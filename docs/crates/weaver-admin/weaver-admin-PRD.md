@@ -114,8 +114,8 @@ refuses the load, and nothing here is repaired.
 **Validation of the agent's configuration file.** The operator writes it, this crate
 alone reads it, and the harness receives what the parse yields in the enter, per
 `weaver-types-PRD` section 2.1. It is declarative,
-read at load, and fixed for the run, carrying the model binding, the tool set, the
-permission mode, and the two elections. Validating it before a process exists is this
+read at load, and fixed for the run, carrying the model binding, the tool set, and the
+two elections, the permission mode retired by #29. Validating it before a process exists is this
 crate's, because a file that is malformed, or that leaves unnamed what a load needs,
 must fail the load at the cheapest possible moment, and what it names is judged by
 the organ that owns it, per section 4.3.
@@ -341,8 +341,8 @@ model rests on the kernel bounding reach and a listener admits a principal the k
 did not place. Section 8 states this where the surface that tests it is named.
 
 **The floor's vocabulary, beyond what it demands.** This crate links `weaver-types`
-and does not link `weaver-traits`. It reads a configuration file whose permission mode
-and tool set are `weaver-types` fields electing from `weaver-traits` definitions, and
+and does not link `weaver-traits`. It reads a configuration file whose tool set is a
+`weaver-types` field judged against the registered tool names (#29), and
 it validates the file's shape rather than the existence of a tool implementation, which
 is harness-internal and unreachable from here. A link added to validate something
 this crate cannot see would be a dependency taken for nothing.

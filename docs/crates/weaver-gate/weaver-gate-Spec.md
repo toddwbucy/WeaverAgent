@@ -191,7 +191,17 @@ directory on the `cgroup2` filesystem), the
 write of `tools/cgroup.kill` that ends an execution, and a read of `tools/cgroup.events`
 for the wait on its emptying (`weaver-admin-Spec` section 6.1). **Every one of
 `tools/cgroup.procs`, `tools/cgroup.kill` and `tools/cgroup.events` is opened by
-`openat` beneath the handle at descriptor 4, never by path.**
+`openat` beneath the handle at descriptor 4, never by path.** **The shell's
+confinement of #29 adds** (section 8.1): `setrlimit`, `prctl` for
+`PR_SET_NO_NEW_PRIVS` and for the seccomp filter (`PR_SET_SECCOMP`), all `nix`'s or
+`libc`'s by name, and **one stated exception to "no raw `libc`"**: the three Landlock
+calls (`landlock_create_ruleset`, `landlock_add_rule`, `landlock_restrict_self`) made by
+number through `nix`'s re-exported `libc`, since `nix` 0.31 has no Landlock and
+`libc` carries their numbers but not `linux/landlock.h`, whose structures this crate
+states itself. It adds no dependency, the precedent being `weaver-harness-Spec`
+section 1's pidfd exception, and the ruleset is built in the parent, wrapped at once
+as an owned descriptor, so the child's `pre_exec` makes only the restriction and the
+filter's load.
 **The bind, the listen and the accept are not among them.**
 `UnixListener::bind` is the standard library's and creates and binds and
 listens in one call, per section 3, which is the shape the one bind site
@@ -419,8 +429,13 @@ to: gate-closure-is-death
 raise directive carries the `gate-instruction` the operator declared and
 admin validated, uninterpreted by the harness, and beside it the socket the
 harness supplies, per `weaver-gate-PRD` section 2. This crate consumes exactly
-two things: that socket path to bind and the access rule the predicate judges
-against. **They arrive as two fields because they have two authors**, the rule
+three things: that socket path to bind, the access rule the predicate judges
+against, and **the shell's grant** where the declaration elects the shell (#29):
+present or absent, and where present the busybox path and the commands directory admin
+authored, section 8.1 building the shell's ruleset from it. An absent grant is no shell: every execution refuses by name with
+nothing run. Where the grant is present, the raise reads the Landlock ABI and refuses
+`BoundaryUnverified` below 6 (section 8.1, failing closed). **The socket and the rule
+arrive as two fields because they have two authors**, the rule
 being the operator's election and the path being the program's deployment
 fact, and a single field carrying both would put the operator's name on a
 value they do not choose. The field list is the floor's satellite, per
@@ -1332,7 +1347,14 @@ Landed by the tool boundary ruling of 2026-08-18, against the amended
 This crate holds one tool, the shell, and holds it as its own verb rather
 than as a table's member: the execution exchange resolves against that one
 name directly, and a name that is not the shell's refuses by name, never a
-nearest match.
+nearest match. **The shell is offered only where the declaration elects it**
+(#29, the operator's rulings of 2026-10-15): the raise instruction carries the
+shell's grant where `tool-set` names `sh`, and with no grant this crate holds no
+tool, every execution refusing by name with nothing run (`weaver-types-Spec`
+section 2, section 3 of this document). **The tool's wire name is `sh`** (the
+operator's ruling of 2026-10-16 on #29), renaming the earlier `bash`: the program the
+call reaches is busybox's POSIX `sh` (ash), never bash, so the name says what the
+model gets.
 
 **The invocation forks the shell into the agent's `tools/` cgroup and
 supervises it to the caller's clock** (#111, `weaver-admin-Spec` section 6.1
@@ -1363,7 +1385,7 @@ bound, then signal the shell's leader by its pid and reap it within the same bou
 before the answer goes: the leader may have moved itself out of `tools/` (the agent's
 account can write `worker/cgroup.procs`), where the kill does not reach it, and an
 unbounded reap would hold this crate on it (Codex on #167). A leader not reaped within
-the bound is an execution not contained. `bash` leaves descendants holding the pipes'
+the bound is an execution not contained. A shell leaves descendants holding the pipes'
 write ends, and a kill that reached only the leader, or only its process
 group, would hold the answer open on a straggler's schedule, or leave a
 command that left its group running past its execution's end. **This crate
@@ -1372,12 +1394,14 @@ never answers an execution it cannot contain**: a failed write of
 with the execution unanswered, so the harness meets the gate's death and
 closes the execution itself, as `weaver-admin-Spec` section 6.1 says.
 
-**The shell starts in the uid's home with `HOME` and no other variable.** This
-crate runs with the agent's environment, per `weaver-harness-Spec` section 2.2
+**The shell starts in the uid's home with `HOME`, `PATH` and `TMPDIR` and no other variable.**
+This crate runs with the agent's environment, per `weaver-harness-Spec` section 2.2
 and the operator's ruling of 2026-10-01, and that ruling reaches the organs and
 not the commands a tool runs, so the invocation clears the environment and sets
-`HOME` alone, the surface the shell had when this crate itself started empty.
-Whether a command should see the agent's environment is a ruling of its own.
+`HOME`, `PATH` to the agent's commands directory and `TMPDIR` to home's `.tmp`
+(section 8.1). `PATH` is a convenience and no control: the wall is section 8.1's Landlock ruleset, which holds
+whatever path a command names. Whether a command should see the agent's environment
+is a ruling of its own.
 
 **Both pipes drain concurrently with the run, bounded, and the drain
 continues past the bound.** A pipe left unread to the exit fills at the
@@ -1522,3 +1546,111 @@ a channel poll is deaf to an exit, and stand uncited until the act that buys
 them cites them, per Working Process section 6. The four-contents claim is
 review's because the enumeration is a shape fact the compiler holds once
 the answer type carries the cases.
+
+### 8.1 The shell's confinement
+
+**The agent's shell is secured like any untrusted user on a controlled box** (#29,
+the operator's rulings of 2026-10-15): every primitive an unprivileged process can
+apply to itself, or ordinary account administration gives, and no system-wide policy.
+SELinux and any system-wide mandatory access control are a last resort, not developed
+under. Restricted bash is not used, adding nothing that holds. **Landlock is the wall
+for the command list**, and the layers below name each primitive with the measurement
+that is its evidence: the `#[ignore]` instruments M1 to M10 of `tests/landlock.rs`,
+run on kernel 7.2.8 on 2026-10-15.
+
+**The program is a statically linked busybox** (the operator's answer of
+2026-10-15): a pinned busybox built from source with a minimal applet configuration,
+installed by the stack's scripts at a root-owned path admin's root names
+(`shell-binary`, `weaver-admin-Spec` section 9). **The configuration is the command
+list's source of truth**: only the applets compiled in exist to run, and adding a
+command is a configuration change and a rebuild. The shell is that binary's `sh`
+(ash) applet, the tool's interpreter and not a listed command. **The gate runs it as
+the busybox file itself, `argv[0]` `sh`, with `-c` and the call's command**, never
+through the commands directory, which holds no entry for it. **The default build is
+read-mostly, with no network** (the operator's ruling of 2026-10-16 on #29): `ls`, `cat`,
+`head`, `tail`, `wc`, `grep`, `sort`, `uniq`, `cut`, `tr`, `date`, `echo`, `pwd` and
+`mktemp`, with the interpreter. `mktemp` is in the set because the shell's temporaries
+land under `TMPDIR` (M11). **The configuration carries `CONFIG_BUSYBOX`**, so
+`busybox --list` answers the compiled set, which admin's inventory compares with the
+applet list (`weaver-admin-Spec` section 4) and M12 asserts equal to the default set
+and the interpreter's two names, `sh` and `ash`: the binary's `busybox <applet>` form
+reaches every applet compiled in, so one more in the build widens the boundary
+whatever the commands directory lists. No applet that reaches the network (`wget`, `nc`) and no other
+interpreter is compiled in. **Static is what closes the interpreter route** (M8): a
+dynamically linked command needs execute on the ELF interpreter (M2e, M2f), and the
+interpreter run as a program loads any readable ELF by `mmap`, which Landlock does not
+check, so an unlisted program written into the home runs through it (M8), as does an
+ELF program under a library root readable wholesale (M8d). A static binary needs no
+interpreter, so none is granted execute (M8b). **The dynamic route is a stated
+fallback, not this act's**: it holds only with all of the interpreter the one
+executable file outside the binary, reads on the commands' library closure granted
+file by file and never on a library root, and the home and every path the agent can
+write mounted `noexec` (M8c).
+
+**The child applies the layers to itself in `pre_exec`, after its move into
+`tools/` and before its exec**, each a `nix` call or a raw system call by number
+through `nix`'s `libc` (section 1's list), on values built before the fork so it
+allocates nothing:
+
+| Layer | Primitive | What it holds | Evidence |
+|---|---|---|---|
+| identity | the agent's own uid, no sudo, in no group of the trace's or the admin's | what the account may touch at all | the account's provisioning (`weaver-admin-Spec` section 9) |
+| privilege | `PR_SET_NO_NEW_PRIVS` | no setuid or file capability can raise the shell, and both filters below require it | the kernel refuses `landlock_restrict_self` and the seccomp filter without it |
+| **the wall** | **Landlock**, ABI 6 or later, handling every filesystem right through ABI 5 (`TRUNCATE` and `IOCTL_DEV` among them): execute and read on **the one busybox file** (a file rule), read on the commands directory, every right but execute beneath the agent's home (`TRUNCATE` included, since a plain `>` over an existing file opens it truncating), read and write on `/dev/null`, read on `/dev/zero` and `/dev/urandom`, and nothing else on the filesystem, `RESOLVE_UNIX` (ABI 9) handled with no grant where the kernel offers it, a second layer under the filter's refusal of every socket, `CONNECT_TCP` and `BIND_TCP` handled with no grant, the same second layer for TCP, and signal and abstract-socket scoping | which programs can start, what they read and write, which processes they signal, and, behind the filter, that no TCP connect or bind succeeds | M1 (ABI 10), M10 (execute on one file runs it through a symlinked directory, and denies an identical copy elsewhere, the interpreter, and a copy written into home), M12 (the real static busybox: its compiled set exactly the default set and `sh` and `ash`, a build carrying `wget` or `nc` failing it, an applet by its link, `busybox <applet>`, and `sh -c` with a pipe, the busybox file run with `argv[0]` `sh` beside a commands directory holding no `sh`, run, an applet not compiled in and a program outside the build do not), M3 (a symlink judged at its target), M4 (`find -exec`, `awk`'s `system()` and the shell start only listed programs), M5 (TCP connect denied with no port allowed), M5b (`bind` refused `EACCES` on every port, port 0 included, so `listen` is never reached, and succeeding with `BIND_TCP` unhandled), M6 (signal and abstract-socket scoping), M7 (writes beneath home alone), M11 (`2>/dev/null`, `>` over a home file, which needs `TRUNCATE` there and none on `/dev/null`, and `mktemp` under `TMPDIR`) |
+| sockets | a seccomp filter: the architecture word checked (`AUDIT_ARCH_X86_64`, any other refused whole), every x32 system call refused (a number with bit 30 set, x32 sharing that word), `io_uring_setup` refused (its `IORING_OP_SOCKET` makes a socket without `socket`), and `socket` and `socketpair` refused for every family | which sockets exist at all: **none**. The shell has no network (#29): no compiled applet reaches it and ash opens no socket. **`AF_UNIX` is refused with the rest** (Codex on #175): below Landlock ABI 9 nothing bounds a pathname socket's `connect`, so the shell could reach any socket file its uid can open, and the refusal holds at the floor of 6. A shell's pipelines and redirects use `pipe`, never a socket, and keep working | M9 (the filter: `socket` of every family tried and `socketpair` refused, `io_uring_setup` refused, an x32 call refused), M9c (the shell's pipeline and redirects run under the filter) |
+| containment | the agent's `tools/` cgroup | every process of an execution killed at its end | `weaver-admin-Spec` section 6.1's instruments (#111) |
+| resources | rlimits on the child, each soft and hard alike: `RLIMIT_FSIZE` `SHELL_RLIMIT_FSIZE` (64 MiB), `RLIMIT_NOFILE` `SHELL_RLIMIT_NOFILE` (64), `RLIMIT_AS` `SHELL_RLIMIT_AS` (512 MiB) and `RLIMIT_CORE` `SHELL_RLIMIT_CORE` (0). The values are the operator's ruling of 2026-10-16 on #29 | file, descriptor and memory runaway, and no core of the shell's memory. The hard limit equal to the soft one, so no command raises its own | M14 (the interpreter and every default applet run under them, `cat /dev/zero` into a home file stops at 64 MiB killed by `SIGXFSZ`, the shell reads each limit as set, soft and hard, and a raise of each past its hard one is refused) |
+| convenience | `PATH` set to the commands directory, `TMPDIR` to home's `.tmp` | nothing: not a control, `TMPDIR` keeping temporaries off a `/tmp` the wall does not grant | M11 |
+
+**Which layer is the wall**: Landlock. Every other row narrows what the wall leaves or
+bounds what runs inside it, and none is relied on for the command list. **The full path
+to the busybox file, invoked with any compiled-in applet's name, runs that applet**, and
+the busybox binary's own `busybox <applet>` form does the same, so the compiled-in set
+is the command list whatever `PATH` says or a command names. The interpreter does the
+same: the pinned configuration carries `FEATURE_SH_STANDALONE`, so ash runs any
+compiled-in applet by its name without a `PATH` lookup, and the boundary is the
+compiled set's equality with the list, never `PATH`. `RLIMIT_NPROC` is not used,
+counting every process of the agent's uid, the worker's organs among them. **Bounding the
+number of a shell's processes is an open question**: it belongs to `pids.max` on `tools/`,
+and no controller is enabled on the agent's cgroups (`weaver-admin-Spec` section 6.1),
+so `pids` is not delegated there today, though the box's own hierarchy offers it. Electing
+it means enabling `pids` in `worker/`'s `cgroup.subtree_control`, which meets the agent's
+own move into `worker/` (C1's first exception) and must place it first.
+
+**TCP for the shell is an open question, with its bar named.** This act elects no
+network, on the operator's ruling of no network by default and minimal access. A later act
+may elect TCP together with a TCP-capable applet, and it brings back three things: an
+elected-port field in the declaration and the grant, the filter admitting `AF_INET` and
+`AF_INET6` as `SOCK_STREAM` with protocol 0 or `IPPROTO_TCP` only, since Landlock's TCP
+rights do not bound an MPTCP or an SCTP stream socket (M9b), and an end-to-end connect
+through the production busybox, an elected port reached and every other refused, before
+the election is offered. M5 (connect bounded by an allowed port), M5b (bind refused
+everywhere), M9b (the protocol pin required) and M9c (a pathname `connect` bounded only
+with `RESOLVE_UNIX` handled) stand as that act's evidence.
+
+**Every layer fails closed.** At the raise, where the instruction grants the shell, this
+crate reads the Landlock ABI and refuses the raise `BoundaryUnverified` below 6, and the
+same where the ABI query itself fails, Landlock absent from the kernel or disabled at
+boot answering it as one below 6, so the load rolls back and no shell is ever offered
+unconfined. In the child, a `setrlimit`, a `prctl`, a seccomp load or a
+`landlock_restrict_self` that fails ends the child before its exec, the spawn failing,
+and the execution is answered `Errored` with nothing run, as a move that fails is. **Both
+filters need no-new-privs**, and the kernel refuses each without it (M13:
+`landlock_restrict_self` `EPERM`, the seccomp load `EACCES`), so that `prctl` comes
+first. **Nothing runs unconfined on a kernel that lacks a primitive.**
+
+**The grant's bound on a subverted worker is the uid.** The harness carries the grant to
+the raise uninterpreted, so a worker subverted could forward a grant wider than admin
+built, another path. This crate runs as the agent's uid, as the worker does,
+and every layer narrows what that uid reaches and none widens it, so a forged grant
+reaches nothing the uid did not already, which a subverted worker holds in any case.
+
+`TMPDIR` is home's `.tmp`, which this crate makes, as the agent's uid, at the raise where
+the shell is granted, so a command's temporaries land inside the wall rather than on a
+`/tmp` it does not grant (M11).
+
+**The commands directory** is the agent's `commands/` in its run directory on tmpfs
+(`weaver-admin-Spec` section 6): root-owned `0755`, one symlink per listed applet to the
+busybox file, no entry for the interpreter, rebuilt by admin's start step at every load
+and removed at the run end. It is `PATH` and a listing, and the wall does not depend on
+it.

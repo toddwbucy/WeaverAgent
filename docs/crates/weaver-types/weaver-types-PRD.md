@@ -370,8 +370,9 @@ to: tool-trait
 ```
 
 The last two are the floor's own argument in edge form. `weaver-traits-PRD` section 2
-rests the two-crate floor on one fact, that the config file names a permission mode and
-a tool set whose definitions therefore cannot sit above the floor. Those are fields
+rests the two-crate floor on one fact, that the config file names a tool set, and once
+a permission mode (retired by #29), whose definitions therefore cannot sit above the
+floor, and the wire's message vocabulary keeps the edge as well. Those are fields
 here electing from vocabulary that crate defines, and without an edge the single
 argument the floor's structure rests on is prose the graph cannot see.
 
@@ -396,10 +397,9 @@ rather than across a seam, which `weaver-admin-PRD` section 3 distinguishes in i
 words, a field read out of a file and a definition drawn by a contract being answerable
 to different checks. `trace-sink` is consumed by admin at load, demanded into this
 section by `weaver-admin-operator-contract` and named by the builder-extension ruling as
-the un-freezable bound admin holds. `permission-mode` elects the floor's mode
-vocabulary, which is the argument the two-crate floor rests on, and the harness reads
-the mode. `tool-set` elects `tool-trait` by the same argument, and its element shape
-arrives with the tool workflow.
+the un-freezable bound admin holds. `permission-mode` is retired by #29, the elected
+tool set and the shell's compiled command list being the permission. `tool-set` elects
+the registered tools, `sh` the one, judged at the parse (`weaver-types-Spec` section 2).
 
 **`field-election` was added to this file on 2026-08-21 and drawn by
 neither contract until this act, which is the same defect one paragraph
@@ -463,7 +463,7 @@ operator is not a node the graph carries. Both crates that touch the file declar
 rather than deferring it.
 
 Known fields, from the passes already done: the model binding, the tool set, the
-permission mode, the residual-readout election, the gate instruction, and the trace
+permission mode (retired by #29), the residual-readout election, the gate instruction, and the trace
 sink. Four joined after this sentence was written, the binding kind, the state
 election, the field election and the surprisal election, each named where this
 section argues it, so the set this section lists is ten today and this sentence is
@@ -831,9 +831,10 @@ to: tool-name
 **No logic beyond the section 2.2 predicate.** The carve-out is one rule with one
 justification, not a category.
 
-**No internal dependency other than `weaver-traits`.** The config file names a
-permission mode and a tool set, which is why that edge exists and why the floor is two
-crates rather than one.
+**No internal dependency other than `weaver-traits`.** The config file names a tool set
+and the wire carries the message vocabulary, which is why that edge exists and why the
+floor is two crates rather than one. The permission mode it once named too is retired
+by #29.
 
 **No socket, no process, no handle.** The definitions describe what crosses a boundary.
 Crossing it is somebody else's crate.

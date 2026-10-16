@@ -92,7 +92,7 @@ depth of the writer's queue, per section 4.2.
 **The working structure is append-only by construction.** It offers no update
 surface, no delete surface, and no mechanism a caller could reach to alter an event
 after it has landed. This is a structural guarantee rather than a behavioral one.
-The agent runs as its own UID with access to bash, and a mutable in-process store
+The agent runs as its own UID with access to a shell, and a mutable in-process store
 reachable through any path that UID can touch is a store the agent could alter.
 A misconfigured sudoers entry, a future dependency, or a bug in a calling crate
 cannot produce a mutation because the structure offers no mutation. The audit trust

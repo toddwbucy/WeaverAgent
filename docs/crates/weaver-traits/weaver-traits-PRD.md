@@ -35,7 +35,8 @@ Every trait in this charter is implemented or consumed by the harness today, so 
 obvious question is why they are not harness-internal.
 
 The answer comes from `weaver-types`, not from any crate not yet chartered. The agent
-config file names a permission mode and a tool set. If those definitions lived in the
+config file names a tool set, and the wire carries the message vocabulary (the
+permission mode it also named is retired by #29). If those definitions lived in the
 harness, then `weaver-types` would depend on `weaver-harness`, and the floor would
 sit above the thing it is meant to be beneath. A neutral crate below both breaks that
 inversion.
@@ -96,7 +97,9 @@ config's `permission-mode` field, the floor's own argument in edge form per
 than seam vocabulary a contract could draw. The mode vocabulary is
 `permission-mode-vocabulary` rather than `permission-modes`, because the agent state
 file holds a `permission-mode` field electing one of them and two identifiers a
-character apart are a collision in the graph and on the page both.
+character apart are a collision in the graph and on the page both. **Both are retired
+by #29** with the mode, the field leaving the declaration and the vocabulary the crate
+at #29's code act.
 
 This crate declares no seam and no floor link. It defines and performs nothing, so
 it signs nothing, and its governance runs entirely through the `draws` edges that
@@ -167,7 +170,11 @@ crate in its vocabulary clause.
 It is here rather than in `weaver-types` because it is contract vocabulary the
 provider signature requires, not part of an agent's declaration.
 
-### 3.4 Permission modes
+### 3.4 Permission modes, retired
+
+**Retired by #29** (the operator's rulings of 2026-10-15): the elected tool set and, for
+the shell, its compiled command list are the permission, the kernel the control, which
+is the point this section made. The vocabulary leaves the crate with #29's code act.
 
 The operator-facing policy vocabulary: whether the operator wants to be consulted
 before a class of action.

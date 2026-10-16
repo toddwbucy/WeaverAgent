@@ -298,7 +298,7 @@ A proto-stateful agent that:
 3. hands that trace to a sink the agent cannot reach, durability being the
    operator's per `weaver-admin-operator-contract` section 3,
 4. keeps a hot KV cache across turns, flushed on the harness's terms,
-5. executes a real tool, with bash as the reference case, invoked by the loop through
+5. executes a real tool, with the shell (`sh`, a static busybox's POSIX shell, #29) as the reference case, invoked by the loop through
    the gate and bounded by the kernel through the identity it runs as,
 6. fires at least one protoautonomic tool call, where the harness injects a
    deterministic result into the stream in place of a stochastic one, with the
@@ -308,10 +308,10 @@ A proto-stateful agent that:
 
 **Item 5 moved three times and this is where it rests.** The egress ruling of
 2026-08-07 read it as a tool reached across the gate, and the port ruling of the same
-date made a tool that binds no listening port, bash among them, internal. **The
+date made a tool that binds no listening port, the shell among them, internal. **The
 operator's ruling of 2026-10-15 (#172) retired that split: the gate is the agent's
 boundary, everything on its far side is external, and a shell session run as a tool
-call is external.** Bash is invoked by the loop through the gate, which forks it per
+call is external.** The shell is invoked by the loop through the gate, which forks it per
 call as the agent's account into the agent's `tools/` cgroup (#111), and this item asks
 what it always asked. Whether the shell becomes a service behind a Unix socket, as
 other external tools are, is #172's open part. A tool that binds a listening port,

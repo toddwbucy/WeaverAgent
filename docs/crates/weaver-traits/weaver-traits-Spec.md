@@ -380,7 +380,14 @@ to: traits-content-block-internally-tagged
 `tool_result` in both places is reading a kind and a block tag, and the licensed
 combinations above are what make the pairing checkable rather than coincidental.
 
-## 4. Permission modes
+## 4. Permission modes, retired
+
+**Retired by #29** (the operator's rulings of 2026-10-15): the elected tool set and,
+for the shell, its compiled command list are the permission (`weaver-types-Spec`
+section 2, `weaver-gate-Spec` section 8.1), and a mode that read as a control where the
+kernel is the control was the misreading charter section 3.4 warned of. The enum and its
+module leave with #29's code act, and with them this section's pins. Until then the
+vocabulary below stands in the crate and no declaration elects it.
 
 The operator-facing policy vocabulary of charter section 3.4, closed and
 exhaustive.
@@ -434,9 +441,9 @@ from: traits-no-adjudicating-method
 to: axiom-floor-is-vocabulary-behavior-is-socket
 ```
 
-**The relationship to the agent config runs one way.** `weaver-types-PRD` section
-2.1 defines a `permission-mode` field that elects one of these, and that charter
-declares the `elects` edge. This crate defines the vocabulary and learns nothing
+**The relationship to the agent config ran one way, and the field is retired.**
+`weaver-types-PRD` section 2.1 defined a `permission-mode` field that elected one of
+these, and #29 retires it. This crate defines the vocabulary and learns nothing
 about which mode any agent chose.
 
 ## 5. The tool contract, chartered with the tool workflow

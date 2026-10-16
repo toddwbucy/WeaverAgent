@@ -1142,7 +1142,25 @@ and sends through the gate after this crate's load, and which this crate never o
 another organ does, per charter section 4.3 as ruled 2026-09-05 on issue #456.**
 The sink exists, or its creation flag is set, per the discriminated cases of
 section 5. The agent's uid resolves and its home directory exists with the
-expected ownership and modes. Any failure refuses with `BoundaryUnverified`,
+expected ownership and modes. **Where `tool-set` elects `sh`** (#29,
+`weaver-types-Spec` section 2), the root's `shell-binary` (section 9) is present and
+judged as the organ binaries are, root-owned and written by root alone, and **it is
+statically linked**: its ELF header carries no `PT_INTERP`, a dynamically linked shell
+needing execute on the ELF interpreter, which reopens the route `weaver-gate-Spec`
+section 8.1 closes (M8). Its applet list, `<shell-binary>.applets` beside it, one name
+per line, root's as the binary is, reads. **The binary's compiled set equals the list**:
+the inventory runs `shell-binary --list` with an empty environment and no input, its
+lines the applets compiled in. The set must contain the interpreter's two names, `sh`
+and `ash`, and the rest must equal the list's exactly. A missing interpreter name
+refuses, since every shell call would otherwise fail as an unknown applet after a load
+that read as ready. An applet compiled in and not listed refuses, since
+`busybox <applet>` reaches every applet the binary holds whatever `commands/` lists
+(`weaver-gate-Spec` section 8.1). A listed name not compiled in refuses too, a link to
+nothing, and a binary that answers no listing refuses, failing closed. Running it is
+trusting what the stack installed, as the organ binaries already judged are trusted.
+The inventory then builds the shell's grant,
+which the enter carries: the two paths this crate authors as deployment facts, `shell-binary` and the run directory's `commands/`, the
+gate reading no root of this crate's (`weaver-types-Spec` section 2). Any failure refuses with `BoundaryUnverified`,
 nothing is repaired, and nothing is built, per charter section 2. **The model
 binding's artifact is checked for presence and never resolved here.** An empty
 member refuses `ConfigInvalid` naming
@@ -1605,6 +1623,17 @@ run lock's description at its fork, per section 3. Each is below, and
 `crates/weaver-admin/src/unit.rs`, and its deploy act removes the units from the deploy
 scripts, which name `weaver-worker@<agent>` only to refuse a box whose agents still run
 under one, `update-stack.sh` before an install and `decommission.sh` before an archive.
+
+**The agent's commands directory is rebuilt by the start step at every load** (#29,
+`weaver-gate-Spec` section 8.1), where `tool-set` elects `sh`: `commands/` in the run
+directory, `<coordination-root>/weaver.run/<agent>/commands/` on tmpfs, root-owned
+`0755`, one symlink per listed applet of `<shell-binary>.applets` to `shell-binary`, and
+no entry for the interpreter (`sh`, `ash`). A stale one a crash left is removed first,
+and the directory is built afresh, never reused. **A rebuild that fails refuses the load
+`BoundaryUnverified` and stands nothing**, so no shell is ever offered over a stale or a
+partial directory. The run end removes it after the agent's cgroup (section 6.1), a
+rollback's included. The directory is `PATH` and a listing: the wall is the gate's
+Landlock ruleset, which grants execute on `shell-binary` alone.
 
 **The runtime directory is made by the start step, with its owner and mode stated**:
 `<coordination-root>/weaver-<agent>/`, `/run/weaver-<agent>/` by default, owned by the
@@ -2611,6 +2640,7 @@ weaver-<agent>/      root's; the agent's cgroup
   - **The kill and the removal:** admin writes `cgroup.kill` on `weaver-<agent>/` and
     waits for it to empty. It then removes `run/`, `tools/`, `worker/`, `constituents/`
     and `weaver-<agent>/`, deepest first, an `ENOENT` read as removed, then the record,
+    then the run directory's `commands/` where it stands (#29, section 6),
     and only then publishes, writes the marker and prints.
   - **The record:** a kill that found processes still standing is said in `admin.log`
     with their pids, the one record that something of the run outlived its leave.
@@ -3268,7 +3298,9 @@ value that fails to read fails the invocation as `ConfigInvalid` with no field.
 **The root holds one file per key.** Required: `worker-binary`, `spu-binary`,
 `gate-binary`, `coordination-root`, `territory`, `operator` and
 `roles.toml`, `run-tool` and `control-tool` retiring with the init system they reached
-on 2026-10-03 (#50), the boundary file of section 9 below. Optional: `headroom-bytes`,
+on 2026-10-03 (#50), the boundary file of section 9 below. Required where the
+declaration elects the shell (#29): `shell-binary`, the stack's statically linked
+busybox, its applet list beside it (section 4). Optional: `headroom-bytes`,
 `library-path`, per section 6, and `load-bound-seconds`, per section 2, the
 `state-store-socket` key having retired with the service engine. **A root holding a key
 of an older layout refuses by its name**, for every verb, the force included, on the
@@ -4160,4 +4192,7 @@ Each names what settles it, and none is this Spec's to settle alone.
   is **not** a restatement of the rule that no crate here exposes a network surface:
   that rule binds what these crates link, and this would bind what an agent's tools may
   reach, so an agent whose tools fetch anything would break under it. Settled by an
-  operator who knows which tools their agents carry.
+  operator who knows which tools their agents carry. **For the agent's shell #29 answers it at the shell
+  itself**: the shell's child makes no socket of any family, `AF_UNIX` included
+  (`weaver-gate-Spec` section 8.1). The question stands for
+  the worker and its organs.

@@ -106,7 +106,7 @@ coordination seam above pays a cell for that question and this one does not.
 **Possession is the authentication, per `weaver-organ-channel` section 2, and one fact
 of it is this seam's.** A named socket admits any number of connections, and a dial
 from the agent's own principal proves nothing about which process dialed, an elected
-`bash` tool
+shell tool
 being one candidate. The unaddressable pair removes the dial entirely, so the peer is
 the
 exact process the harness forked, because holding an end is the only way onto the
