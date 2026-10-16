@@ -221,53 +221,98 @@ fn compiled_set(binary: &Path) -> Result<BTreeSet<String>, String> {
     compiled_set_within(binary, LIST_BOUND)
 }
 
-/// [`compiled_set`] under a named bound.
+/// [`compiled_set`] under a named bound, **the whole judgment bounded**: the
+/// child runs in a process group of its own and its standard output is read
+/// without blocking, so neither the child nor a descendant holding the pipe
+/// can hold the inventory, and the locks it runs under, past the bound. The
+/// listing is read when the pipe closes and the child has exited, and at the
+/// bound the whole group is killed and the listing refused.
 fn compiled_set_within(
     binary: &Path,
     bound: std::time::Duration,
 ) -> Result<BTreeSet<String>, String> {
     use std::io::Read;
+    use std::os::fd::AsFd;
     use std::os::unix::process::CommandExt;
     let mut child = std::process::Command::new(binary)
         .arg0("busybox")
         .arg("--list")
         .env_clear()
+        .process_group(0)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| format!("{} --list does not run: {e}", binary.display()))?;
+    let group = nix::unistd::Pid::from_raw(child.id() as i32);
     let mut stdout = child.stdout.take().expect("stdout is piped");
-    let reader = std::thread::spawn(move || {
-        let mut text = Vec::new();
-        let _ = stdout.read_to_end(&mut text);
-        text
-    });
-    let deadline = std::time::Instant::now() + bound;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "{} --list did not answer within {}ms",
-                    binary.display(),
-                    bound.as_millis()
-                ));
-            }
-            Err(e) => return Err(format!("{} --list: {e}", binary.display())),
+    let kill_group = |child: &mut std::process::Child| {
+        // SAFETY: a signal to the process group this function spawned.
+        unsafe {
+            nix::libc::kill(-group.as_raw(), nix::libc::SIGKILL);
         }
+        let _ = child.wait();
     };
-    let text = reader.join().unwrap_or_default();
-    if !status.success() {
+    let nonblocking =
+        nix::fcntl::fcntl(stdout.as_fd(), nix::fcntl::FcntlArg::F_GETFL).and_then(|flags| {
+            let flags = nix::fcntl::OFlag::from_bits_retain(flags) | nix::fcntl::OFlag::O_NONBLOCK;
+            nix::fcntl::fcntl(stdout.as_fd(), nix::fcntl::FcntlArg::F_SETFL(flags))
+        });
+    if nonblocking.is_err() {
+        kill_group(&mut child);
         return Err(format!(
-            "{} answers no listing ({status}): it must be built with CONFIG_BUSYBOX",
+            "{} --list: its pipe would not read without blocking",
             binary.display()
         ));
+    }
+    let deadline = std::time::Instant::now() + bound;
+    let mut text = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let mut closed = false;
+    let mut exited = None;
+    loop {
+        if !closed {
+            match stdout.read(&mut chunk) {
+                Ok(0) => closed = true,
+                Ok(n) => {
+                    text.extend_from_slice(&chunk[..n]);
+                    continue;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    kill_group(&mut child);
+                    return Err(format!("{} --list: {e}", binary.display()));
+                }
+            }
+        }
+        if exited.is_none() {
+            match child.try_wait() {
+                Ok(status) => exited = status,
+                Err(e) => {
+                    kill_group(&mut child);
+                    return Err(format!("{} --list: {e}", binary.display()));
+                }
+            }
+        }
+        if closed && let Some(status) = exited {
+            if !status.success() {
+                return Err(format!(
+                    "{} answers no listing ({status}): it must be built with CONFIG_BUSYBOX",
+                    binary.display()
+                ));
+            }
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            kill_group(&mut child);
+            return Err(format!(
+                "{} --list did not answer within {}ms",
+                binary.display(),
+                bound.as_millis()
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
     let text =
         String::from_utf8(text).map_err(|_| format!("{} --list is not text", binary.display()))?;

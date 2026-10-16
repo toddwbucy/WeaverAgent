@@ -1158,8 +1158,9 @@ that read as ready. An applet compiled in and not listed refuses, since
 (`weaver-gate-Spec` section 8.1). A listed name not compiled in refuses too, a link to
 nothing, and a binary that answers no listing refuses, failing closed. Running it is
 trusting what the stack installed, as the organ binaries already judged are trusted.
-The inventory then builds the shell's grant,
-which the enter carries: the two paths this crate authors as deployment facts, `shell-binary` and the run directory's `commands/`, the
+**Every inventory judges the shell and builds its grant**, `restore`'s included, since
+every verb that reads a declaration takes the one inventory, so none holds a serving
+binding electing `sh` without its grant. The grant, which the enter carries, is the two paths this crate authors as deployment facts, `shell-binary` and the run directory's `commands/`, the
 gate reading no root of this crate's (`weaver-types-Spec` section 2). Any failure refuses with `BoundaryUnverified`,
 nothing is repaired, and nothing is built, per charter section 2. **The model
 binding's artifact is checked for presence and never resolved here.** An empty

@@ -92,6 +92,33 @@ fn a_listing_past_its_bound_is_killed_and_refused() {
         compiled_set_within(&answering, bound),
         Ok(set(&["sh", "ash", "ls"]))
     );
+    // A child that answers and exits while a descendant it forked holds the
+    // pipe: the read never meets its end, so the bound refuses it and the
+    // whole group, the descendant with it, is killed.
+    let holding = dir.join("holding");
+    let sleeper = dir.join("sleeper.pid");
+    std::fs::write(
+        &holding,
+        format!(
+            "#!/bin/sh\n(exec sleep 30) &\necho $! > {}\nprintf 'sh\\nash\\n'\n",
+            sleeper.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&holding, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let started = std::time::Instant::now();
+    let held = compiled_set_within(&holding, bound).unwrap_err();
+    assert!(held.contains("did not answer"), "{held}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "bounded though a descendant holds the pipe"
+    );
+    let pid = std::fs::read_to_string(&sleeper).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        !std::path::Path::new(&format!("/proc/{}", pid.trim())).exists(),
+        "the descendant is killed with the group"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

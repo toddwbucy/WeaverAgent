@@ -21,8 +21,8 @@
 # unchanged busybox as unchanged.
 #
 # `--preflight` checks only that the tools the build needs stand (curl where
-# no tarball is given, tar with bzip2, make, a C compiler that links
-# statically, python3), so the stack scripts refuse before their long build
+# no tarball is given, tar with bzip2, make, gcc linking statically as the
+# build links, python3), so the stack scripts refuse before their long build
 # rather than after it.
 #
 # Refuses, by name, where:
@@ -46,7 +46,7 @@ export SOURCE_DATE_EPOCH=1672704000 KCONFIG_NOTIMESTAMP=1
 
 preflight() {
   local tool
-  for tool in tar bzip2 make cc python3 sha256sum; do
+  for tool in tar bzip2 make gcc python3 sha256sum; do
     command -v "$tool" >/dev/null || die "the shell's build needs $tool, which this box does not have"
   done
   if [ -z "${BUSYBOX_TARBALL:-}" ]; then
@@ -56,9 +56,11 @@ preflight() {
   local probe
   probe=$(mktemp -d "${TMPDIR:-/tmp}/weaver-busybox-preflight.XXXXXX")
   printf 'int main(void) { return 0; }\n' >"$probe/c.c"
-  if ! cc -static -o "$probe/c" "$probe/c.c" >/dev/null 2>&1; then
+  # **gcc, as busybox's Makefile names it** (`$(CROSS_COMPILE)gcc`), linked
+  # statically as the build will link it.
+  if ! gcc -static -o "$probe/c" "$probe/c.c" >/dev/null 2>&1; then
     rm -rf -- "$probe"
-    die "the C compiler does not link statically (no static libc): the shell's busybox is static"
+    die "gcc does not link statically (no static libc): the shell's busybox is static"
   fi
   rm -rf -- "$probe"
 }
@@ -133,13 +135,16 @@ LISTED=$(env -i "$BIN" --list </dev/null) || die "$BIN answers no listing: CONFI
 for name in sh ash; do
   grep -qx -- "$name" <<<"$LISTED" || die "$BIN has no $name compiled in"
 done
-APPLETS=$(grep -vxE 'sh|ash' <<<"$LISTED" | sort)
-# The configuration's applets, by their symbols: each listed applet's
-# CONFIG_<NAME>=y, so the build's set and the configuration's agree.
-for applet in $APPLETS; do
-  symbol=CONFIG_$(tr '[:lower:]-' '[:upper:]_' <<<"$applet")
-  grep -qxF -- "$symbol=y" "$CONFIG" || die "$BIN lists $applet, whose $symbol=y $CONFIG does not hold"
-done
+# **The listing and the configuration agree both ways**, read through the
+# tree's own declarations (`//applet:IF_<SYMBOL>(APPLET...(<name>, ...))`),
+# so no symbol is guessed from a name: every listed applet has an elected
+# symbol, and every applet whose symbol the configuration elects is listed.
+python3 "$REPO/deploy/busybox_applets.py" "$TREE" "$CONFIG" "$LISTED" \
+  || die "the listing and $CONFIG disagree, see above"
+# The applets beyond the interpreter, an empty set judged rather than
+# ending the script on grep's no-match status.
+APPLETS=$(grep -vxE 'sh|ash' <<<"$LISTED" | sort || true)
+[ -n "$APPLETS" ] || die "$BIN lists no applet beyond the interpreter, so the shell would hold no command"
 
 install -m 0755 -- "$BIN" "$OUT/busybox"
 printf '%s\n' "$APPLETS" >"$OUT/busybox.applets"

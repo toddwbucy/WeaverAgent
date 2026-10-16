@@ -5396,6 +5396,47 @@ class BusyboxBuildTests(unittest.TestCase):
         self.assertEqual(elected, self.ELECTED)
         self.assertFalse(any(ord(c) > 127 for c in text), "ASCII")
 
+    def test_the_listing_and_the_configuration_agree_both_ways(self):
+        # Read through the tree's declarations: a listed applet the config
+        # does not elect, and an elected applet the build did not list, each
+        # refuse by name, and the agreeing case passes. Perturbation: drop
+        # either direction and its case passes.
+        with tempfile.TemporaryDirectory() as tree:
+            Path(tree, "a.c").write_text(
+                "//applet:IF_LS(APPLET_NOEXEC(ls, ls, BB_DIR_BIN, BB_SUID_DROP, ls))\n"
+                "//applet:IF_ASH(APPLET(ash, BB_DIR_BIN, BB_SUID_DROP))\n"
+                "//applet:IF_SH_IS_ASH(  APPLET_ODDNAME(sh,   ash, BB_DIR_BIN, BB_SUID_DROP, ash))\n"
+                "//applet:IF_FIND(APPLET_NOFORK(find, find, BB_DIR_USR_BIN, BB_SUID_DROP, find))\n")
+            config = Path(tree, "config")
+            run = lambda listed: subprocess.run(
+                ["python3", str(DEPLOY / "busybox_applets.py"), tree, str(config), listed],
+                text=True, capture_output=True, timeout=20)
+            config.write_text("CONFIG_LS=y\nCONFIG_ASH=y\nCONFIG_SH_IS_ASH=y\n# CONFIG_FIND is not set\n")
+            self.assertEqual(run("ls sh ash").returncode, 0)
+            extra = run("ls sh ash find")
+            self.assertEqual(extra.returncode, 1)
+            self.assertIn("listed and not elected: find", extra.stderr)
+            config.write_text("CONFIG_LS=y\nCONFIG_ASH=y\nCONFIG_SH_IS_ASH=y\nCONFIG_FIND=y\n")
+            missing = run("ls sh ash")
+            self.assertEqual(missing.returncode, 1)
+            self.assertIn("elected and not listed: find", missing.stderr)
+
+    def test_the_preflight_probes_gcc_as_the_build_does(self):
+        # busybox's Makefile names gcc, so a box with cc and no gcc refuses
+        # before the long build. Perturbation: probe cc again and this box
+        # passes the preflight.
+        with tempfile.TemporaryDirectory() as bin_dir:
+            for tool in ("tar", "bzip2", "make", "cc", "python3", "sha256sum", "curl", "mktemp", "rm"):
+                real = shutil.which(tool)
+                if real:
+                    os.symlink(real, Path(bin_dir, tool))
+            env = {**os.environ, "PATH": bin_dir}
+            env.pop("BUSYBOX_TARBALL", None)
+            result = subprocess.run(["/bin/bash", str(DEPLOY / "build-busybox.sh"), "--preflight"],
+                                    env=env, text=True, capture_output=True, timeout=20)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("needs gcc", result.stderr)
+
     def test_a_tarball_that_is_not_the_pin_refuses(self):
         # Perturbation: drop the sha256 check and the forged tarball reaches
         # tar, which refuses it differently.

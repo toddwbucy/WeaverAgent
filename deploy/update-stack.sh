@@ -1220,9 +1220,11 @@ validate() {
 # A rollback removes the key this run wrote, as it removes the busybox it
 # added, so a rolled-back record never names a file the rollback took away.
 if [ ! -e "$STACK/shell-binary" ]; then
+  # Set before the write, so a write, a chmod or a signal that ends the run
+  # part way leaves restore() removing a key this run may have written.
+  SHELL_KEY_WRITTEN=1
   printf '%s\n' "$BIN_DIR/busybox" | sudo tee "$STACK/shell-binary" >/dev/null
   sudo chmod 0644 "$STACK/shell-binary"
-  SHELL_KEY_WRITTEN=1
   printf '  the stack record gains shell-binary = %s\n' "$BIN_DIR/busybox"
 fi
 
