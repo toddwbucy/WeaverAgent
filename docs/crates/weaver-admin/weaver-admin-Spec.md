@@ -1148,7 +1148,15 @@ judged as the organ binaries are, root-owned and written by root alone, and **it
 statically linked**: its ELF header carries no `PT_INTERP`, a dynamically linked shell
 needing execute on the ELF interpreter, which reopens the route `weaver-gate-Spec`
 section 8.1 closes (M8). Its applet list, `<shell-binary>.applets` beside it, one name
-per line, root's as the binary is, reads. The inventory then builds the shell's grant,
+per line, root's as the binary is, reads. **The binary's compiled set equals the list**:
+the inventory runs `shell-binary --list` with an empty environment and no input, its
+lines the applets compiled in, and the set less the interpreter's two names (`sh`,
+`ash`) must equal the list's. An applet compiled in and not listed refuses, since
+`busybox <applet>` reaches every applet the binary holds whatever `commands/` lists
+(`weaver-gate-Spec` section 8.1). A listed name not compiled in refuses too, a link to
+nothing, and a binary that answers no listing refuses, failing closed. Running it is
+trusting what the stack installed, as the organ binaries already judged are trusted.
+The inventory then builds the shell's grant,
 which the enter carries: the operator's `shell-tcp-connect`, and the two paths this crate
 authors as deployment facts, `shell-binary` and the run directory's `commands/`, the
 gate reading no root of this crate's (`weaver-types-Spec` section 2). Any failure refuses with `BoundaryUnverified`,

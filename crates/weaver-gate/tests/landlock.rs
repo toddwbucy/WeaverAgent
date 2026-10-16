@@ -1215,11 +1215,11 @@ const FS_TRUNCATE: u64 = 1 << 14;
 const FS_RESOLVE_UNIX: u64 = 1 << 16;
 
 /// The static busybox under measurement, named by `WEAVER_BUSYBOX`: built
-/// from a pinned source with the default applets, `ash` and `mktemp`.
-/// Absent, the instrument fails naming it, never passing by skip.
+/// from a pinned source with the default applets, `ash` and the listing
+/// (`CONFIG_BUSYBOX`, so `busybox --list` answers the compiled set). Absent, the instrument fails naming it, never passing by skip.
 fn busybox() -> PathBuf {
     let path = std::env::var_os("WEAVER_BUSYBOX").map(PathBuf::from).expect(
-        "WEAVER_BUSYBOX names a statically linked busybox built with the default applets, ash and mktemp",
+        "WEAVER_BUSYBOX names a statically linked busybox built with the default applets, ash and the listing",
     );
     assert!(path.is_file(), "{} is not a file", path.display());
     path
@@ -1376,13 +1376,29 @@ fn m11_redirects_truncation_and_tmpdir() {
 
 /// **M12: the real static busybox under the ruleset.** Its applet by the
 /// symlink's full path, `busybox <applet>` by the binary's full path, and the
-/// interpreter's `-c` with a pipe. An applet the build does not hold,
-/// asked of the binary, refuses.
+/// interpreter's `-c` with a pipe. **The compiled set is exactly the listed
+/// applets and the interpreter's two names** (Codex on #175): `busybox
+/// <applet>` reaches any applet compiled in, so one more in the build, `nc`
+/// or another interpreter, widens the boundary whatever `commands/` lists.
+/// An applet the build does not hold, asked of the binary, refuses.
 #[test]
 #[ignore = "a measurement of this box's kernel and a built busybox"]
 fn m12_the_static_busybox_under_the_ruleset() {
     let layout = ShellLayout::new("m12", &APPLETS);
     let rules = || layout.rules(true, true);
+    let listing = rules().run(Command::new(layout.path("libexec/busybox")).arg("--list"));
+    assert_ran("M12 --list", &listing);
+    let compiled: std::collections::BTreeSet<String> = String::from_utf8_lossy(&listing.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let expected: std::collections::BTreeSet<String> = APPLETS
+        .iter()
+        .chain(&["sh", "ash"])
+        .map(|name| (*name).to_owned())
+        .collect();
+    println!("M12 the compiled set: {compiled:?}");
+    assert_eq!(compiled, expected, "M12 the compiled set is the listed one");
     let by_link = rules().run(Command::new(layout.path("commands/echo")).arg("by-link"));
     println!("M12 an applet by its link: {}", said(&by_link));
     assert_says("M12 by link", &by_link, "by-link");
