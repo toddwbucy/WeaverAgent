@@ -804,3 +804,35 @@ fn m9_the_socket_family_filter() {
         socket_probe(&socket_filter(true))
     );
 }
+
+/// **M10: execute granted on one file, reached through a symlinked command
+/// directory.** The stand-in for the stack's static multi-call binary is
+/// `docker-init` (static); the commands directory holds a symlink to it, and
+/// Landlock grants execute on that one file and read on the directory. Run
+/// through the symlink it starts, since a symlink is judged at its target
+/// (M3); an identical copy elsewhere is denied, the grant naming the file and
+/// not its contents.
+#[test]
+#[ignore = "a measurement of this box's kernel"]
+fn m10_execute_on_one_file_through_symlinks() {
+    let base = std::env::temp_dir().join(format!("weaver-landlock-m10-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("libexec")).unwrap();
+    std::fs::create_dir_all(base.join("commands")).unwrap();
+    std::fs::create_dir_all(base.join("elsewhere")).unwrap();
+    let multicall = base.join("libexec/multicall");
+    std::fs::copy("/usr/bin/docker-init", &multicall).unwrap();
+    std::fs::copy("/usr/bin/docker-init", base.join("elsewhere/multicall")).unwrap();
+    std::os::unix::fs::symlink(&multicall, base.join("commands/tini")).unwrap();
+    let handled = FS_EXECUTE | FS_READ_FILE | FS_READ_DIR;
+    let rules = || {
+        Ruleset::new(handled, 0, 0)
+            .allow(&multicall, FS_EXECUTE | FS_READ_FILE)
+            .allow(&base.join("commands"), FS_READ_DIR)
+    };
+    let through = rules().run(Command::new(base.join("commands/tini")).arg("--version"));
+    println!("M10 through the symlink: {}", said(&through));
+    let copy = rules().run(Command::new(base.join("elsewhere/multicall")).arg("--version"));
+    println!("M10 an identical copy elsewhere: {}", said(&copy));
+    let _ = std::fs::remove_dir_all(&base);
+}
