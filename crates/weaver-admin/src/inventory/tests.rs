@@ -1069,15 +1069,14 @@ fn the_artifact_is_named_here_and_resolved_at_admission() {
     }
 }
 
-/// **A declaration electing the shell refuses until its deployment is built**
-/// (#29's first act): `tool-set = ["sh"]` parses, and the inventory refuses
-/// it `ConfigInvalid` naming `tool-set`, so no load honours the election with
-/// nothing. The control: the same declaration with the empty set admits. The
-/// second act inverts this test, the election then building the grant.
+/// **The inventory admits a declaration electing the shell** (#29): its
+/// judgment of the busybox and the grant are the caller's, which reads the
+/// root's `shell-binary` (`shell_grant` in `main.rs`). This inverts the first
+/// act's interim refusal. The serving binding leaves here with no grant.
 ///
-/// Perturbation: remove the refusal and the election admits.
+/// Perturbation: restore the interim refusal and the election refuses.
 #[test]
-fn a_declaration_electing_the_shell_refuses_until_the_deployment_is_built() {
+fn a_declaration_electing_the_shell_passes_the_inventory() {
     let root = scratch("shell-elected");
     let sink_dir = root.join("sink");
     std::fs::create_dir_all(&sink_dir).expect("sink dir");
@@ -1087,14 +1086,18 @@ fn a_declaration_electing_the_shell_refuses_until_the_deployment_is_built() {
     let name = AgentName("alpha".to_string());
     let bound = boundary(&home, 65533);
     let elected = config_source(&sink_dir).replace("tool-set = []", "tool-set = [\"sh\"]");
-    let refused = take_inventory(&name, &elected, &bound);
+    let inventory = take_inventory(&name, &elected, &bound).expect("the election passes");
+    assert_eq!(
+        inventory.config.tool_set,
+        [weaver_types::ToolName("sh".into())]
+    );
     assert!(
         matches!(
-            &refused,
-            Err(LifecycleRefusal::ConfigInvalid { field: Some(field) }) if field.0 == "tool-set"
+            &inventory.binding,
+            EnterBinding::Serving { shell: None, .. }
         ),
-        "the shell's election refuses naming tool-set: {refused:?}"
+        "the grant is the caller's: {:?}",
+        inventory.binding
     );
-    let control = take_inventory(&name, &config_source(&sink_dir), &bound);
-    assert!(control.is_ok(), "the empty set admits: {control:?}");
+    assert!(inventory.shell.is_none());
 }

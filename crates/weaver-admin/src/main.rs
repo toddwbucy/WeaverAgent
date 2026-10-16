@@ -44,6 +44,7 @@ mod containment;
 mod inventory;
 mod log;
 mod save_points;
+mod shell;
 mod sink;
 mod stack;
 mod start;
@@ -79,6 +80,9 @@ struct ServiceConfig {
     headroom_bytes: Option<String>,
     /// The engine libraries' directory, judged as the root is, per section 6.
     library_path: Option<PathBuf>,
+    /// **The shell's static busybox**, per section 9 (#29): required where
+    /// the declaration elects `sh`, judged at the inventory (section 4).
+    shell_binary: Option<PathBuf>,
     /// The bound on the enter's answer, per section 2: 900 seconds, or the
     /// root's `load-bound-seconds`.
     load_bound: std::time::Duration,
@@ -835,7 +839,69 @@ fn take_inventory(
     agent: &AgentName,
 ) -> Result<inventory::Inventory, LifecycleRefusal> {
     judge_reader(&config.require_boundary()?.reader, agent)?;
-    room_inventory(config, agent)
+    let mut inventory = room_inventory(config, agent)?;
+    grant_shell(config, &mut inventory)?;
+    Ok(inventory)
+}
+
+/// **The shell's grant, built at the inventory where the declaration elects
+/// `sh`** (#29, Spec section 4): the root's `shell-binary` required, then
+/// judged by `shell::judge`, and the grant names the judged binary and the
+/// run directory's `commands/`, the gate reading no root of this crate's. A
+/// missing key refuses `ConfigInvalid` with no field, as every root value
+/// that fails to read does (section 9). A judgment that fails refuses
+/// `BoundaryUnverified`, said on standard error, nothing repaired.
+fn grant_shell(
+    config: &ServiceConfig,
+    inventory: &mut inventory::Inventory,
+) -> Result<(), LifecycleRefusal> {
+    let elected = inventory
+        .config
+        .tool_set
+        .iter()
+        .any(|tool| tool.0 == weaver_types::SHELL_TOOL);
+    let Some((judged, grant)) = shell_grant(
+        elected,
+        config.shell_binary.as_deref(),
+        &config.run_directory(),
+        nix::unistd::geteuid().as_raw(),
+    )?
+    else {
+        return Ok(());
+    };
+    if let weaver_types::EnterBinding::Serving { shell, .. } = &mut inventory.binding {
+        *shell = Some(grant);
+    }
+    inventory.shell = Some(judged);
+    Ok(())
+}
+
+/// [`grant_shell`]'s judgment, of the values alone: `None` where the shell is
+/// not elected, the judged busybox and the grant where it is.
+fn shell_grant(
+    elected: bool,
+    shell_binary: Option<&std::path::Path>,
+    run_directory: &std::path::Path,
+    owner: u32,
+) -> Result<Option<(shell::Judged, weaver_types::ShellGrant)>, LifecycleRefusal> {
+    if !elected {
+        return Ok(None);
+    }
+    let Some(binary) = shell_binary else {
+        diag!(
+            "weaver-admin: the declaration elects sh, and the service configuration has no shell-binary"
+        );
+        return Err(LifecycleRefusal::ConfigInvalid { field: None });
+    };
+    let judged = shell::judge(binary, owner).map_err(|why| {
+        diag!("weaver-admin: shell-binary: {why}");
+        LifecycleRefusal::BoundaryUnverified
+    })?;
+    let grant = weaver_types::ShellGrant {
+        binary: judged.binary.clone(),
+        commands: run_directory.join(shell::COMMANDS),
+    };
+    Ok(Some((judged, grant)))
 }
 
 /// **The inventory a verb that starts nothing derives**, `restore`'s
@@ -1274,6 +1340,16 @@ fn run_load(
     // constituent forks** (Spec section 3, the order within a load; 6.1).
     let cgroup = make_agent_cgroup(config, agent, &run_reference.0, &account)?;
     standing.cgroup_run = Some(run_reference.0.clone());
+    // **The commands directory is rebuilt at every load where the shell is
+    // granted** (#29, Spec section 6), after the agent's cgroup so the
+    // rollback's run end removes it, and before any constituent forks. A
+    // rebuild that fails refuses the load and stands nothing.
+    if let Some(judged) = inventory.shell.as_ref() {
+        shell::build_commands(&config.run_directory(), judged).map_err(|why| {
+            diag!("weaver-admin: the shell's commands directory: {why}");
+            LifecycleRefusal::BoundaryUnverified
+        })?;
+    }
     record(
         config,
         "load",
@@ -1979,6 +2055,7 @@ fn end_agent_cgroup(
                     "the agent's cgroup is removed and its record did not remove; the next verb removes it",
                 );
             }
+            remove_commands(config, verb);
             Ok(())
         }
         Ok(agent_cgroup::Ended::Stale { record_removed }) => {
@@ -1989,9 +2066,15 @@ fn end_agent_cgroup(
                     "a stale cgroup record did not remove; the next verb removes it",
                 );
             }
+            remove_commands(config, verb);
             Ok(())
         }
-        Ok(agent_cgroup::Ended::NoRecord | agent_cgroup::Ended::NotOwned) => Ok(()),
+        Ok(agent_cgroup::Ended::NoRecord) => {
+            remove_commands(config, verb);
+            Ok(())
+        }
+        // Another run's record: its `commands/` is that run's, left standing.
+        Ok(agent_cgroup::Ended::NotOwned) => Ok(()),
         Err(agent_cgroup::EndRefused::WouldNotExit(pids)) => {
             let named = name_pids(&pids);
             diag!(
@@ -3832,8 +3915,9 @@ fn read_boundary(root: &std::path::Path) -> Result<BoundaryRead, String> {
 
 /// Reads the root's values, per Spec section 9. Required: `worker-binary`,
 /// `spu-binary`, `gate-binary`, `coordination-root`, `territory`,
-/// `operator` and `roles.toml`. Optional: `headroom-bytes`, `library-path` and
-/// `load-bound-seconds`. A failure names the value;
+/// `operator` and `roles.toml`. Optional: `headroom-bytes`, `library-path`,
+/// `load-bound-seconds`, and `shell-binary`, which the inventory requires
+/// where the declaration elects the shell (#29). A failure names the value;
 /// a failure of the boundary file starts with its name, which the caller
 /// carries as the refusal's field.
 fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<ServiceConfig, String> {
@@ -3922,6 +4006,7 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
         gate,
         headroom_bytes: optional("headroom-bytes")?.filter(|v| !v.is_empty()),
         library_path: optional_path("library-path")?,
+        shell_binary: optional_path("shell-binary")?,
         load_bound,
         territory: path("territory")?,
         territory_fd: None,
@@ -3936,3 +4021,19 @@ fn load_service_config_from(root: &std::path::Path, agent: &str) -> Result<Servi
 
 #[cfg(test)]
 mod tests;
+
+/// **The run directory's `commands/`, removed after the agent's cgroup and its
+/// record** (#29, Spec section 6.1), a rollback's run end included. A removal
+/// that fails is said in `admin.log`, and the next load removes the stale one
+/// before it builds.
+fn remove_commands(config: &ServiceConfig, verb: &'static str) {
+    if let Err(error) = shell::remove_commands(&config.run_directory()) {
+        record(
+            config,
+            verb,
+            &format!(
+                "the shell's commands directory did not remove ({error}); the next load removes it"
+            ),
+        );
+    }
+}

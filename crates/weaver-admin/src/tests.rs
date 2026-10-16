@@ -1005,6 +1005,7 @@ fn a_load_with_save_points_waiting_in_the_room_refuses() {
             uid: me,
             gid: nix::unistd::getgid().as_raw(),
         }),
+        shell: None,
     };
     assert_eq!(
         publish_then_select(&config, &AgentName("alpha".into()), &inventory).err(),
@@ -1319,6 +1320,7 @@ fn unread_config() -> ServiceConfig {
         gate: PathBuf::from("/nonexistent/bin/weaver-gate"),
         headroom_bytes: None,
         library_path: None,
+        shell_binary: None,
         load_bound: DEFAULT_LOAD_BOUND,
         territory: PathBuf::from("/nonexistent/territory"),
         territory_fd: None,
@@ -4639,6 +4641,7 @@ fn the_member_spawn_lands_the_members_identity_as_root() {
         },
         lineage: None,
         member_account: Some(member),
+        shell: None,
     };
     let mut service = unread_config();
     // The territory's access group as judged, which no longer rides the
@@ -5494,5 +5497,68 @@ fn containment_a_rollback_whose_run_end_refuses_answers_it() {
             .is_some(),
         "the record is kept for the next unload"
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **The shell's grant is built at the inventory where `sh` is elected, and
+/// refuses where it cannot be** (#29, Spec sections 4 and 9): not elected is
+/// no grant and no look at the root. Elected with no `shell-binary` refuses
+/// `ConfigInvalid` with no field. Elected over a binary that does not judge
+/// refuses `BoundaryUnverified`.
+///
+/// Perturbation: let `shell_grant` answer `None` for a missing key and the
+/// second case passes.
+#[test]
+fn the_shells_grant_refuses_without_its_binary() {
+    let run = PathBuf::from("/run/weaver.run/alpha");
+    assert_eq!(
+        shell_grant(false, None, &run, 0).map(|g| g.is_none()),
+        Ok(true)
+    );
+    assert_eq!(
+        shell_grant(true, None, &run, 0).err(),
+        Some(LifecycleRefusal::ConfigInvalid { field: None })
+    );
+    let missing = std::path::Path::new("/nonexistent/busybox");
+    assert_eq!(
+        shell_grant(true, Some(missing), &run, 0).err(),
+        Some(LifecycleRefusal::BoundaryUnverified)
+    );
+}
+
+/// **The grant names the judged busybox and the run directory's
+/// `commands/`** (#29, Spec section 4): over the stack's build, the grant's
+/// binary is the canonical path and its commands are `<run>/commands`, and
+/// the judged list is the build's.
+#[test]
+#[ignore = "judges a built busybox: needs WEAVER_BUSYBOX"]
+fn the_shells_grant_names_the_judged_binary_and_commands() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = std::env::temp_dir().join(format!("weaver-admin-grant-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let binary = base.join("busybox");
+    std::fs::copy(
+        std::env::var_os("WEAVER_BUSYBOX").expect("WEAVER_BUSYBOX names the pinned build"),
+        &binary,
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let applets = "ls\ncat\nhead\ntail\nwc\ngrep\nsort\nuniq\ncut\ntr\ndate\necho\npwd\nmktemp\n";
+    std::fs::write(shell::applets_path(&binary), applets).unwrap();
+    std::fs::set_permissions(
+        shell::applets_path(&binary),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    let run = PathBuf::from("/run/weaver.run/alpha");
+    let owner = nix::unistd::geteuid().as_raw();
+    let (judged, grant) = shell_grant(true, Some(&binary), &run, owner)
+        .expect("the build judges")
+        .expect("elected");
+    assert_eq!(grant.binary, std::fs::canonicalize(&binary).unwrap());
+    assert_eq!(grant.commands, run.join("commands"));
+    assert_eq!(judged.applets.len(), 14);
     let _ = std::fs::remove_dir_all(&base);
 }
