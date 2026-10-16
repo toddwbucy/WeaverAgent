@@ -156,6 +156,7 @@ fn the_quiesce_answers_every_admitted_request_and_lowers_after_the_writes() {
         LifecycleDirective::Raise {
             instruction: root_admitted(),
             socket: path.to_path_buf(),
+            shell: None,
         },
     );
     assert_eq!(
@@ -252,6 +253,7 @@ fn a_client_that_hung_up_does_not_hold_the_lower() {
         LifecycleDirective::Raise {
             instruction: root_admitted(),
             socket: path.to_path_buf(),
+            shell: None,
         },
     );
     assert_eq!(ready.payload, Payload::Answer(LifecycleAnswer::GateReady));
@@ -314,6 +316,7 @@ fn a_request_never_answered_closes_at_the_lower_at_once() {
         LifecycleDirective::Raise {
             instruction: root_admitted(),
             socket: path.to_path_buf(),
+            shell: None,
         },
     );
     assert_eq!(ready.payload, Payload::Answer(LifecycleAnswer::GateReady));
@@ -373,6 +376,7 @@ fn a_lower_from_a_raised_gate_drops_the_request_in_flight() {
         LifecycleDirective::Raise {
             instruction: root_admitted(),
             socket: path.to_path_buf(),
+            shell: None,
         },
     );
     assert_eq!(ready.payload, Payload::Answer(LifecycleAnswer::GateReady));

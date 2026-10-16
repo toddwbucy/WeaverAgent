@@ -217,6 +217,7 @@ fn the_vector_follows_the_kind_in_both_directions() {
                 denied_uids: Default::default(),
             },
         },
+        shell: None,
     };
     let serving = member_vector(territory, &serving_binding);
     assert_eq!(
@@ -961,7 +962,6 @@ fn a_load_with_save_points_waiting_in_the_room_refuses() {
         concat!(
             "session = \"s-1\"\n",
             "tool-set = []\n",
-            "permission-mode = \"ask\"\n",
             "\n",
             "[spu-instruction.decoder]\n",
             "residual-readout-election = false\n",
@@ -996,7 +996,10 @@ fn a_load_with_save_points_waiting_in_the_room_refuses() {
         config: declaration,
         identity: "weaver-alpha".into(),
         declaration: String::new(),
-        binding: weaver_types::EnterBinding::Serving { gate_instruction },
+        binding: weaver_types::EnterBinding::Serving {
+            gate_instruction,
+            shell: None,
+        },
         lineage: None,
         member_account: Some(inventory::MemberAccount {
             uid: me,
@@ -4593,7 +4596,6 @@ fn the_member_spawn_lands_the_members_identity_as_root() {
         concat!(
             "session = \"s-1\"\n",
             "tool-set = []\n",
-            "permission-mode = \"ask\"\n",
             "\n",
             "[spu-instruction.decoder]\n",
             "residual-readout-election = false\n",
@@ -4631,7 +4633,10 @@ fn the_member_spawn_lands_the_members_identity_as_root() {
         config,
         identity: "weaver-alpha".into(),
         declaration: String::new(),
-        binding: weaver_types::EnterBinding::Serving { gate_instruction },
+        binding: weaver_types::EnterBinding::Serving {
+            gate_instruction,
+            shell: None,
+        },
         lineage: None,
         member_account: Some(member),
     };

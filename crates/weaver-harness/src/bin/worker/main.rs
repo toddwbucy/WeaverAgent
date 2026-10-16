@@ -101,7 +101,6 @@ fn main() -> ExitCode {
     // and no file, per `weaver-trace-Spec` section 3.
     match harness.serve(
         &identity,
-        &[],
         weaver_harness::LoopIdentity::compiled("worker"),
         dev_loop::drive,
     ) {

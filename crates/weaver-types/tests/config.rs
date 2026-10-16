@@ -15,7 +15,6 @@ fn full_config() -> String {
     concat!(
         "session = \"s-1\"\n",
         "tool-set = []\n",
-        "permission-mode = \"ask\"\n",
         "\n",
         "[spu-instruction.decoder]\n",
         "residual-readout-election = false\n",
@@ -53,7 +52,7 @@ fn a_complete_config_parses() {
     let config = parse(&full_config()).expect("parses");
     let decoder = &config.spu_instruction.decoder;
     assert_eq!(decoder.model_binding.devices.len(), 1);
-    assert_eq!(config.permission_mode, weaver_traits::PermissionMode::Ask);
+    assert!(config.tool_set.is_empty());
     assert!(!decoder.residual_readout_election);
 }
 
@@ -140,22 +139,22 @@ fn missing_model_binding_refuses() {
 }
 
 /// A field no organ registered refuses rather than being ignored: a mistyped
-/// `permission-mode` must not vanish.
+/// `tool-set` must not vanish.
 ///
 /// Perturbation: remove `deny_unknown_fields` from `AgentConfig` and the
-/// mistyped key parses as unknown and is discarded, while the real field goes
-/// missing - the exact failure the rejection exists to prevent. Watched to
-/// fail under exactly that removal.
+/// mistyped key parses as unknown and is discarded, while the real field,
+/// optional since #29, silently reads as no tool - the exact failure the
+/// rejection exists to prevent. Watched to fail under exactly that removal.
 #[test]
 fn unknown_key_refuses() {
-    let source = full_config().replace("permission-mode =", "permission-modes =");
+    let source = full_config().replace("tool-set =", "tool-sets =");
     let err = parse(&source).expect_err("refuses");
     assert_eq!(
         err.kind,
         ConfigErrorKind::UnknownField,
         "the mistyped key itself must be the refusal, not the hole it left"
     );
-    assert_eq!(err.field, Some(FieldName("permission-modes".into())));
+    assert_eq!(err.field, Some(FieldName("tool-sets".into())));
 }
 
 /// **An engine this build does not provide refuses naming the field**, per
@@ -199,13 +198,66 @@ fn empty_device_set_refuses() {
     assert_eq!(err.field, Some(FieldName("model-binding".into())));
 }
 
-/// A value outside an elected vocabulary refuses: `permission-mode` elects from
-/// `weaver-traits` and a mode that crate does not define is a bad value.
+/// **`permission-mode` is retired** (#29): a declaration still carrying it
+/// refuses as an unknown field, by name, the ruling of 2026-10-08 carrying no
+/// old layout forward.
+///
+/// Perturbation: put the field back on `AgentConfig` and this parses. Watched
+/// to fail under exactly that restoration.
 #[test]
-fn unknown_permission_mode_refuses() {
-    let source = full_config().replace("permission-mode = \"ask\"", "permission-mode = \"maybe\"");
+fn retired_permission_mode_refuses() {
+    let source = format!("permission-mode = \"ask\"\n{}", full_config());
+    let err = parse(&source).expect_err("refuses");
+    assert_eq!(err.kind, ConfigErrorKind::UnknownField);
+    assert_eq!(err.field, Some(FieldName("permission-mode".into())));
+}
+
+/// **`tool-set` elects registered tools only** (#29): `sh` parses, and a name
+/// outside `REGISTERED_TOOLS`, the earlier `bash` among them, refuses
+/// `BadValue` naming `tool-set`.
+///
+/// Perturbation: remove the `check_tool_set` call from `parse` and the
+/// unregistered names parse. Watched to fail under exactly that removal.
+#[test]
+fn tool_set_elects_registered_names_only() {
+    let shell = parse(&full_config().replace("tool-set = []", "tool-set = [\"sh\"]"))
+        .expect("the registered shell parses");
+    assert_eq!(shell.tool_set, [weaver_types::ToolName("sh".into())]);
+    for unknown in ["bash", "sh2", ""] {
+        let source = full_config().replace("tool-set = []", &format!("tool-set = [\"{unknown}\"]"));
+        let err = parse(&source).expect_err("refuses");
+        assert_eq!(err.kind, ConfigErrorKind::BadValue, "{unknown:?}");
+        assert_eq!(err.field, Some(FieldName("tool-set".into())), "{unknown:?}");
+    }
+}
+
+/// **An absent `tool-set` is the empty list** (#29): nothing offered and
+/// nothing run, the ruled meaning of the field's absence.
+///
+/// Perturbation: remove `#[serde(default)]` from `tool_set` and the absence
+/// refuses as a missing field. Watched to fail under exactly that removal.
+#[test]
+fn absent_tool_set_is_empty() {
+    let config = parse(&full_config().replace("tool-set = []\n", "")).expect("parses");
+    assert!(config.tool_set.is_empty());
+}
+
+/// **A diagnostic binding electing `sh` refuses** (#29): it raises no gate,
+/// so the shell elected there says nothing true. With the empty set it parses.
+///
+/// Perturbation: remove the diagnostic arm of `check_tool_set` and the
+/// election parses. Watched to fail under exactly that removal.
+#[test]
+fn diagnostic_binding_electing_the_shell_refuses() {
+    let source = format!(
+        "binding-kind = \"diagnostic\"\n{}",
+        full_config().replace("tool-set = []", "tool-set = [\"sh\"]")
+    );
     let err = parse(&source).expect_err("refuses");
     assert_eq!(err.kind, ConfigErrorKind::BadValue);
+    assert_eq!(err.field, Some(FieldName("tool-set".into())));
+    parse(&format!("binding-kind = \"diagnostic\"\n{}", full_config()))
+        .expect("the empty set parses under a diagnostic binding");
 }
 
 /// An unknown key inside the sink refuses, per variant, because the derive's

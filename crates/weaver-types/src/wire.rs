@@ -295,9 +295,14 @@ pub enum LifecycleDirective {
     /// directory so the manager's create-and-destroy makes a stale pathname
     /// unreachable, per `weaver-gate-PRD` section 2. A single field would put
     /// the operator's name on a value they do not choose.
+    /// The shell's grant rides beside them where the declaration elects the
+    /// shell (#29), its own field for the same reason: admin authors its
+    /// paths. Absent, the gate holds no tool.
     Raise {
         instruction: GateInstruction,
         socket: std::path::PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shell: Option<crate::config::ShellGrant>,
     },
     Lower,
     Load {
@@ -699,6 +704,11 @@ pub enum ResetReason {
 pub enum EnterBinding {
     Serving {
         gate_instruction: crate::config::GateInstruction,
+        /// The shell's grant, present exactly where `tool-set` elects `sh`
+        /// (#29, `weaver-types-Spec` section 2), absent rather than null
+        /// where it does not.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shell: Option<crate::config::ShellGrant>,
     },
     Diagnostic,
 }

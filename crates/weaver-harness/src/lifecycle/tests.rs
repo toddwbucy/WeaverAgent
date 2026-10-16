@@ -406,6 +406,7 @@ fn the_declared_election_reaches_the_tee() {
                     denied_uids: Default::default(),
                 },
             },
+            shell: None,
         },
         state_store: weaver_types::StateStore::default(),
         declaration: String::new(),
@@ -529,6 +530,7 @@ fn a_refused_enter_leaves_its_reason_in_the_record() {
                     denied_uids: Default::default(),
                 },
             },
+            shell: None,
         },
         state_store: weaver_types::StateStore::default(),
         declaration: String::new(),
@@ -689,6 +691,7 @@ fn the_load_names_the_member_it_was_handed_and_the_composer_serve_set() {
                         denied_uids: Default::default(),
                     },
                 },
+                shell: None,
             },
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
@@ -803,6 +806,7 @@ fn an_enter_naming_a_lineage_with_no_member_refuses_before_the_load() {
                     denied_uids: Default::default(),
                 },
             },
+            shell: None,
         },
         state_store: weaver_types::StateStore::default(),
         declaration: String::new(),
@@ -1005,6 +1009,7 @@ fn enter_against_a_member_leaving(
                         denied_uids: Default::default(),
                     },
                 },
+                shell: None,
             }
         },
         state_store: weaver_types::StateStore::default(),
@@ -1133,6 +1138,7 @@ fn enter_against_a_member_leaving(
                         channel: gate_near,
                         pid: nix::unistd::Pid::from_raw(gate_child.id() as i32),
                         last_word: crate::spawn::LastWord::quiet(),
+                        shell_granted: true,
                     });
                     let gate_order = order.clone();
                     let queue_frame = matches!(mode, LeaveMode::QueuedFrame);
@@ -2194,6 +2200,7 @@ fn an_enter_with_no_member_seats_no_prefix() {
                     denied_uids: Default::default(),
                 },
             },
+            shell: None,
         },
         state_store: weaver_types::StateStore::default(),
         declaration: String::new(),
@@ -2296,6 +2303,7 @@ fn the_declared_elections_reach_the_load_record() {
                         denied_uids: Default::default(),
                     },
                 },
+                shell: None,
             },
             state_store: weaver_types::StateStore::default(),
             declaration: String::new(),
@@ -2582,6 +2590,7 @@ fn the_turn_rehearses_on_the_device() {
                     denied_uids: std::collections::BTreeSet::new(),
                 },
             },
+            shell: None,
         },
         state_store: weaver_types::StateStore::default(),
         declaration: String::new(),
@@ -2617,6 +2626,7 @@ fn the_turn_rehearses_on_the_device() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(1),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     harness.state = ChannelState::Entered(Box::new(run));
 
@@ -2637,7 +2647,6 @@ fn the_turn_rehearses_on_the_device() {
     harness
         .serve_gate_wake(
             "",
-            &[],
             &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
                 let delta = vec![weaver_traits::Message {
                     role: weaver_traits::Role::User,
@@ -2995,6 +3004,7 @@ fn a_gate_a_leave_lowered_stands_the_run_in_s9() {
         channel,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     let stand_in = std::thread::spawn(move || {
@@ -3083,6 +3093,7 @@ fn a_graceful_leave_with_a_dead_spu_or_gate_starts_forced() {
                 channel,
                 pid: nix::unistd::Pid::from_raw(i32::MAX),
                 last_word: crate::spawn::LastWord::quiet(),
+                shell_granted: true,
             });
             let gate_peer = gate_peer.into_channel();
             std::thread::spawn(move || {
@@ -3156,6 +3167,7 @@ fn the_lower_reads_the_channel_promptly_and_meets_gate_stopped_inside_the_bound(
         channel,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     let stand_in = std::thread::spawn(move || {
@@ -3221,6 +3233,7 @@ fn a_lower_unanswered_inside_the_bound_closes_and_reaps_the_gate() {
         channel,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     let (closed_tx, closed_rx) = std::sync::mpsc::channel();
@@ -3512,6 +3525,7 @@ fn a_leave_against_late_stand_ins(
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     std::thread::spawn(move || {
@@ -4288,6 +4302,7 @@ fn dialed_a_join_during_the_drain_turns_the_leave_forced() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     std::thread::spawn(move || {
@@ -4509,6 +4524,7 @@ fn dialed_a_join_while_the_gate_floods_is_heard() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = std::sync::Arc::new(gate_peer.into_channel());
     let reader = gate_peer.clone();
@@ -4702,7 +4718,6 @@ fn a_frame_held_behind_a_turn_that_heard_a_leave_is_not_served() {
     harness
         .serve_shelf(
             "identity",
-            &[],
             &mut |_: &mut crate::engine::Ports<'_>,
                   _: &str|
              -> Result<crate::engine::TurnOutcome, crate::engine::TurnError> {
@@ -4737,6 +4752,7 @@ fn a_gate_that_never_exits_is_killed_at_the_lower_bound() {
         channel,
         pid,
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     std::thread::spawn(move || {
@@ -4910,6 +4926,7 @@ fn a_leave_whose_gate_dies(
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     if matches!(death, GateDeath::BeforeTheDrain) {
@@ -5096,6 +5113,7 @@ fn a_turn_whose_gate_dies(
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     gate_peer
@@ -5136,7 +5154,6 @@ fn a_turn_whose_gate_dies(
     let mut verb_slot = Some(verb_end);
     let served = harness.serve_gate_wake(
         "identity",
-        &[],
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             ports.turn(vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -5227,6 +5244,7 @@ fn a_rollback_is_written_forced_whatever_the_wire_says() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     std::thread::spawn(move || {
@@ -5351,6 +5369,7 @@ fn a_turn_refused_with_the_spu_alive_and_a_leave_held_stays_graceful() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     gate_peer
@@ -5404,7 +5423,6 @@ fn a_turn_refused_with_the_spu_alive_and_a_leave_held_stays_graceful() {
     harness
         .serve_gate_wake(
             "identity",
-            &[],
             &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
                 ports.turn(vec![weaver_traits::Message {
                     role: weaver_traits::Role::User,
@@ -5448,6 +5466,7 @@ fn a_gate_flooding_frames_cannot_hold_the_drain_past_its_bound() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = std::sync::Arc::new(gate_peer.into_channel());
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -5503,6 +5522,7 @@ fn the_lower_reads_past_a_stale_answer_to_its_own_gate_stopped() {
         channel,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     // The drain's quiesce was exchange 1; its answer is still queued.
     run.gate_ordinal = 1;
@@ -5619,6 +5639,7 @@ fn the_gate_dying_at_rest_authors_a_fault_and_serves_on() {
         channel,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let (mut harness, _dir) = harness_entered(run);
     harness.organ_died(OrganDeath::Gate).expect("serves on");
@@ -5675,6 +5696,7 @@ fn the_serve_loop_serves_on_past_an_organs_death_at_rest() {
         channel,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let (decode, decode_far) = DecodeChannel::pair().expect("decode pair");
     if let Some(spu) = run.spu.as_mut() {
@@ -5685,7 +5707,6 @@ fn the_serve_loop_serves_on_past_an_organs_death_at_rest() {
         let _dir = dir;
         let _ = harness.serve(
             "identity",
-            &[],
             weaver_trace::LoopIdentity::compiled("test"),
             |_, _| unreachable!("no frame arrives"),
         );
@@ -5730,6 +5751,7 @@ fn a_request_after_the_spu_died_is_refused_no_model_is_resident() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(1),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     let (mut harness, _dir) = harness_entered(run);
@@ -5754,7 +5776,7 @@ fn a_request_after_the_spu_died_is_refused_no_model_is_resident() {
         .expect("frame sends");
     let mut verb_slot = None;
     harness
-        .serve_gate_wake("", &[], &mut entry, &mut verb_slot)
+        .serve_gate_wake("", &mut entry, &mut verb_slot)
         .expect("the wake serves");
     let answer = gate_peer.recv().expect("the refusal returns");
     let weaver_types::Payload::Frame(frame) = answer.payload else {
@@ -5902,7 +5924,7 @@ fn no_seat_is_granted_while_a_turn_is_in_flight() {
         composer: Some(weaver_trace::LoopIdentity::compiled("test")),
     };
     assert!(
-        harness.grant_seat("identity", &[]).is_none(),
+        harness.grant_seat("identity").is_none(),
         "an active run hands nothing across the seam"
     );
 
@@ -5922,9 +5944,67 @@ fn no_seat_is_granted_while_a_turn_is_in_flight() {
         composer: Some(weaver_trace::LoopIdentity::compiled("test")),
     };
     assert!(
-        harness.grant_seat("identity", &[]).is_some(),
+        harness.grant_seat("identity").is_some(),
         "a loaded-and-idle run grants the seat"
     );
+}
+
+/// **The seat's prompt offers the elected schemas alone** (#29,
+/// `weaver-harness-Spec` section 5): the shell's schema where the run's gate
+/// carries the grant, and none where the gate carries none or no gate stands.
+/// The schema names `sh`, describes ash, and takes one `command`.
+///
+/// Perturbation: let `offered_schemas` ignore the grant and the ungranted
+/// cases carry the schema.
+#[test]
+fn the_seat_offers_the_shell_schema_only_where_granted() {
+    for granted in [None, Some(false), Some(true)] {
+        let (mut run, _spare, _path) = entered_run(None);
+        let (channel, _gate_peer) = OrganChannel::pair().expect("pair");
+        run.gate = granted.map(|shell_granted| GateChannel {
+            channel,
+            pid: nix::unistd::Pid::from_raw(i32::MAX),
+            last_word: crate::spawn::LastWord::quiet(),
+            shell_granted,
+        });
+        let (coordination, _coordination_dir) = test_listener();
+        let mut harness = Harness {
+            coordination,
+            organs: OrganBinaries {
+                classify: None,
+                spu: "/nonexistent/spu".into(),
+                gate: "/nonexistent/gate".into(),
+            },
+            parameters: OrganParameters::default(),
+            state: ChannelState::Entered(Box::new(run)),
+            composer: Some(weaver_trace::LoopIdentity::compiled("test")),
+        };
+        let seat = harness
+            .grant_seat("identity")
+            .expect("an idle run grants the seat");
+        let schemas = &seat.assembled().expect("the seat's prompt").tool_schemas;
+        if granted == Some(true) {
+            assert_eq!(schemas.len(), 1, "the shell's schema alone");
+            let schema: serde_json::Value =
+                serde_json::from_str(&schemas[0]).expect("the schema is JSON");
+            assert_eq!(schema["name"], "sh");
+            assert!(
+                schema["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("busybox ash")
+            );
+            assert_eq!(
+                schema["parameters"]["required"],
+                serde_json::json!(["command"])
+            );
+        } else {
+            assert!(
+                schemas.is_empty(),
+                "{granted:?}: no tool offered: {schemas:?}"
+            );
+        }
+    }
 }
 
 /// **A serving harness never writes the column ask.** The derivation
@@ -5995,7 +6075,7 @@ fn a_diagnostic_run_grants_no_frame_seat() {
         composer: Some(weaver_trace::LoopIdentity::compiled("test")),
     };
     assert!(
-        harness.grant_seat("identity", &[]).is_none(),
+        harness.grant_seat("identity").is_none(),
         "a diagnostic run hands nothing across the frame seam"
     );
     let _ = std::fs::remove_file(&sink_path);
@@ -6085,6 +6165,7 @@ fn an_idle_gate_report_authors_without_a_turn_or_answer() {
             channel: gate,
             pid: nix::unistd::Pid::from_raw(1),
             last_word: crate::spawn::LastWord::quiet(),
+            shell_granted: true,
         });
         let gate_peer = gate_peer.into_channel();
         let (coordination, _coordination_dir) = test_listener();
@@ -6120,7 +6201,6 @@ fn an_idle_gate_report_authors_without_a_turn_or_answer() {
         harness
             .serve_gate_wake(
                 "",
-                &[],
                 &mut |_, _| panic!("an idle report must not grant the seat"),
                 &mut None,
             )
@@ -6234,6 +6314,7 @@ fn a_graceful_leave_heard_mid_turn_is_carried_out_after_the_turn() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     let decode_peer = std::thread::spawn(move || {
@@ -6332,7 +6413,6 @@ fn a_graceful_leave_heard_mid_turn_is_carried_out_after_the_turn() {
     harness
         .serve_gate_wake(
             "identity",
-            &[],
             &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
                 let delta = vec![weaver_traits::Message {
                     role: weaver_traits::Role::User,
@@ -6396,6 +6476,7 @@ fn a_turn_that_errors_with_a_leave_held_still_answers_left() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     // The SPU reads the append, lets the leave be heard, then dies.
@@ -6451,7 +6532,6 @@ fn a_turn_that_errors_with_a_leave_held_still_answers_left() {
     let mut verb_slot = Some(verb_end);
     let served = harness.serve_gate_wake(
         "identity",
-        &[],
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             let delta = vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -6535,6 +6615,7 @@ fn a_gate_dying_during_a_call_with_a_leave_held_forces_the_leave() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     // The SPU asks one tool call and stays standing.
@@ -6545,7 +6626,7 @@ fn a_gate_dying_during_a_call_with_a_leave_held_forces_the_leave() {
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
-                    name: "bash".into(),
+                    name: "sh".into(),
                     arguments: r#"{"command":"sleep 5"}"#.into(),
                 },
             )],
@@ -6609,7 +6690,6 @@ fn a_gate_dying_during_a_call_with_a_leave_held_forces_the_leave() {
     let mut verb_slot = Some(verb_end);
     let served = harness.serve_gate_wake(
         "identity",
-        &[],
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             let delta = vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -6673,6 +6753,7 @@ fn the_spu_dying_mid_turn_fails_the_turn_and_the_run_stands() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     let decode_peer = std::thread::spawn(move || {
@@ -6701,7 +6782,7 @@ fn the_spu_dying_mid_turn_fails_the_turn_and_the_run_stands() {
         }];
         ports.turn(delta)
     };
-    let served = harness.serve_gate_wake("identity", &[], &mut entry, &mut None);
+    let served = harness.serve_gate_wake("identity", &mut entry, &mut None);
     decode_peer.join().expect("the decode peer");
     assert!(served.is_ok(), "the run stands: {served:?}");
     let answered = gate_peer.recv().expect("the dialer's answer");
@@ -6712,7 +6793,7 @@ fn the_spu_dying_mid_turn_fails_the_turn_and_the_run_stands() {
     // A later request meets no model.
     gate_peer.send(&frame(2)).expect("frame sends");
     harness
-        .serve_gate_wake("identity", &[], &mut entry, &mut None)
+        .serve_gate_wake("identity", &mut entry, &mut None)
         .expect("the wake serves");
     let refused = gate_peer.recv().expect("the refusal");
     let weaver_types::Payload::Frame(refused) = refused.payload else {
@@ -6766,6 +6847,7 @@ fn a_lost_channel_with_no_hang_up_ends_service_and_tears_nothing_down() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     // The SPU lets the leave be heard, then answers what does not decode,
@@ -6822,7 +6904,6 @@ fn a_lost_channel_with_no_hang_up_ends_service_and_tears_nothing_down() {
     let mut verb_slot = Some(verb_end);
     let served = harness.serve_gate_wake(
         "identity",
-        &[],
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             let delta = vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -6887,6 +6968,7 @@ fn an_organ_death_met_with_the_record_broken_ends_service() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     gate_peer
@@ -6904,7 +6986,6 @@ fn an_organ_death_met_with_the_record_broken_ends_service() {
     let (mut harness, _dir) = harness_entered(run);
     let served = harness.serve_gate_wake(
         "identity",
-        &[],
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             let delta = vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -6956,11 +7037,11 @@ fn a_gate_dying_at_rest_with_the_record_broken_ends_service() {
         channel,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let (mut harness, _dir) = harness_entered(run);
     let served = harness.serve_gate_wake(
         "identity",
-        &[],
         &mut |_: &mut crate::engine::Ports<'_>, _: &str| unreachable!("no frame"),
         &mut None,
     );
@@ -6998,6 +7079,7 @@ fn a_frame_grants_the_seat_and_is_answered() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(1),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
 
@@ -7064,7 +7146,6 @@ fn a_frame_grants_the_seat_and_is_answered() {
     harness
         .serve_gate_wake(
             "identity",
-            &[],
             &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
                 let delta = vec![weaver_traits::Message {
                     role: weaver_traits::Role::User,
@@ -7133,6 +7214,7 @@ fn an_unparseable_line_refuses_and_the_channel_stands() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(1),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     let (coordination, _coordination_dir) = test_listener();
@@ -7171,7 +7253,7 @@ fn an_unparseable_line_refuses_and_the_channel_stands() {
         .expect("frame sends");
     let mut verb_slot = None;
     harness
-        .serve_gate_wake("", &[], &mut entry, &mut verb_slot)
+        .serve_gate_wake("", &mut entry, &mut verb_slot)
         .expect("the wake serves");
     let answer = gate_peer.recv().expect("the refusal returns");
     let weaver_types::Payload::Frame(frame) = answer.payload else {
@@ -7195,7 +7277,7 @@ fn an_unparseable_line_refuses_and_the_channel_stands() {
         })
         .expect("frame sends");
     harness
-        .serve_gate_wake("", &[], &mut entry, &mut verb_slot)
+        .serve_gate_wake("", &mut entry, &mut verb_slot)
         .expect("the channel stands");
     let answer = gate_peer.recv().expect("the second refusal returns");
     let weaver_types::Payload::Frame(frame) = answer.payload else {
@@ -7277,6 +7359,7 @@ fn a_system_line_from_any_other_dialer_refuses_and_the_channel_stands() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(1),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     let (coordination, _coordination_dir) = test_listener();
@@ -7325,7 +7408,7 @@ fn a_system_line_from_any_other_dialer_refuses_and_the_channel_stands() {
             })
             .expect("frame sends");
         harness
-            .serve_gate_wake("", &[], &mut entry, &mut verb_slot)
+            .serve_gate_wake("", &mut entry, &mut verb_slot)
             .expect("the channel stands");
         let answer = gate_peer.recv().expect("the refusal returns");
         assert_eq!(answer.exchange.ordinal, ordinal);
@@ -7398,6 +7481,7 @@ fn a_seeding_past_the_answer_bound_refuses_and_one_that_fits_seats() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(1),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     let decode_peer = std::thread::spawn(move || {
@@ -7463,7 +7547,7 @@ fn a_seeding_past_the_answer_bound_refuses_and_one_that_fits_seats() {
             })
             .expect("frame sends");
         harness
-            .serve_gate_wake("identity", &[], &mut entry, &mut verb_slot)
+            .serve_gate_wake("identity", &mut entry, &mut verb_slot)
             .expect("the wake serves");
         let answer = gate_peer.recv().expect("the response returns");
         let weaver_types::Payload::Frame(frame) = answer.payload else {
@@ -7553,6 +7637,7 @@ fn the_operators_system_line_seats_the_prompt_and_turns() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(1),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     let decode_peer = std::thread::spawn(move || {
@@ -7620,7 +7705,6 @@ fn the_operators_system_line_seats_the_prompt_and_turns() {
     harness
         .serve_gate_wake(
             "identity",
-            &[],
             &mut |_: &mut crate::engine::Ports<'_>, _: &str| {
                 panic!("the seeding turn is loop 0's own and never enters the loop")
             },
@@ -7721,6 +7805,7 @@ fn the_turn_key_stands_while_a_turn_runs() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(1),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
 
@@ -7809,7 +7894,7 @@ fn the_turn_key_stands_while_a_turn_runs() {
             })
             .expect("frame sends");
         harness
-            .serve_gate_wake("identity", &[], &mut entry, &mut None)
+            .serve_gate_wake("identity", &mut entry, &mut None)
             .expect("the wake serves");
         let answer = gate_peer.recv().expect("the response frame returns");
         assert_eq!(answer.exchange.ordinal, ordinal);
@@ -7991,6 +8076,7 @@ fn a_gate_fault_at_rest_with_the_record_broken_ends_service() {
         channel,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     gate_peer
@@ -8009,7 +8095,6 @@ fn a_gate_fault_at_rest_with_the_record_broken_ends_service() {
     let (mut harness, _dir) = harness_entered(run);
     let served = harness.serve_gate_wake(
         "identity",
-        &[],
         &mut |_: &mut crate::engine::Ports<'_>, _: &str| unreachable!("no frame"),
         &mut None,
     );
@@ -8033,6 +8118,7 @@ fn a_dialer_is_not_answered_over_a_latched_record() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     gate_peer
@@ -8048,7 +8134,6 @@ fn a_dialer_is_not_answered_over_a_latched_record() {
     let (mut harness, _dir) = harness_entered(run);
     let served = harness.serve_gate_wake(
         "identity",
-        &[],
         &mut |_: &mut crate::engine::Ports<'_>, _: &str| unreachable!("the parse refuses"),
         &mut None,
     );
@@ -8085,7 +8170,6 @@ fn the_serve_loop_does_not_wait_over_a_latched_record() {
         let _dir = dir;
         let outcome = harness.serve(
             "identity",
-            &[],
             weaver_trace::LoopIdentity::compiled("test"),
             |_, _| unreachable!("no frame arrives"),
         );
@@ -8145,6 +8229,7 @@ fn a_held_frame_is_not_served_over_a_latched_record() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     run.held_frames.push_back(OrganEnvelope {
         exchange: ExchangeId {
@@ -8159,7 +8244,6 @@ fn a_held_frame_is_not_served_over_a_latched_record() {
     let (mut harness, _dir) = harness_entered(run);
     let served = harness.serve_shelf(
         "identity",
-        &[],
         &mut |_: &mut crate::engine::Ports<'_>, _: &str| panic!("the held frame's turn ran"),
         &mut None,
     );
@@ -8215,6 +8299,7 @@ fn a_gate_report_that_will_not_render_ends_service() {
         channel,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     let report = weaver_types::FaultReport {
@@ -8235,7 +8320,6 @@ fn a_gate_report_that_will_not_render_ends_service() {
     let (mut harness, _dir) = harness_entered(run);
     let served = harness.serve_gate_wake(
         "identity",
-        &[],
         &mut |_: &mut crate::engine::Ports<'_>, _: &str| unreachable!("no frame"),
         &mut None,
     );
@@ -8249,7 +8333,7 @@ fn no_seat_is_granted_over_a_latched_record() {
     let (mut run, _spare, _sink) = entered_run(None);
     latch_by_refusal(&mut run);
     let (mut harness, _dir) = harness_entered(run);
-    assert!(harness.grant_seat("identity", &[]).is_none());
+    assert!(harness.grant_seat("identity").is_none());
 }
 
 /// **C1, the gate's death: a gate dying with a call open leaves `tools/`
@@ -8292,6 +8376,7 @@ fn containment_a_gate_dying_with_a_call_open_leaves_tools_empty() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     // The SPU asks one tool call, then answers whatever follows plainly.
@@ -8302,7 +8387,7 @@ fn containment_a_gate_dying_with_a_call_open_leaves_tools_empty() {
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
-                    name: "bash".into(),
+                    name: "sh".into(),
                     arguments: r#"{"command":"sleep 300"}"#.into(),
                 },
             )],
@@ -8352,7 +8437,6 @@ fn containment_a_gate_dying_with_a_call_open_leaves_tools_empty() {
     let mut verb_slot = Some(verb_end);
     let served = harness.serve_gate_wake(
         "identity",
-        &[],
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             ports.turn(vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -8533,6 +8617,7 @@ fn containment_the_lower_sweeps_tools() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let mut command = crate::tools_cgroup::tests::escaper_in(&layout.leaf("worker/tools"));
     drop(gate_peer);
@@ -8592,6 +8677,7 @@ fn a_forced_leave_closes_a_call_its_gate_never_answers_within_the_lower_bound() 
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     // The SPU asks one tool call and stays standing.
@@ -8602,7 +8688,7 @@ fn a_forced_leave_closes_a_call_its_gate_never_answers_within_the_lower_bound() 
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
-                    name: "bash".into(),
+                    name: "sh".into(),
                     arguments: r#"{"command":"sleep 5"}"#.into(),
                 },
             )],
@@ -8675,7 +8761,6 @@ fn a_forced_leave_closes_a_call_its_gate_never_answers_within_the_lower_bound() 
     let mut verb_slot = Some(verb_end);
     let served = harness.serve_gate_wake(
         "identity",
-        &[],
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             let delta = vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -8744,6 +8829,7 @@ fn containment_a_live_gates_bad_frame_kills_nothing() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let gate_peer = gate_peer.into_channel();
     let decode_peer = std::thread::spawn(move || {
@@ -8753,7 +8839,7 @@ fn containment_a_live_gates_bad_frame_kills_nothing() {
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
-                    name: "bash".into(),
+                    name: "sh".into(),
                     arguments: r#"{"command":"sleep 300"}"#.into(),
                 },
             )],
@@ -8802,7 +8888,6 @@ fn containment_a_live_gates_bad_frame_kills_nothing() {
     let mut verb_slot = Some(verb_end);
     let _ = harness.serve_gate_wake(
         "identity",
-        &[],
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             ports.turn(vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -8847,6 +8932,7 @@ fn containment_the_lower_sweeps_tools_whatever_an_earlier_kill_said() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let mut command = crate::tools_cgroup::tests::escaper_in(&layout.leaf("worker/tools"));
     drop(gate_peer);
@@ -8879,6 +8965,7 @@ fn containment_a_gate_dying_at_rest_with_a_leave_held_never_waits() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let (held, _admin) = pending_leave(
         crate::lifecycle_table::Leave::Graceful,
@@ -8925,6 +9012,7 @@ fn containment_an_undelivered_unwind_sweep_is_its_own_fault() {
         channel: gate_end,
         pid: nix::unistd::Pid::from_raw(i32::MAX),
         last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
     });
     let kill = layout.leaf("worker/tools/cgroup.kill");
     let procs = layout.leaf("worker/tools/cgroup.procs");

@@ -21,6 +21,7 @@ use weaver_gate::channel::{self, Channel, ChannelFault, EntryFault};
 use weaver_gate::hook::{AcceptOutcome, Hook, RaiseRefusal};
 use weaver_gate::relay::{self, Relay};
 use weaver_gate::tools::Unanswered;
+use weaver_gate::tools::confine::Shell;
 use weaver_types::{
     ExchangeId, LifecycleAnswer, LifecycleDirective, LifecycleRefusal, Opener, OrganEnvelope,
     Payload, Position,
@@ -720,10 +721,32 @@ fn dispatch_at(
             LifecycleDirective::Raise {
                 instruction,
                 socket,
+                shell,
             },
         ) => {
+            // **The shell's confinement is built before the bind** (#29,
+            // `weaver-gate-Spec` sections 3 and 8.1): where the grant is
+            // present, an ABI below the floor, a failed query, or a ruleset
+            // that will not build refuses the raise `BoundaryUnverified` with
+            // nothing held, so no shell is ever offered unconfined. Absent,
+            // the gate holds no tool.
+            let confined = match shell.as_ref().map(Shell::confined).transpose() {
+                Ok(confined) => confined,
+                Err(fault) => {
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({"refusal": "boundary_unverified", "detail": fault.to_string()})
+                    );
+                    return Dispatched::Answer(Payload::Refusal(
+                        LifecycleRefusal::BoundaryUnverified,
+                    ));
+                }
+            };
             match Hook::raise(instruction, socket) {
                 Ok(hook) => {
+                    if let Some(confined) = confined {
+                        weaver_gate::tools::grant(confined);
+                    }
                     // Ready is answered only after the bind and listen have
                     // returned, which is what makes ready a fact about the
                     // listener rather than a statement of intent.

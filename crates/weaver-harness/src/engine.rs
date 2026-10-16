@@ -146,6 +146,9 @@ pub(crate) struct GatePort<'a> {
             crate::tools_cgroup::Containment,
         )>,
     >,
+    /// The enter carried the shell's grant (#29): only then does a call
+    /// naming the shell cross to the gate.
+    pub(crate) shell_granted: bool,
 }
 
 /// The wind-down turn's user message (`weaver-admin-Spec` 3.0, graceful step
@@ -1355,6 +1358,36 @@ impl<'a> Ports<'a> {
             self.unload_interrupted = true;
             return Ok(crate::tools::ToolResult::granted(&outcome));
         }
+        // **A call naming a tool the enter did not grant opens no exchange**
+        // (#29, `weaver-harness-Spec` section 6): this crate closes it
+        // `Refused` in its own word, naming the tool as not elected, and the
+        // tool-result turn carries the refusal to the model. Nothing crosses
+        // the gate, which refuses an unelected name too, the second wall.
+        let granted = self
+            .gate
+            .as_ref()
+            .is_some_and(|gate| gate.shell_granted && call.name == crate::tools::SHELL_TOOL);
+        if !granted {
+            let outcome = weaver_types::ToolOutcome::Refused {
+                reason: format!(
+                    "{} is not a tool this agent's declaration elects - nothing ran",
+                    call.name
+                ),
+            };
+            let completed = serde_json::to_string(&outcome).map_err(|_| TurnError::ChannelLost)?;
+            let completed = weaver_trace::raw_payload(&completed).ok_or(TurnError::ChannelLost)?;
+            self.author
+                .author(
+                    self.recorder,
+                    Kind::ToolCallCompleted,
+                    Subsystem::Harness,
+                    Some(turn),
+                    Some(Payload::Deferred(completed)),
+                )
+                .map_err(|_| TurnError::ChannelLost)?;
+            return Ok(crate::tools::ToolResult::granted(&outcome));
+        }
+
         self.interrupted_at.set(None);
         let gate = self
             .gate

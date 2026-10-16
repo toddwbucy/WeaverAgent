@@ -686,6 +686,7 @@ fn sample_enter_payload() -> weaver_types::EnterPayload {
                     denied_uids: Default::default(),
                 },
             },
+            shell: None,
         },
         state_store: weaver_types::StateStore::default(),
         declaration: String::new(),
@@ -713,6 +714,45 @@ fn an_enter_from_a_silent_declaration_carries_no_bound() {
     let json = serde_json::to_string(&sample_enter_payload()).expect("serializes");
     assert!(!json.contains("drain-bound"), "{json}");
     assert!(!json.contains("wind-down-bound"), "{json}");
+}
+
+/// **The shell's grant crosses on the enter and the raise where elected, and
+/// is absent rather than null where not** (#29, `weaver-types-Spec` sections 2
+/// and 4.2). Perturbation: drop `skip_serializing_if` from either `shell` field
+/// and the absent case carries `"shell":null`.
+#[test]
+fn the_shell_grant_round_trips_and_is_absent_when_not_elected() {
+    let grant = weaver_types::ShellGrant {
+        binary: "/usr/local/libexec/weaver/busybox".into(),
+        commands: "/run/weaver.run/a/commands".into(),
+    };
+    let mut payload = sample_enter_payload();
+    let json = serde_json::to_string(&payload).expect("serializes");
+    assert!(!json.contains("\"shell\""), "{json}");
+    let weaver_types::EnterBinding::Serving { shell, .. } = &mut payload.binding else {
+        panic!("the sample is serving");
+    };
+    *shell = Some(grant.clone());
+    let json = serde_json::to_string(&payload).expect("serializes");
+    let back: weaver_types::EnterPayload = serde_json::from_str(&json).expect("parses");
+    assert_eq!(back, payload);
+    let raise = |shell| weaver_types::LifecycleDirective::Raise {
+        instruction: weaver_types::GateInstruction {
+            access_rule: weaver_types::AccessRule {
+                allowed_uids: Default::default(),
+                allowed_gids: Default::default(),
+                denied_uids: Default::default(),
+            },
+        },
+        socket: "/run/gate.sock".into(),
+        shell,
+    };
+    let bare = serde_json::to_string(&raise(None)).expect("serializes");
+    assert!(!bare.contains("\"shell\""), "{bare}");
+    let granted = raise(Some(grant));
+    let json = serde_json::to_string(&granted).expect("serializes");
+    let back: weaver_types::LifecycleDirective = serde_json::from_str(&json).expect("parses");
+    assert_eq!(back, granted);
 }
 
 /// **Each lone bound crosses with the other absent, and round-trips**.

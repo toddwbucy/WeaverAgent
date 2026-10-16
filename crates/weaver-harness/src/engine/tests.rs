@@ -1021,11 +1021,11 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
-                    name: "calculator".into(),
+                    name: "sh".into(),
                     arguments: r#"{"expression":"37 * 43"}"#.into(),
                 },
             )],
-            emission: r#"<tool_call>{"name":"calculator"}</tool_call>"#.into(),
+            emission: r#"<tool_call>{"name":"sh"}</tool_call>"#.into(),
             finish: Finish::Completed,
             resident: 64,
             capacity: 4096,
@@ -1079,7 +1079,7 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
         let weaver_types::Payload::Tool(execution) = &envelope.payload else {
             panic!("the exchange carries the call, got {:?}", envelope.payload);
         };
-        assert_eq!(execution.name.0, "calculator");
+        assert_eq!(execution.name.0, "sh");
         let outcome = weaver_gate_execute_stub(execution);
         gate_far
             .send(&weaver_types::OrganEnvelope {
@@ -1147,6 +1147,7 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
                 held: &mut held,
                 tools: None,
                 contained: None,
+                shell_granted: true,
             }),
             None,
             None,
@@ -1212,6 +1213,251 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
     assert!(
         line_of(Kind::MessageToolResult).contains("1591"),
         "the granted content is the record's"
+    );
+}
+
+/// **A call the enter did not grant closes `Refused` in this crate, and
+/// nothing crosses the gate** (#29, `weaver-harness-Spec` section 6): the
+/// tool bracket's two events are both the harness's, the refusal names the
+/// call as not elected, and the tool-result turn carries it to the model.
+/// Two cases: the shell's own name with no grant, and a name that is not the
+/// shell's where the shell is granted.
+///
+/// Perturbation: drop the grant check from `execute_call` and the call opens
+/// an exchange, failing the gate peer.
+#[test]
+fn an_ungranted_shell_call_closes_refused_in_the_harness() {
+    an_ungranted_call("sh", false);
+}
+
+/// The second case of the test above.
+#[test]
+fn an_unelected_name_closes_refused_in_the_harness() {
+    an_ungranted_call("bash", true);
+}
+
+fn an_ungranted_call(name: &str, shell_granted: bool) {
+    let name = name.to_string();
+    let refused_name = name.clone();
+    let (near, far) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .expect("socketpair");
+    let decode = crate::channel::decode_from_owned(near);
+
+    // The decode peer: two rounds. Round one answers a generation whose
+    // canonical content carries the call; round two reads the tool-result
+    // delta back and answers plain text.
+    let peer = std::thread::spawn(move || {
+        let mut buf = vec![0u8; 65536];
+        let raw = |text: &str| serde_json::value::RawValue::from_string(text.to_string()).unwrap();
+        let send_answer = |answer: &weaver_types::TokenAnswer| {
+            let bytes = serde_json::to_vec(answer).expect("answer renders");
+            send(far.as_raw_fd(), &bytes, MsgFlags::empty()).expect("send answer");
+        };
+
+        let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv append");
+        let directive: weaver_types::TokenDirective =
+            serde_json::from_slice(&buf[..n]).expect("the append parses");
+        assert!(matches!(
+            directive,
+            weaver_types::TokenDirective::AppendAndGenerate { .. }
+        ));
+        send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
+            content: vec![weaver_traits::ContentBlock::ToolCall(
+                weaver_traits::ToolCall {
+                    name: name.clone(),
+                    arguments: r#"{"command":"ls"}"#.into(),
+                },
+            )],
+            emission: r#"<tool_call>{"name":"sh"}</tool_call>"#.into(),
+            finish: Finish::Completed,
+            resident: 64,
+            capacity: 4096,
+            request: raw(r#"{"rendered":"r1","template":"qwen2","sampling":{}}"#),
+            measurement: raw(
+                r#"{"model":"m","weights_hash":"h","input_tokens":[1],"output_tokens":[2],"blocks":[{"label":"turn-delta","start":0,"end":1}],"timings":{"prefill_ns":"1","decode_ns":"2"}}"#,
+            ),
+        }));
+
+        // Round two: the tool-result delta arrives, carrying the granted
+        // content and nothing the loop invented.
+        let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv round 2");
+        let directive: weaver_types::TokenDirective =
+            serde_json::from_slice(&buf[..n]).expect("round 2 parses");
+        let weaver_types::TokenDirective::AppendAndGenerate { delta, .. } = directive else {
+            panic!("round two is an append");
+        };
+        assert_eq!(delta.len(), 1, "one tool-result message crosses");
+        assert!(matches!(delta[0].role, Role::ToolResult));
+        assert!(
+            matches!(
+                &delta[0].content[0],
+                ContentBlock::ToolResult(block)
+                    if block.content.contains("is not a tool this agent's declaration elects")
+                        && block.content.contains(&name)
+            ),
+            "the harness's refusal is what crosses, naming the call: {:?}",
+            delta[0].content
+        );
+        send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            unrecovered: vec![],
+            content: vec![weaver_traits::ContentBlock::Text {
+                text: "refused.".into(),
+            }],
+            emission: "refused.".into(),
+            finish: Finish::Completed,
+            resident: 64,
+            capacity: 4096,
+            request: raw(r#"{"rendered":"r2","template":"qwen2","sampling":{}}"#),
+            measurement: raw(
+                r#"{"model":"m","weights_hash":"h","input_tokens":[3],"output_tokens":[4],"blocks":[{"label":"turn-delta","start":0,"end":1}],"timings":{"prefill_ns":"1","decode_ns":"2"}}"#,
+            ),
+        }));
+    });
+
+    // The gate peer: **nothing crosses**. The channel closes when the
+    // harness's end drops after the turn, and no envelope precedes it.
+    let (gate_near, gate_child) = crate::channel::OrganChannel::pair().expect("gate pair");
+    let gate_peer = std::thread::spawn(move || {
+        let gate_far = gate_child.into_channel();
+        let got = gate_far.recv();
+        assert!(got.is_err(), "no execution opens at the gate: {got:?}");
+    });
+
+    let session = SessionId("s-t".into());
+    let sink = tempfile();
+    let mut recorder = crate::record::Record::from(
+        Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
+            .expect("recorder"),
+    );
+    let author = Author::new(&session, &weaver_types::RunId("r-1".into()));
+    author
+        .author(
+            &mut recorder,
+            Kind::Load,
+            Subsystem::Harness,
+            None,
+            Some(Payload::Elections(Box::new(weaver_trace::Elections {
+                residual_readout: false,
+                field: None,
+                surprisal: false,
+                tee: Some(weaver_trace::Election::default()),
+                state_member: false,
+                declaration: Default::default(),
+                lineage: None,
+                reset: None,
+                stack: Default::default(),
+                boundary: String::new(),
+                cause: weaver_trace::Cause { uid: 0 },
+                library_path: None,
+                state_store: Default::default(),
+                composer: weaver_trace::LoopIdentity::compiled("test"),
+            }))),
+        )
+        .expect("load");
+    let mut turn_ordinal = 0u64;
+    let mut turn_in_flight: Option<weaver_types::TurnKey> = None;
+    let mut gate_ordinal = 0u64;
+    let mut held = std::collections::VecDeque::new();
+
+    let (listener, _dir) = test_listener();
+    let outcome = {
+        let mut fullness = None;
+        let mut pressure_reported = false;
+        let load_facts = crate::engine::test_load_facts();
+        let mut ports = Ports::grant(
+            &decode,
+            &author,
+            &mut recorder,
+            &mut turn_ordinal,
+            &mut turn_in_flight,
+            &load_facts,
+            None,
+            &listener,
+            None,
+            Some(GatePort {
+                channel: &gate_near,
+                ordinal: &mut gate_ordinal,
+                held: &mut held,
+                tools: None,
+                contained: None,
+                shell_granted,
+            }),
+            None,
+            None,
+            &mut fullness,
+            &mut pressure_reported,
+        );
+        let delta = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: "what is 37 * 43?".into(),
+            }],
+        }];
+        ports.turn(delta).expect("the turn completes")
+    };
+    peer.join().expect("the decode peer finishes");
+    drop(gate_near);
+    gate_peer.join().expect("the gate peer finishes");
+
+    assert_eq!(outcome.emission, "refused.");
+    assert!(held.is_empty(), "nothing crossed mid-execution to hold");
+
+    let kinds: Vec<Kind> = recorder
+        .structure()
+        .expect("the serving record")
+        .iter()
+        .filter(|r| r.turn.is_some())
+        .map(|r| r.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            Kind::TurnStarted,
+            Kind::MessageUser,
+            Kind::ModelRequest,
+            Kind::ModelOutput,
+            Kind::ModelMeasurement,
+            Kind::MessageAssistant,
+            Kind::ToolCallStarted,
+            Kind::ToolCallCompleted,
+            Kind::MessageToolResult,
+            Kind::ModelRequest,
+            Kind::ModelOutput,
+            Kind::ModelMeasurement,
+            Kind::MessageAssistant,
+            Kind::TurnClosed,
+        ],
+        "two generations inside one bracket, the tool loop between them"
+    );
+
+    // The attribution: started and completed are both the harness's, the
+    // refusal its own word.
+    let line_of = |kind: Kind| {
+        recorder
+            .structure()
+            .expect("the serving record")
+            .by_kind(kind)
+            .next()
+            .expect("authored")
+            .line
+            .to_string()
+    };
+    assert!(line_of(Kind::ToolCallStarted).contains("\"subsystem\":\"harness\""));
+    let completed = line_of(Kind::ToolCallCompleted);
+    assert!(
+        completed.contains("\"subsystem\":\"harness\""),
+        "{completed}"
+    );
+    assert!(completed.contains("refused"), "{completed}");
+    assert!(
+        line_of(Kind::MessageToolResult).contains(&refused_name),
+        "the refusal is the record's, naming the call"
     );
 }
 
@@ -1795,7 +2041,7 @@ fn leave_during_turn(forced: bool, crossing: bool, before_call: bool) -> LeaveDu
     };
     let with_call = generated(
         vec![ContentBlock::ToolCall(weaver_traits::ToolCall {
-            name: "bash".into(),
+            name: "sh".into(),
             arguments: r#"{"command":"sleep 5"}"#.into(),
         })],
         Finish::Completed,
@@ -1978,6 +2224,7 @@ fn leave_during_turn(forced: bool, crossing: bool, before_call: bool) -> LeaveDu
                 held: &mut held_frames,
                 tools: None,
                 contained: None,
+                shell_granted: true,
             }),
             None,
             None,
@@ -2767,7 +3014,7 @@ fn a_call_asked_in_the_wind_down_is_never_sent() {
     let asked = weaver_types::TokenAnswer::Generated(Generation {
         unrecovered: vec![],
         content: vec![ContentBlock::ToolCall(weaver_traits::ToolCall {
-            name: "bash".into(),
+            name: "sh".into(),
             arguments: r#"{"command":"true"}"#.into(),
         })],
         emission: "a call".into(),
@@ -2909,7 +3156,7 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
     let calls = (0..call_count)
         .map(|_| {
             ContentBlock::ToolCall(weaver_traits::ToolCall {
-                name: "bash".into(),
+                name: "sh".into(),
                 arguments: r#"{"command":"sleep 5"}"#.into(),
             })
         })
@@ -3122,6 +3369,7 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
                 held: &mut held,
                 tools: None,
                 contained: None,
+                shell_granted: true,
             }),
             None,
             None,
@@ -4416,7 +4664,7 @@ fn an_unrecovered_call_opens_no_execution_exchange() {
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
             content: vec![
                 weaver_traits::ContentBlock::ToolCall(weaver_traits::ToolCall {
-                    name: "calculator".into(),
+                    name: "sh".into(),
                     arguments: r#"{"expression":"37 * 43"}"#.into(),
                 }),
                 weaver_traits::ContentBlock::UnrecoveredCall {
@@ -4424,7 +4672,7 @@ fn an_unrecovered_call_opens_no_execution_exchange() {
                 },
             ],
             unrecovered: vec![unrecovered_entry("<tool_call>z", true)],
-            emission: r#"<tool_call>{"name":"calculator"}</tool_call>"#.into(),
+            emission: r#"<tool_call>{"name":"sh"}</tool_call>"#.into(),
             finish: Finish::Completed,
             resident: 64,
             capacity: 4096,
@@ -4478,7 +4726,7 @@ fn an_unrecovered_call_opens_no_execution_exchange() {
         let weaver_types::Payload::Tool(execution) = &envelope.payload else {
             panic!("the exchange carries the call, got {:?}", envelope.payload);
         };
-        assert_eq!(execution.name.0, "calculator");
+        assert_eq!(execution.name.0, "sh");
         let outcome = weaver_gate_execute_stub(execution);
         gate_far
             .send(&weaver_types::OrganEnvelope {
@@ -4546,6 +4794,7 @@ fn an_unrecovered_call_opens_no_execution_exchange() {
                 held: &mut held,
                 tools: None,
                 contained: None,
+                shell_granted: true,
             }),
             None,
             None,

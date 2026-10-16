@@ -243,6 +243,7 @@ fn a_directive_outside_the_drawn_vocabulary_refuses_out_of_order() {
                     },
                 },
                 socket: "/nonexistent/gate.sock".into(),
+                shell: None,
             },
             LifecycleDirective::Lower,
             LifecycleDirective::Load { agent: agent() },

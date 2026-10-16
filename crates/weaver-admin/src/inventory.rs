@@ -160,6 +160,27 @@ fn take_inventory_against(
         | ConfigErrorKind::Malformed => LifecycleRefusal::ConfigInvalid { field: e.field },
     })?;
 
+    // **The shell is refused until its deployment is built** (#29, the first
+    // of its two acts): the declaration may name `sh`, and the gate and the
+    // harness confine and offer it where a grant arrives, but this crate
+    // builds no grant yet - no busybox judged, no `commands/`. A declaration
+    // electing it refuses here, naming `tool-set`, rather than loading with
+    // the election honoured by nothing. The second act replaces this with the
+    // grant.
+    if !config.tool_set.is_empty() {
+        diag!(
+            "{}",
+            serde_json::json!({
+                "refusal": "config_invalid",
+                "field": "tool-set",
+                "detail": "the shell's deployment (its busybox, grant and commands directory, #29) is not built yet, so no declaration may elect it",
+            })
+        );
+        return Err(LifecycleRefusal::ConfigInvalid {
+            field: Some(FieldName("tool-set".into())),
+        });
+    }
+
     // The kind conditions the gate instruction's presence, per
     // `weaver-types-Spec` section 2: a serving declaration requires it and a
     // diagnostic declaration excludes it. The parse checks each field alone,
@@ -170,9 +191,10 @@ fn take_inventory_against(
         config.binding_kind.clone().unwrap_or(BindingKind::Serving),
         config.gate_instruction.clone(),
     ) {
-        (BindingKind::Serving, Some(gate_instruction)) => {
-            EnterBinding::Serving { gate_instruction }
-        }
+        (BindingKind::Serving, Some(gate_instruction)) => EnterBinding::Serving {
+            gate_instruction,
+            shell: None,
+        },
         (BindingKind::Diagnostic, None) => EnterBinding::Diagnostic,
         _ => {
             return Err(LifecycleRefusal::ConfigInvalid {
@@ -361,7 +383,9 @@ fn take_inventory_against(
         denied_uids: Default::default(),
     };
     let rule = match &binding {
-        EnterBinding::Serving { gate_instruction } => &gate_instruction.access_rule,
+        EnterBinding::Serving {
+            gate_instruction, ..
+        } => &gate_instruction.access_rule,
         _ => &empty_rule,
     };
     if let Some(unreachable) = match group {

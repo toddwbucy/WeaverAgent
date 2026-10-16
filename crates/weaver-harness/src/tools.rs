@@ -38,6 +38,38 @@
 //! ```
 
 use weaver_traits::ToolResultBlock;
+
+/// **The shell's name**, the one registered tool (`weaver_types::REGISTERED_TOOLS`,
+/// the operator's ruling of 2026-10-16 on #29).
+pub(crate) const SHELL_TOOL: &str = "sh";
+
+/// **The shell's schema, this crate's own text** (`weaver-harness-Spec`
+/// section 5, #29): a POSIX `sh` command line, busybox's ash, over the
+/// build's listed commands, run in the agent's home with the clock this crate
+/// gives every call. Offered only where the enter carries the shell's grant.
+pub(crate) fn shell_schema() -> String {
+    serde_json::json!({
+        "name": SHELL_TOOL,
+        "description": format!(
+            "Run one POSIX sh command line (busybox ash: no bash arrays, no [[ ]]) in this \
+             agent's home, over the commands its build lists. The answer is the command's \
+             standard output and error, with a nonzero exit status appended. The call is \
+             killed after {} seconds. There is no network.",
+            crate::engine::TOOL_CALL_CLOCK_MS / 1000
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The command line, run as sh -c"
+                }
+            },
+            "required": ["command"]
+        }
+    })
+    .to_string()
+}
 use weaver_types::ToolOutcome;
 
 /// How many execution rounds one turn may run before the harness stops

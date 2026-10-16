@@ -373,7 +373,6 @@ fn config_source(sink_dir: &std::path::Path) -> String {
         concat!(
             "session = \"s-1\"\n",
             "tool-set = []\n",
-            "permission-mode = \"ask\"\n",
             "\n",
             "[spu-instruction.decoder]\n",
             "residual-readout-election = false\n",
@@ -1068,4 +1067,34 @@ fn the_artifact_is_named_here_and_resolved_at_admission() {
             if f.0 == "spu-instruction.decoder.model-binding.artifact" => {}
         other => panic!("an unnamed artifact refuses naming the field, got {other:?}"),
     }
+}
+
+/// **A declaration electing the shell refuses until its deployment is built**
+/// (#29's first act): `tool-set = ["sh"]` parses, and the inventory refuses
+/// it `ConfigInvalid` naming `tool-set`, so no load honours the election with
+/// nothing. The control: the same declaration with the empty set admits. The
+/// second act inverts this test, the election then building the grant.
+///
+/// Perturbation: remove the refusal and the election admits.
+#[test]
+fn a_declaration_electing_the_shell_refuses_until_the_deployment_is_built() {
+    let root = scratch("shell-elected");
+    let sink_dir = root.join("sink");
+    std::fs::create_dir_all(&sink_dir).expect("sink dir");
+    std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o750)).expect("mode");
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).expect("home");
+    let name = AgentName("alpha".to_string());
+    let bound = boundary(&home, 65533);
+    let elected = config_source(&sink_dir).replace("tool-set = []", "tool-set = [\"sh\"]");
+    let refused = take_inventory(&name, &elected, &bound);
+    assert!(
+        matches!(
+            &refused,
+            Err(LifecycleRefusal::ConfigInvalid { field: Some(field) }) if field.0 == "tool-set"
+        ),
+        "the shell's election refuses naming tool-set: {refused:?}"
+    );
+    let control = take_inventory(&name, &config_source(&sink_dir), &bound);
+    assert!(control.is_ok(), "the empty set admits: {control:?}");
 }

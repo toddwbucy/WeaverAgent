@@ -326,3 +326,51 @@ fn the_resolved_tree_carries_no_runtime_no_logging_no_yaml() {
         );
     }
 }
+
+/// **No release build reaches the unconfined shell** (#29, `weaver-gate-Spec`
+/// section 8.1). The supervision suite's bare constructor is gated by
+/// `#[cfg(test)]` and nothing else, and this crate declares no feature, so
+/// no `--features` and no cfg a build can set brings it into the binary. An
+/// integration test compiles the library without `cfg(test)`, so none can
+/// reach it either.
+///
+/// Perturbation: gate the constructor `#[cfg(any(test, feature = "bare"))]`
+/// and declare the feature, and both assertions fail.
+#[test]
+fn no_release_build_reaches_the_unconfined_shell() {
+    let confine =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/tools/confine.rs"))
+            .expect("confine.rs reads");
+    let constructor = confine
+        .find("pub(crate) fn bare(")
+        .expect("the bare constructor is where this test looks");
+    let before: Vec<&str> = confine[..constructor]
+        .lines()
+        .rev()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("///"))
+        .take(1)
+        .collect();
+    assert_eq!(
+        before,
+        ["#[cfg(test)]"],
+        "the bare constructor is gated by cfg(test) and nothing else"
+    );
+    assert_eq!(
+        confine.matches("fn bare(").count(),
+        1,
+        "one bare constructor"
+    );
+    let manifest = cargo_json(&["metadata", "--format-version", "1", "--no-deps"]);
+    let gate = manifest["packages"]
+        .as_array()
+        .expect("packages")
+        .iter()
+        .find(|package| package["name"] == "weaver-gate")
+        .expect("weaver-gate is a package");
+    assert_eq!(
+        gate["features"],
+        serde_json::json!({}),
+        "weaver-gate declares no feature"
+    );
+}

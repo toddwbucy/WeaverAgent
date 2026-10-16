@@ -371,7 +371,6 @@ render_declaration() {
 cat <<TOML
 session = "$SESSION"
 tool-set = []
-permission-mode = "deny"
 # **A serving binding carries a gate instruction and the inventory refuses it
 # absent.** An unstated binding-kind resolves to serving, so both are written
 # rather than left to a default a reader cannot see.
