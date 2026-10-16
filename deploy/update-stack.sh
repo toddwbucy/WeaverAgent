@@ -1074,7 +1074,11 @@ on_exit() {
   set +e
   trap 'printf "  the run is concluding; a signal now is held until the restore is done\n" >&2' INT TERM HUP
   conclude_pending_unload
-  if [ "$COMPLETED" -eq 0 ] && [ "$INSTALL_DONE" -eq 1 ]; then
+  # **A run that wrote the shell's key restores too** (#29, Codex on #177):
+  # a repair-only run installs nothing and may still write it, and restore's
+  # binary branch stays guarded by INSTALL_DONE, so such a restore removes
+  # the key and touches no binary.
+  if [ "$COMPLETED" -eq 0 ] && { [ "$INSTALL_DONE" -eq 1 ] || [ "$SHELL_KEY_WRITTEN" -eq 1 ]; }; then
     printf '\n  the run did not complete (exit %d)\n' "$rc" >&2
     restore
   fi

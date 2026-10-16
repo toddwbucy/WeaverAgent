@@ -53,16 +53,18 @@ preflight() {
     command -v curl >/dev/null \
       || die "the shell's build fetches its tarball with curl, which this box does not have: install it, or name a tarball with BUSYBOX_TARBALL"
   fi
-  local probe
-  probe=$(mktemp -d "${TMPDIR:-/tmp}/weaver-busybox-preflight.XXXXXX")
-  printf 'int main(void) { return 0; }\n' >"$probe/c.c"
+  # A global, so the EXIT trap still names it after the function returns.
+  PROBE=$(mktemp -d "${TMPDIR:-/tmp}/weaver-busybox-preflight.XXXXXX")
+  # Removed on every exit, a signal's among them.
+  trap 'rm -rf -- "$PROBE"' EXIT
+  printf 'int main(void) { return 0; }\n' >"$PROBE/c.c"
   # **gcc, as busybox's Makefile names it** (`$(CROSS_COMPILE)gcc`), linked
   # statically as the build will link it.
-  if ! gcc -static -o "$probe/c" "$probe/c.c" >/dev/null 2>&1; then
-    rm -rf -- "$probe"
+  if ! gcc -static -o "$PROBE/c" "$PROBE/c.c" >/dev/null 2>&1; then
+    rm -rf -- "$PROBE"
     die "gcc does not link statically (no static libc): the shell's busybox is static"
   fi
-  rm -rf -- "$probe"
+  rm -rf -- "$PROBE"
 }
 if [ "${1:-}" = --preflight ]; then
   preflight

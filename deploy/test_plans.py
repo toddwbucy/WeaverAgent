@@ -2648,6 +2648,37 @@ esac
                 self.assertFalse(held.exists())
                 self.assertIn("restored /etc/sudoers.d/weaver-existing", run.stderr)
 
+    def test_a_signal_after_the_shell_key_on_a_repair_run_removes_it(self):
+        """**An interrupted repair run removes the shell key it wrote** (#29,
+        Codex on #177), the real signal source modelled: the box already
+        holds every binary the build makes, so nothing installs, the stack
+        record has no shell-binary, the run writes it, and the stand-in admin
+        signals the run's whole process group at the reconcile's validate.
+        The exit trap restores: no key remains, and the unchanged busybox
+        stands. Perturbation: drop SHELL_KEY_WRITTEN from the trap's condition
+        and the key stays."""
+        rule, held = self.window_admin(
+            f"if [ \"$1\" = validate ] && [ ! -e '{self.root / 'signalled'}' ]; then "
+            f": > '{self.root / 'signalled'}'; "
+            "kill -TERM -- -$(ps -o pgid= -p $$ | tr -d ' '); sleep 5; fi\n")
+        installed = self.root / "installed"
+        for member in ("pyworker", "worker", "weaver-admin", "weaver-trace-relay", "weaver-gate",
+                       "weaver-spu", "weaver-state"):
+            installed.joinpath(member).write_text("fixture artifact " + member)
+        installed.joinpath("busybox").write_text("fixture busybox")
+        installed.joinpath("busybox.applets").write_text("ls\ncat\n")
+        key = self.stack / "shell-binary"
+        self.assertFalse(key.exists())
+        run = subprocess.run(["bash", str(self.repo / "deploy" / "update-stack.sh"), "--install"],
+                             env=self.env, text=True, capture_output=True, timeout=60,
+                             start_new_session=True)
+        self.assertEqual(run.returncode, 143, run.stdout + run.stderr)
+        self.assertIn("nothing to install", run.stdout)
+        self.assertIn("the stack record gains shell-binary", run.stdout)
+        self.assertFalse(key.exists(), run.stdout + run.stderr)
+        self.assertEqual(installed.joinpath("busybox").read_text(), "fixture busybox")
+        self.assertTrue(rule.exists(), "the held rule is put back as before")
+
     def test_stack_build_failure_cannot_claim_a_plan(self):
         self.env["BUILD_FAIL"] = "1"
         result = self.run_script("update-stack.sh")
