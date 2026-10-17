@@ -31,7 +31,7 @@ def instruction():
     return SpuInstruction.model_validate({'decoder':{
         'model-binding':{'artifact':'fixture','devices':[0]},
         'residual-readout-election':False,'surprisal-election':True,
-        'refeed-permission':True,'identity':[],
+        'refeed-permission':True,
         'tunable-values':{'seed':11,'context-capacity':256,'max-tokens-per-turn':4}}})
 
 @pytest.fixture(scope='session')

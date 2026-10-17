@@ -27,7 +27,7 @@ def serving(tiny_model, instruction):
     life.send({"exchange": {"opener": "harness", "ordinal": 0}, "position": "open",
                "payload": {"kind": "directive", "body": {"kind": "admit", "instruction": body}}})
     assert life.receive()["payload"] == {"kind": "answer", "body": {"kind": "admitted"}}
-    decode.send({"kind": "open", "session": "s", "messages": [
+    decode.send({"kind": "open", "session": "s", "column_ask": False, "messages": [
         {"role": "system", "content": [{"type": "text", "text": "be precise"}]}]})
     assert decode.receive() == {"kind": "opened"}
     return life, decode, thread, pairs

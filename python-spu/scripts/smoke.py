@@ -53,7 +53,7 @@ for run,readout in enumerate((False,False,True)):
                          arguments=('--cpu-experiment',) if args.device=='cpu' else ())
     try:
         instruction={'decoder':{'model-binding':{'artifact':str(args.artifact.resolve()),'devices':[0]},
-            'residual-readout-election':readout,'surprisal-election':True,'identity':identity,
+            'residual-readout-election':readout,'surprisal-election':True,
             'tunable-values':{'seed':11,'context-capacity':1024,'max-tokens-per-turn':32}}}
         begin=time.perf_counter()
         answer=process.ask({'kind':'admit','instruction':instruction})
@@ -61,7 +61,7 @@ for run,readout in enumerate((False,False,True)):
         load_seconds=time.perf_counter()-begin
         gpu_loaded=gpu_status()
         decode=process.channels[1]
-        decode.send({'kind':'open','session':'smoke','messages':identity})
+        decode.send({'kind':'open','session':'smoke','messages':identity,'column_ask':False})
         assert decode.receive()=={'kind':'opened'}
         decode.send({'kind':'append_and_generate','turn':'smoke-turn','delta':delta})
         frames=[]; begin=time.perf_counter()

@@ -41,7 +41,7 @@ def test_exec_admit_generate_flush_release(child,tiny_model,instruction,oracle):
     body=dump(instruction); body['decoder']['model-binding']['artifact']=str(tiny_model)
     assert lifecycle_ask(life,{'kind':'release'})['payload']=={'kind':'refusal','body':{'kind':'out_of_order'}}
     assert lifecycle_ask(life,{'kind':'admit','instruction':body},1)['payload']=={'kind':'answer','body':{'kind':'admitted'}}
-    decode.send({'kind':'open','session':'s','messages':[{'role':'system','content':[{'type':'text','text':'be precise'}]}]})
+    decode.send({'kind':'open','session':'s','column_ask':False,'messages':[{'role':'system','content':[{'type':'text','text':'be precise'}]}]})
     assert decode.receive()=={'kind':'opened'}
     decode.send({'kind':'append_and_generate','turn':'t','delta':[{'role':'user','content':[{'type':'text','text':'hello world'}]}]})
     frames=[]

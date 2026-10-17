@@ -556,12 +556,13 @@ def test_the_pins_are_closed_on_every_path(artifact, monkeypatch):
 
 
 def test_a_symlinked_container_admits_and_hashes_as_the_rust_does(artifact, oracle):
-    """hash_canonical does not follow links, so a container reached through one is left
-    out of the digest, the pin still serving its load, which is #25's symlinked-member
-    item. The sidecars are the link target's, artifact.rs `sidecar_dir_of`, so the
-    target's directory holds them, and a target standing alone, no `config.json` beside
-    it, refuses on both sides at the header (Codex on #47). Perturbation: refuse every
-    pinned container the walk does not meet, and this refuses."""
+    """hash_canonical follows links and hashes each target under the link's name, per
+    weaver-spu-Spec section 3 on the operator's ruling of 2026-10-01 (#25's
+    symlinked-member item), so a container reached through one is in the digest. The
+    sidecars are the link target's, artifact.rs `sidecar_dir_of`, so the target's
+    directory holds them, and a target standing alone, no `config.json` beside it,
+    refuses on both sides at the header (Codex on #47). Perturbation: skip links in the
+    walk, as before the ruling, and the two digests differ."""
     root, _ = artifact
     store = root.parent / "store"
     store.mkdir()
@@ -614,3 +615,28 @@ def test_a_move_that_fails_part_way_is_unreachable_before_the_cache_is_freed(tin
     assert caught.value.kind == "device_cannot_admit"
     assert caught.value.__cause__ is None and caught.value.__context__ is None
     assert seen == [True]
+
+
+def test_dot_entries_are_outside_the_walk_and_a_dangling_link_refuses(artifact, oracle):
+    """The walk's other two rules, per weaver-spu-Spec section 3 on the operator's ruling
+    of 2026-10-01, measured against the Rust walk: a dot-entry and everything under it
+    is outside the digest, a downloader's `.cache/` the standing case, and a link that
+    leads nowhere refuses on both sides. Perturbations: walk dot-entries, and the digest
+    moves off the Rust's; skip a dangling link, and Python admits what the Rust refuses."""
+    root, _ = artifact
+    served = engine.HFEngine(root, [0], cpu=True)
+    try: before = served.weights_hash
+    finally: served.close()
+    (root / ".cache").mkdir()
+    (root / ".cache" / "fetch.lock").write_text("downloader state")
+    served = engine.HFEngine(root, [0], cpu=True)
+    try:
+        assert served.weights_hash == before
+        assert oracle(op="weights_hash", path=str(root)) == {"ok": served.weights_hash}
+    finally:
+        served.close()
+    (root / "notes.txt").symlink_to(root / "gone.txt")
+    with pytest.raises(AdmissionError) as refused:
+        engine.HFEngine(root, [0], cpu=True)
+    assert refused.value.kind == "artifact_unreadable", refused.value
+    assert "error" in oracle(op="weights_hash", path=str(root))

@@ -43,7 +43,6 @@ class DecoderInstruction(Config):
     surprisal_election: bool = False
     refeed_permission: bool = False
     column_permission: bool = False
-    identity: list[Message]
     tunable_values: dict[str, Finite]
 class ClassifyInstruction(Config):
     model_binding: ModelBinding
@@ -62,7 +61,7 @@ def tagged(*models):
     return TypeAdapter(Annotated[Union[tuple(models)], Field(discriminator='kind')])
 
 TOKEN_DIRECTIVE = tagged(
-    variant('open', session=(str, ...), messages=(list[Message], ...), column_ask=(bool, False)),
+    variant('open', session=(str, ...), messages=(list[Message], ...), column_ask=(bool, ...)),
     variant('append_and_generate', turn=(str, ...), delta=(list[Message], ...)),
     variant('re_feed', turn=(str, ...), rendered=(str, ...), path=(list[U32], ...)),
     variant('cancel', turn=(str, ...)), variant('flush', keep=(U64, ...)),

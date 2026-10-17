@@ -127,23 +127,31 @@ def file_digest(pinned):
     return digest.hexdigest()
 
 def weights_digest(path,pinned):
-    """weaver-spu artifact.rs `hash_canonical`'s value: every regular file under the
-    directory, sorted, symbolic links not followed, its relative path and then its
-    bytes, in blake3. **A pinned container's bytes are read through its pin**, so under
-    a swap during admission the digest names the bytes the load served, where the Rust
-    walk reads the new name. A container reached through a symbolic link is left out of
-    the walk, as the Rust leaves it, the pin still serving its size and its load: that
-    parity is #25's symlinked-member item, awaiting the operator's ruling. A pinned
-    name that no longer exists at all, unlinked after the pin, is refused rather than
-    left out of the identity."""
+    """weaver-spu artifact.rs `hash_canonical`'s value, per weaver-spu-Spec section 3 on
+    the operator's ruling of 2026-10-01: every regular file under the directory, sorted
+    by name, a dot-entry and everything under it left out, **symbolic links followed and
+    each target hashed under the link's name**, its relative path and then its bytes, in
+    blake3. A link that leads nowhere or loops refuses, as the Rust walk does. **A pinned
+    container's bytes are read through its pin**, so under a swap during admission the
+    digest names the bytes the load served, where the Rust walk reads the new name. A
+    pinned name that no longer exists at all, unlinked after the pin, is refused rather
+    than left out of the identity."""
     path=Path(path); pins=dict(pinned); met=set()
     digest=blake3()
-    def walk(directory):
+    def unreadable(file,error):
+        return AdmissionError('artifact_unreadable',f'the walk cannot read {file}: {error}')
+    def walk(directory,ancestors):
         for file in sorted(directory.iterdir(),key=lambda p:p.name):
-            if file.is_symlink(): continue
-            if file.is_dir(): yield from walk(file)
-            elif file.is_file(): yield file
-    for file in walk(path):
+            if file.name.startswith('.'): continue
+            try: status=file.stat()
+            except OSError as error: raise unreadable(file,error) from error
+            if stat.S_ISDIR(status.st_mode):
+                identity=(status.st_dev,status.st_ino)
+                if identity in ancestors: raise unreadable(file,'a link loops')
+                yield from walk(file,ancestors|{identity})
+            elif stat.S_ISREG(status.st_mode): yield file
+    root_status=path.stat()
+    for file in walk(path,{(root_status.st_dev,root_status.st_ino)}):
         relative=str(file.relative_to(path))
         digest.update(relative.encode())
         if relative in pins:

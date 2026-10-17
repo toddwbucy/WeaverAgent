@@ -74,13 +74,12 @@ def launch(command, arguments, model, record, device):
         instruction = {"decoder": {
             "model-binding": {"artifact": str(model), "devices": [0]},
             "residual-readout-election": False, "surprisal-election": True,
-            "identity": identity,
             "tunable-values": {"seed": 11, "context-capacity": 256, "max-tokens-per-turn": 4}}}
         try:
             answer = process.ask({"kind": "admit", "instruction": instruction})
             assert answer["payload"] == {"kind": "answer", "body": {"kind": "admitted"}}, answer
             decode = process.channels[1]
-            decode.send({"kind": "open", "session": "declare", "messages": identity})
+            decode.send({"kind": "open", "session": "declare", "messages": identity, "column_ask": False})
             assert decode.receive() == {"kind": "opened"}
             decode.send({"kind": "append_and_generate", "turn": "declare-turn", "delta": [
                 {"role": "user", "content": [{"type": "text", "text": "hello world"}]}]})
