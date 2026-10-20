@@ -418,19 +418,19 @@ of anything this section or 5.3 requires. Stated because the shape invites the o
 reading: a feature named for what the crate does not draw looks like the draw rule
 speaking, and it is not.
 
-**The filesystem is reached the same way, through a door and not by a path**, per
-the operator's ruling of 2026-09-23. Nothing internal to the agent's operation opens
-the filesystem directly: access goes through admin or the gate, over a Unix socket.
-The exception is narrow and has three conditions, all required: the access is needed
-for the agent's internal operation, it is scoped to the one function that needs it,
-and the kernel secures it. The SPU reading its pinned model artifact, the embedded
-state engine opening its store in a territory only its own account can enter, and the
-Python loop worker reading its loop file each meet all three. A descriptor handed over
-by admin is the preferred form where it fits, as the trace sink and the diagnostic
-record already take it, since an organ that holds a descriptor and no path cannot name
-anything else. The rule is the same one that governs what is compiled into a binary:
-nothing is present unless operation requires it, and a need that arrives later is
-answered by adding it and rebuilding rather than by admitting it in advance.
+**The filesystem is reached the same way, through a door and not by a path**, per the
+operator's ruling of 2026-09-23. Nothing internal to the agent's operation opens the
+filesystem directly: access goes through admin or the gate, over a Unix socket. The
+exception is narrow and has three conditions, all required: the access is needed for the
+agent's internal operation, it is scoped to the one function that needs it, and the
+kernel secures it. The SPU reading its pinned model artifact and the embedded state
+engine opening its store in a territory only its own account can enter each meet all
+three. A
+descriptor handed over by admin is the preferred form where it fits, as the trace sink
+and the diagnostic record already take it, since an organ that holds a descriptor and no
+path cannot name anything else. The rule is the same one that governs what is compiled
+into a binary: nothing is present unless operation requires it, and a need that arrives
+later is answered by adding it and rebuilding rather than by admitting it in advance.
 
 This invariant is what makes statefulness a feature add rather than a
 re-architecture. Memory behind a socket is a new socket, a new contract, and a
@@ -586,8 +586,8 @@ that makes the parts one program cannot itself be a part.
 and every agentic loop is: it decides what reaches the model and when, and reconciles
 what happened with what is supposed to happen, turn by turn. **There is one loop,
 written in Rust and compiled into the worker**, which is the deployment path
-`weaver-harness-Spec` section 1 already states, the Python-iterating worker staying
-untouched as the bench and experiments lane. There is no loop election and no pluggable
+`weaver-harness-Spec` section 1 states. The Python iteration and SPU tracks retire on
+the operator's ruling of 2026-10-20 (#180). There is no loop election and no pluggable
 loop, and an operator bringing a loop of its own is parked by name at section 9. The
 loop calls on the state member's store and on the SPU's classifier through the harness,
 organs never linking, and both are primitives in the sense of section 2: mechanics
@@ -1083,16 +1083,17 @@ hold, and answering a query over what it holds, are state management's and in sc
 What stays out is the layer below it, the lossy compression consolidation writes, which
 returns by the same door and reads from state's save points when it comes.
 
-**The operator bringing the loop is parked here by name**, on the same rulings. The
-loop of section 5.5 is one loop, compiled into the worker, and `loop-file`, a
-declaration naming code the worker runs, retires for the compiled path with the
-pyworker lane. Its opinions are settings in the declaration's `[state-management]`
-table, recorded on the load event: the table's grammar is `weaver-types-Spec`'s, with
-the declaration's other keys, and its meaning is `weaver-harness-Spec`'s, with the
-loop, per the operator's ruling of 2026-10-02 on #58's sixth question. An operator
-supplying a loop of its own, by a declared file or any other path, is a possible
-future feature, not built here, and it returns by the mechanism below if it returns at
-all. Naming it is not a slot: no field, flag or seam is carried for it.
+**The operator bringing the loop is parked here by name**, on the same rulings. The loop
+of section 5.5 is one loop, compiled into the worker, and `loop-file`, a declaration
+naming code the worker runs, is retired with the Python worker on 2026-10-20 (#180). A
+declaration carrying it refuses by name. Its opinions are settings in the declaration's
+`[state-management]` table, recorded on the load event: the table's grammar is
+`weaver-types-Spec`'s, with the declaration's other keys, and its meaning is
+`weaver-harness-Spec`'s, with the loop, per the operator's ruling of 2026-10-02 on #58's
+sixth question. An operator supplying a loop of its own, by a declared file or any other
+path, is a possible future feature, not built here, and it returns by the mechanism
+below if it returns at all. Naming it is not a slot: no field, flag or seam is carried
+for it.
 
 **Save points as task- or workflow-level presets are parked here by name**, on the
 operator's ruling of 2026-10-02 on #58: a known-good context returned to repeatedly for

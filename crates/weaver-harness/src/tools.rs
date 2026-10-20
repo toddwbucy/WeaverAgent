@@ -14,6 +14,7 @@
 //!   sent,
 //! - its own `Refused` for a call naming a tool the enter did not grant, no
 //!   exchange opened (#29).
+//!
 //! Each is a fact the model must learn, and a refusal
 //! that could not author a tool-result turn would leave the conversation with
 //! a hole where the answer goes.

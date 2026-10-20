@@ -99,32 +99,11 @@ leftovers.
     src/bin/worker/main.rs    the composition root, framework, section 6
     src/bin/worker/dev_loop/  the loop body, the developer's, section 6
 
-    src/bin/pyworker/main.rs     the Python-iterating worker, framework, section 6
-    src/bin/pyworker/py_loop.rs  the connector at the crossing, framework, section 6
-    src/bin/pyworker/dev_python/ the loop files, the developer's, section 6
-
-Twelve library files and no placement among them, and two bin targets: the
-demonstration worker, arriving with the wiring act, and the Python-iterating
-worker, entering the tree 2026-08-19 behind the `pyworker` feature. **This
-listing is re-derived from the tree rather than amended**, four modules having
-landed without it moving - `spawn.rs`, `record.rs`, `failure.rs` and
-`replay.rs` - and `src/tools.rs` having been listed as blocked while the
-granted tool result of section 6 fills it.
-
-**The loop files under `dev_python/` would owe conformance headers**, Python being
-a supported unit since the operator's ruling of 2026-09-17 and the header rule
-suspended until release since 2026-09-27, **and a header here would have no
-assertion to cite.** The blade is a compile pin held in
-`engine.rs`, the crossing is loop 0's and cited at `lifecycle.rs`, and the
-filesystem boundary this section argues is cited from the framework side at
-`src/bin/worker/main.rs`, which is where a reader establishes a claim about what
-sits outside the developer's directories. A loop file is the builder's own code
-arriving by the same path any builder's does, so what it shows is the seat it
-composes against rather than a claim it holds. Minting an assertion to close the
-reading would convert an honest absence into a documented enforcement. The
-condition on which a header lands here is an assertion whose instrument is a
-loop file, and until release the headers stand unmaintained and nothing reads
-them, the census that read them having retired on 2026-09-27.
+The library holds the framework and the `worker` bin target holds the composition root
+and its Rust loop. The Python worker, its loop scripts, the `pyworker` feature and the
+pyo3 dependency retire on the operator's ruling of 2026-10-20 (#180). The manifest
+instrument checks declared dependencies, including optional ones, and the bin inventory.
+No pyo3 dependency or second worker target is carried.
 
 **`src/classify.rs` leaves the listing, and the disagreement that leaves behind
 is named rather than settled here.** No such file exists and the label seam's
@@ -155,29 +134,12 @@ crossing's whole option space: an alternative realization of `dev_loop`
 composes against the same crossing without the framework moving, which is
 the general form and the only form this document states.
 
-**The general form has one realization in the tree, `pyworker`, per
-issue #134.** Framework identical to the demonstration worker, same
-arguments and same crossing, with the loop body marshalled into an embedded
-interpreter by `py_loop`: the loop file is read and compiled per crossing,
-so the builder iterates at conversation speed and freezes the result into
-a Rust `dev_loop` to deploy. The loop files live under `dev_python`, the
-developer's directory by the standing prefix. The file the crossing runs is
-resolved in a fixed order, per charter section 2's ruling of 2026-08-20 on
-issue #243: the `--loop-file` flag first, the declaration's member arriving
-on the argument vector per `weaver-admin-Spec` section 6, then the name
-`WEAVER_PY_LOOP` carries, the developer's bench override, then the deployed
-default. The flag wins because the declaration is the agent's own fact and
-the loop is a member of that agent's harness, unique to it, so an
-environment leaking across agents cannot silently share what the
-declarations separated. The binary and its interpreter dependency enter the manifest
-behind the `pyworker` feature, the dependency optional and the bin target
-carrying `required-features`, so no default build compiles or links an
-interpreter and the deployed worker's build is untouched. The blade holds
-by the same placement rule: a bin target links this library as an external
-crate, the crate-private constructor stays unreachable, and Python reaches
-only what the connector's proxy forwards from the granted seat, the proxy
-dying with its crossing. Which binary the start step runs stays a provisioning
-fact, and no document elects it.
+**The loop is developed and deployed in Rust**, on the operator's ruling of 2026-10-20
+(#180). The worker's `dev_loop` is the builder-facing surface, compiled against the
+granted seat. There is no file-loaded Python loop, interpreter, `WEAVER_PY_LOOP`
+override or `--loop-file` argument. The declaration parser refuses `loop-file` by name.
+The compiled worker's argument parser continues to refuse unknown flags. Which worker
+binary admin starts stays a provisioning fact.
 
 ```graph
 node: harness-dev-boundary-in-the-filesystem
@@ -2162,9 +2124,8 @@ are serial and each one blocks.
 
 **The loop these ports serve is state management**, per the operator's rulings of
 2026-10-02 on issue #1 and `weaver-agent-PRD` section 5.5. **One loop is deployed, the
-Rust loop compiled into the worker under `dev_loop`**, which is the freeze section 1
-already names, and no declaration elects another: the Python-iterating worker stays as
-section 1 states it, untouched, the bench and experiments lane a loop is iterated on.
+Rust loop compiled into the worker under `dev_loop`**, developed and tested through
+the same Rust surface as section 1 states. No declaration elects another loop.
 The ports above are the loop's whole reach into the store and the classifier, so state
 management composes against the same granted surface as every loop and mints nothing.
 **Its opinions are settings in the declaration's `[state-management]` table**, each with

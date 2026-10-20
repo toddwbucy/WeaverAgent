@@ -560,29 +560,28 @@ it the record says what the model did and not what the agent's state was built f
 which are different because the tee both selects which events cross and projects which
 payload paths ride with them, per `weaver-harness-state-contract` section 2.
 
-**Which loop composed the run, and whether the state member stood, are two more
-and were left out.** Both decide what a record is a record of and neither is an
-election about what the model reports. The loop is the party that assembles
-every prompt the model sees, and a deployment can run more than one: the worker
-binary's own, or a file the declaration names and a Python-iterating worker
-reads per crossing, per `weaver-harness-Spec` section 6. Two loops assemble
-different prompts from one declaration, so two records that do not say which
-loop composed them cannot be compared, and a reissue whose loop injects the
-session's past is not byte-comparable with a source whose loop did not, which
-is the finding of 2026-09-03 on issues #381 and #382. The state member's
-standing is the same shape one leg over: admin elects it from where a binary
-sits on disk, per issue #381, and no record said whether it stood, so a record
-taken with the member standing and one taken without are not comparable
-either. **From this act the `load` event names both**, the loop by the binary
-that ran it and the file and digest where the loop is a file, and the member
-not by that election but by whether its end arrived on the enter, which is the
+**Which loop composed the run, and whether the state member stood, are two more and were
+left out.** Both decide what a record is a record of and neither is an election about
+what the model reports. The loop is the party that assembles every prompt the model
+sees. The deployed loop is compiled into the Rust worker, per `weaver-harness-Spec`
+section 6. Historical records may instead name a file read by the Python worker, retired
+on 2026-10-20 (#180). Two loops assemble different prompts from one declaration, so two
+records that do not say which loop composed them cannot be compared, and a reissue whose
+loop injects the session's past is not byte-comparable with a source whose loop did not,
+which is the finding of 2026-09-03 on issues #381 and #382. The state member's standing
+is the same shape one leg over: admin elects it from where a binary sits on disk, per
+issue #381, and no record said whether it stood, so a record taken with the member
+standing and one taken without are not comparable either. **From this act the `load`
+event names both**, the loop by the binary that ran it, preserving the file and digest
+fields for historical file-loaded loops while the compiled worker emits neither, and the
+member not by that election but by whether its end arrived on the enter, which is the
 harness's own knowledge whatever admin decided from. **The loop's settings are one more
 such fact**, on the operator's ruling of 2026-10-02 on issue #1: the compiled loop's
 opinions are the operator's to set in the declaration's `[state-management]` table, per
-`weaver-agent-PRD` section 5.5, so two records run under different settings are
-records of different loops. The `load` event carries every setting's value in effect,
-the declared value or the compiled default it fell back to, and the act that lands the
-table shapes the member.
+`weaver-agent-PRD` section 5.5, so two records run under different settings are records
+of different loops. The `load` event carries every setting's value in effect, the
+declared value or the compiled default it fell back to, and the act that lands the table
+shapes the member.
 
 **The store the member stands on is a third such fact, as of 2026-09-04.** Per
 `weaver-state-PRD` section 4 the engine is the deployment's election, changing only

@@ -1,6 +1,6 @@
 # Basic Inference Loop
 
-**Status:** MERGED v0.13, 2026-10-02. The workflow document for the basic inference
+**Status:** MERGED v0.14, 2026-10-20. The workflow document for the basic inference
 loop, filed under the harness's `Loops/` container per the Document Format's
 container entry. It argues no edges of its own: the seams it walks are declared in
 the crate charters per Document Format section 4, and a graph block here would
@@ -299,13 +299,13 @@ which composes this path with the state member's store and the SPU's classifier 
 the harness, its opinions exposed as settings in the declaration's `[state-management]`
 table and every judgment it makes recorded on the trace. It takes its own workflow
 document in this directory with the act that writes it, and no declaration elects
-another loop for the compiled path. The Python-iterating worker stays, untouched, as the
-bench and experiments lane a loop is iterated on, per `weaver-harness-Spec` section 1.
-Memory, when it comes, is held by the harness the same way and takes its own document.
-The loop is never held by the model. The SPU decoder is a token function the harness
-calls, one interior step of a turn, and the loop runs until the model returns a final
-answer or the operator interrupts it, per `weaver-harness-PRD` section 2, the interrupt
-arriving as the stop exchange.
+another loop. Development and deployment use the Rust implementation, per
+`weaver-harness-Spec` section 1 and the retirement ruling of 2026-10-20 (#180). Memory,
+when it comes, is held by the harness the same way and takes its own document. The loop
+is never held by the model. The SPU decoder is a token function the harness calls, one
+interior step of a turn, and the loop runs until the model returns a final answer or the
+operator interrupts it, per `weaver-harness-PRD` section 2, the interrupt arriving as
+the stop exchange.
 
 What the harness does in this loop: it serves the contract's exchanges, it
 authors every event and places each at its position, it fans turn content to the

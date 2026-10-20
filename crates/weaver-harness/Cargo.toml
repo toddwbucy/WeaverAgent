@@ -26,16 +26,3 @@ weaver-trace = { path = "../weaver-trace" }
 weaver-diagnostic = { path = "../weaver-diagnostic" }
 serde_json.workspace = true
 nix = { version = "0.31", features = ["socket", "fs", "process", "uio", "user", "poll", "signal"] }
-# The embedded interpreter of the python-iterating worker, per
-# weaver-harness-Spec section 1: optional behind the pyworker feature, so no
-# default build compiles or links it and the manifest assertions above keep
-# their subject, the featureless resolved tree.
-pyo3 = { version = "0.27", features = ["auto-initialize"], optional = true }
-
-[features]
-pyworker = ["dep:pyo3"]
-
-[[bin]]
-name = "pyworker"
-path = "src/bin/pyworker/main.rs"
-required-features = ["pyworker"]

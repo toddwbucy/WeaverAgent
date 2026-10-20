@@ -143,15 +143,13 @@ crate reads TOML 1.1, the deploy script and the experiment harness read with Pyt
 others refuse. Admin's parser is the authority on what a declaration says, and syntax
 only 1.1 has, a multiline inline table or a `\e` escape among it, is outside what the
 program guarantees. **A path in a declaration carries no control character**, on the
-operator's ruling of 2026-09-28: the restore's `record`, the `loop-file` (retiring with
-the pyworker lane, the compiled path's state-management loop being compiled into the
-worker on the operator's ruling of 2026-10-02 on #1) and the trace sink's `path` are
-refused by name where one does,
-because every reader in the suite, admin's parser, the deploy script's shell and the
-harness, must agree on what a path is, and a control character is where they part.
-JSON stays rejected on the criterion's comments clause: it has none, and a
-trailing-comma error at three in the morning on a file that gates a load is a bad way
-to learn about JSON.
+operator's ruling of 2026-09-28: the trace sink's `path` is refused by name where one
+does, because admin's parser, the deploy script and the harness must agree on what a
+path is. The restore's save point is a bare name with its own validation. `loop-file` is
+retired on the operator's ruling of 2026-10-20 (#180), and a configuration carrying it
+refuses as an unknown field, naming the key. JSON stays rejected on the criterion's
+comments clause: it has none, and a trailing-comma error at three in the morning on a
+file that gates a load is a bad way to learn about JSON.
 
 ```graph
 node: types-config-format-toml
@@ -211,7 +209,6 @@ pub struct AgentConfig {
     pub trace_sink: TraceSink,
     pub state_election: Option<StateElection>,
     pub state_store: Option<StateStore>,
-    pub loop_file: Option<PathBuf>,
     pub restore: Option<Restore>,
     pub lifecycle: Option<Lifecycle>,
 }
@@ -556,14 +553,8 @@ kinds**, which no election matches, per `weaver-harness-state-contract` section 
 the rulings of 2026-10-02 on #58. `EnterPayload` carries the election resolved, admin
 filling that ruled default at inventory, so the worker never re-derives an absence. When
 the block is present, both its members are required, the required-field discipline
-resuming inside it. `loop_file` may be absent because `weaver-harness-PRD` section 2
-rules what absence means, the worker's own default loop, the compiled body or the
-installed file, which is what omitting the field says. Present, it names the loop file the agent's worker runs, the
-loop being a member of that agent's harness and unique to it per the same section's
-ruling of 2026-08-20, and it reaches the worker in its argument vector per
-`weaver-admin-Spec` section 6 rather than in any exchange, because no exchange carries a
-path. `state_store` may be absent because `weaver-state-PRD` section 4 rules what
-absence means, the embedded engine with the state member standing. Present, its
+resuming inside it. `state_store` may be absent because `weaver-state-PRD` section 4
+rules what absence means, the embedded engine with the state member standing. Present, its
 `engine` names which port the deployment elects, as of 2026-09-04: `none` declares that
 no member stands, which is a deployment's real posture and the one the
 instrument-validation matrices ran under, and `sqlite` the embedded engine. **An engine this
@@ -586,7 +577,7 @@ records them, per `weaver-trace-PRD` section 3.1. The enum is closed at two beca
 this build provides one engine, the embedded one, beside the absence of a member, and a
 further engine is a state act before it is a variant. `binding_kind` may be absent because
 `weaver-types-PRD` section 2.1 rules what absence means, a serving binding, on the same
-footing as `loop_file` above. The enum is closed at two cases because
+footing as `state_store` above. The enum is closed at two cases because
 `weaver-agent-PRD` section 6 names exactly two kinds, and a third kind is an apex act
 before it is a variant. `gate_instruction` is an `Option` for a reason the three above
 do not share: presence follows the resolved kind rather than standing alone, a serving

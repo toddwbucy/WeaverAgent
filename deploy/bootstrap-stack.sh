@@ -31,7 +31,7 @@
 # Box facts are environment, defaulted, printed, and never discovered from a
 # directory listing (the install set is named, per update-stack.sh):
 #
-#   WEAVER_PREFIX        /opt/weaver            bin/ lib/ models/ python-spu/
+#   WEAVER_PREFIX        /opt/weaver            bin/ lib/ models/
 #   WEAVER_ADMIN_CONFIG  /etc/weaver/admin      the admin base: one root per agent
 #   WEAVER_STACK_RECORD  /etc/weaver/stack      the scripts' record of this install
 #   WEAVER_OPERATOR      $SUDO_USER or $USER    named in the plan; owns nothing this makes
@@ -50,6 +50,7 @@ die()  { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
+source "$REPO/deploy/retired-python.sh"
 
 # The operator's cargo, rustup and PATH do the building; root has none of
 # them. Measured 2026-09-30: under sudo the toolchain read empty and nvcc
@@ -70,8 +71,10 @@ OPERATOR=${WEAVER_OPERATOR:-${SUDO_USER:-$USER}}
 AGENT_DIR=${WEAVER_AGENT_DIR:-/var/lib/weaver-agent}
 CUDA_LIB_DIR=${CUDA_LIB_DIR:-/opt/cuda/lib64}
 
-MEMBERS="pyworker worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
-MEMBER_FEATURES=weaver-harness/pyworker,weaver-state/sqlite
+refuse_python_install "$PREFIX" "$PREFIX/bin"
+
+MEMBERS="worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
+MEMBER_FEATURES=weaver-state/sqlite
 SPU_FEATURES=weaver-spu/cuda
 FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
 # The engine's shared objects. llama-cpp-sys builds them into its own

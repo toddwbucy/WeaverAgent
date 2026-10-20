@@ -11,6 +11,11 @@ parent: WeaverTools Technical Documentation
 
 **Status:** technical documentation. Describes, decides nothing.
 
+**Historical snapshot.** The Python iteration path described below retired on 2026-10-20
+(#180). Current development and deployment use the compiled Rust loop, per
+`weaver-harness-PRD` section 2 and `weaver-harness-Spec` section 1. The Python
+implementation is preserved in Git at `e8c004ddb1f189ace0faceaf0480c643aae5c471`.
+
 **Rough draft, first pass.** This page is drafted where the crate papers are not,
 because the surface it describes exists in code and has no paper anywhere else on
 this site.

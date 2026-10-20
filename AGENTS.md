@@ -6,8 +6,8 @@ This Rust 2024 workspace holds ten packages under `crates/weaver-*`, the agent o
 WeaverTools suite. Each crate keeps implementation in `src/` and integration tests in
 `tests/`, with fixtures where needed. `weaver-traits` and `weaver-types` are the floor;
 the harness connects the organs through contracted seams, every one a Unix socket where
-a process line is crossed. `python-spu/` is a Python prototype of the SPU's decode role
-with its own README and lock files.
+a process line is crossed. The worker and SPU are Rust implementations. Python remains
+in development and deployment tooling, with no Python interpreter in the agent runtime.
 
 `docs/crates/` holds crate PRDs, Specs, and contracts. `process/` holds the working
 rules and the lock gate; `deploy/` holds the install scripts and their two guides. Read

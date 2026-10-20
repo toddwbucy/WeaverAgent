@@ -1,6 +1,6 @@
 # Diagnostic Replay Loop
 
-**Status:** MERGED v0.5, 2026-10-02. The workflow document for the diagnostic replay
+**Status:** MERGED v0.6, 2026-10-20. The workflow document for the diagnostic replay
 loop, filed under the harness's `Loops/` container per the Document Format's container
 entry. It argues no edges of its own: the seams it walks are declared in the crate
 charters, and a graph block here would duplicate a record that already has a home.
@@ -21,27 +21,24 @@ The null replay of that charter's section 4 is this loop run with no reader
 elected, and every certified instrument after it is this loop with a reader
 on, which is what the charter means by the class being authored once.
 
-**It runs in the harness's seat, as the agent's declared loop.** The diagnostic
-declaration names this loop the way any declaration names its loop, riding `loop_file`
-per `weaver-harness-PRD` section 2, and it runs at the run's opening rather than on an
-arriving frame, because under a diagnostic binding no frame can arrive, there being no
-Gate. **That entry landed 2026-08-31**: `weaver-harness-Spec` section 6.2
-carries the second criterion beside the frame's, the seat granted once at
-the run's opening on the run itself as the work, the sealed preload having
-arrived owed its certification. An earlier
-form of this sentence rested it on the precedent the context-injection loop set, which
-does not carry it: that loop gained a port on a seat a turn had already granted, and a
-turn begins at the gate and nowhere else. The loop composes what the seat grants and
-nothing else - the state port, the decode surface, the flush and, since 2026-09-26, the
-elision - and it mints no port, per `weaver-harness-Spec` section 6.
+**It runs in the harness's seat under a diagnostic binding.** The binding's kind selects
+the compiled replay at the run's opening rather than on an arriving frame, because under
+a diagnostic binding no frame can arrive, there being no gate. **That entry landed
+2026-08-31**: `weaver-harness-Spec` section 6.2 carries the second criterion beside the
+frame's, the seat granted once at the run's opening on the run itself as the work, the
+sealed preload having arrived owed its certification. An earlier form of this sentence
+rested it on the precedent the context-injection loop set, which does not carry it: that
+loop gained a port on a seat a turn had already granted, and a turn begins at the gate
+and nowhere else. The loop composes what the seat grants and nothing else - the state
+port, the decode surface, the flush and, since 2026-09-26, the elision - and it mints no
+port, per `weaver-harness-Spec` section 6.
 
 **It is no exception to the one deployed loop**, per the operator's rulings of
 2026-10-02 on issue #1. The loop an agent serves under is state management, compiled
-into the worker, and nothing elects another. This loop is not elected either: it is
-what a diagnostic binding runs, the binding's kind selecting it at the load, and it
-manages no state, re-executing a finished record rather than composing a new one. The
-`loop_file` route above is among the Python-loop sites that ruling leaves to resolve
-another day.
+into the worker, and nothing elects another. This loop is not elected either: it is what
+a diagnostic binding runs, the binding's kind selecting it at the load, and it manages
+no state, re-executing a finished record rather than composing a new one. The Python
+loop route and `loop-file` retire on the ruling of 2026-10-20 (#180).
 
 **What it refuses is the substrate's three refusals**, per the charter:
 nothing enters from outside, the working structure is preloaded and read

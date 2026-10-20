@@ -279,6 +279,12 @@ AGENT_DIR=$(stack_key agent-directory required) || exit 1
 # refused on stderr after everything was provisioned and the run still
 # succeeded (Codex on #45).
 PREFIX=$(stack_key prefix required) || exit 1
+source "$(dirname "${BASH_SOURCE[0]}")/retired-python.sh"
+WORKER_BINARY=$(stack_key worker-binary required) || exit 1
+SPU_BINARY=${SPU_OVERRIDE:-$(stack_key spu-binary required)} || exit 1
+refuse_python_binary "$WORKER_BINARY" "the stack's worker-binary"
+refuse_python_binary "$SPU_BINARY" "this agent's spu-binary"
+refuse_python_install "$PREFIX" "$(dirname -- "$WORKER_BINARY")"
 # **The rule names the program sudo runs as root, so it is judged first**: the
 # installed weaver-admin, by its canonical path, held closed by admin's rule.
 ADMIN_BINARY=$(realpath -e -- "$PREFIX/bin/weaver-admin" 2>/dev/null) || die "no weaver-admin at $PREFIX/bin/weaver-admin"
@@ -288,7 +294,6 @@ bad=$(held_closed "$ADMIN_BINARY") || die "weaver-admin at $ADMIN_BINARY is not 
 # than at the first load.
 RELAY_BINARY="$(dirname -- "$(stack_key worker-binary required)")/weaver-trace-relay"
 [ -x "$RELAY_BINARY" ] || die "no weaver-trace-relay beside the worker at $RELAY_BINARY: update-stack.sh installs it"
-SPU_BINARY=${SPU_OVERRIDE:-$(stack_key spu-binary required)} || exit 1
 # **The stack's file names are judged as admin judges them, before anything is
 # provisioned.** Admin keys the load record's stack by file name, and
 # weaver-admin's `stack::judge_names` refuses every verb on a root where the
