@@ -557,10 +557,11 @@ resuming inside it. `state_store` may be absent because `weaver-state-PRD` secti
 rules what absence means, the embedded engine with the state member standing. Present, its
 `engine` names which port the deployment elects, as of 2026-09-04: `none` declares that
 no member stands, which is a deployment's real posture and the one the
-instrument-validation matrices ran under, and `sqlite` the embedded engine. **An engine this
-build does not provide refuses at the parse**, `BadValue` naming `state-store.engine`,
-which admin answers `ConfigInvalid`, so a declaration electing one fails naming the
-field rather than as an unnamed unknown value. No engine is refused by its own name: on
+instrument-validation matrices ran under, and `sqlite` the embedded engine. **An engine
+this build does not provide refuses at the parse**, `BadValue` naming
+`state-store.engine`, which admin answers `ConfigInvalid`, so a declaration electing one
+fails naming the field rather than as an unnamed unknown value. No engine is refused by
+its own name: on
 the operator's ruling of 2026-10-05 (#86) another deployment may provide another engine
 behind the same contract, and the service engine, postgres, is simply not provided here
 since the ruling of 2026-10-02 on #1. Its `database` and `role` left the grammar on the

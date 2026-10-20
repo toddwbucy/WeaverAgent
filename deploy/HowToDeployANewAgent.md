@@ -100,9 +100,9 @@ engine this build provides (#1, #86), and any other engine refuses as one this b
 does not provide. `--engine none` is refused too, and section 3 makes that agent by
 hand. `--session` names the session the declaration opens, default `<name>-001`. `--spu
 <path>` gives this agent its own SPU, written as its root's `spu-binary` in place of the
-stack record's (the python SPU's zipapp, for instance), and without it the agent serves
-from the stack's. `--connector-role operator|observer` chooses which command lines the
-connector's sudo rule grants, section 5, default `operator`.
+stack record's (a separately installed Rust SPU, for instance), and without it the
+agent serves from the stack's. `--connector-role operator|observer` chooses which
+command lines the connector's sudo rule grants, section 5, default `operator`.
 
 Apply makes the accounts and the territory, writes the declaration and the draft into
 it as root, then stages the agent root under the
