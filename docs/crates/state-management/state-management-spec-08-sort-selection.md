@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.12 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-08`
+**Version:** 0.13 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-08`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. Scope and applicability
@@ -241,11 +241,14 @@ order between calls or other primitives. [SORT-1, SORT-3, PLACE-3, R20-12]
    candidate-index tie-breaks as step 4. For provided, keep supplied order. This is the
    order of units, selected_refs and the complete final proposal measured here. Keep
    step 5's acceptance sequence separately, identified by original candidate index and
-   UnitId. If the final proposal fails fit or B, remove the last still-selected
-   occurrence from that acceptance sequence, record its UnitId and limiting drop reason,
-   and measure again in final order. Do not remove the last unit in presentation order
-   or every occurrence sharing that UnitId. This phase makes at most accepted_count+1
-   measurements and never removes mandatory material.
+   UnitId. Measure the final proposal. While it fails fit or B, remove the last
+   still-selected occurrence from that acceptance sequence, record its UnitId and
+   limiting drop reason, and measure again in final order. Repeat until it fits both
+   limits. The mandatory-only proposal is the terminal case: step 3 already checked it
+   against the same prefix and schemas, and its injection cost is zero. Retain every
+   retry drop and the successful final measurement. Do not remove the last unit in
+   presentation order or every occurrence sharing that UnitId. This phase makes at most
+   accepted_count+1 measurements and never removes mandatory material.
 7. Return the immutable selection, decision metadata and measurement, or the typed
    refusal. The harness records them before granting use. This operation neither places
    the result nor starts another pass.
@@ -257,7 +260,13 @@ accepts the step 5 probes in order A, C, B, then refuses the reordered proposal 
 The retry must drop B, measure A, C and return those selected_refs when that probe fits.
 Removing source-order restoration or removing the final presented unit instead must
 fail the fixture. A repeated-UnitId case proves that only the last accepted occurrence
-is removed. These scripted costs test control flow, not a measured model limit.
+is removed. A multiple-drop case uses UnitIds A, B, C and D at ordinals 1, 2, 3 and 4,
+with only D matching. All cumulative step 5 probes fit in candidate order D, C, B, A.
+The final probes A, B, C, D and B, C, D fail before C, D fits. The drops must be A then
+B, with both reasons retained and the final C, D measurement returned. A zero-accepted
+case returns the mandatory-only proposal. Stopping after one drop or omitting either
+drop record must fail. These scripted costs test control flow, not a measured model
+limit.
 [SORT-3, READ-2, STORE-5, PLACE-4, PLACE-5]
 
 **DROP.** A selected tool return and a marked span are indivisible. Every omitted
