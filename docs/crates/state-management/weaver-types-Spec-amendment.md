@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.21 **Date filed:** 2026-10-20 **Parent:** weaver-types-PRD
+**Version:** 0.22 **Date filed:** 2026-10-20 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -26,6 +26,16 @@ deserializer reject all other spellings. MeasuredWait is
 reference. MeasuredInterval has the same fields and validation, but does not grant a
 deadline. No consumer defines a second digest or wait representation. Reason: every port
 must interpret identities and measured quantities alike. [PERSIST-2, CLASS-8, COST-4]
+
+**TYPES-CANONICAL.** Canonical JSON throughout this set is the shared types' compact
+serde_json rendering under [trace Spec section 2][canonical]: one UTF-8 line, fields in
+their declared order, no insignificant whitespace, and integers that can exceed the
+double-safe range as decimal strings. Hashes and byte comparisons use those object
+bytes without a terminating record separator. Preserve string content and serde_json's
+escaping, and serialize typed values directly rather than reordering them through a
+map. Externally tagged UnitId puts its variant tag first, so its byte comparison orders
+that tag before its declared payload fields. Reason: hashes and selection ties need
+one byte rule across the shared representations. [STORE-3, SORT-3, MARK-5, SEAM-2]
 
 **TYPES-CONFIG.** In config.rs replace the serving StateElection with
 `StateManagementConfig { flow: FlowConfig, start: StateStartConfig, persistence:
@@ -309,9 +319,11 @@ All five common fields are required, with request_id a DecimalU64 starting at `1
 uses request `1`. Each subsequent exchange increments by one, checked for exhaustion.
 The control adapter strips the outer wrapper and uses the replacement serving control
 parser in the store/read amendment. The diagnostic parser stays separate. Its answer is
-wrapped with the same request identity. Snapshot continuations stay in one exchange
-until its existing finished or refusal outcome. The control field is not an arbitrary
-new operation or a second writer. [SEAM-1, SEAM-3, FLOW-5]
+wrapped with the same request identity. Snapshot continuations use one exchange ID.
+Finished or refusal permits a fresh exchange, but the original ID remains valid for
+the correlated timeout abort under TYPES-PERSIST until release or the next fresh
+exchange. Abort consumes no fresh ID. The control field is not an arbitrary new
+operation or a second writer. [SEAM-1, SEAM-3, FLOW-5]
 
 Filing refusal codes are malformed_filing, wrong_run, duplicate_source,
 unsupported_schema, scheme_mismatch, invalid_binding, invalid_effect, wrong_phase and
@@ -410,6 +422,7 @@ serving contract remains applicable.
 
 | Claim | Instrument and test | Protective change that must fail |
 | --- | --- | --- |
+| TYPES-CANONICAL | Golden typed bytes for field order, escaping, large counters and every UnitId variant, plus review of shared definitions | Reorder fields, render a large integer as a number, add separator bytes to a hash or use enum declaration order for ties |
 | TYPES-CONFIG | Table-driven parser perturbation tests in config.rs | Accept a missing bound, legacy serving table, duplicate selector, or zero bound |
 | TYPES-SERVING | Per-call criterion, ratio and snapshot-order corpus | Invent a strategy default or compare unrelated read ranks as chronology |
 | TYPES-ENTER | Serialization fixtures for both binding kinds and exhaustive refusal mapping | Drop validation attribution or require serving bounds for diagnostic replay |
@@ -722,7 +735,10 @@ room_name, size_bytes, position}}, acknowledge returns {finished:{capture_id,
 room_name}}, and abort returns {aborted:{capture_id}}. A valid failure returns
 control_refused with image_too_large, snapshot_failed, unknown_capture, or
 invalid_capture_state. The whole capture retains one state exchange request ID through
-its continuations. A new capture cannot share it. [SEAM-2, PERSIST-1, PERSIST-4]
+its continuations, including timeout abort and aborted after a late finished result.
+The correlation is protocol, session_id, run_id, request_id and capture_id. The next
+fresh exchange uses the ID after the original snapshot exchange, not another increment
+for abort. A new capture cannot share it. [SEAM-2, PERSIST-1, PERSIST-4]
 
 Admin-harness adds SavePointPrepared {capture_id, artifact_id, dump_sha256,
 config_sha256} and SavePointCommit {capture_id} on the existing lifecycle channel.
@@ -741,15 +757,15 @@ from an external caller. [PERSIST-1 through PERSIST-4, FLOW-5]
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
 | TYPES-READ | Cross-crate frame corpus and unknown-field cases | Admit SQL, missing identity, or wrong cursor offset encoding |
-| TYPES-PERSIST | Draft/published parse matrix and save/load wire corpus | Load an unbound draft or accept a caller destination |
+| TYPES-PERSIST | Draft/published parse matrix, save/load corpus and snapshot/finished/abort correlation cases | Load an unbound draft, accept a caller destination, change the abort exchange ID or accept a stale aborted answer |
 | TYPES-SEED | Shared admin/member codec corpus, every refusal and substituted scheme/checker case | Accept numeric request_id, a nested refusal payload, missing scheme bytes or certificate bindings checked against another dictionary |
 
 The read source field is externally tagged: {seed:{seed_id,ordinal}} or
 {event:{block_id,envelope,source_path,partition_rule_id}}. SpanRef is
 {seed_id:String,local_id:DecimalU64,revision:DecimalU64}. snapshot_id is DecimalU64.
 Each read/next/release command is a new completed state exchange and increments its
-request ID, while snapshot/acknowledge/finished retain one ID. A read snapshot may
-survive several exchanges and has its own ID domain. [SEAM-3, STORE-5]
+request ID, while snapshot/acknowledge/finished/abort/aborted retain one ID. A read
+snapshot may survive several exchanges and has its own ID domain. [SEAM-3, STORE-5]
 
 The lifecycle capture subprotocol uses these Payload variants, all with capture_id (a
 run-local DecimalU64 starting at 1), and only the listed additional members:
@@ -779,10 +795,13 @@ branch. [PERSIST-2, PERSIST-4, FLOW-5]
 
 State adds release_capture {capture_id}, returning capture_released {capture_id}, as a
 fresh exchange after finished. It releases the retained image and room file after admin
-copied/published it. abort is permitted before finished and returns aborted. Any unknown
-or out-of-phase capture receives invalid_capture_state. The member holds at most one
-capture. Seed mode has its own one-request lifecycle in the admin and state amendments
-and never participates in these serving continuations. [PERSIST-1, PERSIST-4]
+copied/published it. abort returns aborted and is permitted in CaptureHeld and
+FinishedHeld on the original capture exchange. STATE-PERSIST-STATES also permits that
+abort for the just-refused capture until the next fresh exchange, closing the late
+refusal race. Any other unknown or out-of-phase capture receives invalid_capture_state.
+The member holds at most one capture. Seed mode has its own one-request lifecycle in the
+admin and state amendments and never participates in these serving continuations.
+[PERSIST-1, PERSIST-4]
 
 Certificate duty IDs are ste100_emission, recall, forward_flags, locked_plan,
 review_closure, restatement, ste100_input_history, initial_plan, and wall_summary. They
@@ -875,8 +894,9 @@ Admin and harness match it explicitly, never treating it as a component failure 
 reusing Answer/Finished. Other explicit save operation refusals use SavePointNotTaken
 with Answer, Finished, or Published. For serving, these mean an explicit refusal at
 image creation, image finish, or root publication respectively. R20-6 preserves their
-missing image/finished timeout use and the merged retry behavior, with late-answer
-discard. The serving MemberDead path is retired in favor of the typed FlowFailed
+missing image/finished timeout use and retry after PERSIST-CLEANUP confirms aborted,
+with late-answer discard. A failed cleanup follows FlowFailed, not SavePointNotTaken.
+The serving MemberDead path is retired in favor of the typed FlowFailed
 outcome. Diagnostic takes no save point. The detailed typed refusal goes on the trace,
 never in the success-only SavePointReport. [PERSIST-1, PERSIST-4, CLASS-8]
 
@@ -939,3 +959,5 @@ classifier and pair amendments.
 
 [cutover]:
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
+
+[canonical]: ../weaver-trace/weaver-trace-Spec.md#2-canonical-form

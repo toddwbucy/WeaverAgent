@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.17 **Date filed:** 2026-10-20 **Document ID:**
+**Version:** 0.18 **Date filed:** 2026-10-20 **Document ID:**
 `state-management-foundation-Spec` **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -335,8 +335,9 @@ ordinal, artifact_id, A, B, seed_id, parent_artifact_id, cause, position, confir
 and arrival. Arrival is published or selected, as ADMIN-SELECTION defines. Confirmation
 and cause are the exact TYPES-PERSIST enums. artifact_id is the directory basename,
 consisting of the 20-digit decimal ordinal, a hyphen and lowercase 64-hex B.
-binding.json verifies one artifact, the outer index selects artifacts. The highest valid
-index ordinal is latest. Each appended entry has the next ordinal. A selected entry
+binding.json verifies one artifact, the outer index selects artifacts. The highest
+index ordinal is latest. An invalid latest entry refuses load and never falls back to
+an earlier entry. Each appended entry has the next ordinal. A selected entry
 points to an existing artifact without renaming its directory or changing its original
 confirmation. A directory with no index line is never loadable or automatically
 recovered. ADMIN-SELECTION defines the external root key and the argument-free restore
@@ -401,13 +402,16 @@ successful rebind is a separate administrative act. [PERSIST-1, PERSIST-4, R2, R
 | Published | Return SavePointTaken or successful leave outcome | Record outcome, resume serving or finish clean unload | Release capture |
 | Explicit refusal | Return SavePointNotTaken, leave may follow old explicit-refusal policy | Record refusal and release barrier | Discard part, holdings unchanged |
 | Broken seam before Commit | Do not publish | Latch failure, no Commit, halt | Discard unfinished part on exit |
-| Missing snapshot/finish result at its bound | No publication, report SavePointNotTaken and permit the merged retry | Mark the exchange unsettled, discard its late result and preserve the merged lifecycle retry | No successful image inferred |
+| Missing snapshot/finish result at its bound | No publication, await cleanup outcome before permitting retry | Keep barrier, send correlated abort before another ask, discard late result, await aborted | Delete held part or finished file, answer aborted, Ready |
+| Cleanup fails or aborted misses its bound | Failed run, no retryable save outcome | Latch component failure, no further state ask | No successful cleanup inferred |
 | Failure after Commit | Mark broken, stop publication, retain artifacts and report their locations | Halt, no further capture | No new save |
 
 The ladder above summarizes duties. The actor tables below determine transitions. The
 member's complete state table is STATE-PERSIST-STATES. The harness owns the one
-outstanding state exchange and does not send abort behind an unanswered image request.
-Admin never treats a room file as a protocol answer. [SEAM-2, PERSIST-4]
+outstanding state exchange. On image/finished timeout its only permitted continuation
+is PERSIST-CLEANUP's abort with the original request and capture IDs. No fresh state ask
+passes it before matching aborted. Admin never treats a room file as a protocol answer.
+[SEAM-2, PERSIST-4]
 
 | Admin state | Event | Action and next state |
 | --- | --- | --- |
@@ -424,6 +428,7 @@ Admin never treats a room file as a protocol answer. [SEAM-2, PERSIST-4]
 | AwaitOutcome, on demand | Matching SavePointTaken | Validate report against indexed artifact, answer caller, Done |
 | AwaitOutcome, leave | Matching SavePointCaptureComplete | Disarm capture window, retain shared/outer leave windows, AwaitLeft |
 | AwaitLeft | Matching Left | Validate indexed report and normal leave duties, answer caller, Done |
+| AwaitImage or AwaitFinished | SavePointNotTaken after worker cleanup | Cancel unconfirmed publication, refuse caller, Done, merged retry remains available |
 | Any before Commit | Explicit worker refusal or local preparation error | Send Aborted where the exchange permits, remove unlisted root part, refuse caller, Done |
 | Any before Commit | Worker EOF, invalid message or deadline expiry | Do not publish, preserve Open marker, failed-run recovery, Done |
 | After Commit | Worker fails or no final outcome | Mark the pending capture broken, publish nothing further, retain artifacts, never invent Left |
@@ -448,12 +453,17 @@ Admin never treats a room file as a protocol answer. [SEAM-2, PERSIST-4]
 | Completing, leave | Capture released and trace records complete | Carry SavePointCaptureComplete within capture window, then release/unload/Left under shared tail |
 | Any before Commit | Explicit operation refusal | Author refused, abort or release only when its state slot permits, answer SavePointNotTaken |
 | Any | Flow component fails or an undisputed blocking bound expires | Latch halt, no new capture, preserve phase and uncertain outcome |
-| AwaitImage or AwaitFinished | Member result still pending at its bound | SavePointNotTaken, unsettle exchange and retain merged late-answer discard/retry, no snapshot-missing halt |
+| AwaitImage or AwaitFinished | Member result still pending at its bound | Keep barrier, enqueue correlated abort, Aborting |
+| Aborting | Matching late result for the timed-out leg | Validate identity and observation, record observation, discard result, remain Aborting |
+| Aborting | Matching aborted | Record refusal, release barrier, answer SavePointNotTaken, lifecycle owns retry |
+| Aborting | Partial carry or WouldBlock | Retain bytes and cleanup deadline, remain Aborting |
+| Aborting | Missing, refused, malformed or wrongly correlated cleanup, failed carry or dead peer | Component failure, halt without successful leave |
 | After Commit | Aborted or other backward continuation | Protocol failure, do not retract a sent Commit |
 
 Phase-specific rows take precedence over Any rows. A queued on-demand expiry is
-CaptureNotReady. A missing image/finished result is R20-6's timeout and merged retry
-outcome. A component failure is still a halt. After Commit, R20-7 forbids finishing an
+CaptureNotReady. A missing image/finished result is R20-6's timeout, with retry after
+PERSIST-CLEANUP, not an immediate halt. A component failure, including failed cleanup,
+is still a halt. After Commit, R20-7 forbids finishing an
 incomplete publication after worker failure. [FLOW-4, FLOW-5, PERSIST-4, R20-6, R20-7]
 
 The cross-cutting rows below apply in every listed phase, not only at the barrier. They
@@ -469,7 +479,7 @@ FLOW-5, PERSIST-4, R3]
 | Force-unload joins an unload | Existing join changes leave mode, keeps the same capture and deadlines, no second publisher |
 | Force-unload meets an on-demand save holder | InvocationInFlight under the existing verb table |
 | Explicit image/finish refusal in graceful S6 | SavePointNotTaken and S9 remain available for a healthy state channel |
-| Missing image/finish result at its bound | Merged timeout/retry under R20-6, keep its missing-result attribution distinct from explicit refusal |
+| Missing image/finish result at its bound | PERSIST-CLEANUP then merged retry under R20-6, keep its missing-result attribution distinct from explicit refusal |
 | Publication error before index append | No public success, latest unchanged, discard unlisted root part |
 | Index appended but final worker outcome missing | Mark the save point broken and ineligible, keep artifact identity and Open marker as evidence |
 
@@ -505,9 +515,11 @@ PERSIST-7, R20-7]
 Snapshot image waits use the declared persistence.snapshot_wait. The initial explicit
 setting is 120 seconds. The finished leg keeps its merged 2-second allowance. Both
 include enqueue/carry and are capped by the current outer save and leave windows.
-Missing image/finished answers retain unsettled exchange, late-answer discard and
-SavePointNotTaken retry semantics. Dead peers and malformed answers remain component
-failures. [PERSIST-4, CLASS-8, R20-6]
+Missing image/finished answers keep the exchange unsettled until matching aborted.
+PERSIST-CLEANUP discards late results, then allows SavePointNotTaken and retry. Its
+existing two-second small-control bound starts at abort enqueue and includes carry,
+without resetting save or leave windows. Failed cleanup, dead peers and malformed
+answers remain component failures. [PERSIST-4, CLASS-8, R20-6]
 
 ### 5.3 Load, seed, rebind, and unclean end
 
@@ -600,9 +612,11 @@ Seed and rebind have no serving capture_id and are accounted for by their tagged
 identities. Their agreement proves identity and confirmation, not that a trace sink
 survived. Sink durability is still the trace charter's obligation.
 
-An explicit refusal before finished uses abort on the held capture exchange. After
-finished, it uses a fresh release_capture exchange and removes the unlisted root part.
-No abort is sent in FinishedHeld. A missing cleanup result follows component failure.
+An explicit refusal before finished uses abort on the held capture exchange. After a
+timely finished result, it uses a fresh release_capture exchange and removes the
+unlisted root part. An image/finished timeout instead uses abort on the original
+exchange, even when the member has reached FinishedHeld. A missing cleanup result
+follows component failure.
 Before publication a size/refusal result remains a completed operation with unchanged
 latest. [PERSIST-4, FLOW-5]
 
@@ -662,9 +676,9 @@ continues the current turn. Admin reports that case only when it receives the ty
 answer. Silence at its own deadline is Unanswered, never an invented CaptureNotReady or
 successful save. No new turn starts past a begun save barrier until that operation
 completes or is refused. Missing component progress during the barrier uses its
-model-blocking bound. Missing image/finished results follow R20-6 timeout/retry. No new
-Commit is sent after expiry. Post-Commit failure or expiry breaks the save under R20-7,
-with no Left inferred from an artifact. [PERSIST-1, PERSIST-4, CLASS-8, FLOW-5]
+model-blocking bound. Missing image/finished results use R20-6 and PERSIST-CLEANUP. No
+new Commit is sent after expiry. Post-Commit failure or expiry breaks the save under
+R20-7, with no Left inferred from an artifact. [PERSIST-1, PERSIST-4, CLASS-8, FLOW-5]
 
 The deadlines bound waiting and permission to start a later protocol stage. They do not
 claim to interrupt a kernel filesystem call at its exact deadline. Admin checks the
@@ -733,11 +747,12 @@ document-PR direction, R20-5]
 | FOUNDATION-RECEIPT | Real commit with held/lost answer and a second queued source | Accept write completion, resend uncertain commit or let later filing overtake |
 | Foundation circuit | STATE-CIRCUIT-INSTRUMENT's spawned member and real recorder, with in-crate transaction hooks under STATE-FILING-INSTRUMENTS | Skip the real member, add a test-only serving query or treat a scripted transaction as SQLite commit evidence |
 | FOUNDATION-READ | Cross-run history, open-pair, cursor and result-limit fixtures | Swap tagged results, expose partial content or return empty on refusal |
-| PERSIST-ARTIFACT-CODEC | Shared publication/load/restore corpus in admin tests, plus types' state-start-v1 fixtures | Accept an old field alias, inconsistent binding/index value, wrong ordinal/name, malformed newest entry or a mismatched A/B |
+| PERSIST-ARTIFACT-CODEC | Shared publication/load/restore corpus, including invalid newest with valid older artifact, plus types' state-start-v1 fixtures | Accept an old alias, inconsistent binding/index, wrong ordinal/name or A/B, or fall back past malformed newest |
 | PERSIST-TIME, PERSIST-LEAVE-TIME | Admin/harness fake-clock actor walk, existing leave_window baseline | Arm save_wait during an unbounded S4/S5, move an anchor on partial carry, or ignore an earlier tail |
 | PERSIST-BEGIN | Shared frame corpus and fragmented lifecycle exchange | Accept Image before Beginning, change a window, or accept CaptureComplete as Left |
 | PERSIST-PUBLICATION-GUARD | Crash before/after rename, index append and final outcome, plus failed guard update | Publish after worker failure, load a guarded artifact, skip newest silently or remove guard before final success |
 | PERSIST-EXPIRY | Queued and active save cases, delayed local I/O completion | Infer CaptureNotReady from silence, issue a late Commit, or claim kernel I/O was preempted |
+| PERSIST-CLEANUP projections | Harness/member actor walk through late snapshot, finished and refusal, successful abort and cleanup failure | Send filing before aborted, retain a held image after cleanup, publish a late result or halt on the original timeout alone |
 | FOUNDATION-AMENDMENTS | Cross-document review against baseline main | Leave a retired merged clause effective at the same cutover |
 
 The flow pass certifies one accounted disposition per selected source and committed
@@ -772,7 +787,7 @@ changed. No separate inventory document is needed to interpret an INV reference.
 | INV-15 | save_points.rs publishes one-file images and recovers finished room artifacts | Section 5 and ADMIN-SAVE/RECOVERY require three-file A/B binding, healthy-capture Commit and indexed selection. Publication fixtures refuse broken or unconfirmed artifacts |
 | INV-16 | Diagnostic preload and replay depend on the old tables and election | STATE-MODE and the analysis-state amendment preserve a separate diagnostic binding/catalog. Mode fixtures refuse serving preload and cross-mode adoption |
 | INV-17 | ToolInterrupt maps to unload, while MemberDies cells permit serving | Typed fault interruption and replacement serving lifecycle cells distinguish control requests from component loss. Fault fixtures prove no serving continuation after loss |
-| INV-18 | Missing snapshot replies leave a live channel available for retry | R20-6 retains timeout/retry and makes the initial snapshot allowance a loaded measured setting. Expiry fixtures preserve valid operation refusals and retry without inventing a snapshot-missing halt |
+| INV-18 | Missing snapshot replies drain late bytes and leave a live channel available for retry | R20-6 retains retry and the loaded snapshot allowance. PERSIST-CLEANUP first confirms abort on a held capture, including FinishedHeld. Expiry fixtures prove filing and retry work after cleanup and failed cleanup halts |
 
 ## 7. Integration dependencies and measured values
 

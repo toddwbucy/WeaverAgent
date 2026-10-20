@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.10 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-06`
+**Version:** 0.11 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-06`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -85,8 +85,11 @@ statement. [MARK-1, MARK-5, STORE-5]
 previous step. StepQueryRef is {plan:PlanRef,previous_step:Option<StepId>,
 step_id:StepId,instruction:StatementRef}. The step_successor selector returns
 {reference:StepQueryRef,instruction:ReadEntry}. It returns only the next held
-instruction, not the previous step's work. previous_step is null only before the first
-step. Otherwise it must be the closed immediate predecessor in that plan revision. The
+instruction, not the previous step's work. The result is the first waiting step in that
+revision, with no active step or earlier unclosed step. previous_step is null exactly
+when the first waiting step has ordinal 1. Otherwise it names the closed immediate
+predecessor by ordinal. A preserved closed step later in the revision does not prevent
+this read. STATE-STEP-QUERY owns these guards and their replacement-plan fixtures. The
 result names the same loaded seed and exact held statement. [MARK-3, PLAN-1, PLAN-4,
 R20-10]
 

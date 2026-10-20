@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.17 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
+**Version:** 0.18 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
 
 ## 0. What this document is
 
@@ -855,22 +855,31 @@ including a prompt at its task's opening anchor and an outcome at its parent's c
 anchor. The seed uses its fixed member and never this runtime interval query. [MARK-3,
 MARK-5, STORE-5]
 
-**STATE-STEP-QUERY.** step_successor is a read against the exact PlanRef. With
-previous_step null, return the first step only if no step is closed or active. Otherwise
-require that step to be closed and return the immediate next waiting step in ordinal
-order, with no intervening active step. A terminal plan or no successor returns
-not_found. A wrong predecessor or revision returns invalid_selector. The result is
+**STATE-STEP-QUERY.** step_successor is a read against the exact PlanRef. Select the
+first waiting step in ordinal order. No step may be active, and every earlier step must
+be closed. previous_step must be null exactly when that waiting step has ordinal 1.
+Otherwise it must name the closed step at the immediately preceding ordinal in that
+revision. Preserved closed steps at later ordinals do not block the query. A terminal
+plan or no waiting step returns not_found. A wrong predecessor or revision, an active
+step or an earlier unclosed step returns invalid_selector. The result is
 {reference,instruction}, with StepQueryRef from Spec 06 and the statement read for that
 instruction. It never returns the previous step's work span. The store constructs the
-reference, the caller cannot edit it into activation. [MARK-3, PLAN-4, STORE-3, R20-10]
+reference, the caller cannot edit it into activation. Reason: preserved later closures
+must not make the revised plan's first waiting step unreachable. [MARK-3, PLAN-4,
+STORE-3, R20-10]
 
 Use STATE-PLAN-READ's exact revision and ordered step query, then STATE-STATEMENT for
 its stored instruction. These reads share the same snapshot. Annotate that entry with
 the returned step_query, and require byte-for-byte equality at the activation write
 guard. This is read-only, and no next-step action follows from returning it. The
 acceptance fixture swaps predecessor, revision and instruction independently, each must
-refuse when its guard is present and pass when that protective guard is removed.
-[PLAN-1, PLAN-2, R20-12]
+refuse when its guard is present and pass when that protective guard is removed. It also
+replaces a plan with a new waiting ordinal 1 and a preserved closed ordinal 2, then
+reads and activates ordinal 1 with null predecessor. A second fixture has closed ordinal
+1, waiting ordinal 2 and preserved closed ordinal 3, and requires ordinal 1 as
+predecessor. Reinstating the closed-prefix assumption must fail these fixtures, and
+removing the first-waiting or no-active guard must admit a forbidden skipped or
+concurrent step. [PLAN-1, PLAN-2, R20-12]
 
 **STATE-MARK-PAIRS.** For each selected interval, inspect the block's bindings. Return
 only wholly selected bindings. A partial intersection refuses the operation, and a
@@ -1320,21 +1329,26 @@ This replacement applies at the [foundation cutover][cutover]. Until then, the p
 serving contract remains applicable.
 
 **STATE-PERSIST-STATES.** Snapshot continuations hold the same outer request ID. After
-finished, a fresh release_capture request releases the completed capture. All snapshot
-answers obey ANSWER_BOUND. Reason: no second writer or unowned room image may appear
-during persistence. [SEAM-2, PERSIST-1 through PERSIST-5]
+finished, a fresh release_capture request releases a successful completed capture. A
+timeout cleanup instead uses abort with the original request and capture IDs, including
+in FinishedHeld. It consumes no fresh exchange ID. All snapshot answers obey
+ANSWER_BOUND. Reason: no second writer or unowned room image may appear during
+persistence, and a timed-out capture must release its holdings before retry or filing.
+[SEAM-2, PERSIST-1 through PERSIST-5]
 
 | State | Event | Action and next state |
 | --- | --- | --- |
 | Dispatching, no capture | Valid snapshot | Retain capture ID and enter Capturing |
 | Capturing | Complete image within size bound | Queue snapshot answer, then CaptureHeld after full send |
-| Capturing | I/O failure or image too large | control_refused, delete part, Ready |
+| Capturing | I/O failure or image too large | control_refused, delete part, retain refused capture identity for correlated cleanup, Ready |
 | CaptureHeld | acknowledge with matching capture and syntactically valid A | Retain admin's A as attribution, finish image, send finished, FinishedHeld |
-| CaptureHeld | abort | Delete part, send aborted, Ready |
+| CaptureHeld or FinishedHeld | abort with original request and matching capture ID | Delete retained part or finished room file, send aborted, Ready |
+| Ready with just-refused capture | abort with that original request and capture ID | No room file remains, send aborted, clear retained identity, Ready |
+| Ready with just-refused capture | Next fresh request | Clear refused capture identity, use STATE-CHANNEL |
 | CaptureHeld or FinishedHeld | file or file_pair | Send filing refused with wrong_phase, then close |
 | CaptureHeld | Any other control | invalid_capture_state, retain capture |
 | FinishedHeld | release_capture | Delete finished room file, capture_released, Ready |
-| FinishedHeld | Any read, snapshot, abort, or wrong release | control_refused invalid_capture_state, remain FinishedHeld |
+| FinishedHeld | Any read, snapshot, wrong abort, or wrong release | control_refused invalid_capture_state, remain FinishedHeld |
 | Any capture state | EOF or terminal failure | Delete retained room files, close |
 
 Partial answer writes retain their bytes and continuation state. The member reads no
@@ -1343,6 +1357,15 @@ closes, including during a capture. A malformed identity or frame closes rather 
 fabricating a correlated refusal. The member never computes A and cannot claim that it
 compared A with its bytes. Admin owns that hash check. A malformed A is a malformed
 control, not a successful acknowledgement. [SEAM-2, FLOW-4, R1]
+
+The one retained refused capture identity covers a race: the harness may time out and
+send abort before receiving a completed capture refusal. It permits only that abort,
+not another acknowledge, snapshot or old exchange. Successful aborted clears the held
+capture, and the next fresh request uses the ID after the original snapshot exchange.
+A delete failure is component failure, never aborted or Ready. The member finishes any
+queued snapshot, finished or control_refused answer before reading abort. The harness
+discards that late operation result under PERSIST-CLEANUP, then waits for aborted.
+[PERSIST-4, SEAM-2, FLOW-4]
 
 | Seed state | Event | Action and next state |
 | --- | --- | --- |
@@ -1366,7 +1389,7 @@ partial content from the base64 pages. [SEAM-3, FLOW-4]
 
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
-| STATE-PERSIST-STATES | Every seed/capture cell plus partial answers and abrupt EOF | Finish before A confirmation, reuse a capture, or retain an orphan as loadable |
+| STATE-PERSIST-STATES | Every seed/capture cell, timeout abort in CaptureHeld and FinishedHeld, late refusal race, partial answers and EOF | Finish before A confirmation, refuse a correlated cleanup, send aborted before deletion, consume a fresh ID for abort or retain an orphan as loadable |
 
 ## 7. Retired storage representations, destinations sections 2, 3 and 6
 

@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.11 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
+**Version:** 0.12 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -353,8 +353,11 @@ review pair and setup. [PLAN-2, CAP-1, R20-12, R20-17]
 **CLOSURE.** close consumes ClosureEvidence and authors the certified step.outcome with
 the closed label and exact plan close effect. The event takes the trace, partition,
 classifier and store path. The store commits the effect, outcome span and closing marks
-atomically. Failed assessments may be recorded as step.outcome with failed label and
-null effect. Sort writes nothing. [SERVE-3, SORT-4, PLAN-2, MARK-1, FLOW-8]
+atomically. The loop records a failed assessment as PLAN-TRACE's step.outcome with the
+failed label and null context, through the ordinary trace, partition, classifier and
+store path. That record writes no plan effect and consumes no ClosureEvidence, so
+observe_review still leaves the step and plan unchanged. Sort writes nothing. [SERVE-3,
+SORT-4, PLAN-2, MARK-1, FLOW-8]
 
 The store opens and closes outcome_span below the active step, closes that step, and
 closes complete ancestors from their held membership. The pair and frontier guards
@@ -493,7 +496,7 @@ or task success. [PLAN-1 through PLAN-6, R20-12]
 | PLAN-FEED and PLAN-EFFECT | Trace-to-receipt fixture and private authority compile pin | Construct root authority from a gate frame or bypass trace |
 | PLAN-STORAGE and PLAN-READ | Literal DDL, current/history reads, every effect and rollback | Commit marks without the plan label or allow two active steps |
 | WORK-REFERENCE | Preview identity and unchanged-work corpus | Trust a model digest, accept an open pair or use a later frontier |
-| CLOSURE-EVIDENCE and CLOSURE | Matched review pair, revision and consumed-grant cases | Accept model prose, stale work, ordinary external lane or reused evidence |
+| CLOSURE-EVIDENCE and CLOSURE | Matched review pair, revision, consumed-grant cases and a failed assessment traced and filed with null context | Accept model prose, stale work, ordinary external lane or reused evidence, omit the failed record or close a step from it |
 | PLAN-STATES | Create after complete and broken, replace and old-history reads | Reject a legal new plan or overwrite its predecessor |
 | FLAGS | Condition query after reorder/retirement | Retarget or delete a held flag |
 | PLAN-OBSERVATION | Explicit requests, receipt identity and duplicate assembly corpus | Invent zero, cross run clocks or count the same refusal twice |

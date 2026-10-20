@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.13 **Date filed:** 2026-10-20 **Parent:** weaver-admin-PRD
+**Version:** 0.14 **Date filed:** 2026-10-20 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -233,8 +233,12 @@ remove the guard or resume publication in recovery. No halt requests a new image
 
 Replace S3 save-point ActivityNotAtRest with accepted/pending to the next turn boundary.
 Explicit refusal and missing image/finished timeout retain the merged retry path under
-R20-6, including S6/S9 and late-answer discard. Member death remains a separate terminal
-failure. [PERSIST-1, PERSIST-4, R20-6]
+R20-6, including S6/S9. For a timeout, SavePointNotTaken is sent only after the
+harness's correlated abort receives aborted under PERSIST-CLEANUP. Admin never treats a
+late image/finished result as success or initiates another ask on the member channel. A
+cleanup failure is FlowFailed and ends the run, not a retryable save refusal. Silence at
+admin's unchanged outer deadline remains Unanswered, never inferred cleanup success.
+Member death remains a separate terminal failure. [PERSIST-1, PERSIST-4, FLOW-4, R20-6]
 
 **ADMIN-FLOW-END.** Replace the existing serving MemberDies column, rather than adding
 contradictory cells. FlowFailed follows it. Diagnostic cells remain separate. The worker
@@ -246,7 +250,7 @@ root-owned markers. [FLOW-4, FLOW-5]
 | Enter not confirmed | Refuse enter, ordinary failed-enter rollback |
 | S2, S3 | Worker halts and exits unsuccessfully, S8b recovery, no new capture |
 | S4, S5 | Cancel remaining wind-down and unconfirmed capture, no successful Left |
-| S6 graceful, S9 | End run on member death or flow failure. Missing snapshot retains merged retry under R20-6 |
+| S6 graceful, S9 | End run on member death or flow failure, including failed cleanup. Missing snapshot retains retry only after matching aborted under R20-6 and PERSIST-CLEANUP |
 | S6 forced, S10 | End run without successful Left or save claim |
 | S7 | Complete bounded release, no successful Left, preserve indexed artifacts. Any incomplete capture is broken under R20-7 |
 
@@ -329,7 +333,7 @@ serving contract remains applicable.
 | ADMIN-LOAD | Different mutable draft and verified copy, fd probes, failed-enter fixtures | Run draft after checking copy or report loaded before boot |
 | ADMIN-SEED | Temporary-member process fixture, shared TYPES-SEED corpus, root verb parser and cgroup probes | Seed live state, require a prior artifact, omit checked scheme/checker inputs, skip invoker/ancestor checks, accept caller path or index before successful seed cleanup |
 | ADMIN-REBIND | Same A/new B artifact and immutable prompt check | Mutate dump or use old B after editing config |
-| ADMIN-SAVE | Three-party scripted protocol and fsync/rename failure hooks | Index before Commit or overwrite a good artifact |
+| ADMIN-SAVE | Three-party protocol, timeout cleanup then retry, cleanup failure, and fsync/rename failure hooks | Index before Commit, overwrite a good artifact, infer cleanup from silence or retry after FlowFailed |
 | ADMIN-FLOW-END | Every replaced lifecycle cell and tool fault cause | Serve on dead member, return Left, or let worker write marker |
 | ADMIN-RECOVERY | Crash before/after Commit, rename and index append, next-load tuple | Promote unconfirmed room data, skip malformed latest or associate load.reset with another selected start |
 | ADMIN-RETIRE | Deployment plan tests and old-format corpus | Accept --system, empty load, none or old one-file save |

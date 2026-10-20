@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.20 **Date filed:** 2026-10-20 **Parent:** weaver-harness-PRD
+**Version:** 0.21 **Date filed:** 2026-10-20 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -528,14 +528,38 @@ same fixture exercises R20-6 timeout/retry and R20-7 broken-publication outcomes
 no snapshot-missing halt or recovery publication. [CLASS-8, PERSIST-4, FLOW-5]
 
 **HARNESS-CONTROL-FAILURE.** A dead peer or malformed control answer remains component
-failure. A missing snapshot or finished answer follows the merged StateSeam.unsettled
-and late-answer discard behavior, with SavePointNotTaken and an operator retry. It is
-not a model-blocking missing-classifier result. R20-6 withdraws the proposed
-snapshot-missing halt and preserves harness Spec section 6, admin Spec 3.0 S6/S9 and
-their contract outcomes. The timeout is the loaded persistence.snapshot_wait from
-TYPES-CONFIG. The initial declared value is 120 seconds, with no silent compiled
-fallback. A valid explicit refusal remains an operation result. [PERSIST-4, CLASS-8,
-FLOW-4, R20-6]
+failure. A missing snapshot or finished answer enters PERSIST-CLEANUP before any later
+state ask. The sole owner keeps the barrier, queues abort on the original request and
+capture IDs, and waits for matching aborted under the existing two-second small-control
+bound from abort enqueue. Matching late snapshot, finished or capture refusal answers
+are validated and their observations recorded, but discarded as save results. They
+neither reach admin nor restart the cleanup bound. Partial writes retain their offsets.
+[PERSIST-4, CLASS-8, FLOW-4, COST-2, R20-6]
+
+Only aborted proves Ready and permits SavePointNotTaken, barrier release and the
+operator retry. Failed carry, dead peer, missing or invalid aborted, cleanup refusal or
+failed room-file deletion is component failure. R20-6 still forbids halting merely for
+the original image/finished timeout. The snapshot allowance is the loaded
+persistence.snapshot_wait from TYPES-CONFIG, initially declared as 120 seconds with no
+silent compiled fallback. The finished allowance stays two seconds. Cleanup neither
+extends the save/leave windows nor permits publication after expiry. A valid explicit
+save refusal remains an operation result. [PERSIST-4, CLASS-8, FLOW-4, R20-6]
+
+| Save-control state | Event | Action and next state |
+| --- | --- | --- |
+| AwaitImage or AwaitFinished | Original result bound expires | Keep barrier, enqueue correlated abort, Aborting |
+| Aborting | Expected late snapshot, finished or capture refusal for the timed-out leg | Validate and record observation, discard result, remain Aborting |
+| Aborting | Matching aborted | Record refusal, release barrier, return SavePointNotTaken, lifecycle owns retry |
+| Aborting | Partial carry or WouldBlock | Retain bytes and deadline, remain Aborting |
+| Aborting | Cleanup bound, refusal, malformed identity or transport failure | Latch component failure, no further ask or successful leave |
+
+These are the foundation's capture-state projections, not a second channel owner or
+timer policy. No ordinary file/read enters the channel until aborted. Tests delay the
+snapshot answer in CaptureHeld and the finished answer in FinishedHeld, then prove a
+subsequent filing and retried save both succeed without wrong_phase. They also exercise
+a late explicit capture refusal, wrong capture ID, deletion failure and silent cleanup.
+Removing the abort, correlation, barrier or cleanup-bound guard must fail its case.
+[SEAM-2, PERSIST-4, FLOW-4]
 
 ## 4. Halt and lifecycle, destinations sections 3 and 7
 
@@ -617,11 +641,12 @@ a fresh observation or blocks teardown on that read. [FLOW-3, FLOW-5]
 | Busy misuse, invalid ticket or unknown barrier source | protocol_failed, author or barrier | Pending author or supplied source identity, detail names the failed check |
 | Trace admission, render, append, queue or sink failure | trace_failed, author | Pending author where present, source event only after admission. Keep existing StreamWriteFailed fault case |
 
-R20-6 keeps missing snapshot/finished answers on the merged retry path. The
-control-bound row does not elect that outcome. A malformed reply is protocol_failed,
-while EOF is carry_failed. The latter distinction does not depend on which decoder
-noticed it. The first failure wins. Later observations cannot replace its cause or
-revive the flow. [FLOW-4, FLOW-5, CLASS-8, October 18 R3]
+R20-6 keeps missing snapshot/finished answers on the retry path after PERSIST-CLEANUP.
+The control-bound row applies to missing aborted, not the original image/finished
+timeout. A refused cleanup or malformed reply is protocol_failed, with received code
+and detail recorded where available. EOF is carry_failed. This distinction does not
+depend on which decoder noticed it. The first failure wins. Later observations cannot
+replace its cause or revive the flow. [FLOW-4, FLOW-5, CLASS-8, October 18 R3]
 
 A correctly reported NotSte100 never enters this table. A refusal of a filing is a
 broken caller/store contract, distinct from classifier conformance. [CLASS-8, FLOW-4]
@@ -824,7 +849,7 @@ the one-exchange assumption. Neither number is elected here. [CLASS-6, FALS-5, C
 | HARNESS-PUMP | Busy decoder, label wait, asks, writer pressure, nearest deadline | Restore a blocking recv or starve one source |
 | HARNESS-CLOCK | Fake clock/wait pair plus real poll watchdog | Reset anchor on progress or omit a nearer deadline |
 | HARNESS-BARRIERS | Wind-down with pending file and no wind_down_bound | Save before receipt or wait forever |
-| HARNESS-CONTROL-FAILURE | Dead peer, malformed control reply and explicit oversize refusal. Missing snapshot/finished timeout and late-answer tests | Continue on a dead peer or halt on a valid size refusal. Halt on a missing snapshot or accept its stale late answer |
+| HARNESS-CONTROL-FAILURE | Dead peer, malformed reply, explicit size refusal and every cleanup state with later filing/retry | Halt on the save timeout alone, skip abort, resume before aborted, publish a late result or continue after cleanup failure |
 | HARNESS-HALT | Every lifecycle cell and halt phase with live tool containment | Serve on member death, label interrupt unload, save, or return Left |
 | HARNESS-HALT-BOUND | Fake clock plus real-poll watchdog with silent gate, SPU and sink | Restart a phase deadline, run wind-down, or wait past the absolute end |
 | HARNESS-HALT-ACCOUNT | Table-driven failures through the real coordinator, canonical fault/unload corpus and failed-inbox reservation | Relabel malformed receipt as carry loss, lose an unheld block, mark a partial send committed, omit unknown commit, assign a sequence to pending authoring or replace the first cause |

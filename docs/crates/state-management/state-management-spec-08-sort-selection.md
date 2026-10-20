@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.10 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-08`
+**Version:** 0.11 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-08`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. Scope and applicability
@@ -228,8 +228,9 @@ order between calls or other primitives. [SORT-1, SORT-3, PLACE-3, R20-12]
 4. Compute B = floor(C_tail * numerator / denominator), using u128 arithmetic. Drop
    fully covered optional candidates unless repeat=true. For provided, preserve order.
    For recency, use descending entry_ordinal. For current-step ordering, put exact
-   condition matches first, then descending entry_ordinal. Break ties by canonical
-   UnitId JSON bytes, then original candidate index.
+   condition matches first, then descending entry_ordinal. Break ties by UnitId JSON
+   bytes under TYPES-CANONICAL in the types amendment, in ascending byte order with the
+   variant tag compared first, then by original candidate index.
 5. Try each remaining whole candidate once. Insert accepted candidates at optional_at in
    the mandatory proposal. Measure the complete proposal with the unchanged rebuild and
    schemas. Accept only when it fits tail and generation room and max(0, measured_tokens
@@ -352,7 +353,7 @@ old recall readers and deploy instructions. [SORT-1, SORT-4, READ-3, R20-12]
 | SORT-PORT | Caller fixture with exact fields, immutable prefix and strict codec | Accept unrelated ordinals, mutate prefix or invent a mandatory input |
 | SUBJECTS and STATEMENT-READ | Compound nouns, filtered original ordinals and exact query results | Use a filtered-array index as StatementRef or hide a query refusal |
 | COVERAGE | Distinct equal text, partial overlap and explicit repeat cases | Deduplicate by text, slice a span or omit a pair return |
-| SELECT-ORDER | Literal algorithm cases using scripted whole-proposal measures | Sum isolated token counts, drop mandatory material or ignore final-order cost |
+| SELECT-ORDER | Literal algorithm cases using scripted whole-proposal measures and TYPES-CANONICAL UnitId tie fixtures | Sum isolated token counts, drop mandatory material, change canonical tie order or ignore final-order cost |
 | DROP | Oversized external singleton, paired input and multi-mandatory cases | Treat omission as success or allow the exception for a pair |
 | SELECTION-STATES | Every state row and cancellation at each probe | Grant before records, accept a second request or mutate the argument |
 | OUTBOUND | Exact ordered acts and invalid identity corpus | Dispatch from sort or change source identities |

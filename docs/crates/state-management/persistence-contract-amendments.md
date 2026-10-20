@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.7 **Date filed:** 2026-10-20
+**Version:** 0.8 **Date filed:** 2026-10-20
 
 ## 0. Scope and parties
 
@@ -112,14 +112,16 @@ elects no independent states, transition order or deadlines. [PERSIST-2, PERSIST
 | Publication reported | Return success only after final matching outcome | Record publication, release capture, return outcome | Completion makes the named start loadable |
 | Worker fails before final outcome | Stop publication, retain broken artifacts and report them | No successful outcome or new capture | Broken save, manual repair only |
 | Refused operation | Preserve previous selection | Report typed refusal and release healthy resources | No successful new save |
+| Image or finish timeout | Publish nothing and permit retry only after the worker's cleanup outcome | Keep barrier, send correlated abort, discard late result and await aborted | SavePointNotTaken only after image holdings are released |
 | Broken flow before confirmation | Publish nothing new | Halt and report without another capture | Failed run, never successful leave |
 
 **PERSIST-END.** A flow halt takes no dump and supplies no successful leave. It retains
 the account of owed sources and uncertain commits in the trace where possible. Admin
 uses unclean-run recovery and cannot publish a leftover image as recovery. A complete
 typed operation refusal differs from a missing component result. Missing image/finished
-answers keep the merged timeout/retry rule under R20-6. They are not component-failure
-halts. [FLOW-4, FLOW-5, PERSIST-4, October 18 R3]
+answers keep the timeout/retry rule under R20-6 after PERSIST-CLEANUP. The timeout alone
+is not a component-failure halt. A failed cleanup is component failure. [FLOW-4, FLOW-5,
+PERSIST-4, October 18 R3]
 
 ## 3. Harness-state - adoption, reads and image custody
 
@@ -144,7 +146,34 @@ capture exchange, refuses incompatible mutations and releases it only through th
 defined completion, cancellation or run end. It does not read the operational
 declaration, compute its binding identity or publish a loadable start. The harness owns
 the single exchange and must not send a second operation behind an uncertain one.
+PERSIST-CLEANUP's abort is a correlated continuation of that exchange, not another ask.
 [PERSIST-1, PERSIST-4, SEAM-1, SEAM-2]
+
+**PERSIST-CLEANUP.** After a snapshot or finished timeout, the harness keeps the filing
+barrier and sends abort with the original request and capture IDs before any other
+state ask. The member accepts it in CaptureHeld or FinishedHeld, deletes the retained
+room file and answers aborted before returning Ready. A capture refusal that crossed
+the abort retains just that capture identity until cleanup or the next fresh exchange,
+so the same abort can confirm that no file remains. No cleanup changes held content.
+Reason: a recoverable save timeout must not leave the member refusing the next filing.
+[PERSIST-4, SEAM-2, FLOW-4]
+
+Before aborted, the expected late snapshot, finished or capture refusal for the
+timed-out leg is validated for identity, shape and operation observation, then discarded
+as a save result. Any other result is protocol failure. The late result is never relayed
+to admin, acknowledged or used for publication. Its observation still reaches
+the trace. Only the matching aborted result releases the barrier and permits
+SavePointNotTaken and operator retry. Partial writes retain their offsets, so abort
+cannot splice into an unfinished frame. No later filing or read is sent during cleanup.
+[PERSIST-4, SEAM-2, FLOW-3, COST-2]
+
+Cleanup uses the existing two-second small-control bound, starting when abort is
+enqueued and including carry. Late bytes do not restart it. It does not renew the save
+or leave windows or authorize late publication, and existing earlier lifecycle
+containment still applies. A missing, malformed, wrongly correlated or refused cleanup,
+failed delete, dead peer or failed carry is component failure. The harness halts rather
+than resuming on an unproved Ready state. The next fresh request follows the original
+snapshot request ID, as TYPES-PERSIST defines. [PERSIST-4, FLOW-4, FLOW-5, CLASS-8]
 
 Seed uses a separate pre-agent duty that creates the store and inserts exactly the
 certified prompt and end mark. A serving member accepts no seed insertion, arbitrary
@@ -178,6 +207,7 @@ old state is the newly requested result. [FLOW-4, SEAM-2, CLASS-8]
 | PERSIST-END | Broken-flow teardown and later recovery | Attempt a halt dump, invent successful leave or publish a leftover capture |
 | PERSIST-ADOPT | Catalog/scheme/frontier/prompt failure fixtures | Partly adopt or claim declaration verification in the member |
 | PERSIST-IMAGE | Concurrent mutation, oversize result and cancellation fixtures | Return partial content, mutate held image or allow a second uncertain exchange |
+| PERSIST-CLEANUP | Timeout at snapshot and finished, late success/refusal before aborted, then ordinary filing and retry, plus cleanup failure cases | Resume before aborted, leak a room file, publish a late result, reset a deadline or continue after cleanup failure |
 
 The concrete state tables and wire refusal representations are in the owning Specs.
 R20-6 and R20-7 settle the missing-result and broken-publication branches. Measured
