@@ -36,7 +36,7 @@ work remains at the deferred seams already named by the PRD and these Specs.
 | [State management Spec 05 - Tool-call pairs](state-management-spec-05-tool-pairs.md) | 0.8 |
 | [State Management Spec 06 - Marks, Place, and the Decode Boundary](state-management-spec-06-marks-renderer-engine.md) | 0.11 |
 | [State Management Spec 07 - Locked Plan and Forward Flags](state-management-spec-07-plan-forward-flags.md) | 0.12 |
-| [State Management Spec 08 - Sort and Selection Primitives](state-management-spec-08-sort-selection.md) | 0.11 |
+| [State Management Spec 08 - Sort and Selection Primitives](state-management-spec-08-sort-selection.md) | 0.12 |
 | [State Management Spec 09 - Evidence and Qualification Boundary](state-management-spec-09-qualification-costs.md) | 0.12 |
 
 ## Owning amendments and the STE100 contract
@@ -53,7 +53,7 @@ contract. Existing code continues to use the previous contracts until the named 
 | [weaver-admin Spec: flow, seed, publication, and boot amendment](weaver-admin-Spec-amendment.md) | 0.14 |
 | [weaver-diagnostic Spec: isolated legacy conversion amendment](weaver-diagnostic-Spec-amendment.md) | 0.8 |
 | [weaver-gate Spec: input refusal and fault interrupt amendment](weaver-gate-Spec-amendment.md) | 0.7 |
-| [weaver-harness Spec: dependable-flow amendment](weaver-harness-Spec-amendment.md) | 0.21 |
+| [weaver-harness Spec: dependable-flow amendment](weaver-harness-Spec-amendment.md) | 0.22 |
 | [weaver-harness / weaver-spu - STE100 contract](weaver-harness-spu-ste100-contract.md) | 0.4 |
 | [weaver-internal Spec: pure recall query amendment](weaver-internal-Spec-amendment.md) | 0.4 |
 | [weaver-spu Spec: placement measurement and STE100 duty amendment](weaver-spu-Spec-amendment.md) | 0.5 |

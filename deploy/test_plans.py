@@ -5325,9 +5325,11 @@ class DocsMirrorTests(unittest.TestCase):
     named, and the written exceptions are not."""
 
     def test_every_crate_has_its_documents_at_the_top_level(self):
+        """The repository's real document tree satisfies the mirror rule."""
         self.assertEqual(docs_mirror_faults(DEPLOY.parent), [])
 
     def test_a_nested_crate_folder_is_named(self):
+        """Nesting a crate exposes both its missing home and misplaced documents."""
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
             for name in ("weaver-harness", "weaver-trace"):
@@ -5350,6 +5352,7 @@ class DocsMirrorTests(unittest.TestCase):
             ])
 
     def test_a_folder_naming_no_crate_is_named_and_the_exceptions_are_not(self):
+        """Named exceptions stay allowed while an unrelated folder is rejected."""
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
             (root / "crates" / "weaver-trace").mkdir(parents=True)

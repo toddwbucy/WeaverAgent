@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.11 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-08`
+**Version:** 0.12 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-08`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. Scope and applicability
@@ -236,14 +236,29 @@ order between calls or other primitives. [SORT-1, SORT-3, PLACE-3, R20-12]
    schemas. Accept only when it fits tail and generation room and max(0, measured_tokens
    - mandatory_tokens) <= B. Otherwise record the limiting reason and continue without
    partial inclusion.
-6. For a recency order, restore accepted candidates to their source entry order within
-   the insertion slot. For provided, keep their supplied order. Measure that final
-   proposal. If it fails either fit or B, remove the most recently accepted optional
-   unit and repeat. This phase makes at most accepted_count+1 measurements and never
-   removes mandatory material.
+6. For recency and current_step_then_recency, restore accepted candidates to ascending
+   entry_ordinal within the insertion slot, with the same canonical UnitId and original
+   candidate-index tie-breaks as step 4. For provided, keep supplied order. This is the
+   order of units, selected_refs and the complete final proposal measured here. Keep
+   step 5's acceptance sequence separately, identified by original candidate index and
+   UnitId. If the final proposal fails fit or B, remove the last still-selected
+   occurrence from that acceptance sequence, record its UnitId and limiting drop reason,
+   and measure again in final order. Do not remove the last unit in presentation order
+   or every occurrence sharing that UnitId. This phase makes at most accepted_count+1
+   measurements and never removes mandatory material.
 7. Return the immutable selection, decision metadata and measurement, or the typed
    refusal. The harness records them before granting use. This operation neither places
    the result nor starts another pass.
+
+The current-step criterion changes selection priority, while source order remains the
+presentation order for both recency variants. The acceptance fixture supplies distinct
+UnitIds A, B and C at ordinals 1, 2 and 3, with only A matching the current step. It
+accepts the step 5 probes in order A, C, B, then refuses the reordered proposal A, B, C.
+The retry must drop B, measure A, C and return those selected_refs when that probe fits.
+Removing source-order restoration or removing the final presented unit instead must
+fail the fixture. A repeated-UnitId case proves that only the last accepted occurrence
+is removed. These scripted costs test control flow, not a measured model limit.
+[SORT-3, READ-2, STORE-5, PLACE-4, PLACE-5]
 
 **DROP.** A selected tool return and a marked span are indivisible. Every omitted
 candidate has a typed reason and source identity in sort.decision. The explicit
@@ -353,7 +368,7 @@ old recall readers and deploy instructions. [SORT-1, SORT-4, READ-3, R20-12]
 | SORT-PORT | Caller fixture with exact fields, immutable prefix and strict codec | Accept unrelated ordinals, mutate prefix or invent a mandatory input |
 | SUBJECTS and STATEMENT-READ | Compound nouns, filtered original ordinals and exact query results | Use a filtered-array index as StatementRef or hide a query refusal |
 | COVERAGE | Distinct equal text, partial overlap and explicit repeat cases | Deduplicate by text, slice a span or omit a pair return |
-| SELECT-ORDER | Literal algorithm cases using scripted whole-proposal measures and TYPES-CANONICAL UnitId tie fixtures | Sum isolated token counts, drop mandatory material, change canonical tie order or ignore final-order cost |
+| SELECT-ORDER | Whole-proposal probes for all three orders, current-step reordering/retry, repeated UnitIds and TYPES-CANONICAL ties | Sum isolated counts, drop mandatory material, change tie order, remove the wrong accepted occurrence or ignore final-order cost |
 | DROP | Oversized external singleton, paired input and multi-mandatory cases | Treat omission as success or allow the exception for a pair |
 | SELECTION-STATES | Every state row and cancellation at each probe | Grant before records, accept a second request or mutate the argument |
 | OUTBOUND | Exact ordered acts and invalid identity corpus | Dispatch from sort or change source identities |
