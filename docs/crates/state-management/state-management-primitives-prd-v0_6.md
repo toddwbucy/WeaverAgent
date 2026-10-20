@@ -7,6 +7,8 @@ an operator ruling the changed clause names.
 **Document ID:** `state-management-primitives-PRD`
 **Editorial:** ASCII, no semicolons, prose at 88 characters.
 
+**Landing PR:** #182
+
 ## 0. Authority and reading
 
 This document charters state management for WeaverTools' agent. It states the

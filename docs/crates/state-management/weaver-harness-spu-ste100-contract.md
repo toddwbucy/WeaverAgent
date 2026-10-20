@@ -2,6 +2,8 @@
 
 **Status:** MERGED.
 
+**Landing PR:** #182
+
 **Version:** 0.4 **Date filed:** 2026-10-20 **Document ID:**
 weaver-harness-spu-ste100-contract **Parent:** weaver-agent-PRD, invariant 5.3
 **Editorial:** Per the Working Rules.

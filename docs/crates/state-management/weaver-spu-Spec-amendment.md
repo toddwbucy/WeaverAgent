@@ -2,6 +2,8 @@
 
 **Status:** MERGED.
 
+**Landing PR:** #182
+
 **Version:** 0.5 **Date filed:** 2026-10-20 **Parent:** weaver-spu-PRD
 
 ## 0. Scope and owning clauses
