@@ -11,6 +11,11 @@ parent: WeaverTools Technical Documentation
 
 **Status:** technical documentation. Describes, decides nothing.
 
+**Historical snapshot of 2026-08-25.** The `loop-file` key described below retired on
+2026-10-20 (#180) and now refuses as an unknown field. This page also retains the old
+identity and permission surfaces. For the current declaration, read
+[`weaver-types-Spec` section 2](../../crates/weaver-types/weaver-types-Spec.md#2-the-agent-config).
+
 **Rough draft, first pass**, written the day the first from-scratch agent on a
 second box was declared, refused twice by name, corrected from the refusals
 alone, and loaded.

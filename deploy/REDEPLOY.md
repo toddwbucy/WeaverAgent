@@ -50,10 +50,10 @@ something this runbook does not mention, the runbook is what gets amended.
 | Admin base, empty until an agent is made | `/etc/weaver/admin/` (root 0755, and a delegated invocation under sudo reads only this one) | bootstrap |
 | Agent root: the agent's admin configuration, one file per key, copied from the stack record, plus `territory`, `operator` and `roles.toml` | `/etc/weaver/admin/<name>/` (root 0755, files 0644) | create-agent |
 | Sudo rule: the connector's fixed command lines | `/etc/sudoers.d/weaver-<name>` (root 0440) | create-agent |
-| Members: `worker pyworker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state` | `<prefix>/bin/` | bootstrap, update-stack |
+| Members: `worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state` | `<prefix>/bin/` | bootstrap, update-stack |
 | Engine libraries `libggml*`, `libllama*` | `<prefix>/lib/`, reached by `/etc/ld.so.conf.d/weaver.conf` and named by the record's `library-path`, which admin sets as the worker's `LD_LIBRARY_PATH` | bootstrap |
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
-| The python SPU prefix and zipapp | `<prefix>/python-spu/` | `python-spu/README.md` |
+| Retired Python SPU, where an older install left it | `<prefix>/python-spu/` | archive and purge only, Python retirement below |
 | Accounts: the agent's `weaver-<name>` (home `/home/weaver-<name>`, 2750), the member's `weaver-<name>-state`, the relay's `weaver-<name>-relay`, the connector's `weaver-<name>-admincon`, and the groups `weaver-<name>-trace` and `weaver-<name>-admin` | passwd | create-agent |
 | Territory `weaver-<name>/` (root:weaver-<name>-state 0710, passage for the state group alone) with `agent.toml` and `system-prompt.md` (root:weaver-<name>-admin 0640), `admin.log` and `worker.log` once admin has run a verb (root:weaver-<name>-admin 0640), `save-points/` (root:weaver-<name>-admin 0750, the published save points 0640 and the manifest root 0644), `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640); the whole agent, on the operator's ruling of 2026-10-07 on #1 | the stack record's `agent-directory`,  default `/var/lib/weaver-agent` | create-agent, admin for the logs and the save points |
 | Run directory: `run.lock`, `admin.lock` and the trace door `trace.sock` | `<coordination-root>/weaver.run/<name>/` (root 0755, on tmpfs under `/run`) | admin, at its first verb |
@@ -61,6 +61,39 @@ something this runbook does not mention, the runbook is what gets amended.
 No unit and no init system is part of a stack. Admin's start step stands the worker, its
 state member and the trace relay as processes holding one run lock, in the containment
 the load was invoked from.
+
+### Python retirement (2026-10-20, #180)
+
+The Python worker, Python SPU and declaration key `loop-file` are retired. The
+scripts stop before a build or provisioning when the stack or an agent names a
+known retired executable, or the prefix still contains `python-spu/` or its binary
+directory contains `pyworker`. Dangling links count as remnants. A declaration with
+`loop-file` refuses before an update builds, and admin's parser names it as an
+unknown field. The checks recognize the published paths and filenames, not the
+language of an arbitrarily renamed executable. The operator inventories any
+custom deployment paths as part of the transition.
+
+For a box carrying either Python track, use the decommission, archive, purge and
+bootstrap sequence in sections 1 through 4. Keep the installed admin and old agent
+configuration available until every old agent is unloaded. The decommission script
+still knows the retired Python prefix, and its archive includes that prefix and
+`bin/`, including pyworker, with the territories and records. Verify the archive
+before purging. A dangling link at a retired path must also be recorded and removed
+by the operator after confirming that no agent uses it. It is never silently
+removed by an update. No agent is switched to a different implementation in place.
+Recreate affected agents with the Rust worker and SPU, without `loop-file`.
+
+A Rust-only installation can contain an unused pyworker installed by the old default
+build. After confirming that no root or stack record selects it and no process runs
+it, the operator may archive and remove that exact file before the ordinary update.
+If the stack record itself selects pyworker, use the full redeploy sequence instead.
+The update does not rewrite an agent's binary selection. An agent using an external
+Python prefix follows the same unload, archive and retirement procedure for that
+prefix, which the operator must inventory explicitly.
+
+Python remains available for deployment and test tooling. The installed Rust worker
+has no Python interpreter dependency. The Rust SPU retains its existing GGUF and
+CUDA engine dependencies.
 
 ## 1. Decommission and archive
 
@@ -251,7 +284,7 @@ What it does, so the log can say which step a failure was at:
    the tarball), before the long build rather than after it.
 2. Names the tree: the git revision, or `nogit-<lockfile sha>` on a tree without git.
 3. `cargo test --release --locked -p weaver-trace -p weaver-harness -p weaver-state
-   --features weaver-harness/pyworker,weaver-state/sqlite`. The selection is the
+   --features weaver-state/sqlite`. The selection is the
    crates the stack runs, with the store engine's feature on, so the engine an agent
    elects is tested before it is installed. A
    workspace-wide `cargo test --locked` also compiles and passes (#37). Cargo's output
@@ -260,7 +293,7 @@ What it does, so the log can say which step a failure was at:
    names as the cause and the log's last 60, and naming the log, which is kept (#128).
    `update-stack.sh`'s test step does the same.
 4. `cargo build --release --locked --workspace --features
-   weaver-spu/cuda,weaver-harness/pyworker,weaver-state/sqlite`. The engine is named,
+   weaver-spu/cuda,weaver-state/sqlite`. The engine is named,
    though it is the default, or the member refuses an agent electing it at load
    (measured 2026-09-11). The CUDA host compiler is `NVCC_CCBIN`, defaulted as
    `update-stack.sh` defaults it. A build that fails refuses the same way, never going on
@@ -272,7 +305,7 @@ What it does, so the log can say which step a failure was at:
    `deploy/busybox.config`, refused where `oldconfig` would change it, built static and
    refused where it names an ELF interpreter, and its applet list written from its own
    `--list`.
-5. Installs the seven members to `<prefix>/bin` (root, 0755), `weaver-trace-relay`
+5. Installs the six members to `<prefix>/bin` (root, 0755), `weaver-trace-relay`
    beside the worker where admin finds it, and the `libggml*` and `libllama*` objects
    to `<prefix>/lib`, from llama-cpp-sys's `out/lib` under the target's `build/`
    directory (the copies at the target root are bare links that dangle), versioned
@@ -289,11 +322,9 @@ What it does, so the log can say which step a failure was at:
    empty (root 0755) and the agent directory `/var/lib/weaver-agent` (root 0755), under
    which each territory is root:weaver-<name>-state 0710, not setgid.
 
-The python SPU is a separate install and not part of this step. Its procedure is
-`python-spu/README.md`, "Installing it on a box", and an agent that serves from it is
-made with `create-agent.sh --spu <prefix>/python-spu/python-spu.pyz`, which writes that
-path as its root's `spu-binary` in place of the stack record's. Stand the Rust stack
-up first and add it only for an agent that needs it.
+The SPU is the Rust implementation. `create-agent.sh --spu /absolute/path/to/custom-spu`
+can still select a separately installed Rust binary for one agent. The Python zipapp
+and its installation procedure are retired.
 
 ## 4. Agents
 

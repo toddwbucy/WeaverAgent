@@ -135,7 +135,7 @@ elif name == 'cargo':
             print('fixture build refusal', file=sys.stderr)
             sys.exit(42)
         target.joinpath('release').mkdir(parents=True)
-        for member in ('pyworker', 'worker', 'weaver-admin', 'weaver-trace-relay', 'weaver-gate', 'weaver-spu', 'weaver-state'):
+        for member in ('worker', 'weaver-admin', 'weaver-trace-relay', 'weaver-gate', 'weaver-spu', 'weaver-state'):
             target.joinpath('release', member).write_text('fixture artifact ' + member)
     else: sys.exit(99)
 elif name == 'sudo':
@@ -267,7 +267,7 @@ class PlanTests(unittest.TestCase):
         self.config.mkdir()
         existing = self.config / "existing"
         existing.mkdir()
-        (existing / "worker-binary").write_text(str(self.root / "installed" / "pyworker"))
+        (existing / "worker-binary").write_text(str(self.root / "installed" / "worker"))
         # The operator's home, which no script writes into since the
         # operator's ruling of 2026-10-07 on #1: the whole agent lives in its
         # territory under the stack record's agent-directory.
@@ -298,7 +298,7 @@ class PlanTests(unittest.TestCase):
         self.logs = self.root / "log"
         self.logs.mkdir()
         self.stack_keys = {
-            "worker-binary": str(self.root / "installed" / "pyworker"),
+            "worker-binary": str(self.root / "installed" / "worker"),
             "spu-binary": str(self.root / "installed" / "weaver-spu"),
             "gate-binary": str(self.root / "installed" / "weaver-gate"),
             "coordination-root": "/run",
@@ -831,7 +831,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertTrue((self.config / ".m1.partial").is_dir())
 
     def test_spu_override_is_this_agents_spu_binary(self):
-        spu = "/opt/elsewhere/python-spu.pyz"
+        spu = "/opt/elsewhere/custom-spu"
         result = self.create("--spu", spu)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("spu-binary      " + spu, result.stdout)
@@ -841,13 +841,85 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assert_agent_root("sqlite", spu=spu)
         self.assertEqual((self.stack / "spu-binary").read_text(), self.stack_keys["spu-binary"] + "\n")
 
+    def test_retired_python_binaries_refuse_before_provisioning_or_build(self):
+        # The Rust fixture is the control. Restoring any retired election must
+        # refuse before provisioning or a build, including per-agent overrides.
+        control = self.run_script("update-stack.sh")
+        self.assertEqual(control.returncode, 0, control.stderr)
+        for path in ("/opt/weaver/bin/pyworker", "/opt/elsewhere/python-spu.pyz",
+                     "/opt/weaver/python-spu/renamed.pyz"):
+            for where, role in (("stack", "worker-binary"), ("stack", "spu-binary"),
+                                ("agent", "worker-binary"), ("agent", "spu-binary"),
+                                ("create", "worker-binary"), ("override", "spu-binary")):
+                with self.subTest(path=path, where=where):
+                    key = (self.stack / role if where in ("stack", "create")
+                           else self.config / "existing" / role)
+                    old = key.read_text() if key.exists() else None
+                    try:
+                        if where != "override":
+                            key.write_text(path + "\n")
+                        self.log.unlink(missing_ok=True)
+                        if where == "override":
+                            result = self.create("--spu", path)
+                        elif where == "create":
+                            result = self.create()
+                        else:
+                            result = self.run_script("update-stack.sh")
+                        self.assertEqual(result.returncode, 1, result.stdout)
+                        self.assertIn("retired Python executable", result.stderr)
+                        self.assertIn(path, result.stderr)
+                        self.assertFalse(any(c[0] in ("cargo", "sudo") for c in self.calls()))
+                    finally:
+                        if old is None:
+                            key.unlink(missing_ok=True)
+                        else:
+                            key.write_text(old)
+
+    def test_retired_python_installations_are_preserved_and_refused(self):
+        # Removing a member from MEMBERS does not remove its installed file.
+        # Ordinary files, directories and dangling links all require cleanup.
+        prefix = Path(self.stack_keys["prefix"])
+        self.env["WEAVER_PREFIX"] = str(prefix)
+        for relative in ("pyworker", "python-spu", "bin/pyworker"):
+            path = prefix / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            for form in ("file", "directory", "link"):
+                with self.subTest(relative=relative, form=form):
+                    if form == "file":
+                        path.write_text("old installation")
+                    elif form == "directory":
+                        path.mkdir()
+                    else:
+                        path.symlink_to(prefix / "missing")
+                    try:
+                        # update/create use the recorded binary directory.
+                        scripts = [("update-stack.sh", ()), ("create-agent.sh", (
+                            "m1", "--artifact", str(self.artifact)))]
+                        # bootstrap uses prefix/bin, as its layout requires.
+                        if relative == "bin/pyworker":
+                            scripts = [("bootstrap-stack.sh", ())]
+                        elif relative == "python-spu":
+                            scripts.append(("bootstrap-stack.sh", ()))
+                        for script, args in scripts:
+                            self.log.unlink(missing_ok=True)
+                            result = self.run_script(script, *args)
+                            self.assertEqual(result.returncode, 1, result.stdout)
+                            self.assertIn("retired Python installation remains", result.stderr)
+                            self.assertTrue(path.exists() or path.is_symlink())
+                            self.assertFalse(any(c[0] in ("cargo", "sudo") for c in self.calls()))
+                    finally:
+                        if form == "directory":
+                            path.rmdir()
+                        else:
+                            path.unlink()
+
     def test_an_spu_named_like_another_stack_binary_refuses_before_provisioning(self):
         # Codex on #45: admin's stack::judge_names refuses every verb on a root
         # whose worker, state member, gate and SPU share a file name, so an
         # --spu named like one of them refuses here, before any call. Perturbation:
         # drop the judge_names call, and each provisions.
         self.env["ALLOW_APPLY_CHECKS"] = "1"
-        for name in ("pyworker", "weaver-state", "weaver-gate"):
+        for name in ("worker", "weaver-state", "weaver-gate"):
             result = self.create("--spu", "/opt/elsewhere/" + name, "--apply")
             self.assertNotEqual(result.returncode, 0, name)
             self.assertIn("share the file name " + name, result.stderr)
@@ -1578,8 +1650,8 @@ esac
         self.assertIn("--workspace", build)
         self.assertNotIn("--exclude", build)
         self.assertIn("weaver-spu/cuda", build[-1])
-        # The seven members, and the shell's busybox and applet list (#29).
-        self.assertEqual(result.stdout.count("NEW"), 9)
+        # The six Rust members, and the shell's busybox and applet list (#29).
+        self.assertEqual(result.stdout.count("NEW"), 8)
         for shell_file in ("busybox ", "busybox.applets "):
             self.assertIn("  " + shell_file, result.stdout)
         self.assertIn("plan only. rerun with --install", result.stdout)
@@ -1780,6 +1852,26 @@ esac
         control = self.run_script("update-stack.sh")
         self.assertNotIn("permission-mode", control.stderr)
 
+    def test_stack_refuses_the_retired_loop_file_before_build(self):
+        decl = self.existing_territory / "agent.toml"
+        bare = decl.read_text()
+        for key, value in (("loop-file", '"/opt/loops/a.py"'),
+                           ('"loop-file"', '""'),
+                           ("loop-file", "false")):
+            with self.subTest(key=key, value=value):
+                source = f"{key} = {value}\n{bare}"
+                decl.write_text(source)
+                self.log.unlink(missing_ok=True)
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("loop-file, retired by #180", result.stderr)
+                self.assertIn("Recreate existing", result.stderr)
+                self.assertEqual(decl.read_text(), source)
+                self.assertFalse(any(c[0] in ("cargo", "sudo") for c in self.calls()))
+        decl.write_text(bare)
+        control = self.run_script("update-stack.sh")
+        self.assertEqual(control.returncode, 0, control.stderr)
+
     def test_stack_refuses_a_trace_the_old_admin_recreated(self):
         # Codex on #82: an admin before #62 recreated a lost trace root:root,
         # which the new admin refuses at load and validate never sees, so the
@@ -1864,7 +1956,7 @@ esac
         # beside it plans on.
         old_root = self.config / "old"
         old_root.mkdir()
-        (old_root / "worker-binary").write_text(str(self.root / "installed" / "pyworker"))
+        (old_root / "worker-binary").write_text(str(self.root / "installed" / "worker"))
         old_dir = self.operator_home / ".weaveragent" / "old"
         old_dir.mkdir(parents=True)
         (old_dir / "agent.toml").write_text("[state-store]\nengine = \"none\"\n")
@@ -2662,7 +2754,7 @@ esac
             f": > '{self.root / 'signalled'}'; "
             "kill -TERM -- -$(ps -o pgid= -p $$ | tr -d ' '); sleep 5; fi\n")
         installed = self.root / "installed"
-        for member in ("pyworker", "worker", "weaver-admin", "weaver-trace-relay", "weaver-gate",
+        for member in ("worker", "weaver-admin", "weaver-trace-relay", "weaver-gate",
                        "weaver-spu", "weaver-state"):
             installed.joinpath(member).write_text("fixture artifact " + member)
         installed.joinpath("busybox").write_text("fixture busybox")
@@ -5311,7 +5403,7 @@ exit "${CARGO_EXIT:-0}"
         env = dict(os.environ,
                    PATH=f"{self.bin}:{os.environ['PATH']}",
                    BUILT=str(self.tmp / "release"),
-                   MEMBER_FEATURES="weaver-harness/pyworker",
+                   MEMBER_FEATURES="weaver-state/sqlite",
                    FEATURES="weaver-spu/cuda",
                    CARGO_STDOUT=stdout, CARGO_STDERR=stderr,
                    CARGO_EXIT=str(status), CARGO_SEEN=str(self.seen))

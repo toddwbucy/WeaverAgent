@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `WeaverAgent` is one agent of the WeaverTools suite, singular by the operator's ruling of
 2026-10-02 (it was `WeaverAgents`): a ten-crate Rust workspace that builds the deployable
-proto-stateful agent, plus the documents that authorize its code,
-the deploy scripts that install it on a box, and a Python prototype of one organ. It was
+proto-stateful agent, plus the documents that authorize its code and the deploy scripts
+that install it on a box. It was
 split out of the monorepo `toddwbucy/WeaverTools-old2` on 2026-09-30 (root commit
 `a9d9827`, no history on `main`; the local `seed-history` branch holds the monorepo's
 history and is never pushed).
@@ -95,8 +95,7 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
 - **`weaver-harness`** is the content-neutral switchboard: it holds the sockets, routes
   between organs, authors the trace, and holds no opinion about content. Its
   `src/bin/worker` is the composition root, run under the agent's uid by admin's start
-  step, and `src/bin/pyworker` (feature `pyworker`, links pyo3) runs a loop written in
-  Python.
+  step. Its loop is developed, tested and deployed in Rust under `dev_loop`.
   Loops are workflow documents under `docs/crates/weaver-harness/Loops/`, not code in
   the switchboard.
 - **`weaver-trace`** writes the record, one event per line in canonical form, and tees
@@ -141,21 +140,21 @@ folder per crate at the top level, `docs/crates/<crate>/`, holding that crate's 
 under another crate's folder, and `DocsMirrorTests` in `deploy/test_plans.py` pins the
 shape. The exceptions are `contracts/`, the apex `weaver-agent-PRD.md`, and
 `weaver-analysis/`, which has no crate here; a crate's folder may also carry what its
-crate holds beside its two documents (`weaver-harness/Loops/`,
-`weaver-spu/python-spu-Spec.md`). Every seam has a contract under
-`docs/crates/contracts/`; four of them are cross-repository (`weaver-gate-world`,
-`weaver-admin-operator`, `weaver-analysis-state`, `weaver-analysis-web`) and are
-destined for the suite repository. `docs/crates/weaver-analysis/` and the two
-`weaver-analysis-*` contracts are byte-identical copies of files in WeaverAnalysis;
-which copy is authoritative is unruled, so edit neither without saying so.
+crate holds beside its two documents (`weaver-harness/Loops/`, for example). Every seam
+has a contract under `docs/crates/contracts/`. Four of them are cross-repository
+(`weaver-gate-world`, `weaver-admin-operator`, `weaver-analysis-state`,
+`weaver-analysis-web`) and are destined for the suite repository.
+`docs/crates/weaver-analysis/` and the two `weaver-analysis-*` contracts are
+byte-identical copies of files in WeaverAnalysis. Which copy is authoritative is
+unruled, so edit neither without saying so.
 
 `docs/technical/` is a dated, non-normative reader's snapshot (one page per crate,
 `index.md` first). `docs/project/` holds handoffs, audits, sketches and the vision; the
 most recent handoffs are the fastest way to learn where the work stands.
 
-`docs/crates/weaver-spu/python-spu-Spec.md` governs `python-spu/`, a PyTorch prototype
-of the SPU's decode role carried as a lab instrument (a carry is not a hardening). It
-has its own README, lock files and an `oracle/` crate that links this workspace.
+The Python SPU and Python worker retire on the operator's ruling of 2026-10-20 (#180).
+The remaining runtime is the Rust worker and organs with their engine and system
+libraries. Practical Python tooling remains outside the agent runtime.
 
 ## What governs the work
 
@@ -217,11 +216,11 @@ the door with an in-tree client and run as `#[ignore]` instruments under a watch
 re-executes them inside `unshare --map-root-user`. They need neither PostgreSQL nor
 WeaverAnalysis.
 
-The deploy scripts already select
-crates: `deploy/bootstrap-stack.sh` and `deploy/update-stack.sh` test `weaver-trace`,
-`weaver-harness` and `weaver-state` with `weaver-harness/pyworker,weaver-state/sqlite`,
-then build the workspace in release with `weaver-spu/cuda` added, because every engine
-an agent may elect must be compiled in or the member refuses that agent at load.
+The deploy scripts already select crates: `deploy/bootstrap-stack.sh` and
+`deploy/update-stack.sh` test `weaver-trace`, `weaver-harness` and `weaver-state` with
+`weaver-state/sqlite`, then build the workspace in release with `weaver-spu/cuda` added,
+because every engine an agent may elect must be compiled in or the member refuses that
+agent at load.
 
 **`weaver-spu`'s gate carries `--features cuda,gguf`.** A bare run leaves
 `decoder/native.rs`, `decoder/native_pair.rs` and every test reaching them uncompiled,
@@ -235,14 +234,6 @@ fact does not move the lane.
 `--workspace` run answers a smaller question than ten per-crate runs. Issue #471 in
 the monorepo was the register of per-crate counts; counts are per box and none is
 written here.
-
-### python-spu
-
-```bash
-cd python-spu
-cargo build --manifest-path oracle/Cargo.toml --locked    # the Rust oracle the suite compares against
-pytest -q                                                 # CPU; the venv is held to requirements-test.lock
-```
 
 ### Deploying and driving an agent
 

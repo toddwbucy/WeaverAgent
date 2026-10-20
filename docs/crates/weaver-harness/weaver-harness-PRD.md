@@ -12,7 +12,7 @@ conforms to.
 **Document ID:** `weaver-harness-PRD`
 **Parent:** `weaver-agent-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #72
+**Landing PR:** #181
 
 ---
 
@@ -70,73 +70,50 @@ which is why it is stated rather than assumed.
 
 ## 2. What the harness owns
 
-**Loop 0 is the running agent service, per the operator's ruling of 2026-08-05.**
-It is not a document set, not a milestone to reach and pass, and not a loop a
-builder supplies. It is the object itself: the thing admin's start step boots,
-comes up as the statically provisioned agent identity, binds the coordination
-socket inside its own sandbox and listens on it, creates the unnamed pairs its
-organs are reached over, and sits there being one sealed agent. **It binds
-exactly one name and listens on exactly one socket**, per the inversion ruling
-of 2026-08-05: any socket connecting to the harness is an internal connection,
-so the coordination socket lives inside the sandbox and this crate is the party
-that creates it. It is dialable by construction and the credential check is what
-refuses, root or refused, per `weaver-admin-harness-contract` section 2, where
-the earlier form's unreachability did the refusing and could not tell an elected
-tool from the worker. Nothing else here is dialable: the organ pairs have no
+**Loop 0 is the running agent service, per the operator's ruling of 2026-08-05.** It is
+not a document set, not a milestone to reach and pass, and not a loop a builder
+supplies. It is the object itself: the thing admin's start step boots, comes up as the
+statically provisioned agent identity, binds the coordination socket inside its own
+sandbox and listens on it, creates the unnamed pairs its organs are reached over, and
+sits there being one sealed agent. **It binds exactly one name and listens on exactly
+one socket**, per the inversion ruling of 2026-08-05: any socket connecting to the
+harness is an internal connection, so the coordination socket lives inside the sandbox
+and this crate is the party that creates it. It is dialable by construction and the
+credential check is what refuses, root or refused, per `weaver-admin-harness-contract`
+section 2, where the earlier form's unreachability did the refusing and could not tell
+an elected tool from the worker. Nothing else here is dialable: the organ pairs have no
 names. **That is why it is seated in this crate directly and not in the loop
-container.** The container under `Loops/` holds the agent's internal logic,
-which the running loop 0 service executes, and a loop 0 filed beside those
-documents would read as one more supplied loop rather than as the service that
-executes them. **There is one builder-facing surface, it is limited to loop 1
-and above, and it excludes loop 0.** It is the extension seam of section 6, and
-it has two stages rather than two forms: a builder develops against it as a
-loop file that a Python-iterating worker reads per crossing, and deploys by
-compiling that loop into the worker binary. Loop 0 is the service that runs a
-builder's loop at either stage, and is not itself supplied through that
-surface. **The socket-binding surface is not coming**, per the operator's
-ruling of 2026-09-15. An earlier form of this paragraph named a second surface
-beside the seam, a builder's loop standing in a separate process and reached
-over a socket, dropped in beside a running agent, and no such proxy loop is
-built. The development path and the deployment path are the one seam at two
-stages, so a loop is composed into the worker it runs under rather than bound
-to from outside it.
+container.** The container under `Loops/` holds the agent's internal logic, which the
+running loop 0 service executes, and a loop 0 filed beside those documents would read as
+one more supplied loop rather than as the service that executes them. **There is one
+builder-facing surface, it is limited to loop 1 and above, and it excludes loop 0.** It
+is the extension seam of section 6, and the loop is written in Rust and compiled into
+the worker that runs it. The operator retired the Python iteration stage on 2026-10-20
+(#180): the deployed loop is the implementation that is tested. Loop 0 supplies the
+service and the crossing. A loop is composed into the worker rather than bound from
+outside it, and the socket-binding surface remains retired by the ruling of 2026-09-15.
 
-**Loop 0, and the machinery loop 1 composes against.** The harness owns the
-lifecycle interior of loop 0, the load and the unload, the same for every agent,
-together with the engine machinery a loop is built from: tool dispatch, batch
-partitioning, and the surfaces the rest of this section names. The loop itself,
-loop 1, is written at the worker composition root, per the composability ruling of
-2026-08-02, against what this crate exposes, which is the
-extension seam the children list of section 6 names. **The deployed loop 1 is state
-management**, one loop written in Rust and compiled into the worker, per the operator's
-rulings of 2026-10-02 on issue #1 and `weaver-agent-PRD` section 5.5: no declaration
-elects a loop for the compiled path, its opinions are settings in the declaration's
-`[state-management]` table, and an operator bringing a loop of its own is parked at apex
-section 9. The ruling of 2026-08-20 that follows now describes the Python-iterating
-worker, the bench and experiments lane, which stays untouched until its own resolution.
-Which loop an agent runs there is the agent's own declared fact, per that ruling: the
-loop is a member of that agent's harness and unique to it. A worker whose loop
-is compiled carries it in the binary the start step runs, and a worker that reads
-its loop from a file runs the one the agent's declaration names. A compiled
-worker handed a declared loop file refuses at its own argument parse and the
-load fails loudly, because a declaration the installation cannot honor is an
-error to surface rather than a fact to ignore, the residual-readout rule's
-own reasoning one field over. Absence means
-the worker's own default, the compiled body or the installed file, which is
-what lets every declaration written before the member stand. The earlier form
-of this sentence called the loop a provisioning fact rather than a
-configuration field, and the ruling retires that reading where the loop is a
-file: two agents drawing one shared file differ only by conditionals inside
-it, which contaminates any comparison run between them, and separating
-experimental arms is exactly what a per-agent declaration is for. What holds
-for every loop 1 alike is loop 0's bracket discipline: the operator's interrupt
-arrives as the stop exchange of `weaver-admin-harness-contract` section 3,
-aborts whatever is in flight, and returns the agent to loaded and idle,
-whatever the loop's own semantics. The basic loops this program ships are
-demonstrations built by the same path, native in the same way, and they run
-until the model returns a final answer or that interrupt arrives, which
-describes the demonstrations rather than constraining a builder's loop, a
-judgment loop or a fixed-turn loop being licensed by the same ruling.
+**Loop 0, and the machinery loop 1 composes against.** The harness owns the lifecycle
+interior of loop 0, the load and the unload, the same for every agent, together with the
+engine machinery a loop is built from: tool dispatch, batch partitioning, and the
+surfaces the rest of this section names. The loop itself, loop 1, is written at the
+worker composition root, per the composability ruling of 2026-08-02, against what this
+crate exposes, which is the extension seam the children list of section 6 names. **The
+deployed loop 1 is state management**, one loop written in Rust and compiled into the
+worker, per the operator's rulings of 2026-10-02 on issue #1 and `weaver-agent-PRD`
+section 5.5: no declaration elects a loop for the compiled path, its opinions are
+settings in the declaration's `[state-management]` table, and an operator bringing a
+loop of its own is parked at apex section 9. The Python-iterating worker and the
+declaration's `loop-file` retire on the operator's ruling of 2026-10-20 (#180). A
+declaration carrying that key refuses at the parse as an unknown field, named rather
+than ignored. The compiled loop is carried in the worker binary the start step runs.
+What holds for every loop 1 alike is loop 0's bracket discipline: the operator's
+interrupt arrives as the stop exchange of `weaver-admin-harness-contract` section 3,
+aborts whatever is in flight, and returns the agent to loaded and idle, whatever the
+loop's own semantics. The basic loops this program ships are demonstrations built by the
+same path, native in the same way, and they run until the model returns a final answer
+or that interrupt arrives, which describes the demonstrations rather than constraining a
+builder's loop, a judgment loop or a fixed-turn loop being licensed by the same ruling.
 
 **What drives loop 1, and what only clerks, per the operator's ruling of
 2026-08-12.** The seat is granted on work that arrives owed an answer, and on

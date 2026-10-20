@@ -19,7 +19,7 @@ fn distinct_names_pass() {
         judge(
             "/opt/weaver/bin/weaver-worker",
             "/opt/weaver/bin/weaver-gate",
-            "/opt/weaver/python-spu/python-spu.pyz"
+            "/opt/alternate/bin/custom-spu"
         ),
         Ok(())
     );

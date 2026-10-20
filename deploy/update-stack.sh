@@ -58,6 +58,8 @@ cd "$REPO"
 say() { printf '\n== %s\n' "$*"; }
 die() { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 
+source "$REPO/deploy/retired-python.sh"
+
 read_key() { cat "$STACK/$1" 2>/dev/null || true; }
 
 # **An unload is read from admin's answer, never assumed** (the #94 survey's
@@ -321,6 +323,11 @@ sys.exit(1)
 WORKER_BINARY=$(read_key worker-binary)
 [ -n "$WORKER_BINARY" ] || die "no worker-binary in the stack record $STACK"
 BIN_DIR=$(dirname "$WORKER_BINARY")
+refuse_python_binary "$WORKER_BINARY" "the stack's worker-binary"
+refuse_python_binary "$(read_key spu-binary)" "the stack's spu-binary"
+PREFIX=$(read_key prefix)
+[[ "$PREFIX" == /* ]] || die "no absolute prefix in the stack record $STACK"
+refuse_python_install "$PREFIX" "$BIN_DIR"
 
 # **A box still on the box-wide layout refuses before anything is built.**
 # Before 2026-10-01 admin read one configuration for every agent, its
@@ -423,7 +430,8 @@ done
 root_path() { # root_path AGENT KEY
   local value
   [ -e "$ADMIN_BASE/$1/$2" ] || return 0
-  value=$(cat "$ADMIN_BASE/$1/$2" 2>/dev/null) || die "$1: its root's $2 does not read"
+  value=$(cat "$ADMIN_BASE/$1/$2" 2>/dev/null) \
+    || die "$ADMIN_BASE/$1/$2 stands and cannot be read by $OPERATOR_NAME, so whether this run updates $1 is unknown"
   value=${value#"${value%%[![:space:]]*}"}; value=${value%"${value##*[![:space:]]}"}
   [[ "$value" == /* ]] || die "$1: its root's $2 is not an absolute path"
   printf '%s' "$value"
@@ -434,6 +442,14 @@ territory_of() { # territory_of AGENT: prints its territory
   [ -n "$t" ] || die "$1: its root's territory is empty"
   printf '%s' "$t"
 }
+# Each root can name binaries outside the stack's paths. Refuse the known
+# retired names there too, before a build or any replacement of shared files.
+for agent in $AGENTS; do
+  for key in worker-binary spu-binary; do
+    own=$(root_path "$agent" "$key") || exit 1
+    refuse_python_binary "$own" "$agent: its $key"
+  done
+done
 # **Each agent's declaration, read as the operator.** It is `agent.toml` in the
 # territory, root:weaver-<agent>-admin 0640, which the operator reads through the access
 # group, past the territory the state group passes. One it cannot read
@@ -478,13 +494,18 @@ done
 # validate after it.
 for agent in $AGENTS; do
   decl=$(declaration_of "$agent") || exit 1
-  rc=0
-  declared_in "$decl" permission-mode any >/dev/null || rc=$?
-  case $rc in
-    0) die "$agent: its declaration $decl carries permission-mode, retired by #29, which the admin this installs refuses as an unknown field. $(recreate "$agent")" ;;
-    3) ;;
-    *) die "$agent: the declaration does not read, see above" ;;
-  esac
+  # loop-file retires with the Python worker on 2026-10-20 (#180).
+  for key in permission-mode loop-file; do
+    issue=29
+    [ "$key" != loop-file ] || issue=180
+    rc=0
+    declared_in "$decl" "$key" any >/dev/null || rc=$?
+    case $rc in
+      0) die "$agent: its declaration $decl carries $key, retired by #$issue, which the admin this installs refuses as an unknown field. $(recreate "$agent")" ;;
+      3) ;;
+      *) die "$agent: the declaration does not read, see above" ;;
+    esac
+  done
 done
 
 # **Every agent's territory and sink are judged as the admin this installs
@@ -624,13 +645,13 @@ BUILT="$BUILT/release"
 # repository on 2026-09-30. The build below is
 # the whole workspace, the frontend having left the repository on 2026-09-26.
 # A member joins the installed set by being written here.
-MEMBERS="pyworker worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
+MEMBERS="worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
 # **The agent's shell** (#29): the static busybox build-busybox.sh writes
 # beside the members, and its applet list, installed into the members'
 # directory and rolled back with them.
 SHELL_FILES="busybox busybox.applets"
 
-MEMBER_FEATURES=weaver-harness/pyworker,weaver-state/sqlite
+MEMBER_FEATURES=weaver-state/sqlite
 SPU_FEATURES=weaver-spu/cuda
 FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
 
@@ -873,7 +894,7 @@ run_tests
 
 # ------------------------------------------------------------------- 4. build
 # The frontend left the repository on 2026-09-26 and ships no member here, so
-# the build is the whole workspace: the seven installed members and the tools
+# the build is the whole workspace: the six installed members and the tools
 # beside them.
 say "build"
 NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \

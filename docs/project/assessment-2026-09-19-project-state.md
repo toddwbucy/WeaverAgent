@@ -626,8 +626,8 @@ update with `git show f03142a:<path>`.
 [conversation]: ../../crates/weaver-web/src/store/conversation.rs
 [shell-executor]: ../../crates/weaver-gate/src/tools.rs
 [harness-execute]: ../../crates/weaver-harness/src/engine.rs
-[pyworker-main]: ../../crates/weaver-harness/src/bin/pyworker/main.rs
-[pyworker-loop]: ../../crates/weaver-harness/src/bin/pyworker/py_loop.rs
+[pyworker-main]: https://github.com/toddwbucy/WeaverAgent/blob/e8c004dd/crates/weaver-harness/src/bin/pyworker/main.rs
+[pyworker-loop]: https://github.com/toddwbucy/WeaverAgent/blob/e8c004dd/crates/weaver-harness/src/bin/pyworker/py_loop.rs
 [web-test-helper]: ../../crates/weaver-web/src/store/read.rs
 [postgres-engine]: ../../crates/weaver-state/src/engine/postgres.rs
 [unfinished]: sketch-what-is-not-built.md

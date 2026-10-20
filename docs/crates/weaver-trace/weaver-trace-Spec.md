@@ -7,7 +7,7 @@ build order. Code is written against it under the gates of Working Process secti
 **Document ID:** `weaver-trace-Spec`
 **Parent:** `weaver-trace-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #154
+**Landing PR:** #181
 
 ---
 
@@ -851,21 +851,22 @@ saying so. Naming each election is what keeps a record's posture
 recoverable from the record.
 
 **The `load` event names its loop and its member**, as of 2026-09-03, per the charter's
-section 3.1. `composer` is the loop that assembles the run's
-prompts: `binary` names the worker that ran it, the harness's own name for itself, and
-where the loop is a file the worker reads, `file` is the path it resolved and `sha256`
-the digest of that file as read at the load, both absent for a loop compiled into the
-binary. `state_member` is whether the state member's end arrived on the enter, the
-harness's own knowledge and never a read of the deployment. `state_store` is the store
-the member stands on, `StoreIdentity` by engine name, copied from the enter's resolved election as of 2026-09-04 and
-written beside the member because the two answer different questions, the election being
-what the deployment asked for and the member whether an end arrived. Both ride the same `Elections`
-payload rather than a second member on the event, because the payload is the record's
-declaration of its posture and these are posture, and each is named individually for the
-drift reason above. **The digest is the file at the load**: a Python-iterating worker
-reads its file per crossing, so a file edited during a session composes later turns
-under a digest the load did not name, and that bound is stated rather than closed, the
-per-crossing mark being its own act if a reading ever needs it.
+section 3.1. `composer` is the loop that assembles the run's prompts: `binary` names the
+worker that ran it, the harness's own name for itself, and the compiled Rust loop emits
+neither `file` nor `sha256`. Those optional fields remain in the vocabulary for the
+historical file-loaded loop: its resolved path and the digest read at load. Retirement
+of the Python worker on 2026-10-20 (#180) removes its execution path and preserves this
+recorded shape. `state_member` is whether the state member's end arrived on the enter,
+the harness's own knowledge and never a read of the deployment. `state_store` is the
+store the member stands on, `StoreIdentity` by engine name, copied from the enter's
+resolved election as of 2026-09-04 and written beside the member because the two answer
+different questions, the election being what the deployment asked for and the member
+whether an end arrived. Both ride the same `Elections` payload rather than a second
+member on the event, because the payload is the record's declaration of its posture and
+these are posture, and each is named individually for the drift reason above. Historical
+file digests describe the file at load, not each crossing. They do not certify later
+edits to a Python loop. No per-crossing Python provenance work is owed after the
+retirement.
 
 ```graph
 node: trace-load-names-its-loop-and-its-member

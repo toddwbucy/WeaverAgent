@@ -1070,15 +1070,14 @@ pub fn spawn_relay(start: RelayStart<'_>) -> std::io::Result<std::process::Child
 }
 
 /// The worker's argument vector, per section 6: the coordination socket,
-/// the SPU and gate binaries, and the named flags for the headroom, the
-/// loop file and the classify binary where each stands. Only the validated
+/// the SPU and gate binaries, and the named flags for the headroom and
+/// the classify binary where each stands. Only the validated
 /// name, the root's installed values and the validated declaration reach it.
 pub fn worker_arguments(
     coordination_socket: &Path,
     spu: &Path,
     gate: &Path,
     headroom_bytes: Option<&str>,
-    loop_file: Option<&Path>,
     classify: Option<&Path>,
 ) -> Vec<String> {
     let mut args = vec![
@@ -1089,10 +1088,6 @@ pub fn worker_arguments(
     if let Some(headroom) = headroom_bytes {
         args.push("--headroom-bytes".to_string());
         args.push(headroom.to_string());
-    }
-    if let Some(loop_file) = loop_file {
-        args.push("--loop-file".to_string());
-        args.push(loop_file.display().to_string());
     }
     if let Some(classify) = classify {
         args.push("--classify-binary".to_string());

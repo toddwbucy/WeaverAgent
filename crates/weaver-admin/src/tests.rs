@@ -256,7 +256,7 @@ fn the_stack_names_what_was_started_and_handed() {
     let config = unread_config();
     let without = stack_digests(&config, false, None);
     let names: Vec<&str> = without.keys().map(String::as_str).collect();
-    assert_eq!(names, ["python-spu.pyz", "weaver-gate", "worker"]);
+    assert_eq!(names, ["custom-spu", "weaver-gate", "worker"]);
     let with = stack_digests(&config, true, None);
     assert_eq!(
         with.len(),
@@ -274,8 +274,8 @@ fn the_stack_names_what_was_started_and_handed() {
     assert!(classified.contains_key("weaver-spu-classify"));
 }
 
-/// **The vector carries the root's values and the declaration's loop
-/// file, and nothing composed from the invocation's input**, per Spec
+/// **The vector carries the root's values and nothing composed from the
+/// invocation's input**, per Spec
 /// section 6: the socket, the SPU the root names and the gate, then each
 /// named flag only where its value stands. Perturbation: substitute a
 /// fixed SPU path in `worker_arguments` and the first assertion fails;
@@ -284,12 +284,12 @@ fn the_stack_names_what_was_started_and_handed() {
 fn the_roots_spu_reaches_the_vector() {
     let config = unread_config();
     let socket = config.coordination_socket();
-    let bare = start::worker_arguments(&socket, &config.spu, &config.gate, None, None, None);
+    let bare = start::worker_arguments(&socket, &config.spu, &config.gate, None, None);
     assert_eq!(
         bare,
         vec![
             socket.display().to_string(),
-            "/nonexistent/python/python-spu.pyz".to_string(),
+            "/nonexistent/alternate/custom-spu".to_string(),
             "/nonexistent/bin/weaver-gate".to_string(),
         ]
     );
@@ -298,12 +298,10 @@ fn the_roots_spu_reaches_the_vector() {
         &config.spu,
         &config.gate,
         Some("4096"),
-        Some(std::path::Path::new("/home/op/loop.py")),
         Some(std::path::Path::new("/opt/weaver/bin/weaver-spu-classify")),
     );
     for (flag, value) in [
         ("--headroom-bytes", "4096"),
-        ("--loop-file", "/home/op/loop.py"),
         ("--classify-binary", "/opt/weaver/bin/weaver-spu-classify"),
     ] {
         let at = full.iter().position(|a| a == flag).expect(flag);
@@ -1316,7 +1314,7 @@ fn unread_config() -> ServiceConfig {
         agent: "alpha".into(),
         coordination_root: PathBuf::from("/nonexistent"),
         worker: PathBuf::from("/nonexistent/bin/worker"),
-        spu: PathBuf::from("/nonexistent/python/python-spu.pyz"),
+        spu: PathBuf::from("/nonexistent/alternate/custom-spu"),
         gate: PathBuf::from("/nonexistent/bin/weaver-gate"),
         headroom_bytes: None,
         library_path: None,

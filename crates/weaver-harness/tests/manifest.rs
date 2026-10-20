@@ -20,6 +20,7 @@ fn resolved_tree(edges: &str) -> String {
             edges,
             "--prefix",
             "none",
+            "--locked",
         ])
         .output()
         .expect("cargo tree runs");
@@ -29,6 +30,45 @@ fn resolved_tree(edges: &str) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8(out.stdout).expect("utf8")
+}
+
+/// Retirement of the Python worker is a manifest property, including optional
+/// dependencies and targets that a default build would leave uncompiled.
+/// Perturbation: add the optional pyo3 edge or a pyworker bin and this fails.
+#[test]
+fn the_only_worker_target_is_rust_and_no_python_dependency_is_carried() {
+    let out = Command::new(env!("CARGO"))
+        .args(["metadata", "--no-deps", "--format-version", "1", "--locked"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("cargo metadata runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&out.stdout).expect("metadata JSON");
+    let package = metadata["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "weaver-harness")
+        .expect("the harness package");
+    let bins: Vec<_> = package["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["kind"].as_array().unwrap().iter().any(|k| k == "bin"))
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(bins, ["worker"]);
+    assert!(package["features"].get("pyworker").is_none());
+    for dependency in package["dependencies"].as_array().unwrap() {
+        assert!(
+            !dependency["name"].as_str().unwrap().starts_with("pyo3"),
+            "the interpreter cannot return as an optional or renamed edge"
+        );
+    }
 }
 
 fn crate_names(tree: &str) -> Vec<String> {

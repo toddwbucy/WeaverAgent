@@ -100,9 +100,9 @@ engine this build provides (#1, #86), and any other engine refuses as one this b
 does not provide. `--engine none` is refused too, and section 3 makes that agent by
 hand. `--session` names the session the declaration opens, default `<name>-001`. `--spu
 <path>` gives this agent its own SPU, written as its root's `spu-binary` in place of the
-stack record's (the python SPU's zipapp, for instance), and without it the agent serves
-from the stack's. `--connector-role operator|observer` chooses which command lines the
-connector's sudo rule grants, section 5, default `operator`.
+stack record's (a separately installed Rust SPU, for instance), and without it the
+agent serves from the stack's. `--connector-role operator|observer` chooses which
+command lines the connector's sudo rule grants, section 5, default `operator`.
 
 Apply makes the accounts and the territory, writes the declaration and the draft into
 it as root, then stages the agent root under the
@@ -125,14 +125,15 @@ and the store's engine. It carries no system prompt: the prompt is state, on the
 operator's ruling of 2026-10-06, and enters the agent through its gate as the seeding
 turn of section 4, after the first load. Beside the declaration the script writes the
 draft that turn sends, `<territory>/system-prompt.md`, a plain prompt that is yours to
-edit before seeding. Edit `agent.toml` for a wider context before validating.
-Both files are root:weaver-<name>-admin 0640: `sudoedit /var/lib/weaver-agent/weaver-<name>/agent.toml` edits
-one, and you read either through the access group. The fields are in
-`docs/technical/weaver-agent/agent-declaration.md`, a snapshot of 2026-08-25 that still
-shows an identity table, and `docs/crates/weaver-types/weaver-types-Spec.md` section 2
-is the authority. A required key absent, or any key misspelled, refuses the parse by
-name, and the optional keys (`tool-set`, `binding-kind`, `gate-instruction`, `state-election`,
-`state-store`, `loop-file`, `restore`) carry the absence their Spec rules.
+edit before seeding. Edit `agent.toml` for a wider context before validating. Both files
+are root:weaver-<name>-admin 0640: `sudoedit
+/var/lib/weaver-agent/weaver-<name>/agent.toml` edits one, and you read either through
+the access group. The fields are in `docs/technical/weaver-agent/agent-declaration.md`,
+a snapshot of 2026-08-25 that still shows an identity table, and
+`docs/crates/weaver-types/weaver-types-Spec.md` section 2 is the authority. A required
+key absent, or any key misspelled, refuses the parse by name, and the optional keys
+(`tool-set`, `binding-kind`, `gate-instruction`, `state-election`, `state-store`,
+`restore`) carry the absence their Spec rules.
 
 **Electing the shell** (#29). `tool-set = ["sh"]` offers the agent one tool, a POSIX `sh`
 (busybox's ash) over the stack's listed commands (`<prefix>/bin/busybox.applets`), in

@@ -1414,7 +1414,6 @@ fn run_load(
             &config.spu,
             &config.gate,
             config.headroom_bytes.as_deref(),
-            inventory.config.loop_file.as_deref(),
             classify.as_deref(),
         ),
         uid: account.uid,

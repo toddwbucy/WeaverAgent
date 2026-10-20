@@ -7,7 +7,7 @@ agent. Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-admin-Spec`
 **Parent:** `weaver-admin-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #174
+**Landing PR:** #181
 
 ---
 
@@ -1848,24 +1848,16 @@ only value the start step interpolates is the validated agent name of section 4,
 authority stays bounded by the agent's root exactly as charter section 7 requires. Its
 values are the coordination socket path of section 7, which this crate already derives
 from that same validated name, the two organ binary paths section 9 holds among the
-operator's installed values, the SPU's being the agent's own, and, where the declaration
-carries one, the agent's loop file as the named flag `--loop-file`, one token on both
-sides of the vector, composed here and parsed by the worker under the same spelling, per
-`weaver-types-Spec` section 2 and the operator's ruling of 2026-08-20 on issue #243. A
-worker that holds no file-read loop refuses the flag at its own argument parse, named
-rather than ignored, so a declaration the installation cannot honor fails the load
-loudly instead of standing as a fact with no effect. The loop file is the vector's one
-declaration-sourced value and it widens nothing: the declaration is the operator's file,
-validated at section 4's inventory before the start step runs, and the worker resolves
-the path under the agent's own identity, so the value grants nothing the agent uid did
-not already have, per the bare clause below. An absent member puts no flag on the
-vector, the worker's own default standing, per `weaver-harness-PRD` section 2. A builder
-who let any of these values be composed from the invocation's own input would be
-widening the delegated authority by the route the name check closes, so the shape to
-hold is that the vector reads the checked name and the agent's root, the installed
-values and the validated declaration, and reads nothing else. An earlier form of this
-clause counted three values and named the name the one variable, written before any
-declaration member rode the vector.
+operator's installed values, the SPU's being the agent's own, and the named headroom and
+classify arguments where their installed values stand. The declaration's `loop-file` and
+its worker argument retire on the operator's ruling of 2026-10-20 (#180). The parser
+refuses that declaration key by name before the start step. A builder who let any of
+these values be composed from the invocation's own input would be widening the delegated
+authority by the route the name check closes, so the shape to hold is that the vector
+reads the checked name and the agent's root, the installed values and the validated
+declaration, and reads nothing else. An earlier form of this clause counted three values
+and named the name the one variable, written before any declaration member rode the
+vector.
 
 **The classify arm's binary rides the vector too, where it stands, as
 `--classify-binary`.** It is the third organ path the vector carries and the
@@ -3370,16 +3362,16 @@ admission is, in the root the operator holds, and never in a file the declaratio
 author edits. The charter's own test settles it from the other side:
 `weaver-harness-Spec` section 2 has the organ binaries supplied to the composition root
 as a deployment fact, not a discovery, and the declaration is the agent's elections
-rather than the deployment's. **`spu-binary` is this agent's SPU**, on the operator's
-ruling of 2026-09-28 that `python-spu` is an option and not a takeover: one agent may
-serve from the Rust SPU while another serves from `python-spu`, each root naming its
-own. **The names the root's binaries carry differ pairwise**: the worker's, the state
-member's, the gate's and the SPU's, and a root naming two of them under one file name
-fails the invocation as an unreadable configuration fails it, before the start step
-runs. They are held distinct rather than keyed around because the stack below is keyed
-by file name and `weaver-analysis` carries it into a run's code identity by those names.
-No new refusal names any of them, the configuration's failure having no lifecycle case
-to be.
+rather than the deployment's. **`spu-binary` is this agent's SPU**, each root naming its
+own installed Rust binary. The Python implementation retires on the operator's ruling of
+2026-10-20 (#180). A per-agent path remains a deployment fact, so an agent may use a
+separately installed Rust SPU. **The names the root's binaries carry differ pairwise**:
+the worker's, the state member's, the gate's and the SPU's, and a root naming two of
+them under one file name fails the invocation as an unreadable configuration fails it,
+before the start step runs. They are held distinct rather than keyed around because the
+stack below is keyed by file name and `weaver-analysis` carries it into a run's code
+identity by those names. No new refusal names any of them, the configuration's failure
+having no lifecycle case to be.
 
 **The territory is judged before any value in it is read, on its descriptor**, for every
 verb but a `force-unload`, which goes on without it (section 3), on the
@@ -3487,10 +3479,8 @@ path beside it.
 judges each assigned device by one inequality, the shard's need plus the headroom
 against what the device has free, per `weaver-spu-Spec` section 3, which says the device
 is not the SPU's to arbitrate beyond it and that an occupant may be a second agent the
-operator wants there. So a second agent's SPU, of either implementation, is admitted
-where the card has room, and refused, never evicting, where it has not. Nothing here
-changes that, and `python-spu` judges room by the same inequality, per `python-spu-Spec`
-section 3.
+operator wants there. So a second agent's Rust SPU is admitted where the card has room,
+and refused, never evicting, where it has not. Nothing here changes that.
 
 **Two organ binaries are placed and one is derived, and the difference is the ruling
 rather than an inconsistency.** The SPU's and the gate's paths are placed because every
@@ -4170,9 +4160,9 @@ Each names what settles it, and none is this Spec's to settle alone.
   `lifecycle-answer` and their fields are satellites there, consumed here as drawn.
   `AgentSummary` left with `list` on the operator's ruling of 2026-10-02. -
   **The two values the argument vector does not carry.** Section 6's vector carries the
-  socket path, the two placed organ binaries, the SPU's the agent's own, the loop file
-  where a declaration names
-  one, and the derived classify binary where one stands, and the worker's remaining two
+  socket path, the two placed organ binaries, the SPU's the agent's own, the
+  headroom where the root names it, and the derived classify binary where one
+  stands, and the worker's remaining two
   inputs are named here rather than routed, because routing either now would carry a
   value nothing reads. The assembled prompt's identity is one: the agent's declaration
   holds an identity the SPU makes resident as the session's prefix, the assembled prompt

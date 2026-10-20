@@ -72,15 +72,6 @@ pub struct AgentConfig {
     /// engine.
     #[serde(default)]
     pub state_store: Option<StateStore>,
-    /// The agent's loop file, per `weaver-types-Spec` section 2 and the
-    /// ruling of 2026-08-20 on issue #243: the loop is a member of this
-    /// agent's harness and unique to it. The second optional field, by the
-    /// required-field rule's own exception because `weaver-harness-PRD`
-    /// section 2 rules what absence means - the worker's own default loop.
-    /// It reaches the worker on the unit's argument vector, never in an
-    /// exchange, because no exchange carries a path.
-    #[serde(default)]
-    pub loop_file: Option<PathBuf>,
     /// The record the session stands from and the cut, per
     /// `weaver-types-Spec` section 2 as of 2026-09-04 and issue #432: absent
     /// means the load stands from nothing, which is what every load did
@@ -580,9 +571,8 @@ fn check_lifecycle_bounds(source: &str) -> Result<(), ConfigError> {
 /// every reader in the suite, this parser, the deploy script's shell and the
 /// experiment harness, must agree on what a path is, and a control character
 /// is where they part, a shell's command substitution dropping a trailing
-/// newline this parser keeps. The two path fields are the loop file and the
-/// trace sink's path, each refused by its own name; the restore's save point
-/// is a bare name and has its own check below.
+/// newline this parser keeps. The trace sink's path is refused by its own
+/// name. The restore's save point is a bare name with its own check below.
 #[cfg(feature = "config")]
 fn check_declared_paths(config: &AgentConfig) -> Result<(), ConfigError> {
     let sink = match &config.trace_sink {
@@ -590,17 +580,11 @@ fn check_declared_paths(config: &AgentConfig) -> Result<(), ConfigError> {
         | TraceSink::Pipe { path, .. }
         | TraceSink::Socket { path } => path,
     };
-    let declared = [
-        ("trace-sink.path", Some(sink)),
-        ("loop-file", config.loop_file.as_ref()),
-    ];
-    for (field, path) in declared {
-        if path.is_some_and(|p| p.to_string_lossy().chars().any(char::is_control)) {
-            return Err(ConfigError {
-                field: Some(FieldName(field.to_string())),
-                kind: ConfigErrorKind::BadValue,
-            });
-        }
+    if sink.to_string_lossy().chars().any(char::is_control) {
+        return Err(ConfigError {
+            field: Some(FieldName("trace-sink.path".to_string())),
+            kind: ConfigErrorKind::BadValue,
+        });
     }
     Ok(())
 }

@@ -402,23 +402,19 @@ fn an_absent_state_election_is_none() {
     );
 }
 
-/// The second optional field, per the ruling of 2026-08-20 on issue #243:
-/// absent means the worker's own default loop, so every declaration written
-/// before the member existed still parses, which is the absence path the
-/// standing fixtures exercise. Present, it names the agent's own loop file.
+/// The Python loop's declaration key retires with its worker (#180).
+/// Both an ordinary path and an empty value refuse by name, rather than
+/// silently selecting the compiled loop. Without the key the same input parses.
+/// Perturbation: restore loop_file to AgentConfig and this fails.
 #[test]
-fn the_loop_file_is_optional_and_names_a_path_when_present() {
-    let config = parse(&full_config()).expect("parses");
-    assert_eq!(config.loop_file, None);
-    let source = format!(
-        "loop-file = \"/etc/weaver/agents/alpha.loop.py\"\n{}",
-        full_config()
-    );
-    let config = parse(&source).expect("parses");
-    assert_eq!(
-        config.loop_file,
-        Some(std::path::PathBuf::from("/etc/weaver/agents/alpha.loop.py"))
-    );
+fn the_retired_loop_file_refuses_by_name() {
+    parse(&full_config()).expect("the compiled loop needs no file election");
+    for value in ["/etc/weaver/agents/alpha.loop.py", ""] {
+        let source = format!("loop-file = {value:?}\n{}", full_config());
+        let error = parse(&source).expect_err("the loop-file key is retired");
+        assert_eq!(error.kind, ConfigErrorKind::UnknownField);
+        assert_eq!(error.field, Some(FieldName("loop-file".into())));
+    }
 }
 
 /// **The restore is optional and names a record and a cut**, per
@@ -669,12 +665,6 @@ fn a_path_carrying_a_control_character_refuses_by_name() {
             "{control}"
         );
     }
-    let looped = format!(
-        "loop-file = \"/etc/weaver/agents/a.loop.py\\n\"\n{}",
-        full_config()
-    );
-    let err = parse(&looped).expect_err("refuses");
-    assert_eq!(err.field, Some(FieldName("loop-file".into())));
     // A path with no control character parses as it did: a space, a quote and
     // a non-ASCII character are not control characters.
     let plain = full_config().replace(

@@ -111,15 +111,6 @@ fn the_worker_keeps_the_run_lock_and_the_relay_write_end() {
     keeps_both(env!("CARGO_BIN_EXE_worker"), "worker");
 }
 
-/// The same first act in the Python-loop worker, built only with its feature.
-/// Perturbation: drop `keep_start_step_descriptors` from the pyworker's main
-/// and the flags assertion fails.
-#[cfg(feature = "pyworker")]
-#[test]
-fn the_pyworker_keeps_the_run_lock_and_the_relay_write_end() {
-    keeps_both(env!("CARGO_BIN_EXE_pyworker"), "pyworker");
-}
-
 fn keeps_both(binary: &str, tag: &str) {
     let dir = std::env::temp_dir().join(format!("weaver-start-step-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
