@@ -13,7 +13,7 @@ conforms to.
 **Parent:** `weaver-harness-PRD`
 **Companion contract:** `weaver-harness-trace-contract`, written with this document
 **Editorial:** Per the Working Rules.
-**Landing PR:** #181
+**Landing PR:** #182
 
 ---
 
@@ -1397,6 +1397,18 @@ sequence-gap detection, a committed-versus-pending boundary, and commit-pressure
 policy. The obligation it would be read against shrank under the cut of 2026-08-01,
 so the examination is now whether anything beyond canonical encoding, the boundary,
 and pressure surfacing survives at all. **Entry condition:** the Spec pass.
+
+**Sink durability, owed.** State management's duty starts at the tap. Its residue
+is the admitted material copied there, which the trace also carries. Whether that
+line later lands at the sink belongs to this charter, not to the state-management
+PRD. The trace Spec owes the delivery and durability boundary, the disposition of
+pending writes, and the response to sink failure across the admin handoff. Reason:
+the tap's consumer cannot establish or own delivery after that crossing. This stages
+the trace obligation and does not elect a new sink acknowledgment or persistence
+mechanism. **Entry condition:** the trace Spec pass. Source: second State Management
+PRD review return of 2026-10-16, A5, carried by
+[state management PRD v0.6](../state-management/state-management-primitives-prd-v0_6.md),
+FLOW-6.
 
 ## 10. Open ruling
 

@@ -1,0 +1,526 @@
+# weaver-trace Spec: dependable-flow amendment
+
+**Status:** MERGED.
+
+**Landing PR:** #182
+
+**Version:** 0.21 **Date filed:** 2026-10-20 **Parent:** weaver-trace-PRD
+
+## 0. What this document is
+
+Replacement text for trace Spec sections 3, 5, 6, 9, and 11, with instruments added to
+section 10. It implements FLOW-1 through FLOW-8 and TAP-1 through TAP-5 at the trace
+boundary. It requires the charter and harness-trace contract amendments in this packet.
+The crate still authors no event and owns no store interface.
+
+## 1. Envelope and event registry, destination section 3
+
+This replacement applies at the [foundation cutover][cutover]. Until then, the previous
+serving contract remains applicable.
+
+**TRACE-ENVELOPE.** Add `channel: Channel` and `origin: Origin` after `kind` in
+`event::Envelope`. Define these serialize-only enums in weaver-trace, which does not
+gain a dependency on weaver-types. Channel spellings are `input`, `output`, `internal`,
+`tool`, and `measurement`. Origin spellings are `operator`, `external`, `model`, `loop`,
+`tool`, and `runtime`. The harness constructs these values at its one authoring boundary
+from HARNESS-AUTHOR's kind/source table and verified caller identity. No additional
+Channel or Origin wire enum is implied in the floor. Reason: TAP-1's predicate is on the
+recorded envelope, not a payload inference. [TAP-1, TAP-5]
+
+Keep existing canonical rules: sequence and monotonic_ns are decimal strings, wall_ms is
+a JSON number, and absent turn and causal_parent are omitted. Keep subsystem `harness`
+for conversation messages. Message and ContentBlock remain the weaver-traits shapes. No
+top-level message `text` or `return` is introduced. [FLOW-3, STORE-5]
+
+**TRACE-REGISTRY.** Define `tee::ContentSchema` and a total `content_schema(Kind) ->
+ContentSchema` in this crate. Its registry ID is `state-copy/1`. The schema is a finite
+projection surface, not deserialization of every trace payload. This registry owns the
+names accepted by the harness's load-time validator. Admin validates syntax without
+linking this crate. Reason: the trace owns its event vocabulary, while the harness links
+both the trace and declaration parser. [TAP-1, TAP-3]
+
+| Kind | Payload representation | Projection surface | Turn rule |
+| --- | --- | --- | --- |
+| message.user, message.assistant | Existing Payload::Message, canonical Message JSON | content.text[*], content.text[index] | Required |
+| message.tool_result | Existing Payload::Message | Forbidden, model-facing copy of a held pair result | Required |
+| tool.call.started | Serving PairStarted from Spec 05 | pair, whole payload | Required |
+| tool.call.completed | Serving PairEnded from Spec 05 | pair, whole payload | Required except abandoned_at_load, which forbids a turn |
+| tool.return_rejected | RejectedReturn from Spec 05 | Forbidden, unpaired or duplicate return | Optional |
+| loop.instruction | Spec 02 LoopInstructionRecord | message.content.text[0] or wildcard, no context sidecar | Required except wind_down |
+| sort.decision | Spec 08 SortDecisionRecord | message.content.text[0] or wildcard, no context sidecar | Optional |
+| state.sort.measurement | Spec 08 SortMeasurement | Forbidden measurement | Optional |
+| step.outcome | Spec 07 StepOutcomeRecord | message.content.text[0] or wildcard, context sidecar required | Required |
+| plan.event | Spec 07 operator input or internal effect record | All message Text, context sidecar required | Forbidden for operator updates, required for model lock/activation/break |
+| plan.break | Spec 07 PlanBreakReport | Forbidden metadata | Optional |
+| state.plan.measurement | Spec 07 PlanMeasurement | Forbidden measurement | Required for next_ready, optional otherwise |
+| state.mark | New Payload::StateMark holding template_id, one-Text Message and context | message.content.text[0] or wildcard, context sidecar required | Required |
+| state.mark.position | MarkPosition from Spec 06 | Forbidden measurement | Optional |
+| state.placement | PlacementRecord from Spec 06 | Forbidden measurement | Optional |
+| input.offered | New Payload::InputOffered holding input_id and the base64 TurnFrame.octets member, unchanged | Forbidden for state projection | Forbidden |
+| state.flow | New Payload::FlowObservation, as harness amendment section 5 | Forbidden measurement | Optional |
+| state.store.measurement | StateStoreMeasurement from Spec 09 | Forbidden measurement | Optional |
+| ste100.result | Ste100ResultRecord, full typed result and correlation | Forbidden, derived classification evidence | Optional |
+| load | Existing load payload plus state_flow: FlowDeclarationRecord and state_start: StateStartRecord | Untapped | Forbidden |
+| message.system, message.restored, recall, save_point | Existing payloads | Forbidden, including boot recall | Existing rule |
+| All other kinds | Existing payloads | No selectable surface in this amendment | Existing rule |
+
+`input_id` is a run-local decimal-string counter assigned by the harness at serialized
+check intake, before input.offered authoring, under Spec 02's INPUT. The gate deadline
+starts at that same intake. Arrival behind an active turn assigns no input_id and starts
+no check deadline. [FLOW-3, CLASS-4, GATE-1]
+
+LoopInstructionRecord and StepOutcomeRecord each have one Text block. SortDecision has
+exactly one Text block. All have role user and no tool blocks, and their text comes from
+the template inventory. The IDs alongside the Message are provenance, not selectable
+text. Spec 07 owns the plan and step identities. state.mark, plan.event and step.outcome
+have a context surface. Their explicit partition member context="context" selects the
+top-level context bytes, alongside the complete Text block at index zero. The harness
+owns their mechanical meaning under Specs 06 and 07, and the tee never interprets them.
+A failed step.outcome has literal null context, which is still copied. Every other kind
+refuses that projection until its owning amendment licenses it. The sidecar cannot
+substitute for Text, contain another message or grant an effect by itself. [FLOW-8,
+SORT-4, PLAN-2, CLASS-4]
+
+The harness's kind-to-payload licensing checks these shapes before submit. Add the new
+Kind variants to `event.rs::Kind`, `writer.rs::admit`, and
+`writer.rs::pairing_licensed`, with explicit turn rules above. The diagnostic converter
+rejects the new kinds as OutsideDiagnosticVocabulary and also rejects the new serving
+payloads on the two existing pair kinds. Diagnostic runs do not author them. Analysis
+must update its serving trace reader when this vocabulary lands. The old classify kinds
+stay label-scoring records. [FLOW-3, SCOPE-1, October 18 R10]
+
+**TRACE-PLAN.** Add serialize-only, trace-owned PlanInputRecord and PlanEffectRecord.
+Payload::PlanInput carries {message,context:PlanInputContext,document:String}.
+Payload::PlanEffect carries {message,context:PlanEffect,template_id:String}. Both
+license Kind::PlanEvent, with Spec 07's exact PLAN-FEED field shapes and no extra
+payload discriminator. The kind-to-payload check admits PlanInput only on
+input/operator, without a turn. It admits PlanEffect only on internal/loop. authorize,
+replace and operator-source lock forbid a turn. Model-source lock, activate and break
+require one. The close effect is never a plan.event payload. Reason: the two authors
+share one event kind without sharing update authority. [PLAN-1, PLAN-2, PLAN-6, FLOW-3,
+FLOW-8]
+
+Payload::StepOutcome carries Spec 07's exact StepOutcomeRecord and licenses only
+Kind::StepOutcome on internal/loop with a turn. A closed outcome requires its matching
+close context. A failed outcome requires null context. Payload::PlanBreak carries
+PlanBreakReport and licenses only Kind::PlanBreak on internal/loop, with an optional
+turn. The trace mirrors all nested identities and closed variants without linking
+weaver-types. The harness performs the explicit conversion and retains the private
+operator/review grants. Payload licensing checks recorded structure, never the truth of
+a review or the authority claimed in text. [PLAN-2, PLAN-5, PLAN-6, SORT-4, FLOW-3]
+
+Payload::PlanMeasurement mirrors PLAN-OBSERVATION's exact instrument_version, plan and
+tagged event fields, including the measured/unavailable flag result. It licenses only
+Kind::StatePlanMeasurement on internal/loop. next_ready requires a turn, while flags and
+fit_refused permit an absent turn. Mirror the complete PlanFlagSnapshot, closed
+read-refusal codes, fit stages and two fit codes without normalizing strings or dropping
+an unavailable result. The harness validates echoes, count arithmetic and clock
+endpoints before conversion. The trace records them and never obtains its own store
+sample. Diagnostic conversion rejects the kind, and the loader refuses its admission
+under TRACE-VALIDATION. [PLAN-3, PLAN-4, FLOW-3, TAP-3, COST-4]
+
+## 2. Copy and projection, destination section 11
+
+This replacement applies at the [foundation cutover][cutover]. Until then, the previous
+serving contract remains applicable.
+
+**TRACE-COPY.** Replace Election, ElectedKind, opener, distill, and socket-owning Tee
+with `Partition`, `ValidatedPartition`, `Tee`, `AdmittedCopy`, and `TapOutcome` in
+`tee.rs`. Only `validate_partition` can construct ValidatedPartition. Tee holds that
+value and a terminal stopped flag. It contains no socket, store frame, or writer.
+Reason: the tee selects a copy, and the loop owns carrying. [TAP-1, TAP-3, TAP-4]
+
+| Type | Fields or variants |
+| --- | --- |
+| SourceBlock | run String, sequence Sequence, block u64 |
+| SelectedBlock | source SourceBlock, source_path Vec<PathPart>, raw Arc<str> |
+| ContextBlock | source_path Vec<PathPart>, raw Arc<str> |
+| PathPart | Key(String), Index(u64) |
+| StatementCopy | source_envelope canonical JSON, partition_rule_id String, blocks Vec<SelectedBlock>, context Option<ContextBlock> |
+| PairCopy | source_envelope canonical JSON, partition_rule_id String, block SelectedBlock |
+| AdmittedCopy | Statement(StatementCopy) or Pair(PairCopy) |
+| TapFailure | source event identity, code, optional source_path |
+| TapOutcome | HeadUntapped, Unselected, Selected(AdmittedCopy), Failed(TapFailure), Stopped |
+| TapFailureCode | InvalidCanonicalRecord, MissingProjection, InvalidProjection, CopyAllocationFailed |
+
+For StatementCopy, `raw` is the exact canonical JSON spelling of a selected
+ContentBlock, including its type tag. For PairCopy it is the complete pair payload, with
+virtual block index zero and an empty source_path. The tee does not classify either copy
+or interpret a pair's fate. The envelope is copied whole. Block ordinal is the original
+content-array index, not the index in a filtered result. The source path carries any
+`message` nesting. The selector's text segment is a structural type selector, not a JSON
+member. It never appears in source_path, which records the actual content array and
+original index only. All copies keep their own source run, turn, and sequence. [TAP-4,
+TAP-5, STORE-3, STORE-5]
+
+When the declared context projection is present, copy its exact canonical JSON spelling
+once into ContextBlock with source_path [Key("context")]. A missing member is
+MissingProjection, never a context-free success. The raw value is not decoded as
+MarkEffect, PlanEffect or PlanInputContext here. The loop makes the floor SourceContext
+without changing bytes and licenses it only on source block zero. Ordinary statements
+and PairCopy have no context. [TAP-4, MARK-5, SEAM-2]
+
+**TRACE-PROJECT.** Admission compares only kind, channel, and origin against the
+validated tuples. An unselected copy is discarded. On a selected tuple, iterate
+`content.text[*]` in source order or inspect the original declared index. StatementCopy
+projects only Text blocks, whole and without normalization. It omits ToolCall,
+ToolResult, and UnrecoveredCall by structural tag. That projection rule never changes
+envelope admission. An explicit index naming a non-Text block yields zero projected
+blocks. Missing containers, missing indices, and malformed blocks are Failed. An empty
+valid projection gives Selected with zero blocks and an explicit zero-block observation,
+not Unselected. Reason: projection errors cannot masquerade as a partition decision.
+[TAP-1, TAP-4, FLOW-4]
+
+An admitted source array cannot contain overlapping projected indices. Validation
+rejects wildcard-plus-index and duplicate selectors for the same container. The tee may
+inspect the array structure to copy it, but its result cannot depend on text meaning.
+Tool blocks remain whole on the trace but this registry does not offer them to the text
+ledger. A pair projection instead copies the entire payload and produces PairCopy. It
+cannot mix with a Text projection. The harness, not the tee, validates that copy against
+Spec 05's pair codec before producing PairFile. A malformed licensed payload is a
+component fault, never an unselected event. [TAP-1, PAIR-1, PAIR-3, FLOW-4]
+
+**TRACE-VALIDATION.** Load refuses a partition selecting measurement payload,
+save_point, message.restored, message.system, input.offered, ste100.result, recall,
+state.placement, state.mark.position, state.sort.measurement, plan.break,
+state.plan.measurement, message.tool_result or tool.return_rejected. It also requires
+all loop.instruction/internal/loop Text, with no context projection, so every authorized
+review send can be filed. Category.review_required chooses whether closure needs that
+send under R20-17. Coverage supports both category modes because a later root plan
+update can change the category without changing the partition. It requires all assistant
+Text blocks and the complete pair projection for the enabled serving call paths. It
+requires message.user/input/operator and message.user/input/external Text coverage, and
+state.mark/internal/loop block-zero coverage with its context. It requires
+plan.event/input/operator wildcard Text plus context, and plan.event/internal/loop and
+step.outcome/internal/loop one-Text coverage plus context. Single-Text records must name
+only block zero or the one-Text wildcard. An unsupported, missing or extraneous context
+projection refuses invalid_projection at load. Required pair tuples are
+tool.call.started/tool/model and tool.call.completed/tool/tool plus
+tool.call.completed/tool/loop, and tool.call.started/tool/loop for Spec 07's available
+review path. A no-review closure uses step.outcome and its typed null review_call, never
+a fabricated pair. No payload or fate predicate is allowed. The validator proves
+coverage over these finite envelope tuples before constructing ValidatedPartition. The
+tee then applies only that declaration. Reason: an unfiled request or closure cannot
+become an invisible partial pair. [TAP-1, TAP-2, TAP-3, PAIR-1, PAIR-3]
+
+## 3. Submission and capacity, destinations sections 5, 6, and 9
+
+This replacement applies at the [foundation cutover][cutover]. Until then, the previous
+serving contract remains applicable.
+
+**TRACE-SUBMIT.** Replace the serving Recorder result with `Result<SubmitAttempt,
+Failure>`. SubmitAttempt is either `Recorded(Submission)` or `CapacityPending(Event)`.
+Submission contains sequence and TapOutcome and is marked must_use. The existing Failure
+means no newly admitted event on that call, or the existing standing sink failure. A tap
+failure is inside Recorded, never an Err that suggests the source event is absent.
+Reason: trace admission and copy success are separate facts. [FLOW-2, FLOW-4, FLOW-6]
+
+The order is: validate envelope, check standing failure, reserve writer capacity, assign
+sequence, render once, append working structure, apply the tap, and enqueue the same
+canonical line. `load` returns HeadUntapped without invoking Tee. Render or append
+failure releases the reservation and follows the existing trace failure path. No
+sequence is consumed by CapacityPending. No record crosses the tap twice. [FLOW-2,
+FLOW-3]
+
+**TRACE-CAPACITY.** Replace Writer::enqueue's wait on a full queue with a nonblocking
+reservation checked before admission. Keep QUEUE_DEPTH at 1024. Reserve seven entries
+from normal submissions. Each reservation is available once per run for one terminal
+record: fault, tool.call.completed, message.tool_result, turn.closed, session.closed,
+save_point with phase refused, or unload. Absent calls, turns or captures leave their
+reservations unused. Only the halt path receives terminal permits. Ordinary faults,
+normal unload and normal save records use ordinary slots. The serving Recorder exposes
+submit_terminal(Event) -> Result<Submission, Failure>. It refuses unless the tee is
+stopped, the kind and phase match an unused terminal reservation, and the envelope is
+valid. It cannot return CapacityPending because that reservation is already owned. No
+caller can spend an ordinary event against it. Record's halt path is its only serving
+caller, checked by review and tests. The first fault carries the outstanding ledger and
+pending author ticket, so this account needs no additional state.flow event after the
+latch. Suppress secondary fault records after the first and include their evidence in
+the final unload account. A reserved entry still consumes a sequence only when admitted.
+Reservation and queued-count change occur under the existing writer-state mutex. A
+reservation counts toward occupancy until enqueued or cancelled. After a reservation,
+enqueue cannot wait for capacity. The writer's later I/O remains on its existing writer
+thread. Reason: the harness's poll owner must still observe gate and cut deadlines when
+the trace queue is full. [FLOW-4, CLASS-8, GATE-1]
+
+CapacityPending returns ownership of the unchanged Event. The harness retains it and
+polls a capacity-wake descriptor while servicing its other work. No retained event is
+submitted again after Recorded. Fatal-report authoring uses its reserved entry and
+bounded shutdown. Exhausted trace delivery can prevent a report from reaching the sink
+and must not prevent the failure latch from stopping decisions. No extra durable outbox
+or guarantee of sink survival is introduced. [FLOW-4 through FLOW-6]
+
+**TRACE-STOP.** `Tee::stop` is terminal and is public for the harness's serving record
+integration. Review, not a visibility claim, confines its use to that path. Later
+non-head submissions report Stopped and continue along the trace. They are shutdown
+evidence, never a path for another model pass. Construct
+`PreflightRecorder::receive(sink: OwnedFd, run: RunRef, session: SessionRef)`. It
+creates the private Writer and admits only one load, followed by enter-refusal or fault
+and terminal unload until activated. It exposes no content submission method. After load
+is recorded and partition validation passes, `activate(self, partition:
+ValidatedPartition) -> Recorder` consumes this preflight value and installs the single
+Tee. It cannot be called twice or after a refused enter. The resulting Recorder has no
+attach or reactivate method. Keep the existing receive constructor for diagnostic/legacy
+paths. Replace the public constructor pin trace-receive-shape-pinned-by-doctest with
+pins for diagnostic receive and the preflight/activate sequence. Replace attach_tee at
+enter with this sequence. No attach, reopen, or clear-loss API exists during a run.
+Remove tee_lost and its lifecycle.rs::take_save_point consumer, replaced by the flow
+latch and save barrier. [FLOW-4, FLOW-5]
+
+## 4. What is enforced, destination section 10
+
+This replacement applies at the [foundation cutover][cutover]. Until then, the previous
+serving contract remains applicable.
+
+| Claim | Instrument and test | Protective change that must fail the test |
+| --- | --- | --- |
+| TRACE-ENVELOPE | Perturbation in tests/recorder.rs, canonical fixture with escaped content and omitted options | Infer origin from content or change sequence to a JSON number |
+| TRACE-REGISTRY | Exhaustive enum match and tests/kinds.rs, plus table-driven turn/payload tests | Omit a new kind or admit a forbidden projection |
+| TRACE-PLAN | Canonical operator/effect, failed/closed outcome and break fixtures, checked against the floor-to-trace conversion | Swap the two plan payloads, license close as plan.event, omit null context, change an identity or accept a wrong turn/channel/origin |
+| Plan observation | Canonical fixtures for flags success/refusal, successor readiness and both capacity paths | Replace unavailable with zero, drop an identity, add an unknown variant or admit the measurement to residue |
+| TRACE-VALIDATION | Load matrix covering every required call/task tuple and forbidden kind | Permit partial pair or mark coverage, select a boot read or allow a payload predicate |
+| TRACE-COPY | Review of Tee fields and methods for no transport ownership, compile pin for result types | Reintroduce UnixStream or a store frame into Tee |
+| TRACE-PROJECT | Tee tests with mixed Messages, mark sidecars and complete pair records | Treat a tool block as Text, change an index, omit a context/pair field, hide a bad path as Unselected or alter copied bytes |
+| TRACE-SUBMIT | Perturbation with tap failure and working/sink observations | Return Err after tap failure or omit the canonical source record |
+| TRACE-CAPACITY | Perturbation with 1017 ordinary slots full, a live tool, turn and save, and all seven terminal records | Reduce the terminal reserve, reuse one reservation, block enqueue, or consume a sequence on pending capacity |
+| TRACE-STOP | Perturbation with a fault record after latch | Allow a second filing or erase the fault's trace record |
+
+The compile pin on a return type is not a guarantee that a caller consumes it. That
+behavior is enforced at Record::submit in the harness tests. The production crate's
+no-internal-crate assertion remains. No graph-header maintenance is introduced.
+
+## 5. Capacity wake and load evidence, destinations sections 3 and 6
+
+This replacement applies at the [foundation cutover][cutover]. Until then, the previous
+serving contract remains applicable.
+
+**TRACE-WAKE.** The writer creates a nonblocking UnixStream pair solely for capacity
+notification. Recorder exposes the read end as a borrowed descriptor and a drain method,
+never the stream writer. The writer thread sends one byte on a transition from no
+ordinary capacity to available capacity, or on standing writer failure. WouldBlock means
+a wake is already pending. A broken notifier is a trace failure. The harness drains
+notifications, attempts its reservation again, then polls. A notification arriving
+between that attempt and poll remains readable. This replaces the condvar-only wake at
+writer.rs without adding a harness thread. Reason: trace capacity must wake the same
+wait that enforces CLASS-8. [FLOW-4, CLASS-8]
+
+**TRACE-LOAD.** `FlowDeclarationRecord` is serialize-only trace-owned data with
+registry_id, version, partition, gate_wait, cut_wait, observation_interval, backlog,
+scheme, persistence, reads, ste100, tools and placement. These configuration members
+carry the types amendment's fields as explicit trace-owned representations. Each member
+has the types amendment's wire spelling. The harness converts each field explicitly. The
+load also carries clock_source with the literal CLOCK_MONOTONIC and origin_ns as a
+decimal-string count. All envelope monotonic_ns values are elapsed from that one origin.
+Measurement records that carry raw component clock readings retain those readings and
+their declared clock source, under Spec 09's CLOCK. load.state_member_observation is the
+explicit trace-owned mirror of Spec 09's MemberObservationIdentity, preserving its u32
+PID, decimal start/tick fields and unavailable reason. It names the current member and
+instrument, never an identity restored from the dump. [COST-4, COST-5]
+`StateStartRecord` carries seed_id, artifact_id, dump_sha256, config_sha256, and
+parent_artifact_id and position, each null where absent in the verified start. The
+load's old tee-election member is removed for serving. The load also records
+template_inventory: {scheme_id, inventory_sha256, checker_artifact_sha256, templates}.
+templates is the ordered Vec<TemplateSpec> defined by Spec 02's TEMPLATES, including
+every literal and typed slot. The load also holds ste100_scheme, the exact scheme bytes,
+and ste100_binary_sha256 among its executable facts. It records the inputs to
+certification, not an unperformed pass. Template checks run after load and emit turnless
+ste100.result records in inventory order. They carry the exact replies used by
+TEMPLATE-CHECK. No organ fork or template check is moved ahead of the trace bracket. A
+partition refusal is recorded after load by the preflight recorder, before any
+activation. Diagnostic load retains its old fields and has no state_flow member. Reason:
+the trace must name the declaration and proof used, without linking the trace crate to
+the floor wire crate. [TAP-2, FLOW-3, PERSIST-2, review S2]
+
+Spec 09 RUN-EVIDENCE binds external build and host observations to this exact load and
+captured trace. It is an analysis artifact, not a payload kind, load extension or
+selectable event. Preserve stack and ste100_binary_sha256 exactly. Do not synthesize
+source revisions from binary names or fill host observations from the declared device
+assignment. The existing model.request and model.measurement remain turn-bound and keep
+the SPU's later facts in their original position. The load has no account of an
+admission that has not happened. [FLOW-2, FLOW-3, COST-5, SCOPE-1]
+
+**TRACE-INSTRUCTION.** Payload::LoopInstruction mirrors Spec 02's single
+LoopInstructionRecord and closed metadata enum. The trace does not import a wire crate
+to obtain those types. The harness converts every field explicitly, preserving its typed
+source IDs, DecimalU64 strings, WorkRef and review digest. Kind licensing checks the
+metadata variant and its turn rule before submit. The tee projects only the declared
+Message Text, and neither parses purpose to decide admission nor creates a second filing
+from metadata. [FLOW-8, TAP-1, PLAN-2, CLASS-2]
+
+**TRACE-PLACEMENT.** PlacementRecord has the exact fields in Spec 06's PLACEMENT-RECORD,
+with UnitMapEntry from its PLACE-PORT. The trace owns explicit serialize-only mirrors of
+these types. phase is boot, cut or append, with null context for boot/cut and
+PlacementContext for append. Its label and instruction reference mirror Spec 06, without
+importing harness types. method is null for boot and CutMethod otherwise. assembly_id,
+wait_ns, recomputed_messages, Message IDs and occurrence/map indices are decimal
+strings. assistant_message_id is null for boot and cut. N, prefix_tokens,
+resident_before, input_tokens, capacity, generation_limit and terminal_tokens are u64
+JSON numbers, matching their SPU facts. cut is null or the typed CutReference. The
+record is channel internal, origin loop. It holds no selectable Text or context surface.
+Assembly zero is the single boot placement, causally linked to the boot recall. [FLOW-3,
+PLACE-5, MARK-6, COST-4]
+
+Payload::MarkPosition mirrors Spec 06's MARK-POSITION, including the distinct
+MarkOccurrenceId, ArgumentCursor and boot/placed/native source variants. The harness
+authors state.mark.position only after its licensing receipt or complete append. The
+payload contains no projection surface. The loader refuses any attempt to select it,
+including a wildcard. Diagnostic conversion refuses this new serving kind. Neither a
+placement proposal nor a preview is a completed mark occurrence. [FLOW-3, FLOW-8, TAP-3,
+MARK-6]
+
+**TRACE-SORT.** Payload::SortDecision and Payload::SortMeasurement mirror Spec 08's
+SORT-RECORD exactly, including the closed serve/outbound variants, MaterialRef/UnitId
+identities and typed refusal/drop reasons. They import no floor or harness type. The
+harness converts every field and validates the loaded criterion and template identity
+before authoring. sort.decision remains selectable only as its one Text block.
+state.sort.measurement is forbidden by the loader, including wildcard attempts to select
+it. Neither carries a context projection or store effect. Both are new events when the
+choice or measurement is made. [SORT-4, TAP-1, TAP-3, FLOW-8, COST-4]
+
+For an observations read, the existing recall record carries the exact typed selector
+and snapshot_id with empty sources and spans. The query names operation metadata, not a
+content provenance list. Its response observation still produces the ordinary
+state.store.measurement and remains excluded by the partition. [FLOW-3, SEAM-3, TAP-3,
+R20-19]
+
+**TRACE-OBSERVATION.** Add Kind::StateStoreMeasurement and
+Payload::StateStoreMeasurement with explicit serialize-only mirrors of Spec 09's
+StateStoreMeasurement and all nested observation types. The harness converts each field
+without linking the trace to weaver-types. Channel is measurement, origin runtime,
+subsystem harness. A filing measurement retains its source turn. A control measurement
+uses the current turn when one exists. The record has no selectable surface, and the
+loader rejects every projection of it. Diagnostic conversion refuses this new serving
+kind. [FLOW-3, TAP-3, COST-2]
+
+FlowObservation mirrors HARNESS-ACCOUNT, including phases sampled, backlog_wait and
+backlog_resumed and the exact FLOW-COUNTS gauges, interval deltas and raw timestamps.
+retained_blocks and retained_bytes and pending_turns are decimal strings. lag_alarm and
+backlog_waiting are Booleans, and waiting_copy is the optional CopyAtHalt shape. These
+are retention gauges and an alarm, never a new halt reason. The halt account's
+flow_sample uses the same representation, not another counter grammar. The serving trace
+reader must recognize both carriers without counting the final sample twice. No
+measurement triggers another measurement or filing. [FLOW-5, CLASS-6, COST-4, FALS-5]
+
+The trace corpus checks every new kind/envelope/payload association, decimal encoding,
+unavailable value and turn rule. A wildcard partition attempting to select
+state.store.measurement must refuse load. A cross-crate conversion fixture compares the
+received observation with the serialized trace object field for field. Deleting a
+counter, converting a raw clock to elapsed twice or admitting the payload must fail its
+check. This proves faithful record carriage, not OS attribution. [FLOW-3, TAP-3, COST-5]
+
+**TRACE-RESULT.** Ste100ResultRecord is the trace-owned payload for `ste100.result`. It
+carries request_id, target, scheme_id, and result. Target and result use
+TYPES-CLASSIFIER's exact representations, converted into serialize-only trace types.
+Accepted results carry every binding, noun, condition, and span. Rejected results carry
+the defect. Component failures carry their code. Runtime results are authored before
+they change the filing ledger. Enter-time template results use the same kind with
+template targets and no turn, after load and before boot. A record that cannot be
+authored cannot authorize filing. This is evidence for rebuild, never another state
+feed. The result is forbidden by the partition validator. [SORT-4, FLOW-3, STORE-3, apex
+5.5]
+
+| Claim | Instrument | Protective change that must fail |
+| --- | --- | --- |
+| TRACE-WAKE | Saturate the real writer behind a held sink, release one slot, poll wake descriptor | Remove writer notification or reserve after sequence assignment |
+| TRACE-LOAD | Canonical load, failed-partition, failed-template and diagnostic fixtures | Author before load, omit inventory identity or starting hash, or claim a certificate before its results |
+| TRACE-RESULT | Rebuild bindings from source plus result records and compare committed rows | Remove one noun or condition from the trace payload |
+| TRACE-SORT | Exact decision/measurement captures with optional and mandatory overflow | Hide a dropped unit, admit measurement content, truncate a return or mutate an earlier event |
+
+Retire trace Spec 11 assertions trace-tee-no-turn-backpressure and
+trace-tee-envelope-not-electable, and section 3's trace-load-carries-the-tee-election
+assertion. Their replacements are TRACE-CAPACITY, TRACE-REGISTRY and TRACE-LOAD. Replace
+trace PRD 3.1's numeric kind count with the closed TRACE-REGISTRY set, so an added
+serving kind has one registry owner. Persistence extends existing payloads and adds no
+further kind. [FLOW-2, FLOW-3, TAP-1 through TAP-5]
+
+**TRACE-HALT.** Keep fault as the existing FaultReport raw payload. The harness supplies
+HARNESS-HALT-ACCOUNT under the HALT-ACCOUNT-SIZE bound, one account per terminal record,
+under case state_flow_failed, or the existing stream_write_failed case for trace
+failure. Trace does not reconstruct an outstanding ledger from that account or feed any
+of it to state. Extend UnloadClose with optional end_reason and state_flow_failure.
+end_reason has the single new spelling component_failure and is absent on an ordinary
+unload. state_flow_failure is {fault_sequence,account}, with fault_sequence an optional
+Sequence encoded as a decimal string or null, and account Box<RawValue>. These two
+UnloadClose members are either both absent or both present. Diagnostic conversion
+refuses them under the serving-vocabulary rule. [FLOW-3 through FLOW-6]
+
+The harness supplies the same first-failure snapshot as the fault and adds only its
+secondary failures to account.secondary. fault_sequence names the successfully recorded
+first fault in this run, or is null if it could not be recorded. Existing forced,
+forced_by, cause, release and grant_surface keep their meanings. An unload with
+component_failure supplies no successful Left. A reader joins the fault sequence rather
+than counting the repeated account as a second halt. The trace's raw account arm stays
+opaque and adds no dependency on the harness. The evidence fixture compares the first
+account with the unload, removes the fault reference, changes its first cause and
+changes unknown commit to success in turn. Each alteration must fail its corresponding
+assertion. [FLOW-3, FLOW-5, COST-5]
+
+## 6. Persistence payloads, destination section 3
+
+This replacement applies at the [foundation cutover][cutover]. Until then, the previous
+serving contract remains applicable.
+
+**TRACE-PERSIST.** Extend the existing recall payload with a serving read variant
+holding selector, snapshot_id, sources and spans. Its boot variant additionally holds
+the complete seated Message and end mark. Recall remains unselectable. Define
+trace::SavePointRecord and Payload::SavePointRecord for the serving save_point, with
+phase requested, confirmed, published, or refused, capture_id, optional artifact_id,
+A/B, location, position and refusal code. A/B use field names dump_sha256 and
+config_sha256. Location is the artifact's territory-relative name, never dump bytes.
+Requested records precede capture. Confirmed means worker Commit authorization,
+published means admin reported index completion. [PERSIST-1, PERSIST-2, PERSIST-6,
+FLOW-3]
+
+The load holds the starting identity once, in its top-level state_start member. Existing
+lineage retains its existing trace-position fields when present and gains no duplicate
+StartIdentity. state_start.artifact_id supplies location without an absolute path. The
+new load tuple includes template_inventory and state_flow under TRACE-LOAD. Diagnostic
+conversion refuses the new serving recall/save payload variants rather than silently
+dropping them. Analysis's serving reader must update before deployment. [PERSIST-2,
+SCOPE-1]
+
+Unclean recovery preserves the existing load.reset object with prior_run and reason. The
+harness converts admin's ResetReason to its existing wire spelling, including
+no-clean-unload, and records the selected StateStartRecord on that same load. There is
+no reset event kind, new Reset field or second copy of A/B. The recovery fixture must
+pair the recorded prior run with the selected start, including explicit rollback to an
+older indexed artifact. [FLOW-3, PERSIST-3, PERSIST-7]
+
+| Claim | Instrument | Protective change that must fail |
+| --- | --- | --- |
+| TRACE-PERSIST | Boot/save fixtures checked against actual published A/B | Omit seated bytes, equate confirmed with published, or put dump bytes on trace |
+
+| save_point phase | Required fields besides phase, capture_id, window and tail_window | Omitted fields |
+| --- | --- | --- |
+| requested | cause | artifact_id, dump_sha256, config_sha256, location, position, refusal_code |
+| confirmed | cause, artifact_id, dump_sha256, config_sha256, location, position | refusal_code |
+| published | cause, artifact_id, dump_sha256, config_sha256, location, position | refusal_code |
+| refused | cause, refusal_code | artifact_id, dump_sha256, config_sha256, location, position |
+
+Position is explicitly null for a seed-only image. Cause uses TYPES-PERSIST's serving
+cause values. A seed or rebind has no live save_point event and is accounted for by its
+first load's StateStartRecord, which also carries the verified position. TRACE-LOAD's
+FlowDeclarationRecord additionally carries persistence.save_wait under persistence, with
+the same MeasuredWait spelling. [PERSIST-2, PERSIST-5, FLOW-3]
+
+window and tail_window are explicit trace-owned mirrors of TYPES-SAVE-TIME's SaveWindow,
+with decimal raw CLOCK_MONOTONIC timestamps. tail_window is null on demand. Each phase
+preserves the same windows for its capture. An unload creates requested only when its
+capture stage begins after the lower. Its earlier S4/S5 does not acquire a save deadline
+by trace authoring. No dump bytes or captured content enter this record, and the whole
+kind stays excluded from state. The corpus includes queued expiry and an unload whose
+unbounded drain outlasts save_wait. Altering a window or moving its anchor must fail the
+comparison with the lifecycle frame. [PERSIST-4, TAP-3, COST-4]
+
+## 7. Open elections and dependencies
+
+No numeric queue size is changed. The new kind set must be accepted by serving trace
+consumers before deployment. The A/B representation is in this unit's persistence
+amendments. The load keeps its existing organ binary identities and declared elections
+as well as the new fields. Actual model identity and effective parameters remain in
+model.measurement and model.request. Tool metadata and any later selected event kind
+must enter the registry through its owning amendment before it can be configured. These
+are dependencies, not permission for an implementer to guess payload shapes.
+
+[cutover]:
+state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
