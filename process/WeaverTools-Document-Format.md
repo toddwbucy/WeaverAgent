@@ -1,6 +1,6 @@
 # WeaverTools Document Format
 
-**Version:** v0.25, 2026-09-27. Companion to the Working Process. Project
+**Version:** v0.26, 2026-10-19. Companion to the Working Process. Project
 documents carry a version and a date and no state, per Working Process section 2.
 **Parent:** WeaverTools Working Process
 
@@ -121,6 +121,7 @@ declares its own container.
     docs/crates/weaver-<n>/             the PRD and the Spec for one crate, every crate
     docs/crates/contracts/              contracts, and the material they draw
     docs/crates/weaver-analysis/        copies of a crate that lives in its own repository
+    docs/crates/state-management/       the PRD and Specs of a domain with no crate
     docs/crates/weaver-<n>/Loops/       workflow documents of that domain root
     experiments/<e>/README.md           the charter of one experiment, its hypothesis
     experiments/<e>/<arm>/              one variable of that hypothesis
@@ -135,8 +136,14 @@ same exclusion-by-naming device this document uses twice already, the absent
 is a PRD or a Spec by its own filename suffix. This is what makes the mirror check
 mechanical: every `docs/crates/weaver-*` has a matching `crates/weaver-*`, both at
 the top of their trees, and `contracts/` excludes itself by the absent prefix rather
-than by a written exception. `weaver-analysis/` is the one written exception: its
-crate lives in its own repository, and the copies here carry its documents.
+than by a written exception. Two written exceptions stand. `weaver-analysis/` holds
+the copies of a crate that lives in its own repository. `state-management/` holds the
+PRD and the Specs of state management, a domain that spans several crates and has no
+crate of its own, on the operator's ruling of 2026-10-19. A document lands there only
+once its audit clears it from the staging folder `docs/state-management/`, which is
+outside the set. The folder is a container and not a domain root in the sense below,
+so it changes no parent edge, and each Spec in it names the crate Specs and contracts
+it amends.
 
 A document under a `Loops/` directory is a workflow document, the container typing the
 kind directly because that directory splits into no further kinds, where `contracts/`

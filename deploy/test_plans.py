@@ -5291,9 +5291,11 @@ def docs_mirror_faults(root):
     """Where docs/crates/ departs from the shape of crates/ (the layout ruling
     of 2026-10-13): one folder per crate at the top level, holding that
     crate's PRD and Spec, and no crate's documents under another's folder.
-    The exceptions are contracts/, the apex weaver-agent-PRD.md and
+    The exceptions are contracts/, the apex weaver-agent-PRD.md,
     weaver-analysis/, the duplicated copies of a crate that lives in its own
-    repository."""
+    repository, and state-management/, the documents of a domain that spans
+    several crates and has no crate of its own (the operator's ruling of
+    2026-10-19)."""
     crates = sorted(p.name for p in (root / "crates").iterdir()
                     if (p / "Cargo.toml").is_file())
     docs = root / "docs" / "crates"
@@ -5303,7 +5305,7 @@ def docs_mirror_faults(root):
             if not (docs / name / f"{name}-{kind}.md").is_file():
                 faults.append(f"docs/crates/{name}/{name}-{kind}.md is missing")
     for folder in sorted(p for p in docs.iterdir() if p.is_dir()):
-        if folder.name not in crates + ["contracts", "weaver-analysis"]:
+        if folder.name not in crates + ["contracts", "weaver-analysis", "state-management"]:
             faults.append(f"docs/crates/{folder.name}/ names no crate")
     for document in sorted(docs.rglob("weaver-*.md")):
         owner = re.fullmatch(r"(weaver-.+)-(?:PRD|Spec)\.md", document.name)
@@ -5319,7 +5321,8 @@ class DocsMirrorTests(unittest.TestCase):
     it governs (the layout ruling of 2026-10-13).
     Perturbation: nest a crate's folder under another's, as
     weaver-harness/weaver-trace/ once was, and both its missing top-level
-    documents and the nested ones are named."""
+    documents and the nested ones are named. A folder naming no crate is
+    named, and the written exceptions are not."""
 
     def test_every_crate_has_its_documents_at_the_top_level(self):
         self.assertEqual(docs_mirror_faults(DEPLOY.parent), [])
@@ -5345,6 +5348,20 @@ class DocsMirrorTests(unittest.TestCase):
                 "docs/crates/weaver-harness/weaver-trace/weaver-trace-Spec.md "
                 "sits outside docs/crates/weaver-trace/",
             ])
+
+    def test_a_folder_naming_no_crate_is_named_and_the_exceptions_are_not(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            (root / "crates" / "weaver-trace").mkdir(parents=True)
+            (root / "crates" / "weaver-trace" / "Cargo.toml").write_text("")
+            docs = root / "docs" / "crates"
+            (docs / "weaver-trace").mkdir(parents=True)
+            for kind in ("PRD", "Spec"):
+                (docs / "weaver-trace" / f"weaver-trace-{kind}.md").write_text("")
+            for folder in ("contracts", "weaver-analysis", "state-management", "notes"):
+                (docs / folder).mkdir()
+            self.assertEqual(docs_mirror_faults(root),
+                             ["docs/crates/notes/ names no crate"])
 
 
 # What cargo prints, in the shapes the stand-in below replays: a crate that

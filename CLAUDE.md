@@ -138,15 +138,20 @@ Each crate's manifest test reads its own manifest to pin its part of that shape:
 folder per crate at the top level, `docs/crates/<crate>/`, holding that crate's PRD
 (charter) and Spec, so a document maps to the code it governs. No crate's documents sit
 under another crate's folder, and `DocsMirrorTests` in `deploy/test_plans.py` pins the
-shape. The exceptions are `contracts/`, the apex `weaver-agent-PRD.md`, and
-`weaver-analysis/`, which has no crate here; a crate's folder may also carry what its
-crate holds beside its two documents (`weaver-harness/Loops/`, for example). Every seam
-has a contract under `docs/crates/contracts/`. Four of them are cross-repository
-(`weaver-gate-world`, `weaver-admin-operator`, `weaver-analysis-state`,
-`weaver-analysis-web`) and are destined for the suite repository.
-`docs/crates/weaver-analysis/` and the two `weaver-analysis-*` contracts are
-byte-identical copies of files in WeaverAnalysis. Which copy is authoritative is
-unruled, so edit neither without saying so.
+shape. The exceptions are `contracts/`, the apex `weaver-agent-PRD.md`,
+`weaver-analysis/`, which has no crate here, and `state-management/`, the PRD and
+Specs of a domain that spans several crates (the operator's ruling of 2026-10-19:
+cleared documents only, the rest staging in `docs/state-management/`); a crate's
+folder may also carry what its crate holds beside its two documents
+(`weaver-harness/Loops/`, for example). Every seam has a contract under
+`docs/crates/contracts/`. Four of them are cross-repository (`weaver-gate-world`,
+`weaver-admin-operator`, `weaver-analysis-state`, `weaver-analysis-web`) and are
+destined for the suite repository. `docs/crates/weaver-analysis/` and the two
+`weaver-analysis-*` contracts were copied from WeaverAnalysis. On the operator's
+ruling of 2026-10-20, this repository's `weaver-analysis-state` contract is
+authoritative and WeaverAnalysis mirrors it until the suite repository takes
+ownership. The remaining copies have no ownership ruling. Every edit names which
+copy it changes.
 
 `docs/technical/` is a dated, non-normative reader's snapshot (one page per crate,
 `index.md` first). `docs/project/` holds handoffs, audits, sketches and the vision; the
