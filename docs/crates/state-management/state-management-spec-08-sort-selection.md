@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.13 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-08`
+**Version:** 0.14 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-08`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. Scope and applicability
@@ -262,11 +262,12 @@ Removing source-order restoration or removing the final presented unit instead m
 fail the fixture. A repeated-UnitId case proves that only the last accepted occurrence
 is removed. A multiple-drop case uses UnitIds A, B, C and D at ordinals 1, 2, 3 and 4,
 with only D matching. All cumulative step 5 probes fit in candidate order D, C, B, A.
-The final probes A, B, C, D and B, C, D fail before C, D fits. The drops must be A then
-B, with both reasons retained and the final C, D measurement returned. A zero-accepted
-case returns the mandatory-only proposal. Stopping after one drop or omitting either
-drop record must fail. These scripted costs test control flow, not a measured model
-limit.
+The final probes A, B, C, D and B, C, D fail before C, D fits. Removal must occur in
+reverse acceptance order, A then B. The returned dropped_refs must list B then A in
+candidate evaluation order, with both reasons retained and the final C, D measurement
+returned. A zero-accepted case returns the mandatory-only proposal. Stopping after one
+drop, omitting either drop record or serializing drops in removal order must fail.
+These scripted costs test control flow, not a measured model limit.
 [SORT-3, READ-2, STORE-5, PLACE-4, PLACE-5]
 
 **DROP.** A selected tool return and a marked span are indivisible. Every omitted
