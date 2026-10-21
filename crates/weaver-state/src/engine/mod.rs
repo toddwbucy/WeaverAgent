@@ -6,6 +6,9 @@
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
+#[cfg(feature = "sqlite")]
+pub mod serving_sqlite;
+
 // Test-only hook kept here (#118): a case every engine's suite runs against its own store.
 #[cfg(test)]
 fn raw_objects_survive_the_engine_and_answers(store: &mut dyn crate::store::Store) {
