@@ -77,6 +77,7 @@ impl RecordingContext {
         }
         if self.output.is_some()
             || self.filing.is_some()
+            || self.pair_work.is_some()
             || self.input.snapshot().is_some()
             || self.templates_block_content()
             || self.member_capture.is_some()

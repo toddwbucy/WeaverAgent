@@ -430,4 +430,4 @@ fn validate_check(
 
 #[cfg(test)]
 #[path = "model_requests_tests.rs"]
-mod tests;
+pub(in crate::flow) mod tests;

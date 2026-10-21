@@ -92,6 +92,7 @@ impl RecordingContext {
         }
         if self.output.is_some()
             || self.filing.is_some()
+            || self.pair_work.is_some()
             || self.input.snapshot().is_some()
             || !self.input_turns.is_empty()
             || self.input_turn.is_some()

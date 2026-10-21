@@ -96,6 +96,7 @@ impl RecordingContext {
         if self.output.is_some()
             || self.flow.has_output_consumer()
             || self.filing.is_some()
+            || self.pair_work.is_some()
             || self.flow.has_filing_consumer()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()

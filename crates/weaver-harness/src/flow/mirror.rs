@@ -148,10 +148,207 @@ pub(super) fn start(value: &shared::StartIdentity) -> trace::StartIdentity {
         dump_sha256: dump_sha256.as_str().into(),
         config_sha256: config_sha256.as_str().into(),
         parent_artifact_id: parent_artifact_id.clone(),
-        position: position.as_ref().map(|value| trace::SourcePosition {
-            block_id: source(&value.block_id),
-            turn: value.turn.clone(),
-        }),
+        position: position.as_ref().map(source_position),
+    }
+}
+
+pub(super) fn pair_started(value: &shared::PairStarted) -> trace::PairStarted {
+    let shared::PairStarted {
+        call_id: id,
+        call_block,
+        statement: dependency,
+        lane,
+        request,
+        retry_of,
+    } = value;
+    trace::PairStarted {
+        call_id: call_id(id),
+        call_block: number(*call_block),
+        statement: statement(dependency),
+        lane: match lane {
+            shared::PairLane::External => trace::PairLane::External,
+            shared::PairLane::Recall => trace::PairLane::Recall,
+            shared::PairLane::Review => trace::PairLane::Review,
+        },
+        request: match request {
+            shared::PairRequest::External { name, arguments } => trace::PairRequest::External {
+                name: name.clone(),
+                arguments: arguments.clone(),
+            },
+            shared::PairRequest::Recall { subject } => trace::PairRequest::Recall {
+                subject: subject.clone(),
+            },
+            shared::PairRequest::Review {
+                setup,
+                work,
+                command,
+            } => trace::PairRequest::Review {
+                setup: review_setup(setup),
+                work: Box::new(work_ref(work)),
+                command: command.clone(),
+            },
+        },
+        retry_of: retry_of.as_ref().map(call_id),
+    }
+}
+
+pub(super) fn pair_ended(value: &shared::PairEnded) -> trace::PairEnded {
+    let shared::PairEnded {
+        call_id: id,
+        execution,
+        fate,
+        reason,
+        outcome,
+        loaded_from,
+    } = value;
+    trace::PairEnded {
+        call_id: call_id(id),
+        execution: execution.as_ref().map(exchange),
+        fate: match fate {
+            shared::TerminalPairFate::Completed => trace::TerminalPairFate::Completed,
+            shared::TerminalPairFate::Failed => trace::TerminalPairFate::Failed,
+        },
+        reason: reason.as_ref().map(pair_failure),
+        outcome: outcome.as_ref().map(tool_outcome),
+        loaded_from: loaded_from.as_ref().map(start),
+    }
+}
+
+fn call_id(value: &shared::CallId) -> trace::CallId {
+    let shared::CallId {
+        run,
+        sequence,
+        call,
+    } = value;
+    trace::CallId {
+        run: run.clone(),
+        sequence: number(*sequence),
+        call: number(*call),
+    }
+}
+
+fn statement(value: &shared::StatementRef) -> trace::StatementRef {
+    let shared::StatementRef { block_id, binding } = value;
+    trace::StatementRef {
+        block_id: source(block_id),
+        binding: number(*binding),
+    }
+}
+
+fn source_position(value: &shared::SourcePosition) -> trace::SourcePosition {
+    let shared::SourcePosition { block_id, turn } = value;
+    trace::SourcePosition {
+        block_id: source(block_id),
+        turn: turn.clone(),
+    }
+}
+
+fn review_setup(value: &shared::ReviewSetupRef) -> trace::ReviewSetupRef {
+    let shared::ReviewSetupRef { setup_id, sha256 } = value;
+    trace::ReviewSetupRef {
+        setup_id: setup_id.clone(),
+        sha256: sha256.as_str().into(),
+    }
+}
+
+fn work_ref(value: &shared::WorkRef) -> trace::WorkRef {
+    let shared::WorkRef {
+        plan,
+        step_id,
+        span,
+        through,
+        content_sha256,
+    } = value;
+    let shared::PlanRef { plan_id, revision } = plan;
+    let shared::PlanId { seed_id, local_id } = plan_id;
+    let plan = trace::PlanRef {
+        plan_id: trace::PlanId {
+            seed_id: seed_id.clone(),
+            local_id: number(*local_id),
+        },
+        revision: number(*revision),
+    };
+    let shared::StepId { seed_id, local_id } = step_id;
+    let step_id = trace::StepId {
+        seed_id: seed_id.clone(),
+        local_id: number(*local_id),
+    };
+    let shared::SpanRef {
+        seed_id,
+        local_id,
+        revision,
+    } = span;
+    trace::WorkRef {
+        plan,
+        step_id,
+        span: trace::SpanRef {
+            seed_id: seed_id.clone(),
+            local_id: number(*local_id),
+            revision: number(*revision),
+        },
+        through: source_position(through),
+        content_sha256: content_sha256.as_str().into(),
+    }
+}
+
+fn exchange(value: &weaver_types::ExchangeId) -> trace::ExchangeId {
+    let weaver_types::ExchangeId { opener, ordinal } = value;
+    trace::ExchangeId {
+        opener: match opener {
+            weaver_types::Opener::Admin => trace::Opener::Admin,
+            weaver_types::Opener::Harness => trace::Opener::Harness,
+            weaver_types::Opener::Spu => trace::Opener::Spu,
+            weaver_types::Opener::Gate => trace::Opener::Gate,
+        },
+        ordinal: *ordinal,
+    }
+}
+
+fn pair_failure(value: &shared::PairFailure) -> trace::PairFailure {
+    match value {
+        shared::PairFailure::Timeout {} => trace::PairFailure::Timeout {},
+        shared::PairFailure::Cancelled {} => trace::PairFailure::Cancelled {},
+        shared::PairFailure::Unload {} => trace::PairFailure::Unload {},
+        shared::PairFailure::FlowFailure {} => trace::PairFailure::FlowFailure {},
+        shared::PairFailure::GateFault {} => trace::PairFailure::GateFault {},
+        shared::PairFailure::NotGranted {} => trace::PairFailure::NotGranted {},
+        shared::PairFailure::NotDispatched { cause } => trace::PairFailure::NotDispatched {
+            cause: match cause {
+                shared::NonDispatchCause::PassPurpose => trace::NonDispatchCause::PassPurpose,
+                shared::NonDispatchCause::RepairExhausted => {
+                    trace::NonDispatchCause::RepairExhausted
+                }
+                shared::NonDispatchCause::PlanBreak => trace::NonDispatchCause::PlanBreak,
+                shared::NonDispatchCause::RoundLimit => trace::NonDispatchCause::RoundLimit,
+                shared::NonDispatchCause::Stop => trace::NonDispatchCause::Stop,
+                shared::NonDispatchCause::Unload => trace::NonDispatchCause::Unload,
+                shared::NonDispatchCause::NoGate => trace::NonDispatchCause::NoGate,
+            },
+        },
+        shared::PairFailure::AbandonedAtLoad {} => trace::PairFailure::AbandonedAtLoad {},
+    }
+}
+
+fn tool_outcome(value: &weaver_types::ToolOutcome) -> trace::ToolOutcome {
+    match value {
+        weaver_types::ToolOutcome::Result { content } => trace::ToolOutcome::Result {
+            content: content.clone(),
+        },
+        weaver_types::ToolOutcome::Refused { reason } => trace::ToolOutcome::Refused {
+            reason: reason.clone(),
+        },
+        weaver_types::ToolOutcome::Errored { detail } => trace::ToolOutcome::Errored {
+            detail: detail.clone(),
+        },
+        weaver_types::ToolOutcome::Killed { partial, by } => trace::ToolOutcome::Killed {
+            partial: partial.clone(),
+            by: match by {
+                weaver_types::KillCause::Clock => trace::KillCause::Clock,
+                weaver_types::KillCause::Cancel => trace::KillCause::Cancel,
+                weaver_types::KillCause::Unload => trace::KillCause::Unload,
+                weaver_types::KillCause::Fault => trace::KillCause::Fault,
+            },
+        },
     }
 }
 

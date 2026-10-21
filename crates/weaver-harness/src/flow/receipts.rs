@@ -171,6 +171,15 @@ impl ReceiptSet {
         })
     }
 
+    /// Evidence for the frozen halt account. This never releases a receipt or
+    /// changes consumer ownership, including when its enclosing wait has failed.
+    pub(in crate::flow) fn has_recorded_commit(&self, source: &SourceBlockId) -> bool {
+        self.slots.iter().any(|slot| {
+            &slot.source == source
+                && matches!(slot.disposition, Some(SourceDisposition::Committed(_)))
+        })
+    }
+
     pub(in crate::flow) fn is_complete(&self) -> bool {
         self.slots.iter().all(|slot| slot.disposition.is_some())
     }
