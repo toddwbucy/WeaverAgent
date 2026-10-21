@@ -181,7 +181,7 @@ publisher remain separate consumers to connect in P1d/H1b2. The harness suite pa
 the scope, evidence and exact source restoration. The restored capture suite, lint,
 formatting and lock gate pass.
 
-H1t is locally validated, stacked on #205. Its
+H1t is [draft PR #206][template-certification], stacked on #205. Its
 [implementation record][template-certification-record] covers exact compiled inventory
 binding, ordered recorded replies, the private certificate and the original Enter
 bound. Correct rejection permits rollback and never grants content. The full harness
@@ -411,3 +411,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 
 [input-transaction]: https://github.com/toddwbucy/WeaverAgent/pull/204
 [template-certification-record]: state-management-template-certification-2026-10-21.md
+[template-certification]: https://github.com/toddwbucy/WeaverAgent/pull/206

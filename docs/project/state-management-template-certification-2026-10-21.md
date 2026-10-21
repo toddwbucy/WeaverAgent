@@ -1,6 +1,6 @@
 # Harness template certification
 
-Date: 2026-10-21. Status: implementation under local validation.
+Date: 2026-10-21. Status: implementation in [draft PR #206][templates].
 
 This slice follows [PR #205][base]. It implements load-time certification under
 [TEMPLATES][protocol], [TEMPLATE-CHECK][harness] and [TYPES-TEMPLATE][types]. The
@@ -90,6 +90,7 @@ template port returns the typed timeout and retains that request for the lifecyc
 owner. This slice neither reclassifies a lifecycle timeout nor grants a retry.
 
 [base]: https://github.com/toddwbucy/WeaverAgent/pull/205
+[templates]: https://github.com/toddwbucy/WeaverAgent/pull/206
 [protocol]:
   ../crates/state-management/state-management-spec-02-protocol-classifier-gate.md
 [harness]: ../crates/state-management/weaver-harness-Spec-amendment.md
