@@ -444,6 +444,108 @@ fn image_adoption_keeps_committed_order_across_new_runs_and_refuses_old_run_writ
 }
 
 #[test]
+fn abandoned_pair_adoption_requires_a_prior_run_even_with_rebound_image_identity() {
+    use super::super::filing::tests::{opening, pair_file, statement};
+    use weaver_types::state_flow::*;
+    let request = fixture();
+    let seed = seed_image(&request).unwrap();
+    let mut store = ServingSqlite::adopt(
+        seed.as_bytes(),
+        &common(),
+        &request.schema_id,
+        &request.scheme_id,
+        &identity(seed.as_bytes()),
+        limits(),
+    )
+    .unwrap();
+    let mut send = statement(1, "message.assistant");
+    send.scheme_id = request.scheme_id.clone();
+    store.file(&send).unwrap();
+    let started = opening(&send);
+    let mut start_file = pair_file(2, PairRecord::Started(started.clone()), "model");
+    start_file.scheme_id = request.scheme_id.clone();
+    store.file_pair(&start_file).unwrap();
+
+    let loaded_image = store.image().unwrap();
+    let mut loaded_from = identity(&loaded_image);
+    loaded_from.position = store.position().unwrap();
+    let next = Common {
+        run_id: "next-run".into(),
+        ..common()
+    };
+    let mut reloaded = ServingSqlite::adopt(
+        &loaded_image,
+        &next,
+        &request.schema_id,
+        &request.scheme_id,
+        &loaded_from,
+        limits(),
+    )
+    .unwrap();
+    let mut terminal = pair_file(
+        3,
+        PairRecord::Ended(PairEnded {
+            call_id: started.call_id,
+            execution: None,
+            fate: TerminalPairFate::Failed,
+            reason: Some(PairFailure::AbandonedAtLoad {}),
+            outcome: None,
+            loaded_from: Some(loaded_from),
+        }),
+        "loop",
+    );
+    terminal.scheme_id = request.scheme_id.clone();
+    terminal.block_id.run = next.run_id.clone();
+    terminal.source.run = next.run_id.clone();
+    terminal.source.turn = None;
+    reloaded.file_pair(&terminal).unwrap();
+    let captured = reloaded.image().unwrap();
+    let mut start = identity(&captured);
+    start.position = reloaded.position().unwrap();
+    let restored = ServingSqlite::adopt(
+        &captured,
+        &next,
+        &request.schema_id,
+        &request.scheme_id,
+        &start,
+        limits(),
+    )
+    .unwrap();
+    assert!(matches!(
+        restored.query(&ReadSelector::OpenPairs {}).unwrap(),
+        QueryResult::OpenPairs { pairs } if pairs.is_empty()
+    ));
+
+    // Forge only the repair event's run. Its CallId now names the same run,
+    // while the indexed source, raw envelope, hash and frontier remain aligned.
+    let db = connection(&captured);
+    assert_eq!(
+        db.execute(
+            "UPDATE content_block SET run='run', envelope=json_set(envelope,'$.run','run')
+             WHERE id=(SELECT terminal_event FROM tool_pair)",
+            [],
+        )
+        .unwrap(),
+        1
+    );
+    let corrupted = bounded_image(&db, crate::save_point::SAVE_POINT_BOUND).unwrap();
+    start.dump_sha256 = sha256(&corrupted);
+    start.position.as_mut().unwrap().block_id.run = "run".into();
+    let error = ServingSqlite::adopt(
+        &corrupted,
+        &next,
+        &request.schema_id,
+        &request.scheme_id,
+        &start,
+        limits(),
+    )
+    .err()
+    .expect("same-run abandonment must not enter through a saved image");
+    assert_eq!(error.code, StateRefusalCode::OpenFailed);
+    assert!(error.detail.contains("abandoned pair"), "{error}");
+}
+
+#[test]
 fn pair_image_roundtrip_keeps_whole_result_and_rejects_index_divergence() {
     use super::super::filing::tests::{opening, pair_file, statement};
     use weaver_types::state_flow::*;
