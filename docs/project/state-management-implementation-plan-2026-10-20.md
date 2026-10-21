@@ -210,8 +210,8 @@ offset validator is also not wired into production measurement. Its unit tests
 cannot establish the section 6 tokenizer-offset requirement. These remain explicit
 work for the SPU slice, not evidence supplied by its binding mechanics.
 
-H1a is the local slice on code/state-harness-filing. Its branch joins #188 and
-#187, so both must merge before this slice. It adds the sole nonblocking state
+H1a is [draft PR #198][filing], on code/state-harness-filing. Its branch joins
+#188 and #187, so both must merge before this slice. It adds the sole nonblocking state
 channel, whole-copy retention accounting, a guarded STE100 near side and trace
 completion proofs. These are components for the replacement recording context.
 They do not install a parallel writer on the legacy serving path. No measured
@@ -281,3 +281,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [offline-controls]: https://github.com/toddwbucy/WeaverAgent/pull/196
 
 [placement]: https://github.com/toddwbucy/WeaverAgent/pull/197
+[filing]: https://github.com/toddwbucy/WeaverAgent/pull/198
