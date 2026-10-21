@@ -1,11 +1,12 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for the consolidated stack and external pair execution.
+Updated: 2026-10-21 for the paired decode protocol and owned measurements.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
-The operator merges them.
+The operator merges them. Records held only by the separate harness stack are
+linked at its exact commit until the branches join.
 The store remains in weaver-state. The loop remains in worker/dev_loop and calls
 primitives. The SPU owns classification.
 
@@ -27,10 +28,14 @@ landing map and takes precedence over historical branch descriptions below.
 | #213 | Independent empty-correction amendment, approval owed. |
 | #215 | Typed causes and contained terminal delivery, stacked on #198. Held for the coordinated foundation cutover. |
 | #216 | External pair execution and committed result custody, stacked on #215. Review and fold into #215 before that parent folds into #198. Same cutover hold. |
+| #217 | Complete bounded paged reads, stacked on #216. Review and fold into #216 before that parent folds into #215. Recall and placement provenance remain owed. |
+| #218 | Paired decode wire and SPU measurement, based on #184. Held for the coupled cutover. The owned-measurement branch joins this exact change with #217. |
 
-The current harness stack is #198, then #215, then #216. New dependent work
-starts from code/state-pair-execution, the head of #216. Closed child branches
-are no longer landing targets. Normal merge commits preserve the
+The current harness stack is #198, then #215, #216 and #217. The new
+code/state-measure-owner branch starts from #217 and merges #218 as its second
+prerequisite. Hold the paired wire with the coupled cutover. Do not fold it into
+an additive root being landed early. Closed child branches are no longer landing
+targets. Normal merge commits preserve the
 consolidated ancestry. Only the operator merges. A root's old slice-level results
 are not fresh validation of its combined head.
 
@@ -71,14 +76,18 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H1q | H1o | Per-generation source receipt leases and original request association, Specs 02 and 05 |
 | H2a | H1q | Committed opening and terminal accounting for undispatched requests, Spec 05 |
 | H1m | H2a, H1t | Passive model repair, recorded restatement instructions and corrected request custody, Specs 02 and 05 |
-| H1b2 | H1b1, H1i, H1s, H1t, H1f, H1o, H1q, H2a, H1m, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
+| H1d | H1c, F4 | Complete bounded paged read acquisition and structural result checks, HARNESS-READ and STATE-PAGES |
+| H1b2 | H1b1, H1i, H1s, H1t, H1f, H1o, H1q, H2a, H1m, H1d, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
 | H2g | H1m | Typed gate interrupt, containment and terminal delivery, gate amendment |
 | H2e | H1m, H2g | External dispatch, exact gate evidence and terminal commit custody, Spec 05 |
 | H2 | H1b2, H2e, IN1 | Inward calls, boot repair, lifecycle composition and returned coverage, Spec 05 |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
-| H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
+| H3b1 | F1, H3a | Paired decode measurement wire and retiring callers, TYPES-DECODE and SPU amendment |
+| H3bm | H1d, H3b1 | Reserved measurement exchange, exact proposal/count custody and existing waits, HARNESS-PLACE |
+| H3b | H1b2, H3bm | Marks, journal, recorded placement and engine grants, Spec 06 |
 | H4 | H2, H3b | Plan operations and review evidence, Spec 07 and admin amendment |
-| H5 | H3b, H4 | Sort, selection and injection ports, Spec 08 |
+| H5o | H1m, H1f | SUBJECTS, outbound identity sort and recorded-use adapter, Spec 08 |
+| H5 | H3b, H4, H5o | Serve-side selection and injection ports, Spec 08 |
 | Q1 | All above | Serving qualification and coupled cutover, foundation transition |
 
 Spec 09's required evidence producers travel with the primitive that produces each
@@ -352,9 +361,10 @@ three session bounds, two preparation failures and four the real GGUF measuremen
 and append path. Exact source bytes are restored and the corresponding clean
 baselines pass. Independent source review has no open finding.
 This completes the internal SPU primitive, not its replacement socket protocol.
-H3b must change the paired floor, harness and diagnostic consumers together. It also
-owns marks and the harness's between-turn grant. The existing serving wire and loop
-remain active until the coupled cutover.
+H3b1 changes the paired floor, SPU and retiring harness/diagnostic callers together.
+H3b retains marks, measured proposal ownership and the between-turn grant. The
+existing serving loop remains active until the coupled cutover. The replacement
+decode vocabulary must not deploy separately from its complete consumers.
 
 H3b has a named open-measurement gap. Spec 06 OPEN-FACTS requires an identity-prefix
 label at open, while TYPES-DECODE specifies only four counts in Opened and leaves
@@ -456,6 +466,60 @@ merges consolidate review branches. Landing the replacement on main still
 waits for the coordinated cutover. Neither child independently changes main's
 serving contract.
 
+H1d is [draft PR #217][paged-read] on code/state-paged-read, based on #216 at
+8f5aa872. Its [implementation record][paged-read-record] covers bounded page
+assembly, exact selector/result checks, recorded operation custody and one
+snapshot release. The restored harness suite passes 1,055 tests with 18 ignored
+instruments. The new real-member fixture was also run explicitly and passed.
+Thirteen compiled protective mutations fail their named tests, with exact
+restoration verified. Lint, formatting, lock and diff checks pass. This is a
+local author assessment, not a Planner grade.
+
+The result grants no recall or placement authority. Draft #189 must settle the
+recall carrier before public recall, held-material and boot adapters complete.
+The next placement work should reuse #197's internal SPU measurement primitive,
+close the paired decode wire, then build the journal against read/material
+proofs. The OPEN-FACTS carrier gap above remains open. Outbound identity sort
+and noun extraction can proceed independently of serve-side selection and plan
+orchestration. No production language artifact is inferred from these fixtures.
+
+H3b1 is draft #218 on code/state-decode-measurement, based on #184 at 6d5e6b0d.
+It carries the exact required Opened body, MeasureDelta and DeltaMeasured on the
+existing segmented socket. Append takes explicit ordered schema strings through
+SPU-owned rendering. Retiring harness callers send an empty schema list, preserving
+their model input, and structurally consume the required Opened body. They do not
+validate placement budgets or acquire a measured proposal. The implementation and
+validation scope are in the [paired decode record][decode-record].
+
+Review #218 against #184. Its exact producer/consumer change joins the harness
+descendant of #217 at 32a57b57. The [owned measurement record][measure-owner-record]
+tracks that consumer. Cached boot facts, budgets and recorded placement remain owed.
+The wire is not independently deployable. External diagnostic consumers must migrate
+the same vocabulary before the coupled cutover.
+
+H3bm is [PR #219][measure-owner] on code/state-measure-owner, joining #217 at
+bdfa3a76 with #218 at 8b387eff.
+Its reserved decode exchange retains exact proposals and raw replies, checks the
+counts and revision, and keeps the enclosing Decision or Cut wait. Cancellation
+drains the exchange. Protocol failure latches before its owed trace-only refusal
+reports. It returns count evidence, not a PlacementGrant. The engine still owes
+idle-state certification for prior nonmeasurement exchanges.
+
+The restored combined harness/types suites pass 1,228 tests, with 18 inherited
+ignored instruments. Types with config passes 182 tests. Fifteen compiled protective
+mutations fail their named tests. Both changed-crate lint gates, formatting and lock
+checks pass. The [owned measurement record][measure-owner-record] holds the scope,
+test list and evidence limits. Review it against #217 with #218 as a required second
+prerequisite. Keep this union in the held harness stack until coupled cutover.
+
+H5o is [draft PR #220][outbound-sort] on code/state-outbound-sort, based on #219
+at 7da5366c. The
+[outbound implementation record][outbound-record] names its pure noun extraction,
+checked act identities, certified template family and exclusive recording adapter.
+It retains the effective emission through trace pressure and returns no sorted
+result after cancellation or runtime template rejection. It opens no pair and
+elects no workflow. Serve-side selection and its read/place dependencies remain H5.
+
 The later rows remain owed.
 This is a progress record, not a claim that the full goal or any serving cutover is
 complete. Each draft carries its own fresh test and perturbation evidence.
@@ -484,6 +548,10 @@ tests prove mechanics and refusal paths. They do not certify production language
 quality, decoder capacity, throughput or absence of paging waits.
 
 [set]: ../crates/state-management/README.md
+[measure-owner]: https://github.com/toddwbucy/WeaverAgent/pull/219
+[outbound-sort]: https://github.com/toddwbucy/WeaverAgent/pull/220
+[outbound-record]: state-management-outbound-sort-2026-10-21.md
+[measure-owner-record]: state-management-measure-owner-2026-10-21.md
 [catalog]: https://github.com/toddwbucy/WeaverAgent/pull/183
 [floor]: https://github.com/toddwbucy/WeaverAgent/pull/184
 [tap]: https://github.com/toddwbucy/WeaverAgent/pull/185
@@ -496,7 +564,7 @@ quality, decoder capacity, throughput or absence of paging waits.
 
 [snapshot]: https://github.com/toddwbucy/WeaverAgent/pull/192
 [ste100-transport]: https://github.com/toddwbucy/WeaverAgent/pull/200
-[ste100-transport-record]: state-management-ste100-transport-2026-10-21.md
+[ste100-transport-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-ste100-transport-2026-10-21.md
 
 [artifacts]: https://github.com/toddwbucy/WeaverAgent/pull/193
 
@@ -509,40 +577,45 @@ quality, decoder capacity, throughput or absence of paging waits.
 [placement]: https://github.com/toddwbucy/WeaverAgent/pull/197
 [filing]: https://github.com/toddwbucy/WeaverAgent/pull/198
 [filing-coordinator]: https://github.com/toddwbucy/WeaverAgent/pull/199
-[pump-transport-record]: state-management-pump-transports-2026-10-21.md
+[pump-transport-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-pump-transports-2026-10-21.md
 [pump-transports]: https://github.com/toddwbucy/WeaverAgent/pull/201
 
-[recording-support-record]: state-management-recording-support-2026-10-21.md
+[recording-support-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-recording-support-2026-10-21.md
 [recording-support]: https://github.com/toddwbucy/WeaverAgent/pull/202
-[run-context-record]: state-management-run-context-2026-10-21.md
+[run-context-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-run-context-2026-10-21.md
 [run-context]: https://github.com/toddwbucy/WeaverAgent/pull/203
-[input-transaction-record]: state-management-input-transaction-2026-10-21.md
-[capture-transaction-record]: state-management-capture-transaction-2026-10-21.md
+[input-transaction-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-input-transaction-2026-10-21.md
+[capture-transaction-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-capture-transaction-2026-10-21.md
 [capture-transaction]: https://github.com/toddwbucy/WeaverAgent/pull/205
 
 [input-transaction]: https://github.com/toddwbucy/WeaverAgent/pull/204
-[template-certification-record]: state-management-template-certification-2026-10-21.md
+[template-certification-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-template-certification-2026-10-21.md
 [template-certification]: https://github.com/toddwbucy/WeaverAgent/pull/206
-[filing-receipts-record]: state-management-filing-receipts-2026-10-21.md
+[filing-receipts-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-filing-receipts-2026-10-21.md
 [filing-receipts]: https://github.com/toddwbucy/WeaverAgent/pull/207
-[output-checks-record]: state-management-output-checks-2026-10-21.md
+[output-checks-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-output-checks-2026-10-21.md
 [output-checks]: https://github.com/toddwbucy/WeaverAgent/pull/208
 
-[request-accounting-record]: state-management-request-accounting-2026-10-21.md
+[request-accounting-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-request-accounting-2026-10-21.md
 [request-accounting]: https://github.com/toddwbucy/WeaverAgent/pull/209
 
-[pair-accounting-record]: state-management-pair-accounting-2026-10-21.md
+[pair-accounting-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-pair-accounting-2026-10-21.md
 [pair-accounting]: https://github.com/toddwbucy/WeaverAgent/pull/210
 
 [empty-correction]: https://github.com/toddwbucy/WeaverAgent/pull/213
 
-[repair-record]: state-management-repair-2026-10-21.md
+[repair-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-repair-2026-10-21.md
 
 [repair]: https://github.com/toddwbucy/WeaverAgent/pull/214
 
-[gate-interrupt-record]: state-management-gate-interrupt-2026-10-21.md
+[gate-interrupt-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-gate-interrupt-2026-10-21.md
 
 [gate-interrupt]: https://github.com/toddwbucy/WeaverAgent/pull/215
 
 [pair-execution]: https://github.com/toddwbucy/WeaverAgent/pull/216
-[pair-execution-record]: state-management-pair-execution-2026-10-21.md
+[pair-execution-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-pair-execution-2026-10-21.md
+
+[paged-read]: https://github.com/toddwbucy/WeaverAgent/pull/217
+[paged-read-record]: https://github.com/toddwbucy/WeaverAgent/blob/bdfa3a7685aee0b3172e1b2b5e22ff016d4967c5/docs/project/state-management-paged-read-2026-10-21.md
+
+[decode-record]: state-management-decode-measurement-2026-10-21.md

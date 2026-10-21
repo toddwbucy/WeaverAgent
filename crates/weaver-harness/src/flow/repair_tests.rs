@@ -16,6 +16,9 @@ use weaver_types::state_flow::{
 
 static RESTATEMENT: RestatementTemplate = RestatementTemplate::new("repair-test-restate");
 
+#[path = "sort_tests.rs"]
+mod sort_tests;
+
 const _: fn() = || {
     trait NotClone<M> {
         fn check() {}

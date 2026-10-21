@@ -6,10 +6,9 @@ license.workspace = true
 publish.workspace = true
 description = "The organ that holds the model: residency, the decode submodule, and the family libraries"
 
-# One binary, forked and exec'd by the harness during the enter fan-out, per
-# weaver-spu-Spec section 1. Nothing links this crate: the seam is a socket,
-# not a link, which is what `spu-one-binary` reads as a manifest fact and what
-# the manifest test checks - exactly one [[bin]] target.
+# The decoder and label duties have separate binaries, forked and exec'd by
+# the harness. Nothing links this crate: each process seam is a socket.
+# The STE100 protocol mechanics below do not activate its later executable.
 #
 # The lib target beside it is not an API for a consumer. It exists because four
 # of this Spec's named instruments are doctests (the shard-width set, the
@@ -104,6 +103,9 @@ half = { version = "2", features = ["num-traits"] }
 bytemuck = "1"
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 blake3 = "1"
+# STE100 scheme, grammar and model identities use SHA-256 under Spec 02.
+# The existing weight-container BLAKE3 identity keeps its separate meaning.
+sha2 = "0.10"
 walkdir = "2"
 
 # The two fork pins, the load-bearing dependencies of the whole crate. Both are

@@ -197,6 +197,7 @@ fn the_token_directive_round_trips_through_bytes() {
     let directive = weaver_types::TokenDirective::AppendAndGenerate {
         turn: weaver_types::TurnKey("t-7".into()),
         delta: vec![],
+        tool_schemas: vec![],
     };
     let bytes = serde_json::to_string(&directive).expect("serializes");
     assert!(

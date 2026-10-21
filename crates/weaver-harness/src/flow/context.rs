@@ -53,6 +53,8 @@ pub(super) enum RunFailure {
     PairOwned,
     /// A repair transaction retains this author or pair account.
     RepairOwned,
+    /// A measurement owns the decode exchange or its exact pending author.
+    MeasureOwned,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -105,6 +107,8 @@ pub(crate) struct RecordingContext {
     input_turn: Option<input_driver::InputTurn>,
     input_turns: std::collections::BTreeSet<String>,
     member_capture: Option<capture_driver::MemberCapture>,
+    read: Option<read_driver::ReadTransaction>,
+    measure: Option<measure_driver::MeasureTransaction>,
     filing: Option<receipt_driver::FilingTransaction>,
     output: Option<output_driver::OutputTransaction>,
     pairs: pairs::PairLedger,
@@ -199,6 +203,8 @@ impl RecordingContext {
             input_turn: None,
             input_turns: std::collections::BTreeSet::new(),
             member_capture: None,
+            read: None,
+            measure: None,
             filing: None,
             output: None,
             pairs,
@@ -380,7 +386,7 @@ impl RecordingContext {
         self.live(io)?;
         // A template result belongs to its ordered transcript, never a second
         // operation consumer. Correct rejection keeps that boundary closed.
-        if self.templates_block_content() || self.output.is_some() {
+        if self.templates_block_content() || self.output.is_some() || self.read.is_some() {
             return Ok(None);
         }
         let result = self.flow.take_operation_completion(&mut FlowRecording {
@@ -446,6 +452,8 @@ impl RecordingContext {
             || self.output_wait_still_owned(key)
             || self.pair_wait_still_owned(key)
             || self.repair_wait_still_owned(key)
+            || self.read_wait_still_owned(key)
+            || self.measure_wait_still_owned(key)
             || (key == PumpDeadline::Enter
                 && self.phase == RecordingPhase::Entered
                 && self
@@ -471,6 +479,8 @@ impl RecordingContext {
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.member_capture.is_some()
+            || self.read.is_some()
+            || self.measure.is_some()
             || self.open_turn.is_some()
         {
             return Err(self.fail(
@@ -639,6 +649,10 @@ impl RecordingContext {
             self.retain_refused(event);
             return Err(RunFailure::RepairOwned);
         }
+        if self.measure_blocks_external() {
+            self.retain_refused(event);
+            return Err(RunFailure::MeasureOwned);
+        }
         if self.filing.is_some()
             || self.output.is_some()
             || self.pair_work.is_some()
@@ -779,6 +793,9 @@ impl RecordingContext {
         self.live(ports.io)?;
         if self.repair_blocks_external() {
             return Err(RunFailure::RepairOwned);
+        }
+        if self.measure_blocks_external() {
+            return Err(RunFailure::MeasureOwned);
         }
         if self.filing.is_some()
             || self.output.is_some()
@@ -987,6 +1004,9 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<PumpStep, RunFailure> {
+        if let Some(decode) = ports.decode.as_deref() {
+            self.check_measure_port(decode)?;
+        }
         self.live(ports.io)?;
         if self.phase == RecordingPhase::Preflight
             && (ports.gate.is_some()
@@ -1026,7 +1046,14 @@ impl RecordingContext {
             Ok(PumpStep::Deadline { key, bound }) => Err(self.expired(ports.io, key, bound)),
             Ok(step) => Ok(step),
             Err(PumpFailure::Transport { source, failure }) => {
-                Err(RunFailure::Transport { source, failure })
+                if source == PumpSource::Decode && self.measure.is_some() {
+                    if let Some(decode) = ports.decode.as_deref_mut() {
+                        self.retain_measure_transport_evidence(decode);
+                    }
+                    Err(self.measure_fault(ports.io, format!("decode transport: {failure:?}")))
+                } else {
+                    Err(RunFailure::Transport { source, failure })
+                }
             }
             Err(error) => {
                 if self.flow.failure().is_some() {
@@ -1065,6 +1092,7 @@ impl RecordingContext {
         let advance = result.map_err(|failure| self.flow_failed(io, failure))?;
         self.settle_recorded_input(io)?;
         self.settle_recorded_capture(io)?;
+        self.settle_recorded_read(io)?;
         self.live(io)?;
         Ok(advance)
     }
@@ -1292,6 +1320,12 @@ impl RecordingContext {
         self.input.halt();
         self.pairs.freeze();
         self.freeze_repair();
+        if let Some(read) = &mut self.read {
+            read.freeze();
+        }
+        if let Some(measure) = &mut self.measure {
+            measure.freeze();
+        }
         self.phase = RecordingPhase::Failed;
         self.failure = Some(failure.clone());
         self.barrier.stop_for_flow_failure();
@@ -1316,6 +1350,17 @@ impl RecordingContext {
                 author: &self.author,
             },
         );
+        if self.read.is_some()
+            && let Err(error) = self.flow.close_failed_read()
+            && let Some(halt) = self.flow.halt_mut()
+        {
+            let _ = halt.append_secondary(SecondaryFailure {
+                reason: FlowHaltReason::CarryFailed,
+                point: HaltPoint::Teardown,
+                detail: format!("close failed read: {error}"),
+                observed_ns: io.now().ok().map(Into::into),
+            });
+        }
         failure
     }
 }
@@ -1378,10 +1423,15 @@ mod template_tests;
 
 #[path = "context_receipts.rs"]
 mod receipt_driver;
+
+#[path = "context_sort.rs"]
+mod sort_driver;
 #[allow(unused_imports)] // Dormant filing consumer, consumed by dependent primitive ports.
 pub(super) use receipt_driver::{
     FilingBeginError, FilingBeginRefusal, FilingCancellation, FilingCompletion, FilingProgress,
 };
+#[allow(unused_imports)] // The worker consumes the held outbound port at cutover.
+pub(in crate::flow) use sort_driver::{OutboundBeginError, OutboundCompletion, OutboundProgress};
 
 #[cfg(test)]
 #[path = "context_receipt_tests.rs"]
@@ -1440,3 +1490,24 @@ pub(super) use repair_driver::{
 #[cfg(test)]
 #[path = "context_repair_tests.rs"]
 mod repair_tests;
+
+#[path = "context_read.rs"]
+mod read_driver;
+#[allow(unused_imports)] // Composed by dependent boot, recall and placement primitives.
+pub(super) use read_driver::{ReadBeginError, ReadBeginRefusal, ReadProgress};
+
+#[cfg(test)]
+#[path = "context_read_tests.rs"]
+mod read_tests;
+
+#[path = "context_measure.rs"]
+mod measure_driver;
+#[allow(unused_imports)] // The later place owner consumes these count-only proofs.
+pub(super) use measure_driver::{
+    CancelledMeasure, MeasureBeginError, MeasureBeginRefusal, MeasureCompletion, MeasureFacts,
+    MeasurePosition, MeasureProgress, MeasureRequest, MeasuredProposal, RefusedMeasure,
+};
+
+#[cfg(test)]
+#[path = "context_measure_tests.rs"]
+mod measure_tests;
