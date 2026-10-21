@@ -6,6 +6,7 @@ use super::*;
 use crate::flow::author::AuthoredSource;
 use crate::flow::coordinator::{CheckedGeneration, OutputCancellation, OutputOriginal};
 use weaver_traits::{ContentBlock, Role};
+use weaver_types::state_flow as s;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::flow) enum OutputBeginRefusal {
@@ -172,41 +173,60 @@ impl RecordingContext {
     }
 
     pub(super) fn output_wait_still_owned(&self, key: PumpDeadline) -> bool {
-        if key != PumpDeadline::Decision {
+        key == PumpDeadline::Decision
+            && self.output.is_some()
+            && !self.output_disposition_recorded()
+    }
+
+    /// The enclosing wait may end at the final Recorded result even while its
+    /// terminal-status probe yields. This is timing evidence only: the original
+    /// classifier owner must still release every check before any grant exists.
+    fn output_disposition_recorded(&self) -> bool {
+        let Some(owner) = &self.output else {
+            return false;
+        };
+        if !owner.author_done {
             return false;
         }
-        self.output.as_ref().is_some_and(|owner| {
-            if !owner.author_done {
-                return true;
-            }
-            let Some(checks) = self.flow.output_checks() else {
-                return true;
-            };
-            if owner.cancelled {
-                !checks.is_settled()
-            } else {
-                !checks.is_complete()
-                    || checks
-                        .recorded_ns()
-                        .is_none_or(|at| owner.bound.expired(at))
-            }
-        })
+        let Some(checks) = self.flow.output_checks() else {
+            return false;
+        };
+        if owner.cancelled && checks.is_settled() {
+            return true;
+        }
+        if checks
+            .recorded_ns()
+            .is_some_and(|at| !owner.bound.expired(at))
+        {
+            return true;
+        }
+        let Some((request, reply, recorded_ns)) = self.flow.pending_classifier_recorded_request()
+        else {
+            return false;
+        };
+        if owner.bound.expired(recorded_ns)
+            || self.flow.failure().is_some()
+            || matches!(reply.result, s::Ste100Result::ComponentFailed { .. })
+            || !checks.observes(request)
+        {
+            return false;
+        }
+        if owner.cancelled {
+            // Cancellation still drains an issued unselected check. Unissued
+            // checks are cancelled; selected filing remains independently owed.
+            return checks.owns_unselected(request);
+        }
+        let s::Ste100Target::Source(source) = &request.target else {
+            return false;
+        };
+        let mut pending = checks.pending();
+        pending.next().as_ref() == Some(source) && pending.next().is_none()
     }
 
     fn output_wait_matches(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         let owner = self.output.as_ref().ok_or(RunFailure::Closed)?;
         let current = self.deadlines.get(PumpDeadline::Decision);
-        let settled = owner.author_done
-            && self.flow.output_checks().is_some_and(|checks| {
-                if owner.cancelled {
-                    checks.is_settled()
-                } else {
-                    checks.is_complete()
-                        && checks
-                            .recorded_ns()
-                            .is_some_and(|at| !owner.bound.expired(at))
-                }
-            });
+        let settled = self.output_disposition_recorded();
         if current != Some(owner.bound) && !(current.is_none() && settled) {
             return Err(self.fail(
                 io,

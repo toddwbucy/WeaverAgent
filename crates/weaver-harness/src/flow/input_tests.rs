@@ -225,7 +225,10 @@ fn recorded_grant(operation: &CheckOperation) -> (Ste100Reply, AcceptedReuse) {
     else {
         panic!("classifier result must record: {progress:?}")
     };
-    let grant = classifier.recorded_input(proof, *offered_sequence).unwrap();
+    let grant = classifier
+        .recorded_input(proof, *offered_sequence)
+        .unwrap()
+        .unwrap();
     drop(barrier);
     let bytes = drain.join().unwrap();
     let lines: Vec<serde_json::Value> = std::str::from_utf8(&bytes)

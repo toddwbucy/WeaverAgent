@@ -592,7 +592,7 @@ fn classifier_completion_waits_for_real_capacity_then_releases_exactly_once() {
         }
     };
     assert_eq!(classifier.state(), ClassifierState::ResultHeld);
-    assert_eq!(classifier.recorded(proof).unwrap(), expected);
+    assert_eq!(classifier.recorded(proof).unwrap(), Some(expected));
     assert_eq!(classifier.state(), ClassifierState::Idle);
     assert!(classifier.held().is_none());
     assert!(matches!(

@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::flow::author::AuthoredSource;
-use crate::flow::coordinator::OperationStart;
+use crate::flow::coordinator::{CheckOperation, OperationStart};
 use crate::flow::input::{AcceptedInput, ConsumedInput, InputState};
 use weaver_trace::{Subsystem, TurnRef};
 use weaver_traits::Message;
@@ -272,6 +272,32 @@ impl RecordingContext {
             self.flow.operation_completion(),
             Some(OperationCompletion::Input { .. })
         ) {
+            // A completed trace admission can precede release when the final
+            // terminal-status probe is interrupted. Preserve that boundary
+            // without minting an input capability or retiring the exchange.
+            if let Some((CheckOperation::Input { input_id, .. }, reply, recorded_ns)) =
+                self.flow.pending_classifier_recorded()
+            {
+                let Some(input) = self.input.snapshot() else {
+                    return Err(self.input_fault(io, "pending input proof has no owner"));
+                };
+                if input.input_id != *input_id {
+                    return Err(self.input_fault(io, "pending input proof has another owner"));
+                }
+                if input.bound.expired(recorded_ns) {
+                    return Err(self.expired(io, PumpDeadline::Gate, input.bound));
+                }
+                // Rejection still owes its refusal record. A cancelled check
+                // ends at its result record regardless of the verdict.
+                if input.cancelled
+                    || matches!(
+                        reply.result,
+                        weaver_types::state_flow::Ste100Result::Accepted { .. }
+                    )
+                {
+                    self.deadlines.disarm(PumpDeadline::Gate);
+                }
+            }
             return Ok(false);
         }
         let recorded_ns = match self.flow.operation_completion() {
@@ -333,7 +359,9 @@ impl RecordingContext {
         io: &mut impl PumpIo,
         completed_ns: Option<u64>,
     ) -> Result<(), RunFailure> {
-        if self.input.gate_may_disarm() && self.deadlines.get(PumpDeadline::Gate).is_some() {
+        if self.input.gate_may_disarm()
+            && (self.deadlines.get(PumpDeadline::Gate).is_some() || completed_ns.is_some())
+        {
             let id = self.input.snapshot().expect("active disposition").input_id;
             self.flow
                 .input_finished_at(
@@ -369,6 +397,7 @@ impl RecordingContext {
         self.input
             .cancel()
             .map_err(|error| self.input_fault(io, error.to_string()))?;
+        self.settle_recorded_input(io)?;
         self.finish_input_wait(io, None)
     }
 

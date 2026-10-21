@@ -12,6 +12,8 @@ use super::super::ste100_socket::AdmissionPoll;
 use super::tests::{Fixture, config};
 use super::*;
 
+#[path = "context_classifier_release_tests.rs"]
+mod classifier_release;
 #[path = "context_observation_tests.rs"]
 mod observation_ticks;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};

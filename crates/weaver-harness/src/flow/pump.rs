@@ -558,7 +558,12 @@ impl CommonPump {
         // refusal or component-failure reply before that close.
         let mut ready = readiness_hints(ports, coordinator.as_deref(), cx)?;
         for source in LIFECYCLE.into_iter().chain(ROTATING) {
-            if local_work(source, ports, coordinator.as_deref()) {
+            if local_work(
+                source,
+                ports,
+                coordinator.as_deref(),
+                cx.barrier.pending().is_none(),
+            ) {
                 ready[source as usize] |= PollFlags::POLLIN | PollFlags::POLLOUT;
             }
         }
@@ -812,6 +817,7 @@ fn local_work<I: PumpIo>(
     source: PumpSource,
     ports: &PumpPorts<'_, I>,
     coordinator: Option<&FlowCoordinator<SocketPort>>,
+    release_ready: bool,
 ) -> bool {
     match source {
         PumpSource::Listener => {
@@ -849,7 +855,7 @@ fn local_work<I: PumpIo>(
             owner.admission_needs_progress()
                 || owner
                     .standing_classifier()
-                    .is_some_and(|port| port.needs_progress())
+                    .is_some_and(|port| port.needs_progress(release_ready))
                 || owner.starting_classifier().is_some_and(|port| {
                     port.needs_progress()
                         && !owner.admission_refused()

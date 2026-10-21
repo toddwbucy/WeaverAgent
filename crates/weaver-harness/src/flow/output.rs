@@ -285,7 +285,7 @@ impl OutputChecks {
         Ok(())
     }
 
-    pub(super) fn observes(&self, request: &Ste100Request) -> bool {
+    pub(in crate::flow) fn observes(&self, request: &Ste100Request) -> bool {
         let Ste100Target::Source(source) = &request.target else {
             return false;
         };
@@ -294,7 +294,7 @@ impl OutputChecks {
         })
     }
 
-    pub(super) fn owns_unselected(&self, request: &Ste100Request) -> bool {
+    pub(in crate::flow) fn owns_unselected(&self, request: &Ste100Request) -> bool {
         self.in_flight.as_ref() == Some(request)
     }
 

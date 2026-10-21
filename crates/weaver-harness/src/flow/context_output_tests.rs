@@ -636,6 +636,176 @@ fn timely_recorded_checks_can_be_taken_after_the_borrowed_wait_is_retired() {
     assert!(fx.input.run.context.failure().is_none());
 }
 
+fn defer_recorded_output_result(fx: &mut OutputFixture, reply: &s::Ste100Reply) {
+    fx.input.reply(reply);
+    fx.input
+        .run
+        .context
+        .flow
+        .interrupt_classifier_terminal_probes_for_test(1);
+    for _ in 0..128 {
+        let progress = fx.advance().unwrap();
+        if fx
+            .input
+            .run
+            .context
+            .flow
+            .pending_classifier_recorded_request()
+            .is_some()
+        {
+            assert_eq!(progress, OutputProgress::Pending);
+            assert!(
+                fx.input
+                    .run
+                    .context
+                    .take_output(&mut fx.input.run.clock)
+                    .unwrap()
+                    .is_none(),
+                "an interrupted terminal probe cannot release a generation"
+            );
+            return;
+        }
+    }
+    panic!("output result did not reach its interrupted release");
+}
+
+#[test]
+fn interrupted_final_output_release_preserves_the_recorded_decision_boundary() {
+    for reject in [false, true] {
+        let mut fx = OutputFixture::new();
+        fx.begin(original(vec![text("Read delayed.")]));
+        let request = fx.request();
+        let expected = reply(&request, reject);
+        fx.input.run.clock.advance_to(200).unwrap();
+        defer_recorded_output_result(&mut fx, &expected);
+        assert_eq!(fx.input.records(Kind::Ste100Result).len(), 1);
+        assert_eq!(
+            fx.input.run.context.flow.classifier().outstanding(),
+            Some(&request)
+        );
+        assert_eq!(
+            fx.input.run.context.flow.classifier().held(),
+            Some(&expected)
+        );
+        assert_eq!(
+            fx.input.run.context.complete_wait(PumpDeadline::Decision),
+            Some(fx.bound)
+        );
+        fx.input
+            .run
+            .clock
+            .advance_to(fx.bound.deadline_ns() + 1)
+            .unwrap();
+        assert_eq!(fx.advance().unwrap(), OutputProgress::Complete);
+        let checked = fx
+            .input
+            .run
+            .context
+            .take_output(&mut fx.input.run.clock)
+            .unwrap()
+            .unwrap();
+        assert_eq!(checked.recorded_ns(), 200);
+        assert_eq!(checked.blocks()[0].recorded_ns(), 200);
+        assert_eq!(checked.blocks()[0].request(), &request);
+        assert_eq!(checked.blocks()[0].reply(), &expected);
+        assert_eq!(
+            checked.blocks()[0].result_source().turn.as_deref(),
+            Some("output-turn")
+        );
+        assert!(checked.blocks()[0].selected());
+        assert_eq!(fx.input.records(Kind::Ste100Result).len(), 1);
+        assert_eq!(fx.requests.len(), 1);
+        assert!(fx.input.run.context.failure().is_none());
+    }
+}
+
+#[test]
+fn interrupted_nonfinal_output_release_keeps_the_original_decision_bound() {
+    let mut fx = OutputFixture::new();
+    fx.begin(original(vec![text("Read first."), text("Read later.")]));
+    let first = fx.request();
+    fx.input
+        .run
+        .clock
+        .advance_to(fx.bound.deadline_ns() - 1)
+        .unwrap();
+    defer_recorded_output_result(&mut fx, &reply(&first, false));
+    assert!(
+        fx.input
+            .run
+            .context
+            .complete_wait(PumpDeadline::Decision)
+            .is_none()
+    );
+    assert_eq!(
+        fx.input.run.context.deadlines.get(PumpDeadline::Decision),
+        Some(fx.bound)
+    );
+    fx.input
+        .run
+        .clock
+        .advance_to(fx.bound.deadline_ns())
+        .unwrap();
+    assert!(matches!(
+        fx.advance(),
+        Err(RunFailure::Flow {
+            reason: FlowHaltReason::DecisionBound,
+            ..
+        })
+    ));
+    assert_eq!(fx.input.records(Kind::Ste100Result).len(), 1);
+    assert_eq!(fx.requests.len(), 1);
+    assert_eq!(
+        fx.input.run.context.flow.classifier().outstanding(),
+        Some(&first)
+    );
+    assert!(
+        fx.input
+            .run
+            .context
+            .take_output(&mut fx.input.run.clock)
+            .is_err()
+    );
+}
+
+#[test]
+fn terminal_loss_after_recorded_output_wait_retirement_cannot_release_a_generation() {
+    use std::os::fd::AsRawFd;
+
+    let mut fx = OutputFixture::new();
+    fx.begin(original(vec![text("Read retained.")]));
+    let request = fx.request();
+    let expected = reply(&request, false);
+    defer_recorded_output_result(&mut fx, &expected);
+    fx.input
+        .run
+        .context
+        .complete_wait(PumpDeadline::Decision)
+        .unwrap();
+    nix::sys::socket::shutdown(
+        fx.input.peer.readiness().as_raw_fd(),
+        nix::sys::socket::Shutdown::Write,
+    )
+    .unwrap();
+    assert!(matches!(fx.advance(), Err(RunFailure::Flow { .. })));
+    assert_eq!(fx.input.records(Kind::Ste100Result).len(), 1);
+    assert_eq!(
+        fx.input.run.context.flow.classifier().outstanding(),
+        Some(&request)
+    );
+    assert_eq!(
+        fx.input.run.context.flow.classifier().held(),
+        Some(&expected)
+    );
+    assert!(
+        fx.input
+            .run
+            .context
+            .take_output(&mut fx.input.run.clock)
+            .is_err()
+    );
+}
+
 #[test]
 fn malformed_or_foreign_generation_is_returned_before_any_author_or_check() {
     for case in 0..3 {

@@ -788,7 +788,7 @@ fn interrupted_lifecycle_work_is_local_before_any_wait() {
     admin.interrupted = true;
     let mut ports = empty_ports(&mut io);
     ports.lifecycle.peer = Some(&mut admin);
-    assert!(local_work(PumpSource::Admin, &ports, None));
+    assert!(local_work(PumpSource::Admin, &ports, None, true));
     assert_eq!(
         ports
             .lifecycle
@@ -799,7 +799,7 @@ fn interrupted_lifecycle_work_is_local_before_any_wait() {
             .unwrap(),
         ReceiveProgress::Pending
     );
-    assert!(!local_work(PumpSource::Admin, &ports, None));
+    assert!(!local_work(PumpSource::Admin, &ports, None, true));
 }
 
 #[test]

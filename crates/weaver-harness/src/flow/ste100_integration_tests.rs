@@ -449,7 +449,7 @@ fn socket_acceptance_waits_for_trace_capacity_before_it_can_be_reused() {
         }
     };
     assert_eq!(classifier.state(), ClassifierState::ResultHeld);
-    let grant = classifier.recorded_input(proof, 1.into()).unwrap();
+    let grant = classifier.recorded_input(proof, 1.into()).unwrap().unwrap();
     assert_eq!(grant.reply(), &expected);
     assert_eq!(grant.request(), &request);
     assert_eq!(classifier.state(), ClassifierState::Idle);
@@ -503,7 +503,7 @@ fn complete_component_reply_survives_peer_exit_until_its_exact_trace_record() {
             panic!("terminal result requires its real trace record");
         };
         assert_eq!(classifier.state(), ClassifierState::ResultHeld);
-        assert_eq!(classifier.recorded(proof).unwrap(), expected);
+        assert_eq!(classifier.recorded(proof).unwrap(), Some(expected.clone()));
         assert_eq!(classifier.state(), ClassifierState::Failed);
         assert_eq!(
             classifier.failure().unwrap().kind,
