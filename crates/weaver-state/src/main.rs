@@ -22,6 +22,9 @@
 
 use std::io::Read;
 
+#[cfg(feature = "sqlite")]
+mod member;
+
 use weaver_state::save_point::{Room, SavePoint, schema_digest};
 use weaver_state::{
     Ask, Election, Restored, SavePointAnswer, Store, parse_ask, parse_distillate,
@@ -89,7 +92,20 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     }
-    member_entry(std::env::args().skip(1), FIRST_DOOR_FD, SAVE_POINT_FD)
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(feature = "sqlite")]
+    if let Some(result) = member::dispatch(&arguments, FIRST_DOOR_FD, SAVE_POINT_FD) {
+        return result;
+    }
+    #[cfg(not(feature = "sqlite"))]
+    if arguments
+        .first()
+        .is_some_and(|argument| argument.starts_with("--mode"))
+    {
+        eprintln!("weaver-state explicit modes require the sqlite feature");
+        return std::process::ExitCode::FAILURE;
+    }
+    member_entry(arguments.into_iter(), FIRST_DOOR_FD, SAVE_POINT_FD)
 }
 
 /// Marks the inherited run lock close-on-exec and never closes it: the member

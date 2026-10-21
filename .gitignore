@@ -29,3 +29,6 @@ docs/project/open-items.md
 # 2026-09-15, in which time nothing ever read it but the script that writes it.
 process/ingest/chunk-plan.json
 __pycache__/
+
+# Operator-supplied normative reference, identified by edition and hash in the plan.
+/docs/ASD-STE100_ISSUE9.pdf

@@ -225,6 +225,16 @@ pub struct Session<'a> {
     surprisal_elected: bool,
 }
 
+/// Checked, immutable placement facts from a serviceable open session.
+/// A proposed keep is a count, never a buffer handle or permission to cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlacementPosition {
+    pub resident: u64,
+    pub prefix_tokens: u64,
+    pub keep: u64,
+    pub capacity: u64,
+}
+
 impl<'a> Session<'a> {
     pub fn new(
         backend: Box<dyn Backend + 'a>,
@@ -279,6 +289,29 @@ impl<'a> Session<'a> {
 
     pub fn capacity(&self) -> usize {
         self.capacity
+    }
+
+    /// Read the actual session position for SPU-MEASURE without touching the
+    /// backend, sampler or readout. Clamp in u64 space, so a large wire count
+    /// cannot wrap through usize on a narrower host. Flush uses the same bounds.
+    /// Closed or poisoned sessions certify no resident state.
+    pub fn placement_position(&self, keep: u64) -> Result<PlacementPosition, DecodeFault> {
+        if !self.opened {
+            return Err(DecodeFault::NotOpen);
+        }
+        let count = |value: usize| {
+            u64::try_from(value).map_err(|_| DecodeFault::Engine {
+                detail: "session count does not fit the placement contract".into(),
+            })
+        };
+        let resident = count(self.resident.len())?;
+        let prefix_tokens = count(self.prefix_len)?;
+        Ok(PlacementPosition {
+            resident,
+            prefix_tokens,
+            keep: prefix_tokens.max(keep.min(resident)),
+            capacity: count(self.capacity)?,
+        })
     }
 
     /// Render the identity prefix resident, once, and record the length it

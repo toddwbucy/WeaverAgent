@@ -19,6 +19,11 @@ use std::path::Path;
 use sha2::Digest;
 use weaver_types::{LifecycleRefusal, SavePointReport};
 
+// The replacement artifact primitive is isolated until the coupled serving
+// cutover. The existing admin verbs above that boundary retain their protocol.
+#[allow(dead_code)]
+pub(crate) mod serving;
+
 /// The manifest's name in the territory's `save-points/`.
 pub const MANIFEST: &str = "save-points.manifest";
 /// The marker's name in the agent's config root.

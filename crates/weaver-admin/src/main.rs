@@ -43,7 +43,14 @@ mod conclusion;
 mod containment;
 mod inventory;
 mod log;
+// Complete replacement operations, inactive until FOUNDATION-TRANSITION cutover.
+#[allow(dead_code)]
+mod offline_state;
+mod random;
 mod save_points;
+// Complete replacement component, inactive until FOUNDATION-TRANSITION cutover.
+#[allow(dead_code)]
+mod seed;
 mod shell;
 mod sink;
 mod stack;
@@ -958,6 +965,15 @@ fn take_inventory_from(
     agent: &AgentName,
     source: &str,
 ) -> Result<inventory::Inventory, LifecycleRefusal> {
+    let boundary = inventory_boundary(config, agent)?;
+    inventory::take_inventory(agent, source, &boundary)
+}
+
+/// Host facts shared by legacy and replacement authoring inventory.
+fn inventory_boundary(
+    config: &ServiceConfig,
+    agent: &AgentName,
+) -> Result<inventory::Boundary, LifecycleRefusal> {
     let identity = inventory::identity_for(agent);
     // The home comes from the account database rather than from a constructed
     // path: an operator who placed the agent elsewhere would otherwise have
@@ -1020,7 +1036,7 @@ fn take_inventory_from(
             .flatten()
             .map(|group| group.gid.as_raw()),
     };
-    inventory::take_inventory(agent, source, &boundary)
+    Ok(boundary)
 }
 
 /// Every gid the worker may run under: the group the unit sets, the passwd
@@ -2114,6 +2130,19 @@ fn unloaded_by_ladder(config: &ServiceConfig) -> Result<LifecycleAnswer, Lifecyc
             diag!("weaver-admin: the agent's cgroup: {why}");
             Err(LifecycleRefusal::BoundaryUnverified)
         }
+    }
+}
+
+/// Offline operations require the ladder's complete Unloaded judgment even
+/// when their caller already holds the run lock. Surviving cgroup members can
+/// outlive the process that held that lock.
+fn require_unloaded(config: &ServiceConfig) -> Result<(), LifecycleRefusal> {
+    match unloaded_by_ladder(config)? {
+        LifecycleAnswer::State {
+            state: weaver_types::AgentState::Unloaded,
+            ..
+        } => Ok(()),
+        _ => Err(LifecycleRefusal::AgentRunning),
     }
 }
 

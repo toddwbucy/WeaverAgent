@@ -28,7 +28,7 @@ use weaver_spu::channel::{
 };
 use weaver_spu::decoder::backend::{DecodeFault, TokenId};
 use weaver_spu::decoder::session::{
-    CancelPoll, FieldSink, PositionedSinks, SamplerBuild, Session, StopCondition, Stopped,
+    CancelPoll, FieldSink, PositionedSinks, SamplerBuild, StopCondition, Stopped,
 };
 use weaver_spu::family;
 use weaver_spu::readout::ReadoutElection;
@@ -37,11 +37,18 @@ use weaver_spu::sampling::{
     Disposition, EffectiveKnobs, EffectiveSessionParameters, KnobRefusal, Knobs, SessionParameters,
     TunableValues,
 };
+#[cfg(test)]
 use weaver_traits::Message;
 use weaver_types::{
     ExchangeId, Finish, Generation, LifecycleAnswer, LifecycleDirective, LifecycleRefusal, Opener,
     OrganEnvelope, Payload, Position, TokenAnswer, TokenDirective, TokenRefusal,
 };
+
+mod placement;
+use placement::{OpenedSession, PlacementFailure, PreparedDelta};
+
+#[cfg(test)]
+mod placement_tests;
 
 /// The headroom the worker's composition root supplies. A deployment fact
 /// rather than an operator election, per Spec section 3, and a number a builder
@@ -238,25 +245,6 @@ fn resolve_effective(supplied: &TunableValues) -> Result<Effective, KnobRefusal>
     })
 }
 
-/// Render a turn's delta through the family, text blocks only.
-///
-/// **The turns and nothing around them.** The identity prefix goes through
-/// [`family::Family::render_identity`] instead, because a family whose prefix
-/// opens with a preamble its turns do not repeat renders that there and only
-/// there. A block or a role the family cannot render is the delta malformed for
-/// the family, which is the contract's own case rather than one invented here:
-/// the tool shapes are blocked with the tool workflow and the families render
-/// text today.
-///
-/// **This function used to hold the role names and the text flattening for
-/// every family at once.** It does not, because a role's wire name is a family
-/// fact and this is the composition root: `gemma4` calls the assistant `model`,
-/// and a map living here would have taught every other family the word or
-/// grown an arm naming one, which Spec section 5's placement rule forbids.
-fn render_delta(family: &dyn family::Family, delta: &[Message]) -> Result<String, TokenRefusal> {
-    family::render_each(family, delta).map_err(TokenRefusal::from)
-}
-
 /// One frame out on the decode seam: the trio crosses as bare JSON, per
 /// `weaver-types-Spec` section 4.4's provisional encoding.
 fn send_answer(decode: &DecodeSocket, answer: &TokenAnswer) -> Result<(), ChannelFault> {
@@ -349,31 +337,6 @@ impl CancelPoll for SeamCancel<'_> {
             }
         }
     }
-}
-
-/// What stands once the open exchange succeeds: the session and the two
-/// family facts every later exchange reads.
-struct OpenedSession<'r> {
-    session: Session<'r>,
-    renderer: &'static dyn family::Family,
-    /// **Carried for the record and not for the render.** The measurement
-    /// names the template that rendered the prompt, and this is the string it
-    /// names. Nothing renders through it here: that is [`Self::renderer`]'s,
-    /// and a template identity worth the name is issues #88 and #129's.
-    template: &'static str,
-    generation_opener: &'static str,
-    /// **Which generation of the current turn the next one is**, per
-    /// `weaver-spu-Spec` section 8.5, counted from zero and reset when the
-    /// turn changes. A turn runs as many generations as its tool rounds,
-    /// and two of them sharing a derived seed would draw one stream twice.
-    /// Counting within the turn rather than across the residency is what
-    /// keeps the derivation free of history: replaying a turn issues the
-    /// same generations in the same order.
-    turn_generations: Option<(weaver_types::TurnKey, u64)>,
-    /// **The family's stop conditions, promoted against this artifact.** Built
-    /// once at open, because the vocabulary cannot change under a residency and
-    /// a set rebuilt per turn would be the same answer at a per-turn cost.
-    stop: StopSet,
 }
 
 /// The measurement, rendered by this organ to the shape the trace's model
@@ -556,14 +519,12 @@ fn serve_decode(
                         if column_ask {
                             session.ask_columns();
                         }
-                        Ok(OpenedSession {
+                        Ok(OpenedSession::from_open(
                             session,
-                            renderer,
-                            template: declaration.template,
-                            generation_opener: declaration.generation_opener,
+                            resident,
+                            effective.session,
                             stop,
-                            turn_generations: None,
-                        })
+                        ))
                     });
                 match outcome {
                     Ok(standing) => {
@@ -603,21 +564,21 @@ fn serve_decode(
                 // the terminator the engine makes resident closes it. The
                 // identity prefix at open takes no opener: its turns are all
                 // complete.
-                let delta_text = match render_delta(standing.renderer, &delta) {
-                    Ok(mut text) => {
-                        text.push_str(standing.generation_opener);
-                        text
-                    }
-                    Err(refusal) => {
+                // The legacy directive has no schema field. Its empty schema
+                // list takes the same complete rendering and tokenization as
+                // the placement primitive, without activating replacement wire.
+                let PreparedDelta {
+                    rendered: delta_text,
+                    tokens: delta_tokens,
+                } = match standing.prepare_delta(&delta, &[]) {
+                    Ok(prepared) => prepared,
+                    Err(PlacementFailure::Render(refusal)) => {
                         if send_refusal(decode, &refusal).is_err() {
                             return Err(());
                         }
                         continue;
                     }
-                };
-                let delta_tokens = match resident.tokenize(&delta_text) {
-                    Ok(tokens) => tokens,
-                    Err(fault) => {
+                    Err(PlacementFailure::Decode(fault)) => {
                         eprintln!("{}", decode_fault_line(&fault));
                         return Err(());
                     }
