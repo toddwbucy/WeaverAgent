@@ -6,7 +6,7 @@ use weaver_trace::Sequence;
 use weaver_trace::serving::{
     Event, Kind, Payload, Recorder, SubmitAttempt, TapFailure, TapOutcome,
 };
-use weaver_types::state_flow::{SourceBlockId, StateStoreMeasurement, Ste100Reply};
+use weaver_types::state_flow::{SourceBlockId, SourcePosition, StateStoreMeasurement, Ste100Reply};
 
 use super::author::{AuthorError, AuthoredEvent, ServingAuthor};
 use super::intake::{FlowInbox, IntakeFailure, IntakeOutcome, RetentionBudget};
@@ -16,13 +16,16 @@ use weaver_trace::serving::payloads::{FlowObservation, FlowPhase};
 /// only RecordBarrier's successful Recorded arm constructs one.
 #[derive(Debug)]
 pub(super) struct RecordedSte100 {
-    run: String,
+    source: SourcePosition,
     reply: Ste100Reply,
 }
 
 impl RecordedSte100 {
     pub(super) fn run(&self) -> &str {
-        &self.run
+        &self.source.block_id.run
+    }
+    pub(super) fn source(&self) -> &SourcePosition {
+        &self.source
     }
     pub(super) fn matches(&self, reply: &Ste100Reply) -> bool {
         self.reply == *reply
@@ -34,7 +37,14 @@ impl RecordedSte100 {
     #[cfg(test)]
     pub(super) fn for_test_in(run: &str, reply: &Ste100Reply) -> Self {
         Self {
-            run: run.into(),
+            source: SourcePosition {
+                block_id: SourceBlockId {
+                    run: run.into(),
+                    sequence: 1.into(),
+                    block: 0.into(),
+                },
+                turn: None,
+            },
             reply: reply.clone(),
         }
     }
@@ -462,7 +472,18 @@ impl RecordBarrier {
                     RecordPurpose::Content | RecordPurpose::Observation => None,
                     RecordPurpose::Classifier(reply) => {
                         Some(RecordProof::Classifier(RecordedSte100 {
-                            run: self.run.clone(),
+                            source: SourcePosition {
+                                block_id: SourceBlockId {
+                                    run: recorded_event.envelope.run.0.clone(),
+                                    sequence: submission.sequence.0.into(),
+                                    block: 0.into(),
+                                },
+                                turn: recorded_event
+                                    .envelope
+                                    .turn
+                                    .as_ref()
+                                    .map(|turn| turn.0.clone()),
+                            },
                             reply,
                         }))
                     }

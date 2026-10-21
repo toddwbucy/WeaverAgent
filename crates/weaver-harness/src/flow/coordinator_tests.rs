@@ -1430,15 +1430,11 @@ fn template_and_unselected_model_results_never_enter_the_filing_ledger() {
     let reply = fx.reply_check(s::Ste100Result::Accepted { bindings: vec![] });
     assert!(fx.take_operation().unwrap().is_none());
     fx.advance().unwrap();
-    let OperationCompletion::Check {
-        operation: actual,
-        reply: received,
-    } = fx.take_operation().unwrap().unwrap()
-    else {
+    let OperationCompletion::Check(recorded) = fx.take_operation().unwrap().unwrap() else {
         panic!("template completion");
     };
-    assert_eq!(actual, operation);
-    assert_eq!(received, reply);
+    assert_eq!(recorded.operation(), &operation);
+    assert_eq!(recorded.reply(), &reply);
 
     let sequence = fx.record_unselected(authored(
         Kind::ModelOutput,
@@ -1471,16 +1467,11 @@ fn template_and_unselected_model_results_never_enter_the_filing_ledger() {
         spans: vec![],
     });
     fx.advance().unwrap();
-    let OperationCompletion::Check {
-        operation: actual,
-        reply: received,
-        ..
-    } = fx.take_operation().unwrap().unwrap()
-    else {
+    let OperationCompletion::Check(recorded) = fx.take_operation().unwrap().unwrap() else {
         panic!("model repair disposition");
     };
-    assert_eq!(actual, operation);
-    assert_eq!(received, reply);
+    assert_eq!(recorded.operation(), &operation);
+    assert_eq!(recorded.reply(), &reply);
     assert!(fx.flow.failure().is_none());
     assert_eq!(
         fx.records()
@@ -1573,7 +1564,7 @@ fn nonfiling_completion_pressure_holds_both_native_slots_without_reauthoring() {
     }
     assert!(matches!(
         fx.take_operation().unwrap(),
-        Some(OperationCompletion::Check { .. })
+        Some(OperationCompletion::Check(_))
     ));
     assert_eq!(
         fx.records()
@@ -2969,4 +2960,105 @@ fn enter_rollback_requires_a_recorded_refusal_and_never_replaces_clean_retiremen
     );
     assert!(active.flow.standing_state().is_some());
     assert!(active.flow.unused_open().is_none());
+}
+
+// A second applicable trait makes this expression ambiguous if Clone appears.
+const _: fn() = || {
+    trait RecordedCheckMustNotClone<Marker> {
+        fn check() {}
+    }
+    impl<T: ?Sized> RecordedCheckMustNotClone<()> for T {}
+    impl<T: Clone> RecordedCheckMustNotClone<u8> for T {}
+    let _ = <RecordedCheck as RecordedCheckMustNotClone<_>>::check;
+};
+
+#[test]
+fn recorded_check_retains_exact_source_across_a_later_pending_author() {
+    let mut fx = Fixture::new(4);
+    let operation = template_operation();
+    assert!(matches!(
+        fx.begin_check(operation.clone()),
+        OperationStart::Started { .. }
+    ));
+    let expected_reply = fx.reply_check(s::Ste100Result::Accepted { bindings: vec![] });
+    for _ in 0..128 {
+        fx.advance().unwrap();
+        if fx.flow.operation_completion().is_some() {
+            break;
+        }
+    }
+    let result = fx
+        .records()
+        .into_iter()
+        .find(|record| record["kind"] == "ste100.result")
+        .expect("real classifier result must be recorded");
+    let expected_source = s::SourcePosition {
+        block_id: s::SourceBlockId {
+            run: "run".into(),
+            sequence: result["sequence"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                .into(),
+            block: 0.into(),
+        },
+        turn: None,
+    };
+    assert_eq!(
+        result["payload"],
+        serde_json::to_value(&expected_reply).unwrap()
+    );
+    assert!(
+        result["turn"].is_null(),
+        "load template replies are turnless"
+    );
+    let Some(OperationCompletion::Check(held)) = fx.flow.operation_completion() else {
+        panic!("actual recorded check is held");
+    };
+    assert_eq!(held.source(), &expected_source);
+    assert_eq!(held.operation(), &operation);
+    assert_eq!(held.reply(), &expected_reply);
+
+    let pending = fx.fill_trace_capacity();
+    let later = fx.records().last().unwrap()["sequence"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    assert!(
+        later > expected_source.block_id.sequence.0,
+        "later actual authors must distinguish proof source from last sequence"
+    );
+    for _ in 0..3 {
+        assert!(fx.take_operation().unwrap().is_none());
+        assert_eq!(fx.advance().unwrap(), Advance::Pending);
+        assert_eq!(
+            serde_json::to_string(fx.barrier.pending().unwrap()).unwrap(),
+            pending
+        );
+        let Some(OperationCompletion::Check(held)) = fx.flow.operation_completion() else {
+            panic!("later author cannot consume the exact held check");
+        };
+        assert_eq!(held.source(), &expected_source);
+    }
+    let drain = fx.start_drain();
+    fx.resume_external_ticket();
+    let OperationCompletion::Check(recorded) = fx.take_operation().unwrap().unwrap() else {
+        panic!("one recorded check transfers after the pending author");
+    };
+    let (actual_operation, reply, source) = recorded.into_parts();
+    assert_eq!(actual_operation, operation);
+    assert_eq!(reply, expected_reply);
+    assert_eq!(source, expected_source);
+    assert!(fx.take_operation().unwrap().is_none());
+    assert_eq!(
+        fx.records()
+            .iter()
+            .filter(|r| r["kind"] == "ste100.result")
+            .count(),
+        1
+    );
+    drop(fx);
+    drain.join().unwrap();
 }

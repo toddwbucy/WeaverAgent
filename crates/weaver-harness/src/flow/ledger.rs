@@ -18,6 +18,16 @@ use super::RecordedTerminal;
 use super::channel::{CommitEvidence, ExchangeProgress, StateRequest};
 use super::intake::RetentionBudget;
 
+#[path = "receipts.rs"]
+mod receipts;
+pub(super) use receipts::{
+    CommittedSource, ReceiptRegistrationFailure, ReceiptSet, RejectedSource, SourceDisposition,
+};
+#[path = "source_leases.rs"]
+mod source_leases;
+use source_leases::SourceLeases;
+pub(super) use source_leases::{LeaseSlotStatus, SourceLease, SourceLeaseRegistrationFailure};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct LedgerError(pub(super) &'static str);
 
@@ -144,6 +154,8 @@ struct Entry {
     context_bytes: u64,
     intake_ns: u64,
     first_sent_ns: Option<u64>,
+    receipt: Option<StateFrame>,
+    rejection: Option<Ste100Reply>,
 }
 
 impl Entry {
@@ -179,6 +191,8 @@ pub(super) struct Ledger {
     entries: Vec<Entry>,
     history: Vec<SourceHistory>,
     frozen: bool,
+    receipts: Option<ReceiptSet>,
+    source_leases: SourceLeases,
 }
 
 impl Ledger {
@@ -208,6 +222,8 @@ impl Ledger {
             entries: Vec::new(),
             history: Vec::new(),
             frozen: false,
+            receipts: None,
+            source_leases: SourceLeases::new(),
         })
     }
 
@@ -231,6 +247,7 @@ impl Ledger {
         intake_ns: u64,
         reuse: Option<AcceptedReuse>,
     ) -> Result<InstallReport, Box<InstallFailure>> {
+        self.source_leases.prune_abandoned();
         match self.prepare_copy(&copy, intake_ns, reuse.as_ref()) {
             Ok((prepared, history, sources)) => {
                 // Reserve every growing collection before any block transfers.
@@ -350,6 +367,7 @@ impl Ledger {
                 Ok(Classified::Accepted(source.clone()))
             }
             Ste100Result::NotSte100 { .. } => {
+                entry.rejection = Some(reply.clone());
                 entry.state = LedgerState::CorrectlyRejectedHeld;
                 Ok(Classified::CorrectlyRejected(
                     entry.terminal().expect("terminal state"),
@@ -463,6 +481,7 @@ impl Ledger {
             ));
         }
         entry.state = LedgerState::FiledHeld;
+        entry.receipt = Some(answer.clone());
         Ok(entry.terminal().expect("terminal state"))
     }
 
@@ -482,6 +501,7 @@ impl Ledger {
         proof: RecordedTerminal,
         budget: &mut RetentionBudget,
     ) -> Result<TerminalCandidate, LedgerError> {
+        self.source_leases.prune_abandoned();
         self.live()?;
         let index = self
             .entries
@@ -502,11 +522,257 @@ impl Ledger {
                 "terminal proof reports a different source disposition",
             ));
         }
+        let watched = self
+            .receipts
+            .as_ref()
+            .and_then(|set| set.position(&terminal.source));
+        let leased = self.source_leases.watching(&terminal.source);
+        if watched.is_some() && leased.is_some() {
+            return Err(LedgerError("source receipt has overlapping consumers"));
+        }
+        if let Some(slot) = watched
+            && !self.receipts.as_ref().unwrap().slot_available(slot)
+        {
+            return Err(LedgerError("terminal receipt slot is already occupied"));
+        }
+        if leased.is_some_and(|slot| !self.source_leases.slot_available(slot)) {
+            return Err(LedgerError("terminal lease slot is already occupied"));
+        }
+        if watched.is_some() || leased.is_some() {
+            let entry = &self.entries[index];
+            match terminal.outcome {
+                TerminalOutcome::Filed => {
+                    if !matches!(&entry.receipt, Some(StateFrame::Filed { common, block_id, .. })
+                        if block_id == entry.file.source() && entry.exchange.as_ref() == Some(common))
+                        || entry.rejection.is_some()
+                    {
+                        return Err(LedgerError("committed source lost its exact filed answer"));
+                    }
+                }
+                TerminalOutcome::CorrectlyRejected => {
+                    if !matches!(&entry.file, LedgerFile::Statement(_))
+                        || !matches!(&entry.rejection, Some(Ste100Reply {
+                            target: Ste100Target::Source(source),
+                            result: Ste100Result::NotSte100 { .. }, ..
+                        }) if source == entry.file.source())
+                        || entry.receipt.is_some()
+                    {
+                        return Err(LedgerError(
+                            "rejected source lost its exact classifier result",
+                        ));
+                    }
+                }
+            }
+        }
         budget
             .release(proof)
             .map_err(|_| LedgerError("terminal retention release failed"))?;
-        self.entries.remove(index);
+        let entry = self.entries.remove(index);
+        if watched.is_some() || leased.is_some() {
+            let disposition = match terminal.outcome {
+                TerminalOutcome::Filed => SourceDisposition::Committed(CommittedSource::new(
+                    entry.file,
+                    entry.receipt.expect("checked exact committed answer"),
+                    terminal.clone(),
+                )),
+                TerminalOutcome::CorrectlyRejected => {
+                    let LedgerFile::Statement(file) = entry.file else {
+                        unreachable!("checked rejected statement")
+                    };
+                    SourceDisposition::CorrectlyRejected(RejectedSource::new(
+                        file,
+                        entry.rejection.expect("checked exact rejection"),
+                        terminal.clone(),
+                    ))
+                }
+            };
+            if let Some(slot) = watched {
+                self.receipts.as_mut().unwrap().put(slot, disposition);
+            } else {
+                self.source_leases
+                    .put(leased.expect("checked lease consumer"), disposition);
+            }
+        }
         Ok(terminal)
+    }
+
+    /// Register before these exact retained sources can dispose. The context
+    /// reserves its author operation earlier, then supplies actual installed IDs.
+    /// History alone cannot register a source that has already been removed.
+    pub(super) fn register_receipts(
+        &mut self,
+        sources: Vec<SourceBlockId>,
+    ) -> Result<(), ReceiptRegistrationFailure> {
+        self.source_leases.prune_abandoned();
+        let validation = (|| {
+            self.live()?;
+            if self.receipts.is_some() {
+                return Err(LedgerError("another source receipt operation owns custody"));
+            }
+            u64::try_from(sources.len())
+                .map_err(|_| LedgerError("receipt source count overflow"))?;
+            let mut total = 0_u64;
+            let mut previous = None;
+            for source in &sources {
+                let position = (source.sequence.0, source.block.0);
+                if source.run != self.run || previous.is_some_and(|old| old >= position) {
+                    return Err(LedgerError(
+                        "receipt sources are foreign, duplicate or out of order",
+                    ));
+                }
+                if self.source_leases.watches(source) {
+                    return Err(LedgerError("receipt source already has a lease consumer"));
+                }
+                let entry = self
+                    .entries
+                    .iter()
+                    .find(|entry| entry.file.source() == source)
+                    .ok_or(LedgerError("receipt source is unknown or already disposed"))?;
+                total = total
+                    .checked_add(entry.raw_bytes)
+                    .and_then(|bytes| bytes.checked_add(entry.context_bytes))
+                    .ok_or(LedgerError("receipt source byte count overflow"))?;
+                previous = Some(position);
+            }
+            Ok(())
+        })();
+        if let Err(error) = validation {
+            return Err(ReceiptRegistrationFailure { sources, error });
+        }
+        self.receipts = Some(ReceiptSet::new(sources)?);
+        Ok(())
+    }
+
+    /// Register exact currently retained sources without imposing a group wait.
+    /// Each slot transfers separately after the same terminal recording proof.
+    pub(super) fn register_source_lease(
+        &mut self,
+        sources: Vec<SourceBlockId>,
+    ) -> Result<SourceLease, SourceLeaseRegistrationFailure> {
+        self.source_leases.prune_abandoned();
+        let validation = (|| {
+            self.live()?;
+            u64::try_from(sources.len()).map_err(|_| LedgerError("source lease count overflow"))?;
+            let mut previous = None;
+            let mut total = 0_u64;
+            for source in &sources {
+                let position = (source.sequence.0, source.block.0);
+                if source.run != self.run || previous.is_some_and(|old| old >= position) {
+                    return Err(LedgerError(
+                        "lease sources are foreign, duplicate or out of order",
+                    ));
+                }
+                if self.source_leases.watches(source)
+                    || self
+                        .receipts
+                        .as_ref()
+                        .is_some_and(|set| set.position(source).is_some())
+                {
+                    return Err(LedgerError("lease source already has a receipt consumer"));
+                }
+                let entry = self
+                    .entries
+                    .iter()
+                    .find(|entry| entry.file.source() == source)
+                    .ok_or(LedgerError("lease source is unknown or already disposed"))?;
+                total = total
+                    .checked_add(entry.raw_bytes)
+                    .and_then(|bytes| bytes.checked_add(entry.context_bytes))
+                    .ok_or(LedgerError("source lease byte count overflow"))?;
+                previous = Some(position);
+            }
+            Ok(())
+        })();
+        if let Err(error) = validation {
+            return Err(SourceLeaseRegistrationFailure { sources, error });
+        }
+        self.source_leases.register(sources)
+    }
+
+    pub(super) fn source_lease_sources<'a>(
+        &'a self,
+        lease: &SourceLease,
+    ) -> Result<impl Iterator<Item = &'a SourceBlockId>, LedgerError> {
+        self.live()?;
+        self.source_leases.sources(lease)
+    }
+
+    pub(super) fn source_lease_status(
+        &self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<LeaseSlotStatus, LedgerError> {
+        self.live()?;
+        self.source_leases.status(lease, source)
+    }
+
+    pub(super) fn take_source_receipt(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<Option<SourceDisposition>, LedgerError> {
+        self.live()?;
+        self.source_leases.take(lease, source)
+    }
+
+    /// Relinquishing consumer custody never removes a selected filing obligation.
+    /// Cleanup is also permitted after freeze and returns no receipt capability.
+    pub(super) fn release_source_receipt(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<(), LedgerError> {
+        self.source_leases.release_source(lease, source)
+    }
+
+    pub(super) fn release_source_lease(
+        &mut self,
+        lease: SourceLease,
+    ) -> Result<(), (SourceLease, LedgerError)> {
+        self.source_leases.release(lease)
+    }
+
+    /// Retained consumer facts are separate from owed filing gauges and barriers.
+    pub(super) fn has_source_leases(&self) -> bool {
+        !self.source_leases.is_empty()
+    }
+
+    pub(super) fn source_lease_count(&self) -> usize {
+        self.source_leases.len()
+    }
+
+    pub(super) fn source_lease_retained(
+        &self,
+        lease: &SourceLease,
+    ) -> Result<(u64, u64), LedgerError> {
+        self.source_leases.retained(lease)
+    }
+
+    pub(super) fn receipts(&self) -> Option<&ReceiptSet> {
+        self.receipts.as_ref()
+    }
+
+    /// No completion crosses this port on failure or before every subscribed
+    /// disposition was recorded. Taking it relinquishes the one subscription.
+    pub(super) fn take_receipts(&mut self) -> Result<Option<ReceiptSet>, LedgerError> {
+        self.live()?;
+        if self.receipts.as_ref().is_some_and(ReceiptSet::is_complete) {
+            let mut set = self.receipts.take().expect("complete receipt set");
+            set.release();
+            Ok(Some(set))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Cancellation removes only the consumer subscription. Already filed facts
+    /// remain filed, pending obligations retain their original charge, and the
+    /// returned account cannot yield committed grants, including on halt.
+    pub(super) fn cancel_receipts(&mut self) -> Option<ReceiptSet> {
+        self.receipts.take().map(|mut set| {
+            set.cancel();
+            set
+        })
     }
 
     pub(super) fn barrier(&self, sources: &[SourceBlockId]) -> Result<bool, LedgerError> {
@@ -787,6 +1053,8 @@ impl Ledger {
                 context_bytes,
                 intake_ns,
                 first_sent_ns: None,
+                receipt: None,
+                rejection: None,
             });
             ordinals.push(id.block.0);
             sources.push(id);
@@ -955,3 +1223,7 @@ fn resolve_effect(file: &mut StatementFile) -> Result<(), LedgerError> {
 #[cfg(test)]
 #[path = "ledger_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "source_leases_tests.rs"]
+mod source_leases_tests;

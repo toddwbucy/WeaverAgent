@@ -3,7 +3,7 @@
 //! The granted tool result, per `weaver-harness-Spec` section 6 and the tool
 //! workflow's opening act: the loop closes at the type level here.
 //!
-//! **The grant is constructed through one door, at four sites in the one
+//! **The legacy grant is constructed through one door, at four sites in the one
 //! function that closes a call** (`weaver-harness-Spec` section 6):
 //! - the completion of the execution exchange of
 //!   `weaver-harness-gate-contract` section 2, whichever of its four contents
@@ -19,6 +19,10 @@
 //! that could not author a tool-result turn would leave the conversation with
 //! a hole where the answer goes.
 //!
+//! The replacement pair port also constructs a harness-authored non-dispatch
+//! notice, only after its exact opening and terminal commits. The private
+//! `not_dispatched` constructor has one call site in the pair coordinator.
+//!
 //! **Three negatives, each a compile property**, the `PeerIdentity` pattern
 //! one seam over: the gate exchange supplies it and no code asserts it.
 //!
@@ -30,7 +34,7 @@
 //! de::<weaver_harness::ToolResult>();
 //! ```
 //!
-//! No public construction: the fields are private and the one constructor is
+//! No public construction: the fields are private and each constructor is
 //! `pub(crate)`, so the struct literal below does not compile and no public
 //! function returns one from anything a consumer can supply.
 //!
@@ -113,17 +117,37 @@ use weaver_types::ToolOutcome;
 /// they do not, a model that answers every result with one more call.
 pub(crate) const MAX_TOOL_ROUNDS: usize = 32;
 
-/// A tool result the gate exchange granted.
+/// A tool result granted by the gate exchange or committed pair coordinator.
 ///
-/// Obtainable from that exchange's completion alone, per the module note. The
+/// Obtainable from the completion paths in the module note. The
 /// interior is deliberately not public: nobody inspects a tool result's
 /// fields to know it came through the gate - holding the value is the proof,
 /// which is what box granularity means.
+#[derive(Debug)]
 pub struct ToolResult {
     content: String,
 }
 
 impl ToolResult {
+    /// The replacement pair coordinator calls this once, only after its real
+    /// terminal receipt. It carries a harness notice, never a gate outcome.
+    /// No constructor is exported to the model, wire, or replay reader.
+    pub(crate) fn not_dispatched(cause: weaver_types::state_flow::NonDispatchCause) -> Self {
+        use weaver_types::state_flow::NonDispatchCause as Cause;
+        let reason = match cause {
+            Cause::PassPurpose => "this pass does not permit execution",
+            Cause::RepairExhausted => "the statement repair limit was reached",
+            Cause::PlanBreak => "the request does not fit the locked plan",
+            Cause::RoundLimit => "the tool round limit was reached",
+            Cause::Stop => "the operator stopped the turn",
+            Cause::Unload => "the agent is unloading",
+            Cause::NoGate => "no gate is available",
+        };
+        Self {
+            content: format!("The harness did not dispatch this call: {reason}."),
+        }
+    }
+
     /// The one door, crate-private: called at the four sites of
     /// `Engine::execute_call` that close a call (the module's header) and
     /// nowhere else, which `tests/manifest.rs` pins.

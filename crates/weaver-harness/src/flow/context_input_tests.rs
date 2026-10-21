@@ -29,9 +29,9 @@ fn ports<I: PumpIo>(io: &mut I) -> PumpPorts<'_, I> {
     }
 }
 
-struct InputFixture {
-    run: Fixture,
-    peer: Channel,
+pub(super) struct InputFixture {
+    pub(super) run: Fixture,
+    pub(super) peer: Channel,
 }
 
 fn duty() -> (s::Ste100Bootstrap, s::SchemeDeclaration, s::Ste100Ready) {
@@ -89,9 +89,53 @@ fn flush_peer(peer: &mut Channel) {
 }
 
 impl InputFixture {
-    fn new() -> Self {
-        let (bootstrap, scheme, ready) = duty();
+    pub(super) fn new() -> Self {
+        Self::with_templates(None)
+    }
+
+    pub(super) fn with_template_inventory(
+        inventory: &super::super::templates::CompiledInventory,
+    ) -> Self {
+        Self::with_templates(Some(inventory))
+    }
+
+    pub(super) fn with_pending_limit(blocks: u64) -> Self {
         let mut declaration = config();
+        declaration.backlog.max_pending_blocks = blocks.into();
+        Self::with_declaration(None, declaration)
+    }
+
+    fn with_templates(inventory: Option<&super::super::templates::CompiledInventory>) -> Self {
+        Self::with_declaration(inventory, config())
+    }
+
+    pub(super) fn with_declaration(
+        inventory: Option<&super::super::templates::CompiledInventory>,
+        declaration: FlowConfig,
+    ) -> Self {
+        Self::with_declaration_scheme(inventory, declaration, None)
+    }
+
+    pub(super) fn with_scheme(
+        declaration: FlowConfig,
+        scheme_text: String,
+        scheme: s::SchemeDeclaration,
+    ) -> Self {
+        Self::with_declaration_scheme(None, declaration, Some((scheme_text, scheme)))
+    }
+
+    fn with_declaration_scheme(
+        inventory: Option<&super::super::templates::CompiledInventory>,
+        mut declaration: FlowConfig,
+        override_scheme: Option<(String, s::SchemeDeclaration)>,
+    ) -> Self {
+        let (mut bootstrap, mut scheme, mut ready) = duty();
+        if let Some((text, declared)) = override_scheme {
+            bootstrap.scheme_text = text;
+            scheme = declared;
+            ready.scheme_id = scheme.scheme_id.clone();
+            ready.artifact_sha256 = scheme.artifact_sha256.clone();
+        }
         declaration.scheme = scheme;
         let mut run = Fixture::new(declaration);
         run.opened();
@@ -103,6 +147,12 @@ impl InputFixture {
         load.state_flow.ste100 = super::super::mirror::instruction(&bootstrap.instruction);
         load.template_inventory.checker_artifact_sha256 =
             bootstrap.instruction.model_artifact_sha256.as_str().into();
+        if let Some(inventory) = inventory {
+            load.template_inventory = inventory.record(
+                &run.context.declaration.scheme,
+                &bootstrap.instruction.model_artifact_sha256,
+            );
+        }
         assert_eq!(run.author(authored).unwrap(), Sequence(0));
         run.context.activate(&mut run.clock).unwrap();
         for _ in 0..16 {
@@ -174,11 +224,13 @@ impl InputFixture {
                 .unwrap(),
             Some(AdmissionPoll::Ready(ready))
         );
-        run.context.complete_wait(PumpDeadline::Enter).unwrap();
+        if inventory.is_none() {
+            run.context.complete_wait(PumpDeadline::Enter).unwrap();
+        }
         Self { run, peer }
     }
 
-    fn records(&self, kind: Kind) -> Vec<serde_json::Value> {
+    pub(super) fn records(&self, kind: Kind) -> Vec<serde_json::Value> {
         self.run
             .context
             .barrier
@@ -189,7 +241,7 @@ impl InputFixture {
             .collect()
     }
 
-    fn classifier_transport(&mut self) {
+    pub(super) fn classifier_transport(&mut self) {
         self.run
             .context
             .flow
@@ -206,7 +258,7 @@ impl InputFixture {
             .unwrap();
     }
 
-    fn reply(&mut self, reply: &s::Ste100Reply) {
+    pub(super) fn reply(&mut self, reply: &s::Ste100Reply) {
         self.peer
             .begin_send(
                 Tag::Reply,
@@ -218,7 +270,7 @@ impl InputFixture {
         self.classifier_transport();
     }
 
-    fn no_request(&mut self) {
+    pub(super) fn no_request(&mut self) {
         assert_eq!(self.peer.try_receive().unwrap(), Receive::Pending);
     }
 
@@ -228,7 +280,7 @@ impl InputFixture {
         assert!(self.records(Kind::TurnClosed).is_empty());
     }
 
-    fn begin(&mut self, frame: TurnFrame) {
+    pub(super) fn begin(&mut self, frame: TurnFrame) {
         self.run
             .context
             .begin_input(frame, &mut self.run.clock)
@@ -268,7 +320,7 @@ impl InputFixture {
         panic!("input did not reach {expected:?}");
     }
 
-    fn accepted_token(&mut self) -> (s::Ste100Request, s::Ste100Reply, AcceptedInput) {
+    pub(super) fn accepted_token(&mut self) -> (s::Ste100Request, s::Ste100Reply, AcceptedInput) {
         let request = self.request();
         let reply = accepted(&request);
         self.reply(&reply);
@@ -297,7 +349,7 @@ impl InputFixture {
         (request, reply, token)
     }
 
-    fn fill_trace(&mut self) {
+    pub(super) fn fill_trace(&mut self) {
         let payload = serde_json::value::to_raw_value(&serde_json::json!({
             "fixture": "x".repeat(32_768)
         }))
@@ -331,7 +383,7 @@ impl InputFixture {
         panic!("actual writer did not reach its ordinary queue capacity");
     }
 
-    fn drain_trace(&mut self) {
+    pub(super) fn drain_trace(&mut self) {
         self.run._reader.set_nonblocking(true).unwrap();
         let watchdog = Instant::now() + Duration::from_secs(3);
         let mut bytes = [0_u8; 65536];

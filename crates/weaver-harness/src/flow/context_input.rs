@@ -75,7 +75,13 @@ impl RecordingContext {
                 failure: Some(failure),
             });
         }
-        if self.input.snapshot().is_some()
+        if self.output.is_some()
+            || self.filing.is_some()
+            || self.pair_work.is_some()
+            || self.input.snapshot().is_some()
+            || self.templates_block_content()
+            || self.member_capture.is_some()
+            || self.open_turn.is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()
             || (self.barrier.pending().is_some() && !self.flow.has_pending_record())
