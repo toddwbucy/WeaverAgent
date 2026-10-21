@@ -571,6 +571,51 @@ impl RecordBarrier {
         }
     }
 
+    /// A refusal already observed when serving stopped still owes a trace
+    /// record. Queue its original and prepared event without a copy, a release
+    /// proof or a reserved terminal permit. Only trace-only drain may resume it.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn queue_trace_only_authored(
+        &mut self,
+        event: AuthoredEvent,
+        author: &ServingAuthor,
+        raw_ns: u64,
+        wall_ms: u64,
+    ) -> Result<(), TerminalAuthorFailure> {
+        if !self.recorder.tap_stopped()
+            || self.recorder.is_closed()
+            || self.pending.is_some()
+            || self.pending_author.is_some()
+            || event.kind != Kind::Refusal
+            || !matches!(event.source, super::author::AuthoredSource::Runtime)
+            || !matches!(event.payload, Some(Payload::Refusal(_)))
+        {
+            return Err(TerminalAuthorFailure {
+                event,
+                detail: "trace-only author requires a stopped tap and an empty refusal slot".into(),
+            });
+        }
+        let Some(ticket) = self.next_ticket else {
+            return Err(TerminalAuthorFailure {
+                event,
+                detail: "author ticket overflow".into(),
+            });
+        };
+        let prepared = match author.prepare(&event, raw_ns, wall_ms) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                return Err(TerminalAuthorFailure {
+                    event,
+                    detail: format!("trace-only author: {error:?}"),
+                });
+            }
+        };
+        self.next_ticket = ticket.checked_add(1);
+        self.pending_author = Some(AuthorTicket { ticket, event });
+        self.pending = Some((prepared, RecordPurpose::Observation));
+        Ok(())
+    }
+
     /// An ordinary event already owed to the trace may land after the halt.
     /// It receives no completion proof, reservation or state copy.
     pub(super) fn resume_trace_only(&mut self) -> Result<Option<Sequence>, weaver_trace::Failure> {

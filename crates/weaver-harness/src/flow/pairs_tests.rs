@@ -20,7 +20,7 @@ fn hash(bytes: &[u8]) -> Digest {
     Digest::new(format!("{:x}", Sha256::digest(bytes))).unwrap()
 }
 
-fn fixture_scheme() -> (String, SchemeDeclaration, RequestScheme) {
+pub(super) fn fixture_scheme() -> (String, SchemeDeclaration, RequestScheme) {
     let artifact = serde_json::json!({
         "format": "ste100-scheme/1",
         "reference": {
@@ -58,11 +58,11 @@ fn scheme_declaration(text: &str) -> SchemeDeclaration {
     }
 }
 
-fn text(value: &str) -> ContentBlock {
+pub(super) fn text(value: &str) -> ContentBlock {
     ContentBlock::Text { text: value.into() }
 }
 
-fn call(arguments: &str) -> ContentBlock {
+pub(super) fn call(arguments: &str) -> ContentBlock {
     ContentBlock::ToolCall(ToolCall {
         name: "sh".into(),
         arguments: arguments.into(),
@@ -82,7 +82,7 @@ fn span(start: usize, end: usize) -> Span {
     }
 }
 
-fn binding(value: &str) -> Binding {
+pub(super) fn binding(value: &str) -> Binding {
     let verb_end = value.find(' ').unwrap();
     Binding {
         statement_span: span(0, value.len()),
@@ -109,7 +109,7 @@ fn shifted(mut binding: Binding, by: usize) -> Binding {
     binding
 }
 
-fn accepted(value: &str) -> Ste100Result {
+pub(super) fn accepted(value: &str) -> Ste100Result {
     Ste100Result::Accepted {
         bindings: vec![binding(value)],
     }
@@ -123,7 +123,7 @@ fn rejected() -> Ste100Result {
     }
 }
 
-fn source(index: usize) -> SourceBlockId {
+pub(super) fn source(index: usize) -> SourceBlockId {
     SourceBlockId {
         run: "run".into(),
         sequence: 10.into(),
@@ -131,7 +131,7 @@ fn source(index: usize) -> SourceBlockId {
     }
 }
 
-fn original(
+pub(super) fn original(
     content: Vec<ContentBlock>,
     results: Vec<Ste100Result>,
 ) -> (SchemeDeclaration, OriginalRequests) {
@@ -154,7 +154,7 @@ fn one() -> (PairLedger, CallId, SchemeDeclaration) {
     (pairs, call, scheme)
 }
 
-fn envelope(sequence: u64, kind: &str, channel: &str, origin: &str) -> Arc<str> {
+pub(super) fn envelope(sequence: u64, kind: &str, channel: &str, origin: &str) -> Arc<str> {
     serde_json::json!({
         "session":"session", "run":"run", "turn":"turn", "sequence":sequence.to_string(),
         "kind":kind, "channel":channel, "origin":origin, "subsystem":"harness",
@@ -164,7 +164,7 @@ fn envelope(sequence: u64, kind: &str, channel: &str, origin: &str) -> Arc<str> 
     .into()
 }
 
-fn event_id(sequence: u64) -> SourceBlockId {
+pub(super) fn event_id(sequence: u64) -> SourceBlockId {
     SourceBlockId {
         run: "run".into(),
         sequence: sequence.into(),
@@ -172,7 +172,7 @@ fn event_id(sequence: u64) -> SourceBlockId {
     }
 }
 
-fn statement_receipt(
+pub(super) fn statement_receipt(
     scheme: &SchemeDeclaration,
     source: SourceBlockId,
     value: &str,
@@ -198,7 +198,11 @@ fn statement_receipt(
     committed(scheme, source, copy, Some((value.into(), bindings)))
 }
 
-fn pair_receipt(scheme: &SchemeDeclaration, sequence: u64, record: PairRecord) -> CommittedSource {
+pub(super) fn pair_receipt(
+    scheme: &SchemeDeclaration,
+    sequence: u64,
+    record: PairRecord,
+) -> CommittedSource {
     let (kind, origin, raw) = match record {
         PairRecord::Started(record) => (
             "tool.call.started",
@@ -227,7 +231,7 @@ fn pair_receipt(scheme: &SchemeDeclaration, sequence: u64, record: PairRecord) -
     committed(scheme, event_id(sequence), copy, None)
 }
 
-fn committed(
+pub(super) fn committed(
     scheme: &SchemeDeclaration,
     source: SourceBlockId,
     copy: AdmittedCopy,
@@ -342,7 +346,12 @@ fn committed(
     receipt
 }
 
-fn open(pairs: &mut PairLedger, call: &CallId, scheme: &SchemeDeclaration, sequence: u64) {
+pub(super) fn open(
+    pairs: &mut PairLedger,
+    call: &CallId,
+    scheme: &SchemeDeclaration,
+    sequence: u64,
+) {
     let started = pairs.next_opening().unwrap().1.clone();
     assert_eq!(&started.call_id, call);
     pairs

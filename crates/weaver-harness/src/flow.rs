@@ -19,9 +19,12 @@ mod mirror;
 mod observation;
 mod pump;
 mod pump_transport;
+mod read;
+mod read_validate;
 mod record_owner;
 mod recording;
 mod report;
+mod sort;
 mod ste100_channel;
 mod ste100_socket;
 mod templates;
@@ -33,6 +36,33 @@ mod member_tests;
 
 #[cfg(test)]
 mod recording_fixture;
+
+#[cfg(test)]
+mod outbound_port_visibility {
+    use super::clock::testing::FakePumpIo;
+    use super::context::{
+        OutboundBeginError, OutboundCompletion, OutboundProgress, RecordingContext, RunFailure,
+    };
+    use super::pump::PumpPorts;
+    use super::sort::OutboundInput;
+    use super::templates::TemplateCertificate;
+
+    const _: fn(
+        &mut RecordingContext,
+        OutboundInput,
+        &TemplateCertificate,
+        &mut FakePumpIo,
+    ) -> Result<(), OutboundBeginError> = RecordingContext::begin_outbound;
+    const _: fn(
+        &mut RecordingContext,
+        &mut PumpPorts<'_, FakePumpIo>,
+    ) -> Result<OutboundProgress, RunFailure> = RecordingContext::advance_outbound;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<OutboundCompletion>, RunFailure> = RecordingContext::take_outbound;
+    const _: fn(&mut RecordingContext) = RecordingContext::cancel_outbound;
+}
 
 #[cfg(test)]
 mod ste100_integration_tests;
@@ -233,4 +263,67 @@ mod repair_port_visibility {
         &mut RecordingContext,
         &mut FakePumpIo,
     ) -> Result<Option<RepairAccount>, RunFailure> = RecordingContext::take_repair_accounting;
+}
+
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+mod read_port_visibility {
+    use super::clock::testing::FakePumpIo;
+    use super::context::{ReadBeginError, ReadProgress, RecordingContext, RunFailure};
+    use super::pump::PumpPorts;
+    use super::read::{CompletedRead, ReadFailure};
+    use weaver_trace::TurnRef;
+    use weaver_types::state_flow::ReadSelector;
+
+    const _: fn(
+        &mut RecordingContext,
+        ReadSelector,
+        Option<TurnRef>,
+        &mut FakePumpIo,
+    ) -> Result<(), ReadBeginError> = RecordingContext::begin_read;
+    const _: fn(
+        &mut RecordingContext,
+        &mut PumpPorts<'_, FakePumpIo>,
+    ) -> Result<ReadProgress, RunFailure> = RecordingContext::advance_read;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<Result<CompletedRead, ReadFailure>>, RunFailure> =
+        RecordingContext::take_read;
+}
+
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+mod measure_port_visibility {
+    use super::clock::testing::FakePumpIo;
+    use super::context::{
+        MeasureBeginError, MeasureCompletion, MeasureProgress, MeasureRequest, RecordingContext,
+        RunFailure,
+    };
+    use super::pump::{PumpDeadline, PumpPorts};
+    use super::pump_transport::DecodePort;
+    use weaver_trace::Sequence;
+    use weaver_types::state_flow::DecimalU64;
+
+    const _: fn(
+        &mut RecordingContext,
+        MeasureRequest,
+        PumpDeadline,
+        &mut DecodePort,
+        &mut FakePumpIo,
+    ) -> Result<(), MeasureBeginError> = RecordingContext::begin_measurement;
+    const _: fn(
+        &mut RecordingContext,
+        &mut PumpPorts<'_, FakePumpIo>,
+    ) -> Result<MeasureProgress, RunFailure> = RecordingContext::advance_measurement;
+    const _: fn(&mut RecordingContext, &mut FakePumpIo) -> Result<(), RunFailure> =
+        RecordingContext::cancel_measurement;
+    const _: fn(
+        &mut RecordingContext,
+        DecimalU64,
+        &mut DecodePort,
+        &mut FakePumpIo,
+    ) -> Result<Option<MeasureCompletion>, RunFailure> = RecordingContext::take_measurement;
+    const _: fn(&mut RecordingContext, &mut FakePumpIo) -> Result<Option<Sequence>, RunFailure> =
+        RecordingContext::failed_measure_refusal_progress;
 }

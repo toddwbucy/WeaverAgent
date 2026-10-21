@@ -167,35 +167,44 @@ fn the_os_surface_is_one_crate() {
 }
 
 /// **The grant has one door, called at four sites, all in the function that
-/// closes a call** (`weaver-harness-Spec` section 6, #29): the gate's
-/// completion, and the harness's own fault kill, unload kill and refusal of
-/// an ungranted tool. A fifth call, or one outside `execute_call`, is a
-/// second door the invariant does not name.
+/// closes a call** (`weaver-harness-Spec` section 6, #29). The replacement
+/// pair owner has one site after the terminal commit under Spec05. No other
+/// crate file may construct a result from a public outcome.
 ///
-/// Perturbation: construct a grant anywhere else in the crate and this
-/// fails.
+/// Perturbation: add a constructor anywhere else and this fails.
 #[test]
-fn the_grant_is_constructed_only_in_execute_call() {
-    let source = |file: &str| {
-        std::fs::read_to_string(format!("{}/src/{file}", env!("CARGO_MANIFEST_DIR")))
-            .unwrap_or_else(|e| panic!("{file} reads: {e}"))
-    };
-    let engine = source("engine.rs");
+fn the_grant_is_constructed_only_at_the_legacy_and_committed_pair_doors() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let engine = std::fs::read_to_string(root.join("engine.rs")).unwrap();
     let start = engine.find("    fn execute_call(").expect("execute_call");
     let end = start + engine[start..].find("\n    }\n").expect("its end");
     let calls = |text: &str| text.matches("ToolResult::granted(").count();
-    assert_eq!(calls(&engine[start..end]), 4, "four sites in execute_call");
-    assert_eq!(calls(&engine), 4, "and none elsewhere in engine.rs");
-    for file in [
-        "lifecycle.rs",
-        "authorship.rs",
-        "tools.rs",
-        "assembly.rs",
-        "record.rs",
-        "replay.rs",
-    ] {
-        assert_eq!(calls(&source(file)), 0, "{file} constructs no grant");
+    assert_eq!(calls(&engine[start..end]), 4);
+    let pairs = std::fs::read_to_string(root.join("flow/pairs.rs")).unwrap();
+    let start = pairs.find("    pub(super) fn install_terminal(").unwrap();
+    let end = start + pairs[start..].find("\n    }\n").unwrap();
+    assert_eq!(calls(&pairs[start..end]), 1);
+    fn visit(path: &std::path::Path, sites: &mut Vec<(std::path::PathBuf, usize)>) {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(&path, sites);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let source = std::fs::read_to_string(&path).unwrap();
+                let count = source.matches("ToolResult::granted(").count();
+                if count != 0 {
+                    sites.push((path, count));
+                }
+            }
+        }
     }
+    let mut sites = Vec::new();
+    visit(&root, &mut sites);
+    sites.sort();
+    assert_eq!(
+        sites,
+        vec![(root.join("engine.rs"), 4), (root.join("flow/pairs.rs"), 1)]
+    );
 }
 
 /// A committed pair constructs the harness notice. Records, tests and replay

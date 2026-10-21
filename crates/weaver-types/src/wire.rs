@@ -937,13 +937,12 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// The decode seam's ask, per `weaver-types-Spec` section 4.4: the cases are
-/// `weaver-harness-spu-decode-contract` section 2's four exchanges read from
-/// the harness's side, the seam's fifth message being the SPU's emitted
-/// report, owed nothing back and taking its wire case with `FaultReport`'s
-/// shape, and this crate holds rather than creates them. The
-/// messages are `weaver-traits`' [`weaver_traits::Message`], drawn rather than
-/// restated.
+/// The decode seam's asks, per `weaver-types-Spec` section 4.4 and
+/// TYPES-DECODE. The harness supplies these values under the existing
+/// decode contract. The SPU's emitted fault report travels in TokenAnswer
+/// and answers no ask. This crate defines the values, not their dispatch.
+/// Messages are `weaver-traits`' [`weaver_traits::Message`], drawn rather
+/// than restated.
 ///
 /// **No sampling value crosses this seam inbound.** The tunable map left this
 /// directive when the values moved to the declaration, per `weaver-spu-Spec`
@@ -968,6 +967,18 @@ pub enum TokenDirective {
     AppendAndGenerate {
         turn: TurnKey,
         delta: Vec<weaver_traits::Message>,
+        /// Exact granted schemas in assembly order. An empty grant is an
+        /// explicit empty list, never an absent member or a legacy default.
+        tool_schemas: Vec<String>,
+    },
+    /// Read-only sizing through the same whole rendering and tokenizer as
+    /// append, under TYPES-DECODE and SPU-MEASURE. The returned keep is
+    /// clamped to the open session's prefix and resident count. Neither the
+    /// request nor its answer grants a cut or an append.
+    MeasureDelta {
+        keep: u64,
+        delta: Vec<weaver_traits::Message>,
+        tool_schemas: Vec<String>,
     },
     /// The re-feed drive, per `weaver-spu-PRD` section 13.14 and the decode
     /// contract's sixth exchange: the recorded generation's rendered
@@ -1009,12 +1020,10 @@ pub enum TokenDirective {
     },
 }
 
-/// The decode seam's answer, per `weaver-types-Spec` section 4.4. A cancel
-/// with nothing in flight answers `AtRest` rather than refusing, an answer
-/// because it is not a failure of the ask. The SPU's fault report takes no
-/// case here: it is the seam's one emission, owed nothing back per the
-/// ruling of 2026-08-12, and its wire case arrives with `FaultReport`'s
-/// shape.
+/// The decode seam's answers and intermediates, per `weaver-types-Spec`
+/// section 4.4 and TYPES-DECODE. A cancel with nothing in flight answers
+/// `AtRest` rather than refusing. `Fault` carries the SPU's emitted report
+/// under the ruling of 2026-08-12. It answers nothing and closes no exchange.
 ///
 /// Adjacently tagged under the spliced-member arm of section 4.3's test:
 /// `Generated` wraps the one struct in the vocabulary carrying a `RawValue`,
@@ -1026,7 +1035,24 @@ pub enum TokenDirective {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "body", rename_all = "snake_case")]
 pub enum TokenAnswer {
-    Opened,
+    /// Actual facts from the one open residency, under TYPES-DECODE. The
+    /// generation limit is resolved by the SPU, including tunable values.
+    /// This required body replaces the former unit answer at cutover.
+    Opened {
+        prefix_tokens: u64,
+        capacity: u64,
+        generation_limit: u64,
+        terminal_tokens: u64,
+    },
+    /// Count-only result for the exact measured proposal. Numeric facts do
+    /// not carry a rendered prefix, a placement grant or a saved proposal.
+    DeltaMeasured {
+        resident: u64,
+        prefix_tokens: u64,
+        keep: u64,
+        input_tokens: u64,
+        capacity: u64,
+    },
     /// The stream's intermediate, per the contract's section 2 as of the
     /// streaming ruling: any number cross before the close and none closes
     /// the exchange, which stays `Generated`'s alone. The identifier is a
@@ -1130,6 +1156,13 @@ pub enum RefusalRecord {
         asked: TokenAsk,
         refusal: TokenRefusal,
     },
+    /// An attributed placement refusal under TYPES-DECODE. This is an
+    /// operation outcome and carries no decoder mutation or halt authority.
+    Placement {
+        assembly_id: crate::state_flow::DecimalU64,
+        code: crate::state_flow::PlacementCode,
+        detail: String,
+    },
     Lifecycle {
         asked: LifecycleAsk,
         refusal: LifecycleRefusal,
@@ -1168,6 +1201,11 @@ pub enum RefusalRecord {
 pub enum TokenAsk {
     Open,
     AppendAndGenerate,
+    /// A refused measurement names its requested keep, not a token guess
+    /// derived from the proposal's message bytes.
+    MeasureDelta {
+        keep: u64,
+    },
     /// The re-feed drive, per the decode contract's sixth exchange.
     ReFeed,
     Cancel,

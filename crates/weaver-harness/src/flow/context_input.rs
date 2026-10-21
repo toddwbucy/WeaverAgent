@@ -81,6 +81,8 @@ impl RecordingContext {
             || self.input.snapshot().is_some()
             || self.templates_block_content()
             || self.member_capture.is_some()
+            || self.read.is_some()
+            || self.measure_blocks_external()
             || self.open_turn.is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()
