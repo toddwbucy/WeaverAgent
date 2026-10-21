@@ -1423,10 +1423,15 @@ mod template_tests;
 
 #[path = "context_receipts.rs"]
 mod receipt_driver;
+
+#[path = "context_sort.rs"]
+mod sort_driver;
 #[allow(unused_imports)] // Dormant filing consumer, consumed by dependent primitive ports.
 pub(super) use receipt_driver::{
     FilingBeginError, FilingBeginRefusal, FilingCancellation, FilingCompletion, FilingProgress,
 };
+#[allow(unused_imports)] // The worker consumes the held outbound port at cutover.
+pub(in crate::flow) use sort_driver::{OutboundBeginError, OutboundCompletion, OutboundProgress};
 
 #[cfg(test)]
 #[path = "context_receipt_tests.rs"]
