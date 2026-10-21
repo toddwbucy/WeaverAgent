@@ -170,6 +170,9 @@ pub(in crate::flow) struct EffectiveEmission {
     account: RepairAccount,
 }
 impl EffectiveEmission {
+    pub(super) fn account(&self) -> &RepairAccount {
+        &self.account
+    }
     pub(in crate::flow) fn source(&self) -> &SourcePosition {
         &self.source
     }
@@ -896,6 +899,17 @@ fn validate_accounted<'a>(
 #[cfg(test)]
 #[path = "repair_tests.rs"]
 mod tests;
+
+/// Fixture release goes through the real successful repair transition. A
+/// rejected or unresolved generation cannot manufacture an effective emission.
+#[cfg(test)]
+pub(super) fn effective_fixture(original: OriginalRequests) -> EffectiveEmission {
+    RepairLedger::begin(original, 2)
+        .unwrap()
+        .take_effective()
+        .unwrap()
+        .expect("fixture generation has no unresolved repair")
+}
 
 /// Pair-owner fixture. The actual-context repair tests cover the recorder side.
 /// This runs the real repair transitions and derives starts from checked spans,

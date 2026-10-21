@@ -134,8 +134,17 @@ impl InputFixture {
 
     fn with_declaration_scheme(
         inventory: Option<&super::super::templates::CompiledInventory>,
+        declaration: FlowConfig,
+        override_scheme: Option<(String, s::SchemeDeclaration)>,
+    ) -> Self {
+        Self::with_declaration_scheme_tools(inventory, declaration, override_scheme, None)
+    }
+
+    pub(super) fn with_declaration_scheme_tools(
+        inventory: Option<&super::super::templates::CompiledInventory>,
         mut declaration: FlowConfig,
         override_scheme: Option<(String, s::SchemeDeclaration)>,
+        sh: Option<weaver_trace::serving::payloads::ToolPolicy>,
     ) -> Self {
         let (mut bootstrap, mut scheme, mut ready) = duty();
         if let Some((text, declared)) = override_scheme {
@@ -152,6 +161,7 @@ impl InputFixture {
             unreachable!();
         };
         load.ste100_scheme = bootstrap.scheme_text.clone();
+        load.state_flow.tools.sh = sh;
         load.state_flow.ste100 = super::super::mirror::instruction(&bootstrap.instruction);
         load.template_inventory.checker_artifact_sha256 =
             bootstrap.instruction.model_artifact_sha256.as_str().into();

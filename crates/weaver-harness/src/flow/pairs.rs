@@ -1,19 +1,24 @@
-//! Passive custody for conforming sends barred from execution. The context owns
-//! every author ticket and socket operation. This owner grants no execution,
-//! tool result, repair success, placement, or new write path.
+//! Passive pair custody. The context owns every author ticket and socket operation.
+//! Dispatch requires a sealed effective emission and both real commits. A gate
+//! answer remains owned until its exact terminal commits, never itself a grant.
 
 use std::sync::Arc;
 
 use weaver_traits::ContentBlock;
 use weaver_types::state_flow::{
-    CallId, NonDispatchCause, PairEnded, PairFailure, PairRecord, PairStarted, SchemeDeclaration,
-    SourceBlockId, StateFrame, Ste100Result, Ste100Target, TerminalPairFate,
+    CallId, NonDispatchCause, PairEnded, PairFailure, PairLane, PairRecord, PairRequest,
+    PairStarted, SHELL_MAX_CLOCK_MS, SchemeDeclaration, SourceBlockId, SourcePosition, StateFrame,
+    Ste100Result, Ste100Target, TerminalPairFate,
 };
 
-use super::repair::RepairAccount;
+use super::repair::{EffectiveEmission, RepairAccount};
 use crate::flow::coordinator::{CheckedGeneration, OriginalRequests};
 use crate::flow::ledger::{CommittedSource, LedgerFile, SourceLease, TerminalOutcome};
+use crate::flow::pump_transport::ReceivedOrgan;
 use crate::flow::report::{OutstandingPair, PairState};
+use weaver_types::{
+    ExchangeId, KillCause, Opener, OrganEnvelope, Position, ToolExecution, ToolName, ToolOutcome,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PairError {
@@ -28,6 +33,11 @@ pub(super) enum PairError {
     WrongReceipt,
     WrongStatement,
     Allocation,
+    WrongExchange,
+    InvalidClock,
+    UnsupportedLane,
+    InvalidLineage,
+    Protocol,
 }
 
 impl std::fmt::Display for PairError {
@@ -40,6 +50,28 @@ impl std::fmt::Display for PairError {
 pub(super) enum PairRecordPhase {
     Opening,
     Terminal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum GateObservation {
+    Matched(CallId),
+    Rejected,
+    Halted(CallId),
+}
+
+/// Raw received custody remains here until the context records this disposition.
+pub(super) struct RejectedGateReturn {
+    record: weaver_trace::serving::payloads::RejectedReturn,
+    received: ReceivedOrgan,
+}
+
+impl RejectedGateReturn {
+    pub(super) fn record(&self) -> &weaver_trace::serving::payloads::RejectedReturn {
+        &self.record
+    }
+    pub(super) fn raw_bytes(&self) -> &[u8] {
+        self.received.raw_bytes()
+    }
 }
 
 /// A private view of the exact terminal commit, not another wire frame.
@@ -69,9 +101,13 @@ pub(in crate::flow) struct CompletedPair {
     terminal: CommittedSource,
     receipt: FiledReceipt,
     result: crate::tools::ToolResult,
+    received: Option<ReceivedOrgan>,
 }
 
 impl CompletedPair {
+    pub(in crate::flow) fn raw_answer(&self) -> Option<&[u8]> {
+        self.received.as_ref().map(ReceivedOrgan::raw_bytes)
+    }
     pub(in crate::flow) fn started(&self) -> &PairStarted {
         &self.started
     }
@@ -109,6 +145,10 @@ struct Entry {
     terminal_authoring: bool,
     terminal_source: Option<SourceBlockId>,
     completed: Option<CompletedPair>,
+    execution: Option<ExchangeId>,
+    sent: bool,
+    received: Option<ReceivedOrgan>,
+    gate_terminal: bool,
 }
 
 /// Only the association or repair owner can construct either proof. A public
@@ -116,6 +156,7 @@ struct Entry {
 enum BatchProof {
     Original(OriginalRequests),
     Repair(RepairAccount),
+    Effective(EffectiveEmission),
 }
 
 impl BatchProof {
@@ -123,6 +164,7 @@ impl BatchProof {
         match self {
             Self::Original(original) => original,
             Self::Repair(account) => account.original(),
+            Self::Effective(effective) => effective.account().original(),
         }
     }
 
@@ -130,6 +172,7 @@ impl BatchProof {
         let (original, repair) = match self {
             Self::Original(original) => (Some(original), None),
             Self::Repair(account) => (None, Some(account)),
+            Self::Effective(effective) => (None, Some(effective.account())),
         };
         original
             .into_iter()
@@ -141,6 +184,7 @@ impl BatchProof {
         let (original, repair) = match self {
             Self::Original(original) => (Some(original.generation()), None),
             Self::Repair(account) => (None, Some(account)),
+            Self::Effective(effective) => (None, Some(effective.account())),
         };
         original
             .into_iter()
@@ -171,9 +215,469 @@ pub(super) struct PairLedger {
     active: Option<Batch>,
     closed: Vec<CompletedPair>,
     frozen: bool,
+    gate_failed: bool,
+    rejected: Option<RejectedGateReturn>,
+    rejected_sources: Vec<SourceBlockId>,
+    cancelled_exchanges: Vec<(ExchangeId, CallId)>,
 }
 
 impl PairLedger {
+    /// Only successful repair release authorizes execution. Accounting owners
+    /// obtained on rejection or exhaustion cannot enter this arm.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn accept_effective(
+        &mut self,
+        effective: EffectiveEmission,
+    ) -> Result<(), (EffectiveEmission, PairError)> {
+        self.accept_proof(BatchProof::Effective(effective))
+            .map_err(|(proof, error)| match proof {
+                BatchProof::Effective(effective) => (effective, error),
+                _ => unreachable!("effective proof returned unchanged"),
+            })
+    }
+
+    pub(super) fn has_effective(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|batch| matches!(batch.proof, BatchProof::Effective(_)))
+    }
+
+    /// The first unfinished request is a barrier, including an inward lane.
+    /// Never skip a recall to execute a later external call.
+    pub(super) fn next_ready(&self) -> Option<&PairStarted> {
+        if self.frozen || self.gate_failed || self.rejected.is_some() || self.author_pending() {
+            return None;
+        }
+        let batch = self.active.as_ref()?;
+        if !matches!(batch.proof, BatchProof::Effective(_)) || batch.cause.is_some() {
+            return None;
+        }
+        let entry = batch
+            .entries
+            .iter()
+            .find(|entry| entry.completed.is_none())?;
+        if entry.opening.is_none()
+            || entry.execution.is_some()
+            || entry.ending.is_some()
+            || !batch
+                .statements
+                .iter()
+                .any(|receipt| receipt.source() == &entry.started.statement.block_id)
+        {
+            return None;
+        }
+        Some(&entry.started)
+    }
+
+    /// Bind before staging bytes. The context supplies the clock from its exact
+    /// recorded load policy and retains this returned frame until fully sent.
+    pub(super) fn bind_execution(
+        &mut self,
+        call: &CallId,
+        exchange: ExchangeId,
+        clock_ms: u64,
+    ) -> Result<OrganEnvelope, PairError> {
+        self.live()?;
+        if self.next_ready().map(|ready| &ready.call_id) != Some(call) {
+            return Err(PairError::WrongPhase);
+        }
+        if exchange.opener != Opener::Harness
+            || exchange.ordinal == 0
+            || self.exchange_known(&exchange)
+        {
+            return Err(PairError::WrongExchange);
+        }
+        if !(1..=SHELL_MAX_CLOCK_MS).contains(&clock_ms) {
+            return Err(PairError::InvalidClock);
+        }
+        let entry = self.entry_mut(call)?;
+        let PairRequest::External { name, arguments } = &entry.started.request else {
+            return Err(PairError::UnsupportedLane);
+        };
+        if entry.started.lane != PairLane::External {
+            return Err(PairError::UnsupportedLane);
+        }
+        let frame = OrganEnvelope {
+            exchange: exchange.clone(),
+            position: Position::Open,
+            payload: weaver_types::Payload::Tool(ToolExecution {
+                name: ToolName(name.clone()),
+                arguments: arguments.clone(),
+                clock_ms,
+            }),
+        };
+        entry.execution = Some(exchange);
+        Ok(frame)
+    }
+
+    pub(super) fn mark_sent(
+        &mut self,
+        call: &CallId,
+        exchange: &ExchangeId,
+    ) -> Result<(), PairError> {
+        self.live()?;
+        if self
+            .active
+            .as_ref()
+            .is_none_or(|batch| batch.cause.is_some())
+        {
+            return Err(PairError::WrongPhase);
+        }
+        let entry = self.entry_mut(call)?;
+        if entry.execution.as_ref() != Some(exchange) || entry.sent || entry.ending.is_some() {
+            return Err(PairError::WrongPhase);
+        }
+        entry.sent = true;
+        Ok(())
+    }
+
+    /// The context must first withdraw the exact unsent packet from transport.
+    /// Its reservation is retired permanently, without claiming an execution.
+    pub(super) fn cancel_unsent(
+        &mut self,
+        call: &CallId,
+        exchange: &ExchangeId,
+    ) -> Result<(), PairError> {
+        self.live()?;
+        let cause = self
+            .active
+            .as_ref()
+            .and_then(|batch| batch.cause)
+            .ok_or(PairError::WrongPhase)?;
+        let entry = self.entry(call)?;
+        if entry.execution.as_ref() != Some(exchange)
+            || entry.sent
+            || entry.ending.is_some()
+            || entry.terminal_authoring
+            || entry.completed.is_some()
+        {
+            return Err(PairError::WrongPhase);
+        }
+        self.cancelled_exchanges
+            .try_reserve(1)
+            .map_err(|_| PairError::Allocation)?;
+        self.cancelled_exchanges
+            .push((exchange.clone(), call.clone()));
+        let entry = self.entry_mut(call).expect("validated unsent call");
+        entry.execution = None;
+        entry.ending = Some(PairEnded {
+            call_id: call.clone(),
+            execution: None,
+            fate: TerminalPairFate::Failed,
+            reason: Some(PairFailure::NotDispatched { cause }),
+            outcome: None,
+            loaded_from: None,
+        });
+        Ok(())
+    }
+
+    pub(super) fn executing(&self) -> Option<(&CallId, &ExchangeId, bool)> {
+        self.active.as_ref()?.entries.iter().find_map(|entry| {
+            (entry.ending.is_none()).then_some(())?;
+            Some((
+                &entry.started.call_id,
+                entry.execution.as_ref()?,
+                entry.sent,
+            ))
+        })
+    }
+
+    /// No terminal can be attributed to the gate without the owned packet.
+    /// A frozen flow may retain its trace-only outcome, but cannot file it.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn observe_gate(
+        &mut self,
+        received: ReceivedOrgan,
+    ) -> Result<GateObservation, (ReceivedOrgan, PairError)> {
+        if self.rejected.is_some() {
+            return Err((received, PairError::Busy));
+        }
+        let envelope = received.envelope();
+        let weaver_types::Payload::ToolAnswer(outcome) = &envelope.payload else {
+            return Err((received, PairError::Protocol));
+        };
+        if envelope.position != Position::Close {
+            return Err((received, PairError::Protocol));
+        }
+        if matches!(
+            outcome,
+            ToolOutcome::Killed {
+                by: KillCause::Fault,
+                ..
+            }
+        ) || (!self.frozen
+            && matches!(
+                outcome,
+                ToolOutcome::Killed {
+                    by: KillCause::FlowFailure,
+                    ..
+                }
+            ))
+        {
+            return Err((received, PairError::Protocol));
+        }
+        let exchange = envelope.exchange.clone();
+        let mapped = self.active.as_ref().and_then(|batch| {
+            batch
+                .entries
+                .iter()
+                .find(|entry| entry.execution.as_ref() == Some(&exchange))
+        });
+        let live_call = mapped
+            .filter(|entry| entry.ending.is_none() && entry.sent)
+            .map(|entry| entry.started.call_id.clone());
+        if let Some(call) = live_call {
+            let (fate, reason) = match outcome {
+                ToolOutcome::Result { .. }
+                | ToolOutcome::Refused { .. }
+                | ToolOutcome::Errored { .. } => (TerminalPairFate::Completed, None),
+                ToolOutcome::Killed { by, .. } => (
+                    TerminalPairFate::Failed,
+                    Some(match by {
+                        KillCause::Clock => PairFailure::Timeout {},
+                        KillCause::Cancel => PairFailure::Cancelled {},
+                        KillCause::Unload => PairFailure::Unload {},
+                        KillCause::FlowFailure => PairFailure::FlowFailure {},
+                        KillCause::Fault => unreachable!("gate cannot mint a harness fault"),
+                    }),
+                ),
+            };
+            let ending = PairEnded {
+                call_id: call.clone(),
+                execution: Some(exchange),
+                fate,
+                reason,
+                outcome: Some(outcome.clone()),
+                loaded_from: None,
+            };
+            let frozen = self.frozen;
+            let entry = self.entry_mut(&call).expect("live mapped entry");
+            entry.ending = Some(ending);
+            entry.gate_terminal = true;
+            entry.received = Some(received);
+            return Ok(if frozen {
+                GateObservation::Halted(call)
+            } else {
+                GateObservation::Matched(call)
+            });
+        }
+        let known = mapped
+            .map(|entry| (&entry.started.call_id, entry.ending.as_ref()))
+            .or_else(|| {
+                self.closed
+                    .iter()
+                    .find(|pair| pair.ended.execution.as_ref() == Some(&exchange))
+                    .map(|pair| (&pair.started.call_id, Some(&pair.ended)))
+            })
+            .or_else(|| {
+                self.cancelled_exchanges
+                    .iter()
+                    .find(|(reserved, _)| reserved == &exchange)
+                    .map(|(_, call)| (call, None))
+            });
+        let reason = match known {
+            Some((_, Some(end))) if matches!(end.reason, Some(PairFailure::GateFault {})) => {
+                "late_return"
+            }
+            Some((_, Some(_))) => "duplicate_return",
+            _ => "unexpected_exchange",
+        };
+        let call_id = known.map(|(call, _)| call.clone());
+        let raw = match std::str::from_utf8(received.raw_bytes())
+            .ok()
+            .and_then(|text| serde_json::value::RawValue::from_string(text.to_owned()).ok())
+        {
+            Some(raw) => raw,
+            None => return Err((received, PairError::Protocol)),
+        };
+        use weaver_trace::serving::payloads as trace;
+        let record = trace::RejectedReturn {
+            call_id: call_id.map(|call| trace::CallId {
+                run: call.run,
+                sequence: trace::DecimalU64(call.sequence.0),
+                call: trace::DecimalU64(call.call.0),
+            }),
+            execution: trace::ExchangeId {
+                opener: match exchange.opener {
+                    Opener::Harness => trace::Opener::Harness,
+                    Opener::Admin => trace::Opener::Admin,
+                    Opener::Spu => trace::Opener::Spu,
+                    Opener::Gate => trace::Opener::Gate,
+                },
+                ordinal: exchange.ordinal,
+            },
+            reason: reason.into(),
+            raw_envelope: raw,
+        };
+        self.rejected = Some(RejectedGateReturn { record, received });
+        Ok(GateObservation::Rejected)
+    }
+
+    pub(super) fn pending_rejection(&self) -> Option<&RejectedGateReturn> {
+        self.rejected.as_ref()
+    }
+
+    /// Called only by the context's exact Recorded hook, never when authoring
+    /// merely starts. Return the raw custody after its rejection is on trace.
+    pub(super) fn ack_rejection_recorded(
+        &mut self,
+        source: SourcePosition,
+    ) -> Result<ReceivedOrgan, PairError> {
+        let pending = self.rejected.as_ref().ok_or(PairError::WrongPhase)?;
+        if source.block_id.run != self.run
+            || source.block_id.block.0 != 0
+            || source.block_id.sequence.0 == 0
+            || self.source_used(&source.block_id)
+            || self.rejected_sources.contains(&source.block_id)
+            || pending
+                .record
+                .call_id
+                .as_ref()
+                .is_some_and(|call| source.block_id.sequence.0 <= call.sequence.0)
+            || self.active.as_ref().is_some_and(|batch| {
+                source.turn.as_deref()
+                    != Some(
+                        batch
+                            .proof
+                            .original()
+                            .generation()
+                            .original()
+                            .turn
+                            .0
+                            .as_str(),
+                    )
+            })
+        {
+            return Err(PairError::InvalidIdentity);
+        }
+        self.rejected_sources
+            .try_reserve(1)
+            .map_err(|_| PairError::Allocation)?;
+        self.rejected_sources.push(source.block_id);
+        Ok(self.rejected.take().unwrap().received)
+    }
+
+    pub(super) fn terminal_is_gate(&self, call: &CallId) -> Result<bool, PairError> {
+        Ok(self.entry(call)?.gate_terminal)
+    }
+
+    pub(super) fn halted_terminal(&self) -> Option<(&CallId, &PairEnded)> {
+        if !self.frozen {
+            return None;
+        }
+        self.active.as_ref()?.entries.iter().find_map(|entry| {
+            if entry.completed.is_some() {
+                return None;
+            }
+            Some((&entry.started.call_id, entry.ending.as_ref()?))
+        })
+    }
+
+    /// The context calls this only after its gate death/containment evidence.
+    /// A received result already owns the fate and cannot be overwritten.
+    pub(super) fn close_gate_fault(&mut self, call: &CallId) -> Result<(), PairError> {
+        let entry = self.entry_mut(call)?;
+        if entry.execution.is_none()
+            || !entry.sent
+            || entry.ending.is_some()
+            || entry.completed.is_some()
+        {
+            return Err(PairError::WrongPhase);
+        }
+        entry.ending = Some(PairEnded {
+            call_id: call.clone(),
+            execution: entry.execution.clone(),
+            fate: TerminalPairFate::Failed,
+            reason: Some(PairFailure::GateFault {}),
+            outcome: Some(ToolOutcome::Killed {
+                by: KillCause::Fault,
+                partial: None,
+            }),
+            loaded_from: None,
+        });
+        self.gate_failed = true;
+        Ok(())
+    }
+
+    pub(super) fn refuse_ungranted(
+        &mut self,
+        call: &CallId,
+        reason: String,
+    ) -> Result<(), PairError> {
+        self.live()?;
+        if self.next_ready().map(|ready| &ready.call_id) != Some(call) {
+            return Err(PairError::WrongPhase);
+        }
+        let entry = self.entry_mut(call)?;
+        if entry.started.lane != PairLane::External {
+            return Err(PairError::UnsupportedLane);
+        }
+        entry.ending = Some(PairEnded {
+            call_id: call.clone(),
+            execution: None,
+            fate: TerminalPairFate::Failed,
+            reason: Some(PairFailure::NotGranted {}),
+            outcome: Some(ToolOutcome::Refused { reason }),
+            loaded_from: None,
+        });
+        Ok(())
+    }
+
+    pub(super) fn set_retry_of(
+        &mut self,
+        call: &CallId,
+        predecessor: &CallId,
+    ) -> Result<(), PairError> {
+        self.live()?;
+        if !self.has_effective() {
+            return Err(PairError::WrongPhase);
+        }
+        let entry = self.entry(call)?;
+        let prior = self
+            .closed
+            .iter()
+            .find(|pair| &pair.started.call_id == predecessor)
+            .ok_or(PairError::InvalidLineage)?;
+        if entry.opening_authoring
+            || entry.started.retry_of.is_some()
+            || call == predecessor
+            || call.run != predecessor.run
+            || entry.started.lane != PairLane::External
+            || prior.started.lane != PairLane::External
+            || entry.started.request != prior.started.request
+        {
+            return Err(PairError::InvalidLineage);
+        }
+        self.entry_mut(call)?.started.retry_of = Some(predecessor.clone());
+        Ok(())
+    }
+
+    pub(super) fn finish_effective(&mut self) -> Result<EffectiveEmission, PairError> {
+        self.live()?;
+        if !self.has_effective() || self.rejected.is_some() {
+            return Err(PairError::WrongPhase);
+        }
+        match self.finish_proof()? {
+            BatchProof::Effective(effective) => Ok(effective),
+            _ => unreachable!("checked effective owner"),
+        }
+    }
+
+    fn exchange_known(&self, exchange: &ExchangeId) -> bool {
+        self.closed
+            .iter()
+            .any(|pair| pair.ended.execution.as_ref() == Some(exchange))
+            || self
+                .cancelled_exchanges
+                .iter()
+                .any(|(reserved, _)| reserved == exchange)
+            || self.active.as_ref().is_some_and(|batch| {
+                batch
+                    .entries
+                    .iter()
+                    .any(|entry| entry.execution.as_ref() == Some(exchange))
+            })
+    }
     pub(super) fn new(
         session: String,
         run: String,
@@ -190,6 +694,10 @@ impl PairLedger {
             active: None,
             closed: Vec::new(),
             frozen: false,
+            gate_failed: false,
+            rejected: None,
+            rejected_sources: Vec::new(),
+            cancelled_exchanges: Vec::new(),
         })
     }
 
@@ -203,7 +711,7 @@ impl PairLedger {
         self.accept_proof(BatchProof::Original(original))
             .map_err(|(proof, error)| match proof {
                 BatchProof::Original(original) => (original, error),
-                BatchProof::Repair(_) => unreachable!("original proof returned unchanged"),
+                _ => unreachable!("original proof returned unchanged"),
             })
     }
 
@@ -215,7 +723,7 @@ impl PairLedger {
         self.accept_proof(BatchProof::Repair(account))
             .map_err(|(proof, error)| match proof {
                 BatchProof::Repair(account) => (account, error),
-                BatchProof::Original(_) => unreachable!("repair proof returned unchanged"),
+                _ => unreachable!("repair proof returned unchanged"),
             })
     }
 
@@ -289,6 +797,10 @@ impl PairLedger {
                     terminal_authoring: false,
                     terminal_source: None,
                     completed: None,
+                    execution: None,
+                    sent: false,
+                    received: None,
+                    gate_terminal: false,
                 });
             }
             Ok((entries, statements))
@@ -547,7 +1059,15 @@ impl PairLedger {
         let cause = dominant(batch.cause, cause);
         batch.cause = Some(cause);
         for entry in &mut batch.entries {
-            if !entry.terminal_authoring && entry.completed.is_none() {
+            if !entry.terminal_authoring
+                && entry.completed.is_none()
+                && entry.execution.is_none()
+                && (entry.ending.is_none()
+                    || matches!(
+                        entry.ending.as_ref().and_then(|end| end.reason.as_ref()),
+                        Some(PairFailure::NotDispatched { .. })
+                    ))
+            {
                 entry.ending = Some(PairEnded {
                     call_id: entry.started.call_id.clone(),
                     execution: None,
@@ -592,11 +1112,14 @@ impl PairLedger {
             request_id: receipt.common().request_id,
             block_id: receipt.source().clone(),
         };
-        let Some(PairFailure::NotDispatched { cause }) = &entry.ending.as_ref().unwrap().reason
-        else {
-            unreachable!("this owner creates only non-dispatch terminals")
+        let ending = entry.ending.as_ref().unwrap();
+        let result = match (&ending.reason, &ending.outcome) {
+            (Some(PairFailure::NotDispatched { cause }), None) => {
+                crate::tools::ToolResult::not_dispatched(*cause)
+            }
+            (_, Some(outcome)) => crate::tools::ToolResult::granted(outcome),
+            _ => unreachable!("all live terminal constructors retain their outcome"),
         };
-        let cause = *cause;
         entry.completed = Some(CompletedPair {
             started: entry.started.clone(),
             ended: entry.ending.as_ref().unwrap().clone(),
@@ -604,7 +1127,8 @@ impl PairLedger {
             opening: entry.opening.take().unwrap(),
             terminal: receipt,
             receipt: filed,
-            result: crate::tools::ToolResult::not_dispatched(cause),
+            result,
+            received: entry.received.take(),
         });
         Ok(())
     }
@@ -628,6 +1152,7 @@ impl PairLedger {
 
     pub(super) fn is_complete(&self) -> bool {
         !self.frozen
+            && self.rejected.is_none()
             && self
                 .active
                 .as_ref()
@@ -636,12 +1161,16 @@ impl PairLedger {
 
     pub(super) fn finish_batch(&mut self) -> Result<OriginalRequests, PairError> {
         self.live()?;
-        if self.has_repair_account() {
+        if !self
+            .active
+            .as_ref()
+            .is_some_and(|batch| matches!(batch.proof, BatchProof::Original(_)))
+        {
             return Err(PairError::WrongPhase);
         }
         match self.finish_proof()? {
             BatchProof::Original(original) => Ok(original),
-            BatchProof::Repair(_) => unreachable!("checked original batch"),
+            _ => unreachable!("checked original batch"),
         }
     }
 
@@ -652,12 +1181,15 @@ impl PairLedger {
         }
         match self.finish_proof()? {
             BatchProof::Repair(account) => Ok(account),
-            BatchProof::Original(_) => unreachable!("checked repair batch"),
+            _ => unreachable!("checked repair batch"),
         }
     }
 
     fn finish_proof(&mut self) -> Result<BatchProof, PairError> {
         self.live()?;
+        if self.rejected.is_some() {
+            return Err(PairError::Busy);
+        }
         if self
             .active
             .as_ref()
@@ -695,14 +1227,18 @@ impl PairLedger {
                     .any(|held| held.source() == &entry.started.statement.block_id);
                 Some(OutstandingPair {
                     call_id: entry.started.call_id.clone(),
-                    state: if entry.terminal_authoring {
+                    state: if entry.terminal_authoring
+                        || (entry.execution.is_some() && entry.ending.is_some())
+                    {
                         PairState::Ending
+                    } else if entry.execution.is_some() {
+                        PairState::Executing
                     } else if entry.opening.is_some() && has_statement {
                         PairState::Opened
                     } else {
                         PairState::Opening
                     },
-                    execution: None,
+                    execution: entry.execution.clone(),
                     opening_source,
                     opening_filed: entry.opening.is_some(),
                     terminal_source: entry.terminal_source.clone(),
@@ -808,7 +1344,6 @@ impl PairLedger {
                         .as_str(),
                 )
             || file.source.channel != "tool"
-            || file.source.subsystem != "harness"
             || file.validate_structure().is_err()
         {
             return Err(PairError::WrongReceipt);
@@ -819,13 +1354,20 @@ impl PairLedger {
                     && entry.opening_source.as_ref() == Some(receipt.source())
                     && file.source.kind == "tool.call.started"
                     && file.source.origin == "model"
+                    && file.source.subsystem == "harness"
                     && matches!(&file.pair, PairRecord::Started(started) if started == &entry.started)
             }
             PairRecordPhase::Terminal => {
                 entry.terminal_authoring
                     && entry.terminal_source.as_ref() == Some(receipt.source())
                     && file.source.kind == "tool.call.completed"
-                    && file.source.origin == "loop"
+                    && file.source.origin == if entry.gate_terminal { "tool" } else { "loop" }
+                    && file.source.subsystem
+                        == if entry.gate_terminal {
+                            "gate"
+                        } else {
+                            "harness"
+                        }
                     && matches!(&file.pair, PairRecord::Ended(ended) if Some(ended) == entry.ending.as_ref())
             }
         };
@@ -850,3 +1392,7 @@ fn dominant(old: Option<NonDispatchCause>, new: NonDispatchCause) -> NonDispatch
 #[cfg(test)]
 #[path = "pairs_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pairs_execution_tests.rs"]
+mod execution_tests;

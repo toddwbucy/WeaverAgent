@@ -12,6 +12,8 @@
 //! Decode retains the existing SegmentPreamble wire, not the STE100 framing.
 
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
@@ -26,6 +28,7 @@ use weaver_types::{
     TokenDirective,
 };
 
+use super::clock::PumpIo;
 use crate::channel::{ClassifyChannel, ClassifyReply, DecodeChannel, DecodeReply, OrganChannel};
 use crate::failure::ChannelFault;
 
@@ -99,6 +102,71 @@ pub(super) enum Stage<T> {
     Busy(T),
 }
 
+/// Stable socket-owner identity, independent of its current numeric descriptor.
+/// Retaining this identity prevents a later port from matching through fd reuse.
+#[derive(Debug, Clone)]
+pub(super) struct PortIdentity(Arc<()>);
+
+impl PortIdentity {
+    pub(super) fn matches(&self, port: &OrganPort) -> bool {
+        Arc::ptr_eq(&self.0, &port.identity.0)
+    }
+}
+
+const SEND_PENDING: u8 = 0;
+const SEND_SENT: u8 = 1;
+const SEND_OBSERVED: u8 = 2;
+const SEND_WITHDRAWN: u8 = 3;
+
+#[derive(Debug)]
+struct TrackedSend {
+    status: AtomicU8,
+    sent_at: AtomicU64,
+}
+
+/// One staged packet's transport proof. Only the owning port can change its
+/// status, and only a successful whole send can establish Sent. A later socket
+/// fault, another stage or an empty outgoing slot cannot manufacture that fact.
+#[derive(Debug)]
+pub(super) struct OrganSend {
+    identity: PortIdentity,
+    tracked: Arc<TrackedSend>,
+}
+
+impl OrganSend {
+    pub(super) fn sent(&self) -> bool {
+        matches!(
+            self.tracked.status.load(Ordering::Acquire),
+            SEND_SENT | SEND_OBSERVED
+        )
+    }
+
+    /// Raw common-clock nanoseconds observed immediately after the whole send.
+    /// Sent with no timestamp means the post-send clock observation failed.
+    pub(super) fn sent_at(&self) -> Option<u64> {
+        (self.tracked.status.load(Ordering::Acquire) == SEND_OBSERVED)
+            .then(|| self.tracked.sent_at.load(Ordering::Relaxed))
+    }
+
+    pub(super) fn withdrawn(&self) -> bool {
+        self.tracked.status.load(Ordering::Acquire) == SEND_WITHDRAWN
+    }
+
+    pub(super) fn belongs_to(&self, port: &OrganPort) -> bool {
+        self.identity.matches(port)
+    }
+
+    pub(super) fn port_identity(&self) -> PortIdentity {
+        self.identity.clone()
+    }
+}
+
+#[derive(Debug)]
+pub(super) enum TrackedStage {
+    Queued(OrganSend),
+    Busy(OrganEnvelope),
+}
+
 #[derive(Debug)]
 pub(super) struct StageFailure<T> {
     pub input: T,
@@ -131,6 +199,7 @@ struct Outbound {
     preamble: Option<Vec<u8>>,
     preamble_sent: bool,
     offset: usize,
+    tracked: Option<Arc<TrackedSend>>,
 }
 
 #[derive(Debug)]
@@ -145,6 +214,7 @@ struct Series {
 /// codec and wire election, so callers cannot supply a different framing rule.
 pub(super) struct PacketPort<T> {
     end: OwnedFd,
+    identity: PortIdentity,
     wire: Wire,
     decode: fn(&[u8]) -> Result<T, Failure>,
     outgoing: Option<Outbound>,
@@ -163,6 +233,38 @@ pub(super) type OrganPort = PacketPort<OrganEnvelope>;
 pub(super) type DecodePort = PacketPort<DecodeReply>;
 pub(super) type LabelPort = PacketPort<ClassifyReply>;
 
+/// One actual organ datagram, with its decoded view and original octets held
+/// together. Only the owning socket port constructs this fact. It is not a
+/// matched tool outcome, a filed pair, or permission to dispatch anything.
+#[derive(Debug)]
+pub(super) struct ReceivedOrgan {
+    envelope: OrganEnvelope,
+    raw: Vec<u8>,
+    identity: PortIdentity,
+}
+
+impl ReceivedOrgan {
+    pub(super) fn envelope(&self) -> &OrganEnvelope {
+        &self.envelope
+    }
+
+    pub(super) fn raw_bytes(&self) -> &[u8] {
+        &self.raw
+    }
+
+    pub(super) fn port_identity(&self) -> PortIdentity {
+        self.identity.clone()
+    }
+
+    pub(super) fn belongs_to(&self, port: &OrganPort) -> bool {
+        self.identity.matches(port)
+    }
+
+    pub(super) fn into_parts(self) -> (OrganEnvelope, Vec<u8>) {
+        (self.envelope, self.raw)
+    }
+}
+
 impl OrganPort {
     pub(super) fn from_channel(channel: OrganChannel) -> Result<Self, Failure> {
         Self::from_owned(channel.into_fd())
@@ -180,6 +282,106 @@ impl OrganPort {
         input: OrganEnvelope,
     ) -> Result<Stage<OrganEnvelope>, StageFailure<OrganEnvelope>> {
         self.stage_encoded(input, serde_json::to_vec)
+    }
+
+    /// Issue a sealed proof for exactly this stage, without changing the
+    /// existing untracked API used by other seam owners.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_tracked(
+        &mut self,
+        input: OrganEnvelope,
+    ) -> Result<TrackedStage, StageFailure<OrganEnvelope>> {
+        match self.stage(input)? {
+            Stage::Queued => {
+                let tracked = Arc::new(TrackedSend {
+                    status: AtomicU8::new(SEND_PENDING),
+                    sent_at: AtomicU64::new(0),
+                });
+                self.outgoing.as_mut().expect("queued packet").tracked = Some(Arc::clone(&tracked));
+                Ok(TrackedStage::Queued(OrganSend {
+                    identity: self.identity.clone(),
+                    tracked,
+                }))
+            }
+            Stage::Busy(input) => Ok(TrackedStage::Busy(input)),
+        }
+    }
+
+    /// Withdraw only this exact exchange's wholly unsent organ datagram. A
+    /// successful SEQPACKET send removes it atomically, so absence after send
+    /// never becomes a claim that the operation was not dispatched. A failed
+    /// transport keeps all outgoing evidence and refuses withdrawal.
+    pub(super) fn withdraw_pending(
+        &mut self,
+        exchange: &weaver_types::ExchangeId,
+    ) -> Result<Option<OrganEnvelope>, Failure> {
+        self.live()?;
+        let Some(outbound) = self.outgoing.as_ref() else {
+            return Ok(None);
+        };
+        if outbound.preamble.is_some() || outbound.preamble_sent || outbound.offset != 0 {
+            return Err(self.fail(Failure::invalid(
+                "organ withdrawal requires a wholly unsent datagram",
+            )));
+        }
+        let pending = (self.decode)(&outbound.body).map_err(|failure| self.fail(failure))?;
+        if pending.exchange != *exchange {
+            return Ok(None);
+        }
+        if let Some(tracked) = self.outgoing.take().and_then(|outbound| outbound.tracked) {
+            tracked.status.store(SEND_WITHDRAWN, Ordering::Release);
+        }
+        self.send_interrupted = false;
+        Ok(Some(pending))
+    }
+
+    /// Transfer the typed envelope and exact received datagram atomically.
+    /// A later EOF does not erase a completion already held. Neither taking
+    /// that completion nor its raw evidence clears the terminal transport fault.
+    pub(super) fn take_received(&mut self) -> Result<Option<ReceivedOrgan>, Failure> {
+        if let Some(envelope) = self.held.take() {
+            let raw = self
+                .received_wire
+                .take()
+                .expect("a decoded organ completion retains its exact datagram");
+            return Ok(Some(ReceivedOrgan {
+                envelope,
+                raw,
+                identity: self.identity.clone(),
+            }));
+        }
+        self.live()?;
+        Ok(None)
+    }
+
+    /// Available malformed packet bytes, or a truncated packet's received
+    /// prefix. A valid held completion keeps its bytes for take_received even
+    /// if the peer later closes. The fault itself remains owned by this port.
+    pub(super) fn failed_wire(&self) -> Option<&[u8]> {
+        if self.failure.is_some() && self.held.is_none() {
+            self.received_wire.as_deref()
+        } else {
+            None
+        }
+    }
+
+    /// Take malformed evidence once without thawing the failed transport or
+    /// claiming that arbitrary received octets are a JSON tool return.
+    pub(super) fn take_failed_wire(&mut self) -> Option<Vec<u8>> {
+        if self.failure.is_some() && self.held.is_none() {
+            self.received_wire.take()
+        } else {
+            None
+        }
+    }
+
+    /// A tracked send must use the same clock as its decision bound. The
+    /// timestamp records syscall completion, never a later consumer's probe.
+    pub(super) fn try_send_observed(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<SendProgress, Failure> {
+        self.send_with_observation(send, Some(io))
     }
 }
 
@@ -252,6 +454,7 @@ impl<T> PacketPort<T> {
         .map_err(Failure::io)?;
         Ok(Self {
             end,
+            identity: PortIdentity(Arc::new(())),
             wire,
             decode,
             outgoing: None,
@@ -289,6 +492,12 @@ impl<T> PacketPort<T> {
     }
     pub(super) fn held(&self) -> Option<&T> {
         self.held.as_ref()
+    }
+
+    /// Whether an owned send still owes transport work. False alone is no
+    /// proof of sending. A tracked caller uses its exact OrganSend ticket.
+    pub(super) fn send_pending(&self) -> bool {
+        self.outgoing.is_some()
     }
 
     /// Transfer already received evidence even if a later probe observed EOF.
@@ -356,6 +565,7 @@ impl<T> PacketPort<T> {
                 preamble,
                 preamble_sent: false,
                 offset: 0,
+                tracked: None,
             })
         })();
         match prepared {
@@ -378,7 +588,25 @@ impl<T> PacketPort<T> {
         &mut self,
         transmit: impl FnOnce(RawFd, &[u8], MsgFlags) -> nix::Result<usize>,
     ) -> Result<SendProgress, Failure> {
+        self.send_with_observation(transmit, None)
+    }
+
+    fn send_with_observation(
+        &mut self,
+        transmit: impl FnOnce(RawFd, &[u8], MsgFlags) -> nix::Result<usize>,
+        observe: Option<&mut dyn PumpIo>,
+    ) -> Result<SendProgress, Failure> {
         self.live()?;
+        if observe.is_none()
+            && self
+                .outgoing
+                .as_ref()
+                .is_some_and(|outbound| outbound.tracked.is_some())
+        {
+            return Err(Failure::invalid(
+                "tracked send requires the common pump clock",
+            ));
+        }
         // An observed terminal/empty packet is unresolved, not permission to
         // send more bytes while its non-consuming status probe is interrupted.
         if self.zero_received {
@@ -429,7 +657,25 @@ impl<T> PacketPort<T> {
             outbound.offset += sent;
         }
         if outbound.offset == outbound.body.len() {
+            let tracked = outbound.tracked.clone();
+            if let Some(tracked) = &tracked {
+                tracked.status.store(SEND_SENT, Ordering::Release);
+            }
             self.outgoing = None;
+            if let Some(tracked) = tracked {
+                let observed = match observe.expect("tracked send requires a clock").now() {
+                    Ok(observed) => observed,
+                    Err(error) => {
+                        return Err(self.fail(Failure {
+                            fault: ChannelFault::Undecodable,
+                            detail: format!("tracked send clock observation failed: {error}"),
+                            errno: error.raw_os_error(),
+                        }));
+                    }
+                };
+                tracked.sent_at.store(observed, Ordering::Relaxed);
+                tracked.status.store(SEND_OBSERVED, Ordering::Release);
+            }
             Ok(SendProgress::Complete)
         } else {
             Ok(SendProgress::Progress)
@@ -462,9 +708,18 @@ impl<T> PacketPort<T> {
                 self.receive_interrupted = true;
                 return Ok(ReceiveProgress::Pending);
             }
-            Err(ReadFault::Failed(failure)) => return Err(self.fail(failure)),
+            Err(ReadFault::Failed {
+                failure,
+                received_wire,
+            }) => {
+                if let Some(received_wire) = received_wire {
+                    self.received_wire = Some(received_wire);
+                }
+                return Err(self.fail(failure));
+            }
         };
         if packet.bytes.is_empty() {
+            self.received_wire = Some(packet.bytes);
             self.zero_received = true;
             // No second datagram receive. This immediate status probe decides
             // whether recv(0) was an empty packet or a closed peer.
@@ -496,6 +751,11 @@ impl<T> PacketPort<T> {
             return Err(self.fail(Failure::io(Errno::EIO)));
         }
         if events & (libc::POLLHUP | libc::POLLRDHUP) != 0 {
+            if self.zero_received {
+                // recv(0) plus a closed peer is EOF, not an empty malformed
+                // datagram. A previously decoded completion remains intact.
+                self.received_wire = None;
+            }
             return Err(self.fail(Failure::closed("packet peer closed")));
         }
         if self.zero_received {
@@ -571,7 +831,10 @@ struct Packet {
 enum ReadFault {
     Pending,
     Interrupted,
-    Failed(Failure),
+    Failed {
+        failure: Failure,
+        received_wire: Option<Vec<u8>>,
+    },
 }
 
 /// Ancillary custody is established before any flag, payload or shape refusal.
@@ -599,7 +862,10 @@ fn receive_packet(fd: RawFd) -> Result<Packet, ReadFault> {
         return match Errno::last() {
             Errno::EAGAIN => Err(ReadFault::Pending),
             Errno::EINTR => Err(ReadFault::Interrupted),
-            error => Err(ReadFault::Failed(Failure::io(error))),
+            error => Err(ReadFault::Failed {
+                failure: Failure::io(error),
+                received_wire: None,
+            }),
         };
     }
     let mut ancillary = false;
@@ -629,24 +895,33 @@ fn receive_packet(fd: RawFd) -> Result<Packet, ReadFault> {
             item = libc::CMSG_NXTHDR(&header, item);
         }
     }
-    if header.msg_flags & (libc::MSG_TRUNC | libc::MSG_CTRUNC) != 0 {
-        return Err(ReadFault::Failed(Failure::truncated(MAX_ENVELOPE_BYTES)));
-    }
-    if ancillary {
-        return Err(ReadFault::Failed(Failure::invalid(
-            "ancillary handles belong to preflight Enter, not a pump port",
-        )));
-    }
-    let count = usize::try_from(count)
-        .map_err(|_| ReadFault::Failed(Failure::invalid("negative packet size")))?;
-    if count > body.len() {
-        return Err(ReadFault::Failed(Failure::truncated(MAX_ENVELOPE_BYTES)));
-    }
+    let count = usize::try_from(count).map_err(|_| ReadFault::Failed {
+        failure: Failure::invalid("negative packet size"),
+        received_wire: None,
+    })?;
+    let copied = count.min(body.len());
     let mut bytes = Vec::new();
     bytes
-        .try_reserve_exact(count)
-        .map_err(|error| ReadFault::Failed(Failure::invalid(error.to_string())))?;
-    bytes.extend_from_slice(&body[..count]);
+        .try_reserve_exact(copied)
+        .map_err(|error| ReadFault::Failed {
+            failure: Failure::invalid(error.to_string()),
+            received_wire: None,
+        })?;
+    bytes.extend_from_slice(&body[..copied]);
+    if header.msg_flags & (libc::MSG_TRUNC | libc::MSG_CTRUNC) != 0 || count > body.len() {
+        return Err(ReadFault::Failed {
+            failure: Failure::truncated(MAX_ENVELOPE_BYTES),
+            received_wire: Some(bytes),
+        });
+    }
+    if ancillary {
+        return Err(ReadFault::Failed {
+            failure: Failure::invalid(
+                "ancillary handles belong to preflight Enter, not a pump port",
+            ),
+            received_wire: Some(bytes),
+        });
+    }
     Ok(Packet { bytes })
 }
 
@@ -668,3 +943,7 @@ fn peer_status(fd: RawFd) -> nix::Result<i16> {
 #[cfg(test)]
 #[path = "pump_transport_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pump_transport_evidence_tests.rs"]
+mod evidence_tests;

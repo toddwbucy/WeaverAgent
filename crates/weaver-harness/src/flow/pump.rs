@@ -716,7 +716,20 @@ impl CommonPump {
             PumpSource::Residency => {
                 packet_unit(ports.lifecycle.residency.as_deref_mut(), send).map_err(transport)
             }
-            PumpSource::Gate => packet_unit(ports.gate.as_deref_mut(), send).map_err(transport),
+            PumpSource::Gate => {
+                let Some(port) = ports.gate.as_deref_mut() else {
+                    return Ok(false);
+                };
+                if send {
+                    port.try_send_observed(ports.io)
+                        .map(|progress| progress != super::pump_transport::SendProgress::Pending)
+                        .map_err(transport)
+                } else {
+                    port.try_receive()
+                        .map(|progress| progress != super::pump_transport::ReceiveProgress::Pending)
+                        .map_err(transport)
+                }
+            }
             PumpSource::Decode => packet_unit(ports.decode.as_deref_mut(), send).map_err(transport),
             PumpSource::Label => packet_unit(ports.label.as_deref_mut(), send).map_err(transport),
             PumpSource::State => {

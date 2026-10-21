@@ -79,6 +79,7 @@ struct LoadDuty {
     instruction: serving::payloads::Ste100Instruction,
     persistence: serving::payloads::PersistenceConfig,
     template_inventory: serving::payloads::TemplateInventory,
+    tools: serving::payloads::ToolPolicies,
 }
 
 pub(crate) struct RecordingContext {
@@ -108,6 +109,10 @@ pub(crate) struct RecordingContext {
     output: Option<output_driver::OutputTransaction>,
     pairs: pairs::PairLedger,
     pair_work: Option<pair_driver::PairTransaction>,
+    pair_gate_identity: Option<crate::flow::pump_transport::PortIdentity>,
+    pair_rejected_authoring: bool,
+    pair_rejection_wait: Option<(AbsoluteBound, bool)>,
+    pair_refused_gate: Option<crate::flow::pump_transport::ReceivedOrgan>,
     repair: Option<repair_driver::RepairTransaction>,
     repair_certificate: Option<super::templates::TemplateCertificate>,
     last_author_sequence: Option<Sequence>,
@@ -198,6 +203,10 @@ impl RecordingContext {
             output: None,
             pairs,
             pair_work: None,
+            pair_gate_identity: None,
+            pair_rejected_authoring: false,
+            pair_rejection_wait: None,
+            pair_refused_gate: None,
             repair: None,
             repair_certificate: None,
             last_author_sequence: None,
@@ -630,7 +639,11 @@ impl RecordingContext {
             self.retain_refused(event);
             return Err(RunFailure::RepairOwned);
         }
-        if self.filing.is_some() || self.output.is_some() || self.pair_work.is_some() {
+        if self.filing.is_some()
+            || self.output.is_some()
+            || self.pair_work.is_some()
+            || self.pair_rejected_authoring
+        {
             self.retain_refused(event);
             return Err(self.fail(
                 ports.io,
@@ -729,6 +742,7 @@ impl RecordingContext {
                 instruction: load.state_flow.ste100.clone(),
                 persistence: load.state_flow.persistence.clone(),
                 template_inventory: load.template_inventory.clone(),
+                tools: load.state_flow.tools.clone(),
             });
         }
         let wall_ms = match wall_ms() {
@@ -766,7 +780,11 @@ impl RecordingContext {
         if self.repair_blocks_external() {
             return Err(RunFailure::RepairOwned);
         }
-        if self.filing.is_some() || self.output.is_some() || self.pair_work.is_some() {
+        if self.filing.is_some()
+            || self.output.is_some()
+            || self.pair_work.is_some()
+            || self.pair_rejected_authoring
+        {
             return Err(self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
@@ -774,6 +792,14 @@ impl RecordingContext {
                 "generic resume cannot consume a content owner's author",
             ));
         }
+        self.resume_owned_author_and_wait(ports)
+    }
+
+    // Only a private owner that reserved this exact author may call this path.
+    fn resume_owned_author_and_wait<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<Sequence, RunFailure> {
         if let Some(sequence) = self.completed_author.take() {
             return Ok(sequence);
         }
@@ -986,7 +1012,17 @@ impl RecordingContext {
             },
             &self.deadlines,
         );
+        let sent = self.reconcile_pair_send(ports.io)?;
         match step {
+            Ok(PumpStep::Deadline {
+                key: PumpDeadline::Decision,
+                ..
+            }) if sent && self.deadlines.get(PumpDeadline::Decision).is_none() => {
+                self.live(ports.io)?;
+                Ok(PumpStep::Progress {
+                    sources: vec![PumpSource::Gate],
+                })
+            }
             Ok(PumpStep::Deadline { key, bound }) => Err(self.expired(ports.io, key, bound)),
             Ok(step) => Ok(step),
             Err(PumpFailure::Transport { source, failure }) => {
@@ -1059,6 +1095,7 @@ impl RecordingContext {
         if self.barrier.failure().is_some() || self.barrier.standing_failure().is_some() {
             return Err(self.record_failed(io));
         }
+        self.reconcile_pair_send(io)?;
         let now = io.now().map_err(|error| {
             self.fail(
                 io,
@@ -1367,12 +1404,16 @@ mod output_receipt_tests;
 
 #[path = "context_pairs.rs"]
 mod pair_driver;
+#[path = "context_pair_execution.rs"]
+mod pair_execution;
 #[path = "pairs.rs"]
 mod pairs;
 #[allow(unused_imports)] // The loop composes this port at the coupled cutover.
 pub(super) use pair_driver::{
     PairBeginError, PairBeginRefusal, PairProgress, PairReadError, RepairPairBeginError,
 };
+#[allow(unused_imports)]
+pub(super) use pair_execution::{ExecutionBeginError, ExecutionProgress, ExecutionRefusal};
 #[allow(unused_imports)]
 pub(super) use pairs::CompletedPair;
 
