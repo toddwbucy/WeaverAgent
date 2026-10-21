@@ -40,6 +40,8 @@ pub(super) use output::{
 
 #[path = "model_requests.rs"]
 mod model_requests;
+#[cfg(test)]
+pub(in crate::flow) use model_requests::tests::checked as checked_request_fixture;
 #[allow(unused_imports)]
 pub(super) use model_requests::{
     AssociationError, AssociationFailure, AssociationRefusal, ModelRequestCandidate,

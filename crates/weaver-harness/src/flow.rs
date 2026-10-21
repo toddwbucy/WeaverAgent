@@ -128,3 +128,27 @@ mod request_receipt_port_visibility {
     const _: fn(&mut RecordingContext, SourceLease) -> Result<(), (SourceLease, LedgerError)> =
         RecordingContext::release_source_lease;
 }
+
+#[cfg(test)]
+mod pair_port_visibility {
+    use super::clock::testing::FakePumpIo;
+    use super::context::{PairBeginError, PairProgress, RecordingContext, RunFailure};
+    use super::coordinator::OriginalRequests;
+    use super::pump::PumpPorts;
+    use weaver_types::state_flow::NonDispatchCause;
+
+    const _: fn(
+        &mut RecordingContext,
+        OriginalRequests,
+        NonDispatchCause,
+        &mut FakePumpIo,
+    ) -> Result<(), PairBeginError> = RecordingContext::begin_not_dispatched;
+    const _: fn(
+        &mut RecordingContext,
+        &mut PumpPorts<'_, FakePumpIo>,
+    ) -> Result<PairProgress, RunFailure> = RecordingContext::advance_pairs;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<OriginalRequests>, RunFailure> = RecordingContext::take_pair_accounting;
+}

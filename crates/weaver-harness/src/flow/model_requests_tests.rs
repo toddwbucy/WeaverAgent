@@ -131,7 +131,7 @@ fn rejected() -> Ste100Result {
     }
 }
 
-fn checked(
+pub(in crate::flow) fn checked(
     declaration: &SchemeDeclaration,
     content: Vec<ContentBlock>,
     results: Vec<Ste100Result>,
