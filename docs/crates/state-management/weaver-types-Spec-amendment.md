@@ -1,10 +1,11 @@
 # weaver-types Spec: dependable-flow amendment
 
-**Status:** MERGED.
+**Status:** DRAFT amendment for review. The merged clauses remain in force until
+this amendment is approved and merged.
 
 **Landing PR:** #182
 
-**Version:** 0.22 **Date filed:** 2026-10-20 **Parent:** weaver-types-PRD
+**Version:** 0.23 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -520,9 +521,18 @@ qualification. [CLASS-2, CLASS-7, CLASS-8, PERSIST-6]
 **TYPES-INPUT.** Add RefusalRecord::Input with InputRefusal {input_id, case, detail},
 where case is non_ste100 or invalid_input_shape. The JSON tagged refusal names seam
 input. Also add RefusalRecord::ProtocolRepair {source_id:SourceBlockId,case,detail},
-with seam protocol_repair and case correction_call, missing_tool_statement or
-ambiguous_tool_statement. Both use the existing trace kind refusal. A correct protocol
-refusal grants neither filing nor component halt. [CLASS-9, CLASS-10]
+with seam protocol_repair and case correction_call, empty_correction,
+missing_tool_statement or ambiguous_tool_statement. Both use the existing trace kind
+refusal. A correct protocol refusal grants neither filing nor component halt.
+[CLASS-9, CLASS-10]
+
+ProtocolRepairCase::EmptyCorrection serializes as empty_correction. Spec 02's
+EMPTY-CORRECTION owns its meaning and source attribution. The trace carries that
+existing refusal payload without a new event kind or a fabricated content block.
+The strict-codec and harness-to-trace fixtures require this case to preserve source_id
+and detail, and require unknown cases to refuse. Removing the case or changing its
+attribution must fail those fixtures. [CLASS-9, CLASS-10, FLOW-3, amendment proposed
+2026-10-21]
 
 ToolInterrupt becomes `ToolInterrupt { by: KillCause }`, allowing only unload or
 flow_failure on this command. Add KillCause::FlowFailure with wire spelling
