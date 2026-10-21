@@ -1,13 +1,36 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for request sources and receipt custody.
+Updated: 2026-10-21 for the consolidated stack and model repair.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
 The operator merges them.
 The store remains in weaver-state. The loop remains in worker/dev_loop and calls
 primitives. The SPU owns classification.
+
+## Consolidated review stack
+
+The operator folded the completed child PRs into their roots on 2026-10-21.
+Merged into a parent branch does not mean merged into main. The evidence below
+records each original slice and its tested revision. This table is the current
+landing map and takes precedence over historical branch descriptions below.
+
+| Open PR | Current contents and next landing step |
+| --- | --- |
+| #184 | Shared floor, store/member via #212, admin chain #193 through #196, and SPU #191 with #197. Review and land to main. |
+| #185 | Trace copy and recorder, including #187. Review and land to main. |
+| #198 | Harness chain #199 through #210. Its base still names code/state-member-flow. Leave open until #184 and #185 land, then retarget to main and check the full combined diff and gates. |
+| #189 | Independent serving-recall payload amendment, approval owed. |
+| #190 | Independent pure recall query primitive. |
+| #192 | Independent snapshot timing amendment, approval owed. |
+| #213 | Independent empty-correction amendment, approval owed. |
+| #214 | Model repair and recorded restatement/accounting, stacked on #198. |
+
+New harness work stacks on code/state-harness-filing, the head of #198. Closed
+child branches are no longer landing targets. Normal merge commits preserve the
+consolidated ancestry. Only the operator merges. A root's old slice-level results
+are not fresh validation of its combined head.
 
 ## Dependency and merge order
 
@@ -45,7 +68,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H1o | H1f | Complete recorded model-output checks, Spec 02 OUTPUT-UNIT |
 | H1q | H1o | Per-generation source receipt leases and original request association, Specs 02 and 05 |
 | H2a | H1q | Committed opening and terminal accounting for undispatched requests, Spec 05 |
-| H1b2 | H1b1, H1i, H1s, H1t, H1f, H1o, H1q, H2a, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
+| H1m | H2a, H1t | Passive model repair, recorded restatement instructions and corrected request custody, Specs 02 and 05 |
+| H1b2 | H1b1, H1i, H1s, H1t, H1f, H1o, H1q, H2a, H1m, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
 | H2 | H1b2, H2a, IN1 | Executing pair lifecycle and gate containment, Spec 05 and gate amendment |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
@@ -67,7 +91,7 @@ P1d/H1b2, and tool containment vocabulary travels with H2. This keeps wire chang
 with their complete producers and consumers. Every affected document's transition
 clause remains binding.
 
-## Current evidence
+## Slice evidence before consolidation
 
 F2 is [merged PR #183][catalog], merge commit 7a8651d8. Its full crate
 suite, formatting, lint and lock checks passed. Seven deliberate mutations failed
@@ -118,8 +142,8 @@ integration. No serving change or unused harness dependency is added here.
 C1a is [PR #191][spu], stacked on #184. It implements the SPU protocol and
 binding mechanics. Its remaining production dependencies are recorded in the
 [PR description][spu]. It adds no production checker, manifest locator or
-serving activation. C1 in later dependency rows means all four C1 slices, including
-qualification.
+serving activation. C1 in later dependency rows means C1a, C1b and C1c, including
+qualification. C1t is the separately named harness transport.
 Host and Olympus cuda,gguf suites, lint, formatting and lock checks pass. Fifty
 mechanics perturbations and two cancellation-fixture perturbations failed their
 protective tests. The GPU pace instrument reports a skip, so no measured-pace claim
@@ -389,10 +413,21 @@ transport progress, including real trace pressure, not the future pump scheduler
 
 H1c supplies the phaseful recording and pump components and the frozen halt account
 producer. H1b2 still owes all serving author callers, lifecycle integration, input
-and model repair orchestration, bound activation at the owning operations, and
+and repair invocation, bound activation at the owning operations, and
 the complete halt containment and terminal publication sequence. C1 supplies the
 production STE100 adapter. Scripted adapters prove their contracts only. These
 obligations remain part of the complete implementation and cutover gate.
+
+H1m is [draft PR #214][repair], based on the consolidated #198 head.
+Its [implementation record][repair-record] states the passive repair owner and
+its recorded instruction and pair-accounting ports. The loop still chooses each pass
+and calls the decoder. The full harness suite passes 952 tests with 17 inherited
+ignored instruments. Ten compiled protective changes fail their intended assertions.
+The restored suites, lint, formatting and lock gate pass. Independent review verifies
+the repaired custody paths and mutation evidence. Empty corrections and malformed
+recall remain explicit no-grant gaps until their owning Spec changes.
+The empty-correction proposal is [draft PR #213][empty-correction]. It is not
+implementation authority before approval and merge.
 
 The later rows remain owed.
 This is a progress record, not a claim that the full goal or any serving cutover is
@@ -471,3 +506,9 @@ quality, decoder capacity, throughput or absence of paging waits.
 
 [pair-accounting-record]: state-management-pair-accounting-2026-10-21.md
 [pair-accounting]: https://github.com/toddwbucy/WeaverAgent/pull/210
+
+[empty-correction]: https://github.com/toddwbucy/WeaverAgent/pull/213
+
+[repair-record]: state-management-repair-2026-10-21.md
+
+[repair]: https://github.com/toddwbucy/WeaverAgent/pull/214

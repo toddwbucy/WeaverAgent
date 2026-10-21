@@ -51,6 +51,8 @@ pub(super) enum RunFailure {
     TemplateBlocked,
     /// Another primitive owns this operation. This caller acquired no work.
     PairOwned,
+    /// A repair transaction retains this author or pair account.
+    RepairOwned,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -106,6 +108,8 @@ pub(crate) struct RecordingContext {
     output: Option<output_driver::OutputTransaction>,
     pairs: pairs::PairLedger,
     pair_work: Option<pair_driver::PairTransaction>,
+    repair: Option<repair_driver::RepairTransaction>,
+    repair_certificate: Option<super::templates::TemplateCertificate>,
     last_author_sequence: Option<Sequence>,
     author_turn: Option<(Kind, Option<weaver_trace::TurnRef>)>,
     open_turn: Option<weaver_trace::TurnRef>,
@@ -194,6 +198,8 @@ impl RecordingContext {
             output: None,
             pairs,
             pair_work: None,
+            repair: None,
+            repair_certificate: None,
             last_author_sequence: None,
             author_turn: None,
             open_turn: None,
@@ -430,6 +436,7 @@ impl RecordingContext {
             || self.filing_wait_still_owned(key)
             || self.output_wait_still_owned(key)
             || self.pair_wait_still_owned(key)
+            || self.repair_wait_still_owned(key)
             || (key == PumpDeadline::Enter
                 && self.phase == RecordingPhase::Entered
                 && self
@@ -449,6 +456,7 @@ impl RecordingContext {
     ) -> Result<(), RunFailure> {
         self.live(io)?;
         if self.output.is_some()
+            || self.repair.is_some()
             || self.pair_work.is_some()
             || self.filing.is_some()
             || self.input.snapshot().is_some()
@@ -618,6 +626,10 @@ impl RecordingContext {
             self.retain_refused(event);
             return Err(failure);
         }
+        if self.repair_blocks_external() {
+            self.retain_refused(event);
+            return Err(RunFailure::RepairOwned);
+        }
         if self.filing.is_some() || self.output.is_some() || self.pair_work.is_some() {
             self.retain_refused(event);
             return Err(self.fail(
@@ -751,6 +763,9 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
         self.live(ports.io)?;
+        if self.repair_blocks_external() {
+            return Err(RunFailure::RepairOwned);
+        }
         if self.filing.is_some() || self.output.is_some() || self.pair_work.is_some() {
             return Err(self.fail(
                 ports.io,
@@ -794,6 +809,7 @@ impl RecordingContext {
                 proof: None,
             } = &progress
             {
+                self.bind_repair_author(*sequence, ports.io)?;
                 self.bind_pair_author(*sequence, ports.io)?;
             }
             self.drain_intake(ports.io)?;
@@ -1238,6 +1254,7 @@ impl RecordingContext {
         // Revoke before sampling or reporting. A broken clock cannot grant work.
         self.input.halt();
         self.pairs.freeze();
+        self.freeze_repair();
         self.phase = RecordingPhase::Failed;
         self.failure = Some(failure.clone());
         self.barrier.stop_for_flow_failure();
@@ -1353,10 +1370,32 @@ mod pair_driver;
 #[path = "pairs.rs"]
 mod pairs;
 #[allow(unused_imports)] // The loop composes this port at the coupled cutover.
-pub(super) use pair_driver::{PairBeginError, PairBeginRefusal, PairProgress, PairReadError};
+pub(super) use pair_driver::{
+    PairBeginError, PairBeginRefusal, PairProgress, PairReadError, RepairPairBeginError,
+};
 #[allow(unused_imports)]
 pub(super) use pairs::CompletedPair;
 
 #[cfg(test)]
 #[path = "context_pair_tests.rs"]
 mod pair_tests;
+
+#[path = "repair.rs"]
+mod repair;
+
+#[path = "context_repair.rs"]
+mod repair_driver;
+#[allow(unused_imports)]
+pub(super) use repair::{
+    CorrectionProgress, EffectiveEmission, RepairAccount, RepairError, RepairExhausted,
+    RestatementRequest,
+};
+#[allow(unused_imports)]
+pub(super) use repair_driver::{
+    RepairBeginError, RepairBeginRefusal, RepairCancelled, RepairObserveError, RepairProgress,
+    RepairRefusalEvidence, RepairRefused,
+};
+
+#[cfg(test)]
+#[path = "context_repair_tests.rs"]
+mod repair_tests;

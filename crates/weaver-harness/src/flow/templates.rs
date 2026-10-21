@@ -205,6 +205,7 @@ impl TemplateAcceptance {
 pub(super) struct TemplateCertificate {
     run_id: String,
     scheme_id: String,
+    scheme: SchemeDeclaration,
     checker_artifact_sha256: Digest,
     inventory_sha256: Digest,
     accepted: Vec<TemplateAcceptance>,
@@ -217,6 +218,9 @@ impl TemplateCertificate {
     }
     pub(super) fn scheme_id(&self) -> &str {
         &self.scheme_id
+    }
+    pub(super) fn scheme(&self) -> &SchemeDeclaration {
+        &self.scheme
     }
     pub(super) fn checker_artifact_sha256(&self) -> &Digest {
         &self.checker_artifact_sha256
@@ -441,6 +445,7 @@ impl TemplateCheckTranscript {
         let certificate = TemplateCertificate {
             run_id: self.run_id.clone(),
             scheme_id: self.scheme.scheme_id.clone(),
+            scheme: self.scheme.clone(),
             checker_artifact_sha256: self.checker.clone(),
             inventory_sha256: self.inventory.digest.clone(),
             accepted: self
@@ -458,6 +463,13 @@ impl TemplateCheckTranscript {
         Ok(certificate)
     }
 }
+
+#[path = "template_expansion.rs"]
+mod expansion;
+#[allow(unused_imports)] // The repair owner consumes the certified runtime port.
+pub(super) use expansion::{
+    ExpansionIdentity, ExpansionRefusal, RestatementTemplate, TemplateExpansion,
+};
 
 #[cfg(test)]
 #[path = "templates_tests.rs"]

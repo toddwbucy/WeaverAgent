@@ -1110,3 +1110,345 @@ fn halt_preserves_recorded_terminal_receipt_without_issuing_a_completed_pair() {
             .is_err()
     );
 }
+
+fn repaired_context_account(fx: &mut PairFixture) -> super::repair::RepairAccount {
+    let original = fx.generation(vec![text("bad"), call("held original bytes"), text("bad")]);
+    let source = original.unresolved()[0].rejected_source().clone();
+    settle_pair_fixture_flow(fx);
+    // These legal trace markers leave room for the private repair-owner fixture's
+    // requested/instruction proofs. This test exercises the pair adapter and its
+    // real recorder/socket custody, not the repair driver's instruction authoring.
+    for _ in 0..2 {
+        fx.output
+            .input
+            .run
+            .author(AuthoredEvent {
+                kind: Kind::Refusal,
+                subsystem: weaver_trace::Subsystem::Harness,
+                turn: Some(weaver_trace::TurnRef("output-turn".into())),
+                source: crate::flow::author::AuthoredSource::Runtime,
+                causal_parent: Some(Sequence(source.sequence.0)),
+                payload: Some(Payload::Refusal(
+                    serde_json::value::to_raw_value(
+                        &serde_json::json!({"fixture":"private repair owner boundary"}),
+                    )
+                    .unwrap(),
+                )),
+            })
+            .unwrap();
+    }
+    let correction = fx.generation(vec![text("Read corrected.")]);
+    super::repair::account_fixture(original, vec![(source, correction)])
+}
+
+fn settle_pair_fixture_flow(fx: &mut PairFixture) {
+    for _ in 0..256 {
+        fx.output
+            .input
+            .run
+            .context
+            .reduce_flow(&mut fx.output.input.run.clock)
+            .unwrap();
+        fx.checker();
+        fx.member(Hold::None);
+        let context = &fx.output.input.run.context;
+        if context.flow.ledger().facts().next().is_none()
+            && !context.flow.has_pending_record()
+            && context.flow.pending_check().is_none()
+            && context.barrier.pending().is_none()
+            && context.barrier.pending_author().is_none()
+            && context.waiting_content.is_none()
+        {
+            return;
+        }
+    }
+    panic!("pair fixture's ordinary flow did not settle");
+}
+
+#[test]
+fn repaired_pair_uses_its_correction_lease_and_only_returns_to_the_repair_owner() {
+    let mut fx = PairFixture::new();
+    let account = repaired_context_account(&mut fx);
+    let started = account.requests()[0].clone();
+    assert_ne!(
+        started.call_id.sequence,
+        started.statement.block_id.sequence
+    );
+    fx.output
+        .input
+        .run
+        .context
+        .begin_repair_not_dispatched(
+            account,
+            s::NonDispatchCause::RepairExhausted,
+            &mut fx.output.input.run.clock,
+        )
+        .unwrap();
+    assert!(matches!(
+        fx.output
+            .input
+            .run
+            .context
+            .take_pair_accounting(&mut fx.output.input.run.clock,),
+        Err(RunFailure::PairOwned)
+    ));
+    fx.until_held(Hold::Statement);
+    assert!(
+        fx.output
+            .input
+            .run
+            .context
+            .take_repair_accounting(&mut fx.output.input.run.clock,)
+            .unwrap()
+            .is_none()
+    );
+    fx.complete();
+    let account = fx
+        .output
+        .input
+        .run
+        .context
+        .take_repair_accounting(&mut fx.output.input.run.clock)
+        .unwrap()
+        .unwrap();
+    assert_eq!(account.requests(), std::slice::from_ref(&started));
+    assert_eq!(account.generations().count(), 2);
+    let completed = fx
+        .output
+        .input
+        .run
+        .context
+        .completed_pair(&started.call_id, &mut fx.output.input.run.clock)
+        .unwrap()
+        .unwrap();
+    assert_eq!(completed.started(), &started);
+    assert_eq!(completed.statement().source(), &started.statement.block_id);
+    assert_eq!(
+        completed.ended().reason,
+        Some(s::PairFailure::NotDispatched {
+            cause: s::NonDispatchCause::RepairExhausted,
+        })
+    );
+    assert_eq!(fx.output.input.records(Kind::ToolCallStarted).len(), 1);
+    assert_eq!(fx.output.input.records(Kind::ToolCallCompleted).len(), 1);
+    assert_eq!(fx.output.input.records(Kind::MessageAssistant).len(), 2);
+}
+
+#[test]
+fn foreign_repaired_account_refuses_equal_wire_ids_without_consuming_custody() {
+    let mut fx = PairFixture::new();
+    let mut foreign = PairFixture::new();
+    let local_account = repaired_context_account(&mut fx);
+    let foreign_account = repaired_context_account(&mut foreign);
+    assert_eq!(local_account.requests(), foreign_account.requests());
+    let expected = foreign_account.requests()[0].clone();
+    let error = fx
+        .output
+        .input
+        .run
+        .context
+        .begin_repair_not_dispatched(
+            foreign_account,
+            s::NonDispatchCause::Stop,
+            &mut fx.output.input.run.clock,
+        )
+        .unwrap_err();
+    assert_eq!(error.refusal, PairBeginRefusal::LostCustody);
+    assert!(error.failure.is_none());
+    assert_eq!(error.account.requests(), &[expected]);
+    assert_eq!(error.account.generations().count(), 2);
+    assert!(fx.output.input.run.context.failure().is_none());
+    fx.output
+        .input
+        .run
+        .context
+        .begin_repair_not_dispatched(
+            local_account,
+            s::NonDispatchCause::Stop,
+            &mut fx.output.input.run.clock,
+        )
+        .unwrap();
+    fx.complete();
+}
+
+#[test]
+fn repair_take_cannot_consume_an_ordinary_pair_batch() {
+    let mut fx = PairFixture::new();
+    let original = fx.generation(vec![text("Read ordinary."), call("ordinary")]);
+    let started = original.requests()[0].opening().clone();
+    fx.begin(original, s::NonDispatchCause::PassPurpose);
+    assert!(matches!(
+        fx.output
+            .input
+            .run
+            .context
+            .take_repair_accounting(&mut fx.output.input.run.clock,),
+        Err(RunFailure::PairOwned)
+    ));
+    fx.complete();
+    let original = fx
+        .output
+        .input
+        .run
+        .context
+        .take_pair_accounting(&mut fx.output.input.run.clock)
+        .unwrap()
+        .unwrap();
+    assert_eq!(original.requests()[0].opening(), &started);
+}
+
+#[test]
+fn repaired_receipt_waits_halt_at_the_original_bound_without_reauthoring() {
+    for hold in [Hold::Statement, Hold::Opening, Hold::Terminal] {
+        let mut fx = PairFixture::new();
+        let account = repaired_context_account(&mut fx);
+        let call = account.requests()[0].call_id.clone();
+        fx.output
+            .input
+            .run
+            .context
+            .begin_repair_not_dispatched(
+                account,
+                s::NonDispatchCause::RepairExhausted,
+                &mut fx.output.input.run.clock,
+            )
+            .unwrap();
+        fx.until_held(hold);
+        assert!(
+            fx.output
+                .input
+                .run
+                .context
+                .complete_wait(PumpDeadline::Decision)
+                .is_none()
+        );
+        assert!(
+            fx.output
+                .input
+                .run
+                .context
+                .take_repair_accounting(&mut fx.output.input.run.clock,)
+                .unwrap()
+                .is_none()
+        );
+        let opened = fx.output.input.records(Kind::ToolCallStarted).len();
+        let ended = fx.output.input.records(Kind::ToolCallCompleted).len();
+        fx.output
+            .input
+            .run
+            .clock
+            .advance_to(fx.output.bound.deadline_ns())
+            .unwrap();
+        assert!(matches!(
+            fx.advance(),
+            Err(RunFailure::Flow {
+                reason: FlowHaltReason::DecisionBound,
+                ..
+            })
+        ));
+        assert!(
+            fx.output
+                .input
+                .run
+                .context
+                .take_repair_accounting(&mut fx.output.input.run.clock,)
+                .is_err()
+        );
+        assert!(
+            fx.output
+                .input
+                .run
+                .context
+                .completed_pair(&call, &mut fx.output.input.run.clock,)
+                .is_err()
+        );
+        assert!(fx.advance().is_err());
+        assert_eq!(fx.output.input.records(Kind::ToolCallStarted).len(), opened);
+        assert_eq!(
+            fx.output.input.records(Kind::ToolCallCompleted).len(),
+            ended
+        );
+    }
+}
+
+#[test]
+fn generic_cancellation_cannot_drop_or_duplicate_a_repaired_pair_filing() {
+    let mut fx = PairFixture::new();
+    let account = repaired_context_account(&mut fx);
+    let call = account.requests()[0].call_id.clone();
+    fx.output
+        .input
+        .run
+        .context
+        .begin_repair_not_dispatched(
+            account,
+            s::NonDispatchCause::RepairExhausted,
+            &mut fx.output.input.run.clock,
+        )
+        .unwrap();
+    fx.until_held(Hold::Opening);
+    fx.output.input.run.context.cancel_filing();
+    assert!(
+        fx.output
+            .input
+            .run
+            .context
+            .take_cancelled_filing()
+            .is_none()
+    );
+    assert!(matches!(
+        fx.output
+            .input
+            .run
+            .context
+            .take_filing(&mut fx.output.input.run.clock,),
+        Err(RunFailure::PairOwned)
+    ));
+    fx.output
+        .input
+        .run
+        .context
+        .bar_pending_pairs(s::NonDispatchCause::Stop, &mut fx.output.input.run.clock)
+        .unwrap();
+    fx.complete();
+    let account = fx
+        .output
+        .input
+        .run
+        .context
+        .take_repair_accounting(&mut fx.output.input.run.clock)
+        .unwrap()
+        .unwrap();
+    assert_eq!(account.requests()[0].call_id, call);
+    let completed = fx
+        .output
+        .input
+        .run
+        .context
+        .completed_pair(&call, &mut fx.output.input.run.clock)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        completed.ended().reason,
+        Some(s::PairFailure::NotDispatched {
+            cause: s::NonDispatchCause::Stop,
+        })
+    );
+    let refused = fx
+        .output
+        .input
+        .run
+        .context
+        .begin_repair_not_dispatched(
+            account,
+            s::NonDispatchCause::Stop,
+            &mut fx.output.input.run.clock,
+        )
+        .unwrap_err();
+    assert_eq!(refused.refusal, PairBeginRefusal::LostCustody);
+    assert!(refused.failure.is_none());
+    assert_eq!(refused.account.requests()[0].call_id, call);
+    assert_eq!(fx.output.input.records(Kind::ToolCallStarted).len(), 1);
+    assert_eq!(fx.output.input.records(Kind::ToolCallCompleted).len(), 1);
+    assert!(fx.output.input.run.context.failure().is_none());
+}

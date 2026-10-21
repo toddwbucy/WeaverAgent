@@ -85,6 +85,13 @@ impl RecordingContext {
         key: PumpDeadline,
         io: &mut impl PumpIo,
     ) -> Result<(), FilingBeginError> {
+        if self.repair_blocks_external() {
+            return Err(FilingBeginError {
+                event,
+                refusal: FilingBeginRefusal::Busy,
+                failure: None,
+            });
+        }
         self.begin_owned_filing(event, key, FilingOwner::Ordinary, io)
     }
 

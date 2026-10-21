@@ -397,7 +397,7 @@ fn number(value: shared::DecimalU64) -> trace::DecimalU64 {
     value.0.into()
 }
 
-fn source(value: &shared::SourceBlockId) -> trace::SourceBlockId {
+pub(super) fn source(value: &shared::SourceBlockId) -> trace::SourceBlockId {
     let shared::SourceBlockId {
         run,
         sequence,

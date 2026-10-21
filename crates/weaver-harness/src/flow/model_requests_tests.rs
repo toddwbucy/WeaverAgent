@@ -136,6 +136,22 @@ pub(in crate::flow) fn checked(
     content: Vec<ContentBlock>,
     results: Vec<Ste100Result>,
 ) -> CheckedGeneration {
+    checked_at(declaration, content, results, "run", "turn", 10)
+}
+
+pub(in crate::flow) fn checked_at(
+    declaration: &SchemeDeclaration,
+    content: Vec<ContentBlock>,
+    results: Vec<Ste100Result>,
+    run: &str,
+    turn: &str,
+    sequence: u64,
+) -> CheckedGeneration {
+    let source = |index: usize| SourceBlockId {
+        run: run.into(),
+        sequence: sequence.into(),
+        block: (index as u64).into(),
+    };
     let indices: Vec<_> = content
         .iter()
         .enumerate()
@@ -148,12 +164,12 @@ pub(in crate::flow) fn checked(
             content,
         },
         finish: Finish::Stopped,
-        turn: TurnRef("turn".into()),
+        turn: TurnRef(turn.into()),
     };
-    let mut owner = OutputChecks::new("run", declaration, original).unwrap();
+    let mut owner = OutputChecks::new(run, declaration, original).unwrap();
     owner
         .bind(
-            Sequence(10),
+            Sequence(sequence),
             100,
             &indices
                 .iter()
@@ -183,11 +199,11 @@ pub(in crate::flow) fn checked(
                 reply,
                 SourcePosition {
                     block_id: SourceBlockId {
-                        run: "run".into(),
-                        sequence: (20 + ordinal as u64).into(),
+                        run: run.into(),
+                        sequence: (sequence + 10 + ordinal as u64).into(),
                         block: 0.into(),
                     },
-                    turn: Some("turn".into()),
+                    turn: Some(turn.into()),
                 },
                 110 + ordinal as u64,
                 true,

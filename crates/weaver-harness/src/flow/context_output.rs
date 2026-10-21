@@ -93,7 +93,8 @@ impl RecordingContext {
                 failure: None,
             });
         };
-        if self.output.is_some()
+        if !self.repair_allows_output()
+            || self.output.is_some()
             || self.flow.has_output_consumer()
             || self.filing.is_some()
             || self.pair_work.is_some()
@@ -166,6 +167,7 @@ impl RecordingContext {
             cancelled: false,
         });
         self.waiting_content = Some(event);
+        self.repair_note_output_started();
         Ok(())
     }
 
@@ -341,6 +343,10 @@ impl RecordingContext {
     }
 
     pub(in crate::flow) fn cancel_output(&mut self) {
+        // Repair must account this emitted correction and owns cancellation.
+        if self.repair_blocks_external() {
+            return;
+        }
         let Some(owner) = self.output.as_mut() else {
             return;
         };
@@ -358,6 +364,9 @@ impl RecordingContext {
     }
 
     pub(in crate::flow) fn take_cancelled_output(&mut self) -> Option<OutputCancellation> {
+        if self.repair_blocks_external() {
+            return None;
+        }
         if !self
             .output
             .as_ref()

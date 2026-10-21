@@ -42,6 +42,8 @@ pub(super) use output::{
 mod model_requests;
 #[cfg(test)]
 pub(in crate::flow) use model_requests::tests::checked as checked_request_fixture;
+#[cfg(test)]
+pub(in crate::flow) use model_requests::tests::checked_at as checked_request_fixture_at;
 #[allow(unused_imports)]
 pub(super) use model_requests::{
     AssociationError, AssociationFailure, AssociationRefusal, ModelRequestCandidate,
@@ -207,6 +209,45 @@ pub(super) struct RecordedCheck {
     source: SourcePosition,
 }
 
+/// One selected instruction's exact checked result after its trace proof. This
+/// observes classification only and grants no filing or placement authority.
+#[derive(Debug)]
+pub(super) struct RecordedInstructionCheck {
+    instruction: SourcePosition,
+    reply: Ste100Reply,
+    source: SourcePosition,
+    recorded_ns: u64,
+}
+
+impl RecordedInstructionCheck {
+    pub(super) fn instruction(&self) -> &SourcePosition {
+        &self.instruction
+    }
+    pub(super) fn reply(&self) -> &Ste100Reply {
+        &self.reply
+    }
+    pub(super) fn source(&self) -> &SourcePosition {
+        &self.source
+    }
+    pub(super) fn recorded_ns(&self) -> u64 {
+        self.recorded_ns
+    }
+}
+
+#[derive(Debug)]
+pub(super) enum InstructionCheck {
+    Unselected { source: SourcePosition },
+    Checked(RecordedInstructionCheck),
+}
+
+struct InstructionCheckWatch {
+    text: String,
+    turn: TurnRef,
+    source: Option<SourcePosition>,
+    selected: bool,
+    completion: Option<InstructionCheck>,
+}
+
 impl RecordedCheck {
     pub(super) fn operation(&self) -> &CheckOperation {
         &self.operation
@@ -277,6 +318,22 @@ struct Notice {
     turn: Option<String>,
 }
 
+/// The repair consumer can advance only after its exact measurement records.
+/// This is local proof custody, never a public source-position constructor.
+#[derive(Debug)]
+pub(super) struct RecordedRepairMeasurement {
+    pub(super) source: SourcePosition,
+    pub(super) sample: trace::FlowObservation,
+}
+
+struct RepairMeasurement {
+    phase: trace::FlowPhase,
+    source: SourceBlockId,
+    failed_corrections: u64,
+    retry_cap: u64,
+    recorded: Option<RecordedRepairMeasurement>,
+}
+
 struct InputAccount {
     id: DecimalU64,
     began_ns: u64,
@@ -337,6 +394,7 @@ pub(super) struct FlowCoordinator<P> {
     receipt_reservation: Option<ReceiptReservation>,
     output_checks: Option<OutputChecks>,
     output_receipts: Option<OutputReceiptReservation>,
+    instruction_check: Option<InstructionCheckWatch>,
     classifier: Option<Classifier<P>>,
     starting_classifier: Option<P>,
     admission_completion: Option<super::ste100_socket::AdmissionPoll>,
@@ -352,6 +410,7 @@ pub(super) struct FlowCoordinator<P> {
     phase: CoordinatorPhase,
     open_pending: bool,
     notices: VecDeque<Notice>,
+    repair_measurement: Option<RepairMeasurement>,
     pending_record: Option<PendingRecord>,
     failure: Option<FlowFailure>,
     halt: Option<HaltLatch>,
@@ -399,6 +458,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             receipt_reservation: None,
             output_checks: None,
             output_receipts: None,
+            instruction_check: None,
             scheme: classifier.scheme().clone(),
             classifier: Some(classifier),
             starting_classifier: None,
@@ -414,6 +474,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             phase: CoordinatorPhase::Active,
             open_pending: false,
             notices: VecDeque::new(),
+            repair_measurement: None,
             pending_record: None,
             failure: None,
             halt: None,
@@ -506,6 +567,169 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     pub(super) fn ledger(&self) -> &Ledger {
         &self.ledger
     }
+
+    /// Reserve before the instruction's author ticket. The certified expansion
+    /// supplies bytes, while only the actual recorder hook supplies its identity.
+    pub(super) fn reserve_instruction_check(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        expansion: &super::templates::TemplateExpansion,
+        turn: &TurnRef,
+    ) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        if self.phase != CoordinatorPhase::Active
+            || self.instruction_check.is_some()
+            || self.output_checks.is_some()
+            || self.check_operation.is_some()
+            || self.operation_completion.is_some()
+            || self.classifier.is_none()
+            || expansion.run_id() != self.run
+            || expansion.scheme() != &self.scheme
+            || turn.0.is_empty()
+        {
+            return Err(self.fail(
+                cx,
+                "instruction_check",
+                "instruction watcher is unavailable",
+            ));
+        }
+        self.instruction_check = Some(InstructionCheckWatch {
+            text: expansion.text().to_owned(),
+            turn: turn.clone(),
+            source: None,
+            selected: false,
+            completion: None,
+        });
+        Ok(())
+    }
+
+    /// Invoke at this instruction's Recorded hook, before drain_intake. Queued
+    /// and room-deferred copies are inspected in place and never consumed here.
+    pub(super) fn bind_instruction_check(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: Sequence,
+    ) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        let Some(watch) = self.instruction_check.as_ref() else {
+            return Err(self.fail(
+                cx,
+                "instruction_check",
+                "instruction watcher was not reserved",
+            ));
+        };
+        if watch.source.is_some() || sequence.0 == 0 {
+            return Err(self.fail(
+                cx,
+                "instruction_check",
+                "instruction source was already bound",
+            ));
+        }
+        let source = SourcePosition {
+            block_id: SourceBlockId {
+                run: self.run.clone(),
+                sequence: sequence.0.into(),
+                block: 0.into(),
+            },
+            turn: Some(watch.turn.0.clone()),
+        };
+        let selected = (|| -> io::Result<bool> {
+            if self
+                .ledger
+                .facts()
+                .any(|fact| fact.source.run == self.run && fact.source.sequence.0 == sequence.0)
+            {
+                return Err(io::Error::other("instruction watcher bound after intake"));
+            }
+            let mut found = false;
+            for copy in cx.inbox.queued().chain(cx.budget.waiting_copy()) {
+                let (identity, _) = copy_identity(copy)?;
+                if identity.source_event.run != self.run
+                    || identity.source_event.sequence.0 != sequence.0
+                {
+                    continue;
+                }
+                if found {
+                    return Err(io::Error::other("instruction copy has duplicate custody"));
+                }
+                validate_instruction_copy(copy, &source, &watch.text, self.state().identity().0)?;
+                found = true;
+            }
+            Ok(found)
+        })()
+        .map_err(|error| self.fail(cx, "instruction_check", error))?;
+        let watch = self.instruction_check.as_mut().unwrap();
+        watch.source = Some(source.clone());
+        watch.selected = selected;
+        if !selected {
+            watch.completion = Some(InstructionCheck::Unselected { source });
+        }
+        Ok(())
+    }
+
+    pub(super) fn take_instruction_check(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<Option<InstructionCheck>, FlowFailure> {
+        self.observe_failures(cx)?;
+        if self
+            .instruction_check
+            .as_ref()
+            .is_none_or(|watch| watch.completion.is_none())
+        {
+            return Ok(None);
+        }
+        Ok(self.instruction_check.take().unwrap().completion)
+    }
+
+    /// Cancelling interest cannot cancel the ordinary selected filing obligation.
+    pub(super) fn cancel_instruction_check(&mut self) {
+        self.instruction_check = None;
+    }
+
+    fn observe_instruction_check(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        request: &Ste100Request,
+        reply: &Ste100Reply,
+        source: &SourcePosition,
+        recorded_ns: u64,
+    ) -> Result<(), FlowFailure> {
+        let Some(watch) = self.instruction_check.as_ref() else {
+            return Ok(());
+        };
+        let Some(instruction) = watch.source.as_ref() else {
+            return Ok(());
+        };
+        if !watch.selected || request.target != Ste100Target::Source(instruction.block_id.clone()) {
+            return Ok(());
+        }
+        if watch.completion.is_some()
+            || request.text != watch.text
+            || request.scheme_id != self.scheme.scheme_id
+            || reply.validate_for(request, &self.scheme.verbs).is_err()
+            || matches!(reply.result, Ste100Result::ComponentFailed { .. })
+            || source.block_id.run != self.run
+            || source.block_id.block.0 != 0
+            || source.block_id.sequence <= instruction.block_id.sequence
+            || source.turn != instruction.turn
+        {
+            return Err(self.fail(
+                cx,
+                "instruction_check",
+                "recorded instruction check differs",
+            ));
+        }
+        let completion = RecordedInstructionCheck {
+            instruction: instruction.clone(),
+            reply: reply.clone(),
+            source: source.clone(),
+            recorded_ns,
+        };
+        self.instruction_check.as_mut().unwrap().completion =
+            Some(InstructionCheck::Checked(completion));
+        Ok(())
+    }
     /// Reserve complete model content before authoring. Source identity belongs
     /// to the subsequent recorder completion, never to the caller.
     #[allow(clippy::result_large_err)]
@@ -519,6 +743,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         }
         if self.phase != CoordinatorPhase::Active
             || self.output_checks.is_some()
+            || self.instruction_check.is_some()
             || self.receipt_reservation.is_some()
             || self.capture.is_some()
             || self.check_operation.is_some()
@@ -945,6 +1170,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             receipt_reservation: None,
             output_checks: None,
             output_receipts: None,
+            instruction_check: None,
             classifier: None,
             starting_classifier: None,
             admission_completion: None,
@@ -960,6 +1186,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             phase: CoordinatorPhase::Preflight,
             open_pending: false,
             notices: VecDeque::new(),
+            repair_measurement: None,
             pending_record: None,
             failure: None,
             halt: None,
@@ -1056,6 +1283,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     fn settled_obligations(&self, cx: &FlowRecording<'_>) -> bool {
         self.receipt_reservation.is_none()
             && self.output_checks.is_none()
+            && self.instruction_check.is_none()
             && self.ledger.receipts().is_none()
             && self.ledger.facts().next().is_none()
             && cx.inbox.queued().next().is_none()
@@ -1682,7 +1910,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         if matches!(operation, CheckOperation::Input { .. }) {
             return Err(self.fail(cx, "classifier", "input requires measured submission"));
         }
-        if self.output_checks.is_some() {
+        if self.output_checks.is_some() || self.instruction_check.is_some() {
             return Ok(OperationStart::Busy(operation));
         }
         self.begin_check_inner(cx, operation)
@@ -1912,6 +2140,60 @@ impl<P: Ste100Port> FlowCoordinator<P> {
 
     pub(super) fn input_measurements_pending(&self) -> bool {
         self.notices.iter().any(|notice| notice.input_id.is_some())
+    }
+
+    pub(super) fn begin_repair_measurement(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        transition: Transition,
+        turn: String,
+    ) -> Result<bool, FlowFailure> {
+        self.observe_failures(cx)?;
+        if self.repair_measurement.is_some() {
+            return Ok(false);
+        }
+        if self.phase != CoordinatorPhase::Active
+            || turn.is_empty()
+            || !matches!(
+                transition.phase,
+                trace::FlowPhase::RepairRequested | trace::FlowPhase::RepairExhausted
+            )
+            || transition
+                .source_id
+                .as_ref()
+                .is_none_or(|source| source.run != self.run)
+            || transition.failed_corrections.is_none()
+            || transition.retry_cap.is_none_or(|cap| cap == 0)
+        {
+            return Err(self.fail(cx, "repair", "invalid repair measurement"));
+        }
+        let owner = RepairMeasurement {
+            phase: transition.phase,
+            source: transition.source_id.clone().unwrap(),
+            failed_corrections: transition.failed_corrections.unwrap(),
+            retry_cap: transition.retry_cap.unwrap(),
+            recorded: None,
+        };
+        self.notice(cx, io, transition, Some(turn))?;
+        self.repair_measurement = Some(owner);
+        Ok(true)
+    }
+
+    pub(super) fn take_repair_measurement(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<Option<RecordedRepairMeasurement>, FlowFailure> {
+        self.observe_failures(cx)?;
+        if cx.barrier.pending().is_some()
+            || self
+                .repair_measurement
+                .as_ref()
+                .is_none_or(|owner| owner.recorded.is_none())
+        {
+            return Ok(None);
+        }
+        Ok(self.repair_measurement.take().unwrap().recorded)
     }
 
     pub(super) fn take_operation_completion(
@@ -2576,11 +2858,12 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         io: &mut impl PumpIo,
         progress: RecordProgress,
     ) -> Result<Advance, FlowFailure> {
-        let proof = match progress {
+        let (sequence, proof) = match progress {
             RecordProgress::Pending => return Ok(Advance::Pending),
             RecordProgress::Recorded {
-                proof: Some(proof), ..
-            } => proof,
+                sequence,
+                proof: Some(proof),
+            } => (sequence, proof),
             RecordProgress::Busy { event, purpose } => {
                 self.refused_author = Some(RefusedAuthor::Prepared { event, purpose });
                 return Err(self.fail(cx, "author", "flow author was returned busy"));
@@ -2595,6 +2878,41 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         };
         match (self.pending_record.take(), proof) {
             (Some(PendingRecord::Flow), RecordProof::Flow(proof)) => {
+                if matches!(
+                    proof.sample().phase,
+                    trace::FlowPhase::RepairRequested | trace::FlowPhase::RepairExhausted
+                ) {
+                    let sample = proof.sample();
+                    let Some(owner) = self.repair_measurement.as_ref() else {
+                        return Err(self.fail(cx, "repair", "repair record lost its owner"));
+                    };
+                    let expected_source = super::mirror::source(&owner.source);
+                    if owner.recorded.is_some()
+                        || owner.phase != sample.phase
+                        || sample.source_id.as_ref() != Some(&expected_source)
+                        || sample.failed_corrections.map(|n| n.0) != Some(owner.failed_corrections)
+                        || sample.retry_cap.map(|n| n.0) != Some(owner.retry_cap)
+                    {
+                        return Err(self.fail(
+                            cx,
+                            "repair",
+                            "repair record differs from its owner",
+                        ));
+                    }
+                    let turn = self.notices.front().and_then(|notice| notice.turn.clone());
+                    self.repair_measurement.as_mut().unwrap().recorded =
+                        Some(RecordedRepairMeasurement {
+                            source: SourcePosition {
+                                block_id: SourceBlockId {
+                                    run: self.run.clone(),
+                                    sequence: sequence.0.into(),
+                                    block: 0.into(),
+                                },
+                                turn,
+                            },
+                            sample: sample.clone(),
+                        });
+                }
                 let terminal = self
                     .observations
                     .as_mut()
@@ -2744,6 +3062,15 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                     }));
                     return Ok(Advance::Progress);
                 }
+                // The exact result has passed the classifier's Recorded proof.
+                // Observation never consumes or replaces its ordinary filing.
+                self.observe_instruction_check(
+                    cx,
+                    &checked_request,
+                    &reply,
+                    &result_source,
+                    recorded_ns,
+                )?;
                 if self
                     .output_checks
                     .as_ref()
@@ -3317,6 +3644,53 @@ fn retirement_status(fd: std::os::fd::BorrowedFd<'_>) -> io::Result<bool> {
         ));
     }
     Ok(true)
+}
+
+fn validate_instruction_copy(
+    copy: &weaver_trace::serving::AdmittedCopy,
+    expected: &SourcePosition,
+    text: &str,
+    session: &str,
+) -> io::Result<()> {
+    use weaver_trace::serving::{AdmittedCopy, PathPart};
+    let AdmittedCopy::Statement(copy) = copy else {
+        return Err(io::Error::other("instruction copy is not a statement"));
+    };
+    let envelope: SourceEnvelope =
+        serde_json::from_str(&copy.source_envelope).map_err(io::Error::other)?;
+    if envelope.session != session
+        || envelope.run != expected.block_id.run
+        || envelope.sequence != expected.block_id.sequence
+        || envelope.kind != "loop.instruction"
+        || envelope.subsystem != "harness"
+        || envelope.channel != "internal"
+        || envelope.origin != "loop"
+        || envelope.turn != expected.turn
+        || copy.context.is_some()
+        || copy.blocks.len() != 1
+    {
+        return Err(io::Error::other("instruction copy differs from its author"));
+    }
+    let block = &copy.blocks[0];
+    if block.source.run != expected.block_id.run
+        || block.source.sequence.0 != expected.block_id.sequence.0
+        || block.source.block != 0
+        || !matches!(block.source_path.as_slice(),
+            [PathPart::Key(message), PathPart::Key(content), PathPart::Index(0)]
+                if message == "message" && content == "content")
+    {
+        return Err(io::Error::other(
+            "instruction copy has a different source span",
+        ));
+    }
+    let content: weaver_traits::ContentBlock =
+        serde_json::from_str(&block.raw).map_err(io::Error::other)?;
+    if !matches!(content, weaver_traits::ContentBlock::Text { text: value } if value == text) {
+        return Err(io::Error::other(
+            "instruction copy differs from certified text",
+        ));
+    }
+    Ok(())
 }
 
 fn pending_receipt_sources(

@@ -862,3 +862,171 @@ fn a_terminal_cannot_precede_its_opening_or_reuse_the_opening_source() {
         .mark_recorded(&call, PairRecordPhase::Terminal, event_id(31))
         .unwrap();
 }
+
+fn repaired_account() -> (SchemeDeclaration, RepairAccount) {
+    use crate::flow::coordinator::checked_request_fixture_at;
+    let (_, declaration, scheme) = fixture_scheme();
+    let original = OriginalRequests::from_checked(
+        checked_request_fixture_at(
+            &declaration,
+            vec![
+                text("broken"),
+                call("original opaque bytes"),
+                text("Read intact."),
+                call("intact opaque bytes"),
+                text("still broken"),
+            ],
+            vec![rejected(), accepted("Read intact."), rejected()],
+            "run",
+            "turn",
+            10,
+        ),
+        &scheme,
+    )
+    .unwrap();
+    let correction = OriginalRequests::from_checked(
+        checked_request_fixture_at(
+            &declaration,
+            vec![text("Read corrected.")],
+            vec![accepted("Read corrected.")],
+            "run",
+            "turn",
+            30,
+        ),
+        &scheme,
+    )
+    .unwrap();
+    let account = super::super::repair::account_fixture(original, vec![(source(0), correction)]);
+    (declaration, account)
+}
+
+#[test]
+fn repaired_original_requests_use_corrected_statements_and_preserve_original_execution_bytes() {
+    let (scheme, account) = repaired_account();
+    let starts = account.requests().to_vec();
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[0].call_id.sequence.0, 10);
+    assert_eq!(starts[0].call_block.0, 1);
+    assert_eq!(starts[0].statement.block_id, event_id(30));
+    assert_eq!(
+        starts[0].request,
+        PairRequest::External {
+            name: "sh".into(),
+            arguments: "original opaque bytes".into(),
+        }
+    );
+    let mut pairs = PairLedger::new("session".into(), "run".into(), scheme.clone()).unwrap();
+    pairs.accept_repair(account).unwrap();
+    pairs
+        .set_not_dispatched(NonDispatchCause::RepairExhausted)
+        .unwrap();
+    assert_eq!(pairs.finish_batch().unwrap_err(), PairError::WrongPhase);
+    open(&mut pairs, &starts[0].call_id, &scheme, 50);
+    open(&mut pairs, &starts[1].call_id, &scheme, 51);
+    assert!(pairs.next_terminal().is_none());
+    pairs
+        .install_statement(statement_receipt(
+            &scheme,
+            event_id(30),
+            "Read corrected.",
+            vec![binding("Read corrected.")],
+        ))
+        .unwrap();
+    close(&mut pairs, &starts[0].call_id, &scheme, 60);
+    assert_eq!(pairs.next_statement(), Some(&source(2)));
+    pairs
+        .install_statement(statement_receipt(
+            &scheme,
+            source(2),
+            "Read intact.",
+            vec![binding("Read intact.")],
+        ))
+        .unwrap();
+    close(&mut pairs, &starts[1].call_id, &scheme, 61);
+    let account = pairs.finish_repair_batch().unwrap();
+    assert_eq!(account.requests(), starts);
+    assert_eq!(account.generations().count(), 2);
+    assert_eq!(account.original().unresolved().len(), 1);
+    let completed = pairs.completed(&starts[0].call_id).unwrap().unwrap();
+    assert_eq!(completed.statement().source(), &event_id(30));
+    assert_eq!(
+        completed.ended().reason,
+        Some(PairFailure::NotDispatched {
+            cause: NonDispatchCause::RepairExhausted,
+        })
+    );
+    // Returning the private repair account preserves its evidence, not a second
+    // right to open the same original sends after they have reached terminals.
+    let (account, error) = pairs.accept_repair(account).unwrap_err();
+    assert_eq!(error, PairError::DuplicateCall);
+    assert_eq!(account.requests(), starts);
+    assert_eq!(account.generations().count(), 2);
+    assert!(pairs.next_opening().is_none());
+    assert!(pairs.completed(&starts[0].call_id).unwrap().is_some());
+}
+
+#[test]
+fn repaired_receipt_requires_its_exact_corrected_source_bytes_and_author_chronology() {
+    let (scheme, account) = repaired_account();
+    let started = account.requests()[0].clone();
+    let mut pairs = PairLedger::new("session".into(), "run".into(), scheme.clone()).unwrap();
+    pairs.accept_repair(account).unwrap();
+    pairs.set_not_dispatched(NonDispatchCause::Stop).unwrap();
+    let (refused, error) = pairs
+        .install_statement(statement_receipt(
+            &scheme,
+            source(0),
+            "Read corrected.",
+            vec![binding("Read corrected.")],
+        ))
+        .unwrap_err();
+    assert_eq!(error, PairError::WrongStatement);
+    assert_eq!(refused.source(), &source(0));
+    let (refused, error) = pairs
+        .install_statement(statement_receipt(
+            &scheme,
+            event_id(30),
+            "Read changed.",
+            vec![binding("Read changed.")],
+        ))
+        .unwrap_err();
+    assert_eq!(error, PairError::WrongStatement);
+    assert_eq!(refused.source(), &event_id(30));
+    pairs
+        .mark_authoring(&started.call_id, PairRecordPhase::Opening)
+        .unwrap();
+    assert_eq!(
+        pairs.mark_recorded(&started.call_id, PairRecordPhase::Opening, event_id(29)),
+        Err(PairError::InvalidIdentity)
+    );
+    assert!(pairs.outstanding().is_empty());
+    pairs
+        .mark_recorded(&started.call_id, PairRecordPhase::Opening, event_id(50))
+        .unwrap();
+    assert_eq!(pairs.outstanding()[0].opening_source, event_id(50));
+}
+
+#[test]
+fn repaired_batch_keeps_its_owner_on_busy_wrong_take_and_freeze() {
+    let (scheme, account) = repaired_account();
+    let mut pairs = PairLedger::new("session".into(), "run".into(), scheme).unwrap();
+    pairs.accept_repair(account).unwrap();
+    let (_, second) = repaired_account();
+    let (second, error) = pairs.accept_repair(second).unwrap_err();
+    assert_eq!(error, PairError::Busy);
+    assert_eq!(second.generations().count(), 2);
+    assert_eq!(pairs.finish_batch().unwrap_err(), PairError::WrongPhase);
+    pairs.freeze();
+    assert_eq!(pairs.finish_repair_batch().unwrap_err(), PairError::Frozen);
+    assert_eq!(
+        pairs
+            .original()
+            .unwrap()
+            .generation()
+            .source()
+            .block_id
+            .sequence
+            .0,
+        10
+    );
+}
