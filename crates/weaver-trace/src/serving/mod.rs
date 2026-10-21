@@ -1,9 +1,9 @@
-//! The inactive serving tap, under the merged dependable-flow amendment.
+//! The additive serving trace primitive, under the dependable-flow amendment.
 //!
-//! This module supplies the complete projection boundary. It does not select the
-//! serving path, submit trace events, transport copies, or authorize store writes.
-//! Recorder activation, typed event authoring, capacity reservation and their
-//! harness integration are separate work before the foundation cutover.
+//! Typed authoring, reserved writer capacity and the terminal tap share one
+//! canonical record. The existing selected recorder remains in place until the
+//! foundation cutover. This module neither transports copies nor writes state.
+//! Serving recall authoring awaits its owning payload contract.
 //!
 //! A validated partition cannot be constructed without its load checks.
 //!
@@ -19,10 +19,15 @@
 //! reads::<weaver_trace::serving::Kind>();
 //! ```
 
+mod event;
 mod partition;
+pub mod payloads;
 mod record;
+mod recorder;
 mod registry;
+mod structure;
 mod tee;
+mod writer;
 
 pub use partition::{
     Partition, PartitionError, PartitionErrorCode, PartitionRule, ValidatedPartition,
@@ -38,3 +43,11 @@ pub use tee::{
 
 #[cfg(test)]
 mod tests;
+
+pub use event::{Envelope, Event, Payload};
+pub use recorder::{
+    AwaitingLoad, Closed, Loaded, PreflightAttempt, PreflightFailure, PreflightRecorder, Recorder,
+    Refused, Submission, SubmitAttempt,
+};
+pub use structure::{Record, WorkingStructure};
+pub use writer::{ORDINARY_CAPACITY, QUEUE_DEPTH, TERMINAL_RESERVE};

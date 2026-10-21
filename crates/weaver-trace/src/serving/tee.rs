@@ -103,6 +103,10 @@ impl Tee {
         }
     }
 
+    pub fn is_stopped(&self) -> bool {
+        self.stopped
+    }
+
     /// Terminal, including when called more than once. There is no restart API.
     pub fn stop(&mut self) {
         self.stopped = true;
