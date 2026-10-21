@@ -1,6 +1,6 @@
 # Gate fault interrupt implementation record
 
-Date: 2026-10-21. Status: draft implementation evidence, Planner grade owed.
+Date: 2026-10-21. Status: draft PR #215, Planner grade owed.
 
 ## Scope and authority
 

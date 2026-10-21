@@ -25,7 +25,7 @@ landing map and takes precedence over historical branch descriptions below.
 | #190 | Independent pure recall query primitive. |
 | #192 | Independent snapshot timing amendment, approval owed. |
 | #213 | Independent empty-correction amendment, approval owed. |
-| Gate interrupt draft | Typed causes and contained terminal delivery, stacked on #198. Held for the coordinated foundation cutover. |
+| #215 | Typed causes and contained terminal delivery, stacked on #198. Held for the coordinated foundation cutover. |
 
 New harness work stacks on code/state-harness-filing, the head of #198. Closed
 child branches are no longer landing targets. Normal merge commits preserve the
@@ -431,8 +431,8 @@ recall remain explicit no-grant gaps until their owning Spec changes.
 The empty-correction proposal is [draft PR #213][empty-correction]. It is not
 implementation authority before approval and merge.
 
-H2g is the gate interrupt draft on code/state-gate-interrupt, based on #198 at
-a1ce2df5. Its [implementation record][gate-interrupt-record] names the typed
+H2g is [draft PR #215][gate-interrupt] on code/state-gate-interrupt, based on
+#198 at a1ce2df5. Its [implementation record][gate-interrupt-record] names the typed
 interrupt, containment, late-control and terminal-delivery contracts. Every old
 sender supplies Unload. The failed-flow caller and trace-only pair disposition
 remain in H1b2/H2. This slice changes the internal wire and must stay on the draft
@@ -524,3 +524,5 @@ quality, decoder capacity, throughput or absence of paging waits.
 [repair]: https://github.com/toddwbucy/WeaverAgent/pull/214
 
 [gate-interrupt-record]: state-management-gate-interrupt-2026-10-21.md
+
+[gate-interrupt]: https://github.com/toddwbucy/WeaverAgent/pull/215
