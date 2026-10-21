@@ -197,3 +197,28 @@ fn the_grant_is_constructed_only_in_execute_call() {
         assert_eq!(calls(&source(file)), 0, "{file} constructs no grant");
     }
 }
+
+/// A committed pair constructs the harness notice. Records, tests and replay
+/// cannot acquire a second constructor site. Removing its receipt checks is
+/// separately perturbed through the real pair driver.
+#[test]
+fn non_dispatch_notice_has_one_pair_coordinator_construction_site() {
+    fn visit(path: &std::path::Path, sites: &mut Vec<(std::path::PathBuf, usize)>) {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(&path, sites);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let source = std::fs::read_to_string(&path).unwrap();
+                let count = source.matches("ToolResult::not_dispatched(").count();
+                if count != 0 {
+                    sites.push((path, count));
+                }
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut sites = Vec::new();
+    visit(&root, &mut sites);
+    assert_eq!(sites, vec![(root.join("flow/pairs.rs"), 1)]);
+}
