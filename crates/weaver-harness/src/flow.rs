@@ -15,6 +15,8 @@ mod ledger;
 mod mirror;
 mod observation;
 mod recording;
+mod ste100_channel;
+mod ste100_socket;
 
 use recording::{RecordedStateMeasurement, RecordedSte100, RecordedTerminal};
 
@@ -23,3 +25,6 @@ mod member_tests;
 
 #[cfg(test)]
 mod recording_fixture;
+
+#[cfg(test)]
+mod ste100_integration_tests;

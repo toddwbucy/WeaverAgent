@@ -27,6 +27,7 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | C1a | F1 | SPU transport, admission proof and constrained binder, Spec 02 |
 | C1b | C1a | Normative grammar and template proof, Spec 02 O02-1 |
 | C1c | C1a, C1b | Model adapter, duty entry and qualification, Spec 02 O02-2 |
+| C1t | H1b1 | Harness STE100 socket adapter, Spec 02 CHANNEL and PORT |
 | P1a | F1 | Serving declaration, canonical artifacts and verified reads, admin/types amendments |
 | P1b | P1a | Staged artifact publication and restore append, admin/persistence amendments |
 | P1c | P1a, P1b, F4 | Contained seed driver, admin ADMIN-SEED and TYPES-SEED |
@@ -107,7 +108,7 @@ integration. No serving change or unused harness dependency is added here.
 C1a is [PR #191][spu], stacked on #184. It implements the SPU protocol and
 binding mechanics. Its remaining production dependencies are recorded in the
 [PR description][spu]. It adds no production checker, manifest locator or
-serving activation. C1 in later dependency rows means all three C1 slices, including
+serving activation. C1 in later dependency rows means all four C1 slices, including
 qualification.
 Host and Olympus cuda,gguf suites, lint, formatting and lock checks pass. Fifty
 mechanics perturbations and two cancellation-fixture perturbations failed their
