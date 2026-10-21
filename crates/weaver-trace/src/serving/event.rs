@@ -270,6 +270,7 @@ fn payload_licensed(envelope: &Envelope, payload: &Payload) -> bool {
         (K::StatePlacement, P::Placement(record)) => match record.phase {
             PlacementPhase::Boot => {
                 record.context.is_none()
+                    && record.cut.is_none()
                     && record.method.is_none()
                     && record.assistant_message_id.is_none()
                     && record.assembly_id.0 == 0

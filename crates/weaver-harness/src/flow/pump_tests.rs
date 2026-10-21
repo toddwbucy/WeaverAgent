@@ -1045,6 +1045,7 @@ fn real_silent_socket_wait_expires_at_the_original_bound_with_a_watchdog() {
                     assert_eq!(deadlines.get(PumpDeadline::Gate), Some(bound));
                 }
                 PumpStep::Idle => panic!("the silent gate remains standing"),
+                PumpStep::Observation => panic!("no flow owner has an observation tick"),
             }
         }
     });

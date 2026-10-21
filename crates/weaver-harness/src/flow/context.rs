@@ -597,13 +597,12 @@ impl RecordingContext {
                     return Ok(());
                 }
                 Ok(serving::DrainStatus::Pending { .. }) => match self.pump_once(ports) {
+                    // Lifecycle expiry returns ownership to its caller. The
+                    // same writer must remain able to finish a resumed drain.
+                    Err(failure @ RunFailure::Wait { .. }) => return Err(failure),
                     Err(failure) => {
                         self.barrier.abandon();
                         return Err(failure);
-                    }
-                    Ok(PumpStep::Deadline { key, bound }) => {
-                        self.barrier.abandon();
-                        return Err(RunFailure::Wait { key, bound });
                     }
                     Ok(_) => {}
                 },

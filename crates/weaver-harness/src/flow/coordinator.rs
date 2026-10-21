@@ -518,6 +518,31 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.pending_record.is_some()
     }
 
+    /// Wake the common pump for a sample only when reduction can author it.
+    /// A held author or transition coalesces the tick into its next recorded
+    /// sample, without replacing the frozen event or spinning on a past tick.
+    pub(super) fn observation_wake(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<Option<u64>, FlowFailure> {
+        self.ensure_live()?;
+        if self.phase != CoordinatorPhase::Active
+            || self.open_pending
+            || self.pending_record.is_some()
+            || !self.notices.is_empty()
+            || self.operation_completion.is_some()
+            || cx.barrier.pending().is_some()
+        {
+            return Ok(None);
+        }
+        let work_pending = self.gauges(cx)?.work_pending();
+        self.observations
+            .as_ref()
+            .expect("active observation owner")
+            .next_tick(work_pending)
+            .map_err(|error| self.fail(cx, "observation", error))
+    }
+
     /// First-latch facts are captured before any teardown transport is probed.
     /// A pre-open failure has no sample because no observation baseline exists.
     pub(super) fn final_sample(&self) -> Result<Option<&trace::FlowObservation>, &FlowFailure> {

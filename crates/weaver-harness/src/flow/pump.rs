@@ -91,6 +91,8 @@ pub(super) enum PumpStep {
     Progress {
         sources: Vec<PumpSource>,
     },
+    /// The owner can reduce a measurement tick without expiring an operation.
+    Observation,
     Deadline {
         key: PumpDeadline,
         bound: AbsoluteBound,
@@ -584,6 +586,13 @@ impl CommonPump {
             }
         }
         if ready.iter().all(PollFlags::is_empty) && progressed.is_empty() {
+            let observation = coordinator
+                .as_deref_mut()
+                .map(|owner| owner.observation_wake(cx))
+                .transpose()
+                .map_err(PumpFailure::Flow)?
+                .flatten();
+            let wake = deadlines.nearest().into_iter().chain(observation).min();
             let mut interests = Vec::new();
             let mut sources = Vec::new();
             for source in LIFECYCLE.into_iter().chain(ROTATING) {
@@ -603,21 +612,27 @@ impl CommonPump {
             }
             // The recorder contributes a descriptor throughout a live context.
             // No-descriptor operation is still useful at the final closed edge.
-            if interests.is_empty() && deadlines.nearest().is_none() {
+            if interests.is_empty() && wake.is_none() {
                 return Ok(PumpStep::Idle);
             }
             match ports
                 .io
-                .wait(&interests, deadlines.nearest())
+                .wait(&interests, wake)
                 .map_err(PumpFailure::Clock)?
             {
                 WaitOutcome::Timeout => {
-                    return self.deadline(ports.io, deadlines)?.ok_or_else(|| {
-                        PumpFailure::Clock(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "wait returned timeout before any armed deadline",
-                        ))
-                    });
+                    // Terminal bounds win even when their expiry shares the
+                    // tick, or the clock advanced past both during the wait.
+                    if let Some(expired) = self.deadline(ports.io, deadlines)? {
+                        return Ok(expired);
+                    }
+                    if observation.is_some_and(|tick| self.previous >= tick) {
+                        return Ok(PumpStep::Observation);
+                    }
+                    return Err(PumpFailure::Clock(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "wait returned timeout before any armed wake",
+                    )));
                 }
                 WaitOutcome::Ready(wakes) => {
                     for wake in wakes {

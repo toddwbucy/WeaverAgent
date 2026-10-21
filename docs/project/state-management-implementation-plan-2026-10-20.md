@@ -1,36 +1,40 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for the consolidated stack and model repair.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
-start as drafts. The Planner controls the reviewed transition out of draft.
+start as drafts. Gates and Planner verification precede third-party review.
 The operator merges them.
-The store remains in weaver-state. The loop remains in worker/dev_loop and calls
+The crate remains weaver-state. The loop remains in worker/dev_loop and calls
 primitives. The SPU owns classification.
 
 ## Consolidated review stack
 
-The operator folded the completed child PRs into their roots on 2026-10-21.
-Merged into a parent branch does not mean merged into main. The evidence below
-records each original slice and its tested revision. This table is the current
-landing map and takes precedence over historical branch descriptions below.
+The completed child PRs were folded into three roots on 2026-10-21. The
+foundation and trace roots have now reached main. This table is the current landing
+map and takes precedence over the historical branch descriptions below. Results
+recorded for the original slices are not fresh validation of a combined head.
 
-| Open PR | Current contents and next landing step |
+| Root or held branch | Contents and next step |
 | --- | --- |
-| #184 | Shared floor, store/member via #212, admin chain #193 through #196, and SPU #191 with #197. Review and land to main. |
-| #185 | Trace copy and recorder, including #187. Review and land to main. |
-| #198 | Harness chain #199 through #210. Its base still names code/state-member-flow. Leave open until #184 and #185 land, then retarget to main and check the full combined diff and gates. |
-| #189 | Independent serving-recall payload amendment, approval owed. |
-| #190 | Independent pure recall query primitive. |
-| #192 | Independent snapshot timing amendment, approval owed. |
-| #213 | Independent empty-correction amendment, approval owed. |
-| #214 | Model repair and recorded restatement/accounting, stacked on #198. |
+| #184 | Shared floor, store/member via #212, admin #193 through #196, and SPU #191 with #197. Merged to main at b18e7d34. |
+| #185 | Trace copy and recorder, including #187. Merged to main at ba17720d. |
+| #198 | Harness #199 through #210 and model repair #214. Integrated main at ba17720d. The observation wake and recoverable drain fixes pass combined gates and protective probes. Repeat review remains owed before landing. |
+| #190 | Independent pure recall query primitive, held until the foundation cutover by the [operator's ruling][recall-hold]. It does not land ahead of that cutover. |
+| #215, #216, #217 | Typed tool causes, external pair execution and paged reads. Keep the descendant stack held for the coupled cutover. |
+| #218, #219, #220 | Paired decode wire, owned measurement and outbound identity sort. The #219 union preserves both #217 and #218. Keep that union and its descendants held for the coupled cutover. |
+| #189, #192, #213 | Separate Spec proposals. Approval and merge remain owed, so they are not implementation authority. |
 
-New harness work stacks on code/state-harness-filing, the head of #198. Closed
-child branches are no longer landing targets. Normal merge commits preserve the
-consolidated ancestry. Only the operator merges. A root's old slice-level results
-are not fresh validation of its combined head.
+Closed child branches are no longer landing targets. Review #198 against main after
+integration, preserving merge ancestry rather than squashing the joined stacks.
+The paired wire stays out of this additive landing. Only the operator merges. The
+old serving path remains active until the qualified foundation cutover. The full
+implementation and epic #146 remain open.
+
+The contained seed fixture that launches the real member under root-owned host
+containment remains an open instrument carried by #184. The reviewed scripted seed
+fixtures do not replace it. Production language artifacts and measured limits also
+remain unqualified. The foundation landing does not remove these cutover obligations.
 
 ## Dependency and merge order
 
@@ -93,6 +97,9 @@ clause remains binding.
 
 ## Slice evidence before consolidation
 
+The following counts, grades and branch descriptions record each original slice.
+They do not certify the current #198 integration or replace its pending review.
+
 F2 is [merged PR #183][catalog], merge commit 7a8651d8. Its full crate
 suite, formatting, lint and lock checks passed. Seven deliberate mutations failed
 their protective tests. Independent local review found no unresolved catalog issue.
@@ -130,8 +137,9 @@ guard removals failed their protective tests. Independent findings in continuati
 identity, page publication, canonical encoding and observation integrity are fixed.
 Copied and held byte counters remain explicitly uninstrumented. The optional build
 without SQLite still has its inherited legacy binary compile failure. Its current
-head is 9e3dab9c. The operator settled snapshot timing, with the narrow measurement
-amendment in [draft PR #192][snapshot]. Sampling code follows that review.
+head is 9e3dab9c. The narrow snapshot timing amendment remains a proposal in
+[draft PR #192][snapshot]. Its ruling and merge are still owed before the matching
+sampling change becomes implementation authority.
 
 IN1 is [draft PR #190][internal-recall], independently based on main at 7a8651d8.
 It supplies the pure recall query with an empty-only refusal and an exact borrowed
@@ -140,10 +148,11 @@ failed their protective tests, including two type pins. H2 owns the caller and r
 integration. No serving change or unused harness dependency is added here.
 
 C1a is [PR #191][spu], stacked on #184. It implements the SPU protocol and
-binding mechanics. Its remaining production dependencies are recorded in the
-[PR description][spu]. It adds no production checker, manifest locator or
-serving activation. C1 in later dependency rows means C1a, C1b and C1c, including
-qualification. C1t is the separately named harness transport.
+binding mechanics. The [mechanics record][spu-mechanics] and
+[PR description][spu] name its evidence and remaining production dependencies.
+It adds no production checker, manifest locator or serving activation. C1 in later
+dependency rows means C1a, C1b and C1c, including qualification. C1t is the separately
+named harness transport.
 Host and Olympus cuda,gguf suites, lint, formatting and lock checks pass. Fifty
 mechanics perturbations and two cancellation-fixture perturbations failed their
 protective tests. The GPU pace instrument reports a skip, so no measured-pace claim
@@ -431,7 +440,7 @@ implementation authority before approval and merge.
 
 The later rows remain owed.
 This is a progress record, not a claim that the full goal or any serving cutover is
-complete. Each draft carries its own fresh test and perturbation evidence.
+complete. Each original slice carries its own test and perturbation evidence.
 
 The operator supplied docs/ASD-STE100_ISSUE9.pdf as the normative language source.
 The inspected copy is Issue 9, January 2025, with SHA-256:
@@ -465,7 +474,9 @@ quality, decoder capacity, throughput or absence of paging waits.
 [member]: https://github.com/toddwbucy/WeaverAgent/pull/188
 [recall]: https://github.com/toddwbucy/WeaverAgent/pull/189
 [internal-recall]: https://github.com/toddwbucy/WeaverAgent/pull/190
+[recall-hold]: https://github.com/toddwbucy/WeaverAgent/pull/190#issuecomment-6325275500
 [spu]: https://github.com/toddwbucy/WeaverAgent/pull/191
+[spu-mechanics]: state-management-spu-mechanics-2026-10-20.md
 
 [snapshot]: https://github.com/toddwbucy/WeaverAgent/pull/192
 [ste100-transport]: https://github.com/toddwbucy/WeaverAgent/pull/200

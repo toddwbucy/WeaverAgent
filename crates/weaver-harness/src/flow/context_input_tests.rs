@@ -11,6 +11,9 @@ use super::super::ste100_channel::{Channel, Receive, Tag};
 use super::super::ste100_socket::AdmissionPoll;
 use super::tests::{Fixture, config};
 use super::*;
+
+#[path = "context_observation_tests.rs"]
+mod observation_ticks;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
 use std::io::Read;
 use std::time::{Duration, Instant};

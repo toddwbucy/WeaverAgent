@@ -19,6 +19,14 @@ use serde::{Deserialize, Serialize};
 use crate::identity::AccessRule;
 use crate::wire::SessionId;
 
+#[cfg(feature = "config")]
+mod serving;
+#[cfg(feature = "config")]
+pub use serving::{
+    DraftStateManagement, ServingDeclaration, ServingDraft, parse_serving_declaration,
+    parse_serving_draft,
+};
+
 /// The declared surface of an agent.
 ///
 /// Absence is a refusal rather than a default: an operator who stated no

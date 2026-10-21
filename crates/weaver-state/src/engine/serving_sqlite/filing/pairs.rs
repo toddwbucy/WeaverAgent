@@ -212,7 +212,8 @@ pub(in crate::engine::serving_sqlite) fn validate_terminal(
     }
     let abandoned = matches!(ended.reason, Some(AbandonedAtLoad {}));
     if abandoned {
-        if ended.fate != TerminalPairFate::Failed
+        if ended.call_id.run == context.run_id
+            || ended.fate != TerminalPairFate::Failed
             || ended.execution.is_some()
             || ended.outcome.is_some()
             || ended.loaded_from.as_ref() != Some(&context.start)
@@ -220,7 +221,7 @@ pub(in crate::engine::serving_sqlite) fn validate_terminal(
             || filing.source.origin != "loop"
         {
             return Err(invalid(
-                "abandoned pair lacks its exact loaded starting state",
+                "abandoned pair must name a prior run and its exact loaded starting state",
             ));
         }
         return Ok(());
