@@ -356,21 +356,50 @@ fn observation_record(row: &Row<'_>, out: &Output) -> Result<StoredOperationObse
 /// These SELECTs stream one record at a time and do not create a new observation.
 pub(super) fn verify_image_observations(connection: &Connection) -> Result<()> {
     let out = Output::new(u64::MAX.into())?;
-    let mut runs = connection.prepare("SELECT member_observation FROM observation_run")?;
+    let mut runs = connection.prepare(
+        "SELECT run,member_observation FROM observation_run ORDER BY run COLLATE BINARY",
+    )?;
     let mut runs = runs.query([])?;
     while let Some(row) = runs.next()? {
+        let run = text_cell(row, "run", &out)?;
         let member: MemberObservationIdentity =
             json_cell!(&out, row, "member_observation", MemberObservationIdentity);
         member
             .validate()
             .map_err(|_| ReadFailure::ComponentCorruption("invalid member observation"))?;
-    }
-    let mut records = connection.prepare(
-        "SELECT operation_id,request_id,operation,source_run,source_sequence,source_block,observation FROM operation_observation ORDER BY run,operation_id",
-    )?;
-    let mut records = records.query([])?;
-    while let Some(row) = records.next()? {
-        observation_record(row, &out)?;
+        let mut records = connection.prepare(
+            "SELECT operation_id,request_id,operation,source_run,source_sequence,
+                    source_block,observation FROM operation_observation
+             WHERE run=?1 ORDER BY operation_id",
+        )?;
+        let mut records = records.query([run])?;
+        let mut previous = 0_u64;
+        while let Some(row) = records.next()? {
+            let record = observation_record(row, &out)?;
+            let observation = record.observation;
+            if previous.checked_add(1) != Some(observation.operation_id.0) {
+                return Err(ReadFailure::ComponentCorruption(
+                    "stored operation IDs do not form a complete run",
+                ));
+            }
+            if previous == 0 {
+                if observation.operation != StateOperation::Open || observation.request_id.0 != 1 {
+                    return Err(ReadFailure::ComponentCorruption(
+                        "stored run does not begin with open request one",
+                    ));
+                }
+            } else if observation.operation == StateOperation::Open {
+                return Err(ReadFailure::ComponentCorruption(
+                    "stored run contains another open observation",
+                ));
+            }
+            previous = observation.operation_id.0;
+        }
+        if previous == 0 {
+            return Err(ReadFailure::ComponentCorruption(
+                "stored member identity has no open observation",
+            ));
+        }
     }
     Ok(())
 }

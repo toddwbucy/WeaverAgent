@@ -775,7 +775,14 @@ fn observation_reads_pin_frontier_validate_columns_and_stay_out_of_content() {
     )
     .unwrap();
     for id in [1, 2, u64::MAX] {
-        db.execute("INSERT INTO operation_observation(run,operation_id,request_id,operation,observation) VALUES('history',?1,?2,'read',?3)",params![blob(id.into()),blob(1.into()),serde_json::to_string(&stored_observation(1,id)).unwrap()]).unwrap();
+        let mut observation = stored_observation(1, id);
+        let operation = if id == 1 {
+            observation.operation = StateOperation::Open;
+            "open"
+        } else {
+            "read"
+        };
+        db.execute("INSERT INTO operation_observation(run,operation_id,request_id,operation,observation) VALUES('history',?1,?2,?3,?4)",params![blob(id.into()),blob(1.into()),operation,serde_json::to_string(&observation).unwrap()]).unwrap();
     }
     let selector = ReadSelector::Observations {
         run: "history".into(),
@@ -783,7 +790,12 @@ fn observation_reads_pin_frontier_validate_columns_and_stay_out_of_content() {
         through: None,
     };
     let held = query_encoded(&store, &selector).unwrap();
-    verify_image_observations(db).unwrap();
+    // This synthetic read corpus pins unsigned ordering up to u64::MAX. Its
+    // intentional gap cannot be adopted as a complete recorded member run.
+    assert!(matches!(
+        verify_image_observations(db),
+        Err(ReadFailure::ComponentCorruption(_))
+    ));
     let result: QueryResult = serde_json::from_slice(&held).unwrap();
     assert!(
         matches!(result,QueryResult::Observations{through,records,..} if through.0==u64::MAX && records.len()==2&&records[0].observation.operation_id.0==2)

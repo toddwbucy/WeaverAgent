@@ -11,7 +11,7 @@ use weaver_types::state_flow::{
 use super::{CatalogFault, ServingCatalog};
 
 mod adoption;
-pub use adoption::OpenFault;
+pub use adoption::{ObservedAdoption, OpenFault};
 
 #[derive(Debug)]
 pub struct CaptureFault {

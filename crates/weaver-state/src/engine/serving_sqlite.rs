@@ -16,10 +16,11 @@ use crate::{FileCommit, FileFault, ReadFault, ServingStore};
 
 mod filing;
 mod image;
+mod observation;
 mod reads;
 mod schema;
 
-pub use image::{CaptureFault, OpenFault, SeedFault, SeedImage, seed_image};
+pub use image::{CaptureFault, ObservedAdoption, OpenFault, SeedFault, SeedImage, seed_image};
 
 /// Runtime attribution established by the verified open, never by a filing.
 #[derive(Clone, Debug)]
