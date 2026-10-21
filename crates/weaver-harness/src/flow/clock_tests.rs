@@ -5,6 +5,39 @@ use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 
 #[test]
+fn real_wait_preserves_write_half_closure_without_a_read_interest() {
+    // A full completion slot deliberately disables POLLIN. Half-close must
+    // still wake the source, even though nix's PollFlags has no named bit for
+    // Linux POLLRDHUP and its checked conversion would discard this result.
+    for readable in [false, true] {
+        let (near, peer) = UnixStream::pair().unwrap();
+        peer.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut events = PollFlags::from_bits_retain(nix::libc::POLLRDHUP);
+        if readable {
+            events |= PollFlags::POLLIN;
+        }
+        let mut io = MonotonicIo;
+        let deadline = io.now().unwrap().checked_add(1_000_000_000).unwrap();
+        let result = io
+            .wait(
+                &[WaitInterest {
+                    fd: near.as_fd(),
+                    events,
+                }],
+                Some(deadline),
+            )
+            .unwrap();
+        let WaitOutcome::Ready(ready) = result else {
+            panic!("write-half closure was hidden until the deadline");
+        };
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].index, 0);
+        assert_ne!(ready[0].events.bits() & nix::libc::POLLRDHUP, 0);
+        assert_eq!(ready[0].events.contains(PollFlags::POLLIN), readable);
+    }
+}
+
+#[test]
 fn origin_and_absolute_bounds_use_checked_numeric_arithmetic() {
     let mut io = FakePumpIo::new(9_007_199_254_740_993);
     let origin = ClockOrigin::capture(&mut io).unwrap();

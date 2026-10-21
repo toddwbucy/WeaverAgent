@@ -1,0 +1,518 @@
+use super::super::author::AuthoredSource;
+use super::super::clock::{ReadyFd, testing::FakePumpIo};
+use super::super::coordinator::CoordinatorPhase;
+use super::super::pump::LifecyclePorts;
+use super::super::recording_fixture as fixture;
+use super::*;
+use nix::poll::PollFlags;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
+use std::time::Duration;
+use weaver_trace::{Subsystem, TurnRef};
+use weaver_types::state_flow as s;
+
+pub(super) struct Fixture {
+    pub(super) context: RecordingContext,
+    pub(super) clock: FakePumpIo,
+    pub(super) state: UnixStream,
+    pub(super) _reader: UnixStream,
+}
+
+pub(super) fn config() -> FlowConfig {
+    let load = fixture::load_record();
+    let digest = s::Digest::new("a".repeat(64)).unwrap();
+    FlowConfig {
+        version: 1,
+        partition: fixture::partition()
+            .rules
+            .into_iter()
+            .map(|rule| s::PartitionRule {
+                id: rule.id,
+                kind: rule.kind,
+                channels: rule.channels,
+                origins: rule.origins,
+                blocks: rule.blocks,
+                context: rule.context,
+            })
+            .collect(),
+        gate_wait: serde_json::from_value(serde_json::to_value(load.state_flow.gate_wait).unwrap())
+            .unwrap(),
+        cut_wait: serde_json::from_value(serde_json::to_value(load.state_flow.cut_wait).unwrap())
+            .unwrap(),
+        observation_interval: s::MeasuredInterval {
+            elapsed_ns: 1000.into(),
+            measurement_ref: "fixture".into(),
+        },
+        backlog: s::FlowBacklog {
+            max_pending_blocks: 100.into(),
+            max_pending_bytes: 1000000.into(),
+            lag_alarm_turns: 2.into(),
+            measurement_ref: "fixture".into(),
+        },
+        scheme: s::SchemeDeclaration {
+            scheme_id: format!("ste100:{}", digest.as_str()),
+            artifact_sha256: digest,
+            verbs: vec!["read".into()],
+        },
+    }
+}
+
+pub(super) fn event(kind: Kind, payload: Option<Payload>) -> AuthoredEvent {
+    AuthoredEvent {
+        kind,
+        subsystem: Subsystem::Harness,
+        turn: None,
+        source: AuthoredSource::Runtime,
+        causal_parent: None,
+        payload,
+    }
+}
+
+impl Fixture {
+    pub(super) fn new(declaration: FlowConfig) -> Self {
+        let (sink, reader) = UnixStream::pair().unwrap();
+        let (state, peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        peer.set_write_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut clock = FakePumpIo::new(100);
+        let context = RecordingContext::new(
+            sink.into(),
+            StateChannel::new(state, "session".into(), "run".into()).unwrap(),
+            "session".into(),
+            "run".into(),
+            42,
+            declaration,
+            1_000_000_000,
+            &mut clock,
+        )
+        .unwrap();
+        Self {
+            context,
+            clock,
+            state: peer,
+            _reader: reader,
+        }
+    }
+
+    pub(super) fn pump_at(&mut self, time: u64, flags: PollFlags) {
+        self.clock
+            .schedule(
+                time,
+                vec![ReadyFd {
+                    index: 0,
+                    events: flags,
+                }],
+            )
+            .unwrap();
+        self.context
+            .pump_once(&mut PumpPorts {
+                lifecycle: LifecyclePorts::default(),
+                gate: None,
+                decode: None,
+                label: None,
+                io: &mut self.clock,
+            })
+            .unwrap();
+    }
+
+    pub(super) fn opened(&mut self) {
+        let start: StartIdentity = serde_json::from_value(
+            serde_json::to_value(fixture::load_record().state_start).unwrap(),
+        )
+        .unwrap();
+        self.context
+            .begin_open(
+                start,
+                ReadLimits {
+                    max_result_bytes: 100000.into(),
+                    measurement_ref: "fixture".into(),
+                },
+                &mut self.clock,
+            )
+            .unwrap();
+        self.pump_at(101, PollFlags::POLLOUT);
+        let mut line = Vec::new();
+        BufReader::new(&mut self.state)
+            .read_until(b'\n', &mut line)
+            .unwrap();
+        let request = s::decode_state_line(&line, s::FrameDirection::Request).unwrap();
+        let observation = s::StateOperationObservation {
+            operation_id: 1.into(),
+            parent_id: None,
+            request_id: request.common().request_id,
+            operation: s::StateOperation::Open,
+            began_ns: 102.into(),
+            ended_ns: 103.into(),
+            phases: vec![
+                s::OperationPhase {
+                    name: s::PhaseName::Validate,
+                    began_ns: 102.into(),
+                    ended_ns: 102.into(),
+                },
+                s::OperationPhase {
+                    name: s::PhaseName::Encode,
+                    began_ns: 103.into(),
+                    ended_ns: 103.into(),
+                },
+            ],
+            resource: s::OperationResource {
+                cpu_ns: None,
+                copied_bytes: Some(0.into()),
+                held_bytes: Some(0.into()),
+                unavailable: vec![s::ResourceUnavailable {
+                    field: s::ResourceField::CpuNs,
+                    reason: s::ObservationUnavailable::NotSampled,
+                }],
+            },
+            disk: s::OperationDisk {
+                enabled: None,
+                before: None,
+                after: None,
+                unavailable_reason: Some(s::ObservationUnavailable::NotSampled),
+            },
+        };
+        let s::StateFrame::Open {
+            common,
+            schema_id,
+            scheme_id,
+            start,
+            read_limits,
+        } = request
+        else {
+            panic!("open");
+        };
+        let response = s::StateFrame::Opened {
+            common,
+            schema_id,
+            scheme_id,
+            start,
+            read_limits,
+            observation,
+            member_observation: s::MemberObservationIdentity {
+                instrument_version: "state-observation/1".into(),
+                pid: 7,
+                start_ticks: Some(10.into()),
+                ticks_per_second: Some(100.into()),
+                unavailable_reason: None,
+            },
+        };
+        self.state
+            .write_all(&s::encode_state_line(&response, s::FrameDirection::Response).unwrap())
+            .unwrap();
+        self.pump_at(104, PollFlags::POLLIN);
+        assert!(self.context.opened_identity().is_some());
+    }
+
+    pub(super) fn load_event(&self) -> AuthoredEvent {
+        let mut load = fixture::load_record();
+        load.origin_ns = self.context.origin_ns().into();
+        load.state_flow.partition = self
+            .context
+            .declaration
+            .partition
+            .iter()
+            .map(|r| serving::payloads::PartitionRule {
+                id: r.id.clone(),
+                kind: r.kind.clone(),
+                channels: r.channels.clone(),
+                origins: r.origins.clone(),
+                blocks: r.blocks.clone(),
+                context: r.context.clone(),
+            })
+            .collect();
+        let declared = &self.context.declaration;
+        load.state_flow.observation_interval.elapsed_ns =
+            declared.observation_interval.elapsed_ns.0.into();
+        load.state_flow.observation_interval.measurement_ref =
+            declared.observation_interval.measurement_ref.clone();
+        load.state_flow.backlog = serving::payloads::FlowBacklog {
+            max_pending_blocks: declared.backlog.max_pending_blocks.0.into(),
+            max_pending_bytes: declared.backlog.max_pending_bytes.0.into(),
+            lag_alarm_turns: declared.backlog.lag_alarm_turns.0.into(),
+            measurement_ref: declared.backlog.measurement_ref.clone(),
+        };
+        load.state_flow.reads.max_result_bytes = 100000.into();
+        load.state_flow.reads.measurement_ref = "fixture".into();
+        load.state_flow.scheme.verbs = self.context.declaration.scheme.verbs.clone();
+        load.state_flow.scheme.scheme_id = self.context.declaration.scheme.scheme_id.clone();
+        load.state_flow.scheme.artifact_sha256 = self
+            .context
+            .declaration
+            .scheme
+            .artifact_sha256
+            .as_str()
+            .into();
+        load.template_inventory.scheme_id = declared.scheme.scheme_id.clone();
+        load.template_inventory.checker_artifact_sha256 =
+            load.state_flow.ste100.model_artifact_sha256.clone();
+        load.state_member_observation =
+            super::super::mirror::member(&s::MemberObservationIdentity {
+                instrument_version: "state-observation/1".into(),
+                pid: 7,
+                start_ticks: Some(10.into()),
+                ticks_per_second: Some(100.into()),
+                unavailable_reason: None,
+            });
+        event(Kind::Load, Some(Payload::Elections(Box::new(load))))
+    }
+
+    pub(super) fn author(&mut self, event: AuthoredEvent) -> Result<Sequence, RunFailure> {
+        self.context.author_and_wait(
+            &mut PumpPorts {
+                lifecycle: LifecyclePorts::default(),
+                gate: None,
+                decode: None,
+                label: None,
+                io: &mut self.clock,
+            },
+            event,
+        )
+    }
+
+    pub(super) fn activate(&mut self) {
+        self.opened();
+        assert_eq!(self.author(self.load_event()).unwrap(), Sequence(0));
+        self.context.activate(&mut self.clock).unwrap();
+        for _ in 0..10 {
+            self.context.reduce_flow(&mut self.clock).unwrap();
+            if self.context.flow.operation_completion().is_some() {
+                break;
+            }
+        }
+        assert!(matches!(
+            self.context
+                .take_operation_completion(&mut self.clock)
+                .unwrap(),
+            Some(OperationCompletion::Opened { .. })
+        ));
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        self.context.barrier.abandon();
+    }
+}
+
+#[test]
+fn the_same_context_carries_load_ticket_origin_and_open_proof_into_entered() {
+    let mut fx = Fixture::new(config());
+    let origin = fx.context.origin_ns();
+    fx.activate();
+    assert_eq!(fx.context.phase(), RecordingPhase::Entered);
+    assert_eq!(fx.context.origin_ns(), origin);
+    assert_eq!(fx.context.flow.phase(), CoordinatorPhase::Active);
+    assert_eq!(fx.context.budget.gauges(), (0, 0));
+    assert!(fx.context.flow.ledger().facts().next().is_none());
+    assert!(fx.context.pending_author().is_none());
+    assert!(
+        fx.context
+            .take_operation_completion(&mut fx.clock)
+            .unwrap()
+            .is_none()
+    );
+    let records = fx.context.barrier.recorder().structure();
+    assert_eq!(records.len(), 2);
+}
+
+#[test]
+fn load_needs_this_contexts_open_and_common_origin() {
+    for open in [false, true] {
+        let mut fx = Fixture::new(config());
+        if open {
+            fx.opened();
+        }
+        let mut load = fx.load_event();
+        if open {
+            let Some(Payload::Elections(record)) = &mut load.payload else {
+                unreachable!()
+            };
+            record.origin_ns = (fx.context.origin_ns() + 1).into();
+        }
+        assert!(fx.author(load).is_err());
+        assert_eq!(fx.context.phase(), RecordingPhase::Failed);
+        assert!(!fx.context.barrier.is_loaded());
+        assert!(fx.context.refused_author().is_some());
+        assert!(fx.context.flow.halt().is_some());
+    }
+}
+
+#[test]
+fn invalid_partition_refuses_activation_without_a_component_halt() {
+    let mut declaration = config();
+    declaration.partition[0].kind = "save_point".into();
+    let mut fx = Fixture::new(declaration);
+    fx.opened();
+    fx.author(fx.load_event()).unwrap();
+    assert!(matches!(
+        fx.context.activate(&mut fx.clock),
+        Err(ActivationFailure::Partition(_))
+    ));
+    assert!(fx.context.failure().is_none());
+    assert!(!fx.context.barrier.is_active());
+    assert!(fx.context.flow.halt().is_none());
+}
+
+#[test]
+fn a_second_activation_never_rebuilds_the_tap_or_reset_the_author() {
+    let mut fx = Fixture::new(config());
+    fx.activate();
+    assert!(fx.context.activate(&mut fx.clock).is_err());
+    assert!(fx.context.barrier.recorder().tap_stopped());
+    let count = fx.context.barrier.recorder().structure().len();
+    let content = AuthoredEvent { kind: Kind::MessageAssistant, subsystem: Subsystem::Harness,
+        turn: Some(TurnRef("turn".into())), source: AuthoredSource::Model,
+        causal_parent: None, payload: Some(Payload::Message(serde_json::value::RawValue::from_string(
+            "{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Read file.\"}]}".into()).unwrap())) };
+    assert!(fx.author(content).is_err());
+    assert_eq!(fx.context.barrier.recorder().structure().len(), count);
+    assert!(fx.context.flow.ledger().facts().next().is_none());
+}
+
+#[test]
+fn unload_cannot_close_an_entered_store_or_leave_an_owed_block_behind() {
+    let mut fx = Fixture::new(config());
+    fx.activate();
+    let unload = event(
+        Kind::Unload,
+        Some(Payload::Unload(Box::new(unload_close()))),
+    );
+    assert!(fx.author(unload).is_err());
+    assert!(!fx.context.barrier.is_closed());
+    assert!(fx.context.flow.standing_state().is_some());
+    assert_eq!(fx.context.phase(), RecordingPhase::Failed);
+}
+
+fn unload_close() -> serving::payloads::UnloadClose {
+    serving::payloads::UnloadClose {
+        grant_surface: None,
+        cause: None,
+        forced: false,
+        forced_by: None,
+        release: None,
+        end_reason: None,
+        state_flow_failure: None,
+    }
+}
+
+#[test]
+fn clean_release_retains_the_context_through_unload_then_never_reopens() {
+    let mut fx = Fixture::new(config());
+    fx.activate();
+    fx.context.complete_wait(PumpDeadline::Enter).unwrap();
+    let leave = AbsoluteBound::after(104, 10_000).unwrap();
+    fx.context.begin_releasing(leave, &mut fx.clock).unwrap();
+    assert_eq!(
+        fx.context.retire_state(&mut fx.clock).unwrap(),
+        Advance::Progress
+    );
+    assert_eq!(
+        fx.context.retire_classifier(&mut fx.clock).unwrap(),
+        Advance::Progress
+    );
+    assert!(fx.context.flow.standing_state().is_none());
+    assert_eq!(
+        fx.author(event(
+            Kind::Unload,
+            Some(Payload::Unload(Box::new(unload_close())))
+        ))
+        .unwrap(),
+        Sequence(2)
+    );
+    assert!(fx.context.barrier.is_closed());
+    // Synchronize the real writer before the fake wait lane is used below.
+    // The production drain remains bounded by the common pump's leave window.
+    let end = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if matches!(
+            fx.context
+                .barrier
+                .drain_status(&mut fx.context.budget)
+                .unwrap(),
+            serving::DrainStatus::Emptied
+        ) {
+            break;
+        }
+        assert!(std::time::Instant::now() < end, "writer did not drain");
+        std::thread::yield_now();
+    }
+    fx.context
+        .close_after_drain(&mut PumpPorts {
+            lifecycle: LifecyclePorts::default(),
+            gate: None,
+            decode: None,
+            label: None,
+            io: &mut fx.clock,
+        })
+        .unwrap();
+    assert_eq!(fx.context.phase(), RecordingPhase::Closed);
+    assert_eq!(
+        fx.author(event(Kind::SessionClosed, None)).unwrap_err(),
+        RunFailure::Closed
+    );
+    assert_eq!(fx.context.phase(), RecordingPhase::Closed);
+    assert!(fx.context.flow.halt().is_none());
+}
+
+#[test]
+fn lifecycle_deadlines_keep_their_owner_while_gate_expiry_latches_flow() {
+    for key in [
+        PumpDeadline::Enter,
+        PumpDeadline::Leave,
+        PumpDeadline::Label,
+        PumpDeadline::Gate,
+    ] {
+        let mut fx = Fixture::new(config());
+        fx.activate();
+        fx.context.complete_wait(PumpDeadline::Enter).unwrap();
+        let bound = AbsoluteBound::after(104, 5).unwrap();
+        fx.context.arm(key, bound, &mut fx.clock).unwrap();
+        fx.clock.advance_to(109).unwrap();
+        let result = fx.author(event(Kind::SessionClosed, None)).unwrap_err();
+        if key == PumpDeadline::Gate {
+            assert!(matches!(
+                result,
+                RunFailure::Flow {
+                    reason: FlowHaltReason::GateBound,
+                    ..
+                }
+            ));
+            assert_eq!(fx.context.phase(), RecordingPhase::Failed);
+            assert_eq!(fx.context.failed_wait.as_ref().unwrap().deadline_ns.0, 109);
+        } else {
+            assert_eq!(result, RunFailure::Wait { key, bound });
+            assert_eq!(fx.context.phase(), RecordingPhase::Entered);
+            assert!(fx.context.flow.halt().is_none());
+        }
+        assert_eq!(fx.context.barrier.recorder().structure().len(), 2);
+    }
+}
+
+pub(in crate::flow) fn with_frozen_source<T>(
+    use_facts: impl FnOnce(
+        &FlowCoordinator<SocketPort>,
+        &RecordBarrier,
+        &FlowInbox,
+        &RetentionBudget,
+    ) -> T,
+) -> T {
+    let mut fx = Fixture::new(config());
+    fx.activate();
+    fx.author(AuthoredEvent { kind: Kind::MessageAssistant, subsystem: Subsystem::Harness,
+        turn: Some(TurnRef("turn".into())), source: AuthoredSource::Model, causal_parent: None,
+        payload: Some(Payload::Message(serde_json::value::RawValue::from_string(
+            "{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Read file.\"}]}".into()).unwrap())) }).unwrap();
+    fx.context.fail(
+        &mut fx.clock,
+        FlowHaltReason::TraceFailed,
+        HaltPoint::Author,
+        "fixture failure after admission",
+    );
+    use_facts(
+        &fx.context.flow,
+        &fx.context.barrier,
+        &fx.context.inbox,
+        &fx.context.budget,
+    )
+}

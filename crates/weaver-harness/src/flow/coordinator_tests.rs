@@ -16,19 +16,19 @@ use weaver_types::state_flow as s;
 
 use crate::flow::recording_fixture as fixture;
 
-struct Fixture {
-    flow: FlowCoordinator<ScriptedPort>,
-    classifier: ScriptedPeer,
-    state_peer: UnixStream,
+pub(in crate::flow) struct Fixture {
+    pub(in crate::flow) flow: FlowCoordinator<ScriptedPort>,
+    pub(in crate::flow) classifier: ScriptedPeer,
+    pub(in crate::flow) state_peer: UnixStream,
     state_bytes: Vec<u8>,
-    requests: Vec<s::StateFrame>,
+    pub(in crate::flow) requests: Vec<s::StateFrame>,
     classifier_replies: usize,
     operation: u64,
-    barrier: RecordBarrier,
-    inbox: FlowInbox,
-    budget: RetentionBudget,
-    author: ServingAuthor,
-    clock: FakePumpIo,
+    pub(in crate::flow) barrier: RecordBarrier,
+    pub(in crate::flow) inbox: FlowInbox,
+    pub(in crate::flow) budget: RetentionBudget,
+    pub(in crate::flow) author: ServingAuthor,
+    pub(in crate::flow) clock: FakePumpIo,
     reader: Option<UnixStream>,
 }
 
@@ -43,7 +43,11 @@ fn authored(kind: Kind, source: AuthoredSource, payload: Payload, turn: bool) ->
     }
 }
 
-fn operation(request: &s::StateFrame, id: u64, began: u64) -> s::StateOperationObservation {
+pub(in crate::flow) fn operation(
+    request: &s::StateFrame,
+    id: u64,
+    began: u64,
+) -> s::StateOperationObservation {
     s::StateOperationObservation {
         operation_id: id.into(),
         parent_id: None,
@@ -114,7 +118,7 @@ fn accepted(request: &s::Ste100Request) -> s::Ste100Reply {
 }
 
 impl Fixture {
-    fn new(max_blocks: u64) -> Self {
+    pub(in crate::flow) fn new(max_blocks: u64) -> Self {
         let author = ServingAuthor::new("session".into(), "run".into(), 0, 100).unwrap();
         let (sink, reader) = UnixStream::pair().unwrap();
         sink.set_write_timeout(Some(Duration::from_secs(10)))
@@ -281,15 +285,15 @@ impl Fixture {
         }
     }
 
-    fn time(&mut self) -> u64 {
+    pub(in crate::flow) fn time(&mut self) -> u64 {
         self.clock.now().unwrap()
     }
-    fn elapse(&mut self, delta: u64) {
+    pub(in crate::flow) fn elapse(&mut self, delta: u64) {
         let now = self.time();
         self.clock.advance_to(now + delta).unwrap();
     }
 
-    fn advance(&mut self) -> Result<Advance, FlowFailure> {
+    pub(in crate::flow) fn advance(&mut self) -> Result<Advance, FlowFailure> {
         self.elapse(1);
         self.flow.advance(
             &mut FlowRecording {
@@ -303,7 +307,7 @@ impl Fixture {
         )
     }
 
-    fn transport(&mut self) -> Result<(), FlowFailure> {
+    pub(in crate::flow) fn transport(&mut self) -> Result<(), FlowFailure> {
         use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
         let classifier_ready = {
             let mut fds = [PollFd::new(
@@ -327,7 +331,7 @@ impl Fixture {
         )
     }
 
-    fn admit(&mut self, texts: &[&str]) -> Vec<SourceBlockId> {
+    pub(in crate::flow) fn admit(&mut self, texts: &[&str]) -> Vec<SourceBlockId> {
         self.elapse(1);
         let payload = serde_json::json!({"role":"assistant","content":texts.iter().map(|text|serde_json::json!({"type":"text","text":text})).collect::<Vec<_>>()});
         let raw = serde_json::value::to_raw_value(&payload).unwrap();
@@ -363,7 +367,7 @@ impl Fixture {
             .collect()
     }
 
-    fn collect_requests(&mut self) {
+    pub(in crate::flow) fn collect_requests(&mut self) {
         let mut chunk = [0; 8192];
         loop {
             match self.state_peer.read(&mut chunk) {
@@ -380,7 +384,7 @@ impl Fixture {
         }
     }
 
-    fn answer_classifier(&mut self, reject: bool) {
+    pub(in crate::flow) fn answer_classifier(&mut self, reject: bool) {
         let submitted = self.classifier.submitted();
         if self.classifier_replies == submitted.len() {
             return;
@@ -400,7 +404,7 @@ impl Fixture {
         self.classifier_replies += 1;
     }
 
-    fn answer_file(&mut self, index: usize, wrong_identity: bool) {
+    pub(in crate::flow) fn answer_file(&mut self, index: usize, wrong_identity: bool) {
         let now = self.time();
         let request = &self.requests[index];
         let s::StateFrame::File { common, filing } = request else {
@@ -445,7 +449,7 @@ impl Fixture {
         panic!("bounded fixture did not finish ordered filing");
     }
 
-    fn until_file(&mut self) {
+    pub(in crate::flow) fn until_file(&mut self) {
         for _ in 0..128 {
             self.transport().unwrap();
             self.advance().unwrap();
@@ -458,7 +462,7 @@ impl Fixture {
         panic!("filing request did not reach real socket");
     }
 
-    fn until_classifier_request(&mut self) -> s::Ste100Request {
+    pub(in crate::flow) fn until_classifier_request(&mut self) -> s::Ste100Request {
         for _ in 0..128 {
             self.transport().unwrap();
             self.advance().unwrap();
@@ -470,7 +474,7 @@ impl Fixture {
         panic!("classifier request did not reach its port");
     }
 
-    fn fill_trace_capacity(&mut self) -> String {
+    pub(super) fn fill_trace_capacity(&mut self) -> String {
         let large = "x".repeat(32768);
         for _ in 0..ORDINARY_CAPACITY + 64 {
             let now = self.time();
@@ -510,7 +514,7 @@ impl Fixture {
         panic!("bounded fixture did not reach real trace capacity");
     }
 
-    fn resume_external_ticket(&mut self) {
+    pub(super) fn resume_external_ticket(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
             let now = self.time();
@@ -537,7 +541,7 @@ impl Fixture {
             .collect()
     }
 
-    fn start_drain(&mut self) -> std::thread::JoinHandle<Vec<u8>> {
+    pub(super) fn start_drain(&mut self) -> std::thread::JoinHandle<Vec<u8>> {
         let mut reader = self.reader.take().unwrap();
         std::thread::spawn(move || {
             let mut bytes = Vec::new();
@@ -1201,4 +1205,1860 @@ fn ignored_external_author_failure_stops_before_an_unsent_file_reaches_state() {
         assert!(fx.requests.is_empty());
         assert_eq!(fx.barrier.recorder().structure().len(), before);
     }
+}
+
+impl Fixture {
+    fn begin_control(&mut self, request: s::StateControl) -> OperationStart<s::StateControl> {
+        match self
+            .flow
+            .begin_control(
+                &mut FlowRecording {
+                    barrier: &mut self.barrier,
+                    inbox: &mut self.inbox,
+                    budget: &mut self.budget,
+                    author: &self.author,
+                },
+                &mut self.clock,
+                ControlOperation::try_from((request, Some(TurnRef("control-turn".into()))))
+                    .unwrap(),
+            )
+            .unwrap()
+        {
+            OperationStart::Started { request_id } => OperationStart::Started { request_id },
+            OperationStart::Busy(request) => {
+                let (request, turn) = request.into_parts();
+                assert_eq!(turn, Some(TurnRef("control-turn".into())));
+                OperationStart::Busy(request)
+            }
+        }
+    }
+
+    fn take_operation(&mut self) -> Result<Option<OperationCompletion>, FlowFailure> {
+        self.flow.take_operation_completion(&mut FlowRecording {
+            barrier: &mut self.barrier,
+            inbox: &mut self.inbox,
+            budget: &mut self.budget,
+            author: &self.author,
+        })
+    }
+
+    fn begin_check(&mut self, operation: CheckOperation) -> OperationStart<CheckOperation> {
+        self.flow
+            .begin_check(
+                &mut FlowRecording {
+                    barrier: &mut self.barrier,
+                    inbox: &mut self.inbox,
+                    budget: &mut self.budget,
+                    author: &self.author,
+                },
+                operation,
+            )
+            .unwrap()
+    }
+
+    fn record_unselected(&mut self, event: AuthoredEvent) -> u64 {
+        let now = self.time();
+        let event = self.author.prepare(&event, now, 1).unwrap();
+        let RecordProgress::Recorded { sequence, .. } = self.barrier.submit_with_clock(
+            event,
+            RecordPurpose::Observation,
+            &mut self.inbox,
+            &mut self.budget,
+            &mut || Ok(now),
+        ) else {
+            panic!("unselected event must record");
+        };
+        assert_eq!(self.budget.gauges(), (0, 0));
+        sequence.0
+    }
+
+    fn answer_control(&mut self, frame: s::StateControlAnswer) {
+        self.transport().unwrap();
+        self.collect_requests();
+        let request = self.requests.last().expect("control reached socket");
+        assert!(matches!(request, s::StateFrame::Control { .. }));
+        let observation = operation(request, self.operation, self.clock.now().unwrap() + 1);
+        self.operation += 1;
+        let answer = s::StateFrame::ControlAnswer {
+            common: request.common().clone(),
+            frame,
+            observation,
+        };
+        self.state_peer
+            .write_all(&s::encode_state_line(&answer, s::FrameDirection::Response).unwrap())
+            .unwrap();
+        self.elapse(3);
+        self.transport().unwrap();
+    }
+
+    fn reply_check(&mut self, result: s::Ste100Result) -> s::Ste100Reply {
+        let request = self.classifier.submitted().last().unwrap().clone();
+        let reply = s::Ste100Reply {
+            request_id: request.request_id,
+            target: request.target,
+            scheme_id: request.scheme_id,
+            result,
+        };
+        self.classifier.push(ScriptStep::Reply(reply.clone()));
+        assert!(self.classifier.advance().unwrap());
+        self.transport().unwrap();
+        reply
+    }
+}
+
+#[test]
+fn control_completion_is_recorded_once_without_a_ledger_obligation() {
+    let mut fx = Fixture::new(4);
+    assert!(matches!(
+        fx.begin_control(s::StateControl::Shape {}),
+        OperationStart::Started { .. }
+    ));
+    assert_eq!(
+        fx.begin_control(s::StateControl::Grants {}),
+        OperationStart::Busy(s::StateControl::Grants {})
+    );
+    fx.answer_control(s::StateControlAnswer::Shape(vec![s::ShapeRow {
+        run: "prior".into(),
+        kind: "message.user".into(),
+        count: 17.into(),
+    }]));
+    assert!(fx.take_operation().unwrap().is_none());
+    assert!(fx.flow.state().held_measurement().is_some());
+    fx.advance().unwrap();
+    let OperationCompletion::State {
+        request,
+        turn,
+        completion,
+    } = fx.take_operation().unwrap().unwrap()
+    else {
+        panic!("typed state completion");
+    };
+    assert_eq!(request, s::StateControl::Shape {});
+    assert_eq!(turn, Some(TurnRef("control-turn".into())));
+    assert_eq!(
+        fx.records()
+            .iter()
+            .rev()
+            .find(|record| record["kind"] == "state.store.measurement")
+            .unwrap()["turn"],
+        "control-turn",
+    );
+    let s::StateFrame::ControlAnswer {
+        frame: s::StateControlAnswer::Shape(rows),
+        ..
+    } = completion.answer
+    else {
+        panic!("exact shape answer");
+    };
+    assert_eq!(rows[0].count.0, 17);
+    assert!(!completion.discard_capture_result);
+    assert!(fx.take_operation().unwrap().is_none());
+    assert!(fx.flow.ledger().facts().next().is_none());
+    assert_eq!(fx.budget.gauges(), (0, 0));
+    assert_eq!(
+        fx.records()
+            .iter()
+            .filter(|r| r["kind"] == "state.store.measurement")
+            .count(),
+        2
+    );
+    assert!(
+        !fx.records()
+            .iter()
+            .any(|r| r["payload"]["phase"] == "filed")
+    );
+}
+
+#[test]
+fn correct_read_refusal_is_an_operation_result_and_next_control_can_run() {
+    let mut fx = Fixture::new(4);
+    let request = s::StateControl::Read {
+        selector: s::ReadSelector::Conversation {
+            last_turns: 1.into(),
+        },
+    };
+    assert!(matches!(
+        fx.begin_control(request.clone()),
+        OperationStart::Started { .. }
+    ));
+    fx.answer_control(s::StateControlAnswer::ControlRefused {
+        code: s::ControlRefusalCode::Read(s::ReadRefusalCode::ResultUnavailable),
+        detail: "test-only snapshot refused".into(),
+    });
+    fx.advance().unwrap();
+    let OperationCompletion::State {
+        request: actual,
+        completion,
+        ..
+    } = fx.take_operation().unwrap().unwrap()
+    else {
+        panic!("operation refusal");
+    };
+    assert_eq!(actual, request);
+    assert!(matches!(completion.answer, s::StateFrame::ControlAnswer {
+        frame: s::StateControlAnswer::ControlRefused {
+            code: s::ControlRefusalCode::Read(s::ReadRefusalCode::ResultUnavailable), ref detail,
+        }, ..
+    } if detail == "test-only snapshot refused"));
+    assert!(fx.flow.failure().is_none());
+    assert!(matches!(
+        fx.begin_control(s::StateControl::Held {}),
+        OperationStart::Started { .. }
+    ));
+}
+
+#[test]
+fn template_and_unselected_model_results_never_enter_the_filing_ledger() {
+    let mut fx = Fixture::new(4);
+    let template = s::TemplateSpec {
+        template_id: "fixture-read".into(),
+        kind: "loop.instruction".into(),
+        parts: vec![s::TemplatePart::Literal("Read file.".into())],
+    };
+    let operation = CheckOperation::Template {
+        template_id: template.template_id.clone(),
+        text: serde_json::to_string(&template).unwrap(),
+    };
+    assert!(matches!(
+        fx.begin_check(operation.clone()),
+        OperationStart::Started { .. }
+    ));
+    assert_eq!(
+        fx.begin_check(operation.clone()),
+        OperationStart::Busy(operation.clone())
+    );
+    let reply = fx.reply_check(s::Ste100Result::Accepted { bindings: vec![] });
+    assert!(fx.take_operation().unwrap().is_none());
+    fx.advance().unwrap();
+    let OperationCompletion::Check(recorded) = fx.take_operation().unwrap().unwrap() else {
+        panic!("template completion");
+    };
+    assert_eq!(recorded.operation(), &operation);
+    assert_eq!(recorded.reply(), &reply);
+
+    let sequence = fx.record_unselected(authored(
+        Kind::ModelOutput,
+        AuthoredSource::Model,
+        Payload::ModelOutput(weaver_trace::ModelOutput {
+            emission: "not conforming".into(),
+            finish: weaver_trace::Finish::Completed,
+            resident: 10,
+            capacity: 100,
+        }),
+        true,
+    ));
+    let source = s::SourceBlockId {
+        run: "run".into(),
+        sequence: sequence.into(),
+        block: 0.into(),
+    };
+    let operation = CheckOperation::UnselectedModel {
+        source,
+        text: "not conforming".into(),
+        turn: TurnRef("turn".into()),
+    };
+    assert!(matches!(
+        fx.begin_check(operation.clone()),
+        OperationStart::Started { .. }
+    ));
+    let reply = fx.reply_check(s::Ste100Result::NotSte100 {
+        code: s::Ste100DefectCode::NonSte100,
+        detail: "repair required".into(),
+        spans: vec![],
+    });
+    fx.advance().unwrap();
+    let OperationCompletion::Check(recorded) = fx.take_operation().unwrap().unwrap() else {
+        panic!("model repair disposition");
+    };
+    assert_eq!(recorded.operation(), &operation);
+    assert_eq!(recorded.reply(), &reply);
+    assert!(fx.flow.failure().is_none());
+    assert_eq!(
+        fx.records()
+            .iter()
+            .rev()
+            .find(|record| record["kind"] == "ste100.result")
+            .unwrap()["turn"],
+        "turn",
+    );
+    assert!(fx.flow.ledger().facts().next().is_none());
+    assert_eq!(fx.budget.gauges(), (0, 0));
+    fx.collect_requests();
+    assert!(fx.requests.is_empty());
+    assert_eq!(
+        fx.records()
+            .iter()
+            .filter(|r| r["kind"] == "ste100.result")
+            .count(),
+        2
+    );
+}
+
+fn template_operation() -> CheckOperation {
+    let template = s::TemplateSpec {
+        template_id: "fixture-operation".into(),
+        kind: "loop.instruction".into(),
+        parts: vec![s::TemplatePart::Literal("Read file.".into())],
+    };
+    CheckOperation::Template {
+        template_id: template.template_id.clone(),
+        text: serde_json::to_string(&template).unwrap(),
+    }
+}
+
+#[test]
+fn nonfiling_completion_pressure_holds_both_native_slots_without_reauthoring() {
+    let mut fx = Fixture::new(4);
+    fx.begin_control(s::StateControl::Held {});
+    fx.begin_check(template_operation());
+    fx.answer_control(s::StateControlAnswer::Held { count: 23.into() });
+    let reply = fx.reply_check(s::Ste100Result::Accepted { bindings: vec![] });
+    let pending = fx.fill_trace_capacity();
+    for _ in 0..3 {
+        assert_eq!(fx.advance().unwrap(), Advance::Pending);
+        assert!(fx.take_operation().unwrap().is_none());
+        assert!(fx.flow.state().held_measurement().is_some());
+        assert_eq!(fx.flow.classifier().held(), Some(&reply));
+        assert_eq!(
+            serde_json::to_string(fx.barrier.pending().unwrap()).unwrap(),
+            pending
+        );
+    }
+    let reader = fx.start_drain();
+    fx.resume_external_ticket();
+    for _ in 0..128 {
+        fx.advance().unwrap();
+        if fx.flow.operation_completion().is_some() {
+            break;
+        }
+    }
+    assert!(matches!(
+        fx.flow.operation_completion(),
+        Some(OperationCompletion::State { .. })
+    ));
+    let count = fx
+        .records()
+        .iter()
+        .filter(|r| r["kind"] == "state.store.measurement")
+        .count();
+    for _ in 0..3 {
+        assert_eq!(fx.advance().unwrap(), Advance::Pending);
+    }
+    assert_eq!(
+        fx.records()
+            .iter()
+            .filter(|r| r["kind"] == "state.store.measurement")
+            .count(),
+        count
+    );
+    assert_eq!(fx.flow.classifier().held(), Some(&reply));
+    assert!(matches!(
+        fx.take_operation().unwrap(),
+        Some(OperationCompletion::State { .. })
+    ));
+    for _ in 0..128 {
+        fx.advance().unwrap();
+        if fx.flow.operation_completion().is_some() {
+            break;
+        }
+    }
+    assert!(matches!(
+        fx.take_operation().unwrap(),
+        Some(OperationCompletion::Check(_))
+    ));
+    assert_eq!(
+        fx.records()
+            .iter()
+            .filter(|r| r["kind"] == "ste100.result")
+            .count(),
+        1
+    );
+    assert_eq!(fx.budget.gauges(), (0, 0));
+    drop(fx);
+    reader.join().unwrap();
+}
+
+#[test]
+fn one_transport_choice_does_not_progress_the_other_ready_owner() {
+    let mut fx = Fixture::new(4);
+    fx.begin_control(s::StateControl::Held {});
+    fx.begin_check(template_operation());
+    let request = fx.classifier.submitted().last().unwrap().clone();
+    fx.classifier.push(ScriptStep::Reply(s::Ste100Reply {
+        request_id: request.request_id,
+        target: request.target,
+        scheme_id: request.scheme_id,
+        result: s::Ste100Result::Accepted { bindings: vec![] },
+    }));
+    assert!(fx.classifier.advance().unwrap());
+    fx.flow
+        .transport_one(
+            &mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            },
+            &mut fx.clock,
+            TransportSource::State,
+        )
+        .unwrap();
+    assert_eq!(fx.flow.classifier().state(), ClassifierState::InFlight);
+    fx.collect_requests();
+    assert_eq!(fx.requests.len(), 1);
+    fx.flow
+        .transport_one(
+            &mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            },
+            &mut fx.clock,
+            TransportSource::Classifier,
+        )
+        .unwrap();
+    assert_eq!(fx.flow.classifier().state(), ClassifierState::ResultHeld);
+    assert!(fx.take_operation().unwrap().is_none());
+}
+
+#[test]
+fn nonfiling_component_failure_records_exact_result_and_keeps_its_owner() {
+    let mut fx = Fixture::new(4);
+    let operation = template_operation();
+    fx.begin_check(operation.clone());
+    let reply = fx.reply_check(s::Ste100Result::ComponentFailed {
+        code: s::Ste100ComponentCode::NoResult,
+        detail: "test-only template component failure".into(),
+    });
+    fx.classifier.push(ScriptStep::Close);
+    assert!(fx.classifier.advance().unwrap());
+    fx.transport().unwrap();
+    assert!(fx.advance().is_err());
+    assert!(fx.take_operation().is_err());
+    assert_eq!(fx.flow.pending_check(), Some(&operation));
+    assert!(fx.flow.ledger().facts().next().is_none());
+    assert!(fx.budget.is_frozen());
+    let actual = fx
+        .records()
+        .into_iter()
+        .find(|r| r["kind"] == "ste100.result")
+        .unwrap();
+    assert_eq!(actual["payload"], serde_json::to_value(reply).unwrap());
+}
+
+#[test]
+fn returned_second_author_keeps_original_six_members_for_failure_reporting() {
+    let mut fx = Fixture::new(4);
+    let first = fx.fill_trace_capacity();
+    let reply = s::Ste100Reply {
+        request_id: 99.into(),
+        target: s::Ste100Target::Input {
+            input_id: 2.into(),
+            block: 0.into(),
+        },
+        scheme_id: "fixture-read/1".into(),
+        result: s::Ste100Result::NotSte100 {
+            code: s::Ste100DefectCode::NonSte100,
+            detail: "test-only refused second author".into(),
+            spans: vec![],
+        },
+    };
+    let error = fx
+        .flow
+        .author(
+            &mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            },
+            &mut fx.clock,
+            1,
+            Kind::Ste100Result,
+            None,
+            Payload::Ste100Result(Box::new(super::super::mirror::ste100(&reply))),
+            RecordPurpose::Classifier(reply.clone()),
+            PendingRecord::Classifier,
+        )
+        .unwrap_err();
+    assert_eq!(error.point, "author");
+    assert_eq!(
+        serde_json::to_string(fx.barrier.pending().unwrap()).unwrap(),
+        first
+    );
+    let Some(RefusedAuthor::Authored {
+        event,
+        purpose: RecordPurpose::Classifier(held_reply),
+    }) = fx.flow.refused_author()
+    else {
+        panic!("returned author must remain owned");
+    };
+    assert_eq!(event.kind, Kind::Ste100Result);
+    assert_eq!(event.subsystem, Subsystem::Harness);
+    assert!(event.turn.is_none());
+    assert!(matches!(event.source, AuthoredSource::Runtime));
+    assert!(event.causal_parent.is_none());
+    assert_eq!(*held_reply, reply);
+    assert_eq!(
+        serde_json::to_value(event.payload.as_ref().unwrap()).unwrap(),
+        serde_json::to_value(reply).unwrap()
+    );
+    let reader = fx.start_drain();
+    drop(fx);
+    reader.join().unwrap();
+}
+
+#[test]
+fn capture_controls_cannot_enter_the_unpaired_operation_route() {
+    for control in [
+        s::StateControl::Snapshot {
+            capture_id: 7.into(),
+        },
+        s::StateControl::Acknowledge {
+            capture_id: 7.into(),
+            dump_sha256: s::Digest::new("a".repeat(64)).unwrap(),
+        },
+        s::StateControl::Abort {
+            capture_id: 7.into(),
+        },
+        s::StateControl::ReleaseCapture {
+            capture_id: 7.into(),
+        },
+    ] {
+        let turn = Some(TurnRef("capture-turn".into()));
+        assert_eq!(
+            ControlOperation::try_from((control.clone(), turn.clone())),
+            Err((control, turn))
+        );
+    }
+}
+
+#[test]
+fn nonfiling_wait_stays_pending_without_fabricated_flow_work() {
+    let mut fx = Fixture::new(4);
+    fx.begin_check(template_operation());
+    fx.elapse(2_000_000);
+    assert_eq!(fx.advance().unwrap(), Advance::Pending);
+    assert!(fx.flow.ledger().facts().next().is_none());
+    assert_eq!(fx.budget.gauges(), (0, 0));
+    assert!(!fx.records().iter().any(|r| r["kind"] == "state.flow"));
+}
+
+#[test]
+fn busy_control_returns_its_entire_request_and_distinct_turn() {
+    let mut fx = Fixture::new(4);
+    fx.begin_control(s::StateControl::Held {});
+    let request = ControlOperation::try_from((
+        s::StateControl::Grants {},
+        Some(TurnRef("second-turn".into())),
+    ))
+    .unwrap();
+    let result = fx
+        .flow
+        .begin_control(
+            &mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            },
+            &mut fx.clock,
+            request,
+        )
+        .unwrap();
+    let OperationStart::Busy(returned) = result else {
+        panic!("second control is busy");
+    };
+    assert_eq!(
+        returned.into_parts(),
+        (
+            s::StateControl::Grants {},
+            Some(TurnRef("second-turn".into()))
+        )
+    );
+    assert_eq!(
+        fx.flow.pending_control(),
+        Some((
+            &s::StateControl::Held {},
+            Some(&TurnRef("control-turn".into()))
+        ))
+    );
+}
+
+#[test]
+fn selected_copy_cannot_be_relabelled_as_an_unselected_model_check() {
+    for installed in [false, true] {
+        let mut fx = Fixture::new(4);
+        let source = fx.admit(&["Read file."])[0].clone();
+        if installed {
+            fx.flow
+                .drain(
+                    &mut FlowRecording {
+                        barrier: &mut fx.barrier,
+                        inbox: &mut fx.inbox,
+                        budget: &mut fx.budget,
+                        author: &fx.author,
+                    },
+                    &mut fx.clock,
+                )
+                .unwrap();
+        }
+        let result = fx.flow.begin_check(
+            &mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            },
+            CheckOperation::UnselectedModel {
+                source,
+                text: "Read file.".into(),
+                turn: TurnRef("turn".into()),
+            },
+        );
+        assert!(result.is_err());
+        assert!(fx.classifier.submitted().is_empty());
+        assert_eq!(fx.budget.gauges().0, 1);
+        assert_eq!(fx.flow.ledger().facts().count(), usize::from(installed));
+        assert_eq!(fx.inbox.queued().count(), usize::from(!installed));
+    }
+}
+
+#[test]
+fn interrupted_release_waits_for_a_later_external_author_without_recording_twice() {
+    let mut fx = Fixture::new(4);
+    fx.begin_control(s::StateControl::Held {});
+    fx.answer_control(s::StateControlAnswer::Held { count: 31.into() });
+    let measurement = fx.flow.state().held_measurement().unwrap().clone();
+    let event = authored(
+        Kind::StateStoreMeasurement,
+        AuthoredSource::Runtime,
+        Payload::StateStoreMeasurement(Box::new(super::super::mirror::measurement(&measurement))),
+        true,
+    );
+    let RecordProgress::Recorded {
+        proof: Some(RecordProof::State(proof)),
+        ..
+    } = fx.barrier.submit_authored_with_clock(
+        event,
+        RecordPurpose::State(measurement.clone()),
+        &fx.author,
+        1,
+        &mut fx.inbox,
+        &mut fx.budget,
+        &mut || fx.clock.now(),
+    )
+    else {
+        panic!("the exact state measurement must actually record");
+    };
+    // Only the final nonblocking peek is interrupted. The real proof stays in
+    // StateChannel. Establish the matching coordinator continuation exactly as
+    // recorded() does, without inventing a receipt or a successful release.
+    fx.flow.state_release_timing = Some((
+        measurement.harness_received_ns.0,
+        measurement.harness_sent_ns.0,
+    ));
+    let result = fx
+        .flow
+        .state
+        .as_mut()
+        .unwrap()
+        .release_interrupted_for_test(proof)
+        .unwrap();
+    assert!(result.is_none());
+    assert_eq!(
+        fx.flow
+            .finish_state_release(
+                &mut FlowRecording {
+                    barrier: &mut fx.barrier,
+                    inbox: &mut fx.inbox,
+                    budget: &mut fx.budget,
+                    author: &fx.author
+                },
+                &mut fx.clock,
+                result,
+            )
+            .unwrap(),
+        Advance::Pending
+    );
+    let first = fx.fill_trace_capacity();
+    for _ in 0..3 {
+        assert_eq!(fx.advance().unwrap(), Advance::Pending);
+        assert!(fx.take_operation().unwrap().is_none());
+        assert_eq!(fx.flow.state().held_measurement(), Some(&measurement));
+        assert_eq!(
+            serde_json::to_string(fx.barrier.pending().unwrap()).unwrap(),
+            first
+        );
+    }
+    let reader = fx.start_drain();
+    fx.resume_external_ticket();
+    assert_eq!(fx.advance().unwrap(), Advance::Progress);
+    assert!(matches!(
+        fx.take_operation().unwrap(),
+        Some(OperationCompletion::State { .. })
+    ));
+    assert!(fx.flow.state().held_measurement().is_none());
+    assert_eq!(
+        fx.records()
+            .iter()
+            .filter(|r| r["kind"] == "state.store.measurement")
+            .count(),
+        2
+    );
+    assert!(fx.take_operation().unwrap().is_none());
+    drop(fx);
+    reader.join().unwrap();
+}
+
+struct BootFixture<P = ScriptedPort> {
+    flow: FlowCoordinator<P>,
+    peer: UnixStream,
+    barrier: RecordBarrier,
+    inbox: FlowInbox,
+    budget: RetentionBudget,
+    author: ServingAuthor,
+    clock: FakePumpIo,
+    reader: Option<UnixStream>,
+}
+
+impl BootFixture<ScriptedPort> {
+    fn new() -> Self {
+        let seed: s::SeedRequest = s::decode_strict(include_str!("fixtures/seed.json")).unwrap();
+        Self::with_scheme(s::SchemeDeclaration {
+            artifact_sha256: s::Digest::new(seed.scheme_id.strip_prefix("ste100:").unwrap())
+                .unwrap(),
+            scheme_id: seed.scheme_id,
+            verbs: vec!["read".into()],
+        })
+    }
+}
+
+impl<P: Ste100Port> BootFixture<P> {
+    fn with_scheme(scheme: s::SchemeDeclaration) -> Self {
+        let (sink, reader) = UnixStream::pair().unwrap();
+        sink.set_write_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        reader
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let recorder = PreflightRecorder::receive(
+            sink.into(),
+            RunRef("run".into()),
+            SessionRef("session".into()),
+        )
+        .unwrap();
+        let (socket, peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        peer.set_write_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        Self {
+            flow: FlowCoordinator::preflight(
+                StateChannel::new(socket, "session".into(), "run".into()).unwrap(),
+                scheme,
+                s::MeasuredInterval {
+                    elapsed_ns: 1000000.into(),
+                    measurement_ref: "test-only cadence".into(),
+                },
+                2,
+            )
+            .unwrap(),
+            peer,
+            barrier: RecordBarrier::preflight(recorder, "run".into()),
+            inbox: FlowInbox::new(),
+            budget: RetentionBudget::new(s::FlowBacklog {
+                max_pending_blocks: 4.into(),
+                max_pending_bytes: 100000.into(),
+                lag_alarm_turns: 2.into(),
+                measurement_ref: "test-only capacity".into(),
+            })
+            .unwrap(),
+            author: ServingAuthor::new("session".into(), "run".into(), 0, 100).unwrap(),
+            clock: FakePumpIo::new(100),
+            reader: Some(reader),
+        }
+    }
+
+    fn begin_and_answer_open(&mut self) {
+        self.flow
+            .begin_open(
+                &mut FlowRecording {
+                    barrier: &mut self.barrier,
+                    inbox: &mut self.inbox,
+                    budget: &mut self.budget,
+                    author: &self.author,
+                },
+                &mut self.clock,
+                serde_json::from_value(
+                    serde_json::to_value(fixture::load_record().state_start).unwrap(),
+                )
+                .unwrap(),
+                s::ReadLimits {
+                    max_result_bytes: 100000.into(),
+                    measurement_ref: "test-only reads".into(),
+                },
+            )
+            .unwrap();
+        self.clock.advance_to(110).unwrap();
+        self.flow
+            .transport_one(
+                &mut FlowRecording {
+                    barrier: &mut self.barrier,
+                    inbox: &mut self.inbox,
+                    budget: &mut self.budget,
+                    author: &self.author,
+                },
+                &mut self.clock,
+                TransportSource::State,
+            )
+            .unwrap();
+        let mut bytes = Vec::new();
+        BufReader::new(&mut self.peer)
+            .read_until(b'\n', &mut bytes)
+            .unwrap();
+        let request = s::decode_state_line(&bytes, s::FrameDirection::Request).unwrap();
+        let observation = operation(&request, 1, 111);
+        let s::StateFrame::Open {
+            common,
+            schema_id,
+            scheme_id,
+            start,
+            read_limits,
+        } = request
+        else {
+            panic!("open");
+        };
+        let answer = s::StateFrame::Opened {
+            common,
+            schema_id,
+            scheme_id,
+            start,
+            read_limits,
+            observation,
+            member_observation: s::MemberObservationIdentity {
+                instrument_version: "state-observation/1".into(),
+                pid: 7,
+                start_ticks: Some(10.into()),
+                ticks_per_second: Some(100.into()),
+                unavailable_reason: None,
+            },
+        };
+        self.peer
+            .write_all(&s::encode_state_line(&answer, s::FrameDirection::Response).unwrap())
+            .unwrap();
+        self.clock.advance_to(120).unwrap();
+        self.flow
+            .transport_one(
+                &mut FlowRecording {
+                    barrier: &mut self.barrier,
+                    inbox: &mut self.inbox,
+                    budget: &mut self.budget,
+                    author: &self.author,
+                },
+                &mut self.clock,
+                TransportSource::State,
+            )
+            .unwrap();
+    }
+
+    fn load_only(&mut self) {
+        let progress = self.barrier.submit_authored_with_clock(
+            authored(
+                Kind::Load,
+                AuthoredSource::Runtime,
+                Payload::Elections(Box::new(fixture::load_record())),
+                false,
+            ),
+            RecordPurpose::Content,
+            &self.author,
+            100,
+            &mut self.inbox,
+            &mut self.budget,
+            &mut || Ok(121),
+        );
+        assert!(
+            matches!(progress, RecordProgress::Recorded { .. }),
+            "load: {progress:?}, {:?}",
+            self.barrier.failure()
+        );
+    }
+
+    fn load_and_activate(&mut self) {
+        self.load_only();
+        self.barrier
+            .activate(validate_partition(&fixture::partition()).unwrap())
+            .unwrap();
+        self.flow
+            .activate_after_load(&mut FlowRecording {
+                barrier: &mut self.barrier,
+                inbox: &mut self.inbox,
+                budget: &mut self.budget,
+                author: &self.author,
+            })
+            .unwrap();
+        self.clock.advance_to(122).unwrap();
+    }
+
+    fn advance(&mut self) -> Result<Advance, FlowFailure> {
+        self.flow.advance(
+            &mut FlowRecording {
+                barrier: &mut self.barrier,
+                inbox: &mut self.inbox,
+                budget: &mut self.budget,
+                author: &self.author,
+            },
+            &mut self.clock,
+            100,
+        )
+    }
+}
+
+#[test]
+fn preflight_open_is_owned_before_load_and_released_only_after_its_real_record() {
+    let mut fx = BootFixture::new();
+    let state_fd = std::os::fd::AsRawFd::as_raw_fd(&fx.flow.state().fd());
+    assert_eq!(fx.flow.phase(), CoordinatorPhase::Preflight);
+    assert!(fx.flow.standing_classifier().is_none());
+    assert!(fx.flow.observations.is_none());
+    assert_eq!(fx.advance().unwrap(), Advance::Pending);
+    fx.begin_and_answer_open();
+    assert_eq!(fx.flow.opened_identity().unwrap().pid, 7);
+    assert!(fx.flow.state().held_measurement().is_some());
+    assert!(!fx.flow.state().can_begin_filing());
+    assert!(!fx.barrier.is_loaded());
+    assert_eq!(fx.advance().unwrap(), Advance::Pending);
+    assert!(fx.flow.operation_completion().is_none());
+    assert!(fx.flow.ledger().facts().next().is_none());
+    fx.load_and_activate();
+    assert_eq!(fx.flow.phase(), CoordinatorPhase::Opening);
+    assert!(fx.flow.observations.is_none());
+    assert_eq!(fx.advance().unwrap(), Advance::Progress);
+    assert_eq!(fx.flow.phase(), CoordinatorPhase::Active);
+    assert!(fx.flow.observations.is_some());
+    assert!(fx.flow.state().can_begin_filing());
+    assert_eq!(
+        std::os::fd::AsRawFd::as_raw_fd(&fx.flow.state().fd()),
+        state_fd
+    );
+    assert!(matches!(
+        fx.flow
+            .take_operation_completion(&mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            })
+            .unwrap(),
+        Some(OperationCompletion::Opened(_))
+    ));
+    assert!(fx.flow.ledger().facts().next().is_none());
+    assert_eq!(fx.budget.gauges(), (0, 0));
+    assert!(fx.flow.standing_classifier().is_none());
+    let mut reader = BufReader::new(fx.reader.take().unwrap());
+    let mut kinds = Vec::new();
+    for _ in 0..2 {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        kinds.push(serde_json::from_str::<serde_json::Value>(&line).unwrap()["kind"].clone());
+    }
+    assert_eq!(kinds, vec!["load", "state.store.measurement"]);
+}
+
+#[test]
+fn open_cannot_activate_without_recorded_load_or_recreate_the_state_owner() {
+    let mut fx = BootFixture::new();
+    fx.begin_and_answer_open();
+    let error = fx
+        .flow
+        .activate_after_load(&mut FlowRecording {
+            barrier: &mut fx.barrier,
+            inbox: &mut fx.inbox,
+            budget: &mut fx.budget,
+            author: &fx.author,
+        })
+        .unwrap_err();
+    assert_eq!(error.point, "open");
+    assert!(fx.flow.state().held_measurement().is_some());
+    assert!(fx.flow.observations.is_none());
+    assert!(fx.budget.is_frozen());
+    assert!(fx.flow.operation_completion().is_none());
+}
+
+#[test]
+fn clean_retirement_removes_ports_once_and_retains_the_empty_coordinator() {
+    let mut fx = Fixture::new(4);
+    fx.flow
+        .begin_releasing(&mut FlowRecording {
+            barrier: &mut fx.barrier,
+            inbox: &mut fx.inbox,
+            budget: &mut fx.budget,
+            author: &fx.author,
+        })
+        .unwrap();
+    assert_eq!(
+        fx.flow
+            .retire_state(
+                &mut FlowRecording {
+                    barrier: &mut fx.barrier,
+                    inbox: &mut fx.inbox,
+                    budget: &mut fx.budget,
+                    author: &fx.author,
+                },
+                &mut fx.clock
+            )
+            .unwrap(),
+        Advance::Progress
+    );
+    assert!(fx.flow.standing_state().is_none());
+    assert_eq!(
+        fx.flow
+            .retire_classifier(&mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            })
+            .unwrap(),
+        Advance::Progress
+    );
+    assert!(fx.flow.standing_classifier().is_none());
+    assert!(fx.flow.ledger().facts().next().is_none());
+    fx.flow
+        .close(&mut FlowRecording {
+            barrier: &mut fx.barrier,
+            inbox: &mut fx.inbox,
+            budget: &mut fx.budget,
+            author: &fx.author,
+        })
+        .unwrap();
+    assert_eq!(fx.flow.phase(), CoordinatorPhase::Closed);
+    assert_eq!(fx.advance().unwrap(), Advance::Idle);
+    assert!(
+        fx.flow
+            .retire_state(
+                &mut FlowRecording {
+                    barrier: &mut fx.barrier,
+                    inbox: &mut fx.inbox,
+                    budget: &mut fx.budget,
+                    author: &fx.author,
+                },
+                &mut fx.clock
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn retirement_refuses_held_completion_and_unexpected_eof_keeps_owned_evidence() {
+    let mut fx = Fixture::new(4);
+    fx.begin_control(s::StateControl::Shape {});
+    fx.answer_control(s::StateControlAnswer::Shape(vec![]));
+    fx.advance().unwrap();
+    assert!(fx.flow.operation_completion().is_some());
+    assert!(
+        fx.flow
+            .begin_releasing(&mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            })
+            .is_err()
+    );
+    assert!(fx.flow.operation_completion().is_some());
+    assert!(fx.flow.standing_state().is_some());
+
+    let mut fx = Fixture::new(4);
+    fx.flow
+        .begin_releasing(&mut FlowRecording {
+            barrier: &mut fx.barrier,
+            inbox: &mut fx.inbox,
+            budget: &mut fx.budget,
+            author: &fx.author,
+        })
+        .unwrap();
+    fx.state_peer.shutdown(std::net::Shutdown::Write).unwrap();
+    assert!(
+        fx.flow
+            .retire_state(
+                &mut FlowRecording {
+                    barrier: &mut fx.barrier,
+                    inbox: &mut fx.inbox,
+                    budget: &mut fx.budget,
+                    author: &fx.author,
+                },
+                &mut fx.clock
+            )
+            .is_err()
+    );
+    assert!(fx.flow.standing_state().is_some());
+    assert_eq!(fx.flow.phase(), CoordinatorPhase::Failed);
+}
+
+#[test]
+fn first_halt_freezes_the_actual_sample_once_and_preopen_has_no_synthetic_sample() {
+    use crate::flow::report::{FlowHaltReason, HaltPoint, SecondaryFailure};
+    let mut fx = Fixture::new(4);
+    fx.admit(&["Read alpha."]);
+    fx.advance().unwrap();
+    let first = SecondaryFailure {
+        reason: FlowHaltReason::ProtocolFailed,
+        point: HaltPoint::Barrier,
+        observed_ns: Some(fx.time().into()),
+        detail: "first observed failure".into(),
+    };
+    fx.flow.latch(
+        first.clone(),
+        None,
+        &mut FlowRecording {
+            barrier: &mut fx.barrier,
+            inbox: &mut fx.inbox,
+            budget: &mut fx.budget,
+            author: &fx.author,
+        },
+    );
+    let sample = fx.flow.final_sample().unwrap().unwrap().clone();
+    assert!(sample.pending_count.0 > 0);
+    assert_eq!(fx.flow.halt().unwrap().first(), &first);
+    assert!(fx.budget.is_frozen());
+    fx.flow.latch(
+        SecondaryFailure {
+            detail: "later".into(),
+            ..first.clone()
+        },
+        Some(0),
+        &mut FlowRecording {
+            barrier: &mut fx.barrier,
+            inbox: &mut fx.inbox,
+            budget: &mut fx.budget,
+            author: &fx.author,
+        },
+    );
+    assert_eq!(fx.flow.final_sample().unwrap(), Some(&sample));
+    assert_eq!(fx.flow.halt().unwrap().first(), &first);
+    assert_eq!(
+        fx.flow.halt().unwrap().deadline().unwrap(),
+        first.observed_ns.unwrap().0 + 150_000_000_000
+    );
+    let mut boot = BootFixture::new();
+    boot.flow.latch(
+        first,
+        None,
+        &mut FlowRecording {
+            barrier: &mut boot.barrier,
+            inbox: &mut boot.inbox,
+            budget: &mut boot.budget,
+            author: &boot.author,
+        },
+    );
+    assert!(boot.flow.final_sample().unwrap().is_none());
+    assert!(boot.flow.observations.is_none());
+}
+
+fn held_classifier_admission(
+    refuse: bool,
+) -> (
+    BootFixture<crate::flow::ste100_socket::SocketPort>,
+    Option<crate::flow::ste100_channel::Channel>,
+    crate::flow::ste100_socket::AdmissionPoll,
+) {
+    use crate::flow::ste100_channel::{Channel, Receive, Tag};
+    use crate::flow::ste100_socket::{AdmissionPoll, SocketPort};
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+    let seed: s::SeedRequest = s::decode_strict(include_str!("fixtures/seed.json")).unwrap();
+    let scheme = s::SchemeDeclaration {
+        scheme_id: seed.scheme_id.clone(),
+        artifact_sha256: s::Digest::new(seed.scheme_id.strip_prefix("ste100:").unwrap()).unwrap(),
+        verbs: vec!["read".into()],
+    };
+    let bootstrap = s::Ste100Bootstrap {
+        protocol: s::STE100_PROTOCOL.into(),
+        scheme_text: seed.ste100_scheme,
+        instruction: s::Ste100Instruction {
+            model_binding: weaver_types::ModelBinding {
+                artifact: weaver_types::ArtifactRef("synthetic-admission-fixture".into()),
+                devices: vec![weaver_types::DeviceOrdinal(0)],
+            },
+            model_artifact_sha256: seed.checker_artifact_sha256,
+            instances: 1,
+            max_wire_bytes: 262144.into(),
+            measurement_ref: "synthetic transport only, not qualification".into(),
+            repair_cap: s::RepairCap {
+                attempts: 2,
+                measurement_ref: "fixture".into(),
+            },
+            decision_wait: s::MeasuredWait {
+                elapsed_ns: 1000000.into(),
+                measurement_ref: "fixture".into(),
+            },
+        },
+    };
+    let expected = if refuse {
+        AdmissionPoll::Refused(s::Ste100AdmissionRefused {
+            protocol: s::STE100_PROTOCOL.into(),
+            code: s::Ste100AdmissionCode::UnsupportedArtifact,
+            detail: "fixture artifact refused".into(),
+        })
+    } else {
+        AdmissionPoll::Ready(s::Ste100Ready {
+            protocol: s::STE100_PROTOCOL.into(),
+            scheme_id: scheme.scheme_id.clone(),
+            artifact_sha256: scheme.artifact_sha256.clone(),
+            checker_artifact_sha256: bootstrap.instruction.model_artifact_sha256.clone(),
+            instances: 1,
+            max_wire_bytes: bootstrap.instruction.max_wire_bytes,
+        })
+    };
+    let mut fx = BootFixture::<SocketPort>::with_scheme(scheme);
+    fx.begin_and_answer_open();
+    fx.load_and_activate();
+    let (end, peer) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+    let mut peer = Some(Channel::from_owned(peer, 262144).unwrap());
+    fx.flow
+        .begin_classifier_admission(
+            &mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            },
+            end,
+            bootstrap.clone(),
+        )
+        .unwrap();
+    let mut received = false;
+    for _ in 0..64 {
+        assert_eq!(
+            fx.flow
+                .advance_classifier_admission(&mut FlowRecording {
+                    barrier: &mut fx.barrier,
+                    inbox: &mut fx.inbox,
+                    budget: &mut fx.budget,
+                    author: &fx.author,
+                })
+                .unwrap(),
+            AdmissionAdvance::Pending
+        );
+        if let Receive::Complete(message) = peer.as_mut().unwrap().try_receive().unwrap() {
+            assert_eq!(message.tag, Tag::Bootstrap);
+            assert_eq!(
+                s::decode_strict::<s::Ste100Bootstrap>(
+                    std::str::from_utf8(&message.payload).unwrap()
+                )
+                .unwrap(),
+                bootstrap
+            );
+            received = true;
+            break;
+        }
+    }
+    assert!(received);
+    let (tag, bytes) = match &expected {
+        AdmissionPoll::Ready(ready) => (Tag::Ready, serde_json::to_vec(ready).unwrap()),
+        AdmissionPoll::Refused(refusal) => {
+            (Tag::AdmissionRefused, serde_json::to_vec(refusal).unwrap())
+        }
+        AdmissionPoll::Pending => unreachable!(),
+    };
+    peer.as_mut().unwrap().begin_send(tag, 0, bytes).unwrap();
+    for _ in 0..64 {
+        peer.as_mut().unwrap().try_send().unwrap();
+        if !peer.as_ref().unwrap().has_pending_send() {
+            break;
+        }
+    }
+    assert!(!peer.as_ref().unwrap().has_pending_send());
+    for _ in 0..64 {
+        if fx
+            .flow
+            .advance_classifier_admission(&mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            })
+            .unwrap()
+            == AdmissionAdvance::Held
+        {
+            break;
+        }
+    }
+    assert_eq!(fx.flow.held_admission(), Some(&expected));
+    assert!(
+        fx.flow.standing_classifier().is_none(),
+        "transport must not grant service"
+    );
+    assert!(fx.flow.starting_classifier().is_some());
+    (fx, peer, expected)
+}
+
+#[test]
+fn admission_transport_holds_ready_and_refusal_until_one_explicit_take() {
+    for (refuse, close_before_take) in [(false, false), (true, false), (false, true)] {
+        let (mut fx, mut peer, expected) = held_classifier_admission(refuse);
+        if refuse {
+            peer.take();
+        }
+        assert_eq!(
+            fx.flow
+                .advance_classifier_admission(&mut FlowRecording {
+                    barrier: &mut fx.barrier,
+                    inbox: &mut fx.inbox,
+                    budget: &mut fx.budget,
+                    author: &fx.author,
+                })
+                .unwrap(),
+            AdmissionAdvance::Held
+        );
+        if close_before_take {
+            peer.take();
+            assert!(
+                fx.flow
+                    .take_admission_completion(&mut FlowRecording {
+                        barrier: &mut fx.barrier,
+                        inbox: &mut fx.inbox,
+                        budget: &mut fx.budget,
+                        author: &fx.author,
+                    })
+                    .is_err()
+            );
+            assert_eq!(fx.flow.held_admission(), Some(&expected));
+            assert!(fx.flow.standing_classifier().is_none());
+            assert!(fx.flow.starting_classifier().is_some());
+            continue;
+        }
+        assert_eq!(
+            fx.flow
+                .take_admission_completion(&mut FlowRecording {
+                    barrier: &mut fx.barrier,
+                    inbox: &mut fx.inbox,
+                    budget: &mut fx.budget,
+                    author: &fx.author,
+                })
+                .unwrap(),
+            Some(expected)
+        );
+        assert!(
+            fx.flow
+                .take_admission_completion(&mut FlowRecording {
+                    barrier: &mut fx.barrier,
+                    inbox: &mut fx.inbox,
+                    budget: &mut fx.budget,
+                    author: &fx.author,
+                })
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fx.flow.standing_classifier().is_some(), !refuse);
+        assert_eq!(fx.flow.admission_refused(), refuse);
+        assert!(fx.flow.failure().is_none());
+        if refuse {
+            assert_eq!(
+                fx.flow
+                    .advance_classifier_admission(&mut FlowRecording {
+                        barrier: &mut fx.barrier,
+                        inbox: &mut fx.inbox,
+                        budget: &mut fx.budget,
+                        author: &fx.author,
+                    })
+                    .unwrap(),
+                AdmissionAdvance::Pending
+            );
+            assert!(fx.flow.failure().is_none());
+            fx.flow
+                .retire_refused_classifier(&mut FlowRecording {
+                    barrier: &mut fx.barrier,
+                    inbox: &mut fx.inbox,
+                    budget: &mut fx.budget,
+                    author: &fx.author,
+                })
+                .unwrap();
+            assert!(fx.flow.starting_classifier().is_none());
+            assert!(fx.flow.standing_classifier().is_none());
+            assert!(fx.flow.classifier_retired());
+            assert!(fx.flow.failure().is_none());
+            assert!(
+                fx.flow
+                    .retire_refused_classifier(&mut FlowRecording {
+                        barrier: &mut fx.barrier,
+                        inbox: &mut fx.inbox,
+                        budget: &mut fx.budget,
+                        author: &fx.author,
+                    })
+                    .is_err(),
+                "intentional retirement cannot be consumed twice"
+            );
+        }
+    }
+}
+
+#[test]
+fn held_ready_waits_for_the_exact_pending_author_before_granting_service() {
+    let (mut fx, peer, expected) = held_classifier_admission(false);
+    let large = "x".repeat(32768);
+    let mut filled = false;
+    for _ in 0..ORDINARY_CAPACITY + 64 {
+        let progress = fx.barrier.submit_authored_with_clock(
+            authored(
+                Kind::ModelMeasurement,
+                AuthoredSource::Runtime,
+                Payload::ModelMeasurement(
+                    serde_json::value::to_raw_value(&serde_json::json!({"fixture":large})).unwrap(),
+                ),
+                true,
+            ),
+            RecordPurpose::Observation,
+            &fx.author,
+            100,
+            &mut fx.inbox,
+            &mut fx.budget,
+            &mut || Ok(123),
+        );
+        match progress {
+            RecordProgress::Recorded { .. } => {}
+            RecordProgress::Pending => {
+                filled = true;
+                break;
+            }
+            other => panic!("fill trace: {other:?}, {:?}", fx.barrier.failure()),
+        }
+    }
+    assert!(filled, "fixture must reach actual trace capacity");
+    let pending = serde_json::to_string(fx.barrier.pending().unwrap()).unwrap();
+    let ticket = format!("{:?}", fx.barrier.pending_author().unwrap());
+    for _ in 0..3 {
+        assert!(
+            fx.flow
+                .take_admission_completion(&mut FlowRecording {
+                    barrier: &mut fx.barrier,
+                    inbox: &mut fx.inbox,
+                    budget: &mut fx.budget,
+                    author: &fx.author,
+                })
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fx.flow.held_admission(), Some(&expected));
+        assert!(fx.flow.starting_classifier().is_some());
+        assert!(fx.flow.standing_classifier().is_none());
+        assert_eq!(
+            serde_json::to_string(fx.barrier.pending().unwrap()).unwrap(),
+            pending
+        );
+        assert_eq!(
+            format!("{:?}", fx.barrier.pending_author().unwrap()),
+            ticket
+        );
+    }
+    let mut sink_reader = fx.reader.take().unwrap();
+    let drain = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        sink_reader.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        match fx
+            .barrier
+            .resume_with_clock(&mut fx.inbox, &mut fx.budget, &mut || Ok(123))
+        {
+            RecordProgress::Recorded { .. } => break,
+            RecordProgress::Pending => {
+                assert!(Instant::now() < deadline, "pending author did not record");
+                std::thread::yield_now();
+            }
+            other => panic!("pending author: {other:?}"),
+        }
+    }
+    assert!(fx.barrier.pending().is_none());
+    assert!(fx.barrier.pending_author().is_none());
+    assert_eq!(
+        fx.flow
+            .take_admission_completion(&mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            })
+            .unwrap(),
+        Some(expected)
+    );
+    assert!(fx.flow.held_admission().is_none());
+    assert!(fx.flow.starting_classifier().is_none());
+    assert!(fx.flow.standing_classifier().is_some());
+    assert!(
+        fx.flow
+            .take_admission_completion(&mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            })
+            .unwrap()
+            .is_none()
+    );
+    assert!(fx.flow.failure().is_none());
+    drop(fx);
+    drop(peer);
+    assert!(!drain.join().unwrap().is_empty());
+}
+
+#[test]
+fn first_halt_sample_counts_admitted_copies_before_the_ledger_can_drain() {
+    use crate::flow::report::{FlowHaltReason, HaltPoint, SecondaryFailure};
+    let mut fx = Fixture::new(4);
+    fx.admit(&["Read queued.", "Read second."]);
+    let intake_ns = fx.time();
+    let expected_bytes: u64 = queued_sources(&fx.inbox)
+        .unwrap()
+        .iter()
+        .map(|fact| fact.raw_bytes + fact.context_bytes)
+        .sum();
+    assert_eq!(fx.inbox.queued().count(), 1);
+    assert!(fx.flow.ledger().facts().next().is_none());
+    fx.elapse(17);
+    let now = fx.time();
+    fx.flow.latch(
+        SecondaryFailure {
+            reason: FlowHaltReason::TraceFailed,
+            point: HaltPoint::Author,
+            observed_ns: Some(now.into()),
+            detail: "trace failed after admitting copy".into(),
+        },
+        None,
+        &mut FlowRecording {
+            barrier: &mut fx.barrier,
+            inbox: &mut fx.inbox,
+            budget: &mut fx.budget,
+            author: &fx.author,
+        },
+    );
+    let sample = fx.flow.final_sample().unwrap().unwrap();
+    assert_eq!(sample.pending_count.0, 2);
+    assert_eq!(sample.pending_bytes.0, expected_bytes);
+    assert_eq!(sample.pending_turns.0, 1);
+    assert_eq!(sample.oldest_age_ns.0, now - intake_ns);
+    assert_eq!(sample.retained_blocks.0, 2);
+    assert_eq!(sample.retained_bytes.0, fx.budget.gauges().1);
+    assert!(fx.flow.ledger().facts().next().is_none());
+    assert_eq!(
+        fx.inbox.queued().count(),
+        1,
+        "reporting cannot drain the frozen inbox"
+    );
+}
+
+#[test]
+fn a_recorded_operation_stays_owned_until_a_later_pending_author_is_recorded() {
+    let mut fx = Fixture::new(4);
+    fx.begin_control(s::StateControl::Shape {});
+    fx.answer_control(s::StateControlAnswer::Shape(vec![s::ShapeRow {
+        run: "prior".into(),
+        kind: "message.user".into(),
+        count: 17.into(),
+    }]));
+    fx.advance().unwrap();
+    let Some(OperationCompletion::State { completion, .. }) = fx.flow.operation_completion() else {
+        panic!("actual recorded control answer");
+    };
+    let expected = s::encode_state_line(&completion.answer, s::FrameDirection::Response).unwrap();
+    let pending = fx.fill_trace_capacity();
+    for _ in 0..3 {
+        assert!(fx.take_operation().unwrap().is_none());
+        assert_eq!(
+            serde_json::to_string(fx.barrier.pending().unwrap()).unwrap(),
+            pending
+        );
+        let Some(OperationCompletion::State { completion, .. }) = fx.flow.operation_completion()
+        else {
+            panic!("held answer must remain owned");
+        };
+        assert_eq!(
+            s::encode_state_line(&completion.answer, s::FrameDirection::Response).unwrap(),
+            expected
+        );
+    }
+    let reader = fx.start_drain();
+    fx.resume_external_ticket();
+    let Some(OperationCompletion::State { completion, .. }) = fx.take_operation().unwrap() else {
+        panic!("operation follows external Recorded");
+    };
+    assert_eq!(
+        s::encode_state_line(&completion.answer, s::FrameDirection::Response).unwrap(),
+        expected
+    );
+    assert!(fx.take_operation().unwrap().is_none());
+    drop(fx);
+    reader.join().unwrap();
+}
+
+#[test]
+fn preactivation_refusal_rollback_preserves_unused_open_without_a_serving_proof() {
+    for premature_eof in [false, true] {
+        let mut fx = BootFixture::new();
+        fx.begin_and_answer_open();
+        let held = fx.flow.state().held_measurement().unwrap().clone();
+        fx.load_only();
+        let mut invalid = fixture::partition();
+        invalid.rules[0].kind = "save_point".into();
+        assert!(validate_partition(&invalid).is_err());
+        let refusal = authored(
+            Kind::Refusal,
+            AuthoredSource::Runtime,
+            Payload::Refusal(
+                serde_json::value::RawValue::from_string(r#"{"case":"partition_invalid"}"#.into())
+                    .unwrap(),
+            ),
+            false,
+        );
+        let progress = fx.barrier.submit_authored_with_clock(
+            refusal,
+            RecordPurpose::Observation,
+            &fx.author,
+            100,
+            &mut fx.inbox,
+            &mut fx.budget,
+            &mut || Ok(122),
+        );
+        assert!(
+            matches!(progress, RecordProgress::Recorded { .. }),
+            "refusal: {progress:?}"
+        );
+        assert!(fx.barrier.is_refused());
+        assert!(!fx.barrier.is_active());
+        assert!(fx.flow.halt().is_none());
+        if premature_eof {
+            fx.peer.shutdown(std::net::Shutdown::Write).unwrap();
+        }
+        let result = fx.flow.begin_enter_rollback(
+            &mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            },
+            &mut fx.clock,
+        );
+        if premature_eof {
+            assert!(result.is_err());
+            assert_eq!(fx.flow.state().held_measurement(), Some(&held));
+            assert!(fx.flow.unused_open().is_none());
+            assert!(fx.flow.operation_completion().is_none());
+            continue;
+        }
+        assert_eq!(result.unwrap(), Advance::Progress);
+        assert_eq!(fx.flow.phase(), CoordinatorPhase::Releasing);
+        assert!(fx.flow.standing_state().is_none());
+        assert!(fx.flow.standing_classifier().is_none());
+        assert!(fx.flow.classifier_retired());
+        assert_eq!(fx.flow.unused_open().unwrap().measurement(), &held);
+        assert!(matches!(
+            fx.flow.unused_open().unwrap().answer(),
+            StateFrame::Opened { .. }
+        ));
+        assert!(fx.flow.operation_completion().is_none());
+        assert!(fx.flow.observations.is_none());
+        assert!(fx.flow.final_sample().unwrap().is_none());
+        assert!(fx.flow.halt().is_none());
+        assert!(fx.flow.ledger().facts().next().is_none());
+        assert_eq!(fx.budget.gauges(), (0, 0));
+        let mut byte = [0];
+        assert_eq!(
+            fx.peer.read(&mut byte).unwrap(),
+            0,
+            "rollback closes the sole state fd"
+        );
+        let unload = trace::UnloadClose {
+            grant_surface: None,
+            cause: Some(fixture::load_record().cause),
+            forced: true,
+            forced_by: None,
+            release: None,
+            end_reason: None,
+            state_flow_failure: None,
+        };
+        let progress = fx.barrier.submit_authored_with_clock(
+            authored(
+                Kind::Unload,
+                AuthoredSource::Runtime,
+                Payload::Unload(Box::new(unload)),
+                false,
+            ),
+            RecordPurpose::Observation,
+            &fx.author,
+            100,
+            &mut fx.inbox,
+            &mut fx.budget,
+            &mut || Ok(123),
+        );
+        assert!(
+            matches!(progress, RecordProgress::Recorded { .. }),
+            "unload: {progress:?}"
+        );
+        fx.flow
+            .close(&mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            })
+            .unwrap();
+        assert_eq!(fx.flow.phase(), CoordinatorPhase::Closed);
+        assert_eq!(fx.flow.unused_open().unwrap().measurement(), &held);
+        let mut reader = BufReader::new(fx.reader.take().unwrap());
+        let mut kinds = Vec::new();
+        for _ in 0..3 {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            kinds.push(serde_json::from_str::<serde_json::Value>(&line).unwrap()["kind"].clone());
+        }
+        assert_eq!(kinds, vec!["load", "refusal", "unload"]);
+    }
+}
+
+#[test]
+fn enter_rollback_requires_a_recorded_refusal_and_never_replaces_clean_retirement() {
+    let mut fx = BootFixture::new();
+    fx.begin_and_answer_open();
+    fx.load_only();
+    assert!(
+        fx.flow
+            .begin_enter_rollback(
+                &mut FlowRecording {
+                    barrier: &mut fx.barrier,
+                    inbox: &mut fx.inbox,
+                    budget: &mut fx.budget,
+                    author: &fx.author,
+                },
+                &mut fx.clock
+            )
+            .is_err()
+    );
+    assert!(fx.flow.state().held_measurement().is_some());
+    assert!(fx.flow.unused_open().is_none());
+    let mut active = Fixture::new(4);
+    assert!(
+        active
+            .flow
+            .begin_enter_rollback(
+                &mut FlowRecording {
+                    barrier: &mut active.barrier,
+                    inbox: &mut active.inbox,
+                    budget: &mut active.budget,
+                    author: &active.author,
+                },
+                &mut active.clock
+            )
+            .is_err()
+    );
+    assert!(active.flow.standing_state().is_some());
+    assert!(active.flow.unused_open().is_none());
+}
+
+// A second applicable trait makes this expression ambiguous if Clone appears.
+const _: fn() = || {
+    trait RecordedCheckMustNotClone<Marker> {
+        fn check() {}
+    }
+    impl<T: ?Sized> RecordedCheckMustNotClone<()> for T {}
+    impl<T: Clone> RecordedCheckMustNotClone<u8> for T {}
+    let _ = <RecordedCheck as RecordedCheckMustNotClone<_>>::check;
+};
+
+#[test]
+fn recorded_check_retains_exact_source_across_a_later_pending_author() {
+    let mut fx = Fixture::new(4);
+    let operation = template_operation();
+    assert!(matches!(
+        fx.begin_check(operation.clone()),
+        OperationStart::Started { .. }
+    ));
+    let expected_reply = fx.reply_check(s::Ste100Result::Accepted { bindings: vec![] });
+    for _ in 0..128 {
+        fx.advance().unwrap();
+        if fx.flow.operation_completion().is_some() {
+            break;
+        }
+    }
+    let result = fx
+        .records()
+        .into_iter()
+        .find(|record| record["kind"] == "ste100.result")
+        .expect("real classifier result must be recorded");
+    let expected_source = s::SourcePosition {
+        block_id: s::SourceBlockId {
+            run: "run".into(),
+            sequence: result["sequence"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                .into(),
+            block: 0.into(),
+        },
+        turn: None,
+    };
+    assert_eq!(
+        result["payload"],
+        serde_json::to_value(&expected_reply).unwrap()
+    );
+    assert!(
+        result["turn"].is_null(),
+        "load template replies are turnless"
+    );
+    let Some(OperationCompletion::Check(held)) = fx.flow.operation_completion() else {
+        panic!("actual recorded check is held");
+    };
+    assert_eq!(held.source(), &expected_source);
+    assert_eq!(held.operation(), &operation);
+    assert_eq!(held.reply(), &expected_reply);
+
+    let pending = fx.fill_trace_capacity();
+    let later = fx.records().last().unwrap()["sequence"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    assert!(
+        later > expected_source.block_id.sequence.0,
+        "later actual authors must distinguish proof source from last sequence"
+    );
+    for _ in 0..3 {
+        assert!(fx.take_operation().unwrap().is_none());
+        assert_eq!(fx.advance().unwrap(), Advance::Pending);
+        assert_eq!(
+            serde_json::to_string(fx.barrier.pending().unwrap()).unwrap(),
+            pending
+        );
+        let Some(OperationCompletion::Check(held)) = fx.flow.operation_completion() else {
+            panic!("later author cannot consume the exact held check");
+        };
+        assert_eq!(held.source(), &expected_source);
+    }
+    let drain = fx.start_drain();
+    fx.resume_external_ticket();
+    let OperationCompletion::Check(recorded) = fx.take_operation().unwrap().unwrap() else {
+        panic!("one recorded check transfers after the pending author");
+    };
+    let (actual_operation, reply, source) = recorded.into_parts();
+    assert_eq!(actual_operation, operation);
+    assert_eq!(reply, expected_reply);
+    assert_eq!(source, expected_source);
+    assert!(fx.take_operation().unwrap().is_none());
+    assert_eq!(
+        fx.records()
+            .iter()
+            .filter(|r| r["kind"] == "ste100.result")
+            .count(),
+        1
+    );
+    drop(fx);
+    drain.join().unwrap();
 }

@@ -2,7 +2,7 @@
 
 use super::event::{Event, Payload, admit, malformed};
 use super::structure::{Record, WorkingStructure};
-use super::writer::{Terminal, Writer};
+use super::writer::{CapacityWake, DrainStatus, Terminal, Writer};
 use super::{Kind, SourceEvent, TapOutcome, Tee, ValidatedPartition};
 use crate::{Boundary, Drained, Failure, Pressure, RunRef, Sequence, SessionRef};
 use std::marker::PhantomData;
@@ -40,6 +40,20 @@ pub struct Closed;
 ///     PreflightRecorder::receive;
 /// let _: fn(PreflightRecorder<Loaded>, ValidatedPartition) -> Recorder =
 ///     PreflightRecorder::activate;
+/// ```
+///
+/// ```compile_fail
+/// use weaver_trace::serving::{AwaitingLoad, Event, PreflightRecorder};
+/// fn fault_before_load(recorder: PreflightRecorder<AwaitingLoad>, event: Event) {
+///     recorder.record_terminal_fault(event);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use weaver_trace::serving::{Closed, Event, PreflightRecorder};
+/// fn repeat_unload(recorder: PreflightRecorder<Closed>, event: Event) {
+///     recorder.record_terminal_unload(event);
+/// }
 /// ```
 ///
 /// ```compile_fail
@@ -85,6 +99,20 @@ pub struct PreflightFailure<State> {
     pub failure: Failure,
 }
 
+/// A reserved preflight record never waits for ordinary queue capacity.
+#[must_use]
+pub struct PreflightTerminal<State> {
+    pub recorder: PreflightRecorder<State>,
+    pub submission: Submission,
+}
+
+/// Failed terminal authoring retains both the recorder and the original event.
+pub struct PreflightTerminalFailure<State> {
+    pub recorder: PreflightRecorder<State>,
+    pub event: Box<Event>,
+    pub failure: Failure,
+}
+
 impl PreflightRecorder<AwaitingLoad> {
     pub fn receive(sink: OwnedFd, run: RunRef, session: SessionRef) -> Result<Self, Failure> {
         Ok(Self {
@@ -116,6 +144,15 @@ impl PreflightRecorder<Loaded> {
             matches!(event.envelope.kind, Kind::Refusal | Kind::Fault)
         })
     }
+
+    /// Only the harness halt path spends this first-fault reservation. No tee
+    /// has been installed, and the resulting refusal can never activate one.
+    pub fn record_terminal_fault(
+        self,
+        event: Event,
+    ) -> Result<PreflightTerminal<Refused>, PreflightTerminalFailure<Loaded>> {
+        self.terminal_transition(event, Terminal::Fault)
+    }
 }
 
 impl PreflightRecorder<Refused> {
@@ -131,9 +168,63 @@ impl PreflightRecorder<Refused> {
     ) -> Result<PreflightAttempt<Refused, Closed>, PreflightFailure<Refused>> {
         self.transition(event, |event| event.envelope.kind == Kind::Unload)
     }
+
+    /// A component failure after an ordinary refusal still owns its fault
+    /// reservation. A fault already recorded by either path cannot repeat.
+    pub fn record_terminal_fault(
+        self,
+        event: Event,
+    ) -> Result<PreflightTerminal<Refused>, PreflightTerminalFailure<Refused>> {
+        self.terminal_transition(event, Terminal::Fault)
+    }
+
+    /// Finish a failed preflight using the unload reservation. Ordinary refused
+    /// enters continue to call record_unload and use ordinary capacity.
+    pub fn record_terminal_unload(
+        self,
+        event: Event,
+    ) -> Result<PreflightTerminal<Closed>, PreflightTerminalFailure<Refused>> {
+        self.terminal_transition(event, Terminal::Unload)
+    }
 }
 
 impl<State> PreflightRecorder<State> {
+    fn terminal_transition<After>(
+        mut self,
+        event: Event,
+        terminal: Terminal,
+    ) -> Result<PreflightTerminal<After>, PreflightTerminalFailure<State>> {
+        let allowed = match terminal {
+            Terminal::Fault => event.envelope.kind == Kind::Fault && !self.core.preflight_fault,
+            Terminal::Unload => event.envelope.kind == Kind::Unload,
+            _ => false,
+        };
+        if !allowed {
+            return Err(PreflightTerminalFailure {
+                recorder: self,
+                event: Box::new(event),
+                failure: malformed(),
+            });
+        }
+        match self.core.submit(event.clone(), None, Some(terminal)) {
+            Ok(SubmitAttempt::Recorded(submission)) => Ok(PreflightTerminal {
+                recorder: PreflightRecorder {
+                    core: self.core,
+                    state: PhantomData,
+                },
+                submission,
+            }),
+            Ok(SubmitAttempt::CapacityPending(_)) => {
+                unreachable!("terminal capacity was reserved per kind")
+            }
+            Err(failure) => Err(PreflightTerminalFailure {
+                recorder: self,
+                event: Box::new(event),
+                failure,
+            }),
+        }
+    }
+
     fn transition<After>(
         mut self,
         event: Event,
@@ -174,6 +265,17 @@ impl<State> PreflightRecorder<State> {
     }
     pub fn capacity_fd(&self) -> BorrowedFd<'_> {
         self.core.writer.capacity_fd()
+    }
+    pub fn standing_failure(&self) -> Option<Failure> {
+        self.core.standing_failure()
+    }
+    /// Perform at most one nonblocking read of the capacity-wake descriptor.
+    pub fn try_capacity_wake(&mut self) -> Result<CapacityWake, Failure> {
+        self.core.try_capacity_wake()
+    }
+    /// Inspect the drain predicate without waiting or electing a deadline.
+    pub fn drain_status(&self) -> Result<DrainStatus, Failure> {
+        self.core.drain_status()
     }
     pub fn drain_capacity_wake(&mut self) -> Result<(), Failure> {
         self.core.writer.drain_capacity_wake()
@@ -267,6 +369,17 @@ impl Recorder {
     pub fn capacity_fd(&self) -> BorrowedFd<'_> {
         self.core.writer.capacity_fd()
     }
+    pub fn standing_failure(&self) -> Option<Failure> {
+        self.core.standing_failure()
+    }
+    /// Perform at most one nonblocking read of the capacity-wake descriptor.
+    pub fn try_capacity_wake(&mut self) -> Result<CapacityWake, Failure> {
+        self.core.try_capacity_wake()
+    }
+    /// Inspect the drain predicate without waiting or electing a deadline.
+    pub fn drain_status(&self) -> Result<DrainStatus, Failure> {
+        self.core.drain_status()
+    }
     pub fn drain_capacity_wake(&mut self) -> Result<(), Failure> {
         self.core.writer.drain_capacity_wake()
     }
@@ -304,6 +417,23 @@ impl Core {
             append_failure: None,
             preflight_fault: false,
         })
+    }
+    fn standing_failure(&self) -> Option<Failure> {
+        self.append_failure
+            .clone()
+            .or_else(|| self.writer.standing_failure())
+    }
+    fn try_capacity_wake(&mut self) -> Result<CapacityWake, Failure> {
+        if let Some(failure) = self.standing_failure() {
+            return Err(failure);
+        }
+        self.writer.try_capacity_wake()
+    }
+    fn drain_status(&self) -> Result<DrainStatus, Failure> {
+        if let Some(failure) = self.standing_failure() {
+            return Err(failure);
+        }
+        self.writer.drain_status()
     }
     fn submit(
         &mut self,
