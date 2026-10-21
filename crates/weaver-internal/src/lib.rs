@@ -21,3 +21,4 @@
 //! member on this library surface.
 
 pub mod calculator;
+pub mod recall;
