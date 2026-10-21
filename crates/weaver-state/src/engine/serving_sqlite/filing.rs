@@ -11,6 +11,8 @@ use crate::{FileCommit, FileFault};
 pub(super) mod marks;
 pub(super) mod pairs;
 pub(super) mod plan;
+mod timing;
+use timing::TransactionTiming;
 
 #[cfg(test)]
 pub(super) use super::tests::filing as tests;
@@ -57,6 +59,14 @@ pub(super) fn file(
     store: &mut ServingSqlite,
     filing: &StatementFile,
 ) -> Result<FileCommit, FileFault> {
+    file_inner(store, filing, None)
+}
+
+fn file_inner(
+    store: &mut ServingSqlite,
+    filing: &StatementFile,
+    timing: Option<&mut TransactionTiming>,
+) -> Result<FileCommit, FileFault> {
     let context = store.context.clone();
     check_identity(
         &store.connection,
@@ -78,6 +88,7 @@ pub(super) fn file(
         .map_err(|error| fault(StateRefusalCode::InvalidBinding, error.to_string()))?;
     #[cfg(test)]
     let hooks = store.filing_hooks.as_deref();
+    let _clock = timing.map(TransactionTiming::start).transpose()?;
     let tx = store.connection.transaction()?;
     let source_id = insert_statement(&tx, filing)?;
     checkpoint!(hooks, FilingCheckpoint::AfterSource, &tx);
@@ -165,6 +176,14 @@ pub(super) fn file_pair(
     store: &mut ServingSqlite,
     filing: &PairFile,
 ) -> Result<FileCommit, FileFault> {
+    file_pair_inner(store, filing, None)
+}
+
+fn file_pair_inner(
+    store: &mut ServingSqlite,
+    filing: &PairFile,
+    timing: Option<&mut TransactionTiming>,
+) -> Result<FileCommit, FileFault> {
     let context = store.context.clone();
     check_identity(
         &store.connection,
@@ -178,6 +197,7 @@ pub(super) fn file_pair(
         .map_err(|error| fault(StateRefusalCode::InvalidPair, error.to_string()))?;
     #[cfg(test)]
     let hooks = store.filing_hooks.as_deref();
+    let _clock = timing.map(TransactionTiming::start).transpose()?;
     let tx = store.connection.transaction()?;
     let source_id = insert_pair(&tx, filing)?;
     checkpoint!(hooks, FilingCheckpoint::AfterSource, &tx);

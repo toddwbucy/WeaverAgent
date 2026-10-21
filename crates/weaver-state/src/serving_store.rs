@@ -66,6 +66,15 @@ impl std::fmt::Display for ReadFault {
 
 impl std::error::Error for ReadFault {}
 
+/// The outcome and exact SQL transaction interval of a member filing call.
+/// Pre-transaction validation refusals have no transaction phase. A failure to
+/// measure the required clock is a component failure outside this result.
+#[derive(Debug)]
+pub struct ObservedFiling {
+    pub result: Result<FileCommit, FileFault>,
+    pub transaction: Option<weaver_types::state_flow::OperationPhase>,
+}
+
 /// No caller SQL or direct plan/mark mutation crosses this interface.
 pub trait ServingStore {
     fn file(&mut self, filing: &StatementFile) -> Result<FileCommit, FileFault>;
