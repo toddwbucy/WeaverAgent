@@ -301,3 +301,46 @@ fn conditional_measurement_and_persistence_members_have_one_shape() {
     payload.assembly_id = 1.into();
     assert!(!accepts(&placement));
 }
+
+#[test]
+fn boot_placement_refuses_a_cut_reference_but_cut_preparation_may_omit_it() {
+    let mut placement = fixture(Kind::StatePlacement);
+    assert!(accepts(&placement));
+    let Some(Payload::Placement(payload)) = &mut placement.payload else {
+        panic!()
+    };
+    payload.cut = Some(CutReference {
+        span: SpanRef {
+            seed_id: "seed".into(),
+            local_id: 1.into(),
+            revision: 1.into(),
+        },
+        occurrence_id: MarkOccurrenceId {
+            run: "run".into(),
+            ordinal: 1.into(),
+        },
+    });
+    assert!(matches!(
+        admit(
+            &placement,
+            &SessionRef("session".into()),
+            &RunRef("run".into())
+        ),
+        Err(Failure::RefusedOnSubmit {
+            reason: SubmitRefusal::PayloadMalformed,
+        })
+    ));
+
+    let Some(Payload::Placement(payload)) = &mut placement.payload else {
+        panic!()
+    };
+    payload.phase = PlacementPhase::Cut;
+    payload.assembly_id = 1.into();
+    payload.method = Some(CutMethod::Flush);
+    assert!(accepts(&placement));
+    let Some(Payload::Placement(payload)) = &mut placement.payload else {
+        panic!()
+    };
+    payload.cut = None;
+    assert!(accepts(&placement));
+}
