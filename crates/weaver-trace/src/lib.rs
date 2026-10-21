@@ -148,6 +148,8 @@ mod structure;
 mod tee;
 mod writer;
 
+pub mod serving;
+
 pub use canonical::{MonotonicNs, Sequence};
 pub use event::{
     Branch, Candidate, Cause, ClassifyAsk, ClassifyScored, Elections, ElisionSpan, Envelope, Event,
