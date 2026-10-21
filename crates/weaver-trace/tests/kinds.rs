@@ -34,6 +34,35 @@
 
 use weaver_trace::Kind;
 
+const ALL: [Kind; 26] = [
+    Kind::Load,
+    Kind::Unload,
+    Kind::SessionClosed,
+    Kind::TurnStarted,
+    Kind::TurnClosed,
+    Kind::MessageSystem,
+    Kind::MessageUser,
+    Kind::MessageAssistant,
+    Kind::MessageToolResult,
+    Kind::ToolCallStarted,
+    Kind::ToolCallCompleted,
+    Kind::Fault,
+    Kind::Elision,
+    Kind::Refusal,
+    Kind::Flush,
+    Kind::ModelRequest,
+    Kind::ModelOutput,
+    Kind::ModelMeasurement,
+    Kind::ModelField,
+    Kind::ClassifyRequest,
+    Kind::ClassifyOutput,
+    Kind::Recall,
+    Kind::MessageRestored,
+    Kind::Score,
+    Kind::SavePoint,
+    Kind::ModelUnrecoveredCall,
+];
+
 /// Each kind's ordinal, matched exhaustively and with no wildcard arm, so a
 /// kind added to the enum leaves this match non-exhaustive and a kind dropped
 /// leaves an arm naming nothing. Either stops the build.
@@ -89,35 +118,6 @@ fn ordinal(kind: Kind) -> usize {
 /// twenty-six kinds still distinct.
 #[test]
 fn the_kind_set_is_twenty_six() {
-    const ALL: [Kind; 26] = [
-        Kind::Load,
-        Kind::Unload,
-        Kind::SessionClosed,
-        Kind::TurnStarted,
-        Kind::TurnClosed,
-        Kind::MessageSystem,
-        Kind::MessageUser,
-        Kind::MessageAssistant,
-        Kind::MessageToolResult,
-        Kind::ToolCallStarted,
-        Kind::ToolCallCompleted,
-        Kind::Fault,
-        Kind::Elision,
-        Kind::Refusal,
-        Kind::Flush,
-        Kind::ModelRequest,
-        Kind::ModelOutput,
-        Kind::ModelMeasurement,
-        Kind::ModelField,
-        Kind::ClassifyRequest,
-        Kind::ClassifyOutput,
-        Kind::Recall,
-        Kind::MessageRestored,
-        Kind::Score,
-        Kind::SavePoint,
-        Kind::ModelUnrecoveredCall,
-    ];
-
     for (at, kind) in ALL.iter().enumerate() {
         assert!(
             !ALL[..at].contains(kind),
@@ -133,4 +133,19 @@ fn the_kind_set_is_twenty_six() {
         reached.iter().all(|seen| *seen),
         "every kind the enum declares stands in the set: {reached:?}"
     );
+}
+
+/// The additive serving registry must preserve every legacy wire spelling until
+/// cutover merges the two vocabularies. Both serialize paths are exercised, so a
+/// changed legacy rename or a missing serving registration fails this test.
+#[test]
+fn every_legacy_kind_wire_name_resolves_in_the_serving_registry() {
+    for legacy in ALL {
+        let encoded = serde_json::to_string(&legacy).unwrap();
+        let wire: String = serde_json::from_str(&encoded).unwrap();
+        let serving = weaver_trace::serving::Kind::from_name(&wire)
+            .unwrap_or_else(|| panic!("legacy kind {legacy:?} has no serving name: {wire}"));
+        assert_eq!(serde_json::to_string(&serving).unwrap(), encoded);
+        assert_eq!(serving.as_str(), wire);
+    }
 }
