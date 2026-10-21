@@ -190,7 +190,7 @@ mod tests {
             "1 ",
             "1.0",
             "1e0",
-            "١",
+            "\u{661}",
             "18446744073709551616",
         ] {
             assert!(value.parse::<DecimalU64>().is_err(), "{value:?}");

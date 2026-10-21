@@ -309,6 +309,7 @@ impl PairFile {
         // The trace payload is the record inside the floor's external pair tag.
         let equal = match &self.pair {
             PairRecord::Started(record) => {
+                record.validate_structure()?;
                 serde_json::from_str::<super::PairStarted>(self.raw_block.get())
                     .is_ok_and(|raw| raw == *record)
             }
@@ -394,7 +395,7 @@ mod tests {
             condition: None,
             condition_span: None,
             nouns: vec![NounBinding {
-                value: "café".into(),
+                value: "caf\u{e9}".into(),
                 span: span(5, 10),
             }],
         }
@@ -402,7 +403,7 @@ mod tests {
 
     #[test]
     fn binding_checks_decoded_utf8_bytes_without_normalizing_nouns() {
-        let text = "Read café. ";
+        let text = "Read caf\u{e9}. ";
         let mut b = binding();
         b.statement_span = span(0, text.len() as u64);
         assert!(b.validate(text, &["read".into()]).is_ok());
@@ -410,7 +411,7 @@ mod tests {
         bad.nouns[0].span.end = 9.into();
         assert!(bad.validate(text, &["read".into()]).is_err());
         bad = b.clone();
-        bad.nouns[0].value = "CAFÉ".into();
+        bad.nouns[0].value = "CAF\u{c9}".into();
         assert!(bad.validate(text, &["read".into()]).is_err());
         bad = b.clone();
         bad.nouns.clear();
@@ -497,7 +498,7 @@ mod tests {
     }
 
     fn statement() -> StatementFile {
-        let text = "Read café. ";
+        let text = "Read caf\u{e9}. ";
         let mut b = binding();
         b.statement_span = span(0, text.len() as u64);
         StatementFile {
@@ -544,7 +545,7 @@ mod tests {
         let decoded: StatementFile = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.raw_block.get(), filing.raw_block.get());
         assert_eq!(decoded.source_path, filing.source_path);
-        assert_eq!(decoded.text, "Read café. ");
+        assert_eq!(decoded.text, "Read caf\u{e9}. ");
         for field in ["\"context\":null,", ",\"effect\":null"] {
             assert!(serde_json::from_str::<StatementFile>(&json.replace(field, "")).is_err());
         }
@@ -570,10 +571,10 @@ mod tests {
     fn filing_cannot_project_tool_blocks_or_change_copied_text() {
         let mut filing = statement();
         for raw in [
-            r#"{"type":"tool_call","text":"Read café. "}"#,
+            "{\"type\":\"tool_call\",\"text\":\"Read caf\u{e9}. \"}",
             r#"{"type":"text","text":"Read changed text."}"#,
-            r#"{"type":"text","text":"Read café. ","arguments":"hidden"}"#,
-            r#"{"type":"text","text":"Read café. ","text":"Read café. "}"#,
+            "{\"type\":\"text\",\"text\":\"Read caf\u{e9}. \",\"arguments\":\"hidden\"}",
+            "{\"type\":\"text\",\"text\":\"Read caf\u{e9}. \",\"text\":\"Read caf\u{e9}. \"}",
         ] {
             filing.raw_block = RawValue::from_string(raw.into()).unwrap();
             assert!(

@@ -26,7 +26,7 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | C1b | C1a | Normative grammar and template proof, Spec 02 O02-1 |
 | C1c | C1a, C1b | Model adapter, duty entry and qualification, Spec 02 O02-2 |
 | P1 | F1, F4, C1 | Seed, custody and boot, admin/persistence amendments |
-| H1 | T1b, F4, C1, P1 | Harness flow, receipts and halt, harness/foundation amendments |
+| H1 | F1, T1b, F4, C1, P1 | Flow, receipts and halt, harness/foundation amendments |
 | H2 | H1, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
 | H3 | H1 | Marks, renderer and SPU buffer boundary, Spec 06 and SPU amendment |
 | H4 | H2, H3 | Plan operations and review evidence, Spec 07 and admin amendment |
