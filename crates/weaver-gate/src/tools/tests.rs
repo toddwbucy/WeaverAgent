@@ -373,7 +373,7 @@ fn a_name_that_is_not_the_shells_refuses_by_name() {
 /// the shell declares, and both refuse naming the bound.
 #[test]
 fn a_clock_outside_the_maximum_refuses_rather_than_clamps() {
-    for clock in [0, SHELL_MAX_CLOCK_MS + 1] {
+    for clock in [0, weaver_types::state_flow::SHELL_MAX_CLOCK_MS + 1] {
         let outcome = refused(r#"{"command":"true"}"#, clock);
         let ToolOutcome::Refused { reason } = outcome else {
             panic!("a refusal answers for {clock}: {outcome:?}");
@@ -383,6 +383,18 @@ fn a_clock_outside_the_maximum_refuses_rather_than_clamps() {
             "the refusal names the bound: {reason}"
         );
     }
+}
+
+/// The shared maximum passes the clock check before malformed arguments refuse.
+/// No shell runs, so this exercises the accepted boundary without a cgroup fixture.
+#[test]
+fn the_shared_clock_maximum_reaches_argument_validation() {
+    assert_eq!(
+        refused("{}", weaver_types::state_flow::SHELL_MAX_CLOCK_MS),
+        ToolOutcome::Refused {
+            reason: "the arguments carry no command string".into()
+        }
+    );
 }
 
 /// Malformed arguments are the gate's refusal - nothing ran, so no
