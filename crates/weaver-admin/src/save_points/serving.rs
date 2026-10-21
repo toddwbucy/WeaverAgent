@@ -12,7 +12,18 @@ pub(crate) mod publication;
 pub(crate) mod repository;
 
 use std::fmt;
+use std::path::Path;
+use weaver_types::TraceSink;
 use weaver_types::state_flow::PersistenceCase;
+
+/// The declared sink's exact path is part of the bound serving identity.
+pub(crate) fn trace_path(sink: &TraceSink) -> &Path {
+    match sink {
+        TraceSink::File { path, .. }
+        | TraceSink::Pipe { path, .. }
+        | TraceSink::Socket { path } => path,
+    }
+}
 
 /// An artifact judgment is not a worker outcome or an automatic recovery.
 #[derive(Debug)]

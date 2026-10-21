@@ -449,10 +449,7 @@ pub fn mint_run_reference(agent: &str) -> Option<weaver_types::RunId> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?;
-    let mut bytes = [0u8; 8];
-    let mut file = std::fs::File::open("/dev/urandom").ok()?;
-    std::io::Read::read_exact(&mut file, &mut bytes).ok()?;
-    let nonce: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let nonce = crate::random::random_hex(8).ok()?;
     Some(weaver_types::RunId(format!(
         "{}-{agent}-{nonce}",
         rfc3339_millis(now.as_millis() as i64)

@@ -13,7 +13,7 @@ use sha2::{Digest as _, Sha256};
 use weaver_types::state_flow::{
     DecimalU64, Digest, PersistenceCase, PersistenceCause, PersistencePhase, StartIdentity,
 };
-use weaver_types::{ServingDeclaration, SessionId, TraceSink, parse_serving_declaration};
+use weaver_types::{ServingDeclaration, SessionId, parse_serving_declaration};
 
 use super::Fault;
 use super::codec::{Arrival, ArtifactId, PublicationGuard, StateBinding, StateIndexEntry};
@@ -361,11 +361,7 @@ impl Repository {
             return Err(binding_fault("agent.toml names a different dump_sha256"));
         }
         let agent = declaration.agent();
-        let trace_path = match &agent.trace_sink {
-            TraceSink::File { path, .. }
-            | TraceSink::Pipe { path, .. }
-            | TraceSink::Socket { path } => path,
-        };
+        let trace_path = super::trace_path(&agent.trace_sink);
         if agent.session != *scope.session || trace_path != scope.trace_path {
             return Err(configuration_fault(
                 "agent.toml identity or trace path disagrees with judged territory",

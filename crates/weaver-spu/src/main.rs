@@ -245,26 +245,6 @@ fn resolve_effective(supplied: &TunableValues) -> Result<Effective, KnobRefusal>
     })
 }
 
-/// Render a turn's delta through the family, text blocks only.
-///
-/// **The turns and nothing around them.** The identity prefix goes through
-/// [`family::Family::render_identity`] instead, because a family whose prefix
-/// opens with a preamble its turns do not repeat renders that there and only
-/// there. A block or a role the family cannot render is the delta malformed for
-/// the family, which is the contract's own case rather than one invented here:
-/// the tool shapes are blocked with the tool workflow and the families render
-/// text today.
-///
-/// **This function used to hold the role names and the text flattening for
-/// every family at once.** It does not, because a role's wire name is a family
-/// fact and this is the composition root: `gemma4` calls the assistant `model`,
-/// and a map living here would have taught every other family the word or
-/// grown an arm naming one, which Spec section 5's placement rule forbids.
-#[cfg(test)]
-fn render_delta(family: &dyn family::Family, delta: &[Message]) -> Result<String, TokenRefusal> {
-    family::render_each(family, delta).map_err(TokenRefusal::from)
-}
-
 /// One frame out on the decode seam: the trio crosses as bare JSON, per
 /// `weaver-types-Spec` section 4.4's provisional encoding.
 fn send_answer(decode: &DecodeSocket, answer: &TokenAnswer) -> Result<(), ChannelFault> {
