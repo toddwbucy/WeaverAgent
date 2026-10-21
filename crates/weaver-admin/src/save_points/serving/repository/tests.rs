@@ -13,6 +13,9 @@ use weaver_types::state_flow::{
 #[path = "restore_tests.rs"]
 mod restore;
 
+#[path = "seed_tests.rs"]
+mod seed;
+
 struct Fixture {
     path: PathBuf,
     owner: Owner,

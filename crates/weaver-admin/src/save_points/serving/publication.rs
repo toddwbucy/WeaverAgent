@@ -174,6 +174,7 @@ impl<'repo> Publication<'repo> {
         checkpoint: &mut impl FnMut(PersistencePhase) -> Result<(), String>,
     ) -> Result<Self, Failure> {
         precheck(checkpoint, PersistencePhase::Preparing)?;
+        repository.require_unseeded()?;
         let (index, prefix) = repository.read_index_snapshot()?;
         precheck(checkpoint, PersistencePhase::Preparing)?;
         if !index.is_empty() {

@@ -23,7 +23,8 @@ const DUMP: &str = "state.sqlite";
 const CONFIGURATION: &str = "agent.toml";
 const BINDING: &str = "binding.json";
 
-/// Values from the already judged territory, not from the authoring draft.
+/// Identity constraints from the independently judged territory declaration.
+/// Never derive these expectations from the candidate artifact being checked.
 /// Inventory still judges binaries, model artifacts and serving port elections.
 pub(crate) struct LoadScope<'a> {
     pub(crate) session: &'a SessionId,
@@ -104,6 +105,44 @@ impl Repository {
             root_owner,
             access_gid,
         })
+    }
+
+    /// Seed preparation runs under both admin locks and admits no earlier chain.
+    /// The same strict index reader is used again at publication.
+    pub(crate) fn require_unseeded(&self) -> Result<(), Fault> {
+        self.require_unseeded_with(&mut seed_directory_names)
+    }
+
+    fn require_unseeded_with(
+        &self,
+        list: &mut dyn FnMut(BorrowedFd<'_>) -> nix::Result<BTreeSet<Vec<u8>>>,
+    ) -> Result<(), Fault> {
+        if !self.read_index()?.is_empty() {
+            return Err(Fault::new(
+                PersistenceCase::SeedExists,
+                "chain already seeded",
+            ));
+        }
+        // ADMIN-SEED must establish a new chain, not infer one from a missing
+        // index. Spec 4's absent-manifest refusal and PERSIST-RECOVERY's manual
+        // repair boundary also cover surviving artifacts and publication guards.
+        // A part is not a publication and grants no load or recovery authority.
+        let entries = list(self.directory.as_fd())
+            .map_err(|error| layout(format!("list pre-seed repository: {error}")))?;
+        for name in entries {
+            let artifact =
+                std::str::from_utf8(&name).is_ok_and(|name| ArtifactId::parse(name).is_ok());
+            let guard = name.starts_with(b".")
+                && (name.ends_with(b".pending") || name.ends_with(b".pending.broken"));
+            let legacy = name.ends_with(crate::save_points::SUFFIX.as_bytes());
+            if artifact || guard || legacy {
+                return Err(layout(format!(
+                    "cannot establish an unseeded chain: {} stands without its index",
+                    String::from_utf8_lossy(&name),
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// N6: a present root selector must name the latest index entry. In
@@ -488,6 +527,27 @@ fn exact_files(directory: BorrowedFd<'_>) -> Result<(), Fault> {
         ));
     }
     Ok(())
+}
+
+fn seed_directory_names(directory: BorrowedFd<'_>) -> nix::Result<BTreeSet<Vec<u8>>> {
+    // A new description is required: dup would share a previous listing's
+    // offset and could make the second seed check observe an empty directory.
+    let descriptor = nix::fcntl::openat(
+        directory,
+        ".",
+        OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    )?;
+    let mut directory = nix::dir::Dir::from_fd(descriptor)?;
+    let mut names = BTreeSet::new();
+    for entry in directory.iter() {
+        let entry = entry?;
+        let name = entry.file_name().to_bytes();
+        if name != b"." && name != b".." {
+            names.insert(name.to_vec());
+        }
+    }
+    Ok(names)
 }
 
 fn hash(bytes: &[u8]) -> Digest {
