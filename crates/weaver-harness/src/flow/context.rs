@@ -53,6 +53,8 @@ pub(super) enum RunFailure {
     PairOwned,
     /// A repair transaction retains this author or pair account.
     RepairOwned,
+    /// A measurement owns the decode exchange or its exact pending author.
+    MeasureOwned,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -106,6 +108,7 @@ pub(crate) struct RecordingContext {
     input_turns: std::collections::BTreeSet<String>,
     member_capture: Option<capture_driver::MemberCapture>,
     read: Option<read_driver::ReadTransaction>,
+    measure: Option<measure_driver::MeasureTransaction>,
     filing: Option<receipt_driver::FilingTransaction>,
     output: Option<output_driver::OutputTransaction>,
     pairs: pairs::PairLedger,
@@ -201,6 +204,7 @@ impl RecordingContext {
             input_turns: std::collections::BTreeSet::new(),
             member_capture: None,
             read: None,
+            measure: None,
             filing: None,
             output: None,
             pairs,
@@ -449,6 +453,7 @@ impl RecordingContext {
             || self.pair_wait_still_owned(key)
             || self.repair_wait_still_owned(key)
             || self.read_wait_still_owned(key)
+            || self.measure_wait_still_owned(key)
             || (key == PumpDeadline::Enter
                 && self.phase == RecordingPhase::Entered
                 && self
@@ -475,6 +480,7 @@ impl RecordingContext {
             || self.input_turn.is_some()
             || self.member_capture.is_some()
             || self.read.is_some()
+            || self.measure.is_some()
             || self.open_turn.is_some()
         {
             return Err(self.fail(
@@ -643,6 +649,10 @@ impl RecordingContext {
             self.retain_refused(event);
             return Err(RunFailure::RepairOwned);
         }
+        if self.measure_blocks_external() {
+            self.retain_refused(event);
+            return Err(RunFailure::MeasureOwned);
+        }
         if self.filing.is_some()
             || self.output.is_some()
             || self.pair_work.is_some()
@@ -783,6 +793,9 @@ impl RecordingContext {
         self.live(ports.io)?;
         if self.repair_blocks_external() {
             return Err(RunFailure::RepairOwned);
+        }
+        if self.measure_blocks_external() {
+            return Err(RunFailure::MeasureOwned);
         }
         if self.filing.is_some()
             || self.output.is_some()
@@ -991,6 +1004,9 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<PumpStep, RunFailure> {
+        if let Some(decode) = ports.decode.as_deref() {
+            self.check_measure_port(decode)?;
+        }
         self.live(ports.io)?;
         if self.phase == RecordingPhase::Preflight
             && (ports.gate.is_some()
@@ -1030,7 +1046,14 @@ impl RecordingContext {
             Ok(PumpStep::Deadline { key, bound }) => Err(self.expired(ports.io, key, bound)),
             Ok(step) => Ok(step),
             Err(PumpFailure::Transport { source, failure }) => {
-                Err(RunFailure::Transport { source, failure })
+                if source == PumpSource::Decode && self.measure.is_some() {
+                    if let Some(decode) = ports.decode.as_deref_mut() {
+                        self.retain_measure_transport_evidence(decode);
+                    }
+                    Err(self.measure_fault(ports.io, format!("decode transport: {failure:?}")))
+                } else {
+                    Err(RunFailure::Transport { source, failure })
+                }
             }
             Err(error) => {
                 if self.flow.failure().is_some() {
@@ -1300,6 +1323,9 @@ impl RecordingContext {
         if let Some(read) = &mut self.read {
             read.freeze();
         }
+        if let Some(measure) = &mut self.measure {
+            measure.freeze();
+        }
         self.phase = RecordingPhase::Failed;
         self.failure = Some(failure.clone());
         self.barrier.stop_for_flow_failure();
@@ -1468,3 +1494,15 @@ pub(super) use read_driver::{ReadBeginError, ReadBeginRefusal, ReadProgress};
 #[cfg(test)]
 #[path = "context_read_tests.rs"]
 mod read_tests;
+
+#[path = "context_measure.rs"]
+mod measure_driver;
+#[allow(unused_imports)] // The later place owner consumes these count-only proofs.
+pub(super) use measure_driver::{
+    CancelledMeasure, MeasureBeginError, MeasureBeginRefusal, MeasureCompletion, MeasureFacts,
+    MeasurePosition, MeasureProgress, MeasureRequest, MeasuredProposal, RefusedMeasure,
+};
+
+#[cfg(test)]
+#[path = "context_measure_tests.rs"]
+mod measure_tests;

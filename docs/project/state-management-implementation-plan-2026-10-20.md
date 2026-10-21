@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for bounded state reads and the paired decode protocol.
+Updated: 2026-10-21 for the paired decode protocol and owned measurements.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -29,10 +29,13 @@ landing map and takes precedence over historical branch descriptions below.
 | #215 | Typed causes and contained terminal delivery, stacked on #198. Held for the coordinated foundation cutover. |
 | #216 | External pair execution and committed result custody, stacked on #215. Review and fold into #215 before that parent folds into #198. Same cutover hold. |
 | #217 | Complete bounded paged reads, stacked on #216. Review and fold into #216 before that parent folds into #215. Recall and placement provenance remain owed. |
+| #218 | Paired decode wire and SPU measurement, based on #184. Held for the coupled cutover. The owned-measurement branch joins this exact change with #217. |
 
-The current harness stack is #198, then #215, #216 and #217. New dependent work
-starts from code/state-paged-read, the head of #217. Closed child branches
-are no longer landing targets. Normal merge commits preserve the
+The current harness stack is #198, then #215, #216 and #217. The new
+code/state-measure-owner branch starts from #217 and merges #218 as its second
+prerequisite. Hold the paired wire with the coupled cutover. Do not fold it into
+an additive root being landed early. Closed child branches are no longer landing
+targets. Normal merge commits preserve the
 consolidated ancestry. Only the operator merges. A root's old slice-level results
 are not fresh validation of its combined head.
 
@@ -80,7 +83,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H2 | H1b2, H2e, IN1 | Inward calls, boot repair, lifecycle composition and returned coverage, Spec 05 |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b1 | F1, H3a | Paired decode measurement wire and retiring callers, TYPES-DECODE and SPU amendment |
-| H3b | H1b2, H3b1 | Marks, measured proposal ownership and placement, Spec 06 |
+| H3bm | H1d, H3b1 | Reserved measurement exchange, exact proposal/count custody and existing waits, HARNESS-PLACE |
+| H3b | H1b2, H3bm | Marks, journal, recorded placement and engine grants, Spec 06 |
 | H4 | H2, H3b | Plan operations and review evidence, Spec 07 and admin amendment |
 | H5 | H3b, H4 | Sort, selection and injection ports, Spec 08 |
 | Q1 | All above | Serving qualification and coupled cutover, foundation transition |
@@ -478,7 +482,7 @@ proofs. The OPEN-FACTS carrier gap above remains open. Outbound identity sort
 and noun extraction can proceed independently of serve-side selection and plan
 orchestration. No production language artifact is inferred from these fixtures.
 
-H3b1 is on code/state-decode-measurement, based on #184 at 6d5e6b0d.
+H3b1 is draft #218 on code/state-decode-measurement, based on #184 at 6d5e6b0d.
 It carries the exact required Opened body, MeasureDelta and DeltaMeasured on the
 existing segmented socket. Append takes explicit ordered schema strings through
 SPU-owned rendering. Retiring harness callers send an empty schema list, preserving
@@ -486,11 +490,25 @@ their model input, and structurally consume the required Opened body. They do no
 validate placement budgets or acquire a measured proposal. The implementation and
 validation scope are in the [paired decode record][decode-record].
 
-Review this branch against #184. Before a coupled serving cutover, integrate its
-exact producer/consumer change into the harness descendant of #217, then implement
-the sole-pump measurement owner, cached boot facts, proposal validation and placement.
-It is not a second harness path and is not independently deployable. External
-diagnostic consumers must migrate the same vocabulary before that cutover.
+Review #218 against #184. Its exact producer/consumer change joins the harness
+descendant of #217 at 32a57b57. The [owned measurement record][measure-owner-record]
+tracks that consumer. Cached boot facts, budgets and recorded placement remain owed.
+The wire is not independently deployable. External diagnostic consumers must migrate
+the same vocabulary before the coupled cutover.
+
+H3bm is on code/state-measure-owner, joining #217 at bdfa3a76 with #218 at 8b387eff.
+Its reserved decode exchange retains exact proposals and raw replies, checks the
+counts and revision, and keeps the enclosing Decision or Cut wait. Cancellation
+drains the exchange. Protocol failure latches before its owed trace-only refusal
+reports. It returns count evidence, not a PlacementGrant. The engine still owes
+idle-state certification for prior nonmeasurement exchanges.
+
+The restored combined harness/types suites pass 1,228 tests, with 18 inherited
+ignored instruments. Types with config passes 182 tests. Fifteen compiled protective
+mutations fail their named tests. Both changed-crate lint gates, formatting and lock
+checks pass. The [owned measurement record][measure-owner-record] holds the scope,
+test list and evidence limits. Review it against #217 with #218 as a required second
+prerequisite. Keep this union in the held harness stack until coupled cutover.
 
 The later rows remain owed.
 This is a progress record, not a claim that the full goal or any serving cutover is
@@ -520,6 +538,7 @@ tests prove mechanics and refusal paths. They do not certify production language
 quality, decoder capacity, throughput or absence of paging waits.
 
 [set]: ../crates/state-management/README.md
+[measure-owner-record]: state-management-measure-owner-2026-10-21.md
 [catalog]: https://github.com/toddwbucy/WeaverAgent/pull/183
 [floor]: https://github.com/toddwbucy/WeaverAgent/pull/184
 [tap]: https://github.com/toddwbucy/WeaverAgent/pull/185

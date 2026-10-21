@@ -1156,6 +1156,13 @@ pub enum RefusalRecord {
         asked: TokenAsk,
         refusal: TokenRefusal,
     },
+    /// An attributed placement refusal under TYPES-DECODE. This is an
+    /// operation outcome and carries no decoder mutation or halt authority.
+    Placement {
+        assembly_id: crate::state_flow::DecimalU64,
+        code: crate::state_flow::PlacementCode,
+        detail: String,
+    },
     Lifecycle {
         asked: LifecycleAsk,
         refusal: LifecycleRefusal,

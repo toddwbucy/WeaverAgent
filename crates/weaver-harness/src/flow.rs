@@ -263,3 +263,39 @@ mod read_port_visibility {
     ) -> Result<Option<Result<CompletedRead, ReadFailure>>, RunFailure> =
         RecordingContext::take_read;
 }
+
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+mod measure_port_visibility {
+    use super::clock::testing::FakePumpIo;
+    use super::context::{
+        MeasureBeginError, MeasureCompletion, MeasureProgress, MeasureRequest, RecordingContext,
+        RunFailure,
+    };
+    use super::pump::{PumpDeadline, PumpPorts};
+    use super::pump_transport::DecodePort;
+    use weaver_trace::Sequence;
+    use weaver_types::state_flow::DecimalU64;
+
+    const _: fn(
+        &mut RecordingContext,
+        MeasureRequest,
+        PumpDeadline,
+        &mut DecodePort,
+        &mut FakePumpIo,
+    ) -> Result<(), MeasureBeginError> = RecordingContext::begin_measurement;
+    const _: fn(
+        &mut RecordingContext,
+        &mut PumpPorts<'_, FakePumpIo>,
+    ) -> Result<MeasureProgress, RunFailure> = RecordingContext::advance_measurement;
+    const _: fn(&mut RecordingContext, &mut FakePumpIo) -> Result<(), RunFailure> =
+        RecordingContext::cancel_measurement;
+    const _: fn(
+        &mut RecordingContext,
+        DecimalU64,
+        &mut DecodePort,
+        &mut FakePumpIo,
+    ) -> Result<Option<MeasureCompletion>, RunFailure> = RecordingContext::take_measurement;
+    const _: fn(&mut RecordingContext, &mut FakePumpIo) -> Result<Option<Sequence>, RunFailure> =
+        RecordingContext::failed_measure_refusal_progress;
+}
