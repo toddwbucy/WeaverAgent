@@ -109,7 +109,7 @@ impl InputFixture {
         Self::with_declaration(inventory, config())
     }
 
-    fn with_declaration(
+    pub(super) fn with_declaration(
         inventory: Option<&super::super::templates::CompiledInventory>,
         mut declaration: FlowConfig,
     ) -> Self {

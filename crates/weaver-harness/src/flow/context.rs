@@ -101,6 +101,7 @@ pub(crate) struct RecordingContext {
     input_turns: std::collections::BTreeSet<String>,
     member_capture: Option<capture_driver::MemberCapture>,
     filing: Option<receipt_driver::FilingTransaction>,
+    output: Option<output_driver::OutputTransaction>,
     last_author_sequence: Option<Sequence>,
     author_turn: Option<(Kind, Option<weaver_trace::TurnRef>)>,
     open_turn: Option<weaver_trace::TurnRef>,
@@ -180,6 +181,7 @@ impl RecordingContext {
             input_turns: std::collections::BTreeSet::new(),
             member_capture: None,
             filing: None,
+            output: None,
             last_author_sequence: None,
             author_turn: None,
             open_turn: None,
@@ -343,7 +345,7 @@ impl RecordingContext {
         self.live(io)?;
         // A template result belongs to its ordered transcript, never a second
         // operation consumer. Correct rejection keeps that boundary closed.
-        if self.templates_block_content() {
+        if self.templates_block_content() || self.output.is_some() {
             return Ok(None);
         }
         let result = self.flow.take_operation_completion(&mut FlowRecording {
@@ -406,6 +408,7 @@ impl RecordingContext {
         if self.failure.is_some()
             || self.phase == RecordingPhase::Closed
             || self.filing_wait_still_owned(key)
+            || self.output_wait_still_owned(key)
             || (key == PumpDeadline::Enter
                 && self.phase == RecordingPhase::Entered
                 && self
@@ -424,7 +427,8 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
-        if self.filing.is_some()
+        if self.output.is_some()
+            || self.filing.is_some()
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.member_capture.is_some()
@@ -592,13 +596,13 @@ impl RecordingContext {
             self.retain_refused(event);
             return Err(failure);
         }
-        if self.filing.is_some() {
+        if self.filing.is_some() || self.output.is_some() {
             self.retain_refused(event);
             return Err(self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Author,
-                "another author entered an owned filing transaction",
+                "another author entered an owned content transaction",
             ));
         }
         if self.template_blocked_author.is_some() {
@@ -721,12 +725,12 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
         self.live(ports.io)?;
-        if self.filing.is_some() {
+        if self.filing.is_some() || self.output.is_some() {
             return Err(self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Author,
-                "generic resume cannot consume a filing owner's author",
+                "generic resume cannot consume a content owner's author",
             ));
         }
         if let Some(sequence) = self.completed_author.take() {
@@ -777,6 +781,7 @@ impl RecordingContext {
                     }
                     self.completed_author = Some(sequence);
                     self.bind_filing_author(sequence, ports.io)?;
+                    self.bind_output_author(sequence, ports.io)?;
                     self.live(ports.io)?;
                     return Ok(self
                         .completed_author
@@ -1292,3 +1297,12 @@ pub(super) use receipt_driver::{
 #[cfg(test)]
 #[path = "context_receipt_tests.rs"]
 mod receipt_tests;
+
+#[path = "context_output.rs"]
+mod output_driver;
+#[allow(unused_imports)] // Consumed by the complete repair and pair owner at cutover.
+pub(super) use output_driver::{OutputBeginError, OutputBeginRefusal, OutputProgress};
+
+#[cfg(test)]
+#[path = "context_output_tests.rs"]
+mod output_tests;

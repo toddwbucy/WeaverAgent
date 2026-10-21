@@ -70,3 +70,30 @@ mod receipt_port_visibility {
     const _: fn(&mut RecordingContext) -> Option<FilingCancellation> =
         RecordingContext::take_cancelled_filing;
 }
+
+#[cfg(test)]
+mod output_port_visibility {
+    use super::clock::testing::FakePumpIo;
+    use super::context::{OutputBeginError, OutputProgress, RecordingContext, RunFailure};
+    use super::coordinator::{CheckedGeneration, OutputCancellation, OutputOriginal};
+    use super::pump::PumpPorts;
+    use weaver_trace::Sequence;
+
+    const _: fn(
+        &mut RecordingContext,
+        OutputOriginal,
+        Option<Sequence>,
+        &mut FakePumpIo,
+    ) -> Result<(), OutputBeginError> = RecordingContext::begin_output;
+    const _: fn(
+        &mut RecordingContext,
+        &mut PumpPorts<'_, FakePumpIo>,
+    ) -> Result<OutputProgress, RunFailure> = RecordingContext::advance_output;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<CheckedGeneration>, RunFailure> = RecordingContext::take_output;
+    const _: fn(&mut RecordingContext) = RecordingContext::cancel_output;
+    const _: fn(&mut RecordingContext) -> Option<OutputCancellation> =
+        RecordingContext::take_cancelled_output;
+}

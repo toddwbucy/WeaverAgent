@@ -110,7 +110,8 @@ impl RecordingContext {
                 failure: None,
             });
         }
-        if self.filing.is_some()
+        if self.output.is_some()
+            || self.filing.is_some()
             || self.flow.has_filing_consumer()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()

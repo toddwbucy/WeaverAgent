@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for load-time template certification.
+Updated: 2026-10-21 for whole-output checks.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -42,7 +42,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H1s | H1i | Member capture barrier, correlated cleanup and recorded results, foundation/persistence/harness amendments |
 | H1t | H1s | Recorded template transcript and private certificate, Spec 02 and harness amendment |
 | H1f | H1t | Exact registered source disposition and committed filing custody, harness amendment |
-| H1b2 | H1b1, H1i, H1s, H1t, H1f, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
+| H1o | H1f | Complete recorded model-output checks, Spec 02 OUTPUT-UNIT |
+| H1b2 | H1b1, H1i, H1s, H1t, H1f, H1o, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
 | H2 | H1b2, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
@@ -202,6 +203,16 @@ tests with zero failures and 17 inherited ignored instruments. All 22 added test
 run. Ten compiled protective mutations fail their intended assertions, and
 independent review verifies source restoration. All-target clippy, formatting, lock,
 editorial and link checks pass. The Planner grade remains owed.
+
+H1o follows #207. Its [implementation record][output-checks-record] covers the
+complete assistant message and every original Text index. The check frontier is
+independent of ordinary statement filing. Correct rejection is retained for the
+repair owner and grants no successful answer. Repair and pair opening still owe
+per-request receipt custody without an unrelated sibling filing barrier. The
+restored harness suite passes 822 tests with zero failures and 17 inherited ignored
+instruments. All 27 added tests run. Twelve compiled protective probes fail their
+intended assertions, with exact restoration independently checked. Lint, formatting,
+lock and documentation checks pass. The Planner grade remains owed.
 
 P1a adds strict draft/bound declaration parsing, admin-owned canonical TOML,
 strict binding/index/guard codecs and descriptor-held artifact verification. It is
@@ -426,3 +437,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [template-certification]: https://github.com/toddwbucy/WeaverAgent/pull/206
 [filing-receipts-record]: state-management-filing-receipts-2026-10-21.md
 [filing-receipts]: https://github.com/toddwbucy/WeaverAgent/pull/207
+[output-checks-record]: state-management-output-checks-2026-10-21.md
