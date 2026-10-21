@@ -99,9 +99,21 @@ impl InputFixture {
         Self::with_templates(Some(inventory))
     }
 
-    fn with_templates(inventory: Option<&super::super::templates::CompiledInventory>) -> Self {
-        let (bootstrap, scheme, ready) = duty();
+    pub(super) fn with_pending_limit(blocks: u64) -> Self {
         let mut declaration = config();
+        declaration.backlog.max_pending_blocks = blocks.into();
+        Self::with_declaration(None, declaration)
+    }
+
+    fn with_templates(inventory: Option<&super::super::templates::CompiledInventory>) -> Self {
+        Self::with_declaration(inventory, config())
+    }
+
+    fn with_declaration(
+        inventory: Option<&super::super::templates::CompiledInventory>,
+        mut declaration: FlowConfig,
+    ) -> Self {
+        let (bootstrap, scheme, ready) = duty();
         declaration.scheme = scheme;
         let mut run = Fixture::new(declaration);
         run.opened();

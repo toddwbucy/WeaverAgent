@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use std::io;
 
 use weaver_trace::serving::{Kind, Payload, payloads as trace};
-use weaver_trace::{Subsystem, TurnRef};
+use weaver_trace::{Sequence, Subsystem, TurnRef};
 use weaver_types::state_flow::{
     DecimalU64, Digest, MeasuredInterval, ReadLimits, STATE_CONTENT_SCHEMA, SchemeDeclaration,
     SourceBlockId, SourceEnvelope, SourcePosition, StartIdentity, StateControl, StateControlAnswer,
@@ -294,12 +294,23 @@ pub(super) enum CoordinatorPhase {
     Failed,
 }
 
+/// One consumer reserves before authoring. Its source is bound only by the
+/// recorder's actual completion, before any classification can be reduced.
+struct ReceiptReservation {
+    sequence: Option<u64>,
+    expected: Vec<SourceBlockId>,
+    registered: bool,
+    author_recorded_ns: Option<u64>,
+    recorded_ns: Option<u64>,
+}
+
 /// No socket, mutable ledger or completion escapes through a caller-owned clone.
 /// The sole run-wide latch freezes this owner before reporting. Component
 /// notifications preserve every current source and transport fact for that latch.
 pub(super) struct FlowCoordinator<P> {
     run: String,
     ledger: Ledger,
+    receipt_reservation: Option<ReceiptReservation>,
     classifier: Option<Classifier<P>>,
     starting_classifier: Option<P>,
     admission_completion: Option<super::ste100_socket::AdmissionPoll>,
@@ -359,6 +370,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         Ok(Self {
             run,
             ledger,
+            receipt_reservation: None,
             scheme: classifier.scheme().clone(),
             classifier: Some(classifier),
             starting_classifier: None,
@@ -466,6 +478,146 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     pub(super) fn ledger(&self) -> &Ledger {
         &self.ledger
     }
+    /// Reserve the only consumer before its original author is submitted.
+    /// This is not a source lookup or a way to recover a disposed receipt.
+    pub(super) fn reserve_filing_receipts(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        if self.phase != CoordinatorPhase::Active
+            || self.receipt_reservation.is_some()
+            || self.ledger.receipts().is_some()
+        {
+            return Err(self.fail(cx, "receipt", "filing receipt consumer is already owned"));
+        }
+        self.receipt_reservation = Some(ReceiptReservation {
+            sequence: None,
+            expected: Vec::new(),
+            registered: false,
+            author_recorded_ns: None,
+            recorded_ns: None,
+        });
+        Ok(())
+    }
+
+    pub(super) fn has_filing_consumer(&self) -> bool {
+        self.receipt_reservation.is_some()
+    }
+
+    /// Called only at the actual ordinary Recorded boundary. Intake is already
+    /// drained, but a whole copy may still wait for retention room.
+    pub(super) fn bind_filing_receipts(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: Sequence,
+        recorded_ns: u64,
+    ) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        if self
+            .receipt_reservation
+            .as_ref()
+            .is_none_or(|r| r.sequence.is_some())
+        {
+            return Err(self.fail(cx, "receipt", "receipt consumer has no unbound author"));
+        }
+        let installed: Vec<_> = self
+            .ledger
+            .facts()
+            .filter(|fact| fact.source.run == self.run && fact.source.sequence.0 == sequence.0)
+            .map(|fact| fact.source.clone())
+            .collect();
+        let pending = pending_receipt_sources(cx, &self.run, sequence, installed.is_empty())
+            .map_err(|error| self.fail(cx, "receipt", error))?;
+        let deferred = pending.is_some();
+        let expected = pending.unwrap_or(installed);
+        if !deferred {
+            self.ledger
+                .register_receipts(expected.clone())
+                .map_err(|error| self.fail(cx, "receipt", error.error))?;
+        }
+        let owner = self
+            .receipt_reservation
+            .as_mut()
+            .expect("unbound reservation");
+        owner.sequence = Some(sequence.0);
+        owner.author_recorded_ns = Some(recorded_ns);
+        owner.expected = expected;
+        owner.registered = !deferred;
+        if !deferred && owner.expected.is_empty() {
+            owner.recorded_ns = Some(recorded_ns);
+        }
+        Ok(())
+    }
+
+    fn register_deferred_receipts(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: u64,
+        sources: &[SourceBlockId],
+    ) -> Result<(), FlowFailure> {
+        let Some(owner) = self.receipt_reservation.as_ref() else {
+            return Ok(());
+        };
+        if owner.sequence != Some(sequence) {
+            return Ok(());
+        }
+        if owner.registered || owner.expected != sources {
+            return Err(self.fail(
+                cx,
+                "receipt",
+                "installed source differs from reserved author",
+            ));
+        }
+        self.ledger
+            .register_receipts(sources.to_vec())
+            .map_err(|error| self.fail(cx, "receipt", error.error))?;
+        let owner = self
+            .receipt_reservation
+            .as_mut()
+            .expect("matching reservation");
+        owner.registered = true;
+        if sources.is_empty() {
+            owner.recorded_ns = owner.author_recorded_ns;
+        }
+        Ok(())
+    }
+
+    pub(super) fn filing_receipts(&self) -> Option<&super::ledger::ReceiptSet> {
+        self.ledger.receipts()
+    }
+
+    pub(super) fn filing_recorded_ns(&self) -> Option<u64> {
+        self.receipt_reservation
+            .as_ref()
+            .and_then(|r| r.recorded_ns)
+    }
+
+    pub(super) fn take_filing_receipts(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<Option<super::ledger::ReceiptSet>, FlowFailure> {
+        self.observe_failures(cx)?;
+        if cx.barrier.pending().is_some() || self.pending_record.is_some() {
+            return Ok(None);
+        }
+        let result = self
+            .ledger
+            .take_receipts()
+            .map_err(|error| self.fail(cx, "receipt", error))?;
+        if result.is_some() {
+            self.receipt_reservation = None;
+        }
+        Ok(result)
+    }
+
+    /// Subscription cancellation never cancels a selected filing or its trace
+    /// disposition. The partial set is marked unusable by the ledger itself.
+    pub(super) fn cancel_filing_receipts(&mut self) -> Option<super::ledger::ReceiptSet> {
+        self.receipt_reservation = None;
+        self.ledger.cancel_receipts()
+    }
+
     pub(super) fn state(&self) -> &StateChannel {
         self.state.as_ref().expect("standing state channel")
     }
@@ -517,6 +669,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         Ok(Self {
             run,
             ledger,
+            receipt_reservation: None,
             classifier: None,
             starting_classifier: None,
             admission_completion: None,
@@ -626,7 +779,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     }
 
     fn settled_obligations(&self, cx: &FlowRecording<'_>) -> bool {
-        self.ledger.facts().next().is_none()
+        self.receipt_reservation.is_none()
+            && self.ledger.receipts().is_none()
+            && self.ledger.facts().next().is_none()
             && cx.inbox.queued().next().is_none()
             && cx.inbox.failure().is_none()
             && cx.budget.waiting_copy().is_none()
@@ -1704,6 +1859,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 .install(copy, intake_ns, selected_reuse.map(|reuse| reuse.grant))
             {
                 Ok(installed) => {
+                    self.register_deferred_receipts(
+                        cx,
+                        installed.source_sequence,
+                        &installed.sources,
+                    )?;
                     copied.try_reserve(1).map_err(|_| {
                         self.fail(cx, "counter", "copied transition reservation failed")
                     })?;
@@ -2155,6 +2315,19 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                     self.ledger
                         .terminal_recorded(terminal, cx.budget)
                         .map_err(|e| self.fail(cx, "ledger", e))?;
+                    if self.ledger.receipts().is_some_and(|set| set.is_complete())
+                        && self
+                            .receipt_reservation
+                            .as_ref()
+                            .is_some_and(|r| r.recorded_ns.is_none())
+                    {
+                        let recorded_ns =
+                            io.now().map_err(|error| self.fail(cx, "clock", error))?;
+                        self.receipt_reservation
+                            .as_mut()
+                            .expect("registered consumer")
+                            .recorded_ns = Some(recorded_ns);
+                    }
                     if let Some(IntakeOutcome::IntakeFailed { copy, detail }) =
                         cx.inbox.resume_waiting(cx.budget)
                     {
@@ -2795,6 +2968,36 @@ fn retirement_status(fd: std::os::fd::BorrowedFd<'_>) -> io::Result<bool> {
         ));
     }
     Ok(true)
+}
+
+fn pending_receipt_sources(
+    cx: &FlowRecording<'_>,
+    run: &str,
+    sequence: Sequence,
+    installed_empty: bool,
+) -> io::Result<Option<Vec<SourceBlockId>>> {
+    let mut pending = None;
+    for copy in cx.inbox.queued().chain(cx.budget.waiting_copy()) {
+        let (identity, _) = copy_identity(copy)?;
+        if identity.source_event.run != run || identity.source_event.sequence.0 != sequence.0 {
+            continue;
+        }
+        if pending.is_some() || !installed_empty {
+            return Err(io::Error::other("author copy has duplicate custody"));
+        }
+        pending = Some(
+            identity
+                .sources
+                .into_iter()
+                .map(|source| SourceBlockId {
+                    run: source.run,
+                    sequence: source.sequence.0.into(),
+                    block: source.block.0.into(),
+                })
+                .collect(),
+        );
+    }
+    Ok(pending)
 }
 
 fn copy_contains(copy: &weaver_trace::serving::AdmittedCopy, source: &SourceBlockId) -> bool {

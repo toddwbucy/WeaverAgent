@@ -71,6 +71,7 @@ impl RecordingContext {
             return Err(RunFailure::TemplateBlocked);
         }
         if self.phase != RecordingPhase::Entered
+            || self.filing.is_some()
             || self.member_capture.is_some()
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()

@@ -75,7 +75,8 @@ impl RecordingContext {
                 failure: Some(failure),
             });
         }
-        if self.input.snapshot().is_some()
+        if self.filing.is_some()
+            || self.input.snapshot().is_some()
             || self.templates_block_content()
             || self.member_capture.is_some()
             || self.open_turn.is_some()

@@ -39,3 +39,34 @@ mod ste100_integration_tests;
 
 #[cfg(test)]
 mod pump_transport_integration_tests;
+
+// Compile from a sibling scope so a context-private implementation cannot pass
+// its own descendant tests while leaving the promised consumer port inaccessible.
+#[cfg(test)]
+mod receipt_port_visibility {
+    use super::author::AuthoredEvent;
+    use super::clock::testing::FakePumpIo;
+    use super::context::{
+        FilingBeginError, FilingCancellation, FilingCompletion, FilingProgress, RecordingContext,
+        RunFailure,
+    };
+    use super::pump::{PumpDeadline, PumpPorts};
+
+    const _: fn(
+        &mut RecordingContext,
+        AuthoredEvent,
+        PumpDeadline,
+        &mut FakePumpIo,
+    ) -> Result<(), FilingBeginError> = RecordingContext::begin_filing;
+    const _: fn(
+        &mut RecordingContext,
+        &mut PumpPorts<'_, FakePumpIo>,
+    ) -> Result<FilingProgress, RunFailure> = RecordingContext::advance_filing;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<FilingCompletion>, RunFailure> = RecordingContext::take_filing;
+    const _: fn(&mut RecordingContext) = RecordingContext::cancel_filing;
+    const _: fn(&mut RecordingContext) -> Option<FilingCancellation> =
+        RecordingContext::take_cancelled_filing;
+}

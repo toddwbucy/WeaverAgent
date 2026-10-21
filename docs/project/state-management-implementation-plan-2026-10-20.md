@@ -41,7 +41,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H1i | H1c | Checked input transaction and single-use source handoff, Spec 02 and harness amendment |
 | H1s | H1i | Member capture barrier, correlated cleanup and recorded results, foundation/persistence/harness amendments |
 | H1t | H1s | Recorded template transcript and private certificate, Spec 02 and harness amendment |
-| H1b2 | H1b1, H1i, H1s, H1t, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
+| H1f | H1t | Exact registered source disposition and committed filing custody, harness amendment |
+| H1b2 | H1b1, H1i, H1s, H1t, H1f, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
 | H2 | H1b2, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
@@ -190,6 +191,16 @@ Thirteen compiled protective mutations fail their intended assertions, including
 valid capture interleaving attempt. Exact source restoration and the component scope
 are independently reviewed. Production grammar, the complete compiled inventory,
 runtime expansion and paired boot/forced rollback remain owed in C1b/C1c and H1b2.
+
+H1f follows #206. Its [implementation record][filing-receipts-record] covers one
+registered source transaction through the recorder, classifier, actual member
+receipt and terminal recording. It preserves committed sources separately from
+correct rejection. It supplies receipt evidence to future pair, mark and selection
+owners without granting their operations. The restored harness suite passes 795
+tests with zero failures and 17 inherited ignored instruments. All 22 added tests
+run. Ten compiled protective mutations fail their intended assertions, and
+independent review verifies source restoration. All-target clippy, formatting, lock,
+editorial and link checks pass. The Planner grade remains owed.
 
 P1a adds strict draft/bound declaration parsing, admin-owned canonical TOML,
 strict binding/index/guard codecs and descriptor-held artifact verification. It is
@@ -412,3 +423,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [input-transaction]: https://github.com/toddwbucy/WeaverAgent/pull/204
 [template-certification-record]: state-management-template-certification-2026-10-21.md
 [template-certification]: https://github.com/toddwbucy/WeaverAgent/pull/206
+[filing-receipts-record]: state-management-filing-receipts-2026-10-21.md

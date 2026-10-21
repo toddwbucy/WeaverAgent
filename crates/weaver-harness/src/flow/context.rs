@@ -100,6 +100,7 @@ pub(crate) struct RecordingContext {
     input_turn: Option<input_driver::InputTurn>,
     input_turns: std::collections::BTreeSet<String>,
     member_capture: Option<capture_driver::MemberCapture>,
+    filing: Option<receipt_driver::FilingTransaction>,
     last_author_sequence: Option<Sequence>,
     author_turn: Option<(Kind, Option<weaver_trace::TurnRef>)>,
     open_turn: Option<weaver_trace::TurnRef>,
@@ -178,6 +179,7 @@ impl RecordingContext {
             input_turn: None,
             input_turns: std::collections::BTreeSet::new(),
             member_capture: None,
+            filing: None,
             last_author_sequence: None,
             author_turn: None,
             open_turn: None,
@@ -403,6 +405,7 @@ impl RecordingContext {
     pub(super) fn complete_wait(&mut self, key: PumpDeadline) -> Option<AbsoluteBound> {
         if self.failure.is_some()
             || self.phase == RecordingPhase::Closed
+            || self.filing_wait_still_owned(key)
             || (key == PumpDeadline::Enter
                 && self.phase == RecordingPhase::Entered
                 && self
@@ -421,7 +424,8 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
-        if self.input.snapshot().is_some()
+        if self.filing.is_some()
+            || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.member_capture.is_some()
             || self.open_turn.is_some()
@@ -588,6 +592,15 @@ impl RecordingContext {
             self.retain_refused(event);
             return Err(failure);
         }
+        if self.filing.is_some() {
+            self.retain_refused(event);
+            return Err(self.fail(
+                ports.io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Author,
+                "another author entered an owned filing transaction",
+            ));
+        }
         if self.template_blocked_author.is_some() {
             // The first refused input has not returned to its caller. A second
             // author violates the one-owner protocol. Preserve both events:
@@ -708,6 +721,14 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
         self.live(ports.io)?;
+        if self.filing.is_some() {
+            return Err(self.fail(
+                ports.io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Author,
+                "generic resume cannot consume a filing owner's author",
+            ));
+        }
         if let Some(sequence) = self.completed_author.take() {
             return Ok(sequence);
         }
@@ -755,6 +776,7 @@ impl RecordingContext {
                         self.phase = RecordingPhase::Entered;
                     }
                     self.completed_author = Some(sequence);
+                    self.bind_filing_author(sequence, ports.io)?;
                     self.live(ports.io)?;
                     return Ok(self
                         .completed_author
@@ -1259,3 +1281,14 @@ pub(super) use template_driver::{TemplateBeginError, TemplateBeginRefusal, Templ
 #[cfg(test)]
 #[path = "context_template_tests.rs"]
 mod template_tests;
+
+#[path = "context_receipts.rs"]
+mod receipt_driver;
+#[allow(unused_imports)] // Dormant filing consumer, consumed by dependent primitive ports.
+pub(super) use receipt_driver::{
+    FilingBeginError, FilingBeginRefusal, FilingCancellation, FilingCompletion, FilingProgress,
+};
+
+#[cfg(test)]
+#[path = "context_receipt_tests.rs"]
+mod receipt_tests;
