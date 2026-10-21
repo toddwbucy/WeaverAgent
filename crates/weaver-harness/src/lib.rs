@@ -102,6 +102,10 @@ mod authorship;
 mod channel;
 mod engine;
 mod failure;
+// Additive state-flow mechanics. The qualified, coupled foundation cutover
+// replaces the legacy serving owners together, never one seam at a time.
+#[allow(dead_code)]
+mod flow;
 mod lifecycle;
 mod lifecycle_table;
 mod record;
