@@ -3,7 +3,7 @@
 **Status:** DRAFT amendment for review. The merged clauses remain in force until
 this amendment is approved and merged.
 
-**Landing PR:** #182
+**Landing PR:** #182 for the merged base, #213 for this proposed amendment
 
 **Version:** 0.14 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
 **Parent:** state-management-primitives-PRD
