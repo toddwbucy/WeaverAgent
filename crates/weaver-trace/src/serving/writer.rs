@@ -15,6 +15,21 @@ pub const QUEUE_DEPTH: usize = 1024;
 pub const TERMINAL_RESERVE: usize = 7;
 pub const ORDINARY_CAPACITY: usize = QUEUE_DEPTH - TERMINAL_RESERVE;
 
+/// The result of one read of the existing capacity-wake descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapacityWake {
+    Consumed,
+    Empty,
+    Interrupted,
+}
+
+/// A nonblocking view of the writer's drain predicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainStatus {
+    Pending { queued: usize },
+    Emptied,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Terminal {
     Fault,
@@ -137,7 +152,7 @@ impl Drop for Reservation {
         if let Some(terminal) = self.terminal {
             state.reserved_terminals &= !terminal.bit();
         }
-        if was_full && state.occupied < ORDINARY_CAPACITY {
+        if state.occupied == 0 || (was_full && state.occupied < ORDINARY_CAPACITY) {
             self.shared.signal(&mut state);
         }
         self.shared.drained.notify_all();
@@ -207,7 +222,10 @@ impl Writer {
                         None => false,
                     };
                     state.occupied -= 1;
-                    if failed_now || (was_full && state.occupied < ORDINARY_CAPACITY) {
+                    if failed_now
+                        || state.occupied == 0
+                        || (was_full && state.occupied < ORDINARY_CAPACITY)
+                    {
                         worker.signal(&mut state);
                     }
                     worker.drained.notify_all();
@@ -256,6 +274,47 @@ impl Writer {
         self.wake.as_fd()
     }
 
+    pub fn try_capacity_wake(&mut self) -> Result<CapacityWake, Failure> {
+        self.try_capacity_wake_with(|wake, bytes| wake.read(bytes))
+    }
+
+    fn try_capacity_wake_with(
+        &mut self,
+        read: impl FnOnce(&mut UnixStream, &mut [u8]) -> io::Result<usize>,
+    ) -> Result<CapacityWake, Failure> {
+        if let Some(failure) = self.standing_failure() {
+            return Err(failure);
+        }
+        let mut bytes = [0_u8; 256];
+        let progress = match read(&mut self.wake, &mut bytes) {
+            Ok(0) => {
+                return self.wake_failed(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "trace capacity notifier closed",
+                ));
+            }
+            Ok(_) => CapacityWake::Consumed,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => CapacityWake::Empty,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => CapacityWake::Interrupted,
+            Err(error) => return self.wake_failed(error),
+        };
+        self.standing_failure().map_or(Ok(progress), Err)
+    }
+
+    pub fn drain_status(&self) -> Result<DrainStatus, Failure> {
+        let state = self.shared.lock();
+        if let Some(failure) = failure(&state) {
+            return Err(failure);
+        }
+        Ok(if state.occupied == 0 {
+            DrainStatus::Emptied
+        } else {
+            DrainStatus::Pending {
+                queued: state.occupied,
+            }
+        })
+    }
+
     pub fn drain_capacity_wake(&mut self) -> Result<(), Failure> {
         let mut bytes = [0_u8; 256];
         loop {
@@ -276,7 +335,7 @@ impl Writer {
         }
     }
 
-    fn wake_failed(&self, error: io::Error) -> Result<(), Failure> {
+    fn wake_failed<T>(&self, error: io::Error) -> Result<T, Failure> {
         let mut state = self.shared.lock();
         Shared::notifier_failed(&mut state, error);
         self.shared.drained.notify_all();

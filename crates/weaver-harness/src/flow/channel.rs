@@ -5,10 +5,11 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::os::unix::net::UnixStream;
 
 use nix::sys::socket::{MsgFlags, recv, send};
+use nix::{libc, poll::PollFlags};
 use weaver_types::state_flow::{
     Common, DecimalU64, FrameDirection, MemberObservationIdentity, PairFile, ReadLimits,
     STATE_ANSWER_LINE_BOUND, SourceBlockId, StartIdentity, StateControl, StateControlAnswer,
@@ -110,6 +111,25 @@ impl std::error::Error for ChannelFailure {}
 pub(super) struct StateInterest {
     pub readable: bool,
     pub writable: bool,
+    live: bool,
+}
+
+impl StateInterest {
+    /// A full answer slot still observes write-half closure, without requesting
+    /// POLLIN for another answer that this owner cannot receive yet.
+    pub(super) fn events(self) -> PollFlags {
+        if !self.live {
+            return PollFlags::empty();
+        }
+        let mut events = PollFlags::from_bits_retain(libc::POLLRDHUP);
+        if self.readable {
+            events |= PollFlags::POLLIN;
+        }
+        if self.writable {
+            events |= PollFlags::POLLOUT;
+        }
+        events
+    }
 }
 
 /// Only a consumed RecordedStateMeasurement can produce this value.
@@ -118,6 +138,23 @@ pub(super) struct StateCompletion {
     pub answer: StateFrame,
     /// A timeout cleanup was elected before the original answer was recorded.
     pub discard_capture_result: bool,
+}
+
+/// Evidence of an Open that was never released for boot. An enter rollback
+/// consumes it without inventing a serving measurement proof or a read grant.
+#[derive(Debug)]
+pub(super) struct UnusedOpen {
+    answer: StateFrame,
+    measurement: StateStoreMeasurement,
+}
+
+impl UnusedOpen {
+    pub(super) fn answer(&self) -> &StateFrame {
+        &self.answer
+    }
+    pub(super) fn measurement(&self) -> &StateStoreMeasurement {
+        &self.measurement
+    }
 }
 
 struct Exchange {
@@ -157,6 +194,7 @@ impl Exchange {
 struct HeldCompletion {
     answer: StateFrame,
     measurement: StateStoreMeasurement,
+    recorded: Option<RecordedStateMeasurement>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,6 +230,9 @@ pub(super) struct StateChannel {
     held: Option<HeldCompletion>,
     capture: Option<Capture>,
     failure: Option<ChannelFailure>,
+    receive_interrupted: bool,
+    send_interrupted: bool,
+    terminal_interrupted: bool,
 }
 
 impl StateChannel {
@@ -217,6 +258,9 @@ impl StateChannel {
             held: None,
             capture: None,
             failure: None,
+            receive_interrupted: false,
+            send_interrupted: false,
+            terminal_interrupted: false,
         })
     }
 
@@ -225,11 +269,32 @@ impl StateChannel {
     }
 
     pub(super) fn interest(&self) -> StateInterest {
+        // A validated terminal refusal already requires recording then halt.
+        // Its expected peer closure must not spin a full slot under trace pressure.
+        let live = self.failure.is_none() && !self.held_terminal_refusal();
         StateInterest {
-            readable: self.failure.is_none() && self.held.is_none(),
-            writable: self.failure.is_none()
+            readable: live && self.held.is_none(),
+            writable: live
+                && !self.receive_interrupted
+                && !self.terminal_interrupted
                 && self.exchanges.iter().any(|exchange| !exchange.fully_sent()),
+            live,
         }
+    }
+
+    /// EINTR leaves local work even when no descriptor readiness remains. The
+    /// pump retries one bounded unit before waiting; it never resets a deadline.
+    /// A pending release is resumed by its original author, not by transport.
+    pub(super) fn needs_progress(&self) -> bool {
+        self.failure.is_none()
+            && !self.held_terminal_refusal()
+            && (self.receive_interrupted
+                || self.send_interrupted
+                || self.terminal_interrupted
+                || self
+                    .held
+                    .as_ref()
+                    .is_some_and(|held| held.recorded.is_some()))
     }
 
     /// The pump must reduce buffered frames before polling the borrowed fd.
@@ -248,6 +313,55 @@ impl StateChannel {
 
     pub(super) fn held_measurement(&self) -> Option<&StateStoreMeasurement> {
         self.held.as_ref().map(|held| &held.measurement)
+    }
+
+    /// A cancellation may queue fresh release behind this already-recorded
+    /// Finished. This inspection grants no completion or mutable channel slot.
+    pub(super) fn recorded_finished(&self, capture_id: DecimalU64) -> bool {
+        self.held.as_ref().is_some_and(|held| {
+            held.recorded.is_some()
+                && matches!(&held.answer, StateFrame::ControlAnswer {
+                    frame: StateControlAnswer::Finished { capture_id: id, .. }, ..
+                } if *id == capture_id)
+        })
+    }
+
+    /// Only the coordinator's recorded preactivation refusal may elect this
+    /// disposal. Ordinary opened channels still require the recording barrier.
+    pub(super) fn abandon_unactivated_open(
+        &mut self,
+    ) -> Result<Option<UnusedOpen>, ChannelFailure> {
+        self.check_live()?;
+        if self.opened
+            || self.opened_scheme.is_some()
+            || self.capture.is_some()
+            || self.exchanges.len() != 1
+            || !self.exchanges.front().is_some_and(|exchange| {
+                matches!(exchange.request, StateFrame::Open { .. }) && exchange.fully_sent()
+            })
+            || !self.held.as_ref().is_some_and(|held| {
+                matches!(held.answer, StateFrame::Opened { .. }) && held.recorded.is_none()
+            })
+            || !self.received.is_empty()
+        {
+            return Err(self.fail(
+                ChannelFailureKind::Protocol,
+                ChannelPoint::Reply,
+                "preactivation disposal requires one unused matching Open",
+                None,
+            ));
+        }
+        // EOF before intentional closure remains a component failure. EINTR
+        // retains the exact held answer and never grants a successful disposal.
+        if !self.reject_extra_answer()? {
+            return Ok(None);
+        }
+        let held = self.held.take().expect("checked unused Open");
+        self.exchanges.pop_front();
+        Ok(Some(UnusedOpen {
+            answer: held.answer,
+            measurement: held.measurement,
+        }))
     }
 
     pub(super) fn first_sent_ns(&self) -> Option<u64> {
@@ -275,6 +389,20 @@ impl StateChannel {
             StateFrame::Opened {
                 member_observation, ..
             } => Some(member_observation),
+            _ => None,
+        }
+    }
+
+    /// Structural refusal before load is evidence for the existing enter
+    /// refusal path. It creates no completion proof or successful open grant.
+    pub(super) fn open_refusal(
+        &self,
+    ) -> Option<(weaver_types::state_flow::StateRefusalCode, &str)> {
+        if self.opened_scheme.is_some() {
+            return None;
+        }
+        match &self.held.as_ref()?.answer {
+            StateFrame::Refused { code, detail, .. } => Some((*code, detail.as_str())),
             _ => None,
         }
     }
@@ -365,10 +493,40 @@ impl StateChannel {
         &mut self,
         now: &mut impl FnMut() -> io::Result<u64>,
     ) -> Result<(), ChannelFailure> {
+        self.progress_with(
+            now,
+            |fd, bytes| recv(fd, bytes, MsgFlags::MSG_DONTWAIT),
+            |fd, bytes| send(fd, bytes, MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL),
+        )
+    }
+
+    fn progress_with(
+        &mut self,
+        now: &mut impl FnMut() -> io::Result<u64>,
+        receive: impl FnOnce(RawFd, &mut [u8]) -> nix::Result<usize>,
+        transmit: impl FnOnce(RawFd, &[u8]) -> nix::Result<usize>,
+    ) -> Result<(), ChannelFailure> {
         self.check_live()?;
         // Read first: an answer waiting before the request's final byte is premature.
         if self.held.is_none() {
-            self.receive(now)?;
+            self.receive_with(now, receive)?;
+        } else {
+            self.check_held_terminal()?;
+            if self.held_terminal_refusal() {
+                return Ok(());
+            }
+            // Only capture cleanup may send while the original answer is held.
+            // A non-consuming check still has to rule out an early cleanup reply.
+            if self.exchanges.iter().any(|exchange| !exchange.fully_sent())
+                && !self.reject_extra_answer()?
+            {
+                return Ok(());
+            }
+        }
+        // EINTR is not evidence of an empty receive queue. In particular, it
+        // cannot authorize the request's final bytes past an already queued reply.
+        if self.receive_interrupted || self.terminal_interrupted || self.held_terminal_refusal() {
+            return Ok(());
         }
         if let Some(index) = self
             .exchanges
@@ -394,11 +552,7 @@ impl StateChannel {
                 ));
             }
             let exchange = &mut self.exchanges[index];
-            let result = send(
-                self.stream.as_raw_fd(),
-                &exchange.bytes[exchange.offset..],
-                MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL,
-            );
+            let result = transmit(self.stream.as_raw_fd(), &exchange.bytes[exchange.offset..]);
             match result {
                 Ok(0) => {
                     return Err(self.fail_at(
@@ -410,6 +564,7 @@ impl StateChannel {
                     ));
                 }
                 Ok(count) => {
+                    self.send_interrupted = false;
                     exchange.sent_ns.get_or_insert(observed);
                     exchange.offset += count;
                     exchange.commit = if exchange.fully_sent() {
@@ -418,7 +573,8 @@ impl StateChannel {
                         CommitEvidence::NotCommitted
                     };
                 }
-                Err(nix::errno::Errno::EAGAIN | nix::errno::Errno::EINTR) => {}
+                Err(nix::errno::Errno::EAGAIN) => self.send_interrupted = false,
+                Err(nix::errno::Errno::EINTR) => self.send_interrupted = true,
                 Err(error) => {
                     return Err(self.fail_at(
                         index,
@@ -433,12 +589,96 @@ impl StateChannel {
         Ok(())
     }
 
+    /// Observe terminal status without receiving into a full completion slot.
+    /// A terminal refusal is already complete evidence and must be recorded before
+    /// its own failure is latched; the member normally closes after that refusal.
+    pub(super) fn check_held_terminal(&mut self) -> Result<(), ChannelFailure> {
+        self.check_held_terminal_with(Self::terminal_status)
+    }
+
+    fn check_held_terminal_with(
+        &mut self,
+        status: impl FnOnce(RawFd) -> io::Result<i16>,
+    ) -> Result<(), ChannelFailure> {
+        self.check_live()?;
+        if self.held.is_none() || self.held_terminal_refusal() {
+            return Ok(());
+        }
+        let events = match status(self.stream.as_raw_fd()) {
+            Ok(events) => {
+                self.terminal_interrupted = false;
+                events
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                self.terminal_interrupted = true;
+                return Ok(());
+            }
+            Err(error) => {
+                return Err(self.fail(
+                    ChannelFailureKind::Carry,
+                    ChannelPoint::Reply,
+                    format!("state terminal-status probe: {error}"),
+                    None,
+                ));
+            }
+        };
+        if events & (libc::POLLERR | libc::POLLNVAL) != 0 {
+            return Err(self.fail(
+                ChannelFailureKind::Carry,
+                ChannelPoint::Reply,
+                "state descriptor failed while an answer was held",
+                None,
+            ));
+        }
+        if events & (libc::POLLHUP | libc::POLLRDHUP) != 0 {
+            return Err(self.fail(
+                ChannelFailureKind::Carry,
+                ChannelPoint::Reply,
+                "state EOF while an answer was held",
+                None,
+            ));
+        }
+        Ok(())
+    }
+
+    fn terminal_status(fd: RawFd) -> io::Result<i16> {
+        let mut status = libc::pollfd {
+            fd,
+            events: libc::POLLRDHUP,
+            revents: 0,
+        };
+        // SAFETY: status is one initialized writable pollfd, and the socket's
+        // owner keeps fd live for this zero-time, non-consuming call.
+        if unsafe { libc::poll(&mut status, 1, 0) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(status.revents)
+    }
+
     /// The private coordinator proof binds the entire measurement, not an asserted
     /// boolean or a caller-chosen trace sequence. The answer is taken exactly once.
     pub(super) fn release(
         &mut self,
         recorded: RecordedStateMeasurement,
-    ) -> Result<StateCompletion, ChannelFailure> {
+    ) -> Result<Option<StateCompletion>, ChannelFailure> {
+        self.release_with(recorded, Self::peek)
+    }
+
+    /// Exercise the coordinator's continuation with a real recording proof.
+    /// Only the syscall outcome changes, after the ordinary proof checks.
+    #[cfg(test)]
+    pub(super) fn release_interrupted_for_test(
+        &mut self,
+        recorded: RecordedStateMeasurement,
+    ) -> Result<Option<StateCompletion>, ChannelFailure> {
+        self.release_with(recorded, |_| Err(nix::errno::Errno::EINTR))
+    }
+
+    fn release_with(
+        &mut self,
+        recorded: RecordedStateMeasurement,
+        peek: impl FnOnce(RawFd) -> nix::Result<usize>,
+    ) -> Result<Option<StateCompletion>, ChannelFailure> {
         self.check_live()?;
         let Some(held) = &self.held else {
             return Err(self.fail(
@@ -448,7 +688,10 @@ impl StateChannel {
                 None,
             ));
         };
-        if recorded.run() != self.run || recorded.measurement() != &held.measurement {
+        if held.recorded.is_some()
+            || recorded.run() != self.run
+            || recorded.measurement() != &held.measurement
+        {
             return Err(self.fail(
                 ChannelFailureKind::Protocol,
                 ChannelPoint::Reply,
@@ -456,14 +699,38 @@ impl StateChannel {
                 None,
             ));
         }
-        let exchange = self.exchanges.front().expect("held exchange");
-        let discard_capture_result = self
-            .capture
-            .is_some_and(|capture| capture.phase == CapturePhase::Aborting)
-            && matches!(
-                exchange.request.request_operation(),
-                Some(StateOperation::Snapshot | StateOperation::Acknowledge)
-            );
+        self.held
+            .as_mut()
+            .expect("checked held completion")
+            .recorded = Some(recorded);
+        self.resume_release_with(peek)
+    }
+
+    /// Continue a release whose non-consuming extra-answer check was interrupted.
+    /// The exact original proof remains owned here; no second trace author is owed.
+    pub(super) fn resume_release(&mut self) -> Result<Option<StateCompletion>, ChannelFailure> {
+        self.resume_release_with(Self::peek)
+    }
+
+    fn resume_release_with(
+        &mut self,
+        peek: impl FnOnce(RawFd) -> nix::Result<usize>,
+    ) -> Result<Option<StateCompletion>, ChannelFailure> {
+        self.check_live()?;
+        if self
+            .held
+            .as_ref()
+            .is_none_or(|held| held.recorded.is_none())
+        {
+            return Err(self.fail(
+                ChannelFailureKind::Protocol,
+                ChannelPoint::Reply,
+                "state release has no recorded measurement proof",
+                None,
+            ));
+        }
+        let held = self.held.as_ref().expect("checked held completion");
+        let discard_capture_result = self.discard_capture_result();
         if let StateFrame::Refused { code, detail, .. } = &held.answer {
             let kind = if self.opened {
                 ChannelFailureKind::FilingRefused
@@ -497,17 +764,52 @@ impl StateChannel {
         // refusing a filing. Successful answers still cannot release past death.
         // A second answer is legal only for the one queued capture cleanup.
         if self.exchanges.len() == 1 {
-            self.reject_extra_answer()?;
+            if !self.reject_extra_answer_with(peek)? {
+                return Ok(None);
+            }
+            self.terminal_interrupted = false;
+        } else {
+            self.check_held_terminal()?;
+            if self.terminal_interrupted {
+                return Ok(None);
+            }
         }
         let held = self.held.take().expect("checked held completion");
         if !discard_capture_result {
             self.note_answer(&held.answer);
         }
         self.exchanges.pop_front();
-        Ok(StateCompletion {
+        Ok(Some(StateCompletion {
             answer: held.answer,
             discard_capture_result,
-        })
+        }))
+    }
+
+    fn discard_capture_result(&self) -> bool {
+        self.capture
+            .is_some_and(|capture| capture.phase == CapturePhase::Aborting)
+            && self.exchanges.front().is_some_and(|exchange| {
+                matches!(
+                    exchange.request.request_operation(),
+                    Some(StateOperation::Snapshot | StateOperation::Acknowledge)
+                )
+            })
+    }
+
+    fn held_terminal_refusal(&self) -> bool {
+        match self.held.as_ref().map(|held| &held.answer) {
+            Some(StateFrame::Refused { .. }) => true,
+            Some(StateFrame::ControlAnswer {
+                frame: StateControlAnswer::ControlRefused { .. },
+                ..
+            }) => {
+                !self.discard_capture_result()
+                    && self
+                        .capture
+                        .is_some_and(|capture| capture.phase == CapturePhase::Aborting)
+            }
+            _ => false,
+        }
     }
 
     fn common(&self, request_id: DecimalU64) -> Common {
@@ -689,16 +991,16 @@ impl StateChannel {
         }
     }
 
-    fn receive(&mut self, now: &mut impl FnMut() -> io::Result<u64>) -> Result<(), ChannelFailure> {
+    fn receive_with(
+        &mut self,
+        now: &mut impl FnMut() -> io::Result<u64>,
+        receive: impl FnOnce(RawFd, &mut [u8]) -> nix::Result<usize>,
+    ) -> Result<(), ChannelFailure> {
         if !self.received.contains(&b'\n') {
             let mut buffer = [0u8; 16 * 1024];
             // One extra byte proves that a missing LF cannot fit the bounded line.
             let limit = (STATE_ANSWER_LINE_BOUND + 1 - self.received.len()).min(buffer.len());
-            match recv(
-                self.stream.as_raw_fd(),
-                &mut buffer[..limit],
-                MsgFlags::MSG_DONTWAIT,
-            ) {
+            match receive(self.stream.as_raw_fd(), &mut buffer[..limit]) {
                 Ok(0) => {
                     return Err(self.fail(
                         ChannelFailureKind::Carry,
@@ -708,6 +1010,7 @@ impl StateChannel {
                     ));
                 }
                 Ok(count) => {
+                    self.receive_interrupted = false;
                     self.received.extend_from_slice(&buffer[..count]);
                     self.received_ns = Some(now().map_err(|error| {
                         self.fail(
@@ -718,7 +1021,14 @@ impl StateChannel {
                         )
                     })?);
                 }
-                Err(nix::errno::Errno::EAGAIN | nix::errno::Errno::EINTR) => return Ok(()),
+                Err(nix::errno::Errno::EAGAIN) => {
+                    self.receive_interrupted = false;
+                    return Ok(());
+                }
+                Err(nix::errno::Errno::EINTR) => {
+                    self.receive_interrupted = true;
+                    return Ok(());
+                }
                 Err(error) => {
                     return Err(self.fail(
                         ChannelFailureKind::Carry,
@@ -825,6 +1135,7 @@ impl StateChannel {
         self.held = Some(HeldCompletion {
             answer,
             measurement,
+            recorded: None,
         });
         Ok(())
     }
@@ -838,23 +1149,41 @@ impl StateChannel {
                 None,
             ));
         }
-        self.reject_extra_answer()
+        // An interrupted preflight check can stage the request, but leaves the
+        // receive probe pending. progress must resolve it before sending bytes.
+        self.reject_extra_answer().map(|_| ())
     }
 
-    fn reject_extra_answer(&mut self) -> Result<(), ChannelFailure> {
+    fn peek(fd: RawFd) -> nix::Result<usize> {
         let mut byte = [0];
-        match recv(
-            self.stream.as_raw_fd(),
-            &mut byte,
-            MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_PEEK,
-        ) {
+        recv(fd, &mut byte, MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_PEEK)
+    }
+
+    fn reject_extra_answer(&mut self) -> Result<bool, ChannelFailure> {
+        self.reject_extra_answer_with(Self::peek)
+    }
+
+    /// true means EAGAIN proved no extra answer; false means the single probe
+    /// was interrupted and neither sending nor releasing is authorized by it.
+    fn reject_extra_answer_with(
+        &mut self,
+        peek: impl FnOnce(RawFd) -> nix::Result<usize>,
+    ) -> Result<bool, ChannelFailure> {
+        match peek(self.stream.as_raw_fd()) {
             Ok(0) => Err(self.fail(
                 ChannelFailureKind::Carry,
                 ChannelPoint::Reply,
                 "state EOF before exchange release",
                 None,
             )),
-            Err(nix::errno::Errno::EAGAIN | nix::errno::Errno::EINTR) => Ok(()),
+            Err(nix::errno::Errno::EAGAIN) => {
+                self.receive_interrupted = false;
+                Ok(true)
+            }
+            Err(nix::errno::Errno::EINTR) => {
+                self.receive_interrupted = true;
+                Ok(false)
+            }
             Ok(_) => Err(self.fail(
                 ChannelFailureKind::Protocol,
                 ChannelPoint::Reply,

@@ -640,6 +640,40 @@ fn a_coalesced_extra_reply_remains_readable_while_the_first_is_held() {
     assert_eq!(classifier.held(), Some(&reply));
 }
 
+// Parallel process fixtures can inherit the peer between fork and exec. Closing
+// this thread's peer handle then need not make HUP visible in the same instant.
+// Wait only for the fixture's kernel precondition, without calling the classifier
+// or consuming bytes. Its production probe still gets exactly one call below.
+fn await_terminal(fd: BorrowedFd<'_>, expected: i16) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .expect("fixture peer did not become terminal within its watchdog");
+        let timeout = i32::try_from(remaining.as_millis().saturating_add(1).min(100))
+            .expect("bounded fixture poll timeout");
+        let mut status = libc::pollfd {
+            fd: fd.as_raw_fd(),
+            events: libc::POLLRDHUP,
+            revents: 0,
+        };
+        // SAFETY: status is initialized writable storage and fd stays borrowed.
+        // Each wait is capped and the original test watchdog never restarts.
+        let result = unsafe { libc::poll(&mut status, 1, timeout) };
+        if result < 0 {
+            assert_eq!(
+                std::io::Error::last_os_error().kind(),
+                std::io::ErrorKind::Interrupted,
+            );
+            continue;
+        }
+        if status.revents & expected != 0 {
+            return;
+        }
+        assert_eq!(status.revents, 0, "unexpected fixture descriptor status");
+    }
+}
+
 #[test]
 fn peer_death_after_a_held_acceptance_cannot_release_success() {
     for terminal in [ScriptStep::Close, ScriptStep::ShutdownWrite] {
@@ -650,6 +684,7 @@ fn peer_death_after_a_held_acceptance_cannot_release_success() {
         peer.advance().unwrap();
         assert_eq!(classifier.try_result(), Ok(ClassifierPoll::ResultHeld));
         peer.advance().unwrap();
+        await_terminal(classifier.readiness(), libc::POLLHUP | libc::POLLRDHUP);
         assert_eq!(
             classifier.check_held_terminal().unwrap_err().kind,
             PortFailureKind::Component(Ste100ComponentCode::Crashed)
@@ -673,6 +708,7 @@ fn recording_itself_observes_peer_loss_before_releasing_the_held_result() {
         peer.advance().unwrap();
         assert_eq!(classifier.try_result(), Ok(ClassifierPoll::ResultHeld));
         peer.advance().unwrap();
+        await_terminal(classifier.readiness(), libc::POLLHUP | libc::POLLRDHUP);
         // No transport call or try_result occurs between loss and release.
         assert_eq!(
             classifier.recorded(recorded(&reply)).unwrap_err().kind,
@@ -699,6 +735,7 @@ fn a_language_rejection_cannot_release_after_peer_loss() {
         peer.advance().unwrap();
         assert_eq!(classifier.try_result(), Ok(ClassifierPoll::ResultHeld));
         peer.advance().unwrap();
+        await_terminal(classifier.readiness(), libc::POLLHUP | libc::POLLRDHUP);
         assert_eq!(
             classifier.recorded(recorded(&reply)).unwrap_err().kind,
             PortFailureKind::Component(Ste100ComponentCode::Crashed)
@@ -747,6 +784,7 @@ fn descriptor_error_freezes_a_held_result_without_polling_the_adapter() {
     classifier.submit(first.clone()).unwrap();
     classifier.try_result().unwrap();
     drop(reader);
+    await_terminal(classifier.readiness(), libc::POLLERR);
     assert_eq!(
         classifier.check_held_terminal().unwrap_err().kind,
         PortFailureKind::Component(Ste100ComponentCode::TransportFailed)

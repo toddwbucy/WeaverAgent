@@ -315,3 +315,248 @@ fn available_disk_resource_counters_and_optional_values_remain_exact() {
     value.observation.parent_id = Some(u64::MAX.into());
     assert_measurement(&value);
 }
+
+fn pair_id() -> shared::CallId {
+    shared::CallId {
+        run: "pair-run-\u{96ea}".into(),
+        sequence: (u64::MAX - 1).into(),
+        call: 9_007_199_254_740_993.into(),
+    }
+}
+
+fn review_work() -> shared::WorkRef {
+    shared::WorkRef {
+        plan: shared::PlanRef {
+            plan_id: shared::PlanId {
+                seed_id: "plan-seed".into(),
+                local_id: u64::MAX.into(),
+            },
+            revision: 9_007_199_254_740_993.into(),
+        },
+        step_id: shared::StepId {
+            seed_id: "step-seed".into(),
+            local_id: (u64::MAX - 2).into(),
+        },
+        span: shared::SpanRef {
+            seed_id: "span-seed".into(),
+            local_id: (u64::MAX - 3).into(),
+            revision: (u64::MAX - 4).into(),
+        },
+        through: shared::SourcePosition {
+            block_id: source_id(),
+            turn: Some("work-turn-\u{3a9}".into()),
+        },
+        content_sha256: shared::Digest::new("3".repeat(64)).unwrap(),
+    }
+}
+
+fn assert_started(value: &shared::PairStarted) {
+    assert_eq!(
+        serde_json::to_vec(&pair_started(value)).unwrap(),
+        serde_json::to_vec(value).unwrap(),
+        "the opening mirror must preserve exact typed bytes and field order",
+    );
+}
+
+fn assert_ended(value: &shared::PairEnded) {
+    assert_eq!(
+        serde_json::to_vec(&pair_ended(value)).unwrap(),
+        serde_json::to_vec(value).unwrap(),
+        "the terminal mirror must preserve exact typed bytes and field order",
+    );
+}
+
+#[test]
+fn every_opening_lane_keeps_request_identity_review_refs_and_nullable_retry() {
+    let work = review_work();
+    let requests = [
+        shared::PairRequest::External {
+            name: "sh".into(),
+            arguments: "printf '%s\\n' '\u{3a9} {raw}'\n".into(),
+        },
+        shared::PairRequest::Recall {
+            subject: "exact \"subject\" \\ \u{96ea}".into(),
+        },
+        shared::PairRequest::Review {
+            setup: shared::ReviewSetupRef {
+                setup_id: "setup-id".into(),
+                sha256: shared::Digest::new("4".repeat(64)).unwrap(),
+            },
+            work: Box::new(work),
+            command: "exact review\ncommand".into(),
+        },
+    ];
+    for request in requests {
+        for retry_of in [None, Some(pair_id())] {
+            let value = shared::PairStarted {
+                call_id: pair_id(),
+                call_block: u64::MAX.into(),
+                statement: shared::StatementRef {
+                    block_id: source_id(),
+                    binding: 9_007_199_254_740_995.into(),
+                },
+                lane: request.lane(),
+                request: request.clone(),
+                retry_of,
+            };
+            value.validate_structure().unwrap();
+            assert_started(&value);
+        }
+    }
+}
+
+#[test]
+fn review_work_without_a_turn_keeps_its_null_and_distinct_identity_counters() {
+    let mut work = review_work();
+    work.through.turn = None;
+    let value = shared::PairStarted {
+        call_id: pair_id(),
+        call_block: 7.into(),
+        statement: shared::StatementRef {
+            block_id: source_id(),
+            binding: 8.into(),
+        },
+        lane: shared::PairLane::Review,
+        request: shared::PairRequest::Review {
+            setup: shared::ReviewSetupRef {
+                setup_id: "review-setup".into(),
+                sha256: shared::Digest::new("5".repeat(64)).unwrap(),
+            },
+            work: Box::new(work),
+            command: "review unchanged".into(),
+        },
+        retry_of: None,
+    };
+    assert_started(&value);
+    // A conversion is not the lane validator. It must not repair this supplied
+    // evidence into another request or silently replace the caller's lane.
+    let mut mismatched = value;
+    mismatched.lane = shared::PairLane::Recall;
+    assert_started(&mismatched);
+}
+
+fn terminal() -> shared::PairEnded {
+    shared::PairEnded {
+        call_id: pair_id(),
+        execution: None,
+        fate: shared::TerminalPairFate::Completed,
+        reason: None,
+        outcome: None,
+        loaded_from: None,
+    }
+}
+
+#[test]
+fn every_terminal_failure_and_all_seven_non_dispatch_causes_keep_their_tags() {
+    let mut reasons = vec![
+        shared::PairFailure::Timeout {},
+        shared::PairFailure::Cancelled {},
+        shared::PairFailure::Unload {},
+        shared::PairFailure::FlowFailure {},
+        shared::PairFailure::GateFault {},
+        shared::PairFailure::NotGranted {},
+        shared::PairFailure::AbandonedAtLoad {},
+    ];
+    reasons.extend(
+        [
+            shared::NonDispatchCause::PassPurpose,
+            shared::NonDispatchCause::RepairExhausted,
+            shared::NonDispatchCause::PlanBreak,
+            shared::NonDispatchCause::RoundLimit,
+            shared::NonDispatchCause::Stop,
+            shared::NonDispatchCause::Unload,
+            shared::NonDispatchCause::NoGate,
+        ]
+        .into_iter()
+        .map(|cause| shared::PairFailure::NotDispatched { cause }),
+    );
+    assert_eq!(reasons.len(), 14);
+    for reason in reasons {
+        let mut value = terminal();
+        value.fate = shared::TerminalPairFate::Failed;
+        value.reason = Some(reason);
+        assert_ended(&value);
+    }
+    assert_ended(&terminal());
+    assert_eq!(
+        serde_json::to_string(&pair_ended(&terminal())).unwrap(),
+        concat!(
+            "{\"call_id\":{\"run\":\"pair-run-\u{96ea}\",",
+            "\"sequence\":\"18446744073709551614\",\"call\":\"9007199254740993\"},",
+            "\"execution\":null,\"fate\":\"completed\",\"reason\":null,",
+            "\"outcome\":null,\"loaded_from\":null}"
+        ),
+    );
+}
+
+#[test]
+fn every_tool_outcome_kill_cause_and_execution_opener_preserves_exact_wire_shape() {
+    let mut outcomes = vec![
+        weaver_types::ToolOutcome::Result {
+            content: "unchanged result\n\u{96ea}".into(),
+        },
+        weaver_types::ToolOutcome::Refused {
+            reason: "exact refused \"reason\"".into(),
+        },
+        weaver_types::ToolOutcome::Errored {
+            detail: "exact infrastructure\\detail".into(),
+        },
+    ];
+    for by in [
+        weaver_types::KillCause::Clock,
+        weaver_types::KillCause::Cancel,
+        weaver_types::KillCause::Unload,
+        weaver_types::KillCause::Fault,
+    ] {
+        for partial in [None, Some(String::new()), Some("partial\n\u{3a9}".into())] {
+            outcomes.push(weaver_types::ToolOutcome::Killed { partial, by });
+        }
+    }
+    assert_eq!(outcomes.len(), 15);
+    for outcome in outcomes {
+        for opener in [
+            weaver_types::Opener::Admin,
+            weaver_types::Opener::Harness,
+            weaver_types::Opener::Spu,
+            weaver_types::Opener::Gate,
+        ] {
+            let mut value = terminal();
+            value.execution = Some(weaver_types::ExchangeId {
+                opener,
+                ordinal: u64::MAX,
+            });
+            if matches!(outcome, weaver_types::ToolOutcome::Killed { .. }) {
+                value.fate = shared::TerminalPairFate::Failed;
+            }
+            value.outcome = Some(outcome.clone());
+            assert_ended(&value);
+        }
+    }
+}
+
+#[test]
+fn abandoned_at_load_preserves_the_complete_start_identity_and_its_optional_position() {
+    let identity = shared::StartIdentity {
+        seed_id: "seed-\u{3a9}".into(),
+        artifact_id: "artifact-1".into(),
+        dump_sha256: shared::Digest::new("1".repeat(64)).unwrap(),
+        config_sha256: shared::Digest::new("2".repeat(64)).unwrap(),
+        parent_artifact_id: Some("parent-artifact".into()),
+        position: Some(shared::SourcePosition {
+            block_id: source_id(),
+            turn: Some("prior-turn".into()),
+        }),
+    };
+    for position in [None, identity.position.clone()] {
+        for parent in [None, identity.parent_artifact_id.clone()] {
+            let mut identity = identity.clone();
+            identity.position = position.clone();
+            identity.parent_artifact_id = parent;
+            let mut value = terminal();
+            value.fate = shared::TerminalPairFate::Failed;
+            value.reason = Some(shared::PairFailure::AbandonedAtLoad {});
+            value.loaded_from = Some(identity);
+            assert_ended(&value);
+        }
+    }
+}

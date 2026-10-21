@@ -417,3 +417,195 @@ fn pending_admission_neither_consumes_identity_nor_rewrites_the_returned_event()
     drop(recorder);
     assert_eq!(bytes(reader).lines().count(), 2);
 }
+
+#[test]
+fn preflight_terminal_fault_and_unload_bypass_full_ordinary_capacity() {
+    let (mut preflight, reader) = loaded();
+    preflight.drain().unwrap();
+    let held: Vec<_> = (0..super::super::ORDINARY_CAPACITY)
+        .map(|_| preflight.core.writer.reserve(None).unwrap().unwrap())
+        .collect();
+    assert_eq!(
+        preflight.drain_status().unwrap(),
+        DrainStatus::Pending {
+            queued: super::super::ORDINARY_CAPACITY
+        }
+    );
+    let terminal = preflight
+        .record_terminal_fault(fault())
+        .unwrap_or_else(|error| panic!("{:?}", error.failure));
+    assert_eq!(terminal.submission.sequence, Sequence(1));
+    assert_eq!(terminal.submission.tap, TapOutcome::Stopped);
+    let duplicate = fault();
+    let original = serde_json::to_string(&duplicate).unwrap();
+    let failure = match terminal.recorder.record_terminal_fault(duplicate) {
+        Ok(_) => panic!("a terminal fault cannot spend its permit twice"),
+        Err(failure) => failure,
+    };
+    assert_eq!(serde_json::to_string(&failure.event).unwrap(), original);
+    assert_eq!(failure.recorder.boundary().admitted, Some(Sequence(1)));
+    let terminal = failure
+        .recorder
+        .record_terminal_unload(fixture(Kind::Unload))
+        .unwrap_or_else(|error| panic!("{:?}", error.failure));
+    assert_eq!(terminal.submission.sequence, Sequence(2));
+    assert_eq!(terminal.submission.tap, TapOutcome::Stopped);
+    drop(held);
+    let mut closed = terminal.recorder;
+    closed.drain().unwrap();
+    assert_eq!(closed.drain_status().unwrap(), DrainStatus::Emptied);
+    assert_eq!(closed.standing_failure(), None);
+    assert_eq!(closed.try_capacity_wake().unwrap(), CapacityWake::Consumed);
+    assert_eq!(closed.try_capacity_wake().unwrap(), CapacityWake::Empty);
+    drop(closed);
+    let text = bytes(reader);
+    assert_eq!(text.lines().count(), 3);
+    assert!(text.lines().nth(1).unwrap().contains(r#""kind":"fault""#));
+    assert!(text.lines().nth(2).unwrap().contains(r#""kind":"unload""#));
+}
+
+#[test]
+fn terminal_preflight_refusal_preserves_original_event_and_prior_typestate() {
+    let (preflight, reader) = loaded();
+    let wrong = message("Read file.");
+    let original = serde_json::to_string(&wrong).unwrap();
+    let failure = match preflight.record_terminal_fault(wrong) {
+        Ok(_) => panic!("content cannot spend a fault reservation"),
+        Err(failure) => failure,
+    };
+    assert_eq!(serde_json::to_string(&failure.event).unwrap(), original);
+    assert_eq!(failure.recorder.boundary().admitted, Some(Sequence(0)));
+    let mut malformed = fault();
+    malformed.envelope.origin = Origin::Operator;
+    let original = serde_json::to_string(&malformed).unwrap();
+    let failure = match failure.recorder.record_terminal_fault(malformed) {
+        Ok(_) => panic!("an invalid envelope cannot spend the reservation"),
+        Err(failure) => failure,
+    };
+    assert_eq!(serde_json::to_string(&failure.event).unwrap(), original);
+    assert_eq!(failure.recorder.boundary().admitted, Some(Sequence(0)));
+    let terminal = failure
+        .recorder
+        .record_terminal_fault(fault())
+        .unwrap_or_else(|error| panic!("{:?}", error.failure));
+    let wrong = fault();
+    let original = serde_json::to_string(&wrong).unwrap();
+    let failure = match terminal.recorder.record_terminal_unload(wrong) {
+        Ok(_) => panic!("only unload can spend the unload reservation"),
+        Err(failure) => failure,
+    };
+    assert_eq!(serde_json::to_string(&failure.event).unwrap(), original);
+    let terminal = failure
+        .recorder
+        .record_terminal_unload(fixture(Kind::Unload))
+        .unwrap_or_else(|error| panic!("{:?}", error.failure));
+    let mut closed = terminal.recorder;
+    closed.drain().unwrap();
+    drop(closed);
+    assert_eq!(bytes(reader).lines().count(), 3);
+}
+
+#[test]
+fn an_ordinary_preflight_fault_cannot_be_repeated_using_the_terminal_reserve() {
+    let (preflight, reader) = loaded();
+    let refused = match preflight
+        .refuse(fault())
+        .unwrap_or_else(|error| panic!("{:?}", error.failure))
+    {
+        PreflightAttempt::Recorded { recorder, .. } => recorder,
+        _ => panic!("ordinary fault must fit"),
+    };
+    let failure = match refused.record_terminal_fault(fault()) {
+        Ok(_) => panic!("the already recorded first fault cannot repeat"),
+        Err(failure) => failure,
+    };
+    assert_eq!(failure.recorder.structure().by_kind(Kind::Fault).count(), 1);
+    let terminal = failure
+        .recorder
+        .record_terminal_unload(fixture(Kind::Unload))
+        .unwrap_or_else(|error| panic!("{:?}", error.failure));
+    let mut closed = terminal.recorder;
+    closed.drain().unwrap();
+    drop(closed);
+    assert_eq!(bytes(reader).lines().count(), 3);
+}
+
+#[test]
+fn component_failure_after_an_ordinary_refusal_can_use_the_fault_reserve() {
+    let (preflight, reader) = loaded();
+    let refusal = event(
+        Kind::Refusal,
+        Channel::Internal,
+        Origin::Runtime,
+        false,
+        Some(Payload::Refusal(raw(r#"{"case":"partition_invalid"}"#))),
+    );
+    let refused = match preflight
+        .refuse(refusal)
+        .unwrap_or_else(|error| panic!("{:?}", error.failure))
+    {
+        PreflightAttempt::Recorded { recorder, .. } => recorder,
+        _ => panic!("ordinary refusal must fit"),
+    };
+    let terminal = refused
+        .record_terminal_fault(fault())
+        .unwrap_or_else(|error| panic!("{:?}", error.failure));
+    assert_eq!(terminal.submission.sequence, Sequence(2));
+    assert_eq!(terminal.submission.tap, TapOutcome::Stopped);
+    let terminal = terminal
+        .recorder
+        .record_terminal_unload(fixture(Kind::Unload))
+        .unwrap_or_else(|error| panic!("{:?}", error.failure));
+    let mut closed = terminal.recorder;
+    closed.drain().unwrap();
+    drop(closed);
+    assert_eq!(bytes(reader).lines().count(), 4);
+}
+
+#[test]
+fn terminal_preflight_append_failure_preserves_event_and_exact_status() {
+    let (mut preflight, reader) = loaded();
+    preflight.drain().unwrap();
+    preflight.core.structure.fail_append = true;
+    let report = fault();
+    let original = serde_json::to_string(&report).unwrap();
+    let failure = match preflight.record_terminal_fault(report) {
+        Ok(_) => panic!("the append must fail"),
+        Err(failure) => failure,
+    };
+    assert_eq!(serde_json::to_string(&failure.event).unwrap(), original);
+    let expected = Failure::AppendFailed {
+        sequence: Sequence(1),
+    };
+    assert_eq!(failure.failure, expected);
+    let mut preflight = failure.recorder;
+    assert_eq!(preflight.standing_failure(), Some(expected.clone()));
+    assert_eq!(preflight.drain_status(), Err(expected.clone()));
+    assert_eq!(preflight.try_capacity_wake(), Err(expected));
+    assert_eq!(preflight.boundary().admitted, Some(Sequence(0)));
+    assert_eq!(preflight.pressure().queued, 0);
+    drop(preflight);
+    assert_eq!(bytes(reader).lines().count(), 1);
+}
+
+#[test]
+fn active_nonblocking_status_keeps_append_failure_after_queue_empty() {
+    let (mut recorder, reader) = recorder();
+    drained(&mut recorder);
+    recorder.core.structure.fail_append = true;
+    let expected = Failure::AppendFailed {
+        sequence: Sequence(1),
+    };
+    assert!(matches!(
+        recorder.submit(message("Read file.")),
+        Err(Failure::AppendFailed {
+            sequence: Sequence(1)
+        })
+    ));
+    assert_eq!(recorder.standing_failure(), Some(expected.clone()));
+    assert_eq!(recorder.drain_status(), Err(expected.clone()));
+    assert_eq!(recorder.try_capacity_wake(), Err(expected));
+    assert_eq!(recorder.pressure().queued, 0);
+    drop(recorder);
+    assert_eq!(bytes(reader).lines().count(), 1);
+}
