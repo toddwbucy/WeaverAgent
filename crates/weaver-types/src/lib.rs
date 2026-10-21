@@ -98,6 +98,7 @@
 
 mod config;
 mod identity;
+pub mod state_flow;
 mod wire;
 
 pub use config::{

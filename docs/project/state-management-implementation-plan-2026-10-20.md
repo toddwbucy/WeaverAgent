@@ -1,0 +1,82 @@
+# State management implementation map
+
+Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
+
+The authority is the merged [state management set][set] from PR #182. All code PRs
+remain drafts until the prescribed review completes. The operator merges them.
+The crate remains weaver-state. The loop remains in worker/dev_loop and calls
+primitives. The SPU owns classification.
+
+## Dependency and merge order
+
+Each row is a reviewable code slice. Dependent branches may be stacked before their
+base merges. A PR body must name its prerequisite PRs and the exact owning clauses
+it implements. Rows can be split further without changing the Spec or cutover.
+
+| Slice | Prerequisites | Implementation and owning Spec |
+| --- | --- | --- |
+| F1 | PR #182 | Shared state_flow shapes, codecs and pure validators, types amendment |
+| F2 | PR #182 | RAM connection and full catalog, state STATE-CONNECTION/STATE-SCHEMA |
+| F3 | F1, F2 | Atomic filing, effects, reads and verified images, state amendment |
+| F4 | F1, F3 | Member, paging and capture cleanup, state/contract amendments |
+| T1 | F1 | Trace envelope, validated copy and recorder, trace amendment |
+| C1 | F1 | SPU STE100 duty, scheme and template ports, Spec 02 and SPU amendment |
+| P1 | F1, F4, C1 | Seed, custody and boot, admin/persistence amendments |
+| H1 | T1, F4, C1, P1 | Harness flow, receipts and halt, harness/foundation amendments |
+| H2 | H1 | Pair ledger and gate containment, Spec 05 and gate amendment |
+| H3 | H1 | Marks, renderer and SPU buffer boundary, Spec 06 and SPU amendment |
+| H4 | H2, H3 | Plan operations and review evidence, Spec 07 and admin amendment |
+| H5 | H3, H4 | Sort, selection and injection ports, Spec 08 |
+| Q1 | All above | Serving qualification and coupled cutover, foundation transition |
+
+Spec 09's required evidence producers travel with the primitive that produces each
+measure. Evidence analysis remains in WeaverAnalysis. External diagnostic contracts
+are amended through the owning repository's review path.
+
+The first two slices are independent and additive. F2 is the complete empty catalog,
+not a serving store or valid seed. F3 joins both branches and supplies the complete
+state-content/1 behavior. No partial catalog is a deployment option.
+
+F1 does not replace the legacy lifecycle/configuration grammar. Those changes travel
+with P1/H1, and tool containment vocabulary travels with H2. This keeps wire changes
+with their complete producers and consumers. Every affected document's transition
+clause remains binding.
+
+## Current evidence
+
+F2 is [draft PR #183][catalog], commit 1a699511, based on bacbad39. Its full crate
+suite, formatting, lint and lock checks passed. Seven deliberate mutations failed
+their protective tests. Independent local review found no unresolved catalog issue.
+
+F1 is prepared for draft review from an isolated worktree based on bacbad39. Its
+default and config-feature tests, lint, formatting and lock checks passed. Eleven
+guard-removal tests failed as intended. Independent local findings are fixed.
+T1 has an isolated branch from the same base. Other rows have not been implemented.
+This is a progress record, not a claim that the full goal or any serving cutover is
+complete. Each draft carries its own fresh test and perturbation evidence.
+
+The operator supplied docs/ASD-STE100_ISSUE9.pdf as the normative language source.
+The inspected copy is Issue 9, January 2025, with SHA-256:
+
+```text
+d1f4ea9e7cd6e46b47aa9057209f99e78c0e9cfc4e27a5b07895b05c1a166431
+```
+
+Locating this reference does not qualify the project dictionary, conformance corpus,
+span-binding classifier or system prompt. Their evidence remains required by Spec 02
+and the foundation cutover. The PDF is not added by this implementation slice.
+
+## Cutover gate
+
+The complete existing serving implementation remains until one code PR retires it
+and activates the qualified replacement. Its body must supply the foundation's four
+evidence items: tested revisions and tuple, pinned language and reviewed prompt
+artifacts, measured classifier/limit selections, and the checked retirement map.
+There is no deployment switch for an incomplete replacement.
+
+Measured values remain open until measured on the intended hardware. Local fixture
+tests prove mechanics and refusal paths. They do not certify production language
+quality, decoder capacity, throughput or absence of paging waits.
+
+[set]: ../crates/state-management/README.md
+[catalog]: https://github.com/toddwbucy/WeaverAgent/pull/183
