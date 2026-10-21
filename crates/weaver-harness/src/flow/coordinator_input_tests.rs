@@ -618,7 +618,7 @@ fn busy_input_keeps_the_whole_operation_and_original_intake_account() {
     }
     assert!(matches!(
         template_completion,
-        Some(OperationCompletion::Check { .. })
+        Some(OperationCompletion::Check(_))
     ));
     submit(&mut fx, operation);
     let request = fx.classifier.submitted()[1].clone();

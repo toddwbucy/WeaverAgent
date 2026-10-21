@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for the harness/member capture transaction.
+Updated: 2026-10-21 for load-time template certification.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -40,7 +40,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H1c | H1r | Run recording, common pump and frozen failure-account support, harness amendment |
 | H1i | H1c | Checked input transaction and single-use source handoff, Spec 02 and harness amendment |
 | H1s | H1i | Member capture barrier, correlated cleanup and recorded results, foundation/persistence/harness amendments |
-| H1b2 | H1b1, H1i, H1s, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
+| H1t | H1s | Recorded template transcript and private certificate, Spec 02 and harness amendment |
+| H1b2 | H1b1, H1i, H1s, H1t, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
 | H2 | H1b2, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
@@ -179,6 +180,16 @@ publisher remain separate consumers to connect in P1d/H1b2. The harness suite pa
 20 protective mutations fail their intended assertions. Independent review verifies
 the scope, evidence and exact source restoration. The restored capture suite, lint,
 formatting and lock gate pass.
+
+H1t is locally validated, stacked on #205. Its
+[implementation record][template-certification-record] covers exact compiled inventory
+binding, ordered recorded replies, the private certificate and the original Enter
+bound. Correct rejection permits rollback and never grants content. The full harness
+suite passes 773 tests with 17 inherited ignored instruments. All 23 added tests run.
+Thirteen compiled protective mutations fail their intended assertions, including a
+valid capture interleaving attempt. Exact source restoration and the component scope
+are independently reviewed. Production grammar, the complete compiled inventory,
+runtime expansion and paired boot/forced rollback remain owed in C1b/C1c and H1b2.
 
 P1a adds strict draft/bound declaration parsing, admin-owned canonical TOML,
 strict binding/index/guard codecs and descriptor-held artifact verification. It is
@@ -399,3 +410,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [capture-transaction]: https://github.com/toddwbucy/WeaverAgent/pull/205
 
 [input-transaction]: https://github.com/toddwbucy/WeaverAgent/pull/204
+[template-certification-record]: state-management-template-certification-2026-10-21.md

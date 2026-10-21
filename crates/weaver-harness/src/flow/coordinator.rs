@@ -12,8 +12,8 @@ use weaver_trace::serving::{Kind, Payload, payloads as trace};
 use weaver_trace::{Subsystem, TurnRef};
 use weaver_types::state_flow::{
     DecimalU64, Digest, MeasuredInterval, ReadLimits, STATE_CONTENT_SCHEMA, SchemeDeclaration,
-    SourceBlockId, SourceEnvelope, StartIdentity, StateControl, StateControlAnswer, StateFrame,
-    Ste100Reply, Ste100Request, Ste100Result, Ste100Target,
+    SourceBlockId, SourceEnvelope, SourcePosition, StartIdentity, StateControl, StateControlAnswer,
+    StateFrame, Ste100Reply, Ste100Request, Ste100Result, Ste100Target,
 };
 
 use super::author::{AuthoredEvent, AuthoredSource, ServingAuthor};
@@ -176,10 +176,48 @@ pub(super) enum OperationCompletion {
         turn: Option<TurnRef>,
         completion: StateCompletion,
     },
-    Check {
+    Check(RecordedCheck),
+}
+
+/// An operation result and its exact recorded event, held as one capability.
+/// Only the coordinator's successful classifier-proof reduction constructs it.
+/// It cannot be cloned or reconstructed from a reply or a caller-supplied source.
+#[derive(Debug)]
+pub(super) struct RecordedCheck {
+    operation: CheckOperation,
+    reply: Ste100Reply,
+    source: SourcePosition,
+}
+
+impl RecordedCheck {
+    pub(super) fn operation(&self) -> &CheckOperation {
+        &self.operation
+    }
+
+    pub(super) fn reply(&self) -> &Ste100Reply {
+        &self.reply
+    }
+
+    pub(super) fn source(&self) -> &SourcePosition {
+        &self.source
+    }
+
+    pub(super) fn into_parts(self) -> (CheckOperation, Ste100Reply, SourcePosition) {
+        (self.operation, self.reply, self.source)
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_test(
         operation: CheckOperation,
         reply: Ste100Reply,
-    },
+        source: SourcePosition,
+    ) -> Self {
+        Self {
+            operation,
+            reply,
+            source,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2179,6 +2217,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                     });
                     return Ok(Advance::Progress);
                 }
+                let result_source = proof.source().clone();
                 let reply = self
                     .classifier
                     .as_mut()
@@ -2193,10 +2232,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                     ));
                 }
                 if let Some(owner) = self.check_operation.take() {
-                    self.operation_completion = Some(OperationCompletion::Check {
+                    self.operation_completion = Some(OperationCompletion::Check(RecordedCheck {
                         operation: owner,
                         reply,
-                    });
+                        source: result_source,
+                    }));
                     return Ok(Advance::Progress);
                 }
                 match self

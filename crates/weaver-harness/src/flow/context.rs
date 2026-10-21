@@ -46,6 +46,9 @@ pub(super) enum RunFailure {
         failure: super::pump_transport::Failure,
     },
     Closed,
+    /// Certification owns the content boundary. This operation did not start
+    /// and does not latch a component failure.
+    TemplateBlocked,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -71,6 +74,7 @@ struct LoadDuty {
     scheme_text: String,
     instruction: serving::payloads::Ste100Instruction,
     persistence: serving::payloads::PersistenceConfig,
+    template_inventory: serving::payloads::TemplateInventory,
 }
 
 pub(crate) struct RecordingContext {
@@ -88,6 +92,9 @@ pub(crate) struct RecordingContext {
     open_start: Option<StartIdentity>,
     open_limits: Option<ReadLimits>,
     load_duty: Option<LoadDuty>,
+    template_checks: Option<template_driver::TemplateChecks>,
+    template_setup_refusal: Option<super::templates::TemplateError>,
+    template_blocked_author: Option<AuthoredEvent>,
     input: super::input::InputSlot,
     input_author: Option<input_driver::InputAuthorStage>,
     input_turn: Option<input_driver::InputTurn>,
@@ -163,6 +170,9 @@ impl RecordingContext {
             open_start: None,
             open_limits: None,
             load_duty: None,
+            template_checks: None,
+            template_setup_refusal: None,
+            template_blocked_author: None,
             input,
             input_author: None,
             input_turn: None,
@@ -329,6 +339,11 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<OperationCompletion>, RunFailure> {
         self.live(io)?;
+        // A template result belongs to its ordered transcript, never a second
+        // operation consumer. Correct rejection keeps that boundary closed.
+        if self.templates_block_content() {
+            return Ok(None);
+        }
         let result = self.flow.take_operation_completion(&mut FlowRecording {
             barrier: &mut self.barrier,
             inbox: &mut self.inbox,
@@ -386,7 +401,15 @@ impl RecordingContext {
     }
 
     pub(super) fn complete_wait(&mut self, key: PumpDeadline) -> Option<AbsoluteBound> {
-        if self.failure.is_some() || self.phase == RecordingPhase::Closed {
+        if self.failure.is_some()
+            || self.phase == RecordingPhase::Closed
+            || (key == PumpDeadline::Enter
+                && self.phase == RecordingPhase::Entered
+                && self
+                    .template_checks
+                    .as_ref()
+                    .is_some_and(|owner| owner.can_certify()))
+        {
             return None;
         }
         self.deadlines.disarm(key)
@@ -565,6 +588,28 @@ impl RecordingContext {
             self.retain_refused(event);
             return Err(failure);
         }
+        if self.template_blocked_author.is_some() {
+            // The first refused input has not returned to its caller. A second
+            // author violates the one-owner protocol. Preserve both events:
+            // the first in its refusal slot, this one as terminal evidence.
+            self.retain_refused(event);
+            return Err(self.fail(
+                ports.io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Author,
+                "previous template-blocked author has not been taken",
+            ));
+        }
+        if self.templates_block_content()
+            && (serving::content_schema(event.kind) != ContentSchema::None
+                || event.kind == Kind::TurnStarted)
+        {
+            // This is refused caller input, never a pending author ticket.
+            // The caller takes it unchanged before attempting another author.
+            // resume_author_and_wait cannot turn it into admitted content.
+            self.template_blocked_author = Some(event);
+            return Err(RunFailure::TemplateBlocked);
+        }
         if !self.author_allowed(&event) {
             self.retain_refused(event);
             return Err(self.fail(
@@ -628,6 +673,7 @@ impl RecordingContext {
                 scheme_text: load.ste100_scheme.clone(),
                 instruction: load.state_flow.ste100.clone(),
                 persistence: load.state_flow.persistence.clone(),
+                template_inventory: load.template_inventory.clone(),
             });
         }
         let wall_ms = match wall_ms() {
@@ -1204,3 +1250,12 @@ pub(super) use capture_driver::{CaptureAnswer, CaptureProgress};
 #[cfg(test)]
 #[path = "context_capture_tests.rs"]
 mod capture_tests;
+
+#[path = "context_templates.rs"]
+mod template_driver;
+#[allow(unused_imports)] // Dormant certification boundary, consumed by enter at cutover.
+pub(super) use template_driver::{TemplateBeginError, TemplateBeginRefusal, TemplateProgress};
+
+#[cfg(test)]
+#[path = "context_template_tests.rs"]
+mod template_tests;

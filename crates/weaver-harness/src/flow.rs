@@ -24,6 +24,7 @@ mod recording;
 mod report;
 mod ste100_channel;
 mod ste100_socket;
+mod templates;
 
 use recording::{RecordedStateMeasurement, RecordedSte100, RecordedTerminal};
 

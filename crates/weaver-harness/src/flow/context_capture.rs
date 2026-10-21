@@ -67,6 +67,9 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
+        if self.templates_block_content() {
+            return Err(RunFailure::TemplateBlocked);
+        }
         if self.phase != RecordingPhase::Entered
             || self.member_capture.is_some()
             || self.input.snapshot().is_some()
