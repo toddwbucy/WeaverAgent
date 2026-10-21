@@ -380,6 +380,24 @@ impl<P: Ste100Port> Classifier<P> {
     }
 }
 
+impl Classifier<super::ste100_socket::SocketPort> {
+    /// The common pump adds POLLOUT only while this concrete transport has
+    /// unsent request fragments. A held result or failed owner grants no send.
+    pub(super) fn wants_write(&self) -> bool {
+        self.state == ClassifierState::InFlight && self.port.wants_write()
+    }
+
+    /// A consumed zero-length packet can leave a terminal-status probe pending
+    /// after EINTR, without any remaining POLLIN wake. The pump checks this
+    /// buffered work before it waits, while preserving the held-result barrier.
+    pub(super) fn needs_progress(&self) -> bool {
+        matches!(
+            self.state,
+            ClassifierState::Idle | ClassifierState::InFlight
+        ) && self.port.needs_progress()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PortFailureKind {
     Component(Ste100ComponentCode),

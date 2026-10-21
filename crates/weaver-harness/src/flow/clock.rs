@@ -8,7 +8,7 @@ use std::fmt;
 use std::io;
 use std::os::fd::{AsRawFd, BorrowedFd};
 
-use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+use nix::poll::{PollFlags, PollTimeout};
 
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
 const NANOS_PER_MILLISECOND: u64 = 1_000_000;
@@ -62,20 +62,26 @@ impl PumpIo for MonotonicIo {
         descriptors
             .try_reserve_exact(interests.len())
             .map_err(io::Error::other)?;
-        descriptors.extend(
-            interests
-                .iter()
-                .map(|interest| PollFd::new(interest.fd, interest.events)),
-        );
+        descriptors.extend(interests.iter().map(|interest| nix::libc::pollfd {
+            fd: interest.fd.as_raw_fd(),
+            events: interest.events.bits(),
+            revents: 0,
+        }));
         wait_until(absolute_deadline, monotonic_ns, |timeout| {
-            poll(&mut descriptors, timeout)
-                .map_err(|error| io::Error::from_raw_os_error(error as i32))?;
+            let count = nix::libc::nfds_t::try_from(descriptors.len())
+                .map_err(|_| io::Error::other("poll descriptor count overflows"))?;
+            // SAFETY: every fd is borrowed for the entire wait, and this vector
+            // owns count writable pollfd entries. Raw revents preserves Linux
+            // POLLRDHUP, which the pinned nix PollFd::revents would discard.
+            if unsafe { nix::libc::poll(descriptors.as_mut_ptr(), count, i32::from(timeout)) } < 0 {
+                return Err(io::Error::last_os_error());
+            }
             let mut ready = Vec::new();
             ready
                 .try_reserve_exact(interests.len())
                 .map_err(io::Error::other)?;
             for (index, descriptor) in descriptors.iter().enumerate() {
-                let events = descriptor.revents().unwrap_or(PollFlags::empty());
+                let events = PollFlags::from_bits_retain(descriptor.revents);
                 if !events.is_empty() {
                     ready.push(ReadyFd { index, events });
                 }

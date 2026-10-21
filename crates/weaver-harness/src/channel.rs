@@ -724,6 +724,12 @@ impl DecodeChannel {
 }
 
 impl DecodeChannel {
+    /// Transfer the sole socket owner into the common pump's bounded cursor.
+    /// The legacy blocking reader cannot be used after this move.
+    pub(crate) fn into_fd(self) -> OwnedFd {
+        self.end
+    }
+
     /// Send one token directive as bare JSON, per the decode contract: the
     /// seam carries the token trio and no envelope, one write one message,
     /// and a frame past the envelope crosses as the segment series the
@@ -800,6 +806,16 @@ pub struct ClassifyChannel {
 }
 
 impl ClassifyChannel {
+    /// Transfer a live label socket to its bounded pump owner. A retired owner
+    /// returns intact, so moving custody cannot reset its retirement.
+    pub(crate) fn into_pump_fd(self) -> Result<OwnedFd, Self> {
+        if self.retired.get() {
+            Err(self)
+        } else {
+            Ok(self.end)
+        }
+    }
+
     /// Creates the classify pair, `SOCK_SEQPACKET` per `weaver-spu-Spec`
     /// section 11, beside the SPU's two the way those are made before the
     /// fork that carries them.

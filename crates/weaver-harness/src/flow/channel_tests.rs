@@ -4,6 +4,13 @@ use super::*;
 use std::io::{Read, Write};
 use weaver_types::state_flow::*;
 
+fn assert_same_answer(actual: &StateFrame, expected: &StateFrame) {
+    assert_eq!(
+        encode_state_line(actual, FrameDirection::Response).unwrap(),
+        encode_state_line(expected, FrameDirection::Response).unwrap()
+    );
+}
+
 struct Peer {
     channel: StateChannel,
     stream: UnixStream,
@@ -70,7 +77,10 @@ impl Peer {
 
     fn release(&mut self) -> StateCompletion {
         let proof = RecordedStateMeasurement::for_test(self.channel.held_measurement().unwrap());
-        self.channel.release(proof).unwrap()
+        self.channel
+            .release(proof)
+            .unwrap()
+            .expect("release is ready")
     }
 
     fn open(&mut self) {
@@ -469,6 +479,9 @@ fn valid_refusal_is_measured_before_terminal_filing_failure() {
     let held = peer.channel.held_measurement().unwrap().clone();
     // The real member closes after refusing. Preserve that exact failure reason.
     peer.stream.shutdown(std::net::Shutdown::Both).unwrap();
+    peer.step().unwrap();
+    assert!(peer.channel.failure().is_none());
+    assert!(peer.channel.interest().events().is_empty());
     let proof = RecordedStateMeasurement::for_test(&held);
     let failure = peer.channel.release(proof).unwrap_err();
     assert_eq!(failure.kind, ChannelFailureKind::FilingRefused);
@@ -516,6 +529,304 @@ fn peer_death_after_valid_receipt_retains_committed_evidence_without_release() {
     );
     assert_eq!(peer.channel.held_measurement(), Some(&held));
     assert_eq!(peer.channel.outstanding().len(), 1);
+}
+
+#[test]
+fn held_answer_half_close_wakes_common_poll_without_reading_another_answer() {
+    use crate::flow::clock::{MonotonicIo, PumpIo, WaitInterest, WaitOutcome};
+
+    let mut peer = Peer::new();
+    peer.open();
+    let request = peer.send_request(StateRequest::File(statement("Read item.")));
+    let answer = peer.answer(&request, None);
+    peer.write_answer(&answer);
+    let held = peer.channel.held_measurement().unwrap().clone();
+    let extra = encode_state_line(&answer, FrameDirection::Response).unwrap();
+    peer.stream.write_all(&extra).unwrap();
+
+    let events = peer.channel.interest().events();
+    assert!(!events.contains(PollFlags::POLLIN));
+    assert_ne!(events.bits() & libc::POLLRDHUP, 0);
+    let mut status = libc::pollfd {
+        fd: peer.channel.fd().as_raw_fd(),
+        events: events.bits(),
+        revents: 0,
+    };
+    // SAFETY: status describes one live fixture fd and the call never waits.
+    assert_eq!(unsafe { libc::poll(&mut status, 1, 0) }, 0);
+    peer.step().unwrap();
+    assert!(peer.channel.received.is_empty());
+    assert_eq!(peer.channel.held_measurement(), Some(&held));
+
+    peer.stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut io = MonotonicIo;
+    let deadline = io.now().unwrap().checked_add(1_000_000_000).unwrap();
+    let wake = io
+        .wait(
+            &[WaitInterest {
+                fd: peer.channel.fd(),
+                events,
+            }],
+            Some(deadline),
+        )
+        .unwrap();
+    let WaitOutcome::Ready(ready) = wake else {
+        panic!("a held state's half-close must wake the common wait");
+    };
+    assert_eq!(ready.len(), 1);
+    assert_ne!(ready[0].events.bits() & libc::POLLRDHUP, 0);
+    let failure = peer.step().unwrap_err();
+    assert_eq!(failure.kind, ChannelFailureKind::Carry);
+    assert_eq!(peer.channel.held_measurement(), Some(&held));
+    assert_same_answer(&peer.channel.held.as_ref().unwrap().answer, &answer);
+    assert!(peer.channel.received.is_empty());
+    let mut untouched = vec![0; extra.len()];
+    assert_eq!(
+        recv(
+            peer.channel.fd().as_raw_fd(),
+            &mut untouched,
+            MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_PEEK,
+        ),
+        Ok(extra.len())
+    );
+    assert_eq!(untouched, extra);
+    let proof = RecordedStateMeasurement::for_test(&held);
+    assert_eq!(peer.channel.release(proof).unwrap_err(), failure);
+    assert_eq!(peer.channel.failure(), Some(&failure));
+    assert_eq!(peer.channel.outstanding().len(), 1);
+    assert!(peer.channel.interest().events().is_empty());
+    assert!(!peer.channel.needs_progress());
+}
+
+#[test]
+fn held_success_observes_full_or_half_close_without_a_release_attempt() {
+    for shutdown in [std::net::Shutdown::Both, std::net::Shutdown::Write] {
+        let mut peer = Peer::new();
+        let request = peer.send_request(open_request());
+        let answer = peer.answer(&request, None);
+        peer.write_answer(&answer);
+        peer.stream.shutdown(shutdown).unwrap();
+        let held = peer.channel.held_measurement().unwrap().clone();
+        let failure = peer.channel.check_held_terminal().unwrap_err();
+        assert_eq!(failure.kind, ChannelFailureKind::Carry);
+        assert_eq!(peer.channel.held_measurement(), Some(&held));
+        assert_same_answer(&peer.channel.held.as_ref().unwrap().answer, &answer);
+        assert!(!peer.channel.opened);
+        assert_eq!(peer.step().unwrap_err(), failure);
+        assert_eq!(
+            peer.channel
+                .release(RecordedStateMeasurement::for_test(&held))
+                .unwrap_err(),
+            failure
+        );
+    }
+}
+
+#[test]
+fn complete_open_refusal_survives_peer_close_until_its_measurement_is_recorded() {
+    for shutdown in [std::net::Shutdown::Both, std::net::Shutdown::Write] {
+        let mut peer = Peer::new();
+        let request = peer.send_request(open_request());
+        let answer = StateFrame::Refused {
+            common: request.common().clone(),
+            code: StateRefusalCode::OpenFailed,
+            detail: "synthetic open refusal".into(),
+            block_id: None,
+            observation: peer.observation(&request),
+        };
+        peer.stream
+            .write_all(&encode_state_line(&answer, FrameDirection::Response).unwrap())
+            .unwrap();
+        peer.stream.shutdown(shutdown).unwrap();
+        peer.step().unwrap();
+        let held = peer.channel.held_measurement().unwrap().clone();
+        peer.step().unwrap();
+        assert!(peer.channel.failure().is_none());
+        assert_same_answer(&peer.channel.held.as_ref().unwrap().answer, &answer);
+        assert!(peer.channel.interest().events().is_empty());
+        let failure = peer
+            .channel
+            .release(RecordedStateMeasurement::for_test(&held))
+            .unwrap_err();
+        assert_eq!(failure.kind, ChannelFailureKind::OpenRefused);
+        assert!(failure.detail.contains("synthetic open refusal"));
+        assert_eq!(peer.channel.held_measurement(), Some(&held));
+        assert_eq!(peer.channel.failure(), Some(&failure));
+    }
+}
+
+#[test]
+fn interrupted_receive_cannot_send_final_request_bytes_past_a_premature_answer() {
+    let mut peer = Peer::new();
+    peer.channel.begin(open_request(), peer.now).unwrap();
+    let request = peer.channel.exchanges[0].request.clone();
+    let answer = peer.answer(&request, None);
+    let bytes = encode_state_line(&answer, FrameDirection::Response).unwrap();
+    peer.stream.write_all(&bytes).unwrap();
+    let original = peer.channel.outstanding();
+    peer.channel
+        .progress_with(
+            &mut || Ok(peer.now),
+            |_, _| Err(nix::errno::Errno::EINTR),
+            |_, _| panic!("an interrupted receive cannot authorize a send"),
+        )
+        .unwrap();
+    assert!(peer.channel.needs_progress());
+    assert!(!peer.channel.interest().writable);
+    assert_eq!(peer.channel.outstanding(), original);
+    assert!(peer.channel.failure().is_none());
+    let failure = peer.step().unwrap_err();
+    assert_eq!(failure.kind, ChannelFailureKind::Protocol);
+    assert!(failure.detail.contains("before the complete request"));
+    assert_eq!(peer.channel.received, bytes);
+    assert_eq!(peer.channel.outstanding(), original);
+    assert!(!peer.channel.needs_progress());
+}
+
+#[test]
+fn interrupted_receive_and_send_resume_once_without_restarting_queue_or_send_clocks() {
+    let mut peer = Peer::new();
+    peer.channel.begin(open_request(), peer.now).unwrap();
+    let queued = peer.channel.exchanges[0].queued_ns;
+    peer.channel
+        .progress_with(
+            &mut || Ok(20),
+            |_, _| Err(nix::errno::Errno::EINTR),
+            |_, _| panic!("receive EINTR must yield before sending"),
+        )
+        .unwrap();
+    assert!(peer.channel.needs_progress());
+    // The next bounded receive proves EAGAIN; an interrupted send keeps its own
+    // local work but still has no first-byte timestamp or byte progress.
+    peer.channel
+        .progress_with(
+            &mut || Ok(30),
+            |fd, bytes| recv(fd, bytes, MsgFlags::MSG_DONTWAIT),
+            |_, _| Err(nix::errno::Errno::EINTR),
+        )
+        .unwrap();
+    assert!(peer.channel.needs_progress());
+    assert!(peer.channel.interest().writable);
+    assert_eq!(peer.channel.exchanges[0].queued_ns, queued);
+    assert_eq!(peer.channel.exchanges[0].sent_ns, None);
+    assert_eq!(peer.channel.exchanges[0].offset, 0);
+    peer.channel.progress(&mut || Ok(40)).unwrap();
+    assert!(!peer.channel.needs_progress());
+    assert_eq!(peer.channel.exchanges[0].queued_ns, queued);
+    assert_eq!(peer.channel.exchanges[0].sent_ns, Some(40));
+    assert!(peer.channel.exchanges[0].fully_sent());
+    let mut bytes = Vec::new();
+    peer.drain(&mut bytes);
+    assert_eq!(bytes, peer.channel.exchanges[0].bytes);
+}
+
+#[test]
+fn interrupted_held_status_keeps_local_work_without_consuming_or_failing_the_answer() {
+    let mut peer = Peer::new();
+    let request = peer.send_request(open_request());
+    let answer = peer.answer(&request, None);
+    peer.write_answer(&answer);
+    let held = peer.channel.held_measurement().unwrap().clone();
+    peer.channel
+        .check_held_terminal_with(|_| Err(io::Error::from(io::ErrorKind::Interrupted)))
+        .unwrap();
+    assert!(peer.channel.needs_progress());
+    assert!(peer.channel.failure().is_none());
+    assert_eq!(peer.channel.held_measurement(), Some(&held));
+    peer.channel.check_held_terminal().unwrap();
+    assert!(!peer.channel.needs_progress());
+    assert_same_answer(&peer.release().answer, &answer);
+}
+
+#[test]
+fn interrupted_release_keeps_the_original_proof_until_one_successful_release() {
+    let mut peer = Peer::new();
+    let request = peer.send_request(open_request());
+    let answer = peer.answer(&request, None);
+    peer.write_answer(&answer);
+    let held = peer.channel.held_measurement().unwrap().clone();
+    let proof = RecordedStateMeasurement::for_test(&held);
+    assert!(
+        peer.channel
+            .release_with(proof, |_| Err(nix::errno::Errno::EINTR))
+            .unwrap()
+            .is_none()
+    );
+    assert!(peer.channel.needs_progress());
+    assert!(peer.channel.failure().is_none());
+    assert_eq!(peer.channel.held_measurement(), Some(&held));
+    assert!(!peer.channel.opened);
+    assert_eq!(peer.channel.outstanding().len(), 1);
+    assert!(
+        peer.channel
+            .resume_release_with(|_| Err(nix::errno::Errno::EINTR))
+            .unwrap()
+            .is_none()
+    );
+    let retained = peer
+        .channel
+        .held
+        .as_ref()
+        .unwrap()
+        .recorded
+        .as_ref()
+        .unwrap();
+    assert_eq!(retained.run(), "run");
+    assert_eq!(retained.measurement(), &held);
+    // Transport may observe terminal status but cannot release the caller's slot.
+    peer.step().unwrap();
+    assert!(peer.channel.held_measurement().is_some());
+    let completion = peer.channel.resume_release().unwrap().unwrap();
+    assert_same_answer(&completion.answer, &answer);
+    assert!(peer.channel.opened);
+    assert!(peer.channel.outstanding().is_empty());
+    assert!(!peer.channel.needs_progress());
+    assert_eq!(
+        peer.channel.resume_release().unwrap_err().kind,
+        ChannelFailureKind::Protocol
+    );
+}
+
+#[test]
+fn interrupted_release_does_not_hide_a_queued_duplicate_or_later_eof() {
+    for duplicate in [false, true] {
+        let mut peer = Peer::new();
+        let request = peer.send_request(open_request());
+        let answer = peer.answer(&request, None);
+        peer.write_answer(&answer);
+        let held = peer.channel.held_measurement().unwrap().clone();
+        if duplicate {
+            peer.stream
+                .write_all(&encode_state_line(&answer, FrameDirection::Response).unwrap())
+                .unwrap();
+        }
+        assert!(
+            peer.channel
+                .release_with(RecordedStateMeasurement::for_test(&held), |_| {
+                    Err(nix::errno::Errno::EINTR)
+                })
+                .unwrap()
+                .is_none()
+        );
+        if !duplicate {
+            peer.stream.shutdown(std::net::Shutdown::Write).unwrap();
+        }
+        let failure = peer.channel.resume_release().unwrap_err();
+        assert_eq!(
+            failure.kind,
+            if duplicate {
+                ChannelFailureKind::Protocol
+            } else {
+                ChannelFailureKind::Carry
+            }
+        );
+        assert_eq!(peer.channel.held_measurement(), Some(&held));
+        assert_same_answer(&peer.channel.held.as_ref().unwrap().answer, &answer);
+        assert!(peer.channel.held.as_ref().unwrap().recorded.is_some());
+        assert_eq!(peer.channel.outstanding().len(), 1);
+        assert!(!peer.channel.opened);
+        assert!(!peer.channel.needs_progress());
+    }
 }
 
 #[test]

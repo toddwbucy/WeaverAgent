@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for the ordered filing coordinator and its evidence producers.
+Updated: 2026-10-21 for request sources and receipt custody.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -27,6 +27,7 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | C1a | F1 | SPU transport, admission proof and constrained binder, Spec 02 |
 | C1b | C1a | Normative grammar and template proof, Spec 02 O02-1 |
 | C1c | C1a, C1b | Model adapter, duty entry and qualification, Spec 02 O02-2 |
+| C1t | H1b1 | Harness STE100 socket adapter, Spec 02 CHANNEL and PORT |
 | P1a | F1 | Serving declaration, canonical artifacts and verified reads, admin/types amendments |
 | P1b | P1a | Staged artifact publication and restore append, admin/persistence amendments |
 | P1c | P1a, P1b, F4 | Contained seed driver, admin ADMIN-SEED and TYPES-SEED |
@@ -34,8 +35,18 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | P1d | P1a, P1b, F4, C1 | Serving lifecycle and verified boot, admin/persistence amendments |
 | H1a | F1, T1b, F4 | Copy budget, trace proof and sole channel mechanics, harness amendment |
 | H1b1 | H1a | Ordered filing ledger, composition, clock and measurements, harness amendment |
-| H1b2 | H1b1, C1, P1 | Common pump, author census, input and halt, harness/foundation amendments |
-| H2 | H1b2, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
+| H1p | C1t | Bounded organ, decode and label packet owners, HARNESS-PUMP |
+| H1r | H1p | Bounded recording progress and typed operation results, harness/trace amendments |
+| H1c | H1r | Run recording, common pump and frozen failure-account support, harness amendment |
+| H1i | H1c | Checked input transaction and single-use source handoff, Spec 02 and harness amendment |
+| H1s | H1i | Member capture barrier, correlated cleanup and recorded results, foundation/persistence/harness amendments |
+| H1t | H1s | Recorded template transcript and private certificate, Spec 02 and harness amendment |
+| H1f | H1t | Exact registered source disposition and committed filing custody, harness amendment |
+| H1o | H1f | Complete recorded model-output checks, Spec 02 OUTPUT-UNIT |
+| H1q | H1o | Per-generation source receipt leases and original request association, Specs 02 and 05 |
+| H2a | H1q | Committed opening and terminal accounting for undispatched requests, Spec 05 |
+| H1b2 | H1b1, H1i, H1s, H1t, H1f, H1o, H1q, H2a, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
+| H2 | H1b2, H2a, IN1 | Executing pair lifecycle and gate containment, Spec 05 and gate amendment |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
 | H4 | H2, H3b | Plan operations and review evidence, Spec 07 and admin amendment |
@@ -107,13 +118,127 @@ integration. No serving change or unused harness dependency is added here.
 C1a is [PR #191][spu], stacked on #184. It implements the SPU protocol and
 binding mechanics. Its remaining production dependencies are recorded in the
 [PR description][spu]. It adds no production checker, manifest locator or
-serving activation. C1 in later dependency rows means all three C1 slices, including
+serving activation. C1 in later dependency rows means all four C1 slices, including
 qualification.
 Host and Olympus cuda,gguf suites, lint, formatting and lock checks pass. Fifty
 mechanics perturbations and two cancellation-fixture perturbations failed their
 protective tests. The GPU pace instrument reports a skip, so no measured-pace claim
 follows from that run. Independent review found no unresolved mechanics defect.
-Its current head is 22cf33f4 after the shared-floor refresh.
+The empty-packet correction is published at 19e6afb9. Fresh host and Olympus gates
+pass, with three further compiled guard removals. A live empty datagram is framing
+failure, while full or write-half closure remains EOF. The correction changes no
+dispatcher states or production qualification claim.
+
+C1t is [draft PR #200][ste100-transport], stacked on #199 at 2b721285. It adds the
+concrete harness STE100 socket adapter with exact admission echoes, bounded fragments,
+strict replies and one outstanding request. Writable and buffered-work accessors let
+the common pump progress it without another clock. The full harness suite passes
+540 tests with 17 ignored instruments. All 37 new transport and recording tests run.
+Twelve compiled protective changes fail their intended assertions, exact bytes are
+restored, and independent review verifies that evidence. Lint, formatting, lock and
+diff checks pass. [The implementation record][ste100-transport-record] states the
+scope and the separate SPU empty-datagram correction now published in C1a. Worker
+launch, the common pump, production artifacts and qualification remain open.
+
+H1r is [draft PR #202][recording-support], stacked on #201. It adds bounded
+trace wake/drain and preflight terminal APIs, original author custody, held state
+terminal observation, interruption-safe release and typed noncapture control and
+classifier operation results. H1c adds the phaseful recording and common pump
+components. H1i adds input ownership. Lifecycle caller migration remains in H1b2. Its
+[implementation record][recording-support-record] carries the precise boundary and
+validation status. Both full affected-crate suites pass, totaling 726 tests with
+17 inherited ignored instruments. Fifteen compiled protective changes fail their
+intended assertions, and exact restored source passes again. Per-crate lint,
+formatting, lock and diff checks pass. No active serving path changes in this slice.
+
+H1c is [draft PR #203][run-context], based on #202. Its
+[implementation record][run-context-record] states the scope and evidence. It keeps
+one recording lifetime through preflight, activation, correct refusal, release
+and drain, and supplies the common pump and the complete frozen account producer.
+The full affected-crate suites pass 909 tests with 17 inherited ignored instruments
+and zero failures. All 26 compiled protective mutations fail their intended checks,
+and independent review verifies exact source restoration and the final passing
+suites. All-target lint, formatting, lock and diff checks pass. H1i adds input
+ownership. H1s adds the member capture owner. Lifecycle callers, terminal report
+submission and failed-exit containment remain in H1b2.
+
+H1i is [draft PR #204][input-transaction], based on #203. Its
+[implementation record][input-transaction-record] states the scope and evidence.
+It owns original frame custody, trace-first parsing, SPU check routing, revocable
+single-use tokens, exact source handoff, cancellation and original gate-wait accounting.
+The affected-crate suites pass 959 tests with 17 inherited ignored instruments.
+Twenty-two behavioral probes fail their intended assertions and one non-Clone type
+pin fails compilation. Sources are restored exactly and independent review checks the
+evidence. The existing serving path remains active. H1b2 still owes frame/lifecycle
+caller migration and Contribution integration before this port serves.
+
+H1s is [draft PR #205][capture-transaction], stacked on #204. Its
+[implementation record][capture-transaction-record]
+states the member-side boundary. It freezes admission at the recorded turn boundary,
+drains actual filing obligations, and keeps Snapshot, Acknowledge, Abort and
+ReleaseCapture on the existing state owner. Missing original results trigger correlated
+cleanup. Late results record and discard without renewing the cleanup bound. Final
+member completion alone never releases the admission hold. The admin lifecycle and
+publisher remain separate consumers to connect in P1d/H1b2. The harness suite passes
+750 tests with 17 inherited ignored instruments. All 38 new capture tests run, and
+20 protective mutations fail their intended assertions. Independent review verifies
+the scope, evidence and exact source restoration. The restored capture suite, lint,
+formatting and lock gate pass.
+
+H1t is [draft PR #206][template-certification], stacked on #205. Its
+[implementation record][template-certification-record] covers exact compiled inventory
+binding, ordered recorded replies, the private certificate and the original Enter
+bound. Correct rejection permits rollback and never grants content. The full harness
+suite passes 773 tests with 17 inherited ignored instruments. All 23 added tests run.
+Thirteen compiled protective mutations fail their intended assertions, including a
+valid capture interleaving attempt. Exact source restoration and the component scope
+are independently reviewed. Production grammar, the complete compiled inventory,
+runtime expansion and paired boot/forced rollback remain owed in C1b/C1c and H1b2.
+
+H1f is draft [PR #207][filing-receipts], after #206. Its
+[implementation record][filing-receipts-record] covers one
+registered source transaction through the recorder, classifier, actual member
+receipt and terminal recording. It preserves committed sources separately from
+correct rejection. It supplies receipt evidence to future pair, mark and selection
+owners without granting their operations. The restored harness suite passes 795
+tests with zero failures and 17 inherited ignored instruments. All 22 added tests
+run. Ten compiled protective mutations fail their intended assertions, and
+independent review verifies source restoration. All-target clippy, formatting, lock,
+editorial and link checks pass. The Planner grade remains owed.
+
+H1o is draft [PR #208][output-checks], after #207. Its
+[implementation record][output-checks-record] covers the
+complete assistant message and every original Text index. The check frontier is
+independent of ordinary statement filing. Correct rejection is retained for the
+repair owner and grants no successful answer. Repair and pair opening still owe
+per-request receipt custody without an unrelated sibling filing barrier. The
+restored harness suite passes 822 tests with zero failures and 17 inherited ignored
+instruments. All 27 added tests run. Twelve compiled protective probes fail their
+intended assertions, with exact restoration independently checked. Lint, formatting,
+lock and documentation checks pass. The Planner grade remains owed.
+
+H1q is draft [PR #209][request-accounting], after #208. Its
+[implementation record][request-accounting-record] closes
+per-request source custody without an ordinary sibling filing barrier and derives
+original request identities from the complete recorded generation. Pair opening,
+repair and terminal accounting remain owed. Malformed recall still needs a Spec
+amendment defining its typed refusal. No runtime policy is inferred from that gap.
+The restored harness suite passes 871 tests with zero failures and 17 inherited
+ignored instruments. All 49 added tests run. Thirteen compiled protective probes
+fail their intended assertions, with exact restoration independently checked. Lint,
+formatting, lock and documentation checks pass. The Planner grade remains owed.
+
+H2a is draft [PR #210][pair-accounting], after #209. Its
+[implementation record][pair-accounting-record] covers
+committed openings and not_dispatched terminals for every accepted original request
+that the caller bars from execution. Private receipt custody constructs the retained
+completion and harness notice. Stop and unload preserve owed filings, and frozen
+pair facts enter the halt account. External execution, repaired sends, inward reads,
+review authorization, retry lineage, boot repair and placement acknowledgement remain
+owed. The restored harness suite passes 902 tests with zero failures and 17 inherited
+ignored instruments. All 31 added tests run, and twelve compiled protective probes
+fail their intended assertions with exact source restoration. Lint, formatting,
+lock, editorial and link checks pass. The Planner grade remains owed.
 
 P1a adds strict draft/bound declaration parsing, admin-owned canonical TOML,
 strict binding/index/guard codecs and descriptor-held artifact verification. It is
@@ -249,13 +374,25 @@ contracts with real
 trace admission, Unix sockets and scripted classifier/state replies. They do not
 qualify production STE100, deployment limits or throughput.
 
-H1b2 remains owed: all author callers, preflight and lifecycle ownership, input and
-model repair orchestration, the six-source common pump and bound activation,
-and the complete halt account and teardown. C1 supplies the production STE100
-adapter. The scripted adapter proves the near-side contract only. H1b1's frozen
-failure preserves its owned ledger and channel evidence, but is not the run-wide
-halt report or containment ladder. These obligations remain part of the complete
-implementation and cutover gate.
+H1p is [draft PR #201][pump-transports], with the bounded packet owners described in
+the [transport implementation record][pump-transport-record]. It is stacked on
+PR #200. It consumes existing organ, decode and label channels and leaves their
+legacy callers active until the coupled cutover. The shared wire types and decode
+segment format stay unchanged. Enter's initial ancillary descriptor transfer remains
+part of the paired lifecycle migration.
+The full harness suite passes 561 tests with 17 inherited ignored instruments. All
+20 new transport fixtures and the new raw-readiness clock test run. Eleven compiled
+guard removals fail their intended behavioral checks. Exact source restoration and
+the restored 20-test transport and 13-test clock suites are independently verified.
+All-target lint, formatting, lock and diff checks pass. These establish bounded
+transport progress, including real trace pressure, not the future pump scheduler.
+
+H1c supplies the phaseful recording and pump components and the frozen halt account
+producer. H1b2 still owes all serving author callers, lifecycle integration, input
+and model repair orchestration, bound activation at the owning operations, and
+the complete halt containment and terminal publication sequence. C1 supplies the
+production STE100 adapter. Scripted adapters prove their contracts only. These
+obligations remain part of the complete implementation and cutover gate.
 
 The later rows remain owed.
 This is a progress record, not a claim that the full goal or any serving cutover is
@@ -296,6 +433,8 @@ quality, decoder capacity, throughput or absence of paging waits.
 [spu]: https://github.com/toddwbucy/WeaverAgent/pull/191
 
 [snapshot]: https://github.com/toddwbucy/WeaverAgent/pull/192
+[ste100-transport]: https://github.com/toddwbucy/WeaverAgent/pull/200
+[ste100-transport-record]: state-management-ste100-transport-2026-10-21.md
 
 [artifacts]: https://github.com/toddwbucy/WeaverAgent/pull/193
 
@@ -308,3 +447,27 @@ quality, decoder capacity, throughput or absence of paging waits.
 [placement]: https://github.com/toddwbucy/WeaverAgent/pull/197
 [filing]: https://github.com/toddwbucy/WeaverAgent/pull/198
 [filing-coordinator]: https://github.com/toddwbucy/WeaverAgent/pull/199
+[pump-transport-record]: state-management-pump-transports-2026-10-21.md
+[pump-transports]: https://github.com/toddwbucy/WeaverAgent/pull/201
+
+[recording-support-record]: state-management-recording-support-2026-10-21.md
+[recording-support]: https://github.com/toddwbucy/WeaverAgent/pull/202
+[run-context-record]: state-management-run-context-2026-10-21.md
+[run-context]: https://github.com/toddwbucy/WeaverAgent/pull/203
+[input-transaction-record]: state-management-input-transaction-2026-10-21.md
+[capture-transaction-record]: state-management-capture-transaction-2026-10-21.md
+[capture-transaction]: https://github.com/toddwbucy/WeaverAgent/pull/205
+
+[input-transaction]: https://github.com/toddwbucy/WeaverAgent/pull/204
+[template-certification-record]: state-management-template-certification-2026-10-21.md
+[template-certification]: https://github.com/toddwbucy/WeaverAgent/pull/206
+[filing-receipts-record]: state-management-filing-receipts-2026-10-21.md
+[filing-receipts]: https://github.com/toddwbucy/WeaverAgent/pull/207
+[output-checks-record]: state-management-output-checks-2026-10-21.md
+[output-checks]: https://github.com/toddwbucy/WeaverAgent/pull/208
+
+[request-accounting-record]: state-management-request-accounting-2026-10-21.md
+[request-accounting]: https://github.com/toddwbucy/WeaverAgent/pull/209
+
+[pair-accounting-record]: state-management-pair-accounting-2026-10-21.md
+[pair-accounting]: https://github.com/toddwbucy/WeaverAgent/pull/210

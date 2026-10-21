@@ -237,3 +237,137 @@ fn reservation_limits_and_spent_terminal_permits_are_independent_of_sink_speed()
         "a drained terminal record cannot restore its permit"
     );
 }
+
+#[test]
+fn a_small_queue_wakes_the_pump_when_its_last_write_finishes() {
+    let (sink, mut reader) = bounded_pair();
+    let mut writer = Writer::start(sink.into()).unwrap();
+    let large = line(&"x".repeat(1_000_000));
+    let expected = Arc::clone(&large);
+    writer
+        .reserve(None)
+        .unwrap()
+        .unwrap()
+        .enqueue(Sequence(31), large);
+    assert_eq!(
+        writer.drain_status().unwrap(),
+        DrainStatus::Pending { queued: 1 }
+    );
+    assert!(!readable(writer.capacity_fd(), 0));
+    let reader = std::thread::spawn(move || {
+        let mut bytes = vec![0_u8; expected.len()];
+        reader.read_exact(&mut bytes).unwrap();
+        assert_eq!(bytes, expected.as_bytes());
+        reader
+    });
+    assert!(
+        readable(writer.capacity_fd(), 2000),
+        "a queue below the capacity threshold must wake on complete drain"
+    );
+    assert_eq!(writer.drain_status().unwrap(), DrainStatus::Emptied);
+    assert_eq!(
+        writer.boundary(Some(Sequence(31))).committed,
+        Some(Sequence(31))
+    );
+    assert_eq!(writer.try_capacity_wake().unwrap(), CapacityWake::Consumed);
+    assert_eq!(writer.try_capacity_wake().unwrap(), CapacityWake::Empty);
+    drop(writer);
+    drop(reader.join().unwrap());
+}
+
+#[test]
+fn cancelling_the_only_reservation_wakes_the_drain_predicate() {
+    let (sink, _reader) = bounded_pair();
+    let mut writer = Writer::start(sink.into()).unwrap();
+    let reservation = writer.reserve(None).unwrap().unwrap();
+    assert_eq!(
+        writer.drain_status().unwrap(),
+        DrainStatus::Pending { queued: 1 }
+    );
+    drop(reservation);
+    assert!(readable(writer.capacity_fd(), 1000));
+    assert_eq!(writer.drain_status().unwrap(), DrainStatus::Emptied);
+    assert_eq!(writer.try_capacity_wake().unwrap(), CapacityWake::Consumed);
+    assert_eq!(writer.boundary(None).committed, None);
+}
+
+#[test]
+fn bounded_wake_consumes_one_buffer_and_returns_after_an_interruption() {
+    let (sink, _reader) = bounded_pair();
+    let mut writer = Writer::start(sink.into()).unwrap();
+    let mut notifier = &writer.shared.notifier;
+    notifier.write_all(&[1_u8; 512]).unwrap();
+    let calls = std::cell::Cell::new(0);
+    assert_eq!(
+        writer
+            .try_capacity_wake_with(|_, _| {
+                calls.set(calls.get() + 1);
+                Err(io::ErrorKind::Interrupted.into())
+            })
+            .unwrap(),
+        CapacityWake::Interrupted
+    );
+    assert_eq!(calls.get(), 1);
+    assert!(readable(writer.capacity_fd(), 0));
+    assert_eq!(writer.try_capacity_wake().unwrap(), CapacityWake::Consumed);
+    assert!(
+        readable(writer.capacity_fd(), 0),
+        "one call must leave a second buffer for the next pump step"
+    );
+    assert_eq!(writer.try_capacity_wake().unwrap(), CapacityWake::Consumed);
+    assert!(!readable(writer.capacity_fd(), 0));
+    assert_eq!(writer.try_capacity_wake().unwrap(), CapacityWake::Empty);
+    assert_eq!(writer.drain_status().unwrap(), DrainStatus::Emptied);
+}
+
+#[test]
+fn bounded_status_and_wake_keep_the_exact_standing_commit_failure() {
+    let (sink, reader) = bounded_pair();
+    drop(reader);
+    let mut writer = Writer::start(sink.into()).unwrap();
+    writer
+        .reserve(None)
+        .unwrap()
+        .unwrap()
+        .enqueue(Sequence(45), line("fail"));
+    assert!(readable(writer.capacity_fd(), 1000));
+    let failure = writer.standing_failure().expect("the sink failed");
+    assert!(matches!(
+        failure,
+        Failure::CommitFailed {
+            sequence: Sequence(45),
+            ..
+        }
+    ));
+    assert_eq!(writer.drain_status(), Err(failure.clone()));
+    assert_eq!(writer.try_capacity_wake(), Err(failure.clone()));
+    assert_eq!(writer.drain_status(), Err(failure));
+}
+
+#[test]
+fn bounded_wake_eof_is_standing_and_never_a_successful_empty_drain() {
+    let (sink, _reader) = bounded_pair();
+    let mut writer = Writer::start(sink.into()).unwrap();
+    writer
+        .shared
+        .notifier
+        .shutdown(std::net::Shutdown::Write)
+        .unwrap();
+    let failure = writer.try_capacity_wake().unwrap_err();
+    assert!(matches!(failure, Failure::WriteTargetUnusable { .. }));
+    assert_eq!(writer.drain_status(), Err(failure.clone()));
+    assert_eq!(writer.standing_failure(), Some(failure));
+}
+
+#[test]
+fn an_empty_transition_that_cannot_signal_is_a_standing_failure() {
+    let (sink, _reader) = bounded_pair();
+    let writer = Writer::start(sink.into()).unwrap();
+    let reservation = writer.reserve(None).unwrap().unwrap();
+    writer.wake.shutdown(std::net::Shutdown::Read).unwrap();
+    drop(reservation);
+    assert!(matches!(
+        writer.drain_status(),
+        Err(Failure::WriteTargetUnusable { .. })
+    ));
+}

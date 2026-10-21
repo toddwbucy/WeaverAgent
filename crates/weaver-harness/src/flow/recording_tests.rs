@@ -570,9 +570,24 @@ fn classifier_completion_waits_for_real_capacity_then_releases_exactly_once() {
                 std::thread::yield_now();
             }
             RecordProgress::Recorded {
+                sequence,
                 proof: Some(RecordProof::Classifier(proof)),
-                ..
-            } => break proof,
+            } => {
+                assert_eq!(sequence.0, count as u64);
+                assert_eq!(
+                    proof.source(),
+                    &SourcePosition {
+                        block_id: SourceBlockId {
+                            run: "run".into(),
+                            sequence: sequence.0.into(),
+                            block: 0.into(),
+                        },
+                        turn: Some("turn".into()),
+                    },
+                    "proof must use assigned trace identity, never input sequence 999",
+                );
+                break proof;
+            }
             other => panic!("classifier record failed: {other:?}"),
         }
     };
@@ -874,7 +889,10 @@ fn state_socket_completion_waits_for_real_recorded_measurement_and_releases_once
     let Some(RecordProof::State(proof)) = proof else {
         panic!("actual state measurement proof");
     };
-    let completion = channel.release(proof).unwrap();
+    let completion = channel
+        .release(proof)
+        .unwrap()
+        .expect("recorded completion");
     assert_eq!(
         s::encode_state_line(&completion.answer, s::FrameDirection::Response).unwrap(),
         s::encode_state_line(&answer, s::FrameDirection::Response).unwrap()
@@ -904,3 +922,6 @@ fn state_socket_completion_waits_for_real_recorded_measurement_and_releases_once
     };
     assert!(channel.release(proof).is_err());
 }
+
+#[path = "recording_owner_tests.rs"]
+mod owner_tests;

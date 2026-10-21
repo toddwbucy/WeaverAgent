@@ -46,8 +46,8 @@ mod tests;
 
 pub use event::{Envelope, Event, Payload};
 pub use recorder::{
-    AwaitingLoad, Closed, Loaded, PreflightAttempt, PreflightFailure, PreflightRecorder, Recorder,
-    Refused, Submission, SubmitAttempt,
+    AwaitingLoad, Closed, Loaded, PreflightAttempt, PreflightFailure, PreflightRecorder,
+    PreflightTerminal, PreflightTerminalFailure, Recorder, Refused, Submission, SubmitAttempt,
 };
 pub use structure::{Record, WorkingStructure};
-pub use writer::{ORDINARY_CAPACITY, QUEUE_DEPTH, TERMINAL_RESERVE};
+pub use writer::{CapacityWake, DrainStatus, ORDINARY_CAPACITY, QUEUE_DEPTH, TERMINAL_RESERVE};
