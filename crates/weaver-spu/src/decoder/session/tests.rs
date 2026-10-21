@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 /// What the double saw, held behind a shared handle so a test can read it
 /// back after the session has taken ownership of the backend.
-#[derive(Default)]
+#[derive(Default, Clone, Debug, PartialEq)]
 struct Log {
     /// Every reseed the session asked for, in order: the seed it
     /// derived and the penalty window it read from the resident tail.
@@ -29,6 +29,10 @@ struct Log {
     /// What `take_columns` answers. `None` is the unarmed tap, which is
     /// what every test that does not reach for the column wants.
     columns: Option<Vec<Vec<f32>>>,
+    columns_taken: usize,
+    reductions_taken: usize,
+    column_holds: Vec<bool>,
+    closed: usize,
 }
 
 /// A backend that records what it was asked to do. The seam this doubles is
@@ -97,7 +101,16 @@ impl Backend for Recorder {
         Ok(token)
     }
     fn take_columns(&mut self) -> Option<Vec<Vec<f32>>> {
-        self.0.borrow().columns.clone()
+        let mut log = self.0.borrow_mut();
+        log.columns_taken += 1;
+        log.columns.clone()
+    }
+    fn take_reduction(&mut self) -> Option<crate::readout::Reduction> {
+        self.0.borrow_mut().reductions_taken += 1;
+        None
+    }
+    fn hold_columns(&mut self, hold: bool) {
+        self.0.borrow_mut().column_holds.push(hold);
     }
     fn truncate_to(&mut self, position: usize) -> Result<(), DecodeFault> {
         self.0.borrow_mut().truncated.push(position);
@@ -107,7 +120,103 @@ impl Backend for Recorder {
         self.0.borrow_mut().reestablished += 1;
         Ok(())
     }
-    fn close(&mut self) {}
+    fn close(&mut self) {
+        self.0.borrow_mut().closed += 1;
+    }
+}
+
+#[test]
+fn placement_facts_refuse_before_open_after_close_and_after_failed_cut() {
+    let log = Rc::new(RefCell::new(Log::default()));
+    let mut fresh = Session::new(
+        Box::new(Recorder(Rc::clone(&log), DISTRIBUTION.to_vec())),
+        128,
+        FlushMechanism::TruncateToPosition,
+        false,
+    );
+    assert_eq!(fresh.placement_position(0), Err(DecodeFault::NotOpen));
+    assert_eq!(*log.borrow(), Log::default());
+    fresh.open(&[TokenId(1)]).unwrap();
+    fresh.close();
+    let closed = log.borrow().clone();
+    assert_eq!(
+        fresh.placement_position(u64::MAX),
+        Err(DecodeFault::NotOpen)
+    );
+    assert_eq!(*log.borrow(), closed);
+
+    let (mut session, log) = with_mechanism(
+        vec![TokenId(99)],
+        128,
+        FlushMechanism::ReestablishAndReprefill,
+    );
+    let next_decode = log.borrow().decoded.len();
+    log.borrow_mut().fail_decode_call = Some(next_decode);
+    assert!(session.flush(0).is_err());
+    let poisoned = log.borrow().clone();
+    assert_eq!(session.placement_position(0), Err(DecodeFault::NotOpen));
+    assert_eq!(*log.borrow(), poisoned);
+}
+
+#[test]
+fn placement_facts_clamp_without_backend_or_session_effects_across_real_operations() {
+    for mechanism in [
+        FlushMechanism::TruncateToPosition,
+        FlushMechanism::ReestablishAndReprefill,
+    ] {
+        let (mut session, log) = with_mechanism(vec![TokenId(3), TokenId(99)], 128, mechanism);
+        let snapshot = |session: &Session<'_>| {
+            let tokens = session.resident_tokens().to_vec();
+            let before = log.borrow().clone();
+            let resident = tokens.len() as u64;
+            let prefix = session.prefix_len() as u64;
+            for (requested, expected) in [
+                (0, prefix),
+                (prefix, prefix),
+                (resident, resident),
+                (u64::MAX, resident),
+            ] {
+                assert_eq!(
+                    session.placement_position(requested),
+                    Ok(PlacementPosition {
+                        resident,
+                        prefix_tokens: prefix,
+                        keep: expected,
+                        capacity: 128,
+                    })
+                );
+            }
+            assert_eq!(session.resident_tokens(), tokens);
+            assert_eq!(*log.borrow(), before);
+        };
+        snapshot(&session);
+        session
+            .append_and_generate(
+                &[TokenId(4), TokenId(5)],
+                &stop_at(0),
+                &mut NeverCancels,
+                &mut |_| {},
+                PositionedSinks {
+                    field: None,
+                    on_column: &mut |_, _| {},
+                },
+                SamplerBuild {
+                    seed: 17,
+                    penalty_window: 32,
+                },
+            )
+            .unwrap();
+        snapshot(&session);
+        let measured = session.placement_position(3).unwrap();
+        assert_eq!(measured.keep, 3);
+        session.flush(3).unwrap();
+        assert_eq!(session.resident_len() as u64, measured.keep);
+        snapshot(&session);
+        session
+            .elide(session.prefix_len(), session.resident_len())
+            .unwrap();
+        snapshot(&session);
+    }
 }
 
 /// **Each positioned sink fires at the position it names, and the
