@@ -396,7 +396,7 @@ fn every_context_rule_selects_original_block_zero_even_outside_required_tuples()
 #[test]
 fn mixed_message_copies_whole_text_in_original_order_and_preserves_trace_bytes() {
     let first = r#"{"type":"text","text":"Read caf\u00e9.\nKeep \"quotes\"."}"#;
-    let last = r#"{"type":"text","text":"Write α."}"#;
+    let last = concat!(r#"{"type":"text","text":"Write "#, "\u{03b1}", r#"."}"#);
     let payload = format!(
         "{{\"role\":\"assistant\",\"content\":[{first},{{\"type\":\"tool_call\",\"name\":\"sh\",\"arguments\":\"echo x\"}},{{\"type\":\"tool_result\",\"content\":\"x\"}},{{\"type\":\"unrecovered_call\",\"fragment\":\"<tool>\"}},{last}]}}"
     );
@@ -555,7 +555,7 @@ fn canonical_envelope_copy_keeps_escaped_identity_and_full_width_counters() {
         Origin::Operator,
         r#"{"role":"user","content":[{"type":"text","text":"Read x."}]}"#,
     )
-    .replace("\"session\":\"s-1\"", "\"session\":\"s\\\"\\nα\"")
+    .replace("\"session\":\"s-1\"", "\"session\":\"s\\\"\\n\u{03b1}\"")
     .replace(
         "\"sequence\":\"7\"",
         "\"sequence\":\"18446744073709551615\"",
@@ -578,7 +578,11 @@ fn canonical_envelope_copy_keeps_escaped_identity_and_full_width_counters() {
 
 #[test]
 fn pair_copy_is_the_complete_payload_at_virtual_block_zero() {
-    let payload = r#"{"call_id":{"run":"r-1","sequence":"6","call":"0"},"call_block":"1","statement":{"block_id":{"run":"r-1","sequence":"6","block":"0"},"binding":"0"},"lane":"external","request":{"external":{"name":"sh","arguments":"echo café"}},"retry_of":null}"#;
+    let payload = concat!(
+        r#"{"call_id":{"run":"r-1","sequence":"6","call":"0"},"call_block":"1","statement":{"block_id":{"run":"r-1","sequence":"6","block":"0"},"binding":"0"},"lane":"external","request":{"external":{"name":"sh","arguments":"echo caf"#,
+        "\u{00e9}",
+        r#""}},"retry_of":null}"#,
+    );
     let raw = line(Kind::ToolCallStarted, Channel::Tool, Origin::Model, payload);
     let original = raw.clone();
     match tee().tap(&source(), &raw) {
