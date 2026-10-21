@@ -1,13 +1,21 @@
 use super::sha256;
 use crate::engine::serving_sqlite::{
-    CatalogFault, ServingContext, ServingSqlite, configure, filing, open_memory, reads,
-    verify_integrity, verify_json_tables, verify_schema,
+    CatalogFault, ServingContext, ServingSqlite, configure, filing, reads, verify_integrity,
+    verify_json_tables, verify_schema,
 };
 use rusqlite::{Connection, Row};
 use serde_json::value::RawValue;
 use weaver_types::state_flow::*;
 
 mod pairs;
+mod timing;
+
+/// The adoption outcome and the interval of SQL-backed image validation.
+/// Preflight refusals have no query phase. Clock failures are component failures.
+pub struct ObservedAdoption {
+    pub result: Result<ServingSqlite, OpenFault>,
+    pub query: Option<OperationPhase>,
+}
 
 #[derive(Debug)]
 pub struct OpenFault {
@@ -59,6 +67,26 @@ impl ServingSqlite {
         start: &StartIdentity,
         read_limits: ReadLimits,
     ) -> Result<Self, OpenFault> {
+        Self::adopt_inner(
+            image,
+            common,
+            schema_id,
+            scheme_id,
+            start,
+            read_limits,
+            None,
+        )
+    }
+
+    fn adopt_inner(
+        image: &[u8],
+        common: &Common,
+        schema_id: &str,
+        scheme_id: &str,
+        start: &StartIdentity,
+        read_limits: ReadLimits,
+        timing: Option<&mut timing::QueryTiming>,
+    ) -> Result<Self, OpenFault> {
         if schema_id != STATE_CONTENT_SCHEMA {
             return Err(OpenFault {
                 code: StateRefusalCode::UnsupportedSchema,
@@ -78,7 +106,9 @@ impl ServingSqlite {
         {
             return Err(invalid("image size or digest mismatch"));
         }
-        let mut connection = open_memory()?;
+        let mut connection = Connection::open_in_memory()?;
+        let _query = timing.map(timing::QueryTiming::start).transpose()?;
+        configure(&connection)?;
         connection.deserialize_read_exact(rusqlite::MAIN_DB, image, image.len(), false)?;
         lift_memory_limit(&connection)?;
         configure(&connection)?;
@@ -120,6 +150,16 @@ impl ServingSqlite {
             .map_err(|error| invalid(error.to_string()))?;
         reads::verify_image_observations(&connection)
             .map_err(|error| invalid(format!("stored observation: {error:?}")))?;
+        let recorded_run: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM observation_run WHERE run=?1)",
+            [&common.run_id],
+            |row| row.get(0),
+        )?;
+        if recorded_run {
+            return Err(invalid(
+                "the open run already has a member observation identity",
+            ));
+        }
         let position =
             reads::position(&connection).map_err(|error| invalid(format!("{error:?}")))?;
         if position != start.position {

@@ -20,7 +20,7 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | F3 | F1, F2 | Atomic filing, effects, reads and verified images, state amendment |
 | F4 | F1, F3 | Member, paging and capture cleanup, state/contract amendments |
 | T1a | PR #182 | Pure trace registry and validated copy, trace amendment |
-| T1b | F1, T1a | Typed trace authoring and recorder integration, trace amendment |
+| T1b | T1a | Typed trace authoring and recorder integration, trace amendment |
 | C1 | F1 | SPU STE100 duty, scheme and template ports, Spec 02 and SPU amendment |
 | P1 | F1, F4, C1 | Seed, custody and boot, admin/persistence amendments |
 | H1 | T1b, F4, C1, P1 | Harness flow, receipts and halt, harness/foundation amendments |
@@ -63,9 +63,23 @@ prerequisite. The full state crate suite passed, as did lint, formatting and loc
 checks. Thirty-seven deliberate guard removals failed their protective tests.
 The member channel, paging and capture lifecycle remain F4 work.
 
-T1b is in progress on code/state-trace-recorder. The serving recall payload needs
-an exact source/boot representation from its owning contract before that payload can
-be implemented. The recorder and the other specified payloads proceed independently.
+T1b is [draft PR #187][recorder], stacked on #185. Its recorder, typed payloads,
+capacity reservations and writer wake path passed the trace suite and lint checks.
+Sixteen deliberate mutations failed their protective tests. Independent review found
+no unresolved defect in that scope. It has no dependency on the shared floor crate.
+
+The serving recall payload needs an exact source/boot representation from its owning
+contract before that payload can be implemented. The operator authorized drafting
+that amendment for review, now [draft PR #189][recall]. No serving recall constructor
+is supplied before approval.
+
+F4 is [draft PR #188][member], stacked on #186. It supplies the
+state-flow/1 member, immutable paging, capture cleanup and seed process ports.
+The full state suite, lint, formatting and lock checks pass. Twenty-five deliberate
+guard removals failed their protective tests. Independent findings in continuation
+identity, page publication, canonical encoding and observation integrity are fixed.
+Copied and held byte counters remain explicitly uninstrumented. The optional build
+without SQLite still has its inherited legacy binary compile failure.
 The later rows remain owed.
 This is a progress record, not a claim that the full goal or any serving cutover is
 complete. Each draft carries its own fresh test and perturbation evidence.
@@ -98,3 +112,6 @@ quality, decoder capacity, throughput or absence of paging waits.
 [floor]: https://github.com/toddwbucy/WeaverAgent/pull/184
 [tap]: https://github.com/toddwbucy/WeaverAgent/pull/185
 [core]: https://github.com/toddwbucy/WeaverAgent/pull/186
+[recorder]: https://github.com/toddwbucy/WeaverAgent/pull/187
+[member]: https://github.com/toddwbucy/WeaverAgent/pull/188
+[recall]: https://github.com/toddwbucy/WeaverAgent/pull/189
