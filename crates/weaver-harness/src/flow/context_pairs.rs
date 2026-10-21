@@ -4,9 +4,10 @@
 
 use super::pairs::{CompletedPair, PairRecordPhase};
 use super::receipt_driver::FilingOwner;
+use super::repair::RepairAccount;
 use super::*;
 use crate::flow::author::AuthoredSource;
-use crate::flow::coordinator::OriginalRequests;
+use crate::flow::coordinator::{CheckedGeneration, OriginalRequests};
 use crate::flow::ledger::{LeaseSlotStatus, SourceDisposition};
 use crate::flow::mirror;
 use crate::flow::report::OutstandingPair;
@@ -26,6 +27,13 @@ pub(in crate::flow) enum PairBeginRefusal {
 #[derive(Debug)]
 pub(in crate::flow) struct PairBeginError {
     pub original: OriginalRequests,
+    pub refusal: PairBeginRefusal,
+    pub failure: Option<RunFailure>,
+}
+
+#[derive(Debug)]
+pub(in crate::flow) struct RepairPairBeginError {
+    pub account: RepairAccount,
     pub refusal: PairBeginRefusal,
     pub failure: Option<RunFailure>,
 }
@@ -74,12 +82,87 @@ impl RecordingContext {
                 failure: Some(failure),
             });
         }
-        let refusal = if self.phase != RecordingPhase::Entered
+        let refusal = self.pair_begin_refusal().or_else(|| {
+            if !self.pair_generation_matches(original.generation()) {
+                Some(PairBeginRefusal::WrongGeneration)
+            } else if !self.pair_custody_matches(&original) {
+                Some(PairBeginRefusal::LostCustody)
+            } else {
+                None
+            }
+        });
+        if let Some(refusal) = refusal {
+            return Err(PairBeginError {
+                original,
+                refusal,
+                failure: None,
+            });
+        }
+        if let Err((original, _)) = self.pairs.accept(original) {
+            return Err(PairBeginError {
+                original,
+                refusal: PairBeginRefusal::InvalidBatch,
+                failure: None,
+            });
+        }
+        self.start_pair_work(cause);
+        Ok(())
+    }
+
+    /// The repair owner supplies the complete private substitution proof. Public
+    /// corrected references cannot be used to create this account or its receipts.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn begin_repair_not_dispatched(
+        &mut self,
+        account: RepairAccount,
+        cause: NonDispatchCause,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RepairPairBeginError> {
+        if let Err(failure) = self.live(io) {
+            return Err(RepairPairBeginError {
+                account,
+                refusal: PairBeginRefusal::WrongPhase,
+                failure: Some(failure),
+            });
+        }
+        let refusal = self.pair_begin_refusal().or_else(|| {
+            if !account
+                .generations()
+                .all(|generation| self.pair_generation_matches(generation))
+            {
+                Some(PairBeginRefusal::WrongGeneration)
+            } else if !self.repair_pair_custody_matches(&account) {
+                Some(PairBeginRefusal::LostCustody)
+            } else {
+                None
+            }
+        });
+        if let Some(refusal) = refusal {
+            return Err(RepairPairBeginError {
+                account,
+                refusal,
+                failure: None,
+            });
+        }
+        if let Err((account, _)) = self.pairs.accept_repair(account) {
+            return Err(RepairPairBeginError {
+                account,
+                refusal: PairBeginRefusal::InvalidBatch,
+                failure: None,
+            });
+        }
+        self.start_pair_work(cause);
+        Ok(())
+    }
+
+    fn pair_begin_refusal(&self) -> Option<PairBeginRefusal> {
+        if self.phase != RecordingPhase::Entered
             || self.flow.phase() != CoordinatorPhase::Active
             || !self.barrier.is_active()
         {
             Some(PairBeginRefusal::WrongPhase)
-        } else if self.pair_work.is_some()
+        } else if (self.repair_blocks_external() && self.repair_owns_pairs())
+            || self.pair_work.is_some()
             || self.output.is_some()
             || self.filing.is_some()
             || self.templates_block_content()
@@ -100,30 +183,12 @@ impl RecordingContext {
             Some(PairBeginRefusal::Busy)
         } else if self.deadlines.get(PumpDeadline::Decision).is_none() {
             Some(PairBeginRefusal::MissingWait)
-        } else if original.generation().scheme() != &self.declaration.scheme
-            || original.generation().source().block_id.run != self.flow.state().identity().1
-            || self.open_turn.as_ref() != Some(&original.generation().original().turn)
-        {
-            Some(PairBeginRefusal::WrongGeneration)
-        } else if !self.pair_custody_matches(&original) {
-            Some(PairBeginRefusal::LostCustody)
         } else {
             None
-        };
-        if let Some(refusal) = refusal {
-            return Err(PairBeginError {
-                original,
-                refusal,
-                failure: None,
-            });
         }
-        if let Err((original, _)) = self.pairs.accept(original) {
-            return Err(PairBeginError {
-                original,
-                refusal: PairBeginRefusal::InvalidBatch,
-                failure: None,
-            });
-        }
+    }
+
+    fn start_pair_work(&mut self, cause: NonDispatchCause) {
         self.pair_work = Some(PairTransaction {
             bound: self
                 .deadlines
@@ -138,34 +203,66 @@ impl RecordingContext {
         self.pairs
             .set_not_dispatched(cause)
             .expect("new healthy batch");
-        Ok(())
     }
 
-    fn pair_custody_matches(&self, original: &OriginalRequests) -> bool {
-        let Some(lease) = original.generation().receipt_lease() else {
+    pub(super) fn pair_custody_matches(&self, original: &OriginalRequests) -> bool {
+        self.generation_custody_matches(original.generation())
+            && original.dependencies().all(|statement| {
+                self.pair_dependency_ready(original.generation(), &statement.block_id)
+            })
+    }
+
+    fn pair_generation_matches(&self, generation: &CheckedGeneration) -> bool {
+        generation.scheme() == &self.declaration.scheme
+            && generation.source().block_id.run == self.flow.state().identity().1
+            && self.open_turn.as_ref() == Some(&generation.original().turn)
+    }
+
+    pub(super) fn generation_custody_matches(&self, generation: &CheckedGeneration) -> bool {
+        if !self.pair_generation_matches(generation) {
+            return false;
+        }
+        let Some(lease) = generation.receipt_lease() else {
             return false;
         };
         let Ok(sources) = self.flow.ledger().source_lease_sources(lease) else {
             return false;
         };
-        let targets = original
-            .generation()
+        let targets = generation
             .blocks()
             .iter()
             .filter(|check| check.selected())
             .map(|check| &check.request().target);
-        if !sources
+        sources
             .map(|id| Ste100Target::Source(id.clone()))
             .eq(targets.cloned())
-        {
-            return false;
-        }
-        original.dependencies().all(|statement| {
+    }
+
+    fn pair_dependency_ready(
+        &self,
+        generation: &CheckedGeneration,
+        source: &SourceBlockId,
+    ) -> bool {
+        generation.receipt_lease().is_some_and(|lease| {
             matches!(
-                self.flow.source_receipt_status(lease, &statement.block_id),
+                self.flow.source_receipt_status(lease, source),
                 Ok(LeaseSlotStatus::Pending | LeaseSlotStatus::Ready)
             )
         })
+    }
+
+    fn repair_pair_custody_matches(&self, account: &RepairAccount) -> bool {
+        account
+            .generations()
+            .all(|generation| self.generation_custody_matches(generation))
+            && account.requests().iter().all(|request| {
+                account.generations().any(|generation| {
+                    generation.blocks().iter().any(|check| {
+                        check.request().target
+                            == Ste100Target::Source(request.statement.block_id.clone())
+                    }) && self.pair_dependency_ready(generation, &request.statement.block_id)
+                })
+            })
     }
 
     /// Accepted stop/leave may replace an unclaimed ordinary cause. A record
@@ -176,6 +273,9 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
+        if self.repair_blocks_external() && self.repair_owns_pairs() {
+            return Err(RunFailure::RepairOwned);
+        }
         self.pairs
             .set_not_dispatched(cause)
             .map_err(|error| self.pair_fault(io, format!("pair disposition: {error:?}")))
@@ -201,6 +301,9 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<PairProgress, RunFailure> {
         self.live(ports.io)?;
+        if self.repair_blocks_external() && self.repair_owns_pairs() {
+            return Err(RunFailure::RepairOwned);
+        }
         self.pair_wait_matches(ports.io)?;
         self.collect_pair_statement(ports.io)?;
         if self.pair_work.as_ref().unwrap().leg.is_some() {
@@ -310,7 +413,10 @@ impl RecordingContext {
         let Some(source) = self.pairs.next_statement().cloned() else {
             return Ok(());
         };
-        let lease = self.pairs.receipt_lease().expect("accepted private lease");
+        let lease = self
+            .pairs
+            .receipt_lease(&source)
+            .expect("accepted source-specific private lease");
         let disposition = self
             .flow
             .take_source_receipt(lease, &source)
@@ -397,8 +503,14 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<OriginalRequests>, RunFailure> {
         self.live(io)?;
+        if self.repair_blocks_external() && self.repair_owns_pairs() {
+            return Err(RunFailure::RepairOwned);
+        }
         if self.pair_work.is_none() {
             return Ok(None);
+        }
+        if self.pairs.has_repair_account() {
+            return Err(RunFailure::PairOwned);
         }
         self.pair_wait_matches(io)?;
         if !self.pairs.is_complete() {
@@ -410,6 +522,32 @@ impl RecordingContext {
             .map_err(|error| self.pair_fault(io, format!("pair completion: {error:?}")))?;
         self.pair_work = None;
         Ok(Some(original))
+    }
+
+    pub(in crate::flow) fn take_repair_accounting(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<Option<RepairAccount>, RunFailure> {
+        self.live(io)?;
+        if self.repair_blocks_external() && self.repair_owns_pairs() {
+            return Err(RunFailure::RepairOwned);
+        }
+        if self.pair_work.is_none() {
+            return Ok(None);
+        }
+        if !self.pairs.has_repair_account() {
+            return Err(RunFailure::PairOwned);
+        }
+        self.pair_wait_matches(io)?;
+        if !self.pairs.is_complete() {
+            return Ok(None);
+        }
+        let account = self
+            .pairs
+            .finish_repair_batch()
+            .map_err(|error| self.pair_fault(io, format!("repair pair completion: {error:?}")))?;
+        self.pair_work = None;
+        Ok(Some(account))
     }
 
     pub(in crate::flow) fn completed_pair(

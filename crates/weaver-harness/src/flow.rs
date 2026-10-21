@@ -152,3 +152,85 @@ mod pair_port_visibility {
         &mut FakePumpIo,
     ) -> Result<Option<OriginalRequests>, RunFailure> = RecordingContext::take_pair_accounting;
 }
+
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+mod repair_port_visibility {
+    use super::clock::testing::FakePumpIo;
+    use super::context::{
+        CorrectionProgress, EffectiveEmission, RecordingContext, RepairAccount, RepairBeginError,
+        RepairCancelled, RepairExhausted, RepairObserveError, RepairPairBeginError, RepairProgress,
+        RepairRefusalEvidence, RepairRefused, RestatementRequest, RunFailure,
+    };
+    use super::coordinator::OriginalRequests;
+    use super::pump::PumpPorts;
+    use super::templates::{RestatementTemplate, TemplateCertificate};
+    use weaver_types::state_flow::{NonDispatchCause, SourceBlockId};
+
+    const _: fn(
+        &mut RecordingContext,
+        OriginalRequests,
+        TemplateCertificate,
+        &'static RestatementTemplate,
+        &mut FakePumpIo,
+    ) -> Result<(), RepairBeginError> = RecordingContext::begin_repair;
+    const _: fn(
+        &mut RecordingContext,
+        &mut PumpPorts<'_, FakePumpIo>,
+    ) -> Result<RepairProgress, RunFailure> = RecordingContext::advance_repair;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<RestatementRequest>, RunFailure> = RecordingContext::take_restatement;
+    const _: fn(
+        &mut RecordingContext,
+        &SourceBlockId,
+        OriginalRequests,
+        &mut FakePumpIo,
+    ) -> Result<CorrectionProgress, RepairObserveError> = RecordingContext::observe_correction;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<EffectiveEmission>, RunFailure> = RecordingContext::take_effective_emission;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<RepairExhausted>, RunFailure> = RecordingContext::take_repair_exhausted;
+    const _: fn(
+        &mut RecordingContext,
+        NonDispatchCause,
+        &mut FakePumpIo,
+    ) -> Result<(), RunFailure> = RecordingContext::cancel_repair;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<RepairCancelled>, RunFailure> = RecordingContext::take_cancelled_repair;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<TemplateCertificate>, RunFailure> =
+        RecordingContext::take_repair_certificate;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<RepairRefused>, RunFailure> = RecordingContext::take_refused_repair;
+    const _: fn(
+        RepairRefused,
+    ) -> (
+        RepairAccount,
+        Option<OriginalRequests>,
+        RepairRefusalEvidence,
+    ) = RepairRefused::into_parts;
+    const _: fn(EffectiveEmission) -> RepairAccount = EffectiveEmission::into_account;
+    const _: fn(RepairExhausted) -> RepairAccount = RepairExhausted::into_account;
+    const _: fn(
+        &mut RecordingContext,
+        RepairAccount,
+        NonDispatchCause,
+        &mut FakePumpIo,
+    ) -> Result<(), RepairPairBeginError> = RecordingContext::begin_repair_not_dispatched;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<RepairAccount>, RunFailure> = RecordingContext::take_repair_accounting;
+}

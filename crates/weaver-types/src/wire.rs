@@ -1121,7 +1121,7 @@ pub struct InputRefusal {
 /// refusal typed there would make it hold and version four seam
 /// vocabularies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "seam", rename_all = "snake_case")]
+#[serde(tag = "seam", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RefusalRecord {
     Decode {
         asked: TokenAsk,
@@ -1136,6 +1136,19 @@ pub enum RefusalRecord {
     Classify { refusal: LabelRefusal },
     /// The pre-turn input check's attributed operation refusal.
     Input(InputRefusal),
+    /// A model pass cannot supply a usable tool statement or attempts a call
+    /// while it was asked only to restate held text. This is no component halt.
+    ProtocolRepair {
+        source_id: crate::state_flow::SourceBlockId,
+        case: crate::state_flow::ProtocolRepairCase,
+        detail: String,
+    },
+    /// Structural refusal of a compiled instruction's template or provenance.
+    Instruction {
+        template_id: String,
+        case: crate::state_flow::InstructionRefusal,
+        detail: String,
+    },
 }
 
 /// Which decode ask a refusal answered.

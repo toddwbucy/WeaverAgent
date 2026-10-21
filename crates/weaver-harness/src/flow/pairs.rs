@@ -10,7 +10,8 @@ use weaver_types::state_flow::{
     SourceBlockId, StateFrame, Ste100Result, Ste100Target, TerminalPairFate,
 };
 
-use crate::flow::coordinator::OriginalRequests;
+use super::repair::RepairAccount;
+use crate::flow::coordinator::{CheckedGeneration, OriginalRequests};
 use crate::flow::ledger::{CommittedSource, LedgerFile, SourceLease, TerminalOutcome};
 use crate::flow::report::{OutstandingPair, PairState};
 
@@ -110,8 +111,54 @@ struct Entry {
     completed: Option<CompletedPair>,
 }
 
+/// Only the association or repair owner can construct either proof. A public
+/// PairStarted vector is never sufficient to enter the accounting ledger.
+enum BatchProof {
+    Original(OriginalRequests),
+    Repair(RepairAccount),
+}
+
+impl BatchProof {
+    fn original(&self) -> &OriginalRequests {
+        match self {
+            Self::Original(original) => original,
+            Self::Repair(account) => account.original(),
+        }
+    }
+
+    fn requests(&self) -> impl Iterator<Item = &PairStarted> {
+        let (original, repair) = match self {
+            Self::Original(original) => (Some(original), None),
+            Self::Repair(account) => (None, Some(account)),
+        };
+        original
+            .into_iter()
+            .flat_map(|original| original.requests().iter().map(|request| request.opening()))
+            .chain(repair.into_iter().flat_map(|account| account.requests()))
+    }
+
+    fn generations(&self) -> impl Iterator<Item = &CheckedGeneration> {
+        let (original, repair) = match self {
+            Self::Original(original) => (Some(original.generation()), None),
+            Self::Repair(account) => (None, Some(account)),
+        };
+        original
+            .into_iter()
+            .chain(repair.into_iter().flat_map(|account| account.generations()))
+    }
+
+    fn generation_for(&self, source: &SourceBlockId) -> Option<&CheckedGeneration> {
+        self.generations().find(|generation| {
+            generation
+                .blocks()
+                .iter()
+                .any(|block| block.request().target == Ste100Target::Source(source.clone()))
+        })
+    }
+}
+
 struct Batch {
-    original: OriginalRequests,
+    proof: BatchProof,
     entries: Vec<Entry>,
     statements: Vec<Arc<CommittedSource>>,
     cause: Option<NonDispatchCause>,
@@ -153,12 +200,33 @@ impl PairLedger {
         &mut self,
         original: OriginalRequests,
     ) -> Result<(), (OriginalRequests, PairError)> {
+        self.accept_proof(BatchProof::Original(original))
+            .map_err(|(proof, error)| match proof {
+                BatchProof::Original(original) => (original, error),
+                BatchProof::Repair(_) => unreachable!("original proof returned unchanged"),
+            })
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn accept_repair(
+        &mut self,
+        account: RepairAccount,
+    ) -> Result<(), (RepairAccount, PairError)> {
+        self.accept_proof(BatchProof::Repair(account))
+            .map_err(|(proof, error)| match proof {
+                BatchProof::Repair(account) => (account, error),
+                BatchProof::Original(_) => unreachable!("repair proof returned unchanged"),
+            })
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn accept_proof(&mut self, proof: BatchProof) -> Result<(), (BatchProof, PairError)> {
         let prepare = (|| {
             self.live()?;
             if self.active.is_some() {
                 return Err(PairError::Busy);
             }
-            let generation = original.generation();
+            let generation = proof.original().generation();
             if generation.source().block_id.run != self.run
                 || generation.source().block_id.sequence.0 == 0
                 || generation.source().turn.as_deref()
@@ -169,7 +237,19 @@ impl PairLedger {
             if generation.scheme() != &self.scheme {
                 return Err(PairError::WrongScheme);
             }
-            let count = original.requests().len();
+            for held in proof.generations() {
+                if held.scheme() != &self.scheme {
+                    return Err(PairError::WrongScheme);
+                }
+                if held.source().block_id.run != self.run
+                    || held.source().turn != generation.source().turn
+                    || held.original().turn != generation.original().turn
+                    || held.source().block_id.sequence < generation.source().block_id.sequence
+                {
+                    return Err(PairError::InvalidIdentity);
+                }
+            }
+            let count = proof.requests().count();
             let mut entries = Vec::new();
             entries
                 .try_reserve_exact(count)
@@ -181,8 +261,7 @@ impl PairLedger {
             self.closed
                 .try_reserve(count)
                 .map_err(|_| PairError::Allocation)?;
-            for request in original.requests() {
-                let started = request.opening();
+            for started in proof.requests() {
                 if self
                     .closed
                     .iter()
@@ -197,6 +276,7 @@ impl PairLedger {
                     || started.call_id.sequence != generation.source().block_id.sequence
                     || started.retry_of.is_some()
                     || started.validate_structure().is_err()
+                    || proof.generation_for(&started.statement.block_id).is_none()
                 {
                     return Err(PairError::InvalidIdentity);
                 }
@@ -215,10 +295,10 @@ impl PairLedger {
         })();
         let (entries, statements) = match prepare {
             Ok(prepared) => prepared,
-            Err(error) => return Err((original, error)),
+            Err(error) => return Err((proof, error)),
         };
         self.active = Some(Batch {
-            original,
+            proof,
             entries,
             statements,
             cause: None,
@@ -227,11 +307,21 @@ impl PairLedger {
     }
 
     pub(super) fn original(&self) -> Option<&OriginalRequests> {
-        self.active.as_ref().map(|batch| &batch.original)
+        self.active.as_ref().map(|batch| batch.proof.original())
     }
 
-    pub(super) fn receipt_lease(&self) -> Option<&SourceLease> {
-        self.original()?.generation().receipt_lease()
+    pub(super) fn has_repair_account(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|batch| matches!(batch.proof, BatchProof::Repair(_)))
+    }
+
+    pub(super) fn receipt_lease(&self, source: &SourceBlockId) -> Option<&SourceLease> {
+        self.active
+            .as_ref()?
+            .proof
+            .generation_for(source)?
+            .receipt_lease()
     }
 
     /// Multiple bindings in one source use the same owned committed fact.
@@ -273,7 +363,10 @@ impl PairLedger {
             let LedgerFile::Statement(file) = receipt.file() else {
                 return Err(PairError::WrongStatement);
             };
-            let generation = batch.original.generation();
+            let generation = batch
+                .proof
+                .generation_for(receipt.source())
+                .ok_or(PairError::WrongStatement)?;
             let check = generation
                 .blocks()
                 .iter()
@@ -403,6 +496,9 @@ impl PairLedger {
             PairRecordPhase::Opening => {
                 if !entry.opening_authoring || entry.opening_source.is_some() {
                     return Err(PairError::WrongPhase);
+                }
+                if source.sequence <= entry.started.statement.block_id.sequence {
+                    return Err(PairError::InvalidIdentity);
                 }
                 entry.opening_source = Some(source);
             }
@@ -540,6 +636,28 @@ impl PairLedger {
 
     pub(super) fn finish_batch(&mut self) -> Result<OriginalRequests, PairError> {
         self.live()?;
+        if self.has_repair_account() {
+            return Err(PairError::WrongPhase);
+        }
+        match self.finish_proof()? {
+            BatchProof::Original(original) => Ok(original),
+            BatchProof::Repair(_) => unreachable!("checked original batch"),
+        }
+    }
+
+    pub(super) fn finish_repair_batch(&mut self) -> Result<RepairAccount, PairError> {
+        self.live()?;
+        if !self.has_repair_account() {
+            return Err(PairError::WrongPhase);
+        }
+        match self.finish_proof()? {
+            BatchProof::Repair(account) => Ok(account),
+            BatchProof::Original(_) => unreachable!("checked repair batch"),
+        }
+    }
+
+    fn finish_proof(&mut self) -> Result<BatchProof, PairError> {
+        self.live()?;
         if self
             .active
             .as_ref()
@@ -554,7 +672,7 @@ impl PairLedger {
                 .into_iter()
                 .map(|entry| entry.completed.unwrap()),
         );
-        Ok(batch.original)
+        Ok(batch.proof)
     }
 
     /// Unrecorded starts remain in the context's pending-author account. A
@@ -679,7 +797,16 @@ impl PairLedger {
         if file.scheme_id != self.scheme.scheme_id
             || file.source.session != self.session
             || file.source.turn.as_deref()
-                != Some(batch.original.generation().original().turn.0.as_str())
+                != Some(
+                    batch
+                        .proof
+                        .original()
+                        .generation()
+                        .original()
+                        .turn
+                        .0
+                        .as_str(),
+                )
             || file.source.channel != "tool"
             || file.source.subsystem != "harness"
             || file.validate_structure().is_err()

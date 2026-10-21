@@ -99,6 +99,14 @@ impl InputFixture {
         Self::with_templates(Some(inventory))
     }
 
+    pub(super) fn with_template_inventory_and_scheme(
+        inventory: &super::super::templates::CompiledInventory,
+        scheme_text: String,
+        scheme: s::SchemeDeclaration,
+    ) -> Self {
+        Self::with_declaration_scheme(Some(inventory), config(), Some((scheme_text, scheme)))
+    }
+
     pub(super) fn with_pending_limit(blocks: u64) -> Self {
         let mut declaration = config();
         declaration.backlog.max_pending_blocks = blocks.into();
