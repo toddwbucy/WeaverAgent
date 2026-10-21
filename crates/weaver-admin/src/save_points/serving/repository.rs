@@ -10,7 +10,9 @@ use std::path::Path;
 use nix::fcntl::OFlag;
 use nix::sys::stat::Mode;
 use sha2::{Digest as _, Sha256};
-use weaver_types::state_flow::{Digest, PersistenceCase, PersistenceCause, StartIdentity};
+use weaver_types::state_flow::{
+    DecimalU64, Digest, PersistenceCase, PersistenceCause, PersistencePhase, StartIdentity,
+};
 use weaver_types::{ServingDeclaration, SessionId, TraceSink, parse_serving_declaration};
 
 use super::Fault;
@@ -31,20 +33,29 @@ pub(crate) struct LoadScope<'a> {
 /// Root's published-artifact directory. A path is never resolved after entry.
 /// The caller must retain admin's invocation lock for the lifetime of any use.
 pub(crate) struct Repository {
-    directory: OwnedFd,
-    root_owner: Owner,
-    access_gid: u32,
+    pub(super) directory: OwnedFd,
+    pub(super) root_owner: Owner,
+    pub(super) access_gid: u32,
 }
 
-/// Proof of file custody, exact index/binding agreement, the three hashes and
-/// parseability of the actual declaration copy. This does not certify SQLite,
-/// STE100 qualification, peer liveness or the full inventory admission.
+/// Proof of file custody, agreement with the expected entry, the three hashes
+/// and parseability of the declaration copy. Index membership and guard absence
+/// depend on the verifying route. This does not certify SQLite, STE100
+/// qualification, peer liveness or the full inventory admission.
 #[derive(Debug)]
 pub(crate) struct VerifiedArtifact {
     entry: StateIndexEntry,
     declaration: ServingDeclaration,
     configuration: Vec<u8>,
     dump: File,
+}
+
+/// A restore failure never claims that an attempted append left the index alone.
+/// The caller must inspect that index before deciding whether another act is safe.
+#[derive(Debug)]
+pub(crate) struct RestoreFailure {
+    pub(crate) fault: Fault,
+    pub(crate) selection_may_be_appended: bool,
 }
 
 impl VerifiedArtifact {
@@ -137,11 +148,77 @@ impl Repository {
         self.verify(entry.clone(), scope)
     }
 
+    /// Append an explicit selection of a verified indexed artifact. The caller
+    /// owns root authorization and the invocation/run locks of an unloaded agent.
+    /// Checkpoints judge whether that caller may continue, not remote liveness.
+    /// Even a selection of the current latest appends the next ordinal.
+    pub(crate) fn restore(
+        &self,
+        selector: &ArtifactId,
+        scope: &LoadScope<'_>,
+        checkpoint: &mut impl FnMut(PersistencePhase) -> Result<(), String>,
+    ) -> Result<VerifiedArtifact, RestoreFailure> {
+        let before_append = |fault| RestoreFailure {
+            fault,
+            selection_may_be_appended: false,
+        };
+        checkpoint(PersistencePhase::Preparing)
+            .map_err(|detail| before_append(restore_stopped(detail)))?;
+        let (index, prefix) = self.read_index_snapshot().map_err(before_append)?;
+        let entry = index
+            .iter()
+            .rev()
+            .find(|entry| entry.artifact_id == *selector)
+            .ok_or_else(|| {
+                before_append(layout(format!("artifact {selector} has no index entry")))
+            })?;
+        let mut verified = self.verify(entry.clone(), scope).map_err(before_append)?;
+        checkpoint(PersistencePhase::Preparing)
+            .map_err(|detail| before_append(restore_stopped(detail)))?;
+        let mut selection = verified.entry.clone();
+        // Finding the selected entry above proves that this snapshot is nonempty.
+        selection.ordinal = next_selection_ordinal(index.last().expect("indexed artifact").ordinal)
+            .map_err(before_append)?;
+        selection.arrival = Arrival::Selected;
+        let record = selection
+            .to_json()
+            .map_err(|error| before_append(layout(format!("invalid selection: {error}"))))?;
+        checkpoint(PersistencePhase::Publishing)
+            .map_err(|detail| before_append(restore_stopped(detail)))?;
+        let after_attempt = |fault| RestoreFailure {
+            fault,
+            selection_may_be_appended: true,
+        };
+        super::fs_ops::append_line(
+            self.directory.as_fd(),
+            MANIFEST,
+            self.root_owner,
+            &prefix,
+            &record,
+        )
+        .map_err(|error| {
+            after_attempt(Fault::new(
+                PersistenceCase::PublicationFailed,
+                format!("restore selection append failed: {error}"),
+            ))
+        })?;
+        checkpoint(PersistencePhase::Reporting)
+            .map_err(|detail| after_attempt(restore_stopped(detail)))?;
+        verified.entry = selection;
+        Ok(verified)
+    }
+
     /// Empty is a valid pre-seed repository, never a valid serving load. A torn
     /// newest line is an error, including when every preceding line was valid.
     pub(super) fn read_index(&self) -> Result<Vec<StateIndexEntry>, Fault> {
+        self.read_index_snapshot().map(|(index, _)| index)
+    }
+
+    /// Read and validate the whole index and retain the exact bytes from that
+    /// same judged descriptor. An append must match this prefix without repair.
+    pub(super) fn read_index_snapshot(&self) -> Result<(Vec<StateIndexEntry>, Vec<u8>), Fault> {
         let Some(mut file) = open_optional(self.directory.as_fd(), MANIFEST)? else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         };
         judge_file(&file, self.root_owner, 0o644, MANIFEST)?;
         let mut bytes = Vec::new();
@@ -180,15 +257,30 @@ impl Repository {
                 published.insert(&entry.artifact_id, entry);
             }
         }
-        Ok(index)
+        Ok((index, bytes))
     }
 
-    fn verify(
+    pub(super) fn verify(
         &self,
         entry: StateIndexEntry,
         scope: &LoadScope<'_>,
     ) -> Result<VerifiedArtifact, Fault> {
         self.refuse_guard(&entry.artifact_id)?;
+        self.verify_unindexed_publication(entry, scope)
+    }
+
+    /// Publisher readback only. This judges exact artifact files, custody,
+    /// hashes and declaration while its publication guard may still stand.
+    /// It checks neither index membership nor guard absence and grants no load
+    /// authority. Load and restore must go through the guarded verifier above.
+    pub(in crate::save_points::serving) fn verify_unindexed_publication(
+        &self,
+        entry: StateIndexEntry,
+        scope: &LoadScope<'_>,
+    ) -> Result<VerifiedArtifact, Fault> {
+        entry
+            .validate()
+            .map_err(|error| layout(format!("invalid expected publication entry: {error}")))?;
         let directory = nix::fcntl::openat(
             self.directory.as_fd(),
             entry.artifact_id.as_str(),
@@ -273,6 +365,20 @@ impl Repository {
     }
 }
 
+fn next_selection_ordinal(last: DecimalU64) -> Result<DecimalU64, Fault> {
+    last.0
+        .checked_add(1)
+        .map(DecimalU64)
+        .ok_or_else(|| layout("restore selection ordinal exhausted"))
+}
+
+fn restore_stopped(detail: String) -> Fault {
+    Fault::new(
+        PersistenceCase::PublicationFailed,
+        format!("restore checkpoint stopped the act: {detail}"),
+    )
+}
+
 fn layout(detail: impl Into<String>) -> Fault {
     Fault::new(PersistenceCase::UnsupportedLayout, detail)
 }
@@ -311,7 +417,7 @@ fn read_judged(directory: BorrowedFd<'_>, name: &str, owner: Owner) -> Result<Ve
     Ok(bytes)
 }
 
-fn judge_file(file: &File, owner: Owner, mode: u32, name: &str) -> Result<(), Fault> {
+pub(super) fn judge_file(file: &File, owner: Owner, mode: u32, name: &str) -> Result<(), Fault> {
     let metadata = file
         .metadata()
         .map_err(|e| layout(format!("stat {name}: {e}")))?;
@@ -345,7 +451,7 @@ fn judge_directory(directory: BorrowedFd<'_>, uid: u32, gid: u32) -> Result<(), 
     Ok(())
 }
 
-fn judge_acl(descriptor: BorrowedFd<'_>, name: &str) -> Result<(), Fault> {
+pub(super) fn judge_acl(descriptor: BorrowedFd<'_>, name: &str) -> Result<(), Fault> {
     match crate::carries_access_entries_fd(descriptor) {
         Ok(false) => Ok(()),
         Ok(true) => Err(layout(format!(
@@ -358,8 +464,9 @@ fn judge_acl(descriptor: BorrowedFd<'_>, name: &str) -> Result<(), Fault> {
 }
 
 fn exact_files(directory: BorrowedFd<'_>) -> Result<(), Fault> {
-    let descriptor =
-        nix::unistd::dup(directory).map_err(|e| layout(format!("dup directory: {e}")))?;
+    let descriptor = directory
+        .try_clone_to_owned()
+        .map_err(|e| layout(format!("dup directory: {e}")))?;
     let mut directory =
         nix::dir::Dir::from_fd(descriptor).map_err(|e| layout(format!("read directory: {e}")))?;
     let mut names = BTreeSet::new();

@@ -10,6 +10,9 @@ use weaver_types::state_flow::{
     Confirmation, DecimalU64, PersistenceCause, PersistencePhase, PublicationState,
 };
 
+#[path = "restore_tests.rs"]
+mod restore;
+
 struct Fixture {
     path: PathBuf,
     owner: Owner,
