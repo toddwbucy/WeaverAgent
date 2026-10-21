@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for the consolidated stack and external pair execution.
+Updated: 2026-10-21 for the consolidated stack and bounded state reads.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -27,9 +27,10 @@ landing map and takes precedence over historical branch descriptions below.
 | #213 | Independent empty-correction amendment, approval owed. |
 | #215 | Typed causes and contained terminal delivery, stacked on #198. Held for the coordinated foundation cutover. |
 | #216 | External pair execution and committed result custody, stacked on #215. Review and fold into #215 before that parent folds into #198. Same cutover hold. |
+| #217 | Complete bounded paged reads, stacked on #216. Review and fold into #216 before that parent folds into #215. Recall and placement provenance remain owed. |
 
-The current harness stack is #198, then #215, then #216. New dependent work
-starts from code/state-pair-execution, the head of #216. Closed child branches
+The current harness stack is #198, then #215, #216 and #217. New dependent work
+starts from code/state-paged-read, the head of #217. Closed child branches
 are no longer landing targets. Normal merge commits preserve the
 consolidated ancestry. Only the operator merges. A root's old slice-level results
 are not fresh validation of its combined head.
@@ -71,7 +72,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H1q | H1o | Per-generation source receipt leases and original request association, Specs 02 and 05 |
 | H2a | H1q | Committed opening and terminal accounting for undispatched requests, Spec 05 |
 | H1m | H2a, H1t | Passive model repair, recorded restatement instructions and corrected request custody, Specs 02 and 05 |
-| H1b2 | H1b1, H1i, H1s, H1t, H1f, H1o, H1q, H2a, H1m, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
+| H1d | H1c, F4 | Complete bounded paged read acquisition and structural result checks, HARNESS-READ and STATE-PAGES |
+| H1b2 | H1b1, H1i, H1s, H1t, H1f, H1o, H1q, H2a, H1m, H1d, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
 | H2g | H1m | Typed gate interrupt, containment and terminal delivery, gate amendment |
 | H2e | H1m, H2g | External dispatch, exact gate evidence and terminal commit custody, Spec 05 |
 | H2 | H1b2, H2e, IN1 | Inward calls, boot repair, lifecycle composition and returned coverage, Spec 05 |
@@ -456,6 +458,23 @@ merges consolidate review branches. Landing the replacement on main still
 waits for the coordinated cutover. Neither child independently changes main's
 serving contract.
 
+H1d is [draft PR #217][paged-read] on code/state-paged-read, based on #216 at
+8f5aa872. Its [implementation record][paged-read-record] covers bounded page
+assembly, exact selector/result checks, recorded operation custody and one
+snapshot release. The restored harness suite passes 1,055 tests with 18 ignored
+instruments. The new real-member fixture was also run explicitly and passed.
+Thirteen compiled protective mutations fail their named tests, with exact
+restoration verified. Lint, formatting, lock and diff checks pass. This is a
+local author assessment, not a Planner grade.
+
+The result grants no recall or placement authority. Draft #189 must settle the
+recall carrier before public recall, held-material and boot adapters complete.
+The next placement work should reuse #197's internal SPU measurement primitive,
+close the paired decode wire, then build the journal against read/material
+proofs. The OPEN-FACTS carrier gap above remains open. Outbound identity sort
+and noun extraction can proceed independently of serve-side selection and plan
+orchestration. No production language artifact is inferred from these fixtures.
+
 The later rows remain owed.
 This is a progress record, not a claim that the full goal or any serving cutover is
 complete. Each draft carries its own fresh test and perturbation evidence.
@@ -546,3 +565,6 @@ quality, decoder capacity, throughput or absence of paging waits.
 
 [pair-execution]: https://github.com/toddwbucy/WeaverAgent/pull/216
 [pair-execution-record]: state-management-pair-execution-2026-10-21.md
+
+[paged-read]: https://github.com/toddwbucy/WeaverAgent/pull/217
+[paged-read-record]: state-management-paged-read-2026-10-21.md

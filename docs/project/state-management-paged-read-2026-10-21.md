@@ -108,8 +108,8 @@ subject to the repository's review process.
 
 ## Remaining work and merge order
 
-The branch is code/state-paged-read, based on draft #216 at 8f5aa872. Fold this
-child into #216 before folding #216 into #215 and #215 into #198. Those merges
+Draft [PR #217][pr] is code/state-paged-read, based on #216 at 8f5aa872. Fold
+this child into #216 before folding #216 into #215 and #215 into #198. Those merges
 consolidate review branches. They do not qualify the replacement for deployment.
 
 HARNESS-READ-CALLERS and HARNESS-MATERIAL still need the approved recall payload
@@ -123,3 +123,5 @@ qualification on the declared tuple.
 [harness]: ../crates/state-management/weaver-harness-Spec-amendment.md
 [state]: ../crates/state-management/weaver-state-Spec-amendment.md
 [map]: state-management-implementation-plan-2026-10-20.md
+
+[pr]: https://github.com/toddwbucy/WeaverAgent/pull/217
