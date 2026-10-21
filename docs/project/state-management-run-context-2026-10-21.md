@@ -1,8 +1,8 @@
 # Run recording, transport pump and failure-account support
 
-Date: 2026-10-21. Status: validated implementation, pending draft review.
+Date: 2026-10-21. Status: draft PR #203, pending Planner and operator review.
 
-This slice is stacked on [PR #202][base]. It implements the recording lifetime
+[PR #203][pr] is stacked on [PR #202][base]. It implements the recording lifetime
 and transport scheduler needed by the replacement harness. The whole existing
 serving path remains active under [FOUNDATION-TRANSITION][foundation]. The loop
 stays in worker/dev_loop, and classification stays behind the SPU contract.
@@ -144,3 +144,4 @@ qualified by the scripted fixtures in this slice.
 [base]: https://github.com/toddwbucy/WeaverAgent/pull/202
 [foundation]: ../crates/state-management/state-management-foundation-Spec.md
 [harness]: ../crates/state-management/weaver-harness-Spec-amendment.md
+[pr]: https://github.com/toddwbucy/WeaverAgent/pull/203

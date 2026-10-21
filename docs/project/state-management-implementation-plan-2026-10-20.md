@@ -144,7 +144,8 @@ validation status. Both full affected-crate suites pass, totaling 726 tests with
 intended assertions, and exact restored source passes again. Per-crate lint,
 formatting, lock and diff checks pass. No active serving path changes in this slice.
 
-H1c is the next [run-context slice][run-context-record], based on #202. It keeps
+H1c is [draft PR #203][run-context], based on #202. Its
+[implementation record][run-context-record] states the scope and evidence. It keeps
 one recording lifetime through preflight, activation, correct refusal, release
 and drain, and supplies the common pump and the complete frozen account producer.
 The full affected-crate suites pass 909 tests with 17 inherited ignored instruments
@@ -367,3 +368,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [recording-support-record]: state-management-recording-support-2026-10-21.md
 [recording-support]: https://github.com/toddwbucy/WeaverAgent/pull/202
 [run-context-record]: state-management-run-context-2026-10-21.md
+[run-context]: https://github.com/toddwbucy/WeaverAgent/pull/203
