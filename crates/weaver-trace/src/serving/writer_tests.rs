@@ -3,6 +3,28 @@ use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::time::Duration;
 
+// A failed assertion can unwind before the reader starts draining. The writer's
+// Drop joins its worker, so its real socket write must also have a finite bound.
+// Reader timeouts similarly keep a missing sink close from hanging a join.
+fn bounded_pair() -> (UnixStream, UnixStream) {
+    let (sink, reader) = UnixStream::pair().unwrap();
+    sink.set_write_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    reader
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    (sink, reader)
+}
+
+fn drained(writer: &Writer) {
+    assert_eq!(
+        writer
+            .drain_by(Instant::now() + Duration::from_secs(3))
+            .unwrap(),
+        Drained::Emptied
+    );
+}
+
 #[repr(C)]
 struct PollFd {
     fd: i32,
@@ -29,7 +51,7 @@ fn line(text: &str) -> Line {
 
 #[test]
 fn real_stalled_sink_keeps_1017_ordinary_and_seven_distinct_terminal_slots() {
-    let (sink, mut reader) = UnixStream::pair().unwrap();
+    let (sink, mut reader) = bounded_pair();
     let writer = Writer::start(sink.into()).unwrap();
     let large = line(&"x".repeat(1_000_000));
     writer
@@ -97,7 +119,7 @@ fn real_stalled_sink_keeps_1017_ordinary_and_seven_distinct_terminal_slots() {
 
 #[test]
 fn cancelling_a_reservation_returns_its_slot_and_terminal_permit_and_wakes() {
-    let (sink, _reader) = UnixStream::pair().unwrap();
+    let (sink, _reader) = bounded_pair();
     let mut writer = Writer::start(sink.into()).unwrap();
     let mut held = Vec::new();
     for _ in 0..ORDINARY_CAPACITY {
@@ -122,7 +144,7 @@ fn cancelling_a_reservation_returns_its_slot_and_terminal_permit_and_wakes() {
 
 #[test]
 fn sink_failure_is_standing_and_wakes_the_same_poll_descriptor() {
-    let (sink, reader) = UnixStream::pair().unwrap();
+    let (sink, reader) = bounded_pair();
     drop(reader);
     let mut writer = Writer::start(sink.into()).unwrap();
     writer
@@ -145,13 +167,17 @@ fn sink_failure_is_standing_and_wakes_the_same_poll_descriptor() {
             ..
         })
     ));
-    assert!(writer.drain().is_err());
+    assert!(
+        writer
+            .drain_by(Instant::now() + Duration::from_secs(3))
+            .is_err()
+    );
     assert_eq!(writer.boundary(Some(Sequence(12))).committed, None);
 }
 
 #[test]
 fn a_broken_capacity_notifier_is_a_trace_failure() {
-    let (sink, _reader) = UnixStream::pair().unwrap();
+    let (sink, _reader) = bounded_pair();
     let writer = Writer::start(sink.into()).unwrap();
     let mut held = Vec::new();
     for _ in 0..ORDINARY_CAPACITY {
@@ -169,7 +195,7 @@ fn a_broken_capacity_notifier_is_a_trace_failure() {
 
 #[test]
 fn bounded_drain_and_abandon_do_not_join_a_stalled_write() {
-    let (sink, reader) = UnixStream::pair().unwrap();
+    let (sink, reader) = bounded_pair();
     let writer = Writer::start(sink.into()).unwrap();
     writer
         .reserve(None)
@@ -189,7 +215,7 @@ fn bounded_drain_and_abandon_do_not_join_a_stalled_write() {
 
 #[test]
 fn reservation_limits_and_spent_terminal_permits_are_independent_of_sink_speed() {
-    let (sink, _reader) = UnixStream::pair().unwrap();
+    let (sink, _reader) = bounded_pair();
     let writer = Writer::start(sink.into()).unwrap();
     assert_eq!(ORDINARY_CAPACITY, 1017);
     assert_eq!(TERMINAL_RESERVE, 7);
@@ -204,7 +230,7 @@ fn reservation_limits_and_spent_terminal_permits_are_independent_of_sink_speed()
         .unwrap()
         .unwrap()
         .enqueue(Sequence(0), line("first fault"));
-    writer.drain().unwrap();
+    drained(&writer);
     assert_eq!(writer.pressure().queued, 0);
     assert!(
         writer.reserve(Some(Terminal::Fault)).is_err(),

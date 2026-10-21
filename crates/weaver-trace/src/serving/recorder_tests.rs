@@ -7,6 +7,28 @@ use std::io::Read;
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
+// Assertion unwinding still drops and joins the writer. Bound the actual socket
+// I/O so a deliberately broken terminal permit cannot leave that join blocked
+// behind a reader which the failing test has not started yet.
+fn bounded_pair() -> (UnixStream, UnixStream) {
+    let (sink, reader) = UnixStream::pair().unwrap();
+    sink.set_write_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    reader
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    (sink, reader)
+}
+
+fn drained(recorder: &mut Recorder) {
+    assert_eq!(
+        recorder
+            .drain_by(Instant::now() + Duration::from_secs(3))
+            .unwrap(),
+        Drained::Emptied
+    );
+}
+
 fn raw(text: &str) -> Box<RawValue> {
     RawValue::from_string(text.into()).unwrap()
 }
@@ -67,7 +89,7 @@ fn fault() -> Event {
     )
 }
 fn loaded() -> (PreflightRecorder<Loaded>, UnixStream) {
-    let (sink, reader) = UnixStream::pair().unwrap();
+    let (sink, reader) = bounded_pair();
     let recorder = PreflightRecorder::receive(
         sink.into(),
         RunRef("run".into()),
@@ -145,7 +167,7 @@ fn canonical_record_is_shared_by_working_structure_tap_and_sink() {
     assert_eq!(recorder.structure().by_kind(Kind::Load).count(), 1);
     assert!(held[1].starts_with(r#"{"session":"session","run":"run","turn":"turn","sequence":"1","kind":"message.user","channel":"input","origin":"operator","subsystem":"harness","wall_ms":42,"monotonic_ns":"9007199254740993","payload":"#));
     assert_eq!(held[1].bytes().filter(|&b| b == b'\n').count(), 1);
-    recorder.drain().unwrap();
+    drained(&mut recorder);
     assert_eq!(recorder.boundary().committed, Some(Sequence(1)));
     drop(recorder);
     assert_eq!(
@@ -170,7 +192,7 @@ fn tap_failure_records_the_complete_source_then_stops_without_losing_fault() {
     assert!(recorder.submit_terminal(fault()).is_err());
     let another = recorded(recorder.submit(message("Keep fault.")));
     assert_eq!(another.tap, TapOutcome::Stopped);
-    recorder.drain().unwrap();
+    drained(&mut recorder);
     drop(recorder);
     let emitted = bytes(reader);
     let lines: Vec<_> = emitted.lines().collect();
@@ -211,7 +233,12 @@ fn refusal_after_load_never_activates_and_preserves_trace_bracket() {
         PreflightAttempt::Recorded { recorder, .. } => recorder,
         _ => panic!(),
     };
-    closed.drain().unwrap();
+    assert_eq!(
+        closed
+            .drain_by(Instant::now() + Duration::from_secs(3))
+            .unwrap(),
+        Drained::Emptied
+    );
     drop(closed);
     let text = bytes(reader);
     assert_eq!(text.lines().count(), 4);
@@ -221,7 +248,7 @@ fn refusal_after_load_never_activates_and_preserves_trace_bracket() {
 #[test]
 fn malformed_render_and_append_failure_consume_no_admission_or_capacity() {
     let (mut recorder, reader) = recorder();
-    recorder.drain().unwrap();
+    drained(&mut recorder);
     let mut wrong = message("Read file.");
     wrong.envelope.origin = Origin::Runtime;
     assert!(recorder.submit(wrong).is_err());
@@ -233,7 +260,7 @@ fn malformed_render_and_append_failure_consume_no_admission_or_capacity() {
     assert_eq!(recorder.core.next, Some(1));
     let good = recorded(recorder.submit(message("Read file.")));
     assert_eq!(good.sequence, Sequence(1));
-    recorder.drain().unwrap();
+    drained(&mut recorder);
     recorder.core.structure.fail_append = true;
     assert!(matches!(
         recorder.submit(message("Read again.")),
@@ -261,7 +288,7 @@ fn malformed_render_and_append_failure_consume_no_admission_or_capacity() {
 #[test]
 fn capacity_pending_preserves_event_and_sequence_then_admits_after_real_wake() {
     let (mut recorder, mut reader) = recorder();
-    recorder.drain().unwrap();
+    drained(&mut recorder);
     let _ = recorded(recorder.submit(message(&"x".repeat(1_000_000))));
     for _ in 1..super::super::ORDINARY_CAPACITY {
         let _ = recorded(recorder.submit(message("Read file.")));
@@ -288,7 +315,7 @@ fn capacity_pending_preserves_event_and_sequence_then_admits_after_real_wake() {
     );
     recorder.drain_capacity_wake().unwrap();
     assert_eq!(recorded(recorder.submit(waiting)).sequence, Sequence(1018));
-    recorder.drain().unwrap();
+    drained(&mut recorder);
     drop(recorder);
     let data = reader.join().unwrap();
     assert_eq!(data.lines().count(), 1019);
@@ -297,7 +324,7 @@ fn capacity_pending_preserves_event_and_sequence_then_admits_after_real_wake() {
 #[test]
 fn full_ordinary_queue_cannot_starve_the_seven_one_use_terminal_records() {
     let (mut recorder, mut reader) = recorder();
-    recorder.drain().unwrap();
+    drained(&mut recorder);
     assert!(recorder.submit_terminal(fault()).is_err());
     let _ = recorded(recorder.submit(message(&"x".repeat(1_000_000))));
     for _ in 1..super::super::ORDINARY_CAPACITY {
@@ -363,7 +390,7 @@ fn full_ordinary_queue_cannot_starve_the_seven_one_use_terminal_records() {
         reader.read_to_string(&mut data).unwrap();
         data
     });
-    recorder.drain().unwrap();
+    drained(&mut recorder);
     drop(recorder);
     assert_eq!(reader.join().unwrap().lines().count(), 1025);
 }
@@ -371,7 +398,7 @@ fn full_ordinary_queue_cannot_starve_the_seven_one_use_terminal_records() {
 #[test]
 fn pending_admission_neither_consumes_identity_nor_rewrites_the_returned_event() {
     let (mut recorder, reader) = recorder();
-    recorder.drain().unwrap();
+    drained(&mut recorder);
     let held: Vec<_> = (0..1017)
         .map(|_| recorder.core.writer.reserve(None).unwrap().unwrap())
         .collect();
@@ -386,7 +413,7 @@ fn pending_admission_neither_consumes_identity_nor_rewrites_the_returned_event()
     assert_eq!(recorder.structure().len(), 1);
     drop(held);
     assert_eq!(recorded(recorder.submit(waiting)).sequence, Sequence(1));
-    recorder.drain().unwrap();
+    drained(&mut recorder);
     drop(recorder);
     assert_eq!(bytes(reader).lines().count(), 2);
 }

@@ -215,6 +215,26 @@ fn plan_and_outcome_discriminants_cannot_substitute_for_one_another() {
         outcome_span: payload.work.span.clone(),
     });
     assert!(accepts(&outcome));
+    let Some(Payload::StepOutcome(payload)) = &outcome.payload else {
+        panic!()
+    };
+    let mut close_as_plan = event(
+        Kind::PlanEvent,
+        Channel::Internal,
+        Origin::Loop,
+        true,
+        Some(Payload::PlanEffect(Box::new(PlanEffectRecord {
+            message: payload.message.clone(),
+            context: payload.context.clone().unwrap(),
+            template_id: payload.template_id.clone(),
+        }))),
+    );
+    assert!(!accepts(&close_as_plan), "closure belongs to step.outcome");
+    close_as_plan.envelope.turn = None;
+    assert!(
+        !accepts(&close_as_plan),
+        "a turnless plan.event cannot carry closure either"
+    );
     let Some(Payload::StepOutcome(payload)) = &mut outcome.payload else {
         panic!()
     };
