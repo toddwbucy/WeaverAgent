@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for the concrete packet transports needed by the common pump.
+Updated: 2026-10-21 for recording ownership and typed completion routing.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -36,7 +36,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H1a | F1, T1b, F4 | Copy budget, trace proof and sole channel mechanics, harness amendment |
 | H1b1 | H1a | Ordered filing ledger, composition, clock and measurements, harness amendment |
 | H1p | C1t | Bounded organ, decode and label packet owners, HARNESS-PUMP |
-| H1b2 | H1b1, H1p, C1, P1 | Common pump, author census, input and halt, harness/foundation amendments |
+| H1r | H1p | Bounded recording progress and typed operation results, harness/trace amendments |
+| H1b2 | H1b1, H1p, H1r, C1, P1 | Common pump, author census, input and halt, harness/foundation amendments |
 | H2 | H1b2, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
@@ -130,6 +131,17 @@ restored, and independent review verifies that evidence. Lint, formatting, lock 
 diff checks pass. [The implementation record][ste100-transport-record] states the
 scope and the separate SPU empty-datagram correction now published in C1a. Worker
 launch, the common pump, production artifacts and qualification remain open.
+
+H1r is prepared on code/state-recording-context, stacked on #201. It adds bounded
+trace wake/drain and preflight terminal APIs, original author custody, held state
+terminal observation, interruption-safe release and typed noncapture control and
+classifier operation results. The complete phaseful RecordingContext, common pump,
+input owner and lifecycle caller migration remain in H1b2. Its
+[implementation record][recording-support-record] carries the precise boundary and
+validation status. Both full affected-crate suites pass, totaling 726 tests with
+17 inherited ignored instruments. Fifteen compiled protective changes fail their
+intended assertions, and exact restored source passes again. Per-crate lint,
+formatting, lock and diff checks pass. No active serving path changes in this slice.
 
 P1a adds strict draft/bound declaration parsing, admin-owned canonical TOML,
 strict binding/index/guard codecs and descriptor-held artifact verification. It is
@@ -341,3 +353,5 @@ quality, decoder capacity, throughput or absence of paging waits.
 [filing-coordinator]: https://github.com/toddwbucy/WeaverAgent/pull/199
 [pump-transport-record]: state-management-pump-transports-2026-10-21.md
 [pump-transports]: https://github.com/toddwbucy/WeaverAgent/pull/201
+
+[recording-support-record]: state-management-recording-support-2026-10-21.md

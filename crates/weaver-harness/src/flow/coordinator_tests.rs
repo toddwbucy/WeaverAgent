@@ -1202,3 +1202,711 @@ fn ignored_external_author_failure_stops_before_an_unsent_file_reaches_state() {
         assert_eq!(fx.barrier.recorder().structure().len(), before);
     }
 }
+
+impl Fixture {
+    fn begin_control(&mut self, request: s::StateControl) -> OperationStart<s::StateControl> {
+        match self
+            .flow
+            .begin_control(
+                &mut FlowRecording {
+                    barrier: &mut self.barrier,
+                    inbox: &mut self.inbox,
+                    budget: &mut self.budget,
+                    author: &self.author,
+                },
+                &mut self.clock,
+                ControlOperation::try_from((request, Some(TurnRef("control-turn".into()))))
+                    .unwrap(),
+            )
+            .unwrap()
+        {
+            OperationStart::Started { request_id } => OperationStart::Started { request_id },
+            OperationStart::Busy(request) => {
+                let (request, turn) = request.into_parts();
+                assert_eq!(turn, Some(TurnRef("control-turn".into())));
+                OperationStart::Busy(request)
+            }
+        }
+    }
+
+    fn take_operation(&mut self) -> Result<Option<OperationCompletion>, FlowFailure> {
+        self.flow.take_operation_completion(&mut FlowRecording {
+            barrier: &mut self.barrier,
+            inbox: &mut self.inbox,
+            budget: &mut self.budget,
+            author: &self.author,
+        })
+    }
+
+    fn begin_check(&mut self, operation: CheckOperation) -> OperationStart<CheckOperation> {
+        self.flow
+            .begin_check(
+                &mut FlowRecording {
+                    barrier: &mut self.barrier,
+                    inbox: &mut self.inbox,
+                    budget: &mut self.budget,
+                    author: &self.author,
+                },
+                operation,
+            )
+            .unwrap()
+    }
+
+    fn record_unselected(&mut self, event: AuthoredEvent) -> u64 {
+        let now = self.time();
+        let event = self.author.prepare(&event, now, 1).unwrap();
+        let RecordProgress::Recorded { sequence, .. } = self.barrier.submit_with_clock(
+            event,
+            RecordPurpose::Observation,
+            &mut self.inbox,
+            &mut self.budget,
+            &mut || Ok(now),
+        ) else {
+            panic!("unselected event must record");
+        };
+        assert_eq!(self.budget.gauges(), (0, 0));
+        sequence.0
+    }
+
+    fn answer_control(&mut self, frame: s::StateControlAnswer) {
+        self.transport().unwrap();
+        self.collect_requests();
+        let request = self.requests.last().expect("control reached socket");
+        assert!(matches!(request, s::StateFrame::Control { .. }));
+        let observation = operation(request, self.operation, self.clock.now().unwrap() + 1);
+        self.operation += 1;
+        let answer = s::StateFrame::ControlAnswer {
+            common: request.common().clone(),
+            frame,
+            observation,
+        };
+        self.state_peer
+            .write_all(&s::encode_state_line(&answer, s::FrameDirection::Response).unwrap())
+            .unwrap();
+        self.elapse(3);
+        self.transport().unwrap();
+    }
+
+    fn reply_check(&mut self, result: s::Ste100Result) -> s::Ste100Reply {
+        let request = self.classifier.submitted().last().unwrap().clone();
+        let reply = s::Ste100Reply {
+            request_id: request.request_id,
+            target: request.target,
+            scheme_id: request.scheme_id,
+            result,
+        };
+        self.classifier.push(ScriptStep::Reply(reply.clone()));
+        assert!(self.classifier.advance().unwrap());
+        self.transport().unwrap();
+        reply
+    }
+}
+
+#[test]
+fn control_completion_is_recorded_once_without_a_ledger_obligation() {
+    let mut fx = Fixture::new(4);
+    assert!(matches!(
+        fx.begin_control(s::StateControl::Shape {}),
+        OperationStart::Started { .. }
+    ));
+    assert_eq!(
+        fx.begin_control(s::StateControl::Grants {}),
+        OperationStart::Busy(s::StateControl::Grants {})
+    );
+    fx.answer_control(s::StateControlAnswer::Shape(vec![s::ShapeRow {
+        run: "prior".into(),
+        kind: "message.user".into(),
+        count: 17.into(),
+    }]));
+    assert!(fx.take_operation().unwrap().is_none());
+    assert!(fx.flow.state().held_measurement().is_some());
+    fx.advance().unwrap();
+    let OperationCompletion::State {
+        request,
+        turn,
+        completion,
+    } = fx.take_operation().unwrap().unwrap()
+    else {
+        panic!("typed state completion");
+    };
+    assert_eq!(request, s::StateControl::Shape {});
+    assert_eq!(turn, Some(TurnRef("control-turn".into())));
+    assert_eq!(
+        fx.records()
+            .iter()
+            .rev()
+            .find(|record| record["kind"] == "state.store.measurement")
+            .unwrap()["turn"],
+        "control-turn",
+    );
+    let s::StateFrame::ControlAnswer {
+        frame: s::StateControlAnswer::Shape(rows),
+        ..
+    } = completion.answer
+    else {
+        panic!("exact shape answer");
+    };
+    assert_eq!(rows[0].count.0, 17);
+    assert!(!completion.discard_capture_result);
+    assert!(fx.take_operation().unwrap().is_none());
+    assert!(fx.flow.ledger().facts().next().is_none());
+    assert_eq!(fx.budget.gauges(), (0, 0));
+    assert_eq!(
+        fx.records()
+            .iter()
+            .filter(|r| r["kind"] == "state.store.measurement")
+            .count(),
+        2
+    );
+    assert!(
+        !fx.records()
+            .iter()
+            .any(|r| r["payload"]["phase"] == "filed")
+    );
+}
+
+#[test]
+fn correct_read_refusal_is_an_operation_result_and_next_control_can_run() {
+    let mut fx = Fixture::new(4);
+    let request = s::StateControl::Read {
+        selector: s::ReadSelector::Conversation {
+            last_turns: 1.into(),
+        },
+    };
+    assert!(matches!(
+        fx.begin_control(request.clone()),
+        OperationStart::Started { .. }
+    ));
+    fx.answer_control(s::StateControlAnswer::ControlRefused {
+        code: s::ControlRefusalCode::Read(s::ReadRefusalCode::ResultUnavailable),
+        detail: "test-only snapshot refused".into(),
+    });
+    fx.advance().unwrap();
+    let OperationCompletion::State {
+        request: actual,
+        completion,
+        ..
+    } = fx.take_operation().unwrap().unwrap()
+    else {
+        panic!("operation refusal");
+    };
+    assert_eq!(actual, request);
+    assert!(matches!(completion.answer, s::StateFrame::ControlAnswer {
+        frame: s::StateControlAnswer::ControlRefused {
+            code: s::ControlRefusalCode::Read(s::ReadRefusalCode::ResultUnavailable), ref detail,
+        }, ..
+    } if detail == "test-only snapshot refused"));
+    assert!(fx.flow.failure().is_none());
+    assert!(matches!(
+        fx.begin_control(s::StateControl::Held {}),
+        OperationStart::Started { .. }
+    ));
+}
+
+#[test]
+fn template_and_unselected_model_results_never_enter_the_filing_ledger() {
+    let mut fx = Fixture::new(4);
+    let template = s::TemplateSpec {
+        template_id: "fixture-read".into(),
+        kind: "loop.instruction".into(),
+        parts: vec![s::TemplatePart::Literal("Read file.".into())],
+    };
+    let operation = CheckOperation::Template {
+        template_id: template.template_id.clone(),
+        text: serde_json::to_string(&template).unwrap(),
+    };
+    assert!(matches!(
+        fx.begin_check(operation.clone()),
+        OperationStart::Started { .. }
+    ));
+    assert_eq!(
+        fx.begin_check(operation.clone()),
+        OperationStart::Busy(operation.clone())
+    );
+    let reply = fx.reply_check(s::Ste100Result::Accepted { bindings: vec![] });
+    assert!(fx.take_operation().unwrap().is_none());
+    fx.advance().unwrap();
+    let OperationCompletion::Check {
+        operation: actual,
+        reply: received,
+    } = fx.take_operation().unwrap().unwrap()
+    else {
+        panic!("template completion");
+    };
+    assert_eq!(actual, operation);
+    assert_eq!(received, reply);
+
+    let sequence = fx.record_unselected(authored(
+        Kind::ModelOutput,
+        AuthoredSource::Model,
+        Payload::ModelOutput(weaver_trace::ModelOutput {
+            emission: "not conforming".into(),
+            finish: weaver_trace::Finish::Completed,
+            resident: 10,
+            capacity: 100,
+        }),
+        true,
+    ));
+    let source = s::SourceBlockId {
+        run: "run".into(),
+        sequence: sequence.into(),
+        block: 0.into(),
+    };
+    let operation = CheckOperation::UnselectedModel {
+        source,
+        text: "not conforming".into(),
+        turn: TurnRef("turn".into()),
+    };
+    assert!(matches!(
+        fx.begin_check(operation.clone()),
+        OperationStart::Started { .. }
+    ));
+    let reply = fx.reply_check(s::Ste100Result::NotSte100 {
+        code: s::Ste100DefectCode::NonSte100,
+        detail: "repair required".into(),
+        spans: vec![],
+    });
+    fx.advance().unwrap();
+    let OperationCompletion::Check {
+        operation: actual,
+        reply: received,
+        ..
+    } = fx.take_operation().unwrap().unwrap()
+    else {
+        panic!("model repair disposition");
+    };
+    assert_eq!(actual, operation);
+    assert_eq!(received, reply);
+    assert!(fx.flow.failure().is_none());
+    assert_eq!(
+        fx.records()
+            .iter()
+            .rev()
+            .find(|record| record["kind"] == "ste100.result")
+            .unwrap()["turn"],
+        "turn",
+    );
+    assert!(fx.flow.ledger().facts().next().is_none());
+    assert_eq!(fx.budget.gauges(), (0, 0));
+    fx.collect_requests();
+    assert!(fx.requests.is_empty());
+    assert_eq!(
+        fx.records()
+            .iter()
+            .filter(|r| r["kind"] == "ste100.result")
+            .count(),
+        2
+    );
+}
+
+fn template_operation() -> CheckOperation {
+    let template = s::TemplateSpec {
+        template_id: "fixture-operation".into(),
+        kind: "loop.instruction".into(),
+        parts: vec![s::TemplatePart::Literal("Read file.".into())],
+    };
+    CheckOperation::Template {
+        template_id: template.template_id.clone(),
+        text: serde_json::to_string(&template).unwrap(),
+    }
+}
+
+#[test]
+fn nonfiling_completion_pressure_holds_both_native_slots_without_reauthoring() {
+    let mut fx = Fixture::new(4);
+    fx.begin_control(s::StateControl::Held {});
+    fx.begin_check(template_operation());
+    fx.answer_control(s::StateControlAnswer::Held { count: 23.into() });
+    let reply = fx.reply_check(s::Ste100Result::Accepted { bindings: vec![] });
+    let pending = fx.fill_trace_capacity();
+    for _ in 0..3 {
+        assert_eq!(fx.advance().unwrap(), Advance::Pending);
+        assert!(fx.take_operation().unwrap().is_none());
+        assert!(fx.flow.state().held_measurement().is_some());
+        assert_eq!(fx.flow.classifier().held(), Some(&reply));
+        assert_eq!(
+            serde_json::to_string(fx.barrier.pending().unwrap()).unwrap(),
+            pending
+        );
+    }
+    let reader = fx.start_drain();
+    fx.resume_external_ticket();
+    for _ in 0..128 {
+        fx.advance().unwrap();
+        if fx.flow.operation_completion().is_some() {
+            break;
+        }
+    }
+    assert!(matches!(
+        fx.flow.operation_completion(),
+        Some(OperationCompletion::State { .. })
+    ));
+    let count = fx
+        .records()
+        .iter()
+        .filter(|r| r["kind"] == "state.store.measurement")
+        .count();
+    for _ in 0..3 {
+        assert_eq!(fx.advance().unwrap(), Advance::Pending);
+    }
+    assert_eq!(
+        fx.records()
+            .iter()
+            .filter(|r| r["kind"] == "state.store.measurement")
+            .count(),
+        count
+    );
+    assert_eq!(fx.flow.classifier().held(), Some(&reply));
+    assert!(matches!(
+        fx.take_operation().unwrap(),
+        Some(OperationCompletion::State { .. })
+    ));
+    for _ in 0..128 {
+        fx.advance().unwrap();
+        if fx.flow.operation_completion().is_some() {
+            break;
+        }
+    }
+    assert!(matches!(
+        fx.take_operation().unwrap(),
+        Some(OperationCompletion::Check { .. })
+    ));
+    assert_eq!(
+        fx.records()
+            .iter()
+            .filter(|r| r["kind"] == "ste100.result")
+            .count(),
+        1
+    );
+    assert_eq!(fx.budget.gauges(), (0, 0));
+    drop(fx);
+    reader.join().unwrap();
+}
+
+#[test]
+fn one_transport_choice_does_not_progress_the_other_ready_owner() {
+    let mut fx = Fixture::new(4);
+    fx.begin_control(s::StateControl::Held {});
+    fx.begin_check(template_operation());
+    let request = fx.classifier.submitted().last().unwrap().clone();
+    fx.classifier.push(ScriptStep::Reply(s::Ste100Reply {
+        request_id: request.request_id,
+        target: request.target,
+        scheme_id: request.scheme_id,
+        result: s::Ste100Result::Accepted { bindings: vec![] },
+    }));
+    assert!(fx.classifier.advance().unwrap());
+    fx.flow
+        .transport_one(
+            &mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            },
+            &mut fx.clock,
+            TransportSource::State,
+        )
+        .unwrap();
+    assert_eq!(fx.flow.classifier().state(), ClassifierState::InFlight);
+    fx.collect_requests();
+    assert_eq!(fx.requests.len(), 1);
+    fx.flow
+        .transport_one(
+            &mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            },
+            &mut fx.clock,
+            TransportSource::Classifier,
+        )
+        .unwrap();
+    assert_eq!(fx.flow.classifier().state(), ClassifierState::ResultHeld);
+    assert!(fx.take_operation().unwrap().is_none());
+}
+
+#[test]
+fn nonfiling_component_failure_records_exact_result_and_keeps_its_owner() {
+    let mut fx = Fixture::new(4);
+    let operation = template_operation();
+    fx.begin_check(operation.clone());
+    let reply = fx.reply_check(s::Ste100Result::ComponentFailed {
+        code: s::Ste100ComponentCode::NoResult,
+        detail: "test-only template component failure".into(),
+    });
+    fx.classifier.push(ScriptStep::Close);
+    assert!(fx.classifier.advance().unwrap());
+    fx.transport().unwrap();
+    assert!(fx.advance().is_err());
+    assert!(fx.take_operation().is_err());
+    assert_eq!(fx.flow.pending_check(), Some(&operation));
+    assert!(fx.flow.ledger().facts().next().is_none());
+    assert!(fx.budget.is_frozen());
+    let actual = fx
+        .records()
+        .into_iter()
+        .find(|r| r["kind"] == "ste100.result")
+        .unwrap();
+    assert_eq!(actual["payload"], serde_json::to_value(reply).unwrap());
+}
+
+#[test]
+fn returned_second_author_keeps_original_six_members_for_failure_reporting() {
+    let mut fx = Fixture::new(4);
+    let first = fx.fill_trace_capacity();
+    let reply = s::Ste100Reply {
+        request_id: 99.into(),
+        target: s::Ste100Target::Input {
+            input_id: 2.into(),
+            block: 0.into(),
+        },
+        scheme_id: "fixture-read/1".into(),
+        result: s::Ste100Result::NotSte100 {
+            code: s::Ste100DefectCode::NonSte100,
+            detail: "test-only refused second author".into(),
+            spans: vec![],
+        },
+    };
+    let error = fx
+        .flow
+        .author(
+            &mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            },
+            &mut fx.clock,
+            1,
+            Kind::Ste100Result,
+            None,
+            Payload::Ste100Result(Box::new(super::super::mirror::ste100(&reply))),
+            RecordPurpose::Classifier(reply.clone()),
+            PendingRecord::Classifier,
+        )
+        .unwrap_err();
+    assert_eq!(error.point, "author");
+    assert_eq!(
+        serde_json::to_string(fx.barrier.pending().unwrap()).unwrap(),
+        first
+    );
+    let Some(RefusedAuthor::Authored {
+        event,
+        purpose: RecordPurpose::Classifier(held_reply),
+    }) = fx.flow.refused_author()
+    else {
+        panic!("returned author must remain owned");
+    };
+    assert_eq!(event.kind, Kind::Ste100Result);
+    assert_eq!(event.subsystem, Subsystem::Harness);
+    assert!(event.turn.is_none());
+    assert!(matches!(event.source, AuthoredSource::Runtime));
+    assert!(event.causal_parent.is_none());
+    assert_eq!(*held_reply, reply);
+    assert_eq!(
+        serde_json::to_value(event.payload.as_ref().unwrap()).unwrap(),
+        serde_json::to_value(reply).unwrap()
+    );
+    let reader = fx.start_drain();
+    drop(fx);
+    reader.join().unwrap();
+}
+
+#[test]
+fn capture_controls_cannot_enter_the_unpaired_operation_route() {
+    for control in [
+        s::StateControl::Snapshot {
+            capture_id: 7.into(),
+        },
+        s::StateControl::Acknowledge {
+            capture_id: 7.into(),
+            dump_sha256: s::Digest::new("a".repeat(64)).unwrap(),
+        },
+        s::StateControl::Abort {
+            capture_id: 7.into(),
+        },
+        s::StateControl::ReleaseCapture {
+            capture_id: 7.into(),
+        },
+    ] {
+        let turn = Some(TurnRef("capture-turn".into()));
+        assert_eq!(
+            ControlOperation::try_from((control.clone(), turn.clone())),
+            Err((control, turn))
+        );
+    }
+}
+
+#[test]
+fn nonfiling_wait_stays_pending_without_fabricated_flow_work() {
+    let mut fx = Fixture::new(4);
+    fx.begin_check(template_operation());
+    fx.elapse(2_000_000);
+    assert_eq!(fx.advance().unwrap(), Advance::Pending);
+    assert!(fx.flow.ledger().facts().next().is_none());
+    assert_eq!(fx.budget.gauges(), (0, 0));
+    assert!(!fx.records().iter().any(|r| r["kind"] == "state.flow"));
+}
+
+#[test]
+fn busy_control_returns_its_entire_request_and_distinct_turn() {
+    let mut fx = Fixture::new(4);
+    fx.begin_control(s::StateControl::Held {});
+    let request = ControlOperation::try_from((
+        s::StateControl::Grants {},
+        Some(TurnRef("second-turn".into())),
+    ))
+    .unwrap();
+    let result = fx
+        .flow
+        .begin_control(
+            &mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            },
+            &mut fx.clock,
+            request,
+        )
+        .unwrap();
+    let OperationStart::Busy(returned) = result else {
+        panic!("second control is busy");
+    };
+    assert_eq!(
+        returned.into_parts(),
+        (
+            s::StateControl::Grants {},
+            Some(TurnRef("second-turn".into()))
+        )
+    );
+    assert_eq!(
+        fx.flow.pending_control(),
+        Some((
+            &s::StateControl::Held {},
+            Some(&TurnRef("control-turn".into()))
+        ))
+    );
+}
+
+#[test]
+fn selected_copy_cannot_be_relabelled_as_an_unselected_model_check() {
+    for installed in [false, true] {
+        let mut fx = Fixture::new(4);
+        let source = fx.admit(&["Read file."])[0].clone();
+        if installed {
+            fx.flow
+                .drain(
+                    &mut FlowRecording {
+                        barrier: &mut fx.barrier,
+                        inbox: &mut fx.inbox,
+                        budget: &mut fx.budget,
+                        author: &fx.author,
+                    },
+                    &mut fx.clock,
+                )
+                .unwrap();
+        }
+        let result = fx.flow.begin_check(
+            &mut FlowRecording {
+                barrier: &mut fx.barrier,
+                inbox: &mut fx.inbox,
+                budget: &mut fx.budget,
+                author: &fx.author,
+            },
+            CheckOperation::UnselectedModel {
+                source,
+                text: "Read file.".into(),
+                turn: TurnRef("turn".into()),
+            },
+        );
+        assert!(result.is_err());
+        assert!(fx.classifier.submitted().is_empty());
+        assert_eq!(fx.budget.gauges().0, 1);
+        assert_eq!(fx.flow.ledger().facts().count(), usize::from(installed));
+        assert_eq!(fx.inbox.queued().count(), usize::from(!installed));
+    }
+}
+
+#[test]
+fn interrupted_release_waits_for_a_later_external_author_without_recording_twice() {
+    let mut fx = Fixture::new(4);
+    fx.begin_control(s::StateControl::Held {});
+    fx.answer_control(s::StateControlAnswer::Held { count: 31.into() });
+    let measurement = fx.flow.state().held_measurement().unwrap().clone();
+    let event = authored(
+        Kind::StateStoreMeasurement,
+        AuthoredSource::Runtime,
+        Payload::StateStoreMeasurement(Box::new(super::super::mirror::measurement(&measurement))),
+        true,
+    );
+    let RecordProgress::Recorded {
+        proof: Some(RecordProof::State(proof)),
+        ..
+    } = fx.barrier.submit_authored_with_clock(
+        event,
+        RecordPurpose::State(measurement.clone()),
+        &fx.author,
+        1,
+        &mut fx.inbox,
+        &mut fx.budget,
+        &mut || fx.clock.now(),
+    )
+    else {
+        panic!("the exact state measurement must actually record");
+    };
+    // Only the final nonblocking peek is interrupted. The real proof stays in
+    // StateChannel. Establish the matching coordinator continuation exactly as
+    // recorded() does, without inventing a receipt or a successful release.
+    fx.flow.state_release_timing = Some((
+        measurement.harness_received_ns.0,
+        measurement.harness_sent_ns.0,
+    ));
+    let result = fx.flow.state.release_interrupted_for_test(proof).unwrap();
+    assert!(result.is_none());
+    assert_eq!(
+        fx.flow
+            .finish_state_release(
+                &mut FlowRecording {
+                    barrier: &mut fx.barrier,
+                    inbox: &mut fx.inbox,
+                    budget: &mut fx.budget,
+                    author: &fx.author
+                },
+                &mut fx.clock,
+                result,
+            )
+            .unwrap(),
+        Advance::Pending
+    );
+    let first = fx.fill_trace_capacity();
+    for _ in 0..3 {
+        assert_eq!(fx.advance().unwrap(), Advance::Pending);
+        assert!(fx.take_operation().unwrap().is_none());
+        assert_eq!(fx.flow.state().held_measurement(), Some(&measurement));
+        assert_eq!(
+            serde_json::to_string(fx.barrier.pending().unwrap()).unwrap(),
+            first
+        );
+    }
+    let reader = fx.start_drain();
+    fx.resume_external_ticket();
+    assert_eq!(fx.advance().unwrap(), Advance::Progress);
+    assert!(matches!(
+        fx.take_operation().unwrap(),
+        Some(OperationCompletion::State { .. })
+    ));
+    assert!(fx.flow.state().held_measurement().is_none());
+    assert_eq!(
+        fx.records()
+            .iter()
+            .filter(|r| r["kind"] == "state.store.measurement")
+            .count(),
+        2
+    );
+    assert!(fx.take_operation().unwrap().is_none());
+    drop(fx);
+    reader.join().unwrap();
+}

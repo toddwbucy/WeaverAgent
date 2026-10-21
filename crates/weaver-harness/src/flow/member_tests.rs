@@ -116,6 +116,7 @@ fn exchange(channel: &mut StateChannel, request: StateRequest) -> StateCompletio
     channel
         .release(RecordedStateMeasurement::for_test_in("run", &measure))
         .unwrap()
+        .expect("recorded completion")
 }
 
 fn statement(seed: &SeedRequest) -> StatementFile {
