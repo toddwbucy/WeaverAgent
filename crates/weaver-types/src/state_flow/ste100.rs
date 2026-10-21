@@ -707,7 +707,7 @@ mod tests {
                 input_id: DecimalU64(1),
                 block: DecimalU64(0),
             },
-            text: "Read café.".into(),
+            text: "Read caf\u{e9}.".into(),
             scheme_id: "test".into(),
         };
         let binding = Binding {
@@ -723,7 +723,7 @@ mod tests {
             condition: None,
             condition_span: None,
             nouns: vec![super::super::NounBinding {
-                value: "café".into(),
+                value: "caf\u{e9}".into(),
                 span: Span {
                     start: DecimalU64(5),
                     end: DecimalU64(10),

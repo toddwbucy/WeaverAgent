@@ -19,10 +19,10 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | F2 | PR #182 | RAM connection and full catalog, state STATE-CONNECTION/STATE-SCHEMA |
 | F3 | F1, F2 | Atomic filing, effects, reads and verified images, state amendment |
 | F4 | F1, F3 | Member, paging and capture cleanup, state/contract amendments |
-| T1 | F1 | Trace envelope, validated copy and recorder, trace amendment |
+| T1 | PR #182 | Trace envelope, validated copy and recorder, trace amendment |
 | C1 | F1 | SPU STE100 duty, scheme and template ports, Spec 02 and SPU amendment |
 | P1 | F1, F4, C1 | Seed, custody and boot, admin/persistence amendments |
-| H1 | T1, F4, C1, P1 | Harness flow, receipts and halt, harness/foundation amendments |
+| H1 | F1, T1, F4, C1, P1 | Flow, receipts and halt, harness/foundation amendments |
 | H2 | H1 | Pair ledger and gate containment, Spec 05 and gate amendment |
 | H3 | H1 | Marks, renderer and SPU buffer boundary, Spec 06 and SPU amendment |
 | H4 | H2, H3 | Plan operations and review evidence, Spec 07 and admin amendment |

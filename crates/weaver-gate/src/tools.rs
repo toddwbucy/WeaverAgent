@@ -51,7 +51,7 @@ pub fn grant(shell: Shell) {
 
 /// The maximum clock the shell declares, in milliseconds. A caller may ask
 /// for less and never more, per the one-clock rule.
-pub const SHELL_MAX_CLOCK_MS: u64 = 60_000;
+pub use weaver_types::state_flow::SHELL_MAX_CLOCK_MS;
 
 /// The capture bound per pipe. Output past it is drained and discarded so
 /// the pipe empties, and the truncation marks itself in the answer.
