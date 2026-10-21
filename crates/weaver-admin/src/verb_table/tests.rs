@@ -397,3 +397,9 @@ cell!(
     V::WorkerGone,
     A::ShowInTransitionConstituents
 );
+
+class!(
+    a_seed_holder_presents_held_by_other,
+    Seen::Holder(H::Seed),
+    V::HeldByOther
+);

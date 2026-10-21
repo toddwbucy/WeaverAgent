@@ -14,6 +14,39 @@ mod failures;
 const SEED_BYTES: &[u8] = b"the member, not admin, judges this image";
 const CAPTURE_BYTES: &[u8] = b"a complete captured state image";
 
+#[test]
+fn seed_publication_itself_refuses_prior_artifact_evidence_without_an_index() {
+    let fixture = Fixture::new();
+    let orphan = format!("{:020}-{}", 1, "d".repeat(64));
+    fs::create_dir(fixture.root.join(&orphan)).unwrap();
+    let mut repository = fixture.repository();
+    let created = fixture.seed_image();
+    let room = open_directory(&fixture.room).unwrap();
+    let declaration = declaration::render(&declaration::tests::fixture()).unwrap();
+    let result = Publication::seed(
+        &mut repository,
+        &fixture.scope(),
+        parse_serving_draft(&declaration).unwrap(),
+        SeedImage {
+            expected_seed_id: &created.seed_id,
+            created: &created,
+            room: room.as_fd(),
+            member_uid: fixture.owner.uid,
+        },
+        &mut alive,
+    );
+    match result {
+        Err(failure) => {
+            assert_eq!(failure.case, PersistenceCase::UnsupportedLayout);
+            assert!(failure.detail.contains(&orphan));
+        }
+        Ok(_) => panic!("publisher bypassed the seed-only prior-chain check"),
+    }
+    assert_eq!(fs::read_dir(&fixture.root).unwrap().count(), 1);
+    assert!(fixture.root.join(&orphan).is_dir());
+    assert!(!fixture.root.join(MANIFEST).exists());
+}
+
 struct Fixture {
     base: PathBuf,
     root: PathBuf,
