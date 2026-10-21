@@ -1,6 +1,6 @@
 # State management: repair primitive
 
-Date: 2026-10-21. Status: implemented, draft review pending.
+Date: 2026-10-21. Status: implemented in [draft PR #214][repair], review pending.
 This is an implementation record, not a Spec amendment or cutover approval.
 
 ## Scope and authority
@@ -113,3 +113,5 @@ each granted restatement pass and handling of operation refusals. External tool
 execution, recall reads, placement, plan/review orchestration and complete lifecycle
 migration remain their own consumers. The compiled production restatement template
 and language qualification are not elected by this code slice.
+
+[repair]: https://github.com/toddwbucy/WeaverAgent/pull/214

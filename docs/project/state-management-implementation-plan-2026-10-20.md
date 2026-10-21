@@ -25,6 +25,7 @@ landing map and takes precedence over historical branch descriptions below.
 | #190 | Independent pure recall query primitive. |
 | #192 | Independent snapshot timing amendment, approval owed. |
 | #213 | Independent empty-correction amendment, approval owed. |
+| #214 | Model repair and recorded restatement/accounting, stacked on #198. |
 
 New harness work stacks on code/state-harness-filing, the head of #198. Closed
 child branches are no longer landing targets. Normal merge commits preserve the
@@ -417,7 +418,7 @@ the complete halt containment and terminal publication sequence. C1 supplies the
 production STE100 adapter. Scripted adapters prove their contracts only. These
 obligations remain part of the complete implementation and cutover gate.
 
-H1m is local work on code/state-repair-ledger, based on the consolidated #198 head.
+H1m is [draft PR #214][repair], based on the consolidated #198 head.
 Its [implementation record][repair-record] states the passive repair owner and
 its recorded instruction and pair-accounting ports. The loop still chooses each pass
 and calls the decoder. The full harness suite passes 952 tests with 17 inherited
@@ -509,3 +510,5 @@ quality, decoder capacity, throughput or absence of paging waits.
 [empty-correction]: https://github.com/toddwbucy/WeaverAgent/pull/213
 
 [repair-record]: state-management-repair-2026-10-21.md
+
+[repair]: https://github.com/toddwbucy/WeaverAgent/pull/214
