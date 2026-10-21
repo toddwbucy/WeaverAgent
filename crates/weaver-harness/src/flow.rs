@@ -24,6 +24,7 @@ mod read_validate;
 mod record_owner;
 mod recording;
 mod report;
+mod sort;
 mod ste100_channel;
 mod ste100_socket;
 mod templates;
@@ -35,6 +36,33 @@ mod member_tests;
 
 #[cfg(test)]
 mod recording_fixture;
+
+#[cfg(test)]
+mod outbound_port_visibility {
+    use super::clock::testing::FakePumpIo;
+    use super::context::{
+        OutboundBeginError, OutboundCompletion, OutboundProgress, RecordingContext, RunFailure,
+    };
+    use super::pump::PumpPorts;
+    use super::sort::OutboundInput;
+    use super::templates::TemplateCertificate;
+
+    const _: fn(
+        &mut RecordingContext,
+        OutboundInput,
+        &TemplateCertificate,
+        &mut FakePumpIo,
+    ) -> Result<(), OutboundBeginError> = RecordingContext::begin_outbound;
+    const _: fn(
+        &mut RecordingContext,
+        &mut PumpPorts<'_, FakePumpIo>,
+    ) -> Result<OutboundProgress, RunFailure> = RecordingContext::advance_outbound;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<OutboundCompletion>, RunFailure> = RecordingContext::take_outbound;
+    const _: fn(&mut RecordingContext) = RecordingContext::cancel_outbound;
+}
 
 #[cfg(test)]
 mod ste100_integration_tests;

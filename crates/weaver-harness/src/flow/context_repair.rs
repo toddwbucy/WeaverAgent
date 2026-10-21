@@ -343,7 +343,7 @@ impl RecordingContext {
         Ok(())
     }
 
-    fn repair_certificate_matches(&self, certificate: &TemplateCertificate) -> bool {
+    pub(super) fn repair_certificate_matches(&self, certificate: &TemplateCertificate) -> bool {
         let Some(duty) = &self.load_duty else {
             return false;
         };

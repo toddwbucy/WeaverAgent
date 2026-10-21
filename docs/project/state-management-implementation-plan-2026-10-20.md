@@ -86,7 +86,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H3bm | H1d, H3b1 | Reserved measurement exchange, exact proposal/count custody and existing waits, HARNESS-PLACE |
 | H3b | H1b2, H3bm | Marks, journal, recorded placement and engine grants, Spec 06 |
 | H4 | H2, H3b | Plan operations and review evidence, Spec 07 and admin amendment |
-| H5 | H3b, H4 | Sort, selection and injection ports, Spec 08 |
+| H5o | H1m, H1f | SUBJECTS, outbound identity sort and recorded-use adapter, Spec 08 |
+| H5 | H3b, H4, H5o | Serve-side selection and injection ports, Spec 08 |
 | Q1 | All above | Serving qualification and coupled cutover, foundation transition |
 
 Spec 09's required evidence producers travel with the primitive that produces each
@@ -496,7 +497,8 @@ tracks that consumer. Cached boot facts, budgets and recorded placement remain o
 The wire is not independently deployable. External diagnostic consumers must migrate
 the same vocabulary before the coupled cutover.
 
-H3bm is on code/state-measure-owner, joining #217 at bdfa3a76 with #218 at 8b387eff.
+H3bm is [PR #219][measure-owner] on code/state-measure-owner, joining #217 at
+bdfa3a76 with #218 at 8b387eff.
 Its reserved decode exchange retains exact proposals and raw replies, checks the
 counts and revision, and keeps the enclosing Decision or Cut wait. Cancellation
 drains the exchange. Protocol failure latches before its owed trace-only refusal
@@ -509,6 +511,13 @@ mutations fail their named tests. Both changed-crate lint gates, formatting and 
 checks pass. The [owned measurement record][measure-owner-record] holds the scope,
 test list and evidence limits. Review it against #217 with #218 as a required second
 prerequisite. Keep this union in the held harness stack until coupled cutover.
+
+H5o is on code/state-outbound-sort, based on #219 at 7da5366c. The
+[outbound implementation record][outbound-record] names its pure noun extraction,
+checked act identities, certified template family and exclusive recording adapter.
+It retains the effective emission through trace pressure and returns no sorted
+result after cancellation or runtime template rejection. It opens no pair and
+elects no workflow. Serve-side selection and its read/place dependencies remain H5.
 
 The later rows remain owed.
 This is a progress record, not a claim that the full goal or any serving cutover is
@@ -538,6 +547,8 @@ tests prove mechanics and refusal paths. They do not certify production language
 quality, decoder capacity, throughput or absence of paging waits.
 
 [set]: ../crates/state-management/README.md
+[measure-owner]: https://github.com/toddwbucy/WeaverAgent/pull/219
+[outbound-record]: state-management-outbound-sort-2026-10-21.md
 [measure-owner-record]: state-management-measure-owner-2026-10-21.md
 [catalog]: https://github.com/toddwbucy/WeaverAgent/pull/183
 [floor]: https://github.com/toddwbucy/WeaverAgent/pull/184

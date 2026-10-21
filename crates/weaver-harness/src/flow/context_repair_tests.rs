@@ -15,6 +15,9 @@ use std::io::{Read, Write};
 use weaver_traits::{ContentBlock, ToolCall};
 use weaver_types::state_flow as s;
 
+#[path = "context_sort_tests.rs"]
+mod sort_tests;
+
 static RESTATEMENT: RestatementTemplate = RestatementTemplate::new("fixture.restatement");
 
 fn ports<I: PumpIo>(io: &mut I) -> PumpPorts<'_, I> {
@@ -54,14 +57,38 @@ impl RepairFixture {
     }
 
     fn with_template(words: &'static str) -> Self {
-        let templates = Box::leak(
-            vec![s::TemplateSpec {
-                template_id: RESTATEMENT.template_id().into(),
-                kind: "loop.instruction".into(),
-                parts: vec![s::TemplatePart::Literal(words.into())],
-            }]
-            .into_boxed_slice(),
-        );
+        Self::with_outbound_template(words, None)
+    }
+
+    fn with_outbound_template(words: &'static str, outbound: Option<&'static str>) -> Self {
+        Self::with_sort_partition(words, outbound, true)
+    }
+
+    fn with_sort_partition(
+        words: &'static str,
+        outbound: Option<&'static str>,
+        selected: bool,
+    ) -> Self {
+        let mut entries = vec![s::TemplateSpec {
+            template_id: RESTATEMENT.template_id().into(),
+            kind: "loop.instruction".into(),
+            parts: vec![s::TemplatePart::Literal(words.into())],
+        }];
+        if let Some(words) = outbound {
+            entries.push(s::TemplateSpec {
+                template_id: "sort.outbound".into(),
+                kind: "sort.decision".into(),
+                parts: vec![
+                    s::TemplatePart::Literal(words.into()),
+                    s::TemplatePart::Slot {
+                        name: "order".into(),
+                        class: s::SlotClass::TechnicalName,
+                    },
+                    s::TemplatePart::Literal(".".into()),
+                ],
+            });
+        }
+        let templates = Box::leak(entries.into_boxed_slice());
         let inventory = CompiledInventory::new(templates).unwrap();
         let seed: s::SeedRequest = s::decode_strict(include_str!("fixtures/seed.json")).unwrap();
         // Give recall its own key in the actual loaded artifact. Ordinary Read
@@ -72,6 +99,11 @@ impl RepairFixture {
         recall["forms"] = serde_json::json!(["Recall"]);
         artifact["verbs"].as_array_mut().unwrap().push(recall);
         artifact["recall_keys"] = serde_json::json!(["recall"]);
+        if outbound.is_some() {
+            artifact["technical_names"] = serde_json::json!([{
+                "text": "identity", "authority": {"rule_id": "test-rule", "disposition": "technical_use"}
+            }]);
+        }
         let exact = serde_json::to_string(&artifact).unwrap();
         let digest = s::Digest::new(format!("{:x}", Sha256::digest(exact.as_bytes()))).unwrap();
         let declaration = s::SchemeDeclaration {
@@ -80,8 +112,24 @@ impl RepairFixture {
             verbs: vec!["read".into(), "recall".into()],
         };
         let scheme = RequestScheme::from_exact_scheme(&exact, &declaration).unwrap();
-        let mut input =
-            InputFixture::with_template_inventory_and_scheme(&inventory, exact, declaration);
+        let mut config = super::tests::config();
+        if outbound.is_some() && selected {
+            let mut rule = config
+                .partition
+                .iter()
+                .find(|rule| rule.kind == "loop.instruction")
+                .unwrap()
+                .clone();
+            rule.id = "outbound".into();
+            rule.kind = "sort.decision".into();
+            config.partition.push(rule);
+        }
+        let mut input = InputFixture::with_declaration_scheme_tools(
+            Some(&inventory),
+            config,
+            Some((exact, declaration)),
+            None,
+        );
         input
             .run
             .context
@@ -99,11 +147,9 @@ impl RepairFixture {
                 assert_eq!(message.tag, Tag::Request);
                 let request: s::Ste100Request =
                     s::decode_strict(std::str::from_utf8(&message.payload).unwrap()).unwrap();
-                assert_eq!(
-                    request.target,
-                    s::Ste100Target::Template {
-                        template_id: RESTATEMENT.template_id().into(),
-                    }
+                assert!(
+                    matches!(&request.target, s::Ste100Target::Template { template_id }
+                    if template_id == RESTATEMENT.template_id() || (outbound.is_some() && template_id == "sort.outbound"))
                 );
                 input.reply(&s::Ste100Reply {
                     request_id: request.request_id,

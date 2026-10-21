@@ -52,11 +52,23 @@ fn template() -> TemplateSpec {
 }
 
 fn certificate(entries: Vec<TemplateSpec>) -> TemplateCertificate {
+    certificate_for(entries, scheme())
+}
+
+fn certificate_for(
+    entries: Vec<TemplateSpec>,
+    declaration: SchemeDeclaration,
+) -> TemplateCertificate {
     let inventory = CompiledInventory::new(Box::leak(entries.into_boxed_slice())).unwrap();
-    let load = inventory.record(&scheme(), &checker());
-    let mut transcript =
-        TemplateCheckTranscript::begin(inventory, "run".into(), scheme(), checker(), &load)
-            .unwrap();
+    let load = inventory.record(&declaration, &checker());
+    let mut transcript = TemplateCheckTranscript::begin(
+        inventory,
+        "run".into(),
+        declaration.clone(),
+        checker(),
+        &load,
+    )
+    .unwrap();
     let mut ordinal = 1;
     while let Some(operation) = transcript.next_operation() {
         let CheckOperation::Template { template_id, .. } = &operation else {
@@ -67,7 +79,7 @@ fn certificate(entries: Vec<TemplateSpec>) -> TemplateCertificate {
             target: Ste100Target::Template {
                 template_id: template_id.clone(),
             },
-            scheme_id: scheme().scheme_id,
+            scheme_id: declaration.scheme_id.clone(),
             result: Ste100Result::Accepted { bindings: vec![] },
         };
         let result_source = SourcePosition {
@@ -92,6 +104,94 @@ fn expected(certificate: &TemplateCertificate) -> ExpansionIdentity<'_> {
         scheme: certificate.scheme(),
         checker_artifact_sha256: certificate.checker_artifact_sha256(),
         inventory_sha256: certificate.inventory_sha256(),
+    }
+}
+
+fn outbound_certificate(
+    registered: bool,
+    parts: Vec<TemplatePart>,
+) -> (TemplateCertificate, String) {
+    let seed: weaver_types::state_flow::SeedRequest =
+        weaver_types::state_flow::decode_strict(include_str!("fixtures/seed.json")).unwrap();
+    let mut artifact: serde_json::Value = serde_json::from_str(&seed.ste100_scheme).unwrap();
+    if registered {
+        artifact["technical_names"] = serde_json::json!([{"text":"identity","authority":{"rule_id":"test-rule","disposition":"technical_use"}}]);
+    }
+    let text = serde_json::to_string(&artifact).unwrap();
+    let digest = Digest::new(format!("{:x}", Sha256::digest(text.as_bytes()))).unwrap();
+    let declaration = SchemeDeclaration {
+        scheme_id: format!("ste100:{digest}"),
+        artifact_sha256: digest,
+        verbs: vec!["read".into()],
+    };
+    let certificate = certificate_for(
+        vec![TemplateSpec {
+            template_id: "sort.outbound".into(),
+            kind: "sort.decision".into(),
+            parts,
+        }],
+        declaration,
+    );
+    (certificate, text)
+}
+
+fn outbound_parts() -> Vec<TemplatePart> {
+    vec![
+        TemplatePart::Literal("Read ".into()),
+        TemplatePart::Slot {
+            name: "order".into(),
+            class: SlotClass::TechnicalName,
+        },
+        TemplatePart::Literal(".".into()),
+    ]
+}
+
+#[test]
+fn outbound_expansion_uses_only_the_registered_closed_identity_name() {
+    let (certificate, text) = outbound_certificate(true, outbound_parts());
+    let value = expand_outbound(&certificate, expected(&certificate), &text).unwrap();
+    assert_eq!(value.text(), "Read identity.");
+    assert_eq!(value.template_id(), "sort.outbound");
+    assert_eq!(value.message().role, Role::User);
+    assert_eq!(
+        value.acceptance().result_source(),
+        certificate.accepted()[0].result_source()
+    );
+    assert_eq!(
+        expand_outbound(&certificate, expected(&certificate), &(text + " ")).unwrap_err(),
+        ExpansionRefusal::ForeignCertificate
+    );
+}
+
+#[test]
+fn outbound_expansion_refuses_absent_names_step_slots_and_multiple_variables() {
+    let (certificate, text) = outbound_certificate(false, outbound_parts());
+    assert_eq!(
+        expand_outbound(&certificate, expected(&certificate), &text).unwrap_err(),
+        ExpansionRefusal::UnsupportedSlot
+    );
+    for parts in [
+        vec![TemplatePart::Literal("Read identity.".into())],
+        vec![TemplatePart::Slot {
+            name: "step".into(),
+            class: SlotClass::StepId,
+        }],
+        vec![
+            TemplatePart::Slot {
+                name: "one".into(),
+                class: SlotClass::TechnicalName,
+            },
+            TemplatePart::Slot {
+                name: "two".into(),
+                class: SlotClass::TechnicalName,
+            },
+        ],
+    ] {
+        let (certificate, text) = outbound_certificate(true, parts);
+        assert_eq!(
+            expand_outbound(&certificate, expected(&certificate), &text).unwrap_err(),
+            ExpansionRefusal::UnsupportedSlot
+        );
     }
 }
 
