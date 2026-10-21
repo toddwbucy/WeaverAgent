@@ -1,6 +1,6 @@
 # External pair execution implementation record
 
-Date: 2026-10-21. Status: draft implementation, Planner grade owed.
+Date: 2026-10-21. Status: draft PR #216, Planner grade owed.
 
 ## Scope and authority
 
@@ -92,8 +92,8 @@ repair guard. It independently checked the mutation logs, source restoration
 and restored suite totals. No local review finding remains open. This is not
 a Planner grade.
 
-The changed-crate all-target lint, formatting, lock and diff checks are
-recorded with the draft PR. Local logs use /tmp/weaver-state-pair-*.log.
+The changed-crate all-target lint, formatting, lock, diff, ASCII, editorial
+and local-link checks pass. Local logs use /tmp/weaver-state-pair-*.log.
 Mutation evidence is in /tmp/weaver-state-pair-mutations/ and
 /tmp/weaver-state-pair-pump-mutations/. The private Cargo target is
 /tmp/weaver-state-pair-execution-target with incremental caching disabled.

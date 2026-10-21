@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for the consolidated stack and gate containment.
+Updated: 2026-10-21 for the consolidated stack and external pair execution.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -26,9 +26,11 @@ landing map and takes precedence over historical branch descriptions below.
 | #192 | Independent snapshot timing amendment, approval owed. |
 | #213 | Independent empty-correction amendment, approval owed. |
 | #215 | Typed causes and contained terminal delivery, stacked on #198. Held for the coordinated foundation cutover. |
+| #216 | External pair execution and committed result custody, stacked on #215. Review and fold into #215 before that parent folds into #198. Same cutover hold. |
 
-New harness work stacks on code/state-harness-filing, the head of #198. Closed
-child branches are no longer landing targets. Normal merge commits preserve the
+The current harness stack is #198, then #215, then #216. New dependent work
+starts from code/state-pair-execution, the head of #216. Closed child branches
+are no longer landing targets. Normal merge commits preserve the
 consolidated ancestry. Only the operator merges. A root's old slice-level results
 are not fresh validation of its combined head.
 
@@ -71,7 +73,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H1m | H2a, H1t | Passive model repair, recorded restatement instructions and corrected request custody, Specs 02 and 05 |
 | H1b2 | H1b1, H1i, H1s, H1t, H1f, H1o, H1q, H2a, H1m, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
 | H2g | H1m | Typed gate interrupt, containment and terminal delivery, gate amendment |
-| H2 | H1b2, H2a, H2g, IN1 | Executing pair lifecycle, Spec 05 |
+| H2e | H1m, H2g | External dispatch, exact gate evidence and terminal commit custody, Spec 05 |
+| H2 | H1b2, H2e, IN1 | Inward calls, boot repair, lifecycle composition and returned coverage, Spec 05 |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
 | H4 | H2, H3b | Plan operations and review evidence, Spec 07 and admin amendment |
@@ -439,6 +442,20 @@ remain in H1b2/H2. This slice changes the internal wire and must stay on the dra
 stack until the coordinated foundation cutover. It is not an independently
 landable change to the previous serving contract.
 
+H2e is [draft PR #216][pair-execution] on code/state-pair-execution, based on
+#215 at c9aa7709. Its [implementation record][pair-execution-record] names the
+private effective-emission, send-ticket, receipt and rejection contracts.
+The restored harness suite passes 1,010 tests with 17 inherited ignored
+instruments. Twelve compiled protective mutations fail their named tests,
+with exact source restoration independently checked. Lint, formatting, lock,
+diff and editorial checks pass. The local review is not a Planner grade.
+The loop still owes actual controls, lower/reap routing and serving migration.
+Inward recall, trusted review, boot repair and placement acknowledgment remain
+H2 work. Review and fold #216 into #215, then fold #215 into #198. Those
+merges consolidate review branches. Landing the replacement on main still
+waits for the coordinated cutover. Neither child independently changes main's
+serving contract.
+
 The later rows remain owed.
 This is a progress record, not a claim that the full goal or any serving cutover is
 complete. Each draft carries its own fresh test and perturbation evidence.
@@ -526,3 +543,6 @@ quality, decoder capacity, throughput or absence of paging waits.
 [gate-interrupt-record]: state-management-gate-interrupt-2026-10-21.md
 
 [gate-interrupt]: https://github.com/toddwbucy/WeaverAgent/pull/215
+
+[pair-execution]: https://github.com/toddwbucy/WeaverAgent/pull/216
+[pair-execution-record]: state-management-pair-execution-2026-10-21.md
