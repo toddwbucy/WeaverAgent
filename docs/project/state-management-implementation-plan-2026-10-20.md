@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for the ordered filing coordinator and its evidence producers.
+Updated: 2026-10-21 for the concrete packet transports needed by the common pump.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -35,7 +35,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | P1d | P1a, P1b, F4, C1 | Serving lifecycle and verified boot, admin/persistence amendments |
 | H1a | F1, T1b, F4 | Copy budget, trace proof and sole channel mechanics, harness amendment |
 | H1b1 | H1a | Ordered filing ledger, composition, clock and measurements, harness amendment |
-| H1b2 | H1b1, C1, P1 | Common pump, author census, input and halt, harness/foundation amendments |
+| H1p | C1t | Bounded organ, decode and label packet owners, HARNESS-PUMP |
+| H1b2 | H1b1, H1p, C1, P1 | Common pump, author census, input and halt, harness/foundation amendments |
 | H2 | H1b2, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
@@ -114,7 +115,10 @@ Host and Olympus cuda,gguf suites, lint, formatting and lock checks pass. Fifty
 mechanics perturbations and two cancellation-fixture perturbations failed their
 protective tests. The GPU pace instrument reports a skip, so no measured-pace claim
 follows from that run. Independent review found no unresolved mechanics defect.
-Its current head is 22cf33f4 after the shared-floor refresh.
+The empty-packet correction is published at 19e6afb9. Fresh host and Olympus gates
+pass, with three further compiled guard removals. A live empty datagram is framing
+failure, while full or write-half closure remains EOF. The correction changes no
+dispatcher states or production qualification claim.
 
 C1t is [draft PR #200][ste100-transport], stacked on #199 at 2b721285. It adds the
 concrete harness STE100 socket adapter with exact admission echoes, bounded fragments,
@@ -124,8 +128,8 @@ the common pump progress it without another clock. The full harness suite passes
 Twelve compiled protective changes fail their intended assertions, exact bytes are
 restored, and independent review verifies that evidence. Lint, formatting, lock and
 diff checks pass. [The implementation record][ste100-transport-record] states the
-scope and the separate SPU empty-datagram correction still owed to C1a. Worker launch,
-the common pump, production artifacts and qualification remain open.
+scope and the separate SPU empty-datagram correction now published in C1a. Worker
+launch, the common pump, production artifacts and qualification remain open.
 
 P1a adds strict draft/bound declaration parsing, admin-owned canonical TOML,
 strict binding/index/guard codecs and descriptor-held artifact verification. It is
@@ -261,6 +265,19 @@ contracts with real
 trace admission, Unix sockets and scripted classifier/state replies. They do not
 qualify production STE100, deployment limits or throughput.
 
+H1p supplies the bounded packet owners described in the
+[transport implementation record][pump-transport-record]. Its branch is stacked on
+PR #200. It consumes existing organ, decode and label channels and leaves their
+legacy callers active until the coupled cutover. The shared wire types and decode
+segment format stay unchanged. Enter's initial ancillary descriptor transfer remains
+part of the paired lifecycle migration.
+The full harness suite passes 561 tests with 17 inherited ignored instruments. All
+20 new transport fixtures and the new raw-readiness clock test run. Eleven compiled
+guard removals fail their intended behavioral checks. Exact source restoration and
+the restored 20-test transport and 13-test clock suites are independently verified.
+All-target lint, formatting, lock and diff checks pass. These establish bounded
+transport progress, including real trace pressure, not the future pump scheduler.
+
 H1b2 remains owed: all author callers, preflight and lifecycle ownership, input and
 model repair orchestration, the six-source common pump and bound activation,
 and the complete halt account and teardown. C1 supplies the production STE100
@@ -322,3 +339,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [placement]: https://github.com/toddwbucy/WeaverAgent/pull/197
 [filing]: https://github.com/toddwbucy/WeaverAgent/pull/198
 [filing-coordinator]: https://github.com/toddwbucy/WeaverAgent/pull/199
+[pump-transport-record]: state-management-pump-transports-2026-10-21.md

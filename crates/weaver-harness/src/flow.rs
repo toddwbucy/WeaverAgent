@@ -14,6 +14,7 @@ mod intake;
 mod ledger;
 mod mirror;
 mod observation;
+mod pump_transport;
 mod recording;
 mod ste100_channel;
 mod ste100_socket;
@@ -28,3 +29,6 @@ mod recording_fixture;
 
 #[cfg(test)]
 mod ste100_integration_tests;
+
+#[cfg(test)]
+mod pump_transport_integration_tests;
