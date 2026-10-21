@@ -90,10 +90,11 @@ subject. Its crate suite, lint, formatting and lock checks pass. Seven perturbat
 failed their protective tests, including two type pins. H2 owns the caller and read
 integration. No serving change or unused harness dependency is added here.
 
-C1a implements the SPU protocol and binding mechanics. Its scope and the remaining
-production dependencies are recorded in the [mechanics note][spu-mechanics]. It adds
-no production checker, manifest locator or serving activation. C1 in the later
-dependency rows means all three C1 slices, including qualification.
+C1a is [draft PR #191][spu], stacked on #184. It implements the SPU protocol and
+binding mechanics. Its remaining production dependencies are recorded in the
+[mechanics note][spu-mechanics]. It adds no production checker, manifest locator or
+serving activation. C1 in later dependency rows means all three C1 slices, including
+qualification.
 Host and Olympus cuda,gguf suites, lint, formatting and lock checks pass. Fifty
 mechanics perturbations and two cancellation-fixture perturbations failed their
 protective tests. The GPU pace instrument reports a skip, so no measured-pace claim
@@ -134,5 +135,6 @@ quality, decoder capacity, throughput or absence of paging waits.
 [member]: https://github.com/toddwbucy/WeaverAgent/pull/188
 [recall]: https://github.com/toddwbucy/WeaverAgent/pull/189
 [internal-recall]: https://github.com/toddwbucy/WeaverAgent/pull/190
+[spu]: https://github.com/toddwbucy/WeaverAgent/pull/191
 
 [spu-mechanics]: state-management-spu-mechanics-2026-10-20.md
