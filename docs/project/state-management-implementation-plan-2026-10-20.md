@@ -512,7 +512,8 @@ checks pass. The [owned measurement record][measure-owner-record] holds the scop
 test list and evidence limits. Review it against #217 with #218 as a required second
 prerequisite. Keep this union in the held harness stack until coupled cutover.
 
-H5o is on code/state-outbound-sort, based on #219 at 7da5366c. The
+H5o is [draft PR #220][outbound-sort] on code/state-outbound-sort, based on #219
+at 7da5366c. The
 [outbound implementation record][outbound-record] names its pure noun extraction,
 checked act identities, certified template family and exclusive recording adapter.
 It retains the effective emission through trace pressure and returns no sorted
@@ -548,6 +549,7 @@ quality, decoder capacity, throughput or absence of paging waits.
 
 [set]: ../crates/state-management/README.md
 [measure-owner]: https://github.com/toddwbucy/WeaverAgent/pull/219
+[outbound-sort]: https://github.com/toddwbucy/WeaverAgent/pull/220
 [outbound-record]: state-management-outbound-sort-2026-10-21.md
 [measure-owner-record]: state-management-measure-owner-2026-10-21.md
 [catalog]: https://github.com/toddwbucy/WeaverAgent/pull/183

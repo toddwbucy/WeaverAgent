@@ -2,6 +2,7 @@
 
 Date: 2026-10-21. Status: implementation evidence, not a Spec amendment.
 Branch: code/state-outbound-sort.
+Draft PR: https://github.com/toddwbucy/WeaverAgent/pull/220.
 Base: #219 at 7da5366cadeecc785114f679e570a273e902b245.
 
 ## Contract and scope
