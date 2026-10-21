@@ -227,7 +227,8 @@ source bytes are restored before the final gates. Independent review checks the
 component contracts, test failures and restoration evidence. Planner review remains
 owed.
 
-H1b1 builds on #198 with atomic whole-copy installation, source-ordered filing,
+H1b1 is [draft PR #199][filing-coordinator], stacked on #198. It adds atomic
+whole-copy installation, source-ordered filing,
 recorded classifier reuse and terminal disposal. Its coordinator composes the actual
 recording barrier and state channel. A receipt waits for its measurement record,
 and source reservations wait for their terminal record. Transition measurements
@@ -240,7 +241,8 @@ The full harness suite passes 499 tests with 17 ignored instruments. The matchin
 normal-member fixture passes separately. Lint, formatting, lock and diff checks
 pass. Twenty-two compiled guard removals fail their intended assertions and one
 type-pin check rejects a copyable input grant. Exact source bytes are restored
-and all affected baselines pass. The fixtures prove the filing contracts with real
+and all affected baselines pass. Independent review verifies the failure logs and
+restored source hashes. The fixtures prove the filing contracts with real
 trace admission, Unix sockets and scripted classifier/state replies. They do not
 qualify production STE100, deployment limits or throughput.
 
@@ -302,3 +304,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 
 [placement]: https://github.com/toddwbucy/WeaverAgent/pull/197
 [filing]: https://github.com/toddwbucy/WeaverAgent/pull/198
+[filing-coordinator]: https://github.com/toddwbucy/WeaverAgent/pull/199
