@@ -11,12 +11,13 @@ use std::io;
 use weaver_trace::serving::{Kind, Payload, payloads as trace};
 use weaver_trace::{Subsystem, TurnRef};
 use weaver_types::state_flow::{
-    DecimalU64, SourceBlockId, SourceEnvelope, StateControl, Ste100Reply, Ste100Request,
-    Ste100Target,
+    DecimalU64, MeasuredInterval, ReadLimits, STATE_CONTENT_SCHEMA, SchemeDeclaration,
+    SourceBlockId, SourceEnvelope, StartIdentity, StateControl, StateFrame, Ste100Reply,
+    Ste100Request, Ste100Target,
 };
 
 use super::author::{AuthoredEvent, AuthoredSource, ServingAuthor};
-use super::channel::{StateChannel, StateCompletion, StateRequest};
+use super::channel::{StateChannel, StateCompletion, StateRequest, UnusedOpen};
 use super::classifier::{Classifier, ClassifierState, Ste100Port, Submit};
 use super::clock::PumpIo;
 use super::intake::{FlowInbox, IntakeError, IntakeFailure, IntakeOutcome, RetentionBudget};
@@ -27,6 +28,7 @@ use super::observation::{
     GaugeSnapshot, Observation, PendingSource, SamplePoint, Transition, WaitingSource,
 };
 use super::recording::{RecordBarrier, RecordProgress, RecordProof, RecordPurpose};
+use super::report::{HaltLatch, SecondaryFailure};
 
 pub(super) struct FlowRecording<'a> {
     pub barrier: &'a mut RecordBarrier,
@@ -146,6 +148,7 @@ pub(super) enum RefusedAuthor {
 // recording proof never needs a second allocation to publish its completion.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum OperationCompletion {
+    Opened(StateCompletion),
     State {
         request: StateControl,
         turn: Option<TurnRef>,
@@ -171,18 +174,48 @@ enum PendingRecord {
     StateRelease,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AdmissionAdvance {
+    Pending,
+    Held,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CoordinatorPhase {
+    Preflight,
+    Opening,
+    Active,
+    Releasing,
+    Closed,
+    Failed,
+}
+
 /// No socket, mutable ledger or completion escapes through a caller-owned clone.
-/// The later run-wide latch consumes failure() before granting a decision. This
-/// owner freezes immediately and preserves all current source/transport evidence.
+/// The sole run-wide latch freezes this owner before reporting. Component
+/// notifications preserve every current source and transport fact for that latch.
 pub(super) struct FlowCoordinator<P> {
     run: String,
     ledger: Ledger,
-    classifier: Classifier<P>,
-    state: StateChannel,
-    observations: Observation,
+    classifier: Option<Classifier<P>>,
+    starting_classifier: Option<P>,
+    admission_completion: Option<super::ste100_socket::AdmissionPoll>,
+    admission_refused: bool,
+    admission_probe_pending: bool,
+    classifier_retired: bool,
+    state: Option<StateChannel>,
+    state_retired: bool,
+    unused_open: Option<UnusedOpen>,
+    observations: Option<Observation>,
+    observation_config: Option<(MeasuredInterval, u64)>,
+    scheme: SchemeDeclaration,
+    phase: CoordinatorPhase,
+    open_pending: bool,
     notices: VecDeque<Notice>,
     pending_record: Option<PendingRecord>,
     failure: Option<FlowFailure>,
+    halt: Option<HaltLatch>,
+    frozen_sample: Option<trace::FlowObservation>,
+    snapshot_failure: Option<FlowFailure>,
     backlog_reported: bool,
     started_file: Option<SourceBlockId>,
     reuse: Option<AcceptedReuse>,
@@ -218,12 +251,26 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         Ok(Self {
             run,
             ledger,
-            classifier,
-            state,
-            observations,
+            scheme: classifier.scheme().clone(),
+            classifier: Some(classifier),
+            starting_classifier: None,
+            admission_completion: None,
+            admission_refused: false,
+            admission_probe_pending: false,
+            classifier_retired: false,
+            state: Some(state),
+            state_retired: false,
+            unused_open: None,
+            observations: Some(observations),
+            observation_config: None,
+            phase: CoordinatorPhase::Active,
+            open_pending: false,
             notices: VecDeque::new(),
             pending_record: None,
             failure: None,
+            halt: None,
+            frozen_sample: None,
+            snapshot_failure: None,
             backlog_reported: false,
             started_file: None,
             reuse: None,
@@ -235,17 +282,397 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         })
     }
 
+    pub(super) fn run(&self) -> &str {
+        &self.run
+    }
+
+    pub(super) fn classifier_retired(&self) -> bool {
+        self.classifier_retired
+    }
+
     pub(super) fn failure(&self) -> Option<&FlowFailure> {
         self.failure.as_ref()
     }
+    pub(super) fn halt(&self) -> Option<&HaltLatch> {
+        self.halt.as_ref()
+    }
+
+    pub(super) fn halt_mut(&mut self) -> Option<&mut HaltLatch> {
+        self.halt.as_mut()
+    }
+
+    pub(super) fn has_pending_record(&self) -> bool {
+        self.pending_record.is_some()
+    }
+
+    /// First-latch facts are captured before any teardown transport is probed.
+    /// A pre-open failure has no sample because no observation baseline exists.
+    pub(super) fn final_sample(&self) -> Result<Option<&trace::FlowObservation>, &FlowFailure> {
+        match &self.snapshot_failure {
+            Some(failure) => Err(failure),
+            None => Ok(self.frozen_sample.as_ref()),
+        }
+    }
+
+    pub(super) fn latch(
+        &mut self,
+        first: SecondaryFailure,
+        leave_deadline: Option<u64>,
+        cx: &mut FlowRecording<'_>,
+    ) {
+        if self.halt.is_some() {
+            return;
+        }
+        let observed_ns = first.observed_ns;
+        let detail = first.detail.clone();
+        self.halt = Some(HaltLatch::new(first, leave_deadline));
+        self.fail(cx, "halt", detail);
+        if self.observations.is_none() {
+            return;
+        }
+        let result = (|| {
+            let now = observed_ns.ok_or_else(|| FlowFailure {
+                point: "clock",
+                detail: "first halt has no observation timestamp".into(),
+            })?;
+            let gauges = self.gauges(cx)?;
+            self.observations
+                .as_mut()
+                .expect("checked observation owner")
+                .final_sample(gauges, now.0)
+                .map_err(|error| FlowFailure {
+                    point: "observation",
+                    detail: error.to_string(),
+                })
+        })();
+        match result {
+            Ok(sample) => self.frozen_sample = Some(sample),
+            Err(failure) => self.snapshot_failure = Some(failure),
+        }
+    }
+
     pub(super) fn ledger(&self) -> &Ledger {
         &self.ledger
     }
     pub(super) fn state(&self) -> &StateChannel {
-        &self.state
+        self.state.as_ref().expect("standing state channel")
     }
     pub(super) fn classifier(&self) -> &Classifier<P> {
-        &self.classifier
+        self.classifier.as_ref().expect("standing classifier")
+    }
+    pub(super) fn standing_state(&self) -> Option<&StateChannel> {
+        self.state.as_ref()
+    }
+    pub(super) fn standing_classifier(&self) -> Option<&Classifier<P>> {
+        self.classifier.as_ref()
+    }
+    pub(super) fn starting_classifier(&self) -> Option<&P> {
+        self.starting_classifier.as_ref()
+    }
+    pub(super) fn phase(&self) -> CoordinatorPhase {
+        self.phase
+    }
+
+    /// The unopened channel and declared identity become this run's sole owners.
+    pub(super) fn preflight(
+        state: StateChannel,
+        scheme: SchemeDeclaration,
+        observation_interval: MeasuredInterval,
+        lag_alarm_turns: u64,
+    ) -> Result<Self, FlowFailure> {
+        let (session, run, opened_scheme) = state.identity();
+        if opened_scheme.is_some()
+            || !state.outstanding().is_empty()
+            || state.held_measurement().is_some()
+            || state.failure().is_some()
+            || scheme.validate().is_err()
+            || observation_interval.validate().is_err()
+            || lag_alarm_turns == 0
+        {
+            return Err(FlowFailure {
+                point: "open",
+                detail: "preflight requires an unused channel and valid declaration".into(),
+            });
+        }
+        let run = run.to_owned();
+        let ledger =
+            Ledger::new(run.clone(), session.to_owned(), scheme.clone()).map_err(|error| {
+                FlowFailure {
+                    point: "open",
+                    detail: error.to_string(),
+                }
+            })?;
+        Ok(Self {
+            run,
+            ledger,
+            classifier: None,
+            starting_classifier: None,
+            admission_completion: None,
+            admission_refused: false,
+            admission_probe_pending: false,
+            classifier_retired: false,
+            state: Some(state),
+            state_retired: false,
+            unused_open: None,
+            observations: None,
+            observation_config: Some((observation_interval, lag_alarm_turns)),
+            scheme,
+            phase: CoordinatorPhase::Preflight,
+            open_pending: false,
+            notices: VecDeque::new(),
+            pending_record: None,
+            failure: None,
+            halt: None,
+            frozen_sample: None,
+            snapshot_failure: None,
+            backlog_reported: false,
+            started_file: None,
+            reuse: None,
+            state_operation: None,
+            check_operation: None,
+            operation_completion: None,
+            state_release_timing: None,
+            refused_author: None,
+        })
+    }
+
+    pub(super) fn begin_open(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        start: StartIdentity,
+        read_limits: ReadLimits,
+    ) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        if self.phase != CoordinatorPhase::Preflight || self.open_pending {
+            return Err(self.fail(cx, "open", "state open is permitted once during preflight"));
+        }
+        let now = io.now().map_err(|error| self.fail(cx, "clock", error))?;
+        self.open_pending = true;
+        let request = StateRequest::Open {
+            schema_id: STATE_CONTENT_SCHEMA.into(),
+            scheme_id: self.scheme.scheme_id.clone(),
+            start,
+            read_limits,
+        };
+        self.state
+            .as_mut()
+            .expect("preflight channel")
+            .begin(request, now)
+            .map_err(|error| self.fail(cx, "open", error))?;
+        Ok(())
+    }
+
+    pub(super) fn opened_identity(
+        &self,
+    ) -> Option<&weaver_types::state_flow::MemberObservationIdentity> {
+        self.state.as_ref().and_then(StateChannel::opened_identity)
+    }
+
+    pub(super) fn open_refusal(
+        &self,
+    ) -> Option<(weaver_types::state_flow::StateRefusalCode, &str)> {
+        self.state.as_ref().and_then(StateChannel::open_refusal)
+    }
+
+    /// The barrier itself proves load admission and semantic activation. The
+    /// held open answer still owes its own exact measurement before release.
+    pub(super) fn activate_after_load(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        if self.phase != CoordinatorPhase::Preflight
+            || !cx.barrier.is_active()
+            || !self.open_pending
+            || self.opened_identity().is_none()
+        {
+            return Err(self.fail(
+                cx,
+                "open",
+                "activation requires recorded load and held matching open",
+            ));
+        }
+        self.phase = CoordinatorPhase::Opening;
+        Ok(())
+    }
+
+    fn require_active(&mut self, cx: &mut FlowRecording<'_>) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        if self.phase != CoordinatorPhase::Active {
+            return Err(self.fail(cx, "barrier", "operation requires an active flow"));
+        }
+        Ok(())
+    }
+
+    fn clean_obligations(&self, cx: &FlowRecording<'_>) -> bool {
+        self.ledger.facts().next().is_none()
+            && cx.inbox.queued().next().is_none()
+            && cx.inbox.failure().is_none()
+            && cx.budget.waiting_copy().is_none()
+            && cx.budget.gauges() == (0, 0)
+            && self.notices.is_empty()
+            && self.pending_record.is_none()
+            && self.operation_completion.is_none()
+            && self.state_operation.is_none()
+            && self.check_operation.is_none()
+            && self.admission_completion.is_none()
+            && cx.barrier.pending().is_none()
+    }
+
+    pub(super) fn unused_open(&self) -> Option<&UnusedOpen> {
+        self.unused_open.as_ref()
+    }
+
+    /// Existing admin rollback, after an actual preactivation enter refusal.
+    /// No tee was installed and this Open can never authorize boot or filing.
+    pub(super) fn begin_enter_rollback(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        _io: &mut impl PumpIo,
+    ) -> Result<Advance, FlowFailure> {
+        self.observe_failures(cx)?;
+        if self.phase != CoordinatorPhase::Preflight
+            || !cx.barrier.is_refused()
+            || cx.barrier.is_active()
+            || !self.open_pending
+            || self.observations.is_some()
+            || self.state_retired
+            || self.classifier_retired
+            || self.unused_open.is_some()
+            || self.classifier.is_some()
+            || self.starting_classifier.is_some()
+            || !self.clean_obligations(cx)
+        {
+            return Err(self.fail(
+                cx,
+                "barrier",
+                "enter rollback requires a recorded preactivation refusal",
+            ));
+        }
+        let Some(owner) = &mut self.state else {
+            return Err(self.fail(cx, "barrier", "enter rollback lost its state owner"));
+        };
+        let unused = owner
+            .abandon_unactivated_open()
+            .map_err(|error| self.fail(cx, "state_reply", error))?;
+        let Some(unused) = unused else {
+            return Ok(Advance::Pending);
+        };
+        self.unused_open = Some(unused);
+        self.state.take();
+        self.state_retired = true;
+        self.classifier_retired = true;
+        self.open_pending = false;
+        self.phase = CoordinatorPhase::Releasing;
+        Ok(Advance::Progress)
+    }
+
+    pub(super) fn begin_releasing(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<(), FlowFailure> {
+        self.require_active(cx)?;
+        if !self.clean_obligations(cx)
+            || !self.state().can_begin_filing()
+            || self
+                .classifier
+                .as_ref()
+                .is_some_and(|owner| owner.state() != ClassifierState::Idle)
+            || self.starting_classifier.is_some()
+        {
+            return Err(self.fail(
+                cx,
+                "barrier",
+                "release requires all owned operations and filings settled",
+            ));
+        }
+        self.phase = CoordinatorPhase::Releasing;
+        Ok(())
+    }
+
+    pub(super) fn retire_state(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+    ) -> Result<Advance, FlowFailure> {
+        self.observe_failures(cx)?;
+        if self.phase != CoordinatorPhase::Releasing
+            || self.state_retired
+            || !self.clean_obligations(cx)
+            || !self
+                .state
+                .as_ref()
+                .is_some_and(StateChannel::can_begin_filing)
+        {
+            return Err(self.fail(
+                cx,
+                "barrier",
+                "state retirement requires a clean releasing owner",
+            ));
+        }
+        self.state
+            .as_mut()
+            .expect("checked standing state")
+            .progress(&mut || io.now())
+            .map_err(|error| self.fail(cx, "state_transport", error))?;
+        if self.state().needs_progress() {
+            return Ok(Advance::Pending);
+        }
+        self.state.take();
+        self.state_retired = true;
+        Ok(Advance::Progress)
+    }
+
+    pub(super) fn retire_classifier(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<Advance, FlowFailure> {
+        self.observe_failures(cx)?;
+        if self.phase != CoordinatorPhase::Releasing
+            || self.classifier_retired
+            || self.starting_classifier.is_some()
+            || !self.clean_obligations(cx)
+            || self
+                .classifier
+                .as_ref()
+                .is_some_and(|owner| owner.state() != ClassifierState::Idle)
+        {
+            return Err(self.fail(
+                cx,
+                "classifier",
+                "classifier retirement requires a clean releasing owner",
+            ));
+        }
+        if let Some(owner) = &self.classifier {
+            match retirement_status(owner.readiness()) {
+                Ok(false) => return Ok(Advance::Pending),
+                Ok(true) => {}
+                Err(error) => return Err(self.fail(cx, "classifier", error)),
+            }
+        }
+        if let Some(mut owner) = self.classifier.take() {
+            owner.close();
+        }
+        self.classifier_retired = true;
+        Ok(Advance::Progress)
+    }
+
+    pub(super) fn close(&mut self, cx: &mut FlowRecording<'_>) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        if self.phase != CoordinatorPhase::Releasing
+            || !self.state_retired
+            || !self.classifier_retired
+            || !self.clean_obligations(cx)
+        {
+            return Err(self.fail(
+                cx,
+                "barrier",
+                "close requires retired ports and settled evidence",
+            ));
+        }
+        self.phase = CoordinatorPhase::Closed;
+        Ok(())
     }
 
     /// Begin a nonfiling exchange through the same request counter and socket.
@@ -256,11 +683,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         io: &mut impl PumpIo,
         request: ControlOperation,
     ) -> Result<OperationStart<ControlOperation>, FlowFailure> {
-        self.observe_failures(cx)?;
+        self.require_active(cx)?;
         if self.state_operation.is_some()
             || self.operation_completion.is_some()
-            || !self.state.outstanding().is_empty()
-            || self.state.held_measurement().is_some()
+            || !self.state().outstanding().is_empty()
+            || self.state().held_measurement().is_some()
         {
             return Ok(OperationStart::Busy(request));
         }
@@ -269,6 +696,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.state_operation = Some((request.clone(), turn));
         let common = self
             .state
+            .as_mut()
+            .expect("active state")
             .begin(StateRequest::Control(request), now)
             .map_err(|e| self.fail(cx, "state_send", e))?;
         Ok(OperationStart::Started {
@@ -283,10 +712,13 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         cx: &mut FlowRecording<'_>,
         operation: CheckOperation,
     ) -> Result<OperationStart<CheckOperation>, FlowFailure> {
-        self.observe_failures(cx)?;
+        self.require_active(cx)?;
+        if self.classifier.is_none() {
+            return Ok(OperationStart::Busy(operation));
+        }
         if self.check_operation.is_some()
             || self.operation_completion.is_some()
-            || self.classifier.state() != ClassifierState::Idle
+            || self.classifier().state() != ClassifierState::Idle
         {
             return Ok(OperationStart::Busy(operation));
         }
@@ -300,17 +732,21 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         }
         let request_id = self
             .classifier
+            .as_mut()
+            .expect("active classifier")
             .next_request_id()
             .map_err(|e| self.fail(cx, "classifier", e.detail))?;
         let request = Ste100Request {
             request_id,
             target: operation.target(),
             text: operation.text().to_owned(),
-            scheme_id: self.classifier.scheme().scheme_id.clone(),
+            scheme_id: self.classifier().scheme().scheme_id.clone(),
         };
         self.check_operation = Some(operation);
         match self
             .classifier
+            .as_mut()
+            .expect("active classifier")
             .submit(request)
             .map_err(|e| self.fail(cx, "classifier", e.detail))?
         {
@@ -326,6 +762,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         cx: &mut FlowRecording<'_>,
     ) -> Result<Option<OperationCompletion>, FlowFailure> {
         self.observe_failures(cx)?;
+        // HARNESS-RECORD-LIFETIME permits transport progress while an author
+        // waits, but completion reduction waits for that author's Recorded.
+        if cx.barrier.pending().is_some() {
+            return Ok(None);
+        }
         Ok(self.operation_completion.take())
     }
 
@@ -351,7 +792,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     /// before authoring its accepted message. The ledger still compares every
     /// byte, scheme and offered-sequence link before it can bypass classification.
     pub(super) fn reuse_next_input(&mut self, reuse: AcceptedReuse) -> Result<(), AcceptedReuse> {
-        if self.failure.is_some() || self.reuse.is_some() {
+        if self.failure.is_some() || self.phase != CoordinatorPhase::Active || self.reuse.is_some()
+        {
             return Err(reuse);
         }
         self.reuse = Some(reuse);
@@ -369,25 +811,34 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         detail: impl ToString,
     ) -> FlowFailure {
         if self.failure.is_none() {
+            self.phase = CoordinatorPhase::Failed;
             self.failure = Some(FlowFailure {
                 point,
                 detail: detail.to_string(),
             });
         }
+        // Once the semantic latch exists, no subsequent failure probe may move
+        // first-failure evidence. latch() performs this freeze before sampling.
+        let first_snapshot = self.frozen_sample.is_some() || self.snapshot_failure.is_some();
         // Preserve the last transport fact even when the work unit failed.
         // This updates evidence only and never releases a completion or retries.
-        if let Some(progress) = self
-            .state
-            .outstanding()
-            .first()
-            .filter(|p| p.source.is_some())
+        if !first_snapshot
+            && let Some(progress) = self
+                .state
+                .as_ref()
+                .map(StateChannel::outstanding)
+                .unwrap_or_default()
+                .first()
+                .filter(|p| p.source.is_some())
         {
             let _ = self
                 .ledger
-                .observe_progress(progress, self.state.first_sent_ns());
+                .observe_progress(progress, self.state().first_sent_ns());
         }
         self.ledger.freeze();
-        self.classifier.fail();
+        if let Some(owner) = &mut self.classifier {
+            owner.fail();
+        }
         cx.budget.freeze();
         cx.barrier.stop_for_flow_failure();
         self.failure.clone().expect("failure is held")
@@ -408,6 +859,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         let now = io.now().map_err(|e| self.fail(cx, "clock", e))?;
         let point = self
             .observations
+            .as_mut()
+            .expect("recorded open observation")
             .capture(transition, gauges, now)
             .map_err(|e| self.fail(cx, "observation", e))?;
         self.notices.push_back(Notice { point, turn });
@@ -435,6 +888,12 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         io: &mut impl PumpIo,
     ) -> Result<(), FlowFailure> {
         self.observe_failures(cx)?;
+        if self.phase != CoordinatorPhase::Active {
+            if cx.inbox.queued().next().is_some() || cx.budget.waiting_copy().is_some() {
+                return Err(self.fail(cx, "copy_intake", "content reached a non-active flow"));
+            }
+            return Ok(());
+        }
         let mut copied = Vec::new();
         while let Some((copy, intake_ns)) = cx.inbox.pop_timed(cx.budget) {
             let Some(intake_ns) = intake_ns else {
@@ -505,19 +964,34 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     ) -> Result<(), FlowFailure> {
         self.observe_failures(cx)?;
         match source {
-            TransportSource::State => self
-                .state
-                .progress(&mut || io.now())
-                .map_err(|e| self.fail(cx, "state_transport", e))?,
+            TransportSource::State => {
+                let Some(owner) = &mut self.state else {
+                    return Err(self.fail(
+                        cx,
+                        "state_transport",
+                        "state port is absent or retired",
+                    ));
+                };
+                owner
+                    .progress(&mut || io.now())
+                    .map_err(|error| self.fail(cx, "state_transport", error))?;
+            }
             TransportSource::Classifier => {
-                if self.classifier.state() == ClassifierState::ResultHeld {
-                    self.classifier
+                let Some(owner) = &mut self.classifier else {
+                    return Err(self.fail(
+                        cx,
+                        "classifier",
+                        "classifier needs admission or is retired",
+                    ));
+                };
+                if owner.state() == ClassifierState::ResultHeld {
+                    owner
                         .check_held_terminal()
-                        .map_err(|e| self.fail(cx, "classifier", e.detail))?;
+                        .map_err(|error| self.fail(cx, "classifier", error.detail))?;
                 } else {
-                    self.classifier
+                    owner
                         .try_result()
-                        .map_err(|e| self.fail(cx, "classifier", e.detail))?;
+                        .map_err(|error| self.fail(cx, "classifier", error.detail))?;
                 }
             }
         }
@@ -534,7 +1008,12 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         classifier_ready: bool,
     ) -> Result<(), FlowFailure> {
         self.observe_failures(cx)?;
-        if state_ready || self.state.ready_buffered() {
+        if state_ready
+            || self
+                .state
+                .as_ref()
+                .is_some_and(StateChannel::ready_buffered)
+        {
             self.transport_one(cx, io, TransportSource::State)?;
         }
         if classifier_ready {
@@ -553,6 +1032,15 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     ) -> Result<Advance, FlowFailure> {
         self.ensure_live()?;
         self.drain(cx, io)?;
+        if matches!(self.phase, CoordinatorPhase::Preflight) {
+            return Ok(Advance::Pending);
+        }
+        if matches!(
+            self.phase,
+            CoordinatorPhase::Releasing | CoordinatorPhase::Closed
+        ) {
+            return Ok(Advance::Idle);
+        }
         if matches!(self.pending_record, Some(PendingRecord::StateRelease)) {
             // The measurement is recorded, but its interrupted final probe must
             // not release a result across a later outstanding ordinary author.
@@ -561,6 +1049,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             }
             let completion = self
                 .state
+                .as_mut()
+                .expect("pending state release")
                 .resume_release()
                 .map_err(|e| self.fail(cx, "state_reply", e))?;
             return self.finish_state_release(cx, io, completion);
@@ -577,14 +1067,32 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             return Ok(Advance::Pending);
         }
         let now = io.now().map_err(|e| self.fail(cx, "clock", e))?;
+        if self.open_pending {
+            let measurement =
+                self.state().held_measurement().cloned().ok_or_else(|| {
+                    self.fail(cx, "open", "activated open lost its held measurement")
+                })?;
+            return self.author(
+                cx,
+                io,
+                wall_ms,
+                Kind::StateStoreMeasurement,
+                None,
+                Payload::StateStoreMeasurement(Box::new(super::mirror::measurement(&measurement))),
+                RecordPurpose::State(measurement),
+                PendingRecord::State,
+            );
+        }
         if let Some(progress) = self
             .state
+            .as_ref()
+            .expect("active state")
             .outstanding()
             .first()
             .filter(|p| p.source.is_some())
         {
             self.ledger
-                .observe_progress(progress, self.state.first_sent_ns())
+                .observe_progress(progress, self.state().first_sent_ns())
                 .map_err(|e| self.fail(cx, "ledger", e))?;
             if progress.bytes_sent > 0 && self.started_file.as_ref() != progress.source.as_ref() {
                 let source = progress.source.clone().expect("filtered filing");
@@ -597,13 +1105,23 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             }
         }
         if let Some(notice) = self.notices.front().cloned() {
-            if self.observations.pending().is_none() {
+            if self
+                .observations
+                .as_mut()
+                .expect("recorded open observation")
+                .pending()
+                .is_none()
+            {
                 self.observations
+                    .as_mut()
+                    .expect("recorded open observation")
                     .prepare_captured(&notice.point)
                     .map_err(|e| self.fail(cx, "observation", e))?;
             }
             let sample = self
                 .observations
+                .as_mut()
+                .expect("recorded open observation")
                 .pending()
                 .expect("prepared sample")
                 .clone();
@@ -621,7 +1139,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         if self.operation_completion.is_some() {
             return Ok(Advance::Pending);
         }
-        if let Some(measurement) = self.state.held_measurement() {
+        if let Some(measurement) = self.state().held_measurement() {
             let measurement = measurement.clone();
             let turn = measurement
                 .request_source
@@ -644,7 +1162,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 PendingRecord::State,
             );
         }
-        if let Some(reply) = self.classifier.held() {
+        if let Some(reply) = self.classifier.as_ref().and_then(Classifier::held) {
             let reply = reply.clone();
             let turn = match &reply.target {
                 Ste100Target::Source(source) => {
@@ -668,12 +1186,14 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             );
         }
         if self.state_operation.is_none()
-            && self.state.can_begin_filing()
+            && self.state().can_begin_filing()
             && let Some(filing) = self.ledger.next_file()
         {
             let source = filing.source().clone();
             let common = self
                 .state
+                .as_mut()
+                .expect("active state")
                 .begin(filing.into_request(), now)
                 .map_err(|e| self.fail(cx, "state_send", e))?;
             self.ledger
@@ -683,20 +1203,25 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             return Ok(Advance::Progress);
         }
         if self.check_operation.is_none()
-            && self.classifier.state() == ClassifierState::Idle
+            && self.classifier.is_some()
+            && self.classifier().state() == ClassifierState::Idle
             && let Some(candidate) = self.ledger.next_classification()
         {
             let request = Ste100Request {
                 request_id: self
                     .classifier
+                    .as_mut()
+                    .expect("active classifier")
                     .next_request_id()
                     .map_err(|e| self.fail(cx, "classifier", e.detail))?,
                 target: Ste100Target::Source(candidate.source.clone()),
                 text: candidate.text,
-                scheme_id: self.classifier.scheme().scheme_id.clone(),
+                scheme_id: self.classifier().scheme().scheme_id.clone(),
             };
             match self
                 .classifier
+                .as_mut()
+                .expect("active classifier")
                 .submit(request.clone())
                 .map_err(|e| self.fail(cx, "classifier", e.detail))?
             {
@@ -717,6 +1242,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         let gauges = self.gauges(cx)?;
         if self
             .observations
+            .as_mut()
+            .expect("recorded open observation")
             .tick_due(now, gauges.work_pending())
             .map_err(|e| self.fail(cx, "observation", e))?
         {
@@ -803,6 +1330,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             (Some(PendingRecord::Flow), RecordProof::Flow(proof)) => {
                 let terminal = self
                     .observations
+                    .as_mut()
+                    .expect("recorded open observation")
                     .recorded(proof)
                     .map_err(|e| self.fail(cx, "observation", e))?;
                 self.notices.pop_front();
@@ -821,9 +1350,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             (Some(PendingRecord::Classifier), RecordProof::Classifier(proof)) => {
                 let reply = self
                     .classifier
+                    .as_mut()
+                    .expect("held classifier")
                     .recorded(proof)
                     .map_err(|e| self.fail(cx, "classifier", e.detail))?;
-                if self.classifier.state() == ClassifierState::Failed {
+                if self.classifier().state() == ClassifierState::Failed {
                     return Err(self.fail(
                         cx,
                         "classifier",
@@ -857,10 +1388,14 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             (Some(PendingRecord::State), RecordProof::State(proof)) => {
                 self.state_release_timing = self
                     .state
+                    .as_ref()
+                    .expect("held state")
                     .held_measurement()
                     .map(|m| (m.harness_received_ns.0, m.harness_sent_ns.0));
                 let completion = self
                     .state
+                    .as_mut()
+                    .expect("held state")
                     .release(proof)
                     .map_err(|e| self.fail(cx, "state_reply", e))?;
                 return self.finish_state_release(cx, io, completion);
@@ -882,6 +1417,26 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         };
         self.pending_record = None;
         let timing = self.state_release_timing.take();
+        if self.open_pending {
+            if !matches!(completion.answer, StateFrame::Opened { .. }) {
+                return Err(self.fail(cx, "open", "open released a non-open completion"));
+            }
+            let (interval, alarm) = self
+                .observation_config
+                .take()
+                .expect("preflight observation declaration");
+            let confirmed = timing
+                .ok_or_else(|| self.fail(cx, "open", "open measurement lost its timestamp"))?
+                .0;
+            self.observations = Some(
+                Observation::new(self.run.clone(), confirmed, interval, alarm)
+                    .map_err(|error| self.fail(cx, "observation", error))?,
+            );
+            self.open_pending = false;
+            self.phase = CoordinatorPhase::Active;
+            self.operation_completion = Some(OperationCompletion::Opened(completion));
+            return Ok(Advance::Progress);
+        }
         if let Some((request, turn)) = self.state_operation.take() {
             self.operation_completion = Some(OperationCompletion::State {
                 request,
@@ -921,12 +1476,16 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         let phase = match terminal.outcome {
             TerminalOutcome::Filed => {
                 self.observations
+                    .as_mut()
+                    .expect("recorded open observation")
                     .note_filed(terminal.bytes)
                     .map_err(|e| self.fail(cx, "counter", e))?;
                 trace::FlowPhase::Filed
             }
             TerminalOutcome::CorrectlyRejected => {
                 self.observations
+                    .as_mut()
+                    .expect("recorded open observation")
                     .note_rejected()
                     .map_err(|e| self.fail(cx, "counter", e))?;
                 trace::FlowPhase::CorrectlyRejected
@@ -954,6 +1513,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             .map(copy_identity)
             .transpose()
             .map_err(|e| self.fail(cx, "copy_intake", e))?;
+        let queued =
+            queued_sources(cx.inbox).map_err(|error| self.fail(cx, "copy_intake", error))?;
         let result = GaugeSnapshot::from_sources(
             &self.run,
             self.ledger
@@ -970,7 +1531,14 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                     raw_bytes: fact.raw_bytes,
                     context_bytes: fact.context_bytes,
                     intake_ns: fact.intake_ns,
-                }),
+                })
+                .chain(queued.iter().map(|fact| PendingSource {
+                    source: &fact.source,
+                    turn: fact.turn.as_deref(),
+                    raw_bytes: fact.raw_bytes,
+                    context_bytes: fact.context_bytes,
+                    intake_ns: fact.intake_ns,
+                })),
             0,
             cx.budget.gauges(),
             waiting.as_ref().map(|(copy, turn)| WaitingSource {
@@ -980,6 +1548,246 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         );
         result.map_err(|e| self.fail(cx, "observation", e))
     }
+}
+
+impl FlowCoordinator<super::ste100_socket::SocketPort> {
+    pub(super) fn begin_classifier_admission(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        descriptor: std::os::fd::OwnedFd,
+        bootstrap: weaver_types::state_flow::Ste100Bootstrap,
+    ) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        if !matches!(
+            self.phase,
+            CoordinatorPhase::Opening | CoordinatorPhase::Active
+        ) || !cx.barrier.is_active()
+            || self.classifier.is_some()
+            || self.starting_classifier.is_some()
+            || self.classifier_retired
+        {
+            return Err(self.fail(
+                cx,
+                "classifier",
+                "classifier admission is once after trace activation",
+            ));
+        }
+        let port =
+            super::ste100_socket::SocketPort::starting(descriptor, bootstrap, self.scheme.clone())
+                .map_err(|error| self.fail(cx, "classifier", error.detail))?;
+        self.starting_classifier = Some(port);
+        Ok(())
+    }
+
+    pub(super) fn admission_refused(&self) -> bool {
+        self.admission_refused
+    }
+
+    pub(super) fn admission_needs_progress(&self) -> bool {
+        self.admission_probe_pending
+    }
+
+    /// A conforming admission refusal owes intentional disposal, not a failure
+    /// probe. Its peer must close after refusal, so EOF here is expected.
+    pub(super) fn retire_refused_classifier(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        if !matches!(
+            self.phase,
+            CoordinatorPhase::Opening | CoordinatorPhase::Active
+        ) || !self.admission_refused
+            || self.admission_completion.is_some()
+            || self.classifier_retired
+            || self.classifier.is_some()
+            || self.starting_classifier.is_none()
+            || !self.clean_obligations(cx)
+        {
+            return Err(self.fail(
+                cx,
+                "classifier",
+                "refused classifier disposal requires its consumed refusal",
+            ));
+        }
+        self.starting_classifier.take();
+        self.admission_probe_pending = false;
+        self.classifier_retired = true;
+        Ok(())
+    }
+
+    pub(super) fn held_admission(&self) -> Option<&super::ste100_socket::AdmissionPoll> {
+        self.admission_completion.as_ref()
+    }
+
+    /// Transport retains the completion. Only take_admission_completion grants
+    /// use of the admitted port. A valid refusal expects the peer to retire.
+    pub(super) fn advance_classifier_admission(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<AdmissionAdvance, FlowFailure> {
+        self.observe_failures(cx)?;
+        let Some(port) = &mut self.starting_classifier else {
+            return Err(self.fail(cx, "classifier", "no classifier admission is outstanding"));
+        };
+        if self.admission_refused {
+            return Ok(AdmissionAdvance::Pending);
+        }
+        if let Some(held) = &self.admission_completion {
+            if matches!(held, super::ste100_socket::AdmissionPoll::Ready(_)) {
+                match retirement_status(port.readiness()) {
+                    Ok(false) => {
+                        self.admission_probe_pending = true;
+                        return Ok(AdmissionAdvance::Pending);
+                    }
+                    Ok(true) => self.admission_probe_pending = false,
+                    Err(error) => return Err(self.fail(cx, "classifier", error)),
+                }
+            }
+            return Ok(AdmissionAdvance::Held);
+        }
+        let result = port
+            .advance_admission()
+            .map_err(|error| self.fail(cx, "classifier", error.detail))?;
+        if result == super::ste100_socket::AdmissionPoll::Pending {
+            return Ok(AdmissionAdvance::Pending);
+        }
+        self.admission_completion = Some(result);
+        Ok(AdmissionAdvance::Held)
+    }
+
+    pub(super) fn take_admission_completion(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<Option<super::ste100_socket::AdmissionPoll>, FlowFailure> {
+        self.observe_failures(cx)?;
+        if cx.barrier.pending().is_some() {
+            return Ok(None);
+        }
+        if matches!(
+            self.admission_completion,
+            Some(super::ste100_socket::AdmissionPoll::Ready(_))
+        ) {
+            let fd = self
+                .starting_classifier
+                .as_ref()
+                .expect("admission owns its port")
+                .readiness();
+            match retirement_status(fd) {
+                Ok(false) => {
+                    self.admission_probe_pending = true;
+                    return Ok(None);
+                }
+                Ok(true) => self.admission_probe_pending = false,
+                Err(error) => return Err(self.fail(cx, "classifier", error)),
+            }
+        }
+        let Some(result) = self.admission_completion.take() else {
+            return Ok(None);
+        };
+        if matches!(result, super::ste100_socket::AdmissionPoll::Ready(_)) {
+            let port = self
+                .starting_classifier
+                .take()
+                .expect("admission owns its port");
+            self.classifier = Some(
+                Classifier::new(port, self.scheme.clone(), self.run.clone())
+                    .map_err(|error| self.fail(cx, "classifier", error.detail))?,
+            );
+        }
+        if matches!(result, super::ste100_socket::AdmissionPoll::Refused(_)) {
+            self.admission_refused = true;
+        }
+        Ok(Some(result))
+    }
+}
+
+struct QueuedSource {
+    source: SourceBlockId,
+    turn: Option<String>,
+    raw_bytes: u64,
+    context_bytes: u64,
+    intake_ns: u64,
+}
+
+/// A failure can occur after admission and before the ordinary inbox drain.
+/// These are the same owed sources, with their actual original intake clocks.
+fn queued_sources(inbox: &FlowInbox) -> io::Result<Vec<QueuedSource>> {
+    use weaver_trace::serving::AdmittedCopy;
+    let mut facts = Vec::new();
+    for (copy, intake_ns) in inbox.queued_timed() {
+        let (envelope, blocks, context) = match copy {
+            AdmittedCopy::Statement(copy) => (
+                &copy.source_envelope,
+                copy.blocks.as_slice(),
+                copy.context.as_ref(),
+            ),
+            AdmittedCopy::Pair(copy) => (
+                &copy.source_envelope,
+                std::slice::from_ref(&copy.block),
+                None,
+            ),
+        };
+        if blocks.is_empty() {
+            continue;
+        }
+        let intake_ns =
+            intake_ns.ok_or_else(|| io::Error::other("queued copy has no intake clock"))?;
+        let source: SourceEnvelope =
+            weaver_types::state_flow::decode_strict(envelope).map_err(io::Error::other)?;
+        facts.try_reserve(blocks.len()).map_err(io::Error::other)?;
+        for block in blocks {
+            if block.source.run != source.run || block.source.sequence.0 != source.sequence.0 {
+                return Err(io::Error::other("queued block differs from its envelope"));
+            }
+            let context_bytes = if block.source.block == 0 {
+                context
+                    .map_or(Ok(0), |context| u64::try_from(context.raw.len()))
+                    .map_err(io::Error::other)?
+            } else {
+                0
+            };
+            facts.push(QueuedSource {
+                source: SourceBlockId {
+                    run: block.source.run.clone(),
+                    sequence: block.source.sequence.0.into(),
+                    block: block.source.block.into(),
+                },
+                turn: source.turn.clone(),
+                raw_bytes: u64::try_from(block.raw.len()).map_err(io::Error::other)?,
+                context_bytes,
+                intake_ns,
+            });
+        }
+    }
+    Ok(facts)
+}
+
+/// A clean retirement still observes an already queued terminal/extra frame.
+/// EINTR grants no permission to close and adds no wait or retry loop.
+fn retirement_status(fd: std::os::fd::BorrowedFd<'_>) -> io::Result<bool> {
+    use nix::libc;
+    use std::os::fd::AsRawFd;
+    let mut entry = libc::pollfd {
+        fd: fd.as_raw_fd(),
+        events: libc::POLLIN | libc::POLLRDHUP,
+        revents: 0,
+    };
+    // SAFETY: entry is one writable pollfd and the owned descriptor stays borrowed.
+    if unsafe { libc::poll(&mut entry, 1, 0) } < 0 {
+        let error = io::Error::last_os_error();
+        return if error.kind() == io::ErrorKind::Interrupted {
+            Ok(false)
+        } else {
+            Err(error)
+        };
+    }
+    if entry.revents != 0 {
+        return Err(io::Error::other(
+            "classifier has terminal or unsolicited work before retirement",
+        ));
+    }
+    Ok(true)
 }
 
 fn copy_contains(copy: &weaver_trace::serving::AdmittedCopy, source: &SourceBlockId) -> bool {
@@ -1032,4 +1840,4 @@ fn copy_identity(
 
 #[cfg(test)]
 #[path = "coordinator_tests.rs"]
-mod tests;
+pub(in crate::flow) mod tests;

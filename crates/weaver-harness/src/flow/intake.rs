@@ -264,6 +264,12 @@ impl FlowInbox {
         self.copies.iter().map(|(copy, _)| copy)
     }
 
+    pub(super) fn queued_timed(&self) -> impl Iterator<Item = (&AdmittedCopy, Option<u64>)> {
+        self.copies
+            .iter()
+            .map(|(copy, intake_ns)| (copy, *intake_ns))
+    }
+
     pub(super) fn failure(&self) -> Option<&IntakeFailure> {
         self.failure.as_ref()
     }

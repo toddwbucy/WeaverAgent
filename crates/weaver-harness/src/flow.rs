@@ -9,13 +9,18 @@ mod author;
 mod channel;
 mod classifier;
 mod clock;
+pub(crate) mod context;
 mod coordinator;
+mod halt_snapshot;
 mod intake;
 mod ledger;
 mod mirror;
 mod observation;
+mod pump;
 mod pump_transport;
+mod record_owner;
 mod recording;
+mod report;
 mod ste100_channel;
 mod ste100_socket;
 

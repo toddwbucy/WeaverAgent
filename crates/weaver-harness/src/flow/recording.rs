@@ -200,7 +200,7 @@ pub(super) struct TerminalAuthorFailure {
 /// recording context supplies author attribution, drains the inbox and owns
 /// the halt latch. This component never turns a failure into a success token.
 pub(super) struct RecordBarrier {
-    recorder: Recorder,
+    recorder: super::record_owner::RunRecorder,
     run: String,
     pending: Option<(Event, RecordPurpose)>,
     pending_author: Option<AuthorTicket>,
@@ -211,6 +211,17 @@ pub(super) struct RecordBarrier {
 
 impl RecordBarrier {
     pub(super) fn new(recorder: Recorder, run: String) -> Self {
+        Self::with_owner(super::record_owner::RunRecorder::active(recorder), run)
+    }
+
+    pub(super) fn preflight(
+        recorder: weaver_trace::serving::PreflightRecorder,
+        run: String,
+    ) -> Self {
+        Self::with_owner(super::record_owner::RunRecorder::preflight(recorder), run)
+    }
+
+    fn with_owner(recorder: super::record_owner::RunRecorder, run: String) -> Self {
         Self {
             recorder,
             run,
@@ -220,6 +231,43 @@ impl RecordBarrier {
             admitted_before_failure: None,
             failure: None,
         }
+    }
+
+    pub(super) fn is_loaded(&self) -> bool {
+        self.recorder.is_loaded()
+    }
+    pub(super) fn run(&self) -> &str {
+        &self.run
+    }
+    pub(super) fn is_active(&self) -> bool {
+        self.recorder.is_active()
+    }
+
+    pub(super) fn is_refused(&self) -> bool {
+        self.recorder.is_refused()
+    }
+    pub(super) fn is_closed(&self) -> bool {
+        self.recorder.is_closed()
+    }
+
+    pub(super) fn activate(
+        &mut self,
+        partition: weaver_trace::serving::ValidatedPartition,
+    ) -> Result<(), weaver_trace::Failure> {
+        if self.failure.is_some() || self.pending.is_some() || self.pending_author.is_some() {
+            return Err(weaver_trace::Failure::RefusedOnSubmit {
+                reason: weaver_trace::SubmitRefusal::PayloadMalformed,
+            });
+        }
+        self.recorder.activate(partition)
+    }
+
+    pub(super) fn standing_failure(&self) -> Option<weaver_trace::Failure> {
+        self.recorder.standing_failure()
+    }
+
+    pub(super) fn abandon(&mut self) {
+        self.recorder.abandon();
     }
 
     /// Prepare once and retain the complete original until actual admission.
@@ -400,6 +448,8 @@ impl RecordBarrier {
                     TapOutcome::Failed(failure) => {
                         return self.fail(RecordFailure::Tap(failure), budget);
                     }
+                    TapOutcome::HeadUntapped if !self.recorder.is_active() => {}
+                    TapOutcome::Stopped if self.recorder.is_preflight_shutdown() => {}
                     TapOutcome::Stopped | TapOutcome::HeadUntapped => {
                         return self.fail(
                             RecordFailure::Protocol("ordinary record has no live tap".into()),
@@ -520,8 +570,9 @@ impl RecordBarrier {
             }
         }
     }
+    #[cfg(test)]
     pub(super) fn recorder(&self) -> &Recorder {
-        &self.recorder
+        self.recorder.active_recorder()
     }
     pub(super) fn capacity_fd(&self) -> std::os::fd::BorrowedFd<'_> {
         self.recorder.capacity_fd()

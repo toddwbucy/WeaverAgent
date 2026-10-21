@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for recording ownership and typed completion routing.
+Updated: 2026-10-21 for run recording, the common pump and frozen failure accounts.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -37,7 +37,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H1b1 | H1a | Ordered filing ledger, composition, clock and measurements, harness amendment |
 | H1p | C1t | Bounded organ, decode and label packet owners, HARNESS-PUMP |
 | H1r | H1p | Bounded recording progress and typed operation results, harness/trace amendments |
-| H1b2 | H1b1, H1p, H1r, C1, P1 | Common pump, author census, input and halt, harness/foundation amendments |
+| H1c | H1r | Run recording, common pump and frozen failure-account support, harness amendment |
+| H1b2 | H1b1, H1c, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
 | H2 | H1b2, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
@@ -135,13 +136,23 @@ launch, the common pump, production artifacts and qualification remain open.
 H1r is [draft PR #202][recording-support], stacked on #201. It adds bounded
 trace wake/drain and preflight terminal APIs, original author custody, held state
 terminal observation, interruption-safe release and typed noncapture control and
-classifier operation results. The complete phaseful RecordingContext, common pump,
-input owner and lifecycle caller migration remain in H1b2. Its
+classifier operation results. H1c adds the phaseful recording and common pump
+components. Input ownership and lifecycle caller migration remain in H1b2. Its
 [implementation record][recording-support-record] carries the precise boundary and
 validation status. Both full affected-crate suites pass, totaling 726 tests with
 17 inherited ignored instruments. Fifteen compiled protective changes fail their
 intended assertions, and exact restored source passes again. Per-crate lint,
 formatting, lock and diff checks pass. No active serving path changes in this slice.
+
+H1c is the next [run-context slice][run-context-record], based on #202. It keeps
+one recording lifetime through preflight, activation, correct refusal, release
+and drain, and supplies the common pump and the complete frozen account producer.
+The full affected-crate suites pass 909 tests with 17 inherited ignored instruments
+and zero failures. All 26 compiled protective mutations fail their intended checks,
+and independent review verifies exact source restoration and the final passing
+suites. All-target lint, formatting, lock and diff checks pass. The lifecycle callers,
+input and capture owners, terminal report submission and failed-exit containment
+remain in H1b2.
 
 P1a adds strict draft/bound declaration parsing, admin-owned canonical TOML,
 strict binding/index/guard codecs and descriptor-held artifact verification. It is
@@ -290,13 +301,12 @@ the restored 20-test transport and 13-test clock suites are independently verifi
 All-target lint, formatting, lock and diff checks pass. These establish bounded
 transport progress, including real trace pressure, not the future pump scheduler.
 
-H1b2 remains owed: all author callers, preflight and lifecycle ownership, input and
-model repair orchestration, the six-source common pump and bound activation,
-and the complete halt account and teardown. C1 supplies the production STE100
-adapter. The scripted adapter proves the near-side contract only. H1b1's frozen
-failure preserves its owned ledger and channel evidence, but is not the run-wide
-halt report or containment ladder. These obligations remain part of the complete
-implementation and cutover gate.
+H1c supplies the phaseful recording and pump components and the frozen halt account
+producer. H1b2 still owes all serving author callers, lifecycle integration, input
+and model repair orchestration, bound activation at the owning operations, and
+the complete halt containment and terminal publication sequence. C1 supplies the
+production STE100 adapter. Scripted adapters prove their contracts only. These
+obligations remain part of the complete implementation and cutover gate.
 
 The later rows remain owed.
 This is a progress record, not a claim that the full goal or any serving cutover is
@@ -356,3 +366,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 
 [recording-support-record]: state-management-recording-support-2026-10-21.md
 [recording-support]: https://github.com/toddwbucy/WeaverAgent/pull/202
+[run-context-record]: state-management-run-context-2026-10-21.md

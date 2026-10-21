@@ -80,6 +80,122 @@ pub(super) fn measurement(value: &shared::StateStoreMeasurement) -> trace::State
     }
 }
 
+pub(super) fn member(
+    value: &shared::MemberObservationIdentity,
+) -> trace::MemberObservationIdentity {
+    let shared::MemberObservationIdentity {
+        instrument_version,
+        pid,
+        start_ticks,
+        ticks_per_second,
+        unavailable_reason: reason,
+    } = value;
+    trace::MemberObservationIdentity {
+        instrument_version: instrument_version.clone(),
+        pid: *pid,
+        start_ticks: start_ticks.map(number),
+        ticks_per_second: ticks_per_second.map(number),
+        unavailable_reason: reason.map(unavailable_reason),
+    }
+}
+
+pub(super) fn instruction(value: &shared::Ste100Instruction) -> trace::Ste100Instruction {
+    let shared::Ste100Instruction {
+        model_binding,
+        model_artifact_sha256,
+        instances,
+        max_wire_bytes,
+        measurement_ref,
+        repair_cap,
+        decision_wait,
+    } = value;
+    trace::Ste100Instruction {
+        model_binding: trace::ModelBinding {
+            artifact: model_binding.artifact.0.clone(),
+            devices: model_binding
+                .devices
+                .iter()
+                .map(|device| device.0)
+                .collect(),
+        },
+        model_artifact_sha256: model_artifact_sha256.as_str().into(),
+        instances: *instances,
+        max_wire_bytes: number(*max_wire_bytes),
+        measurement_ref: measurement_ref.clone(),
+        repair_cap: trace::RepairCap {
+            attempts: repair_cap.attempts,
+            measurement_ref: repair_cap.measurement_ref.clone(),
+        },
+        decision_wait: trace::MeasuredWait {
+            elapsed_ns: number(decision_wait.elapsed_ns),
+            measurement_ref: decision_wait.measurement_ref.clone(),
+        },
+    }
+}
+
+pub(super) fn start(value: &shared::StartIdentity) -> trace::StartIdentity {
+    let shared::StartIdentity {
+        seed_id,
+        artifact_id,
+        dump_sha256,
+        config_sha256,
+        parent_artifact_id,
+        position,
+    } = value;
+    trace::StartIdentity {
+        seed_id: seed_id.clone(),
+        artifact_id: artifact_id.clone(),
+        dump_sha256: dump_sha256.as_str().into(),
+        config_sha256: config_sha256.as_str().into(),
+        parent_artifact_id: parent_artifact_id.clone(),
+        position: position.as_ref().map(|value| trace::SourcePosition {
+            block_id: source(&value.block_id),
+            turn: value.turn.clone(),
+        }),
+    }
+}
+
+/// Compare only the flow fields owned by this context. The loader owns the
+/// remaining deployment facts. No trace value is parsed back into a contract.
+pub(super) fn matches_flow(
+    value: &shared::FlowConfig,
+    record: &trace::FlowDeclarationRecord,
+) -> bool {
+    let shared::FlowConfig {
+        version,
+        partition,
+        gate_wait,
+        cut_wait,
+        observation_interval,
+        backlog,
+        scheme,
+    } = value;
+    record.registry_id == weaver_trace::serving::REGISTRY_ID
+        && record.version == *version
+        && record.partition.len() == partition.len()
+        && record.partition.iter().zip(partition).all(|(a, b)| {
+            a.id == b.id
+                && a.kind == b.kind
+                && a.channels == b.channels
+                && a.origins == b.origins
+                && a.blocks == b.blocks
+                && a.context == b.context
+        })
+        && record.gate_wait.elapsed_ns.0 == gate_wait.elapsed_ns.0
+        && record.gate_wait.measurement_ref == gate_wait.measurement_ref
+        && record.cut_wait.elapsed_ns.0 == cut_wait.elapsed_ns.0
+        && record.cut_wait.measurement_ref == cut_wait.measurement_ref
+        && record.observation_interval.elapsed_ns.0 == observation_interval.elapsed_ns.0
+        && record.observation_interval.measurement_ref == observation_interval.measurement_ref
+        && record.backlog.max_pending_blocks.0 == backlog.max_pending_blocks.0
+        && record.backlog.max_pending_bytes.0 == backlog.max_pending_bytes.0
+        && record.backlog.lag_alarm_turns.0 == backlog.lag_alarm_turns.0
+        && record.backlog.measurement_ref == backlog.measurement_ref
+        && record.scheme.scheme_id == scheme.scheme_id
+        && record.scheme.artifact_sha256 == scheme.artifact_sha256.as_str()
+        && record.scheme.verbs == scheme.verbs
+}
+
 fn number(value: shared::DecimalU64) -> trace::DecimalU64 {
     value.0.into()
 }

@@ -1430,18 +1430,9 @@ impl PartialEq for FaultReport {
     }
 }
 
-/// The three charters' closed twelve, per `weaver-types-Spec` section 4.2:
-/// three of `weaver-spu-PRD` section 13.10, three of `weaver-gate-PRD`
-/// section 13.4, six of `weaver-harness-PRD` section 5. **A thirteenth case
-/// is a charter act before it is a code change**, and the tenth, eleventh
-/// and twelfth were each exactly that: the act typing these found the
-/// harness authoring an assembly fault no case covered, the act answering
-/// #369 found it leaving a seated prefix unaccounted for, and #111's PR C
-/// found the unwind's sweep of `tools/` with nothing to name its failure
-/// but a death that never happened. The charter widened before this enum
-/// did, each time. The harness's six ride the same shape
-/// although they cross no socket, one shape serving the wire and the `fault`
-/// event's payload.
+/// The closed fault vocabulary from the organ charters and TYPES-FAULT.
+/// New cases require a charter act. Harness faults use the same carrier even
+/// when they cross no socket, with their account owned by the reporting member.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FaultCase {
@@ -1472,6 +1463,11 @@ pub enum FaultCase {
     /// holds is left unsignalled for the run end's kill of the agent's
     /// cgroup (C2). `Left` is answered all the same.
     ToolsContainmentUndelivered,
+    /// Component failure of the one serving flow. The harness owns its account.
+    StateFlowFailed,
+    /// A correct conformance result exposed an invalid template certificate.
+    /// This reports an operation defect and never implies a component halt.
+    StateTemplateRejected,
 }
 
 #[cfg(test)]

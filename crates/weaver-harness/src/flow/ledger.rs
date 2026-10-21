@@ -126,6 +126,10 @@ pub(super) struct BlockFacts<'a> {
     pub(super) context_bytes: u64,
     pub(super) intake_ns: u64,
     pub(super) state: LedgerState,
+    pub(super) content_type: weaver_trace::serving::payloads::CopyContentType,
+    /// Disposition records can wait after a valid port result. The halt account
+    /// retains the state whose result is held, with commit evidence separately.
+    pub(super) prior_state: LedgerState,
     pub(super) progress: Option<&'a ExchangeProgress>,
     pub(super) first_sent_ns: Option<u64>,
 }
@@ -540,6 +544,17 @@ impl Ledger {
             context_bytes: entry.context_bytes,
             intake_ns: entry.intake_ns,
             state: entry.state,
+            content_type: match entry.file {
+                LedgerFile::Statement(_) => {
+                    weaver_trace::serving::payloads::CopyContentType::Statement
+                }
+                LedgerFile::Pair(_) => weaver_trace::serving::payloads::CopyContentType::Pair,
+            },
+            prior_state: match entry.state {
+                LedgerState::FiledHeld => LedgerState::AwaitingReceipt,
+                LedgerState::CorrectlyRejectedHeld => LedgerState::AwaitingClassification,
+                state => state,
+            },
             progress: entry.progress.as_ref(),
             first_sent_ns: entry.first_sent_ns,
         })

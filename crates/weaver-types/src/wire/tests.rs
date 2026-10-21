@@ -1,5 +1,18 @@
 use super::*;
 
+#[test]
+fn state_fault_cases_keep_component_and_conformance_results_distinct() {
+    for (case, spelling) in [
+        (FaultCase::StateFlowFailed, "state_flow_failed"),
+        (FaultCase::StateTemplateRejected, "state_template_rejected"),
+    ] {
+        let encoded = serde_json::to_value(case).unwrap();
+        assert_eq!(encoded, spelling);
+        assert_eq!(serde_json::from_value::<FaultCase>(encoded).unwrap(), case);
+    }
+    assert!(serde_json::from_str::<FaultCase>("\"state_rejected\"").is_err());
+}
+
 /// **A save point report carries its seven members and no other** (#99,
 /// K9): the report admin writes into a root-owned manifest round-trips,
 /// and the same report with one field more fails to deserialize.
