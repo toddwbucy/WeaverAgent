@@ -207,11 +207,8 @@ fn prepare<P: Ste100Port>(
                     });
                     match &expected.target {
                         Ste100Target::Source(source) => {
-                            if input_id.is_some() {
-                                return Err(ReportError::Invalid(
-                                    "input conflicts with classifier source",
-                                ));
-                            }
+                            // A queued input may be waiting behind this source's
+                            // check. Both identities are real concurrent facts.
                             source_id = Some(source.clone());
                         }
                         Ste100Target::Input {
@@ -224,13 +221,7 @@ fn prepare<P: Ste100Port>(
                             }
                             input_id = Some(*actual);
                         }
-                        Ste100Target::Template { .. } => {
-                            if input_id.is_some() {
-                                return Err(ReportError::Invalid(
-                                    "input conflicts with classifier template",
-                                ));
-                            }
-                        }
+                        Ste100Target::Template { .. } => {}
                     }
                 }
             }

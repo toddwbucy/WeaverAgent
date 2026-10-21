@@ -9,11 +9,11 @@ use std::collections::VecDeque;
 use std::io;
 
 use weaver_trace::serving::{Kind, Payload, payloads as trace};
-use weaver_trace::{Subsystem, TurnRef};
+use weaver_trace::{Sequence, Subsystem, TurnRef};
 use weaver_types::state_flow::{
-    DecimalU64, MeasuredInterval, ReadLimits, STATE_CONTENT_SCHEMA, SchemeDeclaration,
-    SourceBlockId, SourceEnvelope, StartIdentity, StateControl, StateFrame, Ste100Reply,
-    Ste100Request, Ste100Target,
+    DecimalU64, Digest, MeasuredInterval, ReadLimits, STATE_CONTENT_SCHEMA, SchemeDeclaration,
+    SourceBlockId, SourceEnvelope, SourcePosition, StartIdentity, StateControl, StateControlAnswer,
+    StateFrame, Ste100Reply, Ste100Request, Ste100Result, Ste100Target,
 };
 
 use super::author::{AuthoredEvent, AuthoredSource, ServingAuthor};
@@ -22,13 +22,31 @@ use super::classifier::{Classifier, ClassifierState, Ste100Port, Submit};
 use super::clock::PumpIo;
 use super::intake::{FlowInbox, IntakeError, IntakeFailure, IntakeOutcome, RetentionBudget};
 use super::ledger::{
-    AcceptedReuse, Classified, Ledger, LedgerState, TerminalCandidate, TerminalOutcome,
+    AcceptedReuse, Classified, Ledger, LedgerState, SourceLease, TerminalCandidate, TerminalOutcome,
 };
 use super::observation::{
     GaugeSnapshot, Observation, PendingSource, SamplePoint, Transition, WaitingSource,
 };
 use super::recording::{RecordBarrier, RecordProgress, RecordProof, RecordPurpose};
 use super::report::{HaltLatch, SecondaryFailure};
+
+#[path = "output.rs"]
+mod output;
+// The later repair owner names each block capability through this private port.
+#[allow(unused_imports)]
+pub(super) use output::{
+    CheckedGeneration, OutputCancellation, OutputChecks, OutputOriginal, RecordedOutputBlock,
+};
+
+#[path = "model_requests.rs"]
+mod model_requests;
+#[cfg(test)]
+pub(in crate::flow) use model_requests::tests::checked as checked_request_fixture;
+#[allow(unused_imports)]
+pub(super) use model_requests::{
+    AssociationError, AssociationFailure, AssociationRefusal, ModelRequestCandidate,
+    OriginalRequests, PendingAssociation, RequestScheme,
+};
 
 pub(super) struct FlowRecording<'a> {
     pub barrier: &'a mut RecordBarrier,
@@ -96,10 +114,15 @@ impl ControlOperation {
 }
 
 /// The caller owns the source of this work. None of these operations grants
-/// selected-copy admission or manufactures a ledger entry. Gate input is
-/// deliberately absent until its intake, cancellation and counter owner exists.
+/// selected-copy admission or manufactures a ledger entry. Input submission is
+/// licensed only through its registered intake and measured submission method.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum CheckOperation {
+    Input {
+        input_id: DecimalU64,
+        offered_sequence: DecimalU64,
+        text: String,
+    },
     Template {
         template_id: String,
         text: String,
@@ -114,6 +137,10 @@ pub(super) enum CheckOperation {
 impl CheckOperation {
     fn target(&self) -> Ste100Target {
         match self {
+            Self::Input { input_id, .. } => Ste100Target::Input {
+                input_id: *input_id,
+                block: 0.into(),
+            },
             Self::Template { template_id, .. } => Ste100Target::Template {
                 template_id: template_id.clone(),
             },
@@ -123,7 +150,9 @@ impl CheckOperation {
 
     fn text(&self) -> &str {
         match self {
-            Self::Template { text, .. } | Self::UnselectedModel { text, .. } => text,
+            Self::Input { text, .. }
+            | Self::Template { text, .. }
+            | Self::UnselectedModel { text, .. } => text,
         }
     }
 }
@@ -148,22 +177,115 @@ pub(super) enum RefusedAuthor {
 // recording proof never needs a second allocation to publish its completion.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum OperationCompletion {
+    Capture {
+        request: StateControl,
+        completion: StateCompletion,
+        recorded_ns: u64,
+    },
+    Input {
+        operation: CheckOperation,
+        reply: Ste100Reply,
+        reuse: Option<AcceptedReuse>,
+        recorded_ns: u64,
+    },
     Opened(StateCompletion),
     State {
         request: StateControl,
         turn: Option<TurnRef>,
         completion: StateCompletion,
     },
-    Check {
+    Check(RecordedCheck),
+}
+
+/// An operation result and its exact recorded event, held as one capability.
+/// Only the coordinator's successful classifier-proof reduction constructs it.
+/// It cannot be cloned or reconstructed from a reply or a caller-supplied source.
+#[derive(Debug)]
+pub(super) struct RecordedCheck {
+    operation: CheckOperation,
+    reply: Ste100Reply,
+    source: SourcePosition,
+}
+
+impl RecordedCheck {
+    pub(super) fn operation(&self) -> &CheckOperation {
+        &self.operation
+    }
+
+    pub(super) fn reply(&self) -> &Ste100Reply {
+        &self.reply
+    }
+
+    pub(super) fn source(&self) -> &SourcePosition {
+        &self.source
+    }
+
+    pub(super) fn into_parts(self) -> (CheckOperation, Ste100Reply, SourcePosition) {
+        (self.operation, self.reply, self.source)
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_test(
         operation: CheckOperation,
         reply: Ste100Reply,
-    },
+        source: SourcePosition,
+    ) -> Self {
+        Self {
+            operation,
+            reply,
+            source,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CapturePhase {
+    Barrier,
+    SnapshotPending,
+    Held,
+    AcknowledgePending,
+    Finished,
+    ReleaseQueued,
+    Aborting,
+    Complete,
+}
+
+/// Read-only custody facts. The context owns save, leg and cleanup deadlines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CaptureSnapshot {
+    pub capture_id: DecimalU64,
+    pub frontier: u64,
+    pub request_id: Option<DecimalU64>,
+    pub phase: CapturePhase,
+}
+
+struct CaptureOwner {
+    snapshot: CaptureSnapshot,
+    leg: Option<StateControl>,
+    // The original leg remains owned until its exact observation is recorded.
+    // Abort is the channel's sole permitted second exchange.
+    cleanup: Option<StateControl>,
+    release_queued: Option<StateControl>,
+    refused_snapshot: bool,
+    queued_ns: Option<u64>,
 }
 
 #[derive(Clone)]
 struct Notice {
+    input_id: Option<u64>,
     point: SamplePoint,
     turn: Option<String>,
+}
+
+struct InputAccount {
+    id: DecimalU64,
+    began_ns: u64,
+    request_id: Option<DecimalU64>,
+}
+
+struct InputReuse {
+    grant: AcceptedReuse,
+    source_sequence: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -190,12 +312,31 @@ pub(super) enum CoordinatorPhase {
     Failed,
 }
 
+/// One consumer reserves before authoring. Its source is bound only by the
+/// recorder's actual completion, before any classification can be reduced.
+struct ReceiptReservation {
+    sequence: Option<u64>,
+    expected: Vec<SourceBlockId>,
+    registered: bool,
+    author_recorded_ns: Option<u64>,
+    recorded_ns: Option<u64>,
+}
+
+struct OutputReceiptReservation {
+    sequence: u64,
+    expected: Vec<SourceBlockId>,
+    lease: Option<SourceLease>,
+}
+
 /// No socket, mutable ledger or completion escapes through a caller-owned clone.
 /// The sole run-wide latch freezes this owner before reporting. Component
 /// notifications preserve every current source and transport fact for that latch.
 pub(super) struct FlowCoordinator<P> {
     run: String,
     ledger: Ledger,
+    receipt_reservation: Option<ReceiptReservation>,
+    output_checks: Option<OutputChecks>,
+    output_receipts: Option<OutputReceiptReservation>,
     classifier: Option<Classifier<P>>,
     starting_classifier: Option<P>,
     admission_completion: Option<super::ste100_socket::AdmissionPoll>,
@@ -218,11 +359,15 @@ pub(super) struct FlowCoordinator<P> {
     snapshot_failure: Option<FlowFailure>,
     backlog_reported: bool,
     started_file: Option<SourceBlockId>,
-    reuse: Option<AcceptedReuse>,
+    reuse: Option<InputReuse>,
+    input_account: Option<InputAccount>,
+    last_input_id: u64,
     state_operation: Option<(StateControl, Option<TurnRef>)>,
+    capture: Option<CaptureOwner>,
     check_operation: Option<CheckOperation>,
     operation_completion: Option<OperationCompletion>,
     state_release_timing: Option<(u64, u64)>,
+    state_recorded_ns: Option<u64>,
     refused_author: Option<RefusedAuthor>,
 }
 
@@ -251,6 +396,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         Ok(Self {
             run,
             ledger,
+            receipt_reservation: None,
+            output_checks: None,
+            output_receipts: None,
             scheme: classifier.scheme().clone(),
             classifier: Some(classifier),
             starting_classifier: None,
@@ -274,10 +422,14 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             backlog_reported: false,
             started_file: None,
             reuse: None,
+            input_account: None,
+            last_input_id: 0,
             state_operation: None,
+            capture: None,
             check_operation: None,
             operation_completion: None,
             state_release_timing: None,
+            state_recorded_ns: None,
             refused_author: None,
         })
     }
@@ -354,6 +506,391 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     pub(super) fn ledger(&self) -> &Ledger {
         &self.ledger
     }
+    /// Reserve complete model content before authoring. Source identity belongs
+    /// to the subsequent recorder completion, never to the caller.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn reserve_output_checks(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        original: OutputOriginal,
+    ) -> Result<(), (OutputOriginal, FlowFailure)> {
+        if let Err(failure) = self.observe_failures(cx) {
+            return Err((original, failure));
+        }
+        if self.phase != CoordinatorPhase::Active
+            || self.output_checks.is_some()
+            || self.receipt_reservation.is_some()
+            || self.capture.is_some()
+            || self.check_operation.is_some()
+            || self.operation_completion.is_some()
+            || self.classifier.is_none()
+        {
+            return Err((
+                original,
+                self.fail(cx, "output", "output check owner is unavailable"),
+            ));
+        }
+        let owner = OutputChecks::new(&self.run, &self.scheme, original)
+            .map_err(|(original, error)| (original, self.fail(cx, "output", error)))?;
+        self.output_checks = Some(owner);
+        Ok(())
+    }
+
+    pub(super) fn has_output_consumer(&self) -> bool {
+        self.output_checks.is_some()
+    }
+
+    pub(super) fn output_checks(&self) -> Option<&OutputChecks> {
+        self.output_checks.as_ref()
+    }
+
+    /// Intake has installed the copy or retained it whole for room. No result
+    /// may be reduced between that intake and this actual source binding.
+    pub(super) fn bind_output_checks(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: Sequence,
+        recorded_ns: u64,
+    ) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        if self
+            .output_checks
+            .as_ref()
+            .is_none_or(OutputChecks::is_bound)
+        {
+            return Err(self.fail(cx, "output", "output has no unbound original author"));
+        }
+        let installed: Vec<_> = self
+            .ledger
+            .facts()
+            .filter(|fact| fact.source.run == self.run && fact.source.sequence.0 == sequence.0)
+            .map(|fact| fact.source.clone())
+            .collect();
+        let pending = pending_receipt_sources(cx, &self.run, sequence, installed.is_empty())
+            .map_err(|error| self.fail(cx, "output", error))?;
+        let deferred = pending.is_some();
+        let selected = pending.unwrap_or(installed);
+        if self.output_checks.as_ref().unwrap().is_cancelled() {
+            // A cancelled author may still finish its one real trace ticket.
+            // Preserve that source, but never revive the abandoned consumer.
+            return self
+                .output_checks
+                .as_mut()
+                .unwrap()
+                .bind(sequence, recorded_ns, &selected)
+                .map_err(|error| self.fail(cx, "output_receipt", error));
+        }
+        let lease = if deferred {
+            None
+        } else {
+            Some(
+                self.ledger
+                    .register_source_lease(selected.clone())
+                    .map_err(|error| self.fail(cx, "output_receipt", error.error))?,
+            )
+        };
+        self.output_receipts = Some(OutputReceiptReservation {
+            sequence: sequence.0,
+            expected: selected.clone(),
+            lease,
+        });
+        self.output_checks
+            .as_mut()
+            .expect("unbound output")
+            .bind(sequence, recorded_ns, &selected)
+            .map_err(|error| self.fail(cx, "output", error))
+    }
+
+    fn register_deferred_output_receipts(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: u64,
+        sources: &[SourceBlockId],
+    ) -> Result<(), FlowFailure> {
+        let Some(owner) = self.output_receipts.as_ref() else {
+            return Ok(());
+        };
+        if owner.sequence != sequence {
+            return Ok(());
+        }
+        if owner.lease.is_some() || owner.expected != sources {
+            return Err(self.fail(cx, "output_receipt", "deferred output copy changed"));
+        }
+        let lease = self
+            .ledger
+            .register_source_lease(sources.to_vec())
+            .map_err(|error| self.fail(cx, "output_receipt", error.error))?;
+        self.output_receipts.as_mut().unwrap().lease = Some(lease);
+        Ok(())
+    }
+
+    pub(super) fn take_output_checks(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<Option<CheckedGeneration>, FlowFailure> {
+        self.observe_failures(cx)?;
+        if !self
+            .output_checks
+            .as_ref()
+            .is_some_and(OutputChecks::is_complete)
+        {
+            return Ok(None);
+        }
+        // The check proof is independent of unrelated pending filings or their
+        // observation records. No selected source obligation transfers here.
+        if self
+            .output_receipts
+            .as_ref()
+            .is_none_or(|owner| owner.lease.is_none())
+        {
+            return Err(self.fail(
+                cx,
+                "output_receipt",
+                "complete output lost its receipt lease",
+            ));
+        }
+        let owner = self.output_checks.take().expect("complete output");
+        match owner.complete() {
+            Ok(mut checked) => {
+                let lease = self.output_receipts.take().unwrap().lease.unwrap();
+                checked.attach_receipt_lease(lease);
+                Ok(Some(checked))
+            }
+            Err(owner) => {
+                self.output_checks = Some(owner);
+                Err(self.fail(cx, "output", "complete output could not transfer"))
+            }
+        }
+    }
+
+    pub(super) fn cancel_output_checks(&mut self) {
+        if let Some(reservation) = self.output_receipts.take()
+            && let Some(lease) = reservation.lease
+        {
+            // Cancellation removes consumer interest, never the copied filing.
+            self.ledger
+                .release_source_lease(lease)
+                .expect("owned output lease");
+        }
+        if let Some(owner) = &mut self.output_checks {
+            owner.cancel();
+        }
+    }
+
+    pub(super) fn take_cancelled_output_checks(&mut self) -> Option<OutputCancellation> {
+        if !self
+            .output_checks
+            .as_ref()
+            .is_some_and(|owner| owner.is_cancelled() && owner.is_settled())
+        {
+            return None;
+        }
+        let owner = self.output_checks.take().expect("settled cancellation");
+        match owner.cancellation() {
+            Ok(cancelled) => Some(cancelled),
+            Err(owner) => {
+                self.output_checks = Some(owner);
+                None
+            }
+        }
+    }
+
+    fn start_output_check(&mut self, cx: &mut FlowRecording<'_>) -> Result<bool, FlowFailure> {
+        let Some((source, text, turn)) = self
+            .output_checks
+            .as_ref()
+            .and_then(OutputChecks::next_unselected)
+        else {
+            return Ok(false);
+        };
+        let operation = CheckOperation::UnselectedModel { source, text, turn };
+        match self.begin_check_inner(cx, operation)? {
+            OperationStart::Busy(_) => Ok(false),
+            OperationStart::Started { .. } => {
+                let request = self.classifier().outstanding().cloned().ok_or_else(|| {
+                    self.fail(cx, "output", "submitted output request is not retained")
+                })?;
+                self.output_checks
+                    .as_mut()
+                    .expect("reserved output")
+                    .submitted(request)
+                    .map_err(|error| self.fail(cx, "output", error))?;
+                Ok(true)
+            }
+        }
+    }
+
+    pub(super) fn source_receipt_status(
+        &self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<super::ledger::LeaseSlotStatus, super::ledger::LedgerError> {
+        self.ledger.source_lease_status(lease, source)
+    }
+
+    pub(super) fn take_source_receipt(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<Option<super::ledger::SourceDisposition>, super::ledger::LedgerError> {
+        self.ledger.take_source_receipt(lease, source)
+    }
+
+    pub(super) fn release_source_receipt(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<(), super::ledger::LedgerError> {
+        self.ledger.release_source_receipt(lease, source)
+    }
+
+    pub(super) fn release_source_lease(
+        &mut self,
+        lease: SourceLease,
+    ) -> Result<(), (SourceLease, super::ledger::LedgerError)> {
+        self.ledger.release_source_lease(lease)
+    }
+
+    /// Reserve the only consumer before its original author is submitted.
+    /// This is not a source lookup or a way to recover a disposed receipt.
+    pub(super) fn reserve_filing_receipts(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        if self.phase != CoordinatorPhase::Active
+            || self.receipt_reservation.is_some()
+            || self.ledger.receipts().is_some()
+        {
+            return Err(self.fail(cx, "receipt", "filing receipt consumer is already owned"));
+        }
+        self.receipt_reservation = Some(ReceiptReservation {
+            sequence: None,
+            expected: Vec::new(),
+            registered: false,
+            author_recorded_ns: None,
+            recorded_ns: None,
+        });
+        Ok(())
+    }
+
+    pub(super) fn has_filing_consumer(&self) -> bool {
+        self.receipt_reservation.is_some()
+    }
+
+    /// Called only at the actual ordinary Recorded boundary. Intake is already
+    /// drained, but a whole copy may still wait for retention room.
+    pub(super) fn bind_filing_receipts(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: Sequence,
+        recorded_ns: u64,
+    ) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        if self
+            .receipt_reservation
+            .as_ref()
+            .is_none_or(|r| r.sequence.is_some())
+        {
+            return Err(self.fail(cx, "receipt", "receipt consumer has no unbound author"));
+        }
+        let installed: Vec<_> = self
+            .ledger
+            .facts()
+            .filter(|fact| fact.source.run == self.run && fact.source.sequence.0 == sequence.0)
+            .map(|fact| fact.source.clone())
+            .collect();
+        let pending = pending_receipt_sources(cx, &self.run, sequence, installed.is_empty())
+            .map_err(|error| self.fail(cx, "receipt", error))?;
+        let deferred = pending.is_some();
+        let expected = pending.unwrap_or(installed);
+        if !deferred {
+            self.ledger
+                .register_receipts(expected.clone())
+                .map_err(|error| self.fail(cx, "receipt", error.error))?;
+        }
+        let owner = self
+            .receipt_reservation
+            .as_mut()
+            .expect("unbound reservation");
+        owner.sequence = Some(sequence.0);
+        owner.author_recorded_ns = Some(recorded_ns);
+        owner.expected = expected;
+        owner.registered = !deferred;
+        if !deferred && owner.expected.is_empty() {
+            owner.recorded_ns = Some(recorded_ns);
+        }
+        Ok(())
+    }
+
+    fn register_deferred_receipts(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: u64,
+        sources: &[SourceBlockId],
+    ) -> Result<(), FlowFailure> {
+        let Some(owner) = self.receipt_reservation.as_ref() else {
+            return Ok(());
+        };
+        if owner.sequence != Some(sequence) {
+            return Ok(());
+        }
+        if owner.registered || owner.expected != sources {
+            return Err(self.fail(
+                cx,
+                "receipt",
+                "installed source differs from reserved author",
+            ));
+        }
+        self.ledger
+            .register_receipts(sources.to_vec())
+            .map_err(|error| self.fail(cx, "receipt", error.error))?;
+        let owner = self
+            .receipt_reservation
+            .as_mut()
+            .expect("matching reservation");
+        owner.registered = true;
+        if sources.is_empty() {
+            owner.recorded_ns = owner.author_recorded_ns;
+        }
+        Ok(())
+    }
+
+    pub(super) fn filing_receipts(&self) -> Option<&super::ledger::ReceiptSet> {
+        self.ledger.receipts()
+    }
+
+    pub(super) fn filing_recorded_ns(&self) -> Option<u64> {
+        self.receipt_reservation
+            .as_ref()
+            .and_then(|r| r.recorded_ns)
+    }
+
+    pub(super) fn take_filing_receipts(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<Option<super::ledger::ReceiptSet>, FlowFailure> {
+        self.observe_failures(cx)?;
+        if cx.barrier.pending().is_some() || self.pending_record.is_some() {
+            return Ok(None);
+        }
+        let result = self
+            .ledger
+            .take_receipts()
+            .map_err(|error| self.fail(cx, "receipt", error))?;
+        if result.is_some() {
+            self.receipt_reservation = None;
+        }
+        Ok(result)
+    }
+
+    /// Subscription cancellation never cancels a selected filing or its trace
+    /// disposition. The partial set is marked unusable by the ledger itself.
+    pub(super) fn cancel_filing_receipts(&mut self) -> Option<super::ledger::ReceiptSet> {
+        self.receipt_reservation = None;
+        self.ledger.cancel_receipts()
+    }
+
     pub(super) fn state(&self) -> &StateChannel {
         self.state.as_ref().expect("standing state channel")
     }
@@ -405,6 +942,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         Ok(Self {
             run,
             ledger,
+            receipt_reservation: None,
+            output_checks: None,
+            output_receipts: None,
             classifier: None,
             starting_classifier: None,
             admission_completion: None,
@@ -428,10 +968,14 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             backlog_reported: false,
             started_file: None,
             reuse: None,
+            input_account: None,
+            last_input_id: 0,
             state_operation: None,
+            capture: None,
             check_operation: None,
             operation_completion: None,
             state_release_timing: None,
+            state_recorded_ns: None,
             refused_author: None,
         })
     }
@@ -506,7 +1050,14 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     }
 
     fn clean_obligations(&self, cx: &FlowRecording<'_>) -> bool {
-        self.ledger.facts().next().is_none()
+        self.capture.is_none() && self.settled_obligations(cx)
+    }
+
+    fn settled_obligations(&self, cx: &FlowRecording<'_>) -> bool {
+        self.receipt_reservation.is_none()
+            && self.output_checks.is_none()
+            && self.ledger.receipts().is_none()
+            && self.ledger.facts().next().is_none()
             && cx.inbox.queued().next().is_none()
             && cx.inbox.failure().is_none()
             && cx.budget.waiting_copy().is_none()
@@ -514,6 +1065,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             && self.notices.is_empty()
             && self.pending_record.is_none()
             && self.operation_completion.is_none()
+            && self.input_account.is_none()
+            && self.reuse.is_none()
             && self.state_operation.is_none()
             && self.check_operation.is_none()
             && self.admission_completion.is_none()
@@ -675,6 +1228,419 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         Ok(())
     }
 
+    pub(super) fn capture_snapshot(&self) -> Option<CaptureSnapshot> {
+        self.capture.as_ref().map(|owner| owner.snapshot)
+    }
+
+    pub(super) fn capture_queued_ns(&self) -> Option<u64> {
+        self.capture.as_ref().and_then(|owner| owner.queued_ns)
+    }
+
+    /// A Recorded leg may still owe the nonblocking final release probe. Its
+    /// deadline ends at this preserved boundary, not at a later EINTR retry.
+    pub(super) fn capture_recorded_ns(&self) -> Option<u64> {
+        self.capture.as_ref().and_then(|owner| {
+            owner.leg.as_ref()?;
+            // A late original's proof cannot end the cleanup leg's deadline.
+            if owner.cleanup.is_some() || owner.release_queued.is_some() {
+                return None;
+            }
+            matches!(self.pending_record, Some(PendingRecord::StateRelease))
+                .then_some(self.state_recorded_ns)
+                .flatten()
+        })
+    }
+
+    /// The context has frozen ordinary admission at a turn boundary. Existing
+    /// owed copies still drain through their actual classification and receipts.
+    pub(super) fn register_capture_barrier(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        capture_id: DecimalU64,
+        frontier: u64,
+    ) -> Result<(), FlowFailure> {
+        self.require_active(cx)?;
+        if capture_id.0 == 0 || self.capture.is_some() {
+            return Err(self.fail(cx, "barrier", "invalid or repeated capture barrier"));
+        }
+        self.check_capture_frontier(cx, frontier)?;
+        self.capture = Some(CaptureOwner {
+            snapshot: CaptureSnapshot {
+                capture_id,
+                frontier,
+                request_id: None,
+                phase: CapturePhase::Barrier,
+            },
+            leg: None,
+            cleanup: None,
+            release_queued: None,
+            refused_snapshot: false,
+            queued_ns: None,
+        });
+        Ok(())
+    }
+
+    fn check_capture_frontier(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        frontier: u64,
+    ) -> Result<(), FlowFailure> {
+        let later = self
+            .ledger
+            .facts()
+            .any(|fact| fact.source.sequence.0 > frontier)
+            || cx
+                .inbox
+                .queued()
+                .chain(cx.budget.waiting_copy())
+                .any(|copy| {
+                    super::intake::selected_blocks(copy)
+                        .iter()
+                        .any(|block| block.source.sequence.0 > frontier)
+                });
+        if later {
+            return Err(self.fail(cx, "barrier", "capture frontier precedes owned content"));
+        }
+        Ok(())
+    }
+
+    /// A maximum sequence alone is not a disposition. This checks every owned
+    /// ledger row, copy, proof, operation and observation, including later rows.
+    pub(super) fn capture_barrier_ready(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<bool, FlowFailure> {
+        self.require_active(cx)?;
+        let Some(owner) = self.capture.as_ref() else {
+            return Err(self.fail(cx, "barrier", "capture has no registered barrier"));
+        };
+        let snapshot = owner.snapshot;
+        if snapshot.phase != CapturePhase::Barrier {
+            return Ok(false);
+        }
+        self.check_capture_frontier(cx, snapshot.frontier)?;
+        Ok(self.settled_obligations(cx)
+            && self.state().can_begin_filing()
+            && self
+                .classifier
+                .as_ref()
+                .is_none_or(|port| port.state() == ClassifierState::Idle)
+            && self.starting_classifier.is_none())
+    }
+
+    pub(super) fn begin_capture_snapshot(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        capture_id: DecimalU64,
+    ) -> Result<OperationStart<DecimalU64>, FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        if !self.capture_barrier_ready(cx)? {
+            return Ok(OperationStart::Busy(capture_id));
+        }
+        let request_id = self.start_capture_leg(
+            cx,
+            io,
+            StateControl::Snapshot { capture_id },
+            CapturePhase::SnapshotPending,
+        )?;
+        self.capture
+            .as_mut()
+            .expect("registered capture")
+            .snapshot
+            .request_id = Some(request_id);
+        Ok(OperationStart::Started { request_id })
+    }
+
+    pub(super) fn acknowledge_capture(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        capture_id: DecimalU64,
+        dump_sha256: Digest,
+    ) -> Result<OperationStart<(DecimalU64, Digest)>, FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        if !self.capture_leg_ready(cx, CapturePhase::Held) {
+            return Ok(OperationStart::Busy((capture_id, dump_sha256)));
+        }
+        let request_id = self.start_capture_leg(
+            cx,
+            io,
+            StateControl::Acknowledge {
+                capture_id,
+                dump_sha256,
+            },
+            CapturePhase::AcknowledgePending,
+        )?;
+        Ok(OperationStart::Started { request_id })
+    }
+
+    pub(super) fn release_capture(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        capture_id: DecimalU64,
+    ) -> Result<OperationStart<DecimalU64>, FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        if !self.capture_leg_ready(cx, CapturePhase::Finished) {
+            return Ok(OperationStart::Busy(capture_id));
+        }
+        let request_id = self.start_capture_leg(
+            cx,
+            io,
+            StateControl::ReleaseCapture { capture_id },
+            CapturePhase::Finished,
+        )?;
+        Ok(OperationStart::Started { request_id })
+    }
+
+    /// Accept a fresh release intent for a Recorded Finished. The
+    /// context decides whether that original result was timely. Acceptance is
+    /// the queue-time anchor even if the original proof or a later trace author
+    /// still prevents the channel from beginning this new exchange.
+    pub(super) fn enqueue_capture_release(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        capture_id: DecimalU64,
+    ) -> Result<bool, FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        let owner = self.capture.as_ref().expect("checked capture");
+        if owner.release_queued.is_some() || owner.cleanup.is_some() {
+            return Ok(false);
+        }
+        let recorded_completion = matches!(
+            &self.operation_completion,
+            Some(OperationCompletion::Capture {
+                request: StateControl::Acknowledge { capture_id: id, .. },
+                completion: StateCompletion {
+                    answer: StateFrame::ControlAnswer {
+                        frame: StateControlAnswer::Finished { capture_id: returned, .. }, ..
+                    },
+                    discard_capture_result: false,
+                }, ..
+            }) if *id == capture_id && *returned == capture_id
+        );
+        let finished = match owner.snapshot.phase {
+            CapturePhase::Finished => {
+                owner.leg.is_none() && (recorded_completion || self.operation_completion.is_none())
+            }
+            CapturePhase::AcknowledgePending => {
+                self.operation_completion.is_none()
+                    && matches!(self.pending_record, Some(PendingRecord::StateRelease))
+                    && self.state_recorded_ns.is_some()
+                    && self.state().recorded_finished(capture_id)
+            }
+            _ => false,
+        };
+        if !finished {
+            return Ok(false);
+        }
+        let now = io.now().map_err(|error| self.fail(cx, "clock", error))?;
+        let owner = self.capture.as_mut().expect("checked capture");
+        owner.release_queued = Some(StateControl::ReleaseCapture { capture_id });
+        owner.snapshot.phase = CapturePhase::ReleaseQueued;
+        owner.queued_ns = Some(now);
+        if recorded_completion
+            && let Some(OperationCompletion::Capture { completion, .. }) =
+                &mut self.operation_completion
+        {
+            completion.discard_capture_result = true;
+        }
+        self.start_queued_capture_release(cx)?;
+        Ok(true)
+    }
+
+    fn start_queued_capture_release(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<bool, FlowFailure> {
+        if !self
+            .capture
+            .as_ref()
+            .is_some_and(|owner| owner.release_queued.is_some() && owner.leg.is_none())
+            || self.operation_completion.is_some()
+            || self.pending_record.is_some()
+            || cx.barrier.pending().is_some()
+            || !self.state().outstanding().is_empty()
+            || self.state().held_measurement().is_some()
+        {
+            return Ok(false);
+        }
+        let owner = self.capture.as_mut().expect("queued release owner");
+        let request = owner.release_queued.take().expect("queued release request");
+        let queued_ns = owner.queued_ns.expect("accepted release anchor");
+        owner.leg = Some(request.clone());
+        owner.snapshot.phase = CapturePhase::Finished;
+        self.state
+            .as_mut()
+            .expect("active state")
+            .begin(StateRequest::Control(request), queued_ns)
+            .map_err(|error| self.fail(cx, "state_send", error))?;
+        Ok(true)
+    }
+
+    /// Queue the one cleanup continuation without replacing an outstanding
+    /// Snapshot/Acknowledge or consuming its held measurement. The channel keeps
+    /// both partial-send offsets and identifies the original result as discard.
+    pub(super) fn abort_capture(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        capture_id: DecimalU64,
+    ) -> Result<OperationStart<DecimalU64>, FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        let owner = self.capture.as_ref().expect("checked capture");
+        let recorded_original = matches!(
+            &self.operation_completion,
+            Some(OperationCompletion::Capture {
+                request: StateControl::Snapshot { capture_id: id }
+                    | StateControl::Acknowledge { capture_id: id, .. },
+                completion,
+                ..
+            }) if *id == capture_id && !completion.discard_capture_result
+        );
+        if (self.operation_completion.is_some() && !recorded_original)
+            || owner.cleanup.is_some()
+            || owner.release_queued.is_some()
+            || !(matches!(
+                owner.snapshot.phase,
+                CapturePhase::SnapshotPending
+                    | CapturePhase::Held
+                    | CapturePhase::AcknowledgePending
+                    | CapturePhase::Finished
+            ) || (owner.snapshot.phase == CapturePhase::Complete && owner.refused_snapshot))
+            || matches!(owner.leg, Some(StateControl::ReleaseCapture { .. }))
+        {
+            return Ok(OperationStart::Busy(capture_id));
+        }
+        let now = io.now().map_err(|e| self.fail(cx, "clock", e))?;
+        let owner = self.capture.as_mut().expect("checked capture");
+        let request = StateControl::Abort { capture_id };
+        if owner.leg.is_some() {
+            owner.cleanup = Some(request);
+        } else {
+            owner.leg = Some(request);
+        }
+        owner.snapshot.phase = CapturePhase::Aborting;
+        owner.queued_ns = Some(now);
+        if recorded_original
+            && let Some(OperationCompletion::Capture { completion, .. }) =
+                &mut self.operation_completion
+        {
+            // The original proof already exists, but a later author may still
+            // block its consumer. Preserve that one result as explicit discard
+            // while the channel carries cleanup on the same capture identity.
+            completion.discard_capture_result = true;
+        }
+        let common = self
+            .state
+            .as_mut()
+            .expect("active state")
+            .abort_capture(now)
+            .map_err(|e| self.fail(cx, "state_send", e))?;
+        Ok(OperationStart::Started {
+            request_id: common.request_id,
+        })
+    }
+
+    /// The caller records the final save outcome before relinquishing this hold.
+    /// A refused capture retains its identity until Abort proves cleanup.
+    pub(super) fn finish_capture(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        capture_id: DecimalU64,
+    ) -> Result<(), FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        let owner = self.capture.as_ref().expect("checked capture");
+        if owner.snapshot.phase != CapturePhase::Complete
+            || owner.refused_snapshot
+            || owner.leg.is_some()
+            || owner.cleanup.is_some()
+            || owner.release_queued.is_some()
+            || !self.settled_obligations(cx)
+            || !self.state().can_begin_filing()
+        {
+            return Err(self.fail(cx, "barrier", "capture still owes result or cleanup"));
+        }
+        self.capture.take();
+        Ok(())
+    }
+
+    /// Expiry before Snapshot needs no member cleanup. The caller records the
+    /// refusal before dropping only this hold. Existing filing remains owned.
+    pub(super) fn cancel_capture_barrier(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        capture_id: DecimalU64,
+    ) -> Result<(), FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        let owner = self.capture.as_ref().expect("checked capture");
+        if owner.snapshot.phase != CapturePhase::Barrier
+            || owner.leg.is_some()
+            || owner.cleanup.is_some()
+            || cx.barrier.pending().is_some()
+        {
+            return Err(self.fail(
+                cx,
+                "barrier",
+                "capture cancellation already owes a member result",
+            ));
+        }
+        self.capture.take();
+        Ok(())
+    }
+
+    fn require_capture(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        capture_id: DecimalU64,
+    ) -> Result<(), FlowFailure> {
+        self.require_active(cx)?;
+        if self
+            .capture
+            .as_ref()
+            .is_none_or(|owner| owner.snapshot.capture_id != capture_id)
+        {
+            return Err(self.fail(cx, "barrier", "capture identity has no registered owner"));
+        }
+        Ok(())
+    }
+
+    fn capture_leg_ready(&self, cx: &FlowRecording<'_>, phase: CapturePhase) -> bool {
+        self.capture.as_ref().is_some_and(|owner| {
+            owner.snapshot.phase == phase
+                && owner.leg.is_none()
+                && owner.cleanup.is_none()
+                && owner.release_queued.is_none()
+        }) && self.operation_completion.is_none()
+            && self.pending_record.is_none()
+            && cx.barrier.pending().is_none()
+            && self.state().outstanding().is_empty()
+            && self.state().held_measurement().is_none()
+    }
+
+    fn start_capture_leg(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        request: StateControl,
+        phase: CapturePhase,
+    ) -> Result<DecimalU64, FlowFailure> {
+        let now = io.now().map_err(|e| self.fail(cx, "clock", e))?;
+        let owner = self.capture.as_mut().expect("registered capture");
+        owner.leg = Some(request.clone());
+        owner.snapshot.phase = phase;
+        owner.queued_ns = Some(now);
+        let common = self
+            .state
+            .as_mut()
+            .expect("active state")
+            .begin(StateRequest::Control(request), now)
+            .map_err(|e| self.fail(cx, "state_send", e))?;
+        Ok(common.request_id)
+    }
+
     /// Begin a nonfiling exchange through the same request counter and socket.
     /// A busy owner returns the entire control unchanged and assigns no identity.
     pub(super) fn begin_control(
@@ -684,7 +1650,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         request: ControlOperation,
     ) -> Result<OperationStart<ControlOperation>, FlowFailure> {
         self.require_active(cx)?;
-        if self.state_operation.is_some()
+        if self.capture.is_some()
+            || self.state_operation.is_some()
             || self.operation_completion.is_some()
             || !self.state().outstanding().is_empty()
             || self.state().held_measurement().is_some()
@@ -712,8 +1679,22 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         cx: &mut FlowRecording<'_>,
         operation: CheckOperation,
     ) -> Result<OperationStart<CheckOperation>, FlowFailure> {
+        if matches!(operation, CheckOperation::Input { .. }) {
+            return Err(self.fail(cx, "classifier", "input requires measured submission"));
+        }
+        if self.output_checks.is_some() {
+            return Ok(OperationStart::Busy(operation));
+        }
+        self.begin_check_inner(cx, operation)
+    }
+
+    fn begin_check_inner(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        operation: CheckOperation,
+    ) -> Result<OperationStart<CheckOperation>, FlowFailure> {
         self.require_active(cx)?;
-        if self.classifier.is_none() {
+        if self.classifier.is_none() || self.capture.is_some() {
             return Ok(OperationStart::Busy(operation));
         }
         if self.check_operation.is_some()
@@ -757,6 +1738,182 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         }
     }
 
+    /// The frame owner registers serialized intake before authoring input.offered.
+    /// The supplied start is the gate bound's original sample of this same clock.
+    /// Queued frames have no account and therefore cannot start a check clock here.
+    pub(super) fn input_started(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        input_id: DecimalU64,
+        began_ns: u64,
+    ) -> Result<(), FlowFailure> {
+        // The frame owner already transferred serialized intake. Mirror that
+        // ownership before a clock or asynchronously failed trace can latch.
+        // An existing failure is immutable and cannot acquire later work.
+        self.ensure_live()?;
+        if self.phase != CoordinatorPhase::Active {
+            return Err(self.fail(cx, "barrier", "input requires an active flow"));
+        }
+        if self.capture.is_some() {
+            return Err(self.fail(
+                cx,
+                "barrier",
+                "input cannot enter a registered save barrier",
+            ));
+        }
+        if self.input_account.is_some() || input_id.0 <= self.last_input_id {
+            return Err(self.fail(
+                cx,
+                "counter",
+                "input intake is repeated or already occupied",
+            ));
+        }
+        self.last_input_id = input_id.0;
+        self.input_account = Some(InputAccount {
+            id: input_id,
+            began_ns,
+            request_id: None,
+        });
+        self.observations
+            .as_mut()
+            .expect("active observation owner")
+            .note_input_started()
+            .map_err(|error| self.fail(cx, "counter", error))?;
+        self.observe_failures(cx)?;
+        let now = io.now().map_err(|error| self.fail(cx, "clock", error))?;
+        if began_ns > now {
+            return Err(self.fail(cx, "clock", "input intake is after registration"));
+        }
+        Ok(())
+    }
+
+    /// This is the sole input submission path. Busy retains the complete operation
+    /// and the original intake account without counting a second submission.
+    pub(super) fn begin_input_check(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        operation: CheckOperation,
+    ) -> Result<OperationStart<CheckOperation>, FlowFailure> {
+        self.require_active(cx)?;
+        let CheckOperation::Input {
+            input_id,
+            offered_sequence,
+            ..
+        } = &operation
+        else {
+            return Err(self.fail(
+                cx,
+                "classifier",
+                "input submission requires an input target",
+            ));
+        };
+        let input_id = *input_id;
+        if input_id.0 == 0
+            || offered_sequence.0 == 0
+            || !self
+                .input_account
+                .as_ref()
+                .is_some_and(|input| input.id == input_id && input.request_id.is_none())
+        {
+            return Err(self.fail(
+                cx,
+                "classifier",
+                "input submission lacks its original intake",
+            ));
+        }
+        let result = self.begin_check_inner(cx, operation)?;
+        if let OperationStart::Started { request_id } = &result {
+            self.input_account
+                .as_mut()
+                .expect("registered input")
+                .request_id = Some(*request_id);
+            let mut transition = Transition::new(trace::FlowPhase::ClassificationStarted);
+            transition.input_id = Some(input_id.0);
+            transition.request_id = Some(request_id.0);
+            self.notice(cx, io, transition, None)?;
+        }
+        Ok(result)
+    }
+
+    /// The frame owner calls this only after its required result/refusal or
+    /// cancellation disposition. A still-submitted check cannot be forgotten.
+    pub(super) fn input_finished(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        input_id: DecimalU64,
+    ) -> Result<(), FlowFailure> {
+        let ended_ns = io.now().map_err(|error| self.fail(cx, "clock", error))?;
+        self.input_finished_at(cx, io, input_id, ended_ns)
+    }
+
+    /// The completion owner supplies its exact Recorded/response-ack sample.
+    /// Time spent reducing or publishing later measurements is not gate wait.
+    pub(super) fn input_finished_at(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        input_id: DecimalU64,
+        ended_ns: u64,
+    ) -> Result<(), FlowFailure> {
+        self.require_active(cx)?;
+        if self
+            .input_account
+            .as_ref()
+            .is_none_or(|input| input.id != input_id)
+            || matches!(self.check_operation, Some(CheckOperation::Input { .. }))
+            || matches!(
+                self.operation_completion,
+                Some(OperationCompletion::Input { .. })
+            )
+        {
+            return Err(self.fail(
+                cx,
+                "counter",
+                "input disposition is absent or still outstanding",
+            ));
+        }
+        let now = io.now().map_err(|error| self.fail(cx, "clock", error))?;
+        let account = self.input_account.as_ref().expect("matched input");
+        let elapsed = ended_ns
+            .checked_sub(account.began_ns)
+            .filter(|_| ended_ns <= now)
+            .ok_or_else(|| {
+                self.fail(
+                    cx,
+                    "clock",
+                    "input disposition is outside its clock interval",
+                )
+            })?;
+        let request_id = self
+            .input_account
+            .as_ref()
+            .expect("matched input")
+            .request_id;
+        self.observations
+            .as_mut()
+            .expect("active observation owner")
+            .note_input_completed()
+            .map_err(|error| self.fail(cx, "counter", error))?;
+        self.input_account.take();
+        let mut transition = Transition::new(trace::FlowPhase::WaitFinished);
+        transition.input_id = Some(input_id.0);
+        transition.request_id = request_id.map(|id| id.0);
+        transition.blocked_stage = Some(trace::BlockedStage::Gate);
+        transition.elapsed_ns = Some(elapsed);
+        self.notice(cx, io, transition, None)
+    }
+
+    pub(super) fn pending_input_id(&self) -> Option<DecimalU64> {
+        self.input_account.as_ref().map(|account| account.id)
+    }
+
+    pub(super) fn input_measurements_pending(&self) -> bool {
+        self.notices.iter().any(|notice| notice.input_id.is_some())
+    }
+
     pub(super) fn take_operation_completion(
         &mut self,
         cx: &mut FlowRecording<'_>,
@@ -796,7 +1953,47 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         {
             return Err(reuse);
         }
-        self.reuse = Some(reuse);
+        self.reuse = Some(InputReuse {
+            grant: reuse,
+            source_sequence: None,
+        });
+        Ok(())
+    }
+
+    /// A Recorded accepted message pins its actual source. An unselected or
+    /// zero-block copy owes no filing and cannot donate labels to a later event.
+    pub(super) fn finish_input_author(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: weaver_trace::Sequence,
+    ) -> Result<(), FlowFailure> {
+        self.require_active(cx)?;
+        let Some(reuse) = &mut self.reuse else {
+            return Ok(());
+        };
+        if sequence.0 <= reuse.grant.offered_sequence().0
+            || reuse
+                .source_sequence
+                .is_some_and(|source| source != sequence.0)
+        {
+            return Err(self.fail(
+                cx,
+                "copy_intake",
+                "accepted input source does not follow its offer",
+            ));
+        }
+        reuse.source_sequence = Some(sequence.0);
+        let owed = cx
+            .inbox
+            .queued()
+            .chain(cx.budget.waiting_copy())
+            .try_fold(false, |owed, copy| {
+                matches_input_copy(copy, reuse).map(|matches| owed || matches)
+            });
+        let owed = owed.map_err(|error| self.fail(cx, "copy_intake", error))?;
+        if !owed {
+            self.reuse.take();
+        }
         Ok(())
     }
 
@@ -836,6 +2033,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 .observe_progress(progress, self.state().first_sent_ns());
         }
         self.ledger.freeze();
+        if let Some(output) = &mut self.output_checks {
+            output.freeze();
+        }
         if let Some(owner) = &mut self.classifier {
             owner.fail();
         }
@@ -857,13 +2057,18 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         })?;
         let gauges = self.gauges(cx)?;
         let now = io.now().map_err(|e| self.fail(cx, "clock", e))?;
+        let input_id = transition.input_id;
         let point = self
             .observations
             .as_mut()
             .expect("recorded open observation")
             .capture(transition, gauges, now)
             .map_err(|e| self.fail(cx, "observation", e))?;
-        self.notices.push_back(Notice { point, turn });
+        self.notices.push_back(Notice {
+            input_id,
+            point,
+            turn,
+        });
         Ok(())
     }
 
@@ -894,6 +2099,15 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             }
             return Ok(());
         }
+        if let Some(owner) = &self.capture {
+            let snapshot = owner.snapshot;
+            self.check_capture_frontier(cx, snapshot.frontier)?;
+            if snapshot.phase != CapturePhase::Barrier
+                && (cx.inbox.queued().next().is_some() || cx.budget.waiting_copy().is_some())
+            {
+                return Err(self.fail(cx, "barrier", "content entered a held capture"));
+            }
+        }
         let mut copied = Vec::new();
         while let Some((copy, intake_ns)) = cx.inbox.pop_timed(cx.budget) {
             let Some(intake_ns) = intake_ns else {
@@ -903,8 +2117,40 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 });
                 return Err(self.fail(cx, "copy_intake", "copy has no intake clock"));
             };
-            match self.ledger.install(copy, intake_ns, self.reuse.take()) {
+            let use_reuse = match self
+                .reuse
+                .as_ref()
+                .map(|reuse| matches_input_copy(&copy, reuse))
+                .transpose()
+            {
+                Ok(matched) => matched.unwrap_or(false),
+                Err(error) => {
+                    let _ = cx.inbox.preserve_failure(IntakeFailure {
+                        copy,
+                        detail: IntakeError::InvalidIdentity,
+                    });
+                    return Err(self.fail(cx, "copy_intake", error));
+                }
+            };
+            let selected_reuse = if use_reuse { self.reuse.take() } else { None };
+            let reuse_sequence = selected_reuse
+                .as_ref()
+                .and_then(|reuse| reuse.source_sequence);
+            match self
+                .ledger
+                .install(copy, intake_ns, selected_reuse.map(|reuse| reuse.grant))
+            {
                 Ok(installed) => {
+                    self.register_deferred_receipts(
+                        cx,
+                        installed.source_sequence,
+                        &installed.sources,
+                    )?;
+                    self.register_deferred_output_receipts(
+                        cx,
+                        installed.source_sequence,
+                        &installed.sources,
+                    )?;
                     copied.try_reserve(1).map_err(|_| {
                         self.fail(cx, "counter", "copied transition reservation failed")
                     })?;
@@ -912,7 +2158,12 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 }
                 Err(failure) => {
                     let detail = failure.error.to_string();
-                    self.reuse = failure.reuse;
+                    if let Some(grant) = failure.reuse {
+                        self.reuse = Some(InputReuse {
+                            grant,
+                            source_sequence: reuse_sequence,
+                        });
+                    }
                     let _ = cx.inbox.preserve_failure(IntakeFailure {
                         copy: failure.copy,
                         detail: IntakeError::InvalidIdentity,
@@ -1139,6 +2390,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         if self.operation_completion.is_some() {
             return Ok(Advance::Pending);
         }
+        if self.start_queued_capture_release(cx)? {
+            return Ok(Advance::Progress);
+        }
         if let Some(measurement) = self.state().held_measurement() {
             let measurement = measurement.clone();
             let turn = measurement
@@ -1185,7 +2439,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 PendingRecord::Classifier,
             );
         }
-        if self.state_operation.is_none()
+        if self
+            .capture
+            .as_ref()
+            .is_none_or(|owner| owner.snapshot.phase == CapturePhase::Barrier)
+            && self.state_operation.is_none()
             && self.state().can_begin_filing()
             && let Some(filing) = self.ledger.next_file()
         {
@@ -1202,7 +2460,14 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             self.started_file = None;
             return Ok(Advance::Progress);
         }
-        if self.check_operation.is_none()
+        if self.start_output_check(cx)? {
+            return Ok(Advance::Progress);
+        }
+        if self
+            .capture
+            .as_ref()
+            .is_none_or(|owner| owner.snapshot.phase == CapturePhase::Barrier)
+            && self.check_operation.is_none()
             && self.classifier.is_some()
             && self.classifier().state() == ClassifierState::Idle
             && let Some(candidate) = self.ledger.next_classification()
@@ -1255,6 +2520,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             if gauges.work_pending()
                 || self.state_operation.is_some()
                 || self.check_operation.is_some()
+                || self.capture.is_some()
+                || self.output_checks.is_some()
             {
                 Advance::Pending
             } else {
@@ -1339,6 +2606,19 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                     self.ledger
                         .terminal_recorded(terminal, cx.budget)
                         .map_err(|e| self.fail(cx, "ledger", e))?;
+                    if self.ledger.receipts().is_some_and(|set| set.is_complete())
+                        && self
+                            .receipt_reservation
+                            .as_ref()
+                            .is_some_and(|r| r.recorded_ns.is_none())
+                    {
+                        let recorded_ns =
+                            io.now().map_err(|error| self.fail(cx, "clock", error))?;
+                        self.receipt_reservation
+                            .as_mut()
+                            .expect("registered consumer")
+                            .recorded_ns = Some(recorded_ns);
+                    }
                     if let Some(IntakeOutcome::IntakeFailed { copy, detail }) =
                         cx.inbox.resume_waiting(cx.budget)
                     {
@@ -1348,6 +2628,69 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 }
             }
             (Some(PendingRecord::Classifier), RecordProof::Classifier(proof)) => {
+                if let Some(CheckOperation::Input {
+                    input_id,
+                    offered_sequence,
+                    ..
+                }) = &self.check_operation
+                {
+                    let input_id = *input_id;
+                    let offered_sequence = *offered_sequence;
+                    // The completed proof is the gate's logical recording
+                    // boundary. Sample before releasing or authoring any notice.
+                    let recorded_ns = io.now().map_err(|error| self.fail(cx, "clock", error))?;
+                    let accepted = matches!(
+                        self.classifier().held().map(|reply| &reply.result),
+                        Some(Ste100Result::Accepted { .. })
+                    );
+                    let (reply, reuse) = if accepted {
+                        let reuse = self
+                            .classifier
+                            .as_mut()
+                            .expect("held classifier")
+                            .recorded_input(proof, offered_sequence)
+                            .map_err(|error| self.fail(cx, "classifier", error.detail))?;
+                        (reuse.reply().clone(), Some(reuse))
+                    } else {
+                        let reply = self
+                            .classifier
+                            .as_mut()
+                            .expect("held classifier")
+                            .recorded(proof)
+                            .map_err(|error| self.fail(cx, "classifier", error.detail))?;
+                        (reply, None)
+                    };
+                    if self.classifier().state() == ClassifierState::Failed {
+                        return Err(self.fail(
+                            cx,
+                            "classifier",
+                            "classifier reported component failure",
+                        ));
+                    }
+                    if accepted {
+                        let mut transition = Transition::new(trace::FlowPhase::Accepted);
+                        transition.input_id = Some(input_id.0);
+                        transition.request_id = Some(reply.request_id.0);
+                        self.notice(cx, io, transition, None)?;
+                    }
+                    self.operation_completion = Some(OperationCompletion::Input {
+                        operation: self.check_operation.take().expect("owned input operation"),
+                        reply,
+                        reuse,
+                        recorded_ns,
+                    });
+                    return Ok(Advance::Progress);
+                }
+                let result_source = proof.source().clone();
+                let recorded_ns = io.now().map_err(|error| self.fail(cx, "clock", error))?;
+                let checked_request =
+                    self.classifier().outstanding().cloned().ok_or_else(|| {
+                        self.fail(
+                            cx,
+                            "classifier",
+                            "recorded reply has no outstanding request",
+                        )
+                    })?;
                 let reply = self
                     .classifier
                     .as_mut()
@@ -1361,12 +2704,62 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                         "classifier reported component failure",
                     ));
                 }
+                if self
+                    .output_checks
+                    .as_ref()
+                    .is_some_and(|owner| owner.owns_unselected(&checked_request))
+                {
+                    let Some(CheckOperation::UnselectedModel { source, text, turn }) =
+                        self.check_operation.take()
+                    else {
+                        return Err(self.fail(
+                            cx,
+                            "output",
+                            "owned output lost its check operation",
+                        ));
+                    };
+                    let owner = self.output_checks.as_ref().expect("owned output");
+                    if checked_request.target != Ste100Target::Source(source)
+                        || checked_request.text != text
+                        || owner.original().turn != turn
+                    {
+                        return Err(self.fail(
+                            cx,
+                            "output",
+                            "output operation differs from its request",
+                        ));
+                    }
+                    self.output_checks
+                        .as_mut()
+                        .expect("owned output")
+                        .record(checked_request, reply, result_source, recorded_ns, false)
+                        .map_err(|error| self.fail(cx, "output", error))?;
+                    return Ok(Advance::Progress);
+                }
                 if let Some(owner) = self.check_operation.take() {
-                    self.operation_completion = Some(OperationCompletion::Check {
+                    self.operation_completion = Some(OperationCompletion::Check(RecordedCheck {
                         operation: owner,
                         reply,
-                    });
+                        source: result_source,
+                    }));
                     return Ok(Advance::Progress);
+                }
+                if self
+                    .output_checks
+                    .as_ref()
+                    .is_some_and(|owner| owner.observes(&checked_request))
+                {
+                    self.output_checks
+                        .as_mut()
+                        .expect("observed output")
+                        .record(
+                            checked_request,
+                            reply.clone(),
+                            result_source,
+                            recorded_ns,
+                            true,
+                        )
+                        .map_err(|error| self.fail(cx, "output", error))?;
                 }
                 match self
                     .ledger
@@ -1386,6 +2779,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 }
             }
             (Some(PendingRecord::State), RecordProof::State(proof)) => {
+                // One sample at the Recorded boundary survives a pending final
+                // release probe and all later consumer delay.
+                self.state_recorded_ns = Some(io.now().map_err(|e| self.fail(cx, "clock", e))?);
                 self.state_release_timing = self
                     .state
                     .as_ref()
@@ -1417,6 +2813,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         };
         self.pending_record = None;
         let timing = self.state_release_timing.take();
+        let recorded_ns = self.state_recorded_ns.take();
         if self.open_pending {
             if !matches!(completion.answer, StateFrame::Opened { .. }) {
                 return Err(self.fail(cx, "open", "open released a non-open completion"));
@@ -1436,6 +2833,15 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             self.phase = CoordinatorPhase::Active;
             self.operation_completion = Some(OperationCompletion::Opened(completion));
             return Ok(Advance::Progress);
+        }
+        if self
+            .capture
+            .as_ref()
+            .is_some_and(|owner| owner.leg.is_some())
+        {
+            let recorded_ns = recorded_ns
+                .ok_or_else(|| self.fail(cx, "state_reply", "capture lost its recording time"))?;
+            return self.finish_capture_release(cx, completion, recorded_ns);
         }
         if let Some((request, turn)) = self.state_operation.take() {
             self.operation_completion = Some(OperationCompletion::State {
@@ -1462,6 +2868,98 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             Some(elapsed),
             Some(completion.answer.common().request_id.0),
         )?;
+        Ok(Advance::Progress)
+    }
+
+    fn finish_capture_release(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        mut completion: StateCompletion,
+        recorded_ns: u64,
+    ) -> Result<Advance, FlowFailure> {
+        let owner = self.capture.as_ref().expect("owned capture leg");
+        let request = owner.leg.as_ref().expect("owned capture request");
+        if completion.discard_capture_result {
+            if owner.snapshot.phase != CapturePhase::Aborting
+                || owner.cleanup.is_none()
+                || !matches!(
+                    request,
+                    StateControl::Snapshot { .. } | StateControl::Acknowledge { .. }
+                )
+            {
+                return Err(self.fail(
+                    cx,
+                    "state_reply",
+                    "discard does not name the cleanup's original leg",
+                ));
+            }
+            let owner = self.capture.as_mut().expect("owned capture leg");
+            owner.leg = owner.cleanup.take();
+            return Ok(Advance::Progress);
+        }
+        let StateFrame::ControlAnswer { frame, .. } = &completion.answer else {
+            return Err(self.fail(cx, "state_reply", "capture released a non-control answer"));
+        };
+        if owner.release_queued.is_some() {
+            if !matches!((request, frame),
+                (StateControl::Acknowledge { capture_id, .. }, StateControlAnswer::Finished { capture_id: id, .. })
+                    if capture_id == id)
+            {
+                return Err(self.fail(
+                    cx,
+                    "state_reply",
+                    "queued release lost its Recorded Finished",
+                ));
+            }
+            completion.discard_capture_result = true;
+            let owner = self.capture.as_mut().expect("queued release owner");
+            self.operation_completion = Some(OperationCompletion::Capture {
+                request: owner.leg.take().expect("recorded original request"),
+                completion,
+                recorded_ns,
+            });
+            return Ok(Advance::Progress);
+        }
+        let phase = match (request, frame) {
+            (StateControl::Snapshot { .. }, StateControlAnswer::Snapshot { .. }) => {
+                CapturePhase::Held
+            }
+            (StateControl::Acknowledge { .. }, StateControlAnswer::Finished { .. }) => {
+                CapturePhase::Finished
+            }
+            (StateControl::Abort { .. }, StateControlAnswer::Aborted { .. })
+            | (StateControl::ReleaseCapture { .. }, StateControlAnswer::CaptureReleased { .. })
+            | (StateControl::Snapshot { .. }, StateControlAnswer::ControlRefused { .. }) => {
+                CapturePhase::Complete
+            }
+            (StateControl::Acknowledge { .. }, StateControlAnswer::ControlRefused { .. }) => {
+                CapturePhase::Held
+            }
+            (StateControl::ReleaseCapture { .. }, StateControlAnswer::ControlRefused { .. }) => {
+                CapturePhase::Finished
+            }
+            _ => {
+                return Err(self.fail(
+                    cx,
+                    "state_reply",
+                    "capture answer differs from its owned leg",
+                ));
+            }
+        };
+        let owner = self.capture.as_mut().expect("owned capture leg");
+        owner.refused_snapshot = matches!(
+            (&owner.leg, frame),
+            (
+                Some(StateControl::Snapshot { .. }),
+                StateControlAnswer::ControlRefused { .. }
+            )
+        );
+        owner.snapshot.phase = phase;
+        self.operation_completion = Some(OperationCompletion::Capture {
+            request: owner.leg.take().expect("owned capture request"),
+            completion,
+            recorded_ns,
+        });
         Ok(Advance::Progress)
     }
 
@@ -1539,7 +3037,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                     context_bytes: fact.context_bytes,
                     intake_ns: fact.intake_ns,
                 })),
-            0,
+            u64::from(self.input_account.is_some()),
             cx.budget.gauges(),
             waiting.as_ref().map(|(copy, turn)| WaitingSource {
                 copy,
@@ -1702,6 +3200,37 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
     }
 }
 
+/// Select reuse by its real offer correlation, never by inbox position.
+fn matches_input_copy(
+    copy: &weaver_trace::serving::AdmittedCopy,
+    reuse: &InputReuse,
+) -> io::Result<bool> {
+    let weaver_trace::serving::AdmittedCopy::Statement(statement) = copy else {
+        return Ok(false);
+    };
+    if statement.blocks.is_empty() {
+        return Ok(false);
+    }
+    let source: SourceEnvelope =
+        weaver_types::state_flow::decode_strict(&statement.source_envelope)
+            .map_err(io::Error::other)?;
+    if source.run != reuse.grant.run()
+        || source.kind != "message.user"
+        || source.causal_parent != Some(reuse.grant.offered_sequence())
+    {
+        return Ok(false);
+    }
+    if reuse
+        .source_sequence
+        .is_some_and(|sequence| sequence != source.sequence.0)
+    {
+        return Err(io::Error::other(
+            "input copy differs from its recorded source",
+        ));
+    }
+    Ok(true)
+}
+
 struct QueuedSource {
     source: SourceBlockId,
     turn: Option<String>,
@@ -1790,6 +3319,36 @@ fn retirement_status(fd: std::os::fd::BorrowedFd<'_>) -> io::Result<bool> {
     Ok(true)
 }
 
+fn pending_receipt_sources(
+    cx: &FlowRecording<'_>,
+    run: &str,
+    sequence: Sequence,
+    installed_empty: bool,
+) -> io::Result<Option<Vec<SourceBlockId>>> {
+    let mut pending = None;
+    for copy in cx.inbox.queued().chain(cx.budget.waiting_copy()) {
+        let (identity, _) = copy_identity(copy)?;
+        if identity.source_event.run != run || identity.source_event.sequence.0 != sequence.0 {
+            continue;
+        }
+        if pending.is_some() || !installed_empty {
+            return Err(io::Error::other("author copy has duplicate custody"));
+        }
+        pending = Some(
+            identity
+                .sources
+                .into_iter()
+                .map(|source| SourceBlockId {
+                    run: source.run,
+                    sequence: source.sequence.0.into(),
+                    block: source.block.0.into(),
+                })
+                .collect(),
+        );
+    }
+    Ok(pending)
+}
+
 fn copy_contains(copy: &weaver_trace::serving::AdmittedCopy, source: &SourceBlockId) -> bool {
     super::intake::selected_blocks(copy).iter().any(|block| {
         block.source.run == source.run
@@ -1841,3 +3400,11 @@ fn copy_identity(
 #[cfg(test)]
 #[path = "coordinator_tests.rs"]
 pub(in crate::flow) mod tests;
+
+#[cfg(test)]
+#[path = "coordinator_input_tests.rs"]
+mod input_tests;
+
+#[cfg(test)]
+#[path = "coordinator_capture_tests.rs"]
+mod capture_tests;

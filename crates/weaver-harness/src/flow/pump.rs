@@ -40,6 +40,10 @@ pub(super) enum PumpDeadline {
     Cut,
     Decision,
     StateControl,
+    /// Snapshot/finished missing results require cleanup, not immediate halt.
+    CaptureResult,
+    /// The unchanged publication window, retained separately from leg waits.
+    CaptureWindow,
     Label,
 }
 

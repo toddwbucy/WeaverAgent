@@ -1100,6 +1100,16 @@ pub enum TokenAnswer {
     Fault(FaultReport),
 }
 
+/// One refused input, attributed to the run-local offer under TYPES-INPUT.
+/// This record grants neither filing nor a component halt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputRefusal {
+    pub input_id: crate::state_flow::DecimalU64,
+    pub case: crate::state_flow::InputRefusalCase,
+    pub detail: String,
+}
+
 /// What a seam turned away, as the record carries it, per
 /// `weaver-types-Spec` section 4 and `weaver-trace-PRD` section 3.1's
 /// twenty-first kind.
@@ -1124,6 +1134,8 @@ pub enum RefusalRecord {
     /// **Classify carries no ask**, its content standing in the
     /// `classify.request` event the harness authored before the exchange.
     Classify { refusal: LabelRefusal },
+    /// The pre-turn input check's attributed operation refusal.
+    Input(InputRefusal),
 }
 
 /// Which decode ask a refusal answered.

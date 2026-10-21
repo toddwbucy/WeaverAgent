@@ -623,7 +623,7 @@ fn halt_account_matches_the_latched_wait_and_installs_the_frozen_owners_once() {
         commit_sent: true,
         published: None,
     };
-    let mut wrong = external(Some(wrong_wait.clone()), Some(23.into()));
+    let mut wrong = external(Some(wrong_wait.clone()), None);
     wrong.capture = Some(capture.clone());
     let HaltAccountFailure::Snapshot(failure) = fx.context.freeze_halt_account(wrong).unwrap_err()
     else {
@@ -631,7 +631,11 @@ fn halt_account_matches_the_latched_wait_and_installs_the_frozen_owners_once() {
     };
     assert_eq!(failure.external.wait, Some(wrong_wait));
     assert_eq!(failure.external.capture, Some(capture));
-    assert_eq!(failure.external.input_id, Some(23.into()));
+    assert_eq!(failure.external.input_id, None);
+    assert_eq!(
+        failure.error,
+        ReportError::Invalid("wait differs from latched bound")
+    );
     assert!(fx.context.halt().unwrap().account().is_none());
 
     fx.context
@@ -648,13 +652,13 @@ fn halt_account_matches_the_latched_wait_and_installs_the_frozen_owners_once() {
     let original = installed.to_raw().unwrap().get().to_owned();
     let HaltAccountFailure::Install(failure) = fx
         .context
-        .freeze_halt_account(external(Some(wait), Some(29.into())))
+        .freeze_halt_account(external(Some(wait), None))
         .unwrap_err()
     else {
         panic!("second account was not rejected by the one-install owner");
     };
     assert_eq!(failure.error, ReportError::SnapshotAlreadyInstalled);
-    assert_eq!(failure.account.input_id, Some(29.into()));
+    assert_eq!(failure.account.input_id, None);
     assert_eq!(
         fx.context
             .halt()

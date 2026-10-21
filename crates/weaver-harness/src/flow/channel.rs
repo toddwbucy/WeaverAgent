@@ -315,6 +315,17 @@ impl StateChannel {
         self.held.as_ref().map(|held| &held.measurement)
     }
 
+    /// A cancellation may queue fresh release behind this already-recorded
+    /// Finished. This inspection grants no completion or mutable channel slot.
+    pub(super) fn recorded_finished(&self, capture_id: DecimalU64) -> bool {
+        self.held.as_ref().is_some_and(|held| {
+            held.recorded.is_some()
+                && matches!(&held.answer, StateFrame::ControlAnswer {
+                    frame: StateControlAnswer::Finished { capture_id: id, .. }, ..
+                } if *id == capture_id)
+        })
+    }
+
     /// Only the coordinator's recorded preactivation refusal may elect this
     /// disposal. Ordinary opened channels still require the recording barrier.
     pub(super) fn abandon_unactivated_open(
