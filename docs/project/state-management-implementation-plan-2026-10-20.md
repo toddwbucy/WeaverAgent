@@ -228,7 +228,8 @@ ignored instruments. All 49 added tests run. Thirteen compiled protective probes
 fail their intended assertions, with exact restoration independently checked. Lint,
 formatting, lock and documentation checks pass. The Planner grade remains owed.
 
-H2a follows #209. Its [implementation record][pair-accounting-record] covers
+H2a is draft [PR #210][pair-accounting], after #209. Its
+[implementation record][pair-accounting-record] covers
 committed openings and not_dispatched terminals for every accepted original request
 that the caller bars from execution. Private receipt custody constructs the retained
 completion and harness notice. Stop and unload preserve owed filings, and frozen
@@ -469,3 +470,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [request-accounting]: https://github.com/toddwbucy/WeaverAgent/pull/209
 
 [pair-accounting-record]: state-management-pair-accounting-2026-10-21.md
+[pair-accounting]: https://github.com/toddwbucy/WeaverAgent/pull/210

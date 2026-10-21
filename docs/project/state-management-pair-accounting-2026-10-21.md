@@ -2,7 +2,7 @@
 
 Date: 2026-10-21. Status: implementation record, not a Spec amendment.
 
-This branch follows [draft #209][request-custody]. It implements the complete
+[Draft #210][draft] follows [draft #209][request-custody]. It implements the complete
 opening and terminal accounting path for accepted model requests that the caller
 bars from execution. The serving implementation remains unchanged until the
 qualified coupled cutover. The loop supplies the cause and decides when to invoke
@@ -111,3 +111,5 @@ The Planner grade and operator merge remain owed.
 
 [pairs]: ../crates/state-management/state-management-spec-05-tool-pairs.md
 [request-custody]: https://github.com/toddwbucy/WeaverAgent/pull/209
+
+[draft]: https://github.com/toddwbucy/WeaverAgent/pull/210
