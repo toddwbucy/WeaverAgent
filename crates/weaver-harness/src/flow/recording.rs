@@ -9,6 +9,7 @@ use weaver_trace::serving::{
 use weaver_types::state_flow::{SourceBlockId, StateStoreMeasurement, Ste100Reply};
 
 use super::intake::{FlowInbox, IntakeFailure, IntakeOutcome, RetentionBudget};
+use weaver_trace::serving::payloads::{FlowObservation, FlowPhase};
 
 /// None of these receipts is Clone or publicly constructible. In production,
 /// only RecordBarrier's successful Recorded arm constructs one.
@@ -67,15 +68,69 @@ impl RecordedStateMeasurement {
 #[derive(Debug)]
 pub(super) struct RecordedTerminal {
     source: SourceBlockId,
+    phase: FlowPhase,
 }
 
 impl RecordedTerminal {
+    pub(super) fn phase(&self) -> FlowPhase {
+        self.phase
+    }
+    pub(super) fn source(&self) -> &SourceBlockId {
+        &self.source
+    }
     pub(super) fn into_source(self) -> SourceBlockId {
         self.source
     }
     #[cfg(test)]
     pub(super) fn for_test(source: SourceBlockId) -> Self {
-        Self { source }
+        Self::for_test_phase(source, FlowPhase::Filed)
+    }
+    #[cfg(test)]
+    pub(super) fn for_test_phase(source: SourceBlockId, phase: FlowPhase) -> Self {
+        Self { source, phase }
+    }
+}
+
+/// One exact flow sample crossed the trace barrier. The accounting owner must
+/// match this sample before advancing its interval or releasing its charge.
+#[derive(Debug)]
+pub(super) struct RecordedFlow {
+    run: String,
+    sample: FlowObservation,
+}
+
+impl RecordedFlow {
+    pub(super) fn run(&self) -> &str {
+        &self.run
+    }
+
+    pub(super) fn sample(&self) -> &FlowObservation {
+        &self.sample
+    }
+
+    pub(super) fn into_terminal(self) -> Option<RecordedTerminal> {
+        if !matches!(
+            self.sample.phase,
+            FlowPhase::Filed | FlowPhase::CorrectlyRejected
+        ) {
+            return None;
+        }
+        self.sample.source_id.map(|source| RecordedTerminal {
+            phase: self.sample.phase,
+            source: SourceBlockId {
+                run: source.run,
+                sequence: source.sequence.0.into(),
+                block: source.block.0.into(),
+            },
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_test(run: &str, sample: &FlowObservation) -> Self {
+        Self {
+            run: run.into(),
+            sample: sample.clone(),
+        }
     }
 }
 
@@ -86,6 +141,7 @@ pub(super) enum RecordPurpose {
     Classifier(Ste100Reply),
     State(StateStoreMeasurement),
     Terminal(SourceBlockId),
+    Flow(FlowObservation),
 }
 
 #[derive(Debug)]
@@ -93,6 +149,7 @@ pub(super) enum RecordProof {
     Classifier(RecordedSte100),
     State(RecordedStateMeasurement),
     Terminal(RecordedTerminal),
+    Flow(RecordedFlow),
 }
 
 #[must_use]
@@ -145,6 +202,23 @@ impl RecordBarrier {
         inbox: &mut FlowInbox,
         budget: &mut RetentionBudget,
     ) -> RecordProgress {
+        self.submit_with_clock(
+            event,
+            purpose,
+            inbox,
+            budget,
+            &mut super::clock::monotonic_ns,
+        )
+    }
+
+    pub(super) fn submit_with_clock(
+        &mut self,
+        event: Event,
+        purpose: RecordPurpose,
+        inbox: &mut FlowInbox,
+        budget: &mut RetentionBudget,
+        now: &mut impl FnMut() -> std::io::Result<u64>,
+    ) -> RecordProgress {
         // Busy returns ownership before admission. Observation progress remains
         // possible while a whole selected copy waits for its source allowance.
         if self.failure.is_none()
@@ -169,13 +243,22 @@ impl RecordBarrier {
             return RecordProgress::Busy { event, purpose };
         }
         self.pending = Some((event, purpose));
-        self.resume(inbox, budget)
+        self.resume_with_clock(inbox, budget, now)
     }
 
     pub(super) fn resume(
         &mut self,
         inbox: &mut FlowInbox,
         budget: &mut RetentionBudget,
+    ) -> RecordProgress {
+        self.resume_with_clock(inbox, budget, &mut super::clock::monotonic_ns)
+    }
+
+    pub(super) fn resume_with_clock(
+        &mut self,
+        inbox: &mut FlowInbox,
+        budget: &mut RetentionBudget,
+        now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
         if self.failure.is_some() {
             return RecordProgress::Failed;
@@ -211,9 +294,15 @@ impl RecordBarrier {
                 RecordProgress::Pending
             }
             Ok(SubmitAttempt::Recorded(submission)) => {
-                let (_, purpose) = self.pending.take().expect("pending event");
+                let (recorded_event, purpose) = self.pending.take().expect("pending event");
                 match submission.tap {
-                    TapOutcome::Selected(copy) => match inbox.accept(copy, budget) {
+                    TapOutcome::Selected(copy) => match match now() {
+                        Ok(intake_ns) => inbox.accept_at(copy, budget, Some(intake_ns)),
+                        Err(_) => IntakeOutcome::IntakeFailed {
+                            copy,
+                            detail: super::intake::IntakeError::ClockReadFailed,
+                        },
+                    } {
                         IntakeOutcome::Accepted | IntakeOutcome::Deferred => {}
                         IntakeOutcome::IntakeFailed { copy, detail } => {
                             // A failure is terminal, so this slot cannot already
@@ -252,8 +341,18 @@ impl RecordBarrier {
                         }))
                     }
                     RecordPurpose::Terminal(source) => {
-                        Some(RecordProof::Terminal(RecordedTerminal { source }))
+                        let Some(Payload::FlowObservation(sample)) = recorded_event.payload else {
+                            unreachable!("validated terminal payload")
+                        };
+                        Some(RecordProof::Terminal(RecordedTerminal {
+                            source,
+                            phase: sample.phase,
+                        }))
                     }
+                    RecordPurpose::Flow(sample) => Some(RecordProof::Flow(RecordedFlow {
+                        run: self.run.clone(),
+                        sample,
+                    })),
                 };
                 RecordProgress::Recorded {
                     sequence: submission.sequence,
@@ -278,6 +377,9 @@ impl RecordBarrier {
 
     pub(super) fn failure(&self) -> Option<&RecordFailure> {
         self.failure.as_ref()
+    }
+    pub(super) fn stop_for_flow_failure(&mut self) {
+        self.recorder.stop_tap();
     }
     pub(super) fn pending(&self) -> Option<&Event> {
         self.pending.as_ref().map(|p| &p.0)
@@ -321,6 +423,14 @@ fn matches_purpose(event: &Event, purpose: &RecordPurpose) -> bool {
                         && id.sequence.0 == source.sequence.0
                         && id.block.0 == source.block.0
                 })
+        }
+        (RecordPurpose::Flow(sample), Some(Payload::FlowObservation(record))) => {
+            event.envelope.kind == Kind::StateFlow
+                && record.as_ref() == sample
+                && sample
+                    .source_id
+                    .as_ref()
+                    .is_none_or(|source| source.run == event.envelope.run.0)
         }
         _ => false,
     }

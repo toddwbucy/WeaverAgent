@@ -5,6 +5,17 @@ use weaver_types::state_flow::{
     Ste100Target, TemplatePart, TemplateSpec,
 };
 
+// Type property, not a behavioral assertion. A Clone implementation adds a
+// second applicable trait instance and makes this inference ambiguous.
+const _: fn() = || {
+    trait InputGrantMustNotClone<Marker> {
+        fn check() {}
+    }
+    impl<T: ?Sized> InputGrantMustNotClone<()> for T {}
+    impl<T: Clone> InputGrantMustNotClone<u8> for T {}
+    let _ = <AcceptedReuse as InputGrantMustNotClone<_>>::check;
+};
+
 fn request(id: u64, block: u64) -> Ste100Request {
     Ste100Request {
         request_id: id.into(),
@@ -358,6 +369,87 @@ fn coordinator_holds_completion_until_the_exact_result_is_recorded() {
 }
 
 #[test]
+fn accepted_input_grant_consumes_the_exact_recorded_result_once() {
+    let mut request = request(1, 0);
+    request.target = Ste100Target::Input {
+        input_id: 4.into(),
+        block: 0.into(),
+    };
+    let reply = accepted(&request);
+    let (mut classifier, mut peer) = guard([ScriptStep::Reply(reply.clone())]);
+    classifier.submit(request.clone()).unwrap();
+    peer.advance().unwrap();
+    classifier.try_result().unwrap();
+    let grant = classifier
+        .recorded_input(recorded(&reply), 2.into())
+        .unwrap();
+    assert_eq!(grant.run(), "source run");
+    assert_eq!(grant.offered_sequence(), DecimalU64(2));
+    assert_eq!(grant.text(), request.text);
+    assert_eq!(grant.scheme_id(), request.scheme_id);
+    assert_eq!(grant.bindings(), &[binding()]);
+    assert_eq!(grant.request(), &request);
+    assert_eq!(grant.reply(), &reply);
+    assert_eq!(classifier.state(), ClassifierState::Idle);
+    assert!(classifier.outstanding().is_none() && classifier.held().is_none());
+    assert!(
+        classifier
+            .recorded_input(recorded(&reply), 2.into())
+            .is_err()
+    );
+}
+
+#[test]
+fn accepted_input_grant_refuses_foreign_or_changed_recording_proofs() {
+    for foreign_run in [false, true] {
+        let mut request = request(1, 0);
+        request.target = Ste100Target::Input {
+            input_id: 4.into(),
+            block: 0.into(),
+        };
+        let reply = accepted(&request);
+        let (mut classifier, mut peer) = guard([ScriptStep::Reply(reply.clone())]);
+        classifier.submit(request).unwrap();
+        peer.advance().unwrap();
+        classifier.try_result().unwrap();
+        let proof = if foreign_run {
+            super::super::RecordedSte100::for_test_in("another run", &reply)
+        } else {
+            let mut changed = reply.clone();
+            changed.request_id = 9.into();
+            recorded(&changed)
+        };
+        assert!(classifier.recorded_input(proof, 2.into()).is_err());
+        assert_eq!(classifier.state(), ClassifierState::Failed);
+        assert_eq!(classifier.held(), Some(&reply));
+    }
+}
+
+#[test]
+fn an_accepted_source_or_nonzero_input_block_cannot_mint_an_input_grant() {
+    for source_target in [true, false] {
+        let mut request = request(1, 0);
+        if !source_target {
+            request.target = Ste100Target::Input {
+                input_id: 4.into(),
+                block: 1.into(),
+            };
+        }
+        let reply = accepted(&request);
+        let (mut classifier, mut peer) = guard([ScriptStep::Reply(reply.clone())]);
+        classifier.submit(request).unwrap();
+        peer.advance().unwrap();
+        classifier.try_result().unwrap();
+        assert!(
+            classifier
+                .recorded_input(recorded(&reply), 2.into())
+                .is_err()
+        );
+        assert_eq!(classifier.held(), Some(&reply));
+    }
+}
+
+#[test]
 fn wrong_recording_proofs_cannot_release_or_replace_the_held_result() {
     for cross_run in [false, true] {
         let mut first = request(1, 0);
@@ -484,6 +576,9 @@ fn a_coalesced_extra_reply_remains_readable_while_the_first_is_held() {
     classifier.submit(first).unwrap();
     peer.advance().unwrap();
     assert_eq!(classifier.try_result(), Ok(ClassifierPoll::ResultHeld));
+    assert_eq!(classifier.check_held_terminal(), Ok(()));
+    assert_eq!(classifier.state(), ClassifierState::ResultHeld);
+    assert_eq!(classifier.held(), Some(&reply));
     use nix::poll::{PollFd, PollFlags, poll};
     let mut fds = [PollFd::new(classifier.readiness(), PollFlags::POLLIN)];
     assert_eq!(poll(&mut fds, 0_u16).unwrap(), 1);
@@ -496,21 +591,94 @@ fn a_coalesced_extra_reply_remains_readable_while_the_first_is_held() {
 
 #[test]
 fn peer_death_after_a_held_acceptance_cannot_release_success() {
+    for terminal in [ScriptStep::Close, ScriptStep::ShutdownWrite] {
+        let first = request(1, 0);
+        let reply = accepted(&first);
+        let (mut classifier, mut peer) = guard([ScriptStep::Reply(reply.clone()), terminal]);
+        classifier.submit(first.clone()).unwrap();
+        peer.advance().unwrap();
+        assert_eq!(classifier.try_result(), Ok(ClassifierPoll::ResultHeld));
+        peer.advance().unwrap();
+        assert_eq!(
+            classifier.check_held_terminal().unwrap_err().kind,
+            PortFailureKind::Component(Ste100ComponentCode::Crashed)
+        );
+        assert!(classifier.recorded(recorded(&reply)).is_err());
+        assert_eq!(classifier.state(), ClassifierState::Failed);
+        assert_eq!(classifier.held(), Some(&reply));
+        assert_eq!(classifier.outstanding(), Some(&first));
+        assert!(classifier.submit(request(2, 1)).is_err());
+        assert_eq!(peer.submitted(), vec![first]);
+    }
+}
+
+#[test]
+fn recording_itself_observes_peer_loss_before_releasing_the_held_result() {
+    for terminal in [ScriptStep::Close, ScriptStep::ShutdownWrite] {
+        let first = request(1, 0);
+        let reply = accepted(&first);
+        let (mut classifier, mut peer) = guard([ScriptStep::Reply(reply.clone()), terminal]);
+        classifier.submit(first.clone()).unwrap();
+        peer.advance().unwrap();
+        assert_eq!(classifier.try_result(), Ok(ClassifierPoll::ResultHeld));
+        peer.advance().unwrap();
+        // No transport call or try_result occurs between loss and release.
+        assert_eq!(
+            classifier.recorded(recorded(&reply)).unwrap_err().kind,
+            PortFailureKind::Component(Ste100ComponentCode::Crashed)
+        );
+        assert_eq!(classifier.state(), ClassifierState::Failed);
+        assert_eq!(classifier.held(), Some(&reply));
+        assert_eq!(classifier.outstanding(), Some(&first));
+    }
+}
+
+#[test]
+fn descriptor_error_freezes_a_held_result_without_polling_the_adapter() {
+    use std::os::fd::{AsFd, OwnedFd};
+
+    struct ErrorPort {
+        readiness: OwnedFd,
+        reply: Option<Ste100Reply>,
+    }
+    impl Ste100Port for ErrorPort {
+        fn readiness(&self) -> BorrowedFd<'_> {
+            self.readiness.as_fd()
+        }
+        fn submit(&mut self, _: Ste100Request) -> Result<Submit, PortFailure> {
+            Ok(Submit::Submitted)
+        }
+        fn try_result(&mut self) -> Result<ResultPoll, PortFailure> {
+            Ok(ResultPoll::Completed(
+                self.reply
+                    .take()
+                    .expect("the held slot prevents another read"),
+            ))
+        }
+    }
+
+    // The write end of a pipe reports POLLERR when its read end closes. It is
+    // owned throughout the probe, so this exercises a real descriptor error
+    // without fabricating an invalid BorrowedFd.
+    let (reader, writer) = nix::unistd::pipe().unwrap();
     let first = request(1, 0);
     let reply = accepted(&first);
-    let (mut classifier, mut peer) = guard([ScriptStep::Reply(reply.clone()), ScriptStep::Close]);
+    let port = ErrorPort {
+        readiness: writer,
+        reply: Some(reply.clone()),
+    };
+    let mut classifier = Classifier::fixture(port, "source run".into());
     classifier.submit(first.clone()).unwrap();
-    peer.advance().unwrap();
-    assert_eq!(classifier.try_result(), Ok(ClassifierPoll::ResultHeld));
-    peer.advance().unwrap();
+    classifier.try_result().unwrap();
+    drop(reader);
     assert_eq!(
-        classifier.try_result().unwrap_err().kind,
-        PortFailureKind::Component(Ste100ComponentCode::Crashed)
+        classifier.check_held_terminal().unwrap_err().kind,
+        PortFailureKind::Component(Ste100ComponentCode::TransportFailed)
     );
-    assert!(classifier.recorded(recorded(&reply)).is_err());
     assert_eq!(classifier.state(), ClassifierState::Failed);
     assert_eq!(classifier.held(), Some(&reply));
     assert_eq!(classifier.outstanding(), Some(&first));
+    assert!(classifier.recorded(recorded(&reply)).is_err());
 }
 
 #[test]

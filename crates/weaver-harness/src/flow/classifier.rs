@@ -1,11 +1,13 @@
 //! The HARNESS-CLASSIFY near side. This is independent of the optional label
 //! scorer and introduces no production classifier transport or scheduling policy.
 
-use std::os::fd::BorrowedFd;
+use std::os::fd::{AsRawFd, BorrowedFd};
+
+use nix::libc;
 
 use weaver_types::state_flow::{
-    DecimalU64, SchemeDeclaration, Ste100ComponentCode, Ste100Reply, Ste100Request, Ste100Result,
-    Ste100Target,
+    Binding, DecimalU64, SchemeDeclaration, Ste100ComponentCode, Ste100Reply, Ste100Request,
+    Ste100Result, Ste100Target,
 };
 
 /// One pump owns the adapter and its cursor. After the initial nonblocking
@@ -43,6 +45,43 @@ pub(crate) enum ClassifierState {
 pub(crate) enum ClassifierPoll {
     Pending,
     ResultHeld,
+}
+
+/// A consumed, recorded input check. Only this classifier owner constructs it,
+/// after its exact result has crossed the trace barrier. It is never Clone.
+#[derive(Debug)]
+pub(super) struct AcceptedReuse {
+    run: String,
+    offered_sequence: DecimalU64,
+    request: Box<Ste100Request>,
+    reply: Box<Ste100Reply>,
+}
+
+impl AcceptedReuse {
+    pub(super) fn run(&self) -> &str {
+        &self.run
+    }
+    pub(super) fn offered_sequence(&self) -> DecimalU64 {
+        self.offered_sequence
+    }
+    pub(super) fn text(&self) -> &str {
+        &self.request.text
+    }
+    pub(super) fn scheme_id(&self) -> &str {
+        &self.request.scheme_id
+    }
+    pub(super) fn bindings(&self) -> &[Binding] {
+        match &self.reply.result {
+            Ste100Result::Accepted { bindings } => bindings,
+            _ => unreachable!("only an accepted recorded check constructs this grant"),
+        }
+    }
+    pub(super) fn request(&self) -> &Ste100Request {
+        &self.request
+    }
+    pub(super) fn reply(&self) -> &Ste100Reply {
+        &self.reply
+    }
 }
 
 /// The classifier state inside FlowCoordinator, not a second transport owner
@@ -96,6 +135,13 @@ impl<P: Ste100Port> Classifier<P> {
         self.state
     }
 
+    pub(super) fn scheme(&self) -> &SchemeDeclaration {
+        &self.scheme
+    }
+    pub(super) fn run(&self) -> &str {
+        &self.run
+    }
+
     pub(crate) fn outstanding(&self) -> Option<&Ste100Request> {
         self.outstanding.as_ref()
     }
@@ -108,6 +154,51 @@ impl<P: Ste100Port> Classifier<P> {
 
     pub(crate) fn failure(&self) -> Option<&PortFailure> {
         self.failure.as_ref()
+    }
+
+    /// Observe terminal descriptor status without reading another completion
+    /// into the full result slot. A readable second reply stays with the port;
+    /// a peer close or transport error freezes the exact held account.
+    pub(crate) fn check_held_terminal(&mut self) -> Result<(), PortFailure> {
+        self.ensure_active()?;
+        if self.state != ClassifierState::ResultHeld {
+            return Ok(());
+        }
+        let fd = self.port.readiness();
+        let mut status = libc::pollfd {
+            fd: fd.as_raw_fd(),
+            // POLLRDHUP also observes EOF from a peer's write-half shutdown.
+            // nix's PollFlags does not expose this Linux flag.
+            events: libc::POLLRDHUP,
+            revents: 0,
+        };
+        // SAFETY: status is one writable pollfd and fd stays borrowed for the
+        // immediate call. A zero timeout never introduces a second wait clock.
+        if unsafe { libc::poll(&mut status, 1, 0) } < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                // An interrupted probe observed no terminal status. The common
+                // pump may observe it next unit; this probe owns no retry wait.
+                return Ok(());
+            }
+            return self.stop(PortFailure::component(
+                Ste100ComponentCode::TransportFailed,
+                error.to_string(),
+            ));
+        }
+        if status.revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
+            return self.stop(PortFailure::component(
+                Ste100ComponentCode::TransportFailed,
+                "classifier readiness descriptor failed while a result was held",
+            ));
+        }
+        if status.revents & (libc::POLLHUP | libc::POLLRDHUP) != 0 {
+            return self.stop(PortFailure::component(
+                Ste100ComponentCode::Crashed,
+                "classifier peer closed while a result was held",
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn next_request_id(&mut self) -> Result<DecimalU64, PortFailure> {
@@ -182,14 +273,15 @@ impl<P: Ste100Port> Classifier<P> {
         }
     }
 
-    /// No port call or wire acknowledgment occurs here. The receipt binds both
-    /// the complete reply and this run, so even input/template IDs cannot be
-    /// released using another run's trace admission.
+    /// Check terminal descriptor status without receiving a second reply or
+    /// acknowledging the wire. The receipt binds both the complete reply and
+    /// this run, so another run's trace admission cannot release input/template
+    /// IDs, and a dead peer cannot release a previously accepted result.
     pub(crate) fn recorded(
         &mut self,
         receipt: super::RecordedSte100,
     ) -> Result<Ste100Reply, PortFailure> {
-        self.ensure_active()?;
+        self.check_held_terminal()?;
         let Some(reply) = self.held.as_ref() else {
             return self.stop(PortFailure::protocol("no classifier result is held"));
         };
@@ -209,6 +301,42 @@ impl<P: Ste100Port> Classifier<P> {
             self.state = ClassifierState::Idle;
         }
         Ok(reply)
+    }
+
+    /// Release an accepted gate check into the single-use input filing grant.
+    /// Rejections use recorded() and remain ordinary conformance outcomes. This
+    /// method refuses an attempted grant for any other target or disposition.
+    pub(super) fn recorded_input(
+        &mut self,
+        receipt: super::RecordedSte100,
+        offered_sequence: DecimalU64,
+    ) -> Result<AcceptedReuse, PortFailure> {
+        self.ensure_active()?;
+        let Some(request) = self.outstanding.as_ref() else {
+            return self.stop(PortFailure::protocol(
+                "input grant has no outstanding check",
+            ));
+        };
+        if offered_sequence.0 == 0
+            || !matches!(request.target, Ste100Target::Input { input_id, block }
+                if input_id.0 != 0 && block.0 == 0)
+            || !matches!(
+                self.held.as_ref().map(|reply| &reply.result),
+                Some(Ste100Result::Accepted { .. })
+            )
+        {
+            return self.stop(PortFailure::protocol(
+                "input grant requires an accepted block-zero input check",
+            ));
+        }
+        let request = request.clone();
+        let reply = self.recorded(receipt)?;
+        Ok(AcceptedReuse {
+            run: self.run.clone(),
+            offered_sequence,
+            request: Box::new(request),
+            reply: Box::new(reply),
+        })
     }
 
     /// A trace failure or applicable bound is owned by the coordinator's halt
@@ -334,6 +462,7 @@ pub(crate) mod scripted {
         Reply(Ste100Reply),
         Bytes(Vec<u8>),
         Close,
+        ShutdownWrite,
     }
 
     pub(crate) struct ScriptedPort {
@@ -495,6 +624,13 @@ pub(crate) mod scripted {
                     None | Some(ScriptStep::Hold) => return Ok(true),
                     Some(ScriptStep::Close) => {
                         self.socket.take();
+                        return Ok(true);
+                    }
+                    Some(ScriptStep::ShutdownWrite) => {
+                        self.socket
+                            .as_ref()
+                            .ok_or_else(|| io::Error::other("script peer closed"))?
+                            .shutdown(std::net::Shutdown::Write)?;
                         return Ok(true);
                     }
                     Some(ScriptStep::Reply(reply)) => {

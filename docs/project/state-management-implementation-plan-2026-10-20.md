@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for the SPU placement and harness filing components.
+Updated: 2026-10-21 for the ordered filing coordinator and its evidence producers.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -33,10 +33,11 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | P1o | P1a, P1b | Offline bind and restore drivers, admin selection/rebind clauses |
 | P1d | P1a, P1b, F4, C1 | Serving lifecycle and verified boot, admin/persistence amendments |
 | H1a | F1, T1b, F4 | Copy budget, trace proof and sole channel mechanics, harness amendment |
-| H1b | H1a, C1, P1 | Ledger, common pump, author census and halt, harness/foundation amendments |
-| H2 | H1b, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
+| H1b1 | H1a | Ordered filing ledger, composition, clock and measurements, harness amendment |
+| H1b2 | H1b1, C1, P1 | Common pump, author census, input and halt, harness/foundation amendments |
+| H2 | H1b2, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
-| H3b | H1b, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
+| H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
 | H4 | H2, H3b | Plan operations and review evidence, Spec 07 and admin amendment |
 | H5 | H3b, H4 | Sort, selection and injection ports, Spec 08 |
 | Q1 | All above | Serving qualification and coupled cutover, foundation transition |
@@ -51,7 +52,7 @@ state-content/1 behavior. No partial catalog is a deployment option.
 
 F1 does not replace the legacy lifecycle/configuration grammar. P1a adds a separate
 serving parser without activating it. Replacement lifecycle changes travel with
-P1d/H1b, and tool containment vocabulary travels with H2. This keeps wire changes
+P1d/H1b2, and tool containment vocabulary travels with H2. This keeps wire changes
 with their complete producers and consumers. Every affected document's transition
 clause remains binding.
 
@@ -226,11 +227,30 @@ source bytes are restored before the final gates. Independent review checks the
 component contracts, test failures and restoration evidence. Planner review remains
 owed.
 
-H1b remains owed: whole-copy ledger installation and source order, all author
-callers, preflight and lifecycle ownership, the common pump and absolute bounds,
-transition samples, and the complete halt account and teardown. C1 supplies the
-production STE100 adapter. The scripted adapter proves the near-side contract only.
-These obligations remain part of the complete implementation and cutover gate.
+H1b1 builds on #198 with atomic whole-copy installation, source-ordered filing,
+recorded classifier reuse and terminal disposal. Its coordinator composes the actual
+recording barrier and state channel. A receipt waits for its measurement record,
+and source reservations wait for their terminal record. Transition measurements
+retain the gauges, timestamp and cumulative counts observed at the transition.
+The numeric clock and absolute-bound registry supply the common pump's timing
+primitive. They do not replace the existing six source adapters or choose measured
+bounds. Serving author preparation supplies exhaustive kind/source attribution.
+It does not complete the caller census or pending-author halt account.
+The full harness suite passes 499 tests with 17 ignored instruments. The matching
+normal-member fixture passes separately. Lint, formatting, lock and diff checks
+pass. Twenty-two compiled guard removals fail their intended assertions and one
+type-pin check rejects a copyable input grant. Exact source bytes are restored
+and all affected baselines pass. The fixtures prove the filing contracts with real
+trace admission, Unix sockets and scripted classifier/state replies. They do not
+qualify production STE100, deployment limits or throughput.
+
+H1b2 remains owed: all author callers, preflight and lifecycle ownership, input and
+model repair orchestration, the six-source common pump and bound activation,
+and the complete halt account and teardown. C1 supplies the production STE100
+adapter. The scripted adapter proves the near-side contract only. H1b1's frozen
+failure preserves its owned ledger and channel evidence, but is not the run-wide
+halt report or containment ladder. These obligations remain part of the complete
+implementation and cutover gate.
 
 The later rows remain owed.
 This is a progress record, not a claim that the full goal or any serving cutover is

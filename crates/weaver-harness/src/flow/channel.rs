@@ -184,6 +184,7 @@ pub(super) struct StateChannel {
     next_request: Option<u64>,
     next_operation: Option<u64>,
     opened: bool,
+    opened_scheme: Option<String>,
     // The second entry exists only for abort cleanup of a late capture answer.
     exchanges: VecDeque<Exchange>,
     received: Vec<u8>,
@@ -209,6 +210,7 @@ impl StateChannel {
             next_request: Some(1),
             next_operation: Some(1),
             opened: false,
+            opened_scheme: None,
             exchanges: VecDeque::new(),
             received: Vec::new(),
             received_ns: None,
@@ -246,6 +248,24 @@ impl StateChannel {
 
     pub(super) fn held_measurement(&self) -> Option<&StateStoreMeasurement> {
         self.held.as_ref().map(|held| &held.measurement)
+    }
+
+    pub(super) fn first_sent_ns(&self) -> Option<u64> {
+        self.exchanges.front().and_then(|exchange| exchange.sent_ns)
+    }
+
+    pub(super) fn can_begin_filing(&self) -> bool {
+        self.failure.is_none()
+            && self.opened
+            && self.exchanges.is_empty()
+            && self.held.is_none()
+            && self
+                .capture
+                .is_none_or(|capture| capture.phase == CapturePhase::Refused)
+    }
+
+    pub(super) fn identity(&self) -> (&str, &str, Option<&str>) {
+        (&self.session, &self.run, self.opened_scheme.as_deref())
     }
 
     /// Load needs the member facts before activation permits the measurement event.
@@ -641,7 +661,10 @@ impl StateChannel {
 
     fn note_answer(&mut self, answer: &StateFrame) {
         match answer {
-            StateFrame::Opened { .. } => self.opened = true,
+            StateFrame::Opened { scheme_id, .. } => {
+                self.opened = true;
+                self.opened_scheme = Some(scheme_id.clone());
+            }
             StateFrame::ControlAnswer { frame, .. } => match frame {
                 StateControlAnswer::Snapshot { .. } => {
                     self.capture.as_mut().expect("snapshot capture").phase = CapturePhase::Held
