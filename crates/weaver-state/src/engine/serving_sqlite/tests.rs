@@ -857,6 +857,37 @@ pub(super) mod filing {
     }
 
     #[test]
+    fn pair_lane_request_mismatch_refuses_and_rolls_back_its_source() {
+        let mut store = store();
+        let send = statement(1, "message.assistant");
+        store.file(&send).unwrap();
+        let mut started = opening(&send);
+        started.lane = PairLane::Recall;
+        let filing = pair_file(2, PairRecord::Started(started.clone()), "model");
+        let before = store.image().unwrap();
+        let error = store.file_pair(&filing).unwrap_err();
+        assert_eq!(error.code, StateRefusalCode::InvalidPair);
+        assert_eq!(store.image().unwrap(), before);
+        assert_eq!(
+            source_id(&store.connection, &filing.block_id).unwrap(),
+            None
+        );
+        for table in ["pair_event", "tool_pair"] {
+            let count: i64 = store
+                .connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0, "refused pair must leave no {table} row");
+        }
+        started.lane = PairLane::External;
+        store
+            .file_pair(&pair_file(2, PairRecord::Started(started), "model"))
+            .unwrap();
+    }
+
+    #[test]
     fn pair_receipts_are_atomic_and_terminal_is_single_use() {
         let mut store = store();
         let send = statement(1, "message.assistant");
