@@ -56,7 +56,7 @@ T1a is [draft PR #185][tap], commit 19bf1f56, independently based on bacbad39. I
 tests, lint, formatting and lock checks passed. Eleven guard removals failed their
 tests. Review found and fixed a context-bearing projection that could omit block zero.
 
-F3 is ready for draft review on code/state-store-core. It supplies atomic statement,
+F3 is [draft PR #186][core], stacked on #184. It supplies atomic statement,
 pair, mark and plan filing, bounded structured reads, and verified seed/image ports.
 The catalog prerequisite is on main. The shared floor in #184 remains its open PR
 prerequisite. The full state crate suite passed, as did lint, formatting and lock
@@ -97,3 +97,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [catalog]: https://github.com/toddwbucy/WeaverAgent/pull/183
 [floor]: https://github.com/toddwbucy/WeaverAgent/pull/184
 [tap]: https://github.com/toddwbucy/WeaverAgent/pull/185
+[core]: https://github.com/toddwbucy/WeaverAgent/pull/186
