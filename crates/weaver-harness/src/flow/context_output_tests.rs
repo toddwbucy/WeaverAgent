@@ -24,11 +24,11 @@ fn ports<I: PumpIo>(io: &mut I) -> PumpPorts<'_, I> {
     }
 }
 
-fn text(value: &str) -> ContentBlock {
+pub(super) fn text(value: &str) -> ContentBlock {
     ContentBlock::Text { text: value.into() }
 }
 
-fn original(content: Vec<ContentBlock>) -> OutputOriginal {
+pub(super) fn original(content: Vec<ContentBlock>) -> OutputOriginal {
     OutputOriginal {
         message: Message {
             role: Role::Assistant,
@@ -56,7 +56,7 @@ fn older_event(value: &str) -> AuthoredEvent {
     }
 }
 
-fn reply(request: &s::Ste100Request, reject: bool) -> s::Ste100Reply {
+pub(super) fn reply(request: &s::Ste100Request, reject: bool) -> s::Ste100Reply {
     let result = if reject {
         s::Ste100Result::NotSte100 {
             code: s::Ste100DefectCode::NonSte100,
@@ -97,22 +97,33 @@ fn reply(request: &s::Ste100Request, reject: bool) -> s::Ste100Reply {
     }
 }
 
-struct OutputFixture {
-    input: InputFixture,
-    bound: AbsoluteBound,
-    requests: Vec<s::Ste100Request>,
+pub(super) struct OutputFixture {
+    pub(super) input: InputFixture,
+    pub(super) bound: AbsoluteBound,
+    pub(super) requests: Vec<s::Ste100Request>,
     received: Vec<u8>,
-    file_requests: Vec<s::StateFrame>,
-    operation: u64,
+    pub(super) file_requests: Vec<s::StateFrame>,
+    pub(super) operation: u64,
 }
 
 impl OutputFixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self::configured(super::tests::config())
     }
 
-    fn configured(declaration: FlowConfig) -> Self {
-        let mut input = InputFixture::with_declaration(None, declaration);
+    pub(super) fn configured(declaration: FlowConfig) -> Self {
+        Self::from_input(InputFixture::with_declaration(None, declaration))
+    }
+
+    pub(super) fn with_scheme(text: String, scheme: s::SchemeDeclaration) -> Self {
+        Self::from_input(InputFixture::with_scheme(
+            super::tests::config(),
+            text,
+            scheme,
+        ))
+    }
+
+    fn from_input(mut input: InputFixture) -> Self {
         input.run.state.set_nonblocking(true).unwrap();
         input
             .run
@@ -141,7 +152,7 @@ impl OutputFixture {
         }
     }
 
-    fn begin(&mut self, original: OutputOriginal) {
+    pub(super) fn begin(&mut self, original: OutputOriginal) {
         self.input
             .run
             .context
@@ -149,14 +160,14 @@ impl OutputFixture {
             .unwrap();
     }
 
-    fn advance(&mut self) -> Result<OutputProgress, RunFailure> {
+    pub(super) fn advance(&mut self) -> Result<OutputProgress, RunFailure> {
         self.input
             .run
             .context
             .advance_output(&mut ports(&mut self.input.run.clock))
     }
 
-    fn transport(&mut self, source: TransportSource) {
+    pub(super) fn transport(&mut self, source: TransportSource) {
         self.input
             .run
             .context
@@ -174,7 +185,7 @@ impl OutputFixture {
             .unwrap();
     }
 
-    fn receive_check(&mut self) -> Option<s::Ste100Request> {
+    pub(super) fn receive_check(&mut self) -> Option<s::Ste100Request> {
         self.input.classifier_transport();
         let Receive::Complete(message) = self.input.peer.try_receive().unwrap() else {
             return None;
@@ -187,7 +198,7 @@ impl OutputFixture {
         Some(request)
     }
 
-    fn member(&mut self, answer: bool) {
+    pub(super) fn member(&mut self, answer: bool) {
         self.transport(TransportSource::State);
         let mut bytes = [0; 65536];
         loop {
@@ -229,7 +240,7 @@ impl OutputFixture {
         }
     }
 
-    fn step(&mut self, reject: Option<&str>, file: bool) -> OutputProgress {
+    pub(super) fn step(&mut self, reject: Option<&str>, file: bool) -> OutputProgress {
         let progress = self.advance().unwrap();
         if let Some(request) = self.receive_check() {
             self.input
@@ -239,7 +250,7 @@ impl OutputFixture {
         progress
     }
 
-    fn complete(&mut self, reject: Option<&str>, file: bool) {
+    pub(super) fn complete(&mut self, reject: Option<&str>, file: bool) {
         for _ in 0..256 {
             if self.step(reject, file) == OutputProgress::Complete {
                 return;
@@ -248,7 +259,7 @@ impl OutputFixture {
         panic!("whole output did not reach its recorded check frontier");
     }
 
-    fn request(&mut self) -> s::Ste100Request {
+    pub(super) fn request(&mut self) -> s::Ste100Request {
         for _ in 0..128 {
             self.advance().unwrap();
             if let Some(request) = self.receive_check() {
@@ -259,7 +270,7 @@ impl OutputFixture {
         panic!("whole output did not submit its check");
     }
 
-    fn drive_to_file(&mut self) {
+    pub(super) fn drive_to_file(&mut self) {
         for _ in 0..128 {
             self.input
                 .run

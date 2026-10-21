@@ -22,7 +22,7 @@ use super::classifier::{Classifier, ClassifierState, Ste100Port, Submit};
 use super::clock::PumpIo;
 use super::intake::{FlowInbox, IntakeError, IntakeFailure, IntakeOutcome, RetentionBudget};
 use super::ledger::{
-    AcceptedReuse, Classified, Ledger, LedgerState, TerminalCandidate, TerminalOutcome,
+    AcceptedReuse, Classified, Ledger, LedgerState, SourceLease, TerminalCandidate, TerminalOutcome,
 };
 use super::observation::{
     GaugeSnapshot, Observation, PendingSource, SamplePoint, Transition, WaitingSource,
@@ -36,6 +36,16 @@ mod output;
 #[allow(unused_imports)]
 pub(super) use output::{
     CheckedGeneration, OutputCancellation, OutputChecks, OutputOriginal, RecordedOutputBlock,
+};
+
+#[path = "model_requests.rs"]
+mod model_requests;
+#[cfg(test)]
+pub(in crate::flow) use model_requests::tests::checked as checked_request_fixture;
+#[allow(unused_imports)]
+pub(super) use model_requests::{
+    AssociationError, AssociationFailure, AssociationRefusal, ModelRequestCandidate,
+    OriginalRequests, PendingAssociation, RequestScheme,
 };
 
 pub(super) struct FlowRecording<'a> {
@@ -312,6 +322,12 @@ struct ReceiptReservation {
     recorded_ns: Option<u64>,
 }
 
+struct OutputReceiptReservation {
+    sequence: u64,
+    expected: Vec<SourceBlockId>,
+    lease: Option<SourceLease>,
+}
+
 /// No socket, mutable ledger or completion escapes through a caller-owned clone.
 /// The sole run-wide latch freezes this owner before reporting. Component
 /// notifications preserve every current source and transport fact for that latch.
@@ -320,6 +336,7 @@ pub(super) struct FlowCoordinator<P> {
     ledger: Ledger,
     receipt_reservation: Option<ReceiptReservation>,
     output_checks: Option<OutputChecks>,
+    output_receipts: Option<OutputReceiptReservation>,
     classifier: Option<Classifier<P>>,
     starting_classifier: Option<P>,
     admission_completion: Option<super::ste100_socket::AdmissionPoll>,
@@ -381,6 +398,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             ledger,
             receipt_reservation: None,
             output_checks: None,
+            output_receipts: None,
             scheme: classifier.scheme().clone(),
             classifier: Some(classifier),
             starting_classifier: None,
@@ -550,12 +568,60 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             .collect();
         let pending = pending_receipt_sources(cx, &self.run, sequence, installed.is_empty())
             .map_err(|error| self.fail(cx, "output", error))?;
+        let deferred = pending.is_some();
         let selected = pending.unwrap_or(installed);
+        if self.output_checks.as_ref().unwrap().is_cancelled() {
+            // A cancelled author may still finish its one real trace ticket.
+            // Preserve that source, but never revive the abandoned consumer.
+            return self
+                .output_checks
+                .as_mut()
+                .unwrap()
+                .bind(sequence, recorded_ns, &selected)
+                .map_err(|error| self.fail(cx, "output_receipt", error));
+        }
+        let lease = if deferred {
+            None
+        } else {
+            Some(
+                self.ledger
+                    .register_source_lease(selected.clone())
+                    .map_err(|error| self.fail(cx, "output_receipt", error.error))?,
+            )
+        };
+        self.output_receipts = Some(OutputReceiptReservation {
+            sequence: sequence.0,
+            expected: selected.clone(),
+            lease,
+        });
         self.output_checks
             .as_mut()
             .expect("unbound output")
             .bind(sequence, recorded_ns, &selected)
             .map_err(|error| self.fail(cx, "output", error))
+    }
+
+    fn register_deferred_output_receipts(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: u64,
+        sources: &[SourceBlockId],
+    ) -> Result<(), FlowFailure> {
+        let Some(owner) = self.output_receipts.as_ref() else {
+            return Ok(());
+        };
+        if owner.sequence != sequence {
+            return Ok(());
+        }
+        if owner.lease.is_some() || owner.expected != sources {
+            return Err(self.fail(cx, "output_receipt", "deferred output copy changed"));
+        }
+        let lease = self
+            .ledger
+            .register_source_lease(sources.to_vec())
+            .map_err(|error| self.fail(cx, "output_receipt", error.error))?;
+        self.output_receipts.as_mut().unwrap().lease = Some(lease);
+        Ok(())
     }
 
     pub(super) fn take_output_checks(
@@ -572,9 +638,24 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         }
         // The check proof is independent of unrelated pending filings or their
         // observation records. No selected source obligation transfers here.
+        if self
+            .output_receipts
+            .as_ref()
+            .is_none_or(|owner| owner.lease.is_none())
+        {
+            return Err(self.fail(
+                cx,
+                "output_receipt",
+                "complete output lost its receipt lease",
+            ));
+        }
         let owner = self.output_checks.take().expect("complete output");
         match owner.complete() {
-            Ok(checked) => Ok(Some(checked)),
+            Ok(mut checked) => {
+                let lease = self.output_receipts.take().unwrap().lease.unwrap();
+                checked.attach_receipt_lease(lease);
+                Ok(Some(checked))
+            }
             Err(owner) => {
                 self.output_checks = Some(owner);
                 Err(self.fail(cx, "output", "complete output could not transfer"))
@@ -583,6 +664,14 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     }
 
     pub(super) fn cancel_output_checks(&mut self) {
+        if let Some(reservation) = self.output_receipts.take()
+            && let Some(lease) = reservation.lease
+        {
+            // Cancellation removes consumer interest, never the copied filing.
+            self.ledger
+                .release_source_lease(lease)
+                .expect("owned output lease");
+        }
         if let Some(owner) = &mut self.output_checks {
             owner.cancel();
         }
@@ -629,6 +718,37 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 Ok(true)
             }
         }
+    }
+
+    pub(super) fn source_receipt_status(
+        &self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<super::ledger::LeaseSlotStatus, super::ledger::LedgerError> {
+        self.ledger.source_lease_status(lease, source)
+    }
+
+    pub(super) fn take_source_receipt(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<Option<super::ledger::SourceDisposition>, super::ledger::LedgerError> {
+        self.ledger.take_source_receipt(lease, source)
+    }
+
+    pub(super) fn release_source_receipt(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<(), super::ledger::LedgerError> {
+        self.ledger.release_source_receipt(lease, source)
+    }
+
+    pub(super) fn release_source_lease(
+        &mut self,
+        lease: SourceLease,
+    ) -> Result<(), (SourceLease, super::ledger::LedgerError)> {
+        self.ledger.release_source_lease(lease)
     }
 
     /// Reserve the only consumer before its original author is submitted.
@@ -824,6 +944,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             ledger,
             receipt_reservation: None,
             output_checks: None,
+            output_receipts: None,
             classifier: None,
             starting_classifier: None,
             admission_completion: None,
@@ -2021,6 +2142,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             {
                 Ok(installed) => {
                     self.register_deferred_receipts(
+                        cx,
+                        installed.source_sequence,
+                        &installed.sources,
+                    )?;
+                    self.register_deferred_output_receipts(
                         cx,
                         installed.source_sequence,
                         &installed.sources,

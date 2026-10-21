@@ -11,6 +11,8 @@ use weaver_types::state_flow::{
     Ste100Target,
 };
 
+use crate::flow::ledger::SourceLease;
+
 #[derive(Debug)]
 pub(in crate::flow) struct OutputOriginal {
     pub message: Message,
@@ -47,13 +49,34 @@ impl RecordedOutputBlock {
 
 #[derive(Debug)]
 pub(in crate::flow) struct CheckedGeneration {
+    scheme: SchemeDeclaration,
     original: OutputOriginal,
     source: SourcePosition,
     blocks: Vec<RecordedOutputBlock>,
     recorded_ns: u64,
+    receipt_lease: Option<SourceLease>,
 }
 
 impl CheckedGeneration {
+    pub(in crate::flow) fn scheme(&self) -> &SchemeDeclaration {
+        &self.scheme
+    }
+
+    /// Real run transactions attach a lease before returning this check proof.
+    /// A lease retains facts only. It grants no pair or dispatch authority.
+    pub(in crate::flow) fn receipt_lease(&self) -> Option<&SourceLease> {
+        self.receipt_lease.as_ref()
+    }
+
+    pub(in crate::flow) fn take_receipt_lease(&mut self) -> Option<SourceLease> {
+        self.receipt_lease.take()
+    }
+
+    pub(super) fn attach_receipt_lease(&mut self, lease: SourceLease) {
+        assert!(self.receipt_lease.is_none());
+        self.receipt_lease = Some(lease);
+    }
+
     pub(in crate::flow) fn original(&self) -> &OutputOriginal {
         &self.original
     }
@@ -341,6 +364,7 @@ impl OutputChecks {
             return Err(self);
         };
         Ok(CheckedGeneration {
+            scheme: self.scheme,
             original: self.original,
             source: self.source.unwrap(),
             blocks: self
@@ -349,6 +373,7 @@ impl OutputChecks {
                 .map(|slot| slot.recorded.unwrap())
                 .collect(),
             recorded_ns,
+            receipt_lease: None,
         })
     }
 

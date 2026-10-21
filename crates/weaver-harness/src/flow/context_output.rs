@@ -96,6 +96,7 @@ impl RecordingContext {
         if self.output.is_some()
             || self.flow.has_output_consumer()
             || self.filing.is_some()
+            || self.pair_work.is_some()
             || self.flow.has_filing_consumer()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()
@@ -367,5 +368,60 @@ impl RecordingContext {
         let result = self.flow.take_cancelled_output_checks()?;
         self.output = None;
         Some(result)
+    }
+}
+
+/// A wrong lease is a caller refusal. Failure of the run never becomes a ready
+/// receipt. Reading a committed fact does not arm a clock or authorize dispatch.
+#[derive(Debug)]
+pub(in crate::flow) enum SourceReceiptError {
+    Run(RunFailure),
+    Refused(crate::flow::ledger::LedgerError),
+}
+
+impl RecordingContext {
+    pub(in crate::flow) fn source_receipt_status(
+        &mut self,
+        lease: &crate::flow::ledger::SourceLease,
+        source: &weaver_types::state_flow::SourceBlockId,
+        io: &mut impl PumpIo,
+    ) -> Result<crate::flow::ledger::LeaseSlotStatus, SourceReceiptError> {
+        self.live(io).map_err(SourceReceiptError::Run)?;
+        self.flow
+            .source_receipt_status(lease, source)
+            .map_err(SourceReceiptError::Refused)
+    }
+
+    pub(in crate::flow) fn take_source_receipt(
+        &mut self,
+        lease: &crate::flow::ledger::SourceLease,
+        source: &weaver_types::state_flow::SourceBlockId,
+        io: &mut impl PumpIo,
+    ) -> Result<Option<crate::flow::ledger::SourceDisposition>, SourceReceiptError> {
+        self.live(io).map_err(SourceReceiptError::Run)?;
+        self.flow
+            .take_source_receipt(lease, source)
+            .map_err(SourceReceiptError::Refused)
+    }
+
+    pub(in crate::flow) fn release_source_receipt(
+        &mut self,
+        lease: &crate::flow::ledger::SourceLease,
+        source: &weaver_types::state_flow::SourceBlockId,
+    ) -> Result<(), crate::flow::ledger::LedgerError> {
+        self.flow.release_source_receipt(lease, source)
+    }
+
+    pub(in crate::flow) fn release_source_lease(
+        &mut self,
+        lease: crate::flow::ledger::SourceLease,
+    ) -> Result<
+        (),
+        (
+            crate::flow::ledger::SourceLease,
+            crate::flow::ledger::LedgerError,
+        ),
+    > {
+        self.flow.release_source_lease(lease)
     }
 }

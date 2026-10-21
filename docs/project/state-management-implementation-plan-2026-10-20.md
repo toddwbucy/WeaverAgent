@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for whole-output checks.
+Updated: 2026-10-21 for request sources and receipt custody.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -43,8 +43,10 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H1t | H1s | Recorded template transcript and private certificate, Spec 02 and harness amendment |
 | H1f | H1t | Exact registered source disposition and committed filing custody, harness amendment |
 | H1o | H1f | Complete recorded model-output checks, Spec 02 OUTPUT-UNIT |
-| H1b2 | H1b1, H1i, H1s, H1t, H1f, H1o, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
-| H2 | H1b2, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
+| H1q | H1o | Per-generation source receipt leases and original request association, Specs 02 and 05 |
+| H2a | H1q | Committed opening and terminal accounting for undispatched requests, Spec 05 |
+| H1b2 | H1b1, H1i, H1s, H1t, H1f, H1o, H1q, H2a, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
+| H2 | H1b2, H2a, IN1 | Executing pair lifecycle and gate containment, Spec 05 and gate amendment |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
 | H4 | H2, H3b | Plan operations and review evidence, Spec 07 and admin amendment |
@@ -214,6 +216,29 @@ restored harness suite passes 822 tests with zero failures and 17 inherited igno
 instruments. All 27 added tests run. Twelve compiled protective probes fail their
 intended assertions, with exact restoration independently checked. Lint, formatting,
 lock and documentation checks pass. The Planner grade remains owed.
+
+H1q is draft [PR #209][request-accounting], after #208. Its
+[implementation record][request-accounting-record] closes
+per-request source custody without an ordinary sibling filing barrier and derives
+original request identities from the complete recorded generation. Pair opening,
+repair and terminal accounting remain owed. Malformed recall still needs a Spec
+amendment defining its typed refusal. No runtime policy is inferred from that gap.
+The restored harness suite passes 871 tests with zero failures and 17 inherited
+ignored instruments. All 49 added tests run. Thirteen compiled protective probes
+fail their intended assertions, with exact restoration independently checked. Lint,
+formatting, lock and documentation checks pass. The Planner grade remains owed.
+
+H2a is draft [PR #210][pair-accounting], after #209. Its
+[implementation record][pair-accounting-record] covers
+committed openings and not_dispatched terminals for every accepted original request
+that the caller bars from execution. Private receipt custody constructs the retained
+completion and harness notice. Stop and unload preserve owed filings, and frozen
+pair facts enter the halt account. External execution, repaired sends, inward reads,
+review authorization, retry lineage, boot repair and placement acknowledgement remain
+owed. The restored harness suite passes 902 tests with zero failures and 17 inherited
+ignored instruments. All 31 added tests run, and twelve compiled protective probes
+fail their intended assertions with exact source restoration. Lint, formatting,
+lock, editorial and link checks pass. The Planner grade remains owed.
 
 P1a adds strict draft/bound declaration parsing, admin-owned canonical TOML,
 strict binding/index/guard codecs and descriptor-held artifact verification. It is
@@ -440,3 +465,9 @@ quality, decoder capacity, throughput or absence of paging waits.
 [filing-receipts]: https://github.com/toddwbucy/WeaverAgent/pull/207
 [output-checks-record]: state-management-output-checks-2026-10-21.md
 [output-checks]: https://github.com/toddwbucy/WeaverAgent/pull/208
+
+[request-accounting-record]: state-management-request-accounting-2026-10-21.md
+[request-accounting]: https://github.com/toddwbucy/WeaverAgent/pull/209
+
+[pair-accounting-record]: state-management-pair-accounting-2026-10-21.md
+[pair-accounting]: https://github.com/toddwbucy/WeaverAgent/pull/210

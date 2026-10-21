@@ -102,7 +102,7 @@ impl SourceDisposition {
         }
     }
 
-    fn bytes(&self) -> u64 {
+    pub(super) fn bytes(&self) -> u64 {
         match self {
             Self::Committed(source) => source.terminal.bytes,
             Self::CorrectlyRejected(source) => source.terminal.bytes,
@@ -168,6 +168,15 @@ impl ReceiptSet {
             (self.released && !self.cancelled)
                 .then_some(slot.disposition.as_ref())
                 .flatten()
+        })
+    }
+
+    /// Evidence for the frozen halt account. This never releases a receipt or
+    /// changes consumer ownership, including when its enclosing wait has failed.
+    pub(in crate::flow) fn has_recorded_commit(&self, source: &SourceBlockId) -> bool {
+        self.slots.iter().any(|slot| {
+            &slot.source == source
+                && matches!(slot.disposition, Some(SourceDisposition::Committed(_)))
         })
     }
 
