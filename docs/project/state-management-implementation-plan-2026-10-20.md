@@ -192,7 +192,8 @@ valid capture interleaving attempt. Exact source restoration and the component s
 are independently reviewed. Production grammar, the complete compiled inventory,
 runtime expansion and paired boot/forced rollback remain owed in C1b/C1c and H1b2.
 
-H1f follows #206. Its [implementation record][filing-receipts-record] covers one
+H1f is draft [PR #207][filing-receipts], after #206. Its
+[implementation record][filing-receipts-record] covers one
 registered source transaction through the recorder, classifier, actual member
 receipt and terminal recording. It preserves committed sources separately from
 correct rejection. It supplies receipt evidence to future pair, mark and selection
@@ -424,3 +425,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [template-certification-record]: state-management-template-certification-2026-10-21.md
 [template-certification]: https://github.com/toddwbucy/WeaverAgent/pull/206
 [filing-receipts-record]: state-management-filing-receipts-2026-10-21.md
+[filing-receipts]: https://github.com/toddwbucy/WeaverAgent/pull/207

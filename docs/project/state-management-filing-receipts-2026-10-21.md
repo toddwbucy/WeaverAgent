@@ -1,6 +1,6 @@
 # Harness filing receipt custody
 
-Date: 2026-10-21. Status: implementation under review.
+Date: 2026-10-21. Status: draft [PR #207][draft], Planner grade owed.
 
 This slice follows [PR #206][base]. It completes the caller-facing disposition
 handoff from [HARNESS-LEDGER][harness]. A registered consumer receives the original
@@ -91,6 +91,7 @@ for the serving recall payload. No new wire vocabulary or production classifier
 qualification is part of this slice.
 
 [base]: https://github.com/toddwbucy/WeaverAgent/pull/206
+[draft]: https://github.com/toddwbucy/WeaverAgent/pull/207
 [recall]: https://github.com/toddwbucy/WeaverAgent/pull/189
 [harness]: ../crates/state-management/weaver-harness-Spec-amendment.md
 [pairs]: ../crates/state-management/state-management-spec-05-tool-pairs.md
