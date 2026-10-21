@@ -366,7 +366,15 @@ impl RecordingContext {
         if self.pairs.is_complete() {
             return Ok(PairProgress::Complete);
         }
-        let next = if let Some((call, record)) = self.pairs.next_opening() {
+        // Spec 05 permits overlapping openings but does not require them. This
+        // execution owner has one receipt wait: finish its first pair before
+        // another opening can acquire that wait or obstruct the first answer.
+        let opening = if self.pairs.has_effective() {
+            self.pairs.next_execution_opening()
+        } else {
+            self.pairs.next_opening()
+        };
+        let next = if let Some((call, record)) = opening {
             Some((
                 call.clone(),
                 PairRecordPhase::Opening,
@@ -511,6 +519,7 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         let leg = self.pair_work.as_ref().unwrap().leg.as_ref().unwrap();
+        let terminal = leg.phase == PairRecordPhase::Terminal;
         if leg.recorded.as_ref().map(|source| source.sequence.0) != Some(completion.sequence().0)
             || completion.receipts().sources().count() != 1
         {
@@ -542,6 +551,9 @@ impl RecordingContext {
             return Err(self.pair_fault(io, format!("pair receipt mismatch: {error:?}")));
         }
         self.pair_work.as_mut().unwrap().leg = None;
+        if terminal && self.pairs.has_effective() && !self.pairs.is_complete() {
+            self.begin_next_pair_send_wait(io)?;
+        }
         Ok(())
     }
 

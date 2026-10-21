@@ -346,7 +346,42 @@ impl RecordingContext {
             .elapsed_ns;
         let bound = AbsoluteBound::after(self.last_ns, elapsed.0)
             .map_err(|error| self.pair_fault(io, format!("terminal wait: {error}")))?;
-        self.arm(PumpDeadline::Decision, bound, io)?;
+        // The caller checked live before consuming the answer or withdrawing
+        // the send. Install its terminal wait without yielding after custody
+        // has changed; the next live check still honors an earlier Leave.
+        self.deadlines
+            .arm(PumpDeadline::Decision, bound)
+            .map_err(|error| self.pair_fault(io, format!("terminal wait: {error}")))?;
+        self.pair_work.as_mut().unwrap().bound = Some(bound);
+        Ok(())
+    }
+
+    /// The previous terminal receipt has completed its barrier. A later call's
+    /// opening/send now blocks the next decision and starts a distinct measured
+    /// window. Partial progress within either barrier never renews its bound.
+    pub(super) fn begin_next_pair_send_wait(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        // take_owned_filing checked this boundary before consuming the terminal
+        // receipt. Its installation and the next wait are one owner transition:
+        // another live/arm check here could yield Leave after losing that
+        // continuation, or after disarming the previous wait.
+        self.pair_wait_matches(io)?;
+        let elapsed = self
+            .load_duty
+            .as_ref()
+            .expect("recorded load")
+            .instruction
+            .decision_wait
+            .elapsed_ns
+            .0;
+        let bound = AbsoluteBound::after(self.last_ns, elapsed)
+            .map_err(|error| self.pair_fault(io, format!("next send wait: {error}")))?;
+        self.deadlines.disarm(PumpDeadline::Decision);
+        self.deadlines
+            .arm(PumpDeadline::Decision, bound)
+            .map_err(|error| self.pair_fault(io, format!("next send wait: {error}")))?;
         self.pair_work.as_mut().unwrap().bound = Some(bound);
         Ok(())
     }

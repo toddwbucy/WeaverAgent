@@ -51,6 +51,9 @@ impl ReadTransaction {
 impl RecordingContext {
     /// A busy caller retains its selector and receives no request identity or
     /// new wait. Fresh-history filing barriers remain an explicit caller duty.
+    /// This external entry excludes an owned pair, including gaps between its
+    /// legs. Spec 05's future inward execution needs an explicit pair-owned read
+    /// entry; it must not borrow this unrelated consumer's admission path.
     #[allow(clippy::result_large_err)] // Return owned inputs without allocating on refusal.
     pub(in crate::flow) fn begin_read(
         &mut self,
@@ -82,15 +85,23 @@ impl RecordingContext {
             || self.member_capture.is_some()
             || self.output.is_some()
             || self.filing.is_some()
+            || self.pair_work.is_some()
             || self.templates_block_content()
             || self.input.snapshot().is_some()
             || self.input_author.is_some()
+            || self.input_turn.is_some()
             || self.repair_blocks_external()
+            || self.waiting_content.is_some()
+            || self.completed_author.is_some()
+            || self.barrier.pending().is_some()
+            || self.flow.has_pending_record()
             || self.flow.pending_control().is_some()
             || self.flow.pending_check().is_some()
             || self.flow.operation_completion().is_some()
             || !self.flow.state().outstanding().is_empty()
             || self.flow.state().held_measurement().is_some()
+            || self.deadlines.get(PumpDeadline::Gate).is_some()
+            || self.deadlines.get(PumpDeadline::Cut).is_some()
             || self.deadlines.get(PumpDeadline::StateControl).is_some()
         {
             return Err(ReadBeginError {

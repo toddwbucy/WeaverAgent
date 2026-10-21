@@ -503,6 +503,386 @@ fn a_later_page_refusal_discards_partial_data_only_after_snapshot_release() {
 }
 
 #[test]
+fn refusal_codes_from_other_legs_close_the_read_channel_without_a_guessed_release() {
+    for code in [
+        s::ReadRefusalCode::ReadBusy,
+        s::ReadRefusalCode::UnknownSnapshot,
+        s::ReadRefusalCode::WrongOffset,
+    ] {
+        let mut member = Member::new();
+        let initial = member.begin();
+        member.respond_protocol_failure(&initial, refused(code));
+        assert_eq!(member.requests.len(), 1);
+    }
+    for code in [
+        s::ReadRefusalCode::InvalidSelector,
+        s::ReadRefusalCode::ReadBusy,
+        s::ReadRefusalCode::ResultTooLarge,
+    ] {
+        let mut member = Member::new();
+        let initial = member.begin();
+        member.respond(&initial, page(7, 0, EMPTY.len(), &EMPTY[..3]));
+        let next = member.next_request();
+        member.respond_protocol_failure(&next, refused(code));
+        assert_eq!(member.requests.len(), 2);
+        assert!(matches!(member.requests[1], s::StateControl::Next { .. }));
+    }
+}
+
+#[test]
+fn read_admission_preserves_pending_pair_and_author_owners() {
+    for pending in 0..5 {
+        let mut member = Member::new();
+        let mut event = super::tests::event(
+            Kind::ModelMeasurement,
+            Some(Payload::ModelMeasurement(
+                serde_json::value::to_raw_value(&serde_json::json!({"pending":"owner"})).unwrap(),
+            )),
+        );
+        event.turn = Some(TurnRef("pending-owner".into()));
+        match pending {
+            0 => {
+                member.run.context.pair_work = Some(super::pair_driver::PairTransaction::new(
+                    AbsoluteBound::after(member.now(), 1_000_000).unwrap(),
+                ));
+            }
+            1 => member.run.context.waiting_content = Some(event),
+            2 => {
+                let sequence = member.run.author(event).unwrap();
+                // A completed author remains owned across a lifecycle yield.
+                member.run.context.completed_author = Some(sequence);
+            }
+            3 => {
+                member.fill_trace();
+                let now = member.now();
+                assert!(matches!(
+                    member.run.context.barrier.submit_authored_with_clock(
+                        event,
+                        RecordPurpose::Observation,
+                        &member.run.context.author,
+                        1,
+                        &mut member.run.context.inbox,
+                        &mut member.run.context.budget,
+                        &mut || Ok(now),
+                    ),
+                    RecordProgress::Pending
+                ));
+                assert!(member.run.context.barrier.pending().is_some());
+                assert!(!member.run.context.flow.has_pending_record());
+            }
+            _ => {
+                let now = member.now();
+                member
+                    .run
+                    .context
+                    .flow
+                    .input_started(
+                        &mut FlowRecording {
+                            barrier: &mut member.run.context.barrier,
+                            inbox: &mut member.run.context.inbox,
+                            budget: &mut member.run.context.budget,
+                            author: &member.run.context.author,
+                        },
+                        &mut member.run.clock,
+                        1.into(),
+                        now,
+                    )
+                    .unwrap();
+                member.fill_trace();
+                member
+                    .run
+                    .clock
+                    .advance_to(
+                        now + member
+                            .run
+                            .context
+                            .declaration
+                            .observation_interval
+                            .elapsed_ns
+                            .0,
+                    )
+                    .unwrap();
+                for _ in 0..16 {
+                    member
+                        .run
+                        .context
+                        .reduce_flow(&mut member.run.clock)
+                        .unwrap();
+                    if member.run.context.flow.has_pending_record() {
+                        break;
+                    }
+                }
+                assert!(member.run.context.flow.has_pending_record());
+            }
+        }
+        let pending_author = format!("{:?}", member.run.context.pending_author());
+        let waiting = member.run.context.waiting_content.is_some();
+        let completed = member.run.context.completed_author;
+        let pending_record = member.run.context.flow.has_pending_record();
+        let pair = member.run.context.pair_work.is_some();
+        assert!(member.run.context.flow.state().outstanding().is_empty());
+        let refused = member
+            .run
+            .context
+            .begin_read(
+                selector(),
+                Some(TurnRef("read-owner".into())),
+                &mut member.run.clock,
+            )
+            .unwrap_err();
+        assert_eq!(
+            refused.refusal,
+            read_driver::ReadBeginRefusal::Busy,
+            "owner {pending}"
+        );
+        assert_eq!(refused.selector, selector());
+        assert_eq!(refused.turn, Some(TurnRef("read-owner".into())));
+        assert!(refused.failure.is_none());
+        assert!(member.run.context.read.is_none());
+        assert!(
+            member
+                .run
+                .context
+                .deadlines
+                .get(PumpDeadline::StateControl)
+                .is_none()
+        );
+        assert!(member.run.context.flow.state().outstanding().is_empty());
+        assert_eq!(
+            format!("{:?}", member.run.context.pending_author()),
+            pending_author
+        );
+        assert_eq!(member.run.context.waiting_content.is_some(), waiting);
+        assert_eq!(member.run.context.completed_author, completed);
+        assert_eq!(member.run.context.flow.has_pending_record(), pending_record);
+        assert_eq!(member.run.context.pair_work.is_some(), pair);
+        assert!(member.run.context.failure().is_none());
+        member.no_request();
+    }
+}
+
+#[test]
+fn read_admission_preserves_gate_and_cut_barriers_without_allocating_a_request() {
+    for key in [PumpDeadline::Gate, PumpDeadline::Cut] {
+        let mut member = Member::new();
+        let bound = AbsoluteBound::after(member.now(), 1_000_000).unwrap();
+        member
+            .run
+            .context
+            .arm(key, bound, &mut member.run.clock)
+            .unwrap();
+        let refused = member
+            .run
+            .context
+            .begin_read(selector(), None, &mut member.run.clock)
+            .unwrap_err();
+        assert_eq!(refused.refusal, read_driver::ReadBeginRefusal::Busy);
+        assert!(refused.failure.is_none());
+        assert!(member.run.context.read.is_none());
+        assert!(member.run.context.flow.pending_control().is_none());
+        assert!(member.run.context.flow.state().outstanding().is_empty());
+        assert!(
+            member
+                .run
+                .context
+                .deadlines
+                .get(PumpDeadline::StateControl)
+                .is_none()
+        );
+        assert_eq!(member.run.context.deadlines.get(key), Some(bound));
+        member.no_request();
+        assert_eq!(member.run.context.complete_wait(key), Some(bound));
+        let admitted = member.begin();
+        assert_eq!(admitted.common().request_id, 2.into());
+        assert!(member.run.context.failure().is_none());
+    }
+}
+
+#[test]
+fn read_admission_preserves_recorded_classifier_release_with_an_empty_author_barrier() {
+    use super::super::ste100_channel::{Receive, Tag};
+
+    let mut input = super::input_tests::InputFixture::new();
+    input
+        .run
+        .author(AuthoredEvent {
+            kind: Kind::MessageAssistant,
+            subsystem: Subsystem::Harness,
+            turn: Some(TurnRef("source-turn".into())),
+            source: super::super::author::AuthoredSource::Model,
+            causal_parent: Some(Sequence(0)),
+            payload: Some(Payload::Message(
+                serde_json::value::to_raw_value(&serde_json::json!({
+                    "role": "assistant", "content": [{"type": "text", "text": "Read file."}]
+                }))
+                .unwrap(),
+            )),
+        })
+        .unwrap();
+    let mut request = None;
+    for _ in 0..128 {
+        input.run.context.reduce_flow(&mut input.run.clock).unwrap();
+        input.classifier_transport();
+        if let Receive::Complete(message) = input.peer.try_receive().unwrap() {
+            assert_eq!(message.tag, Tag::Request);
+            request = Some(
+                s::decode_strict::<s::Ste100Request>(
+                    std::str::from_utf8(&message.payload).unwrap(),
+                )
+                .unwrap(),
+            );
+            break;
+        }
+    }
+    let request = request.expect("selected source crosses the real classifier socket");
+    let reply = s::Ste100Reply {
+        request_id: request.request_id,
+        target: request.target.clone(),
+        scheme_id: request.scheme_id.clone(),
+        result: s::Ste100Result::NotSte100 {
+            code: s::Ste100DefectCode::NonSte100,
+            detail: "synthetic source rejection".into(),
+            spans: vec![],
+        },
+    };
+    input.reply(&reply);
+    input
+        .run
+        .context
+        .flow
+        .interrupt_classifier_terminal_probes_for_test(1);
+    for _ in 0..128 {
+        input.run.context.reduce_flow(&mut input.run.clock).unwrap();
+        if input
+            .run
+            .context
+            .flow
+            .pending_classifier_recorded_request()
+            .is_some()
+        {
+            break;
+        }
+    }
+    let context = &mut input.run.context;
+    assert!(context.flow.pending_classifier_recorded_request().is_some());
+    assert!(context.flow.has_pending_record());
+    assert!(context.barrier.pending().is_none());
+    assert!(context.waiting_content.is_none());
+    assert!(context.completed_author.is_none());
+    assert!(context.output.is_none());
+    assert!(context.input.snapshot().is_none());
+    assert!(context.flow.pending_check().is_none());
+    assert!(context.flow.pending_control().is_none());
+    assert!(context.flow.operation_completion().is_none());
+    assert!(context.flow.state().outstanding().is_empty());
+    assert!(context.flow.state().held_measurement().is_none());
+    let refused = context
+        .begin_read(selector(), None, &mut input.run.clock)
+        .unwrap_err();
+    assert_eq!(refused.refusal, read_driver::ReadBeginRefusal::Busy);
+    assert!(refused.failure.is_none());
+    assert!(context.read.is_none());
+    assert!(context.deadlines.get(PumpDeadline::StateControl).is_none());
+    assert!(context.flow.pending_control().is_none());
+    assert!(context.flow.has_pending_record());
+    assert_eq!(context.flow.classifier().outstanding(), Some(&request));
+    assert_eq!(context.flow.classifier().held(), Some(&reply));
+    assert!(context.failure().is_none());
+    assert_eq!(input.records(Kind::Ste100Result).len(), 1);
+    input.run.context.reduce_flow(&mut input.run.clock).unwrap();
+    assert!(
+        input
+            .run
+            .context
+            .flow
+            .pending_classifier_recorded_request()
+            .is_none()
+    );
+    assert_eq!(input.records(Kind::Ste100Result).len(), 1);
+}
+
+struct InputHandoffClock {
+    reads: usize,
+}
+
+impl PumpIo for InputHandoffClock {
+    fn now(&mut self) -> std::io::Result<u64> {
+        self.reads += 1;
+        Ok(if self.reads <= 4 { 104 } else { 109 })
+    }
+
+    fn wait(&mut self, _: &[WaitInterest<'_>], _: Option<u64>) -> std::io::Result<WaitOutcome> {
+        panic!("input handoff records before its lifecycle interruption");
+    }
+}
+
+#[test]
+fn read_admission_preserves_an_interrupted_input_source_handoff() {
+    let mut input = super::input_tests::InputFixture::new();
+    input.begin(weaver_types::TurnFrame::carry_from(
+        br#"{"text":"Read file."}"#,
+        42,
+    ));
+    let (_, _, token) = input.accepted_token();
+    let bound = AbsoluteBound::after(104, 5).unwrap();
+    input
+        .run
+        .context
+        .arm(PumpDeadline::Leave, bound, &mut input.run.clock)
+        .unwrap();
+    let mut clock = InputHandoffClock { reads: 0 };
+    let interrupted = input
+        .run
+        .context
+        .consume_input(token, TurnRef("input-owner".into()), &mut ports(&mut clock))
+        .unwrap_err();
+    assert_eq!(
+        interrupted.failure,
+        RunFailure::Wait {
+            key: PumpDeadline::Leave,
+            bound
+        }
+    );
+    assert!(input.run.context.input_turn.is_some());
+    let snapshot = input.run.context.input.snapshot();
+    let completed = input.run.context.completed_author;
+    input
+        .run
+        .context
+        .complete_wait(PumpDeadline::Leave)
+        .unwrap();
+    input.run.clock.advance_to(109).unwrap();
+    let refused = input
+        .run
+        .context
+        .begin_read(selector(), None, &mut input.run.clock)
+        .unwrap_err();
+    assert_eq!(refused.refusal, read_driver::ReadBeginRefusal::Busy);
+    assert!(refused.failure.is_none());
+    assert!(input.run.context.input_turn.is_some());
+    assert_eq!(input.run.context.input.snapshot(), snapshot);
+    assert_eq!(input.run.context.completed_author, completed);
+    assert!(
+        input
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::StateControl)
+            .is_none()
+    );
+    assert!(input.run.context.read.is_none());
+    assert!(input.run.context.failure().is_none());
+    assert!(
+        input
+            .run
+            .context
+            .resume_input_turn(&mut ports(&mut input.run.clock))
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
 fn read_refuses_another_begin_and_generic_consumers_cannot_steal_its_completion() {
     let mut member = Member::new();
     let initial = member.begin();

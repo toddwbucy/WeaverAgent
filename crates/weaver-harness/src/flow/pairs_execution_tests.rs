@@ -111,19 +111,26 @@ fn terminal_receipt(
     ended: &PairEnded,
     gate: bool,
 ) -> CommittedSource {
-    let raw_envelope = envelope(
+    terminal_receipt_attributed(
+        scheme,
         sequence,
-        "tool.call.completed",
-        "tool",
+        ended,
         if gate { "tool" } else { "loop" },
-    );
-    let raw_envelope: Arc<str> = if gate {
-        raw_envelope
-            .replace("\"subsystem\":\"harness\"", "\"subsystem\":\"gate\"")
-            .into()
-    } else {
-        raw_envelope
-    };
+        if gate { "gate" } else { "harness" },
+    )
+}
+
+fn terminal_receipt_attributed(
+    scheme: &SchemeDeclaration,
+    sequence: u64,
+    ended: &PairEnded,
+    origin: &str,
+    subsystem: &str,
+) -> CommittedSource {
+    let raw_envelope = envelope(sequence, "tool.call.completed", "tool", origin);
+    let mut raw_envelope: serde_json::Value = serde_json::from_str(&raw_envelope).unwrap();
+    raw_envelope["subsystem"] = subsystem.into();
+    let raw_envelope = serde_json::to_string(&raw_envelope).unwrap().into();
     let copy = AdmittedCopy::Pair(PairCopy {
         source_envelope: raw_envelope,
         partition_rule_id: "pairs".into(),
@@ -179,6 +186,9 @@ fn execution_requires_effective_owner_and_each_of_the_two_commits() {
         PairError::WrongPhase
     );
     open(&mut ledger, &call, &scheme, 30);
+    // Pin this exact readiness predicate independently of bind_execution's
+    // second validation: a filed opening does not replace the statement receipt.
+    assert!(ledger.next_ready().is_none());
     assert_eq!(
         ledger.bind_execution(&call, exchange(1), 1000).unwrap_err(),
         PairError::WrongPhase
@@ -194,6 +204,59 @@ fn execution_requires_effective_owner_and_each_of_the_two_commits() {
     );
     open(&mut ledger, &call, &scheme, 30);
     dispatch(&mut ledger, &call, 1);
+}
+
+#[test]
+fn terminal_receipt_checks_origin_and_subsystem_independently() {
+    for gate in [true, false] {
+        let (mut ledger, call, scheme) = ready();
+        if gate {
+            dispatch(&mut ledger, &call, 1);
+            ledger.observe_gate(received(1, result())).unwrap();
+        } else {
+            ledger
+                .refuse_ungranted(&call, "not granted".into())
+                .unwrap();
+        }
+        let ending = ledger.next_terminal().unwrap().1.clone();
+        ledger
+            .mark_authoring(&call, PairRecordPhase::Terminal)
+            .unwrap();
+        ledger
+            .mark_recorded(&call, PairRecordPhase::Terminal, event_id(40))
+            .unwrap();
+        let (origin, subsystem, wrong_origin, wrong_subsystem) = if gate {
+            ("tool", "gate", "loop", "harness")
+        } else {
+            ("loop", "harness", "tool", "gate")
+        };
+        for (candidate_origin, candidate_subsystem) in
+            [(wrong_origin, subsystem), (origin, wrong_subsystem)]
+        {
+            let (held, error) = ledger
+                .install_terminal(
+                    &call,
+                    terminal_receipt_attributed(
+                        &scheme,
+                        40,
+                        &ending,
+                        candidate_origin,
+                        candidate_subsystem,
+                    ),
+                )
+                .unwrap_err();
+            assert_eq!(error, PairError::WrongReceipt);
+            assert_eq!(held.source(), &event_id(40));
+            assert!(ledger.completed(&call).unwrap().is_none());
+        }
+        ledger
+            .install_terminal(
+                &call,
+                terminal_receipt_attributed(&scheme, 40, &ending, origin, subsystem),
+            )
+            .unwrap();
+        assert!(ledger.completed(&call).unwrap().is_some());
+    }
 }
 
 #[test]
@@ -703,6 +766,64 @@ fn retry_requires_a_committed_same_run_external_predecessor_with_exact_request()
         PairError::InvalidLineage
     );
     assert!(ledger.next_opening().unwrap().1.retry_of.is_none());
+}
+
+#[test]
+fn retry_can_name_a_filed_terminal_in_the_active_batch_before_its_own_opening() {
+    let (scheme, effective) = make_effective(
+        vec![
+            text("Read files."),
+            call("ls"),
+            text("Read files."),
+            call("ls"),
+        ],
+        vec![accepted("Read files."), accepted("Read files.")],
+    );
+    let calls: Vec<_> = effective
+        .requests()
+        .iter()
+        .map(|request| request.call_id.clone())
+        .collect();
+    let mut ledger = PairLedger::new("session".into(), "run".into(), scheme.clone()).unwrap();
+    ledger.accept_effective(effective).unwrap();
+    statement(&mut ledger, &scheme);
+    ledger
+        .install_statement(statement_receipt(
+            &scheme,
+            source(2),
+            "Read files.",
+            vec![binding("Read files.")],
+        ))
+        .unwrap();
+    open(&mut ledger, &calls[0], &scheme, 30);
+    assert!(ledger.next_execution_opening().is_none());
+    dispatch(&mut ledger, &calls[0], 1);
+    ledger.observe_gate(received(1, result())).unwrap();
+    assert_eq!(
+        ledger.set_retry_of(&calls[1], &calls[0]).unwrap_err(),
+        PairError::InvalidLineage
+    );
+    close(&mut ledger, &calls[0], &scheme, 40);
+    ledger.set_retry_of(&calls[1], &calls[0]).unwrap();
+    let next = ledger.next_execution_opening().unwrap();
+    assert_eq!(next.0, &calls[1]);
+    assert_eq!(next.1.retry_of.as_ref(), Some(&calls[0]));
+    open(&mut ledger, &calls[1], &scheme, 50);
+    dispatch(&mut ledger, &calls[1], 2);
+    ledger.observe_gate(received(2, result())).unwrap();
+    close(&mut ledger, &calls[1], &scheme, 60);
+    let completed = ledger.completed(&calls[1]).unwrap().unwrap();
+    assert_eq!(completed.started().retry_of.as_ref(), Some(&calls[0]));
+    assert_eq!(completed.ended().execution, Some(exchange(2)));
+    // Caller-supplied execution lineage belongs to the pair's opening. The
+    // sealed model/repair proof retains the exact original request metadata.
+    let effective = ledger.finish_effective().unwrap();
+    assert!(
+        effective
+            .requests()
+            .iter()
+            .all(|request| request.retry_of.is_none())
+    );
 }
 
 #[test]

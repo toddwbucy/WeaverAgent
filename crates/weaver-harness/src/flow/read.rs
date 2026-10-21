@@ -182,6 +182,40 @@ impl PageRead {
                     detail,
                 },
             ) => {
+                let allowed = match self.phase {
+                    // STATE-PAGES: a fresh read owns no cursor. A cursor-only
+                    // refusal would reveal a broken channel state, not a query
+                    // outcome the caller can clean up with a guessed identity.
+                    Phase::Read => matches!(
+                        code,
+                        ReadRefusalCode::UnsupportedOperation
+                            | ReadRefusalCode::InvalidSelector
+                            | ReadRefusalCode::WrongSeed
+                            | ReadRefusalCode::NotFound
+                            | ReadRefusalCode::UnknownSpan
+                            | ReadRefusalCode::SpanOpen
+                            | ReadRefusalCode::SpanPending
+                            | ReadRefusalCode::PartialPair
+                            | ReadRefusalCode::CounterExhausted
+                            | ReadRefusalCode::ResultTooLarge
+                            | ReadRefusalCode::ResultUnavailable
+                            | ReadRefusalCode::AnswerTooLarge
+                    ),
+                    // Later page allocation/encoding can fail without dropping
+                    // the acquired cursor (STATE-PAGES and STATE-CHANNEL's
+                    // complete ANSWER_BOUND). Query-selection codes cannot.
+                    Phase::Next => matches!(
+                        code,
+                        ReadRefusalCode::UnknownSnapshot
+                            | ReadRefusalCode::WrongOffset
+                            | ReadRefusalCode::ResultUnavailable
+                            | ReadRefusalCode::AnswerTooLarge
+                    ),
+                    _ => unreachable!("read refusals are matched only on read and next"),
+                };
+                if !allowed {
+                    return self.fail("read refusal is not valid for its request leg");
+                }
                 self.refusal = Some(ReadFailure::Refused {
                     code: *code,
                     detail: detail.clone(),

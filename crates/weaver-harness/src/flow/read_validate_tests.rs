@@ -55,7 +55,7 @@ fn binding() -> s::ReadBinding {
             condition: None,
             condition_span: None,
             nouns: vec![s::NounBinding {
-                value: "é".into(),
+                value: "\u{e9}".into(),
                 span: span(5, 7),
             }],
         },
@@ -64,8 +64,8 @@ fn binding() -> s::ReadBinding {
 fn entry() -> s::ReadEntry {
     s::ReadEntry {
         source: s::ReadSource::Event(Box::new(event_source(5, "message.assistant"))),
-        raw_block: to_raw_value(&serde_json::json!({"type":"text","text":"Read é."})).unwrap(),
-        text: "Read é.".into(),
+        raw_block: to_raw_value(&serde_json::json!({"type":"text","text":"Read \u{e9}."})).unwrap(),
+        text: "Read \u{e9}.".into(),
         bindings: vec![binding()],
         selected_span: None,
         step_query: None,
@@ -79,7 +79,7 @@ fn result(entry: s::ReadEntry) -> s::QueryResult {
 }
 fn history() -> s::ReadSelector {
     s::ReadSelector::History {
-        noun: "é".into(),
+        noun: "\u{e9}".into(),
         verb: Some("read".into()),
         condition: None,
     }
@@ -262,7 +262,7 @@ fn original_raw_text_and_event_index_survive_without_normalization() {
     assert!(validate(&history(), &result(bad)).is_err());
     let mut bad = original.clone();
     bad.raw_block = serde_json::value::RawValue::from_string(
-        r#"{"type":"text","text":"Read é.","text":"Read é."}"#.into(),
+        r#"{"type":"text","text":"Read \u00e9.","text":"Read \u00e9."}"#.into(),
     )
     .unwrap();
     assert!(validate(&history(), &result(bad)).is_err());
@@ -317,7 +317,7 @@ fn filtered_reads_keep_original_ordinals_and_exact_selector_values() {
     };
     assert!(validate(&changed, &result(entry())).is_err());
     let changed = s::ReadSelector::History {
-        noun: "é".into(),
+        noun: "\u{e9}".into(),
         verb: Some("write".into()),
         condition: None,
     };
@@ -329,9 +329,54 @@ fn filtered_reads_keep_original_ordinals_and_exact_selector_values() {
 }
 
 #[test]
+fn filtered_span_bindings_keep_unique_increasing_original_ordinals() {
+    let mut selected = entry();
+    selected.text = "Read \u{e9}. Write it.".into();
+    selected.raw_block =
+        to_raw_value(&serde_json::json!({"type":"text","text":selected.text})).unwrap();
+    selected.bindings[0].ordinal = 2.into();
+    selected.bindings.push(s::ReadBinding {
+        ordinal: 7.into(),
+        value: s::Binding {
+            statement_span: span(9, 18),
+            verb: "write".into(),
+            verb_span: span(9, 14),
+            nouns: vec![s::NounBinding {
+                value: "it".into(),
+                span: span(15, 17),
+            }],
+            condition: None,
+            condition_span: None,
+        },
+    });
+    selected.selected_span = Some(s::SelectedSpan {
+        span_ref: span_ref(),
+        start: 0.into(),
+        end: 18.into(),
+    });
+    let selector = s::ReadSelector::Span {
+        seed_id: "seed".into(),
+        local_id: 4.into(),
+        revision: 1.into(),
+    };
+    // A filtered span can retain gaps in the original ordinals. It cannot
+    // duplicate or reverse them, even though each binding is byte-valid and
+    // the complete-sequence check used by conversation/subjects does not apply.
+    assert!(validate(&selector, &result(selected.clone())).is_ok());
+    for ordinal in [2, 1] {
+        let mut bad = selected.clone();
+        bad.bindings[1].ordinal = ordinal.into();
+        assert!(
+            validate(&selector, &result(bad)).is_err(),
+            "ordinal {ordinal}"
+        );
+    }
+}
+
+#[test]
 fn subjects_and_conversation_require_complete_unique_binding_and_source_sequences() {
     let mut full = entry();
-    full.text = "Read é. Write it.".into();
+    full.text = "Read \u{e9}. Write it.".into();
     full.raw_block = to_raw_value(&serde_json::json!({"type":"text","text":full.text})).unwrap();
     full.bindings.push(s::ReadBinding {
         ordinal: 1.into(),
@@ -348,7 +393,7 @@ fn subjects_and_conversation_require_complete_unique_binding_and_source_sequence
         },
     });
     let subjects = s::ReadSelector::Subjects {
-        nouns: vec!["é".into()],
+        nouns: vec!["\u{e9}".into()],
     };
     let conversation = s::ReadSelector::Conversation {
         last_turns: 1.into(),

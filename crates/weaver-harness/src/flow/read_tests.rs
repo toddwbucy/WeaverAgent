@@ -111,7 +111,7 @@ fn final_page_is_not_a_result_until_the_exact_snapshot_releases_once() {
 }
 
 #[test]
-fn every_initial_read_refusal_preserves_code_detail_and_acquires_no_snapshot() {
+fn valid_initial_read_refusals_preserve_code_detail_and_acquire_no_snapshot() {
     for code in [
         ReadRefusalCode::UnsupportedOperation,
         ReadRefusalCode::InvalidSelector,
@@ -122,9 +122,6 @@ fn every_initial_read_refusal_preserves_code_detail_and_acquires_no_snapshot() {
         ReadRefusalCode::SpanPending,
         ReadRefusalCode::PartialPair,
         ReadRefusalCode::CounterExhausted,
-        ReadRefusalCode::ReadBusy,
-        ReadRefusalCode::UnknownSnapshot,
-        ReadRefusalCode::WrongOffset,
         ReadRefusalCode::ResultTooLarge,
         ReadRefusalCode::ResultUnavailable,
         ReadRefusalCode::AnswerTooLarge,
@@ -149,30 +146,94 @@ fn every_initial_read_refusal_preserves_code_detail_and_acquires_no_snapshot() {
 
 #[test]
 fn later_refusal_owns_the_snapshot_until_one_release_and_keeps_original_detail() {
+    for code in [
+        ReadRefusalCode::UnknownSnapshot,
+        ReadRefusalCode::WrongOffset,
+        ReadRefusalCode::ResultUnavailable,
+        ReadRefusalCode::AnswerTooLarge,
+    ] {
+        let raw = empty();
+        let mut read = PageRead::new(selector(), 1_000.into()).unwrap();
+        round(&mut read, 1, page(&raw, 0, 3)).unwrap();
+        assert_eq!(
+            read.next_control(),
+            Some(StateControl::Next {
+                snapshot_id: 7.into(),
+                offset: 3.into()
+            })
+        );
+        assert_eq!(
+            round(&mut read, 2, refuse(code)).unwrap(),
+            ReadAdvance::Pending
+        );
+        assert!(read.take().is_none());
+        release(&mut read, 3);
+        assert_eq!(
+            read.take().unwrap().unwrap_err(),
+            ReadFailure::Refused {
+                code,
+                detail: "exact store detail".into(),
+            }
+        );
+        unavailable(&mut read);
+    }
+}
+
+#[test]
+fn refusal_codes_from_another_read_leg_freeze_without_guessing_cleanup() {
+    for code in [
+        ReadRefusalCode::ReadBusy,
+        ReadRefusalCode::UnknownSnapshot,
+        ReadRefusalCode::WrongOffset,
+    ] {
+        let mut read = PageRead::new(selector(), 1_000.into()).unwrap();
+        assert!(round(&mut read, 1, refuse(code)).is_err(), "{code:?}");
+        assert!(read.snapshot.is_none());
+        assert!(read.refusal.is_none());
+        unavailable(&mut read);
+    }
+    for code in [
+        ReadRefusalCode::UnsupportedOperation,
+        ReadRefusalCode::InvalidSelector,
+        ReadRefusalCode::WrongSeed,
+        ReadRefusalCode::NotFound,
+        ReadRefusalCode::UnknownSpan,
+        ReadRefusalCode::SpanOpen,
+        ReadRefusalCode::SpanPending,
+        ReadRefusalCode::PartialPair,
+        ReadRefusalCode::CounterExhausted,
+        ReadRefusalCode::ReadBusy,
+        ReadRefusalCode::ResultTooLarge,
+    ] {
+        let raw = empty();
+        let mut read = PageRead::new(selector(), 1_000.into()).unwrap();
+        round(&mut read, 1, page(&raw, 0, 3)).unwrap();
+        assert!(round(&mut read, 2, refuse(code)).is_err(), "{code:?}");
+        assert_eq!(read.snapshot, Some(7.into()));
+        assert_eq!(read.bytes, raw[..3]);
+        assert!(read.refusal.is_none());
+        unavailable(&mut read);
+    }
+}
+
+#[test]
+fn internally_valid_repeated_or_skipped_page_offsets_cannot_change_reassembly() {
     let raw = empty();
-    let mut read = PageRead::new(selector(), 1_000.into()).unwrap();
-    round(&mut read, 1, page(&raw, 0, 3)).unwrap();
-    assert_eq!(
-        read.next_control(),
-        Some(StateControl::Next {
-            snapshot_id: 7.into(),
-            offset: 3.into()
-        })
-    );
-    assert_eq!(
-        round(&mut read, 2, refuse(ReadRefusalCode::ResultUnavailable)).unwrap(),
-        ReadAdvance::Pending
-    );
-    assert!(read.take().is_none());
-    release(&mut read, 3);
-    assert_eq!(
-        read.take().unwrap().unwrap_err(),
-        ReadFailure::Refused {
-            code: ReadRefusalCode::ResultUnavailable,
-            detail: "exact store detail".into(),
-        }
-    );
-    unavailable(&mut read);
+    for offset in [0, 2, 4] {
+        let mut read = PageRead::new(selector(), 1_000.into()).unwrap();
+        round(&mut read, 1, page(&raw, 0, 3)).unwrap();
+        let answer = page(&raw, offset, offset + 3);
+        let StateControlAnswer::ReadPage(value) = &answer else {
+            unreachable!();
+        };
+        assert!(
+            value.decode_octets(1_000.into()).is_ok(),
+            "floor-valid page"
+        );
+        assert!(round(&mut read, 2, answer).is_err(), "offset {offset}");
+        assert_eq!(read.bytes, raw[..3]);
+        unavailable(&mut read);
+    }
 }
 
 #[test]

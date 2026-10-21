@@ -634,8 +634,12 @@ impl PairLedger {
         }
         let entry = self.entry(call)?;
         let prior = self
-            .closed
-            .iter()
+            .active
+            .as_ref()
+            .into_iter()
+            .flat_map(|batch| &batch.entries)
+            .filter_map(|entry| entry.completed.as_ref())
+            .chain(self.closed.iter())
             .find(|pair| &pair.started.call_id == predecessor)
             .ok_or(PairError::InvalidLineage)?;
         if entry.opening_authoring
@@ -944,6 +948,20 @@ impl PairLedger {
             .iter()
             .find(|entry| !entry.opening_authoring)?;
         Some((&entry.started.call_id, &entry.started))
+    }
+
+    /// The execution context shares one receipt wait, so it opens only the
+    /// first unfinished pair. The general ledger still permits overlapping
+    /// openings for callers that retain independent receipt ownership.
+    pub(super) fn next_execution_opening(&self) -> Option<(&CallId, &PairStarted)> {
+        let next = self.next_opening()?;
+        let first = self
+            .active
+            .as_ref()?
+            .entries
+            .iter()
+            .find(|entry| entry.completed.is_none())?;
+        (next.0 == &first.started.call_id).then_some(next)
     }
 
     pub(super) fn next_terminal(&self) -> Option<(&CallId, &PairEnded)> {
