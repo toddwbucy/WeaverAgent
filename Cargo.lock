@@ -2016,6 +2016,7 @@ dependencies = [
  "nix",
  "safetensors 0.7.0",
  "serde_json",
+ "sha2",
  "tokenizers 0.21.4",
  "walkdir",
  "weaver-traits",

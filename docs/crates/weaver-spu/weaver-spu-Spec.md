@@ -345,6 +345,12 @@ backend's weights, `half` and `bytemuck` for host-side tensor math,
 `tokenizers` for the artifacts' tokenizers, `blake3` and `walkdir` for the weights
 hash of section 3.
 
+`sha2` supplies SHA-256 for the STE100 scheme, grammar blobs, model manifest and
+manifest-named files under state-management Spec 02 SCHEME and DECLARATION. It uses
+the workspace lock's existing 0.10 package. The older weight-container BLAKE3
+identity keeps its separate meaning. The admission tests pin exact-byte hashing and
+refuse mutated blobs and files before a compiled adapter receives them.
+
 **What does not cross, from a working tree that had it.** No HTTP client and no
 model downloader: an artifact this crate cannot reach is a refused admit, per
 charter section 4.1, and fetching one would make this crate a provisioner of
