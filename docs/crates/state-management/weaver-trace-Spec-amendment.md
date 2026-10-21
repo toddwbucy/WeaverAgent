@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #189
 
 **Version:** 0.22 **Date filed:** 2026-10-20 **Parent:** weaver-trace-PRD
 
@@ -548,8 +548,8 @@ the new read and boot wrappers before deployment. [FLOW-3, TAP-3, SCOPE-1]
 **TRACE-RECALL-CHECK.** Before recording, require a positive snapshot_id and the
 selector's context-free TYPES-READ constraints. Every mirrored identity must meet its
 owning grammar, including nested selector references and every ContentRef and SpanRef.
-Require unique ContentRefs in
-sources and strictly increasing, unique numeric binding_ordinals in each source. Every
+Require unique ContentRefs in sources and strictly increasing, unique numeric
+binding_ordinals in each source. Every
 RecallSpan.source must occur in sources. Each selected interval must have start less
 than end. Repeated equal RecallSpans remain permitted. Apply TRACE-RECALL-BOOT's exact
 single-source, single-selection and Message/end agreement to Boot. A failed check takes
