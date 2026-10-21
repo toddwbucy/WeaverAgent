@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.21 **Date filed:** 2026-10-20 **Parent:** weaver-trace-PRD
+**Version:** 0.22 **Date filed:** 2026-10-20 **Parent:** weaver-trace-PRD
 
 ## 0. What this document is
 
@@ -61,7 +61,8 @@ both the trace and declaration parser. [TAP-1, TAP-3]
 | state.store.measurement | StateStoreMeasurement from Spec 09 | Forbidden measurement | Optional |
 | ste100.result | Ste100ResultRecord, full typed result and correlation | Forbidden, derived classification evidence | Optional |
 | load | Existing load payload plus state_flow: FlowDeclarationRecord and state_start: StateStartRecord | Untapped | Forbidden |
-| message.system, message.restored, recall, save_point | Existing payloads | Forbidden, including boot recall | Existing rule |
+| recall | Payload::RecallRecord with TRACE-RECALL's serving read or boot variant | Forbidden, including boot recall | Forbidden |
+| message.system, message.restored, save_point | Existing payloads | Forbidden | Existing rule |
 | All other kinds | Existing payloads | No selectable surface in this amendment | Existing rule |
 
 `input_id` is a run-local decimal-string counter assigned by the harness at serialized
@@ -460,10 +461,9 @@ assertion. [FLOW-3, FLOW-5, COST-5]
 This replacement applies at the [foundation cutover][cutover]. Until then, the previous
 serving contract remains applicable.
 
-**TRACE-PERSIST.** Extend the existing recall payload with a serving read variant
-holding selector, snapshot_id, sources and spans. Its boot variant additionally holds
-the complete seated Message and end mark. Recall remains unselectable. Define
-trace::SavePointRecord and Payload::SavePointRecord for the serving save_point, with
+**TRACE-PERSIST.** TRACE-RECALL defines the serving read and boot representations of
+the existing recall kind. Recall remains unselectable. Define trace::SavePointRecord
+and Payload::SavePointRecord for the serving save_point, with
 phase requested, confirmed, published, or refused, capture_id, optional artifact_id,
 A/B, location, position and refusal code. A/B use field names dump_sha256 and
 config_sha256. Location is the artifact's territory-relative name, never dump bytes.
@@ -511,6 +511,149 @@ by trace authoring. No dump bytes or captured content enter this record, and the
 kind stays excluded from state. The corpus includes queued expiry and an unload whose
 unbounded drain outlasts save_wait. Altering a window or moving its anchor must fail the
 comparison with the lifecycle frame. [PERSIST-4, TAP-3, COST-4]
+
+### 6.1. Serving recall representation
+
+**TRACE-RECALL.** Add trace-owned serialize-only RecallRecord and
+Payload::RecallRecord. RecallRecord is externally tagged read or boot, with these
+fields in the declared order. Define local mirrors of the referenced floor types, not
+an internal crate dependency. Use TYPES-CANONICAL's compact typed rendering and exact
+DecimalU64 strings. Reason: one complete provenance shape must cover the already
+specified read results and boot evidence. [FLOW-3, SEAM-3, STORE-3, PERSIST-6]
+
+| Type or variant | Fields in serialization order |
+| --- | --- |
+| RecallRecord::Read | selector:ReadSelector, snapshot_id:DecimalU64, sources:Vec<RecallSource>, spans:Vec<RecallSpan> |
+| RecallRecord::Boot | selector:ReadSelector, snapshot_id:DecimalU64, sources:Vec<RecallSource>, spans:Vec<RecallSpan>, message:Box<RawValue>, end_mark:RecallEndMark |
+| RecallSource | source:ContentRef, binding_ordinals:Vec<DecimalU64> |
+| RecallSpan | source:ContentRef, selected_span:RecallSelection |
+| RecallSelection | span_ref:SpanRef, start:DecimalU64, end:DecimalU64 |
+| RecallEndMark | span:SpanRef, end:DecimalU64 |
+
+These are closed objects. Every field is present, including empty arrays. ReadSelector,
+ContentRef, SpanRef and SourceBlockId retain the exact TYPES-READ and TYPES-FILE shapes,
+including every selector variant and its required nullable fields. There is no generic
+JSON selector or result arm. snapshot_id is the acquired positive read snapshot ID,
+never a state request ID. message holds the complete canonical Message JSON and gains
+no dependency on the crate defining Message. Only boot carries message and end_mark.
+[SEAM-3, STORE-3, STORE-5, PERSIST-6]
+
+Both variants license only kind recall, channel internal, origin runtime, subsystem
+harness, with no turn. This retains the old recall turn rule. TRACE-VALIDATION still
+refuses the whole kind, including the boot variant. Diagnostic conversion refuses both
+new variants as OutsideDiagnosticVocabulary, without coercion into the old
+RecallAccount. The legacy recall grammar is unchanged. Serving readers must recognize
+the new read and boot wrappers before deployment. [FLOW-3, TAP-3, SCOPE-1]
+
+**TRACE-RECALL-CHECK.** Before recording, require a positive snapshot_id and the
+selector's context-free TYPES-READ constraints. Every mirrored identity must meet its
+owning grammar, including nested selector references and every ContentRef and SpanRef.
+Require unique ContentRefs in
+sources and strictly increasing, unique numeric binding_ordinals in each source. Every
+RecallSpan.source must occur in sources. Each selected interval must have start less
+than end. Repeated equal RecallSpans remain permitted. Apply TRACE-RECALL-BOOT's exact
+single-source, single-selection and Message/end agreement to Boot. A failed check takes
+the existing invalid-authoring path and never becomes an empty successful recall.
+Reason: representation errors must fail at the authoring seam that can observe them.
+[FLOW-3, STORE-3, STORE-5, MARK-3, SEAM-3]
+
+The harness has the checked QueryResult needed to compare returned binding ordinals,
+UTF-8 boundaries, interval limits and original content bytes. It performs those checks
+before conversion under HARNESS-MATERIAL and HARNESS-RECALL. The trace checks the
+record's structure and its boot Message, not whether a source exists in state. It never
+queries the store or reruns selection to validate recall. [FLOW-3, STORE-3, MARK-3,
+SEAM-3]
+
+**TRACE-RECALL-SOURCES.** Build sources in the traversal order below. Visiting an
+EventSource contributes event:{block_id}, and visiting a SeedSource contributes
+seed:{seed_id,ordinal}. An explicit SourceBlockId contributes event:{block_id} with no
+binding ordinals. A StatementRef contributes its event block with its original binding
+ordinal. Deduplicate sources by exact ContentRef in first-encounter order. Union the
+binding ordinals for each source in increasing numeric order. An empty ordinal list
+means the read cited a source without selecting a binding. It never means binding zero.
+The source identity is not a newly authored event. [STORE-3, STORE-5, SEAM-3]
+
+Visit a ReadEntry's source with every returned ReadBinding.ordinal, then visit its
+step_query.instruction when nonnull, then each attached ReadPair in returned order.
+Visit a ReadPair's statement first, opening_source.source second, and nonnull
+terminal_source.source last. The latter two cite the complete opening and terminal pair
+blocks. They have empty binding ordinals and no byte selection. Do not parse a return
+as another statement or substitute the request's identity for a pair block's identity.
+A metadata citation adds no binding unless the table names a StatementRef. [STORE-2,
+STORE-3, STORE-5, PAIR-1, PAIR-3, PAIR-4, MARK-3]
+
+For each visited ReadEntry with nonnull selected_span, append one RecallSpan containing
+that entry's ContentRef and exact selected_span. Append in entry occurrence order and
+preserve repeated equal occurrences. No pair block, StepQueryRef or metadata reference
+adds a RecallSpan. Sources answer which original blocks and bindings were returned.
+Spans answer which selected intervals occurred, including repeated declared prefixes.
+Neither array contains recalled text or grants placement authority. A binding's
+statement, verb, noun and condition byte spans remain recoverable through its original
+ordinal and the source's traced ste100.result, or the starting artifact for a seed.
+They are not copied into RecallSpan, which records selected_span occurrences only.
+[STORE-3, MARK-3, MARK-6, SEAM-3]
+
+| Selector | Checked QueryResult and exact traversal |
+| --- | --- |
+| history, subjects, statement, condition, span, system_prompt, conversation | entries, visit entries in returned order |
+| span_preview | span_preview, visit entries in returned order, preserve the selector's exact span and through |
+| step_successor | step_successor, visit instruction once, then reference.instruction as a StatementRef, which deduplicates against the checked instruction |
+| open_pairs | open_pairs, visit pairs in returned order |
+| marks | marks, visit open_scopes in returned root-to-leaf order, each opened_source then ended_source when nonnull, spans empty |
+| plan_current | plan_current, no visits for current null, otherwise the PlanSnapshot walk below, spans empty |
+| plan | plan, the PlanSnapshot walk below, spans empty |
+| plan_flags | plan_flags, visit after then through.block_id, spans empty |
+| observations | observations, no content-source visits, sources and spans empty |
+
+For PlanSnapshot, visit operator_source, nonnull lock_source, then last_source. Visit
+steps in their returned ordinal order. For each step, visit instruction as a
+StatementRef, nonnull work.through.block_id, then nonnull closure_source. Finally, if
+broken is nonnull, visit its nonnull proposed_source and then source. This is the entire
+walk. Do not recursively traverse task, review, categories, group_drafts, groups,
+PlanRef, StepId, CallId, SpanRef or digest fields. They are metadata identities, not
+returned content. The marks walk likewise does not turn current_task, parent or
+replacement addresses into selected spans. Reason: metadata reads cite their recorded
+sources without pretending that marked content was fetched. [PLAN-1, PLAN-2, PLAN-3,
+MARK-1, MARK-3, SEAM-3, FLOW-3]
+
+A complete empty entries or open_pairs result produces both arrays empty. An empty
+metadata result follows its row, so plan_current with current null also produces empty
+arrays. A refused or failed read produces no RecallRecord. It follows the existing
+refusal or fault account, including a refusal after an acquired page. A partial result
+cannot be recorded as a smaller success. Reason: an empty answer and no answer have
+different meanings at the decision. [READ-1, SEAM-3, FLOW-3, FLOW-4]
+
+**TRACE-RECALL-BOOT.** Boot uses selector system_prompt and the first checked content
+read of the session. That read has exactly one seed entry, ordinal zero, whose seed_id
+is the loaded state_start.seed_id. Its selected_span has that same seed, local_id zero,
+revision one, start zero and end equal to the complete prompt's decoded UTF-8 byte
+length. It has no step_query or pairs. sources has exactly that seed ContentRef with
+its returned original binding ordinals. spans has exactly that full selected_span.
+Reason: the prompt is held by the seed, not authored or filed again at load. [PROMPT-1,
+PERSIST-5, PERSIST-6, STORE-8, MARK-1]
+
+message is the canonical system-role Message with exactly one Text block, containing
+the complete unchanged decoded prompt. end_mark.span equals that selected SpanRef, and
+end_mark.end equals its end byte offset. This is the stored prompt boundary, not a token
+count, N, argument position or later mark occurrence. The harness checks these fields
+against the loaded seed identity and its completed read before authoring. The trace
+checks their structural agreement and the Message shape before recording. It performs
+no store read and adds no source event for the seed. Later explicit system_prompt reads
+use Read, not Boot, and do not seat a second boot head. [PROMPT-1, PERSIST-6, MARK-1,
+MARK-6, PLACE-1, FLOW-3]
+
+A pass at trace authoring certifies the closed payload shape, canonical bytes, envelope
+license and boot's internal field agreement. It does not certify store contents or
+which history was useful. HARNESS-RECALL owns comparison with the completed read and
+record-before-consumer ordering. No new event kind, state feed, binding or content
+copy is introduced by the representation. [FLOW-3, TAP-3, SEAM-3, STORE-8]
+
+| Claim | Instrument | Protective change that must fail |
+| --- | --- | --- |
+| TRACE-RECALL | Exact typed byte fixtures for both variants and every selector, plus authoring and diagnostic licensing tests | Change a field spelling/order, encode a counter as a number, add an unconstrained payload arm, allow a turn or accept serving recall in diagnostic conversion |
+| TRACE-RECALL-CHECK | Context-free selector and reference cases, duplicate sources and ordinals, missing source citations, reversed intervals and repeated-span positive cases | Accept zero snapshot_id, invalid identity grammar, a duplicate source or ordinal, an uncited span or an empty interval, or reject a repeated selected occurrence |
+| TRACE-RECALL-SOURCES | Shared concrete read/result fixture corpus consumed by trace and harness tests, without a crate dependency | Renumber filtered ordinals, erase a repeated selected-span occurrence, cite a pair under its request identity or manufacture a span from metadata |
+| TRACE-RECALL-BOOT | Seeded boot fixture with complete Message and stored end mark, plus malformed authoring cases | Omit prompt bytes, accept a non-system or extra-block Message, substitute an event for the seed or use a token count as the stored byte end |
 
 ## 7. Open elections and dependencies
 
