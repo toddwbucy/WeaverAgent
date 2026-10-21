@@ -6,21 +6,26 @@ use weaver_trace::Sequence;
 use weaver_trace::serving::{
     Event, Kind, Payload, Recorder, SubmitAttempt, TapFailure, TapOutcome,
 };
-use weaver_types::state_flow::{SourceBlockId, StateStoreMeasurement, Ste100Reply};
+use weaver_types::state_flow::{SourceBlockId, SourcePosition, StateStoreMeasurement, Ste100Reply};
 
+use super::author::{AuthorError, AuthoredEvent, ServingAuthor};
 use super::intake::{FlowInbox, IntakeFailure, IntakeOutcome, RetentionBudget};
+use weaver_trace::serving::payloads::{FlowObservation, FlowPhase};
 
 /// None of these receipts is Clone or publicly constructible. In production,
 /// only RecordBarrier's successful Recorded arm constructs one.
 #[derive(Debug)]
 pub(super) struct RecordedSte100 {
-    run: String,
+    source: SourcePosition,
     reply: Ste100Reply,
 }
 
 impl RecordedSte100 {
     pub(super) fn run(&self) -> &str {
-        &self.run
+        &self.source.block_id.run
+    }
+    pub(super) fn source(&self) -> &SourcePosition {
+        &self.source
     }
     pub(super) fn matches(&self, reply: &Ste100Reply) -> bool {
         self.reply == *reply
@@ -32,7 +37,14 @@ impl RecordedSte100 {
     #[cfg(test)]
     pub(super) fn for_test_in(run: &str, reply: &Ste100Reply) -> Self {
         Self {
-            run: run.into(),
+            source: SourcePosition {
+                block_id: SourceBlockId {
+                    run: run.into(),
+                    sequence: 1.into(),
+                    block: 0.into(),
+                },
+                turn: None,
+            },
             reply: reply.clone(),
         }
     }
@@ -67,15 +79,69 @@ impl RecordedStateMeasurement {
 #[derive(Debug)]
 pub(super) struct RecordedTerminal {
     source: SourceBlockId,
+    phase: FlowPhase,
 }
 
 impl RecordedTerminal {
+    pub(super) fn phase(&self) -> FlowPhase {
+        self.phase
+    }
+    pub(super) fn source(&self) -> &SourceBlockId {
+        &self.source
+    }
     pub(super) fn into_source(self) -> SourceBlockId {
         self.source
     }
     #[cfg(test)]
     pub(super) fn for_test(source: SourceBlockId) -> Self {
-        Self { source }
+        Self::for_test_phase(source, FlowPhase::Filed)
+    }
+    #[cfg(test)]
+    pub(super) fn for_test_phase(source: SourceBlockId, phase: FlowPhase) -> Self {
+        Self { source, phase }
+    }
+}
+
+/// One exact flow sample crossed the trace barrier. The accounting owner must
+/// match this sample before advancing its interval or releasing its charge.
+#[derive(Debug)]
+pub(super) struct RecordedFlow {
+    run: String,
+    sample: FlowObservation,
+}
+
+impl RecordedFlow {
+    pub(super) fn run(&self) -> &str {
+        &self.run
+    }
+
+    pub(super) fn sample(&self) -> &FlowObservation {
+        &self.sample
+    }
+
+    pub(super) fn into_terminal(self) -> Option<RecordedTerminal> {
+        if !matches!(
+            self.sample.phase,
+            FlowPhase::Filed | FlowPhase::CorrectlyRejected
+        ) {
+            return None;
+        }
+        self.sample.source_id.map(|source| RecordedTerminal {
+            phase: self.sample.phase,
+            source: SourceBlockId {
+                run: source.run,
+                sequence: source.sequence.0.into(),
+                block: source.block.0.into(),
+            },
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_test(run: &str, sample: &FlowObservation) -> Self {
+        Self {
+            run: run.into(),
+            sample: sample.clone(),
+        }
     }
 }
 
@@ -86,6 +152,7 @@ pub(super) enum RecordPurpose {
     Classifier(Ste100Reply),
     State(StateStoreMeasurement),
     Terminal(SourceBlockId),
+    Flow(FlowObservation),
 }
 
 #[derive(Debug)]
@@ -93,6 +160,7 @@ pub(super) enum RecordProof {
     Classifier(RecordedSte100),
     State(RecordedStateMeasurement),
     Terminal(RecordedTerminal),
+    Flow(RecordedFlow),
 }
 
 #[must_use]
@@ -107,35 +175,160 @@ pub(super) enum RecordProgress {
         event: Event,
         purpose: RecordPurpose,
     },
+    BusyAuthored {
+        event: AuthoredEvent,
+        purpose: RecordPurpose,
+    },
     Failed,
 }
 
 #[derive(Debug)]
 pub(super) enum RecordFailure {
     Protocol(String),
+    Author(AuthorError),
+    Clock(String),
     Trace(weaver_trace::Failure),
     Tap(TapFailure),
     Intake(super::intake::IntakeError),
+}
+
+/// Identity belongs to the author attempt, not the trace. The original source
+/// includes facts (such as the peer UID) which preparation deliberately reduces.
+#[derive(Debug)]
+pub(super) struct AuthorTicket {
+    pub ticket: u64,
+    pub event: AuthoredEvent,
+}
+
+#[derive(Debug)]
+pub(super) struct TerminalAuthorFailure {
+    pub event: AuthoredEvent,
+    pub detail: String,
 }
 
 /// This object owns the only ordinary serving-recorder handle. The later
 /// recording context supplies author attribution, drains the inbox and owns
 /// the halt latch. This component never turns a failure into a success token.
 pub(super) struct RecordBarrier {
-    recorder: Recorder,
+    recorder: super::record_owner::RunRecorder,
     run: String,
     pending: Option<(Event, RecordPurpose)>,
+    pending_author: Option<AuthorTicket>,
+    next_ticket: Option<u64>,
+    admitted_before_failure: Option<Sequence>,
     failure: Option<RecordFailure>,
 }
 
 impl RecordBarrier {
     pub(super) fn new(recorder: Recorder, run: String) -> Self {
+        Self::with_owner(super::record_owner::RunRecorder::active(recorder), run)
+    }
+
+    pub(super) fn preflight(
+        recorder: weaver_trace::serving::PreflightRecorder,
+        run: String,
+    ) -> Self {
+        Self::with_owner(super::record_owner::RunRecorder::preflight(recorder), run)
+    }
+
+    fn with_owner(recorder: super::record_owner::RunRecorder, run: String) -> Self {
         Self {
             recorder,
             run,
             pending: None,
+            pending_author: None,
+            next_ticket: Some(0),
+            admitted_before_failure: None,
             failure: None,
         }
+    }
+
+    pub(super) fn is_loaded(&self) -> bool {
+        self.recorder.is_loaded()
+    }
+    pub(super) fn run(&self) -> &str {
+        &self.run
+    }
+    pub(super) fn is_active(&self) -> bool {
+        self.recorder.is_active()
+    }
+
+    pub(super) fn is_refused(&self) -> bool {
+        self.recorder.is_refused()
+    }
+    pub(super) fn is_closed(&self) -> bool {
+        self.recorder.is_closed()
+    }
+
+    pub(super) fn activate(
+        &mut self,
+        partition: weaver_trace::serving::ValidatedPartition,
+    ) -> Result<(), weaver_trace::Failure> {
+        if self.failure.is_some() || self.pending.is_some() || self.pending_author.is_some() {
+            return Err(weaver_trace::Failure::RefusedOnSubmit {
+                reason: weaver_trace::SubmitRefusal::PayloadMalformed,
+            });
+        }
+        self.recorder.activate(partition)
+    }
+
+    pub(super) fn standing_failure(&self) -> Option<weaver_trace::Failure> {
+        self.recorder.standing_failure()
+    }
+
+    pub(super) fn abandon(&mut self) {
+        self.recorder.abandon();
+    }
+
+    /// Prepare once and retain the complete original until actual admission.
+    /// Busy returns the new original intact and never replaces the first ticket.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn submit_authored_with_clock(
+        &mut self,
+        event: AuthoredEvent,
+        purpose: RecordPurpose,
+        author: &ServingAuthor,
+        wall_ms: u64,
+        inbox: &mut FlowInbox,
+        budget: &mut RetentionBudget,
+        now: &mut impl FnMut() -> std::io::Result<u64>,
+    ) -> RecordProgress {
+        if self.pending.is_some() || self.pending_author.is_some() {
+            self.remember_failure(
+                RecordFailure::Protocol("second author while a ticket is pending".into()),
+                budget,
+            );
+            return RecordProgress::BusyAuthored { event, purpose };
+        }
+        if let Some(failure) = inbox.failure() {
+            self.remember_failure(RecordFailure::Intake(failure.detail), budget);
+        }
+        if self.failure.is_some()
+            || budget.is_frozen()
+            || (budget.waiting_copy().is_some() && matches!(purpose, RecordPurpose::Content))
+        {
+            return RecordProgress::BusyAuthored { event, purpose };
+        }
+        let Some(ticket) = self.next_ticket else {
+            self.remember_failure(
+                RecordFailure::Protocol("author ticket overflow".into()),
+                budget,
+            );
+            return RecordProgress::BusyAuthored { event, purpose };
+        };
+        self.next_ticket = ticket.checked_add(1);
+        self.pending_author = Some(AuthorTicket { ticket, event });
+        let raw_ns = match now() {
+            Ok(value) => value,
+            Err(error) => return self.fail(RecordFailure::Clock(error.to_string()), budget),
+        };
+        let original = &self.pending_author.as_ref().expect("owned original").event;
+        let prepared = match author.prepare(original, raw_ns, wall_ms) {
+            Ok(event) => event,
+            Err(error) => return self.fail(RecordFailure::Author(error), budget),
+        };
+        self.pending = Some((prepared, purpose));
+        self.resume_with_clock(inbox, budget, now)
     }
 
     pub(super) fn submit(
@@ -144,6 +337,23 @@ impl RecordBarrier {
         purpose: RecordPurpose,
         inbox: &mut FlowInbox,
         budget: &mut RetentionBudget,
+    ) -> RecordProgress {
+        self.submit_with_clock(
+            event,
+            purpose,
+            inbox,
+            budget,
+            &mut super::clock::monotonic_ns,
+        )
+    }
+
+    pub(super) fn submit_with_clock(
+        &mut self,
+        event: Event,
+        purpose: RecordPurpose,
+        inbox: &mut FlowInbox,
+        budget: &mut RetentionBudget,
+        now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
         // Busy returns ownership before admission. Observation progress remains
         // possible while a whole selected copy waits for its source allowance.
@@ -169,13 +379,22 @@ impl RecordBarrier {
             return RecordProgress::Busy { event, purpose };
         }
         self.pending = Some((event, purpose));
-        self.resume(inbox, budget)
+        self.resume_with_clock(inbox, budget, now)
     }
 
     pub(super) fn resume(
         &mut self,
         inbox: &mut FlowInbox,
         budget: &mut RetentionBudget,
+    ) -> RecordProgress {
+        self.resume_with_clock(inbox, budget, &mut super::clock::monotonic_ns)
+    }
+
+    pub(super) fn resume_with_clock(
+        &mut self,
+        inbox: &mut FlowInbox,
+        budget: &mut RetentionBudget,
+        now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
         if self.failure.is_some() {
             return RecordProgress::Failed;
@@ -211,9 +430,19 @@ impl RecordBarrier {
                 RecordProgress::Pending
             }
             Ok(SubmitAttempt::Recorded(submission)) => {
-                let (_, purpose) = self.pending.take().expect("pending event");
+                let (recorded_event, purpose) = self.pending.take().expect("pending event");
+                self.pending_author = None;
+                // Failure below is after trace admission. It must not be
+                // reported as an unadmitted author in the halt account.
+                self.admitted_before_failure = Some(submission.sequence);
                 match submission.tap {
-                    TapOutcome::Selected(copy) => match inbox.accept(copy, budget) {
+                    TapOutcome::Selected(copy) => match match now() {
+                        Ok(intake_ns) => inbox.accept_at(copy, budget, Some(intake_ns)),
+                        Err(_) => IntakeOutcome::IntakeFailed {
+                            copy,
+                            detail: super::intake::IntakeError::ClockReadFailed,
+                        },
+                    } {
                         IntakeOutcome::Accepted | IntakeOutcome::Deferred => {}
                         IntakeOutcome::IntakeFailed { copy, detail } => {
                             // A failure is terminal, so this slot cannot already
@@ -229,6 +458,8 @@ impl RecordBarrier {
                     TapOutcome::Failed(failure) => {
                         return self.fail(RecordFailure::Tap(failure), budget);
                     }
+                    TapOutcome::HeadUntapped if !self.recorder.is_active() => {}
+                    TapOutcome::Stopped if self.recorder.is_preflight_shutdown() => {}
                     TapOutcome::Stopped | TapOutcome::HeadUntapped => {
                         return self.fail(
                             RecordFailure::Protocol("ordinary record has no live tap".into()),
@@ -241,7 +472,18 @@ impl RecordBarrier {
                     RecordPurpose::Content | RecordPurpose::Observation => None,
                     RecordPurpose::Classifier(reply) => {
                         Some(RecordProof::Classifier(RecordedSte100 {
-                            run: self.run.clone(),
+                            source: SourcePosition {
+                                block_id: SourceBlockId {
+                                    run: recorded_event.envelope.run.0.clone(),
+                                    sequence: submission.sequence.0.into(),
+                                    block: 0.into(),
+                                },
+                                turn: recorded_event
+                                    .envelope
+                                    .turn
+                                    .as_ref()
+                                    .map(|turn| turn.0.clone()),
+                            },
                             reply,
                         }))
                     }
@@ -252,9 +494,20 @@ impl RecordBarrier {
                         }))
                     }
                     RecordPurpose::Terminal(source) => {
-                        Some(RecordProof::Terminal(RecordedTerminal { source }))
+                        let Some(Payload::FlowObservation(sample)) = recorded_event.payload else {
+                            unreachable!("validated terminal payload")
+                        };
+                        Some(RecordProof::Terminal(RecordedTerminal {
+                            source,
+                            phase: sample.phase,
+                        }))
                     }
+                    RecordPurpose::Flow(sample) => Some(RecordProof::Flow(RecordedFlow {
+                        run: self.run.clone(),
+                        sample,
+                    })),
                 };
+                self.admitted_before_failure = None;
                 RecordProgress::Recorded {
                     sequence: submission.sequence,
                     proof,
@@ -279,17 +532,92 @@ impl RecordBarrier {
     pub(super) fn failure(&self) -> Option<&RecordFailure> {
         self.failure.as_ref()
     }
+    pub(super) fn stop_for_flow_failure(&mut self) {
+        self.recorder.stop_tap();
+    }
     pub(super) fn pending(&self) -> Option<&Event> {
         self.pending.as_ref().map(|p| &p.0)
     }
+    pub(super) fn pending_author(&self) -> Option<&AuthorTicket> {
+        self.pending_author.as_ref()
+    }
+    pub(super) fn admitted_before_failure(&self) -> Option<Sequence> {
+        self.admitted_before_failure
+    }
+
+    /// Only the halt owner calls this after stopping the tap. Reserved evidence
+    /// bypasses an unadmitted ordinary author without taking or replacing it.
+    // Return the original event inline on failure, without requiring another
+    // allocation on the terminal reporting path.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn submit_terminal_authored(
+        &mut self,
+        event: AuthoredEvent,
+        author: &ServingAuthor,
+        raw_ns: u64,
+        wall_ms: u64,
+    ) -> Result<Sequence, TerminalAuthorFailure> {
+        let result = author
+            .prepare(&event, raw_ns, wall_ms)
+            .map_err(|e| format!("terminal author: {e:?}"))
+            .and_then(|prepared| {
+                self.recorder
+                    .submit_terminal(prepared)
+                    .map_err(|e| format!("terminal trace: {e:?}"))
+            });
+        match result {
+            Ok(submission) => Ok(submission.sequence),
+            Err(detail) => Err(TerminalAuthorFailure { event, detail }),
+        }
+    }
+
+    /// An ordinary event already owed to the trace may land after the halt.
+    /// It receives no completion proof, reservation or state copy.
+    pub(super) fn resume_trace_only(&mut self) -> Result<Option<Sequence>, weaver_trace::Failure> {
+        if !self.recorder.tap_stopped() {
+            return Err(weaver_trace::Failure::RefusedOnSubmit {
+                reason: weaver_trace::SubmitRefusal::PayloadMalformed,
+            });
+        }
+        let Some((event, _)) = self.pending.as_ref() else {
+            return Ok(None);
+        };
+        match self.recorder.submit(event.clone())? {
+            SubmitAttempt::CapacityPending(_) => Ok(None),
+            SubmitAttempt::Recorded(submission) => {
+                self.pending = None;
+                self.pending_author = None;
+                Ok(Some(submission.sequence))
+            }
+        }
+    }
+    #[cfg(test)]
     pub(super) fn recorder(&self) -> &Recorder {
-        &self.recorder
+        self.recorder.active_recorder()
     }
     pub(super) fn capacity_fd(&self) -> std::os::fd::BorrowedFd<'_> {
         self.recorder.capacity_fd()
     }
     pub(super) fn drain_capacity_wake(&mut self) -> Result<(), weaver_trace::Failure> {
         self.recorder.drain_capacity_wake()
+    }
+
+    pub(super) fn try_capacity_wake(
+        &mut self,
+        budget: &mut RetentionBudget,
+    ) -> Result<weaver_trace::serving::CapacityWake, weaver_trace::Failure> {
+        self.recorder.try_capacity_wake().inspect_err(|failure| {
+            self.remember_failure(RecordFailure::Trace(failure.clone()), budget);
+        })
+    }
+
+    pub(super) fn drain_status(
+        &mut self,
+        budget: &mut RetentionBudget,
+    ) -> Result<weaver_trace::serving::DrainStatus, weaver_trace::Failure> {
+        self.recorder.drain_status().inspect_err(|failure| {
+            self.remember_failure(RecordFailure::Trace(failure.clone()), budget);
+        })
     }
 }
 
@@ -321,6 +649,14 @@ fn matches_purpose(event: &Event, purpose: &RecordPurpose) -> bool {
                         && id.sequence.0 == source.sequence.0
                         && id.block.0 == source.block.0
                 })
+        }
+        (RecordPurpose::Flow(sample), Some(Payload::FlowObservation(record))) => {
+            event.envelope.kind == Kind::StateFlow
+                && record.as_ref() == sample
+                && sample
+                    .source_id
+                    .as_ref()
+                    .is_none_or(|source| source.run == event.envelope.run.0)
         }
         _ => false,
     }

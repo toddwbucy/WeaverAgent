@@ -29,6 +29,7 @@ pub(super) struct CopyReservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum IntakeError {
     InvalidLimits,
+    ClockReadFailed,
     InvalidEnvelope,
     InvalidIdentity,
     DuplicateBlock,
@@ -45,6 +46,7 @@ impl std::fmt::Display for IntakeError {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         out.write_str(match self {
             Self::InvalidLimits => "invalid declared flow backlog",
+            Self::ClockReadFailed => "copy intake monotonic clock failed",
             Self::InvalidEnvelope => "selected copy has an invalid source envelope",
             Self::InvalidIdentity => "selected copy identities disagree",
             Self::DuplicateBlock => "selected block identities repeat or are out of order",
@@ -89,6 +91,7 @@ pub(super) struct RetentionBudget {
     bytes: u64,
     reservations: HashMap<SourceEventKey, CopyReservation>,
     waiting_copy: Option<AdmittedCopy>,
+    waiting_intake_ns: Option<u64>,
     frozen: bool,
 }
 
@@ -101,6 +104,7 @@ impl RetentionBudget {
             bytes: 0,
             reservations: HashMap::new(),
             waiting_copy: None,
+            waiting_intake_ns: None,
             frozen: false,
         })
     }
@@ -182,7 +186,7 @@ impl RetentionBudget {
 /// These are notifications and owned copies, never a second failure latch.
 #[derive(Debug, Default)]
 pub(super) struct FlowInbox {
-    copies: VecDeque<AdmittedCopy>,
+    copies: VecDeque<(AdmittedCopy, Option<u64>)>,
     failure: Option<IntakeFailure>,
     #[cfg(test)]
     fail_allocation: Option<AllocationPoint>,
@@ -198,6 +202,15 @@ impl FlowInbox {
         copy: AdmittedCopy,
         budget: &mut RetentionBudget,
     ) -> IntakeOutcome {
+        self.accept_at(copy, budget, None)
+    }
+
+    pub(super) fn accept_at(
+        &mut self,
+        copy: AdmittedCopy,
+        budget: &mut RetentionBudget,
+        intake_ns: Option<u64>,
+    ) -> IntakeOutcome {
         match self.reserve(&copy, budget) {
             Ok(Some(PreparedCharge { plan, reservation })) => {
                 if let Some(reservation) = reservation {
@@ -205,11 +218,12 @@ impl FlowInbox {
                     budget.blocks = plan.next_blocks;
                     budget.bytes = plan.next_bytes;
                 }
-                self.copies.push_back(copy);
+                self.copies.push_back((copy, intake_ns));
                 IntakeOutcome::Accepted
             }
             Ok(None) => {
                 budget.waiting_copy = Some(copy);
+                budget.waiting_intake_ns = intake_ns;
                 IntakeOutcome::Deferred
             }
             Err(detail) => IntakeOutcome::IntakeFailed { copy, detail },
@@ -223,7 +237,8 @@ impl FlowInbox {
             return None;
         }
         let copy = budget.waiting_copy.take()?;
-        Some(self.accept(copy, budget))
+        let intake_ns = budget.waiting_intake_ns.take();
+        Some(self.accept_at(copy, budget, intake_ns))
     }
 
     /// The whole-copy ledger installation must itself be atomic. Popping does
@@ -232,11 +247,27 @@ impl FlowInbox {
         if budget.frozen {
             return None;
         }
+        self.copies.pop_front().map(|(copy, _)| copy)
+    }
+
+    pub(super) fn pop_timed(
+        &mut self,
+        budget: &RetentionBudget,
+    ) -> Option<(AdmittedCopy, Option<u64>)> {
+        if budget.frozen {
+            return None;
+        }
         self.copies.pop_front()
     }
 
     pub(super) fn queued(&self) -> impl Iterator<Item = &AdmittedCopy> {
-        self.copies.iter()
+        self.copies.iter().map(|(copy, _)| copy)
+    }
+
+    pub(super) fn queued_timed(&self) -> impl Iterator<Item = (&AdmittedCopy, Option<u64>)> {
+        self.copies
+            .iter()
+            .map(|(copy, intake_ns)| (copy, *intake_ns))
     }
 
     pub(super) fn failure(&self) -> Option<&IntakeFailure> {

@@ -14,8 +14,7 @@ use weaver_types::state_flow::{
     FlowBacklog, Ste100DefectCode, Ste100Request, Ste100Result, Ste100Target,
 };
 
-#[path = "recording_fixture.rs"]
-mod fixture;
+use crate::flow::recording_fixture as fixture;
 
 fn event(kind: Kind, payload: Payload) -> Event {
     let (channel, origin) = match kind {
@@ -262,6 +261,79 @@ fn real_tap_queues_exact_copy_and_only_recorded_terminal_releases_it() {
 }
 
 #[test]
+fn copied_intake_uses_one_raw_clock_read_and_excluded_observations_use_none() {
+    let (recorder, _reader) = recorder();
+    let mut barrier = RecordBarrier::new(recorder, "run".into());
+    let mut inbox = FlowInbox::new();
+    let mut budget = budget(1);
+    let mut reads = 0;
+    recorded(barrier.submit_with_clock(
+        message("Read file."),
+        RecordPurpose::Content,
+        &mut inbox,
+        &mut budget,
+        &mut || {
+            reads += 1;
+            Ok(1_234_567)
+        },
+    ));
+    assert_eq!(reads, 1);
+    let (copy, intake_ns) = inbox.pop_timed(&budget).unwrap();
+    assert_eq!(intake_ns, Some(1_234_567));
+    let weaver_trace::serving::AdmittedCopy::Statement(copy) = copy else {
+        panic!("statement");
+    };
+    assert_eq!(copy.blocks[0].source.sequence, Sequence(1));
+    recorded(barrier.submit_with_clock(
+        measurement("excluded"),
+        RecordPurpose::Observation,
+        &mut inbox,
+        &mut budget,
+        &mut || panic!("excluded observations have no copy intake clock"),
+    ));
+    assert_eq!(inbox.queued().count(), 0);
+}
+
+#[test]
+fn failed_intake_clock_preserves_the_whole_recorded_copy_and_stops_admission() {
+    let (recorder, _reader) = recorder();
+    let mut barrier = RecordBarrier::new(recorder, "run".into());
+    let mut inbox = FlowInbox::new();
+    let mut budget = budget(1);
+    assert!(matches!(
+        barrier.submit_with_clock(
+            message("Read file."),
+            RecordPurpose::Content,
+            &mut inbox,
+            &mut budget,
+            &mut || Err(std::io::Error::other("test clock failure")),
+        ),
+        RecordProgress::Failed
+    ));
+    assert_eq!(barrier.recorder().structure().len(), 2);
+    assert!(budget.is_frozen());
+    assert!(inbox.pop_timed(&budget).is_none());
+    let failure = inbox.failure().expect("whole failed copy remains owned");
+    assert_eq!(failure.detail, IntakeError::ClockReadFailed);
+    let weaver_trace::serving::AdmittedCopy::Statement(copy) = &failure.copy else {
+        panic!("statement");
+    };
+    assert_eq!(copy.blocks.len(), 1);
+    assert_eq!(copy.blocks[0].source.sequence, Sequence(1));
+    assert!(matches!(
+        barrier.submit_with_clock(
+            message("Read later."),
+            RecordPurpose::Content,
+            &mut inbox,
+            &mut budget,
+            &mut || panic!("failed flow cannot take another copy"),
+        ),
+        RecordProgress::Busy { .. }
+    ));
+    assert_eq!(barrier.recorder().structure().len(), 2);
+}
+
+#[test]
 fn waiting_copy_blocks_content_before_admission_but_excluded_measurements_progress() {
     let (recorder, _reader) = recorder();
     let mut barrier = RecordBarrier::new(recorder, "run".into());
@@ -498,9 +570,24 @@ fn classifier_completion_waits_for_real_capacity_then_releases_exactly_once() {
                 std::thread::yield_now();
             }
             RecordProgress::Recorded {
+                sequence,
                 proof: Some(RecordProof::Classifier(proof)),
-                ..
-            } => break proof,
+            } => {
+                assert_eq!(sequence.0, count as u64);
+                assert_eq!(
+                    proof.source(),
+                    &SourcePosition {
+                        block_id: SourceBlockId {
+                            run: "run".into(),
+                            sequence: sequence.0.into(),
+                            block: 0.into(),
+                        },
+                        turn: Some("turn".into()),
+                    },
+                    "proof must use assigned trace identity, never input sequence 999",
+                );
+                break proof;
+            }
             other => panic!("classifier record failed: {other:?}"),
         }
     };
@@ -802,7 +889,10 @@ fn state_socket_completion_waits_for_real_recorded_measurement_and_releases_once
     let Some(RecordProof::State(proof)) = proof else {
         panic!("actual state measurement proof");
     };
-    let completion = channel.release(proof).unwrap();
+    let completion = channel
+        .release(proof)
+        .unwrap()
+        .expect("recorded completion");
     assert_eq!(
         s::encode_state_line(&completion.answer, s::FrameDirection::Response).unwrap(),
         s::encode_state_line(&answer, s::FrameDirection::Response).unwrap()
@@ -832,3 +922,6 @@ fn state_socket_completion_waits_for_real_recorded_measurement_and_releases_once
     };
     assert!(channel.release(proof).is_err());
 }
+
+#[path = "recording_owner_tests.rs"]
+mod owner_tests;
