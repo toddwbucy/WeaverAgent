@@ -85,5 +85,15 @@ The pull request records the exact final validation commands and their results.
 Host mechanics tests do not replace the crate's required Olympus cuda,gguf lane.
 Neither a green fixture run nor this implementation note clears production cutover.
 
+The transport review on 2026-10-21 found that recv returning zero also represents an
+empty SEQPACKET datagram. A single immediate status probe now distinguishes live
+malformed traffic from full or write-half EOF. A failed probe is terminal I/O failure,
+including interruption. Returning Pending after consuming that packet would lose its
+readiness and could permit a dispatcher reply after malformed traffic. Complete
+nonempty messages still reach the dispatcher before a later EOF. Three compiled
+guard removals exercise the empty-packet distinction, write-half closure and failed
+probe. Each source is restored exactly before the gates. No new timer, retry or
+dispatcher state is introduced.
+
 [protocol]:
 ../crates/state-management/state-management-spec-02-protocol-classifier-gate.md

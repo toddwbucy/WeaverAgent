@@ -3,10 +3,11 @@
 //! This transport owns one partial receive and one pending send. It does not
 //! parse JSON, decide duty states, or compare the header ID with a JSON ID.
 
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+use nix::libc;
 use nix::sys::socket::{
     MsgFlags, Shutdown, SockType, UnixAddr, getpeername, getsockname, getsockopt, recv, send,
     shutdown, sockopt,
@@ -168,16 +169,26 @@ impl Channel {
     /// Read at most one datagram. The dispatcher can observe a first fragment
     /// while Checking without blocking for that unwanted message's remainder.
     pub fn try_receive(&mut self) -> Result<Receive, Fault> {
+        self.receive_with_zero_probe(peer_status)
+    }
+
+    fn receive_with_zero_probe(
+        &mut self,
+        probe: impl FnOnce(RawFd) -> nix::Result<i16>,
+    ) -> Result<Receive, Fault> {
         if self.failed {
             return Err(Fault::Failed);
         }
-        match self.receive_one() {
+        match self.receive_one(probe) {
             Ok(progress) => Ok(progress),
             Err(fault) => Err(self.fail(fault)),
         }
     }
 
-    fn receive_one(&mut self) -> Result<Receive, Fault> {
+    fn receive_one(
+        &mut self,
+        probe: impl FnOnce(RawFd) -> nix::Result<i16>,
+    ) -> Result<Receive, Fault> {
         let mut datagram = [0_u8; DATAGRAM_BYTES];
         let count = loop {
             match recv(
@@ -192,7 +203,23 @@ impl Channel {
             }
         };
         if count == 0 {
-            return Err(Fault::Closed);
+            // SEQPACKET also returns zero for an empty packet. The consumed
+            // read is terminal either way; only observed EOF is orderly close.
+            // A probe error, including EINTR, is terminal I/O failure. Pending
+            // would lose the consumed packet's readiness and permit a reply
+            // after malformed traffic in the dispatcher's receive-before-send
+            // check. Do not retry this zero-time probe or add a hidden wait.
+            let events = probe(self.end.as_raw_fd()).map_err(Fault::Io)?;
+            if events & libc::POLLNVAL != 0 {
+                return Err(Fault::Io(Errno::EBADF));
+            }
+            if events & libc::POLLERR != 0 {
+                return Err(Fault::Io(Errno::EIO));
+            }
+            if events & (libc::POLLHUP | libc::POLLRDHUP) != 0 {
+                return Err(Fault::Closed);
+            }
+            return Err(Fault::Framing("empty datagram from live peer"));
         }
         if count > DATAGRAM_BYTES {
             return Err(Fault::Framing("truncated datagram"));
@@ -371,6 +398,20 @@ impl Channel {
         let _ = shutdown(self.end.as_raw_fd(), Shutdown::Both);
         fault
     }
+}
+
+fn peer_status(fd: RawFd) -> nix::Result<i16> {
+    let mut status = libc::pollfd {
+        fd,
+        events: libc::POLLRDHUP,
+        revents: 0,
+    };
+    // SAFETY: status is one writable pollfd and the channel owns fd throughout
+    // the immediate call. POLLRDHUP includes a peer's write-half shutdown.
+    if unsafe { libc::poll(&mut status, 1, 0) } < 0 {
+        return Err(Errno::last());
+    }
+    Ok(status.revents)
 }
 
 #[cfg(test)]
@@ -568,14 +609,96 @@ mod tests {
     #[test]
     fn eof_during_a_partial_message_is_never_a_completion() {
         for partial in [false, true] {
+            for close in [None, Some(Shutdown::Both), Some(Shutdown::Write)] {
+                let (writer, reader) = pair();
+                let mut channel = Channel::from_owned(reader, 8).unwrap();
+                if partial {
+                    raw_send(&writer, &packet(Tag::Request, 1, 6, 0, b"abc"));
+                    assert_eq!(channel.try_receive(), Ok(Receive::Fragment));
+                    assert_eq!(channel.partial.as_ref().unwrap().bytes, b"abc");
+                }
+                match close {
+                    Some(direction) => shutdown(writer.as_raw_fd(), direction).unwrap(),
+                    None => drop(writer),
+                }
+                assert_eq!(channel.try_receive(), Err(Fault::Closed));
+                assert_failed(&mut channel);
+            }
+        }
+    }
+
+    #[test]
+    fn a_live_empty_datagram_is_framing_and_retires_a_partial_message() {
+        for partial in [false, true] {
             let (writer, reader) = pair();
             let mut channel = Channel::from_owned(reader, 8).unwrap();
             if partial {
                 raw_send(&writer, &packet(Tag::Request, 1, 6, 0, b"abc"));
                 assert_eq!(channel.try_receive(), Ok(Receive::Fragment));
-                assert!(channel.has_partial_receive());
+                assert_eq!(channel.partial.as_ref().unwrap().bytes, b"abc");
             }
-            drop(writer);
+            channel
+                .begin_send(Tag::Reply, 1, b"queued".to_vec())
+                .unwrap();
+            raw_send(&writer, &[]);
+            assert_eq!(
+                channel.try_receive(),
+                Err(Fault::Framing("empty datagram from live peer"))
+            );
+            assert_failed(&mut channel);
+            let mut byte = [0];
+            assert_eq!(
+                recv(writer.as_raw_fd(), &mut byte, MsgFlags::MSG_DONTWAIT),
+                Ok(0)
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_zero_read_probe_is_terminal_without_retry_or_pending_permission() {
+        for error in [Errno::EINTR, Errno::EIO] {
+            let (writer, reader) = pair();
+            let mut channel = Channel::from_owned(reader, 8).unwrap();
+            raw_send(&writer, &packet(Tag::Request, 1, 6, 0, b"abc"));
+            assert_eq!(channel.try_receive(), Ok(Receive::Fragment));
+            channel
+                .begin_send(Tag::Reply, 1, b"queued".to_vec())
+                .unwrap();
+            raw_send(&writer, &[]);
+            assert_eq!(
+                channel.receive_with_zero_probe(|_| Err(error)),
+                Err(Fault::Io(error))
+            );
+            assert_failed(&mut channel);
+            let mut byte = [0];
+            assert_eq!(
+                recv(writer.as_raw_fd(), &mut byte, MsgFlags::MSG_DONTWAIT),
+                Ok(0)
+            );
+        }
+    }
+
+    #[test]
+    fn a_complete_reply_before_peer_close_still_precedes_eof() {
+        for half in [false, true] {
+            let (writer, reader) = pair();
+            let mut channel = Channel::from_owned(reader, 8).unwrap();
+            raw_send(&writer, &packet(Tag::Reply, 1, 6, 0, b"abc"));
+            raw_send(&writer, &packet(Tag::Reply, 1, 6, 3, b"def"));
+            if half {
+                shutdown(writer.as_raw_fd(), Shutdown::Write).unwrap();
+            } else {
+                drop(writer);
+            }
+            assert_eq!(channel.try_receive(), Ok(Receive::Fragment));
+            assert_eq!(
+                channel.try_receive(),
+                Ok(Receive::Complete(Message {
+                    tag: Tag::Reply,
+                    id: 1,
+                    payload: b"abcdef".to_vec(),
+                }))
+            );
             assert_eq!(channel.try_receive(), Err(Fault::Closed));
             assert_failed(&mut channel);
         }
