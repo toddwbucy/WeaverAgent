@@ -436,7 +436,9 @@ impl<'a> Ports<'a> {
                 .send(&weaver_types::OrganEnvelope {
                     exchange: execution.clone(),
                     position: weaver_types::Position::Continue,
-                    payload: weaver_types::Payload::ToolInterrupt,
+                    payload: weaver_types::Payload::ToolInterrupt {
+                        by: weaver_types::KillCause::Unload,
+                    },
                 })
                 .map_err(|_| TurnError::ChannelLost),
             None => self

@@ -346,6 +346,7 @@ fn tool_outcome(value: &weaver_types::ToolOutcome) -> trace::ToolOutcome {
                 weaver_types::KillCause::Clock => trace::KillCause::Clock,
                 weaver_types::KillCause::Cancel => trace::KillCause::Cancel,
                 weaver_types::KillCause::Unload => trace::KillCause::Unload,
+                weaver_types::KillCause::FlowFailure => trace::KillCause::FlowFailure,
                 weaver_types::KillCause::Fault => trace::KillCause::Fault,
             },
         },

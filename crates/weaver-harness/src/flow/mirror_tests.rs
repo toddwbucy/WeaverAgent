@@ -506,13 +506,14 @@ fn every_tool_outcome_kill_cause_and_execution_opener_preserves_exact_wire_shape
         weaver_types::KillCause::Clock,
         weaver_types::KillCause::Cancel,
         weaver_types::KillCause::Unload,
+        weaver_types::KillCause::FlowFailure,
         weaver_types::KillCause::Fault,
     ] {
         for partial in [None, Some(String::new()), Some("partial\n\u{3a9}".into())] {
             outcomes.push(weaver_types::ToolOutcome::Killed { partial, by });
         }
     }
-    assert_eq!(outcomes.len(), 15);
+    assert_eq!(outcomes.len(), 18);
     for outcome in outcomes {
         for opener in [
             weaver_types::Opener::Admin,

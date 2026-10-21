@@ -177,6 +177,9 @@ impl ToolResult {
                     weaver_types::KillCause::Unload => {
                         "the command was interrupted by the agent's unload"
                     }
+                    weaver_types::KillCause::FlowFailure => {
+                        "the command was contained after the agent's state flow failed"
+                    }
                     weaver_types::KillCause::Fault => {
                         "the gate failed with the command open, and its outcome is unknown"
                     }

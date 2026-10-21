@@ -152,11 +152,11 @@ pub enum Payload {
     ToolAnswer(ToolOutcome),
     /// Cancel the open execution at the continue position.
     ToolCancel,
-    /// **Interrupt the open execution for the agent's unload**, at the continue
-    /// position, per `weaver-harness-gate-contract` section 2 as of the
-    /// lifecycle act (2026-10-09): the gate ends it by the cancel's path and
-    /// answers `Killed { by: unload }`, the first outcome winning.
-    ToolInterrupt,
+    /// Interrupt the open execution for unload or a failed state flow. The
+    /// gate accepts only those two causes and answers after containment.
+    ToolInterrupt {
+        by: KillCause,
+    },
 }
 
 /// One tool call as it crosses the gate seam: the name and arguments exactly
@@ -215,6 +215,9 @@ pub enum KillCause {
     /// The agent's unload interrupted the call (`ToolInterrupt`): never
     /// finished, and re-runnable after the reload.
     Unload,
+    /// The state flow failed. The gate contained the call, but the failed run
+    /// cannot publish a save point or treat this as an operator unload.
+    FlowFailure,
     /// The gate died with the call open and the harness closed it: its outcome
     /// indeterminate, never re-run automatically.
     Fault,

@@ -142,6 +142,8 @@ pub enum KillCause {
     /// The agent's unload interrupted the call (`ToolInterrupt`): never
     /// finished, and re-runnable after the reload.
     Unload,
+    /// The gate contained a call after the state flow failed. Trace only.
+    FlowFailure,
     /// The gate died with the call open and the harness closed it: its outcome
     /// indeterminate, never re-run automatically.
     Fault,

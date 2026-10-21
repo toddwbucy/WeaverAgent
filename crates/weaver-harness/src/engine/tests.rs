@@ -2147,7 +2147,12 @@ fn leave_during_turn(
                             let interrupt = gate.recv().unwrap();
                             assert_eq!(interrupt.exchange, envelope.exchange);
                             assert_eq!(interrupt.position, weaver_types::Position::Continue);
-                            assert_eq!(interrupt.payload, weaver_types::Payload::ToolInterrupt);
+                            assert_eq!(
+                                interrupt.payload,
+                                weaver_types::Payload::ToolInterrupt {
+                                    by: weaver_types::KillCause::Unload
+                                }
+                            );
                             interrupts += 1;
                             if !crossing {
                                 answer(weaver_types::ToolOutcome::Killed {
@@ -2161,7 +2166,9 @@ fn leave_during_turn(
                             });
                         }
                     }
-                    weaver_types::Payload::ToolInterrupt => interrupts += 1,
+                    weaver_types::Payload::ToolInterrupt {
+                        by: weaver_types::KillCause::Unload,
+                    } => interrupts += 1,
                     other => panic!("unexpected gate traffic: {other:?}"),
                 }
             } else if gate_finished.load(Ordering::Acquire) {

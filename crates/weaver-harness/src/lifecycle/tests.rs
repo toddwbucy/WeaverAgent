@@ -8792,7 +8792,12 @@ fn a_forced_leave_closes_a_call_its_gate_never_answers_within_the_lower_bound() 
         // held open well past the lower's bound.
         let interrupt = gate_peer.recv().expect("the interrupt");
         assert!(
-            matches!(interrupt.payload, weaver_types::Payload::ToolInterrupt),
+            matches!(
+                interrupt.payload,
+                weaver_types::Payload::ToolInterrupt {
+                    by: weaver_types::KillCause::Unload
+                }
+            ),
             "{interrupt:?}"
         );
         std::thread::sleep(std::time::Duration::from_secs(60));

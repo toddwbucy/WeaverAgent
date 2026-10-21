@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for the consolidated stack and model repair.
+Updated: 2026-10-21 for the consolidated stack and gate containment.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -20,12 +20,12 @@ landing map and takes precedence over historical branch descriptions below.
 | --- | --- |
 | #184 | Shared floor, store/member via #212, admin chain #193 through #196, and SPU #191 with #197. Review and land to main. |
 | #185 | Trace copy and recorder, including #187. Review and land to main. |
-| #198 | Harness chain #199 through #210. Its base still names code/state-member-flow. Leave open until #184 and #185 land, then retarget to main and check the full combined diff and gates. |
+| #198 | Harness chain #199 through #210 plus merged model repair #214. Its base still names code/state-member-flow. Leave open until #184 and #185 land, then retarget to main and check the full combined diff and gates. |
 | #189 | Independent serving-recall payload amendment, approval owed. |
 | #190 | Independent pure recall query primitive. |
 | #192 | Independent snapshot timing amendment, approval owed. |
 | #213 | Independent empty-correction amendment, approval owed. |
-| #214 | Model repair and recorded restatement/accounting, stacked on #198. |
+| Gate interrupt draft | Typed causes and contained terminal delivery, stacked on #198. Held for the coordinated foundation cutover. |
 
 New harness work stacks on code/state-harness-filing, the head of #198. Closed
 child branches are no longer landing targets. Normal merge commits preserve the
@@ -70,7 +70,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H2a | H1q | Committed opening and terminal accounting for undispatched requests, Spec 05 |
 | H1m | H2a, H1t | Passive model repair, recorded restatement instructions and corrected request custody, Specs 02 and 05 |
 | H1b2 | H1b1, H1i, H1s, H1t, H1f, H1o, H1q, H2a, H1m, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
-| H2 | H1b2, H2a, IN1 | Executing pair lifecycle and gate containment, Spec 05 and gate amendment |
+| H2g | H1m | Typed gate interrupt, containment and terminal delivery, gate amendment |
+| H2 | H1b2, H2a, H2g, IN1 | Executing pair lifecycle, Spec 05 |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
 | H4 | H2, H3b | Plan operations and review evidence, Spec 07 and admin amendment |
@@ -418,7 +419,8 @@ the complete halt containment and terminal publication sequence. C1 supplies the
 production STE100 adapter. Scripted adapters prove their contracts only. These
 obligations remain part of the complete implementation and cutover gate.
 
-H1m is [draft PR #214][repair], based on the consolidated #198 head.
+H1m is [merged PR #214][repair], folded into #198 at a1ce2df5.
+It is not merged into main.
 Its [implementation record][repair-record] states the passive repair owner and
 its recorded instruction and pair-accounting ports. The loop still chooses each pass
 and calls the decoder. The full harness suite passes 952 tests with 17 inherited
@@ -428,6 +430,14 @@ the repaired custody paths and mutation evidence. Empty corrections and malforme
 recall remain explicit no-grant gaps until their owning Spec changes.
 The empty-correction proposal is [draft PR #213][empty-correction]. It is not
 implementation authority before approval and merge.
+
+H2g is the gate interrupt draft on code/state-gate-interrupt, based on #198 at
+a1ce2df5. Its [implementation record][gate-interrupt-record] names the typed
+interrupt, containment, late-control and terminal-delivery contracts. Every old
+sender supplies Unload. The failed-flow caller and trace-only pair disposition
+remain in H1b2/H2. This slice changes the internal wire and must stay on the draft
+stack until the coordinated foundation cutover. It is not an independently
+landable change to the previous serving contract.
 
 The later rows remain owed.
 This is a progress record, not a claim that the full goal or any serving cutover is
@@ -512,3 +522,5 @@ quality, decoder capacity, throughput or absence of paging waits.
 [repair-record]: state-management-repair-2026-10-21.md
 
 [repair]: https://github.com/toddwbucy/WeaverAgent/pull/214
+
+[gate-interrupt-record]: state-management-gate-interrupt-2026-10-21.md
