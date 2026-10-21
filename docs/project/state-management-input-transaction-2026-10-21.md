@@ -1,6 +1,6 @@
 # Input transaction and checked-source handoff
 
-Date: 2026-10-21. Status: local implementation, draft submission pending.
+Date: 2026-10-21. Status: [draft PR #204][this-pr].
 
 This slice is stacked on [PR #203][base]. It implements the serving input transaction
 specified by [Spec 02 INPUT and REUSE][protocol] and [HARNESS-INPUT and
@@ -102,3 +102,5 @@ state-management goal or cutover is complete.
 [protocol]: ../crates/state-management/state-management-spec-02-protocol-classifier-gate.md
 [harness]: ../crates/state-management/weaver-harness-Spec-amendment.md
 [foundation]: ../crates/state-management/state-management-foundation-Spec.md
+
+[this-pr]: https://github.com/toddwbucy/WeaverAgent/pull/204

@@ -156,7 +156,8 @@ suites. All-target lint, formatting, lock and diff checks pass. H1i adds input
 ownership. Lifecycle callers, capture owners, terminal report submission and failed-exit
 containment remain in H1b2.
 
-H1i is the next [input-transaction slice][input-transaction-record], based on #203.
+H1i is [draft PR #204][input-transaction], based on #203. Its
+[implementation record][input-transaction-record] states the scope and evidence.
 It owns original frame custody, trace-first parsing, SPU check routing, revocable
 single-use tokens, exact source handoff, cancellation and original gate-wait accounting.
 The affected-crate suites pass 959 tests with 17 inherited ignored instruments.
@@ -380,3 +381,5 @@ quality, decoder capacity, throughput or absence of paging waits.
 [run-context-record]: state-management-run-context-2026-10-21.md
 [run-context]: https://github.com/toddwbucy/WeaverAgent/pull/203
 [input-transaction-record]: state-management-input-transaction-2026-10-21.md
+
+[input-transaction]: https://github.com/toddwbucy/WeaverAgent/pull/204
