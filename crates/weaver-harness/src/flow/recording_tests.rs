@@ -570,9 +570,24 @@ fn classifier_completion_waits_for_real_capacity_then_releases_exactly_once() {
                 std::thread::yield_now();
             }
             RecordProgress::Recorded {
+                sequence,
                 proof: Some(RecordProof::Classifier(proof)),
-                ..
-            } => break proof,
+            } => {
+                assert_eq!(sequence.0, count as u64);
+                assert_eq!(
+                    proof.source(),
+                    &SourcePosition {
+                        block_id: SourceBlockId {
+                            run: "run".into(),
+                            sequence: sequence.0.into(),
+                            block: 0.into(),
+                        },
+                        turn: Some("turn".into()),
+                    },
+                    "proof must use assigned trace identity, never input sequence 999",
+                );
+                break proof;
+            }
             other => panic!("classifier record failed: {other:?}"),
         }
     };

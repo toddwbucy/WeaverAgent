@@ -140,6 +140,23 @@ pub(super) struct StateCompletion {
     pub discard_capture_result: bool,
 }
 
+/// Evidence of an Open that was never released for boot. An enter rollback
+/// consumes it without inventing a serving measurement proof or a read grant.
+#[derive(Debug)]
+pub(super) struct UnusedOpen {
+    answer: StateFrame,
+    measurement: StateStoreMeasurement,
+}
+
+impl UnusedOpen {
+    pub(super) fn answer(&self) -> &StateFrame {
+        &self.answer
+    }
+    pub(super) fn measurement(&self) -> &StateStoreMeasurement {
+        &self.measurement
+    }
+}
+
 struct Exchange {
     request: StateFrame,
     bytes: Vec<u8>,
@@ -298,6 +315,55 @@ impl StateChannel {
         self.held.as_ref().map(|held| &held.measurement)
     }
 
+    /// A cancellation may queue fresh release behind this already-recorded
+    /// Finished. This inspection grants no completion or mutable channel slot.
+    pub(super) fn recorded_finished(&self, capture_id: DecimalU64) -> bool {
+        self.held.as_ref().is_some_and(|held| {
+            held.recorded.is_some()
+                && matches!(&held.answer, StateFrame::ControlAnswer {
+                    frame: StateControlAnswer::Finished { capture_id: id, .. }, ..
+                } if *id == capture_id)
+        })
+    }
+
+    /// Only the coordinator's recorded preactivation refusal may elect this
+    /// disposal. Ordinary opened channels still require the recording barrier.
+    pub(super) fn abandon_unactivated_open(
+        &mut self,
+    ) -> Result<Option<UnusedOpen>, ChannelFailure> {
+        self.check_live()?;
+        if self.opened
+            || self.opened_scheme.is_some()
+            || self.capture.is_some()
+            || self.exchanges.len() != 1
+            || !self.exchanges.front().is_some_and(|exchange| {
+                matches!(exchange.request, StateFrame::Open { .. }) && exchange.fully_sent()
+            })
+            || !self.held.as_ref().is_some_and(|held| {
+                matches!(held.answer, StateFrame::Opened { .. }) && held.recorded.is_none()
+            })
+            || !self.received.is_empty()
+        {
+            return Err(self.fail(
+                ChannelFailureKind::Protocol,
+                ChannelPoint::Reply,
+                "preactivation disposal requires one unused matching Open",
+                None,
+            ));
+        }
+        // EOF before intentional closure remains a component failure. EINTR
+        // retains the exact held answer and never grants a successful disposal.
+        if !self.reject_extra_answer()? {
+            return Ok(None);
+        }
+        let held = self.held.take().expect("checked unused Open");
+        self.exchanges.pop_front();
+        Ok(Some(UnusedOpen {
+            answer: held.answer,
+            measurement: held.measurement,
+        }))
+    }
+
     pub(super) fn first_sent_ns(&self) -> Option<u64> {
         self.exchanges.front().and_then(|exchange| exchange.sent_ns)
     }
@@ -323,6 +389,20 @@ impl StateChannel {
             StateFrame::Opened {
                 member_observation, ..
             } => Some(member_observation),
+            _ => None,
+        }
+    }
+
+    /// Structural refusal before load is evidence for the existing enter
+    /// refusal path. It creates no completion proof or successful open grant.
+    pub(super) fn open_refusal(
+        &self,
+    ) -> Option<(weaver_types::state_flow::StateRefusalCode, &str)> {
+        if self.opened_scheme.is_some() {
+            return None;
+        }
+        match &self.held.as_ref()?.answer {
+            StateFrame::Refused { code, detail, .. } => Some((*code, detail.as_str())),
             _ => None,
         }
     }
