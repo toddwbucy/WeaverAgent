@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-use super::{DecimalU64, EventSource, ReviewSetupRef, StartIdentity, StatementRef, WorkRef};
+use super::{
+    DecimalU64, EventSource, ReviewSetupRef, StartIdentity, StatementRef, ValidationError, WorkRef,
+};
 
 /// Stable source identity of one recovered request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +65,15 @@ pub struct PairStarted {
     pub request: PairRequest,
     #[serde(deserialize_with = "super::required_option")]
     pub retry_of: Option<CallId>,
+}
+
+impl PairStarted {
+    /// Check the lane before a directly constructed opening enters a filing.
+    /// Referential and lifecycle checks remain the store's obligations.
+    /// Decoding preserves a mismatched lane for the member's InvalidPair refusal.
+    pub fn validate_structure(&self) -> Result<(), ValidationError> {
+        validate_lane(self.lane, &self.request)
+    }
 }
 
 /// All retained pair states, including the open state in a read.
@@ -142,7 +153,7 @@ pub struct PairReadSource {
 }
 
 /// A whole pair joined to its original request binding.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReadPair {
     pub call_id: CallId,
@@ -150,11 +161,58 @@ pub struct ReadPair {
     pub lane: PairLane,
     pub request: PairRequest,
     pub fate: PairFate,
-    #[serde(deserialize_with = "super::required_option")]
     pub reason: Option<PairFailure>,
     pub opening_source: PairReadSource,
-    #[serde(deserialize_with = "super::required_option")]
     pub terminal_source: Option<PairReadSource>,
+}
+
+impl ReadPair {
+    /// Check the request's declared lane before accepting a pair attachment.
+    /// The store still owns source reconstruction and terminal-state checks.
+    pub fn validate_structure(&self) -> Result<(), ValidationError> {
+        validate_lane(self.lane, &self.request)
+    }
+}
+
+impl<'de> Deserialize<'de> for ReadPair {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            call_id: CallId,
+            statement: StatementRef,
+            lane: PairLane,
+            request: PairRequest,
+            fate: PairFate,
+            #[serde(deserialize_with = "super::required_option")]
+            reason: Option<PairFailure>,
+            opening_source: PairReadSource,
+            #[serde(deserialize_with = "super::required_option")]
+            terminal_source: Option<PairReadSource>,
+        }
+        let fields = Fields::deserialize(deserializer)?;
+        let record = Self {
+            call_id: fields.call_id,
+            statement: fields.statement,
+            lane: fields.lane,
+            request: fields.request,
+            fate: fields.fate,
+            reason: fields.reason,
+            opening_source: fields.opening_source,
+            terminal_source: fields.terminal_source,
+        };
+        record
+            .validate_structure()
+            .map_err(serde::de::Error::custom)?;
+        Ok(record)
+    }
+}
+
+fn validate_lane(lane: PairLane, request: &PairRequest) -> Result<(), ValidationError> {
+    if lane != request.lane() {
+        return Err(ValidationError("pair lane differs from its request kind"));
+    }
+    Ok(())
 }
 
 /// Read the existing shared types strictly at this new protocol boundary.
@@ -239,6 +297,240 @@ fn deserialize_outcome<'de, D: serde::Deserializer<'de>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn requests() -> [PairRequest; 3] {
+        let digest = super::super::Digest::new("a".repeat(64)).unwrap();
+        [
+            PairRequest::External {
+                name: "sh".into(),
+                arguments: "ls".into(),
+            },
+            PairRequest::Recall {
+                subject: "record".into(),
+            },
+            PairRequest::Review {
+                setup: ReviewSetupRef {
+                    setup_id: "checks".into(),
+                    sha256: digest.clone(),
+                },
+                work: Box::new(WorkRef {
+                    plan: super::super::PlanRef {
+                        plan_id: super::super::PlanId {
+                            seed_id: "seed".into(),
+                            local_id: 1.into(),
+                        },
+                        revision: 1.into(),
+                    },
+                    step_id: super::super::StepId {
+                        seed_id: "seed".into(),
+                        local_id: 1.into(),
+                    },
+                    span: super::super::SpanRef {
+                        seed_id: "seed".into(),
+                        local_id: 2.into(),
+                        revision: 1.into(),
+                    },
+                    through: super::super::SourcePosition {
+                        block_id: super::super::SourceBlockId {
+                            run: "r".into(),
+                            sequence: 5.into(),
+                            block: 0.into(),
+                        },
+                        turn: Some("t".into()),
+                    },
+                    content_sha256: digest,
+                }),
+                command: "check".into(),
+            },
+        ]
+    }
+
+    fn started(request: PairRequest) -> PairStarted {
+        PairStarted {
+            call_id: CallId {
+                run: "r".into(),
+                sequence: 1.into(),
+                call: 0.into(),
+            },
+            call_block: 0.into(),
+            statement: StatementRef {
+                block_id: super::super::SourceBlockId {
+                    run: "r".into(),
+                    sequence: 1.into(),
+                    block: 0.into(),
+                },
+                binding: 0.into(),
+            },
+            lane: request.lane(),
+            request,
+            retry_of: None,
+        }
+    }
+
+    fn read_pair(opening: &PairStarted) -> ReadPair {
+        ReadPair {
+            call_id: opening.call_id.clone(),
+            statement: opening.statement.clone(),
+            lane: opening.lane,
+            request: opening.request.clone(),
+            fate: PairFate::Opened,
+            reason: None,
+            opening_source: PairReadSource {
+                source: EventSource {
+                    block_id: super::super::SourceBlockId {
+                        run: "r".into(),
+                        sequence: 2.into(),
+                        block: 0.into(),
+                    },
+                    envelope: super::super::SourceEnvelope {
+                        session: "s".into(),
+                        run: "r".into(),
+                        turn: Some("t".into()),
+                        sequence: 2.into(),
+                        kind: "tool.call.started".into(),
+                        channel: "tool".into(),
+                        origin: "loop".into(),
+                        subsystem: "harness".into(),
+                        causal_parent: None,
+                        wall_ms: 0,
+                        monotonic_ns: 0.into(),
+                    },
+                    source_path: vec![],
+                    partition_rule_id: "pairs".into(),
+                },
+                raw_block: serde_json::value::to_raw_value(opening).unwrap(),
+            },
+            terminal_source: None,
+        }
+    }
+
+    #[test]
+    fn opening_lane_is_validated_at_filing_without_losing_the_typed_refusal() {
+        for request in requests() {
+            let opening = started(request);
+            for lane in [PairLane::External, PairLane::Recall, PairLane::Review] {
+                let record = PairStarted {
+                    lane,
+                    ..opening.clone()
+                };
+                let valid = lane == record.request.lane();
+                assert_eq!(record.validate_structure().is_ok(), valid);
+                let raw = serde_json::to_string(&record).unwrap();
+                assert!(serde_json::from_str::<PairStarted>(&raw).is_ok());
+                assert!(
+                    serde_json::from_str::<PairRecord>(&format!(r#"{{"started":{raw}}}"#)).is_ok()
+                );
+                let source = read_pair(&record).opening_source.source;
+                let filing = super::super::PairFile {
+                    block_id: source.block_id,
+                    source: source.envelope,
+                    partition_rule_id: source.partition_rule_id,
+                    source_path: source.source_path,
+                    admission: super::super::Admission::Admitted,
+                    raw_block: RawValue::from_string(raw).unwrap(),
+                    scheme_id: "scheme".into(),
+                    pair: PairRecord::Started(record),
+                };
+                assert_eq!(filing.validate_structure().is_ok(), valid);
+            }
+        }
+    }
+
+    #[test]
+    fn read_lane_must_match_through_entries_and_tagged_query_results() {
+        use super::super::{QueryResult, ReadEntry, ReadSource, StepQueryRef};
+        for request in requests() {
+            let opening = started(request);
+            for lane in [PairLane::External, PairLane::Recall, PairLane::Review] {
+                let pair = ReadPair {
+                    lane,
+                    ..read_pair(&opening)
+                };
+                let valid = lane == pair.request.lane();
+                assert_eq!(pair.validate_structure().is_ok(), valid);
+                assert_eq!(
+                    serde_json::from_str::<ReadPair>(&serde_json::to_string(&pair).unwrap())
+                        .is_ok(),
+                    valid
+                );
+                let entry = ReadEntry {
+                    source: ReadSource::Event(Box::new(pair.opening_source.source.clone())),
+                    raw_block: RawValue::from_string(
+                        r#"{"type":"text","text":"Read the record."}"#.into(),
+                    )
+                    .unwrap(),
+                    text: "Read the record.".into(),
+                    bindings: vec![],
+                    selected_span: None,
+                    step_query: None,
+                    pairs: vec![pair.clone()],
+                };
+                assert_eq!(
+                    serde_json::from_str::<ReadEntry>(&serde_json::to_string(&entry).unwrap())
+                        .is_ok(),
+                    valid
+                );
+                let PairRequest::Review { work, .. } = &requests()[2] else {
+                    unreachable!()
+                };
+                for result in [
+                    QueryResult::Entries {
+                        entries: vec![entry.clone()],
+                    },
+                    QueryResult::OpenPairs { pairs: vec![pair] },
+                    QueryResult::SpanPreview {
+                        span: work.span.clone(),
+                        through: work.through.clone(),
+                        entries: vec![entry.clone()],
+                    },
+                    QueryResult::StepSuccessor {
+                        reference: StepQueryRef {
+                            plan: work.plan.clone(),
+                            previous_step: None,
+                            step_id: work.step_id.clone(),
+                            instruction: opening.statement.clone(),
+                        },
+                        instruction: Box::new(entry),
+                    },
+                ] {
+                    assert_eq!(
+                        serde_json::from_str::<QueryResult>(
+                            &serde_json::to_string(&result).unwrap()
+                        )
+                        .is_ok(),
+                        valid
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn validated_pair_decoders_keep_required_nulls_and_strict_fields() {
+        let opening = started(requests()[0].clone());
+        let open_json = serde_json::to_string(&opening).unwrap();
+        for forbidden in [
+            open_json.replace(",\"retry_of\":null", ""),
+            open_json.replacen("\"lane\":", "\"extra\":null,\"lane\":", 1),
+            open_json.replacen("\"lane\":", "\"lane\":\"external\",\"lane\":", 1),
+        ] {
+            assert!(serde_json::from_str::<PairStarted>(&forbidden).is_err());
+        }
+        let mut pair = read_pair(&opening);
+        let raw = open_json.replacen('{', "{ ", 1);
+        pair.opening_source.raw_block = RawValue::from_string(raw.clone()).unwrap();
+        let read_json = serde_json::to_string(&pair).unwrap();
+        let decoded: ReadPair = serde_json::from_str(&read_json).unwrap();
+        assert_eq!(decoded.opening_source.raw_block.get(), raw);
+        for forbidden in [
+            read_json.replacen(",\"reason\":null", "", 1),
+            read_json.replacen(",\"terminal_source\":null", "", 1),
+            read_json.replacen("\"lane\":", "\"extra\":null,\"lane\":", 1),
+            read_json.replacen("\"lane\":", "\"lane\":\"external\",\"lane\":", 1),
+        ] {
+            assert!(serde_json::from_str::<ReadPair>(&forbidden).is_err());
+        }
+    }
 
     #[test]
     fn failure_metadata_keeps_empty_object_and_closed_cause_shapes() {

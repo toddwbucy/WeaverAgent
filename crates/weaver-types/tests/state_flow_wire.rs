@@ -376,6 +376,32 @@ fn opaque_blocks_and_nested_control_objects_still_refuse_duplicate_keys() {
 }
 
 #[test]
+fn a_pair_lane_mismatch_decodes_for_the_store_to_answer_invalid_pair() {
+    let mut filing = pair_filing();
+    filing.source.kind = "tool.call.started".into();
+    let PairRecord::Started(record) = &mut filing.pair else {
+        panic!("the fixture is an opening");
+    };
+    record.lane = PairLane::External;
+    filing.raw_block = serde_json::value::to_raw_value(record).unwrap();
+    let request = StateFrame::FilePair {
+        common: common(3),
+        filing,
+    };
+    let line = encode_state_line(&request, FrameDirection::Request).unwrap();
+    let StateFrame::FilePair { common, filing } =
+        decode_state_line(&line, FrameDirection::Request).unwrap()
+    else {
+        panic!("the member receives the filing with its correlation identity");
+    };
+    assert_eq!(common.request_id, 3.into());
+    assert_eq!(
+        filing.validate_structure(),
+        Err(ValidationError("pair lane differs from its request kind"))
+    );
+}
+
+#[test]
 fn every_response_requires_observation_and_every_request_refuses_it() {
     let frames = [
         opened(),

@@ -4,6 +4,8 @@ use crate::{ServingStore, engine::serving_sqlite::ServingSqlite};
 use serde_json::value::RawValue;
 use sha2::{Digest as _, Sha256};
 
+mod provenance;
+
 fn block(sequence: u64, index: u64) -> SourceBlockId {
     SourceBlockId {
         run: "run".into(),

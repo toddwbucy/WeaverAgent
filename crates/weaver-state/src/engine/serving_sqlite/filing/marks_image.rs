@@ -2,7 +2,8 @@
 
 use rusqlite::{Connection, OptionalExtension, named_params, params};
 use weaver_types::state_flow::{
-    MarkEffect, PlanEffect, PlanLockSource, SpanRef, StatementEffect, StepQueryRef, decode_strict,
+    MarkEffect, PlanEffect, PlanInputContext, PlanInputOperation, PlanLockSource, SourceBlockId,
+    SpanRef, StatementEffect, StepQueryRef, decode_strict,
 };
 
 use super::{
@@ -467,7 +468,11 @@ fn check_opening(seed: &str, span: &SpanRow, effect: &StatementEffect) -> Result
         }
         StatementEffect::Plan(effect) => match effect.as_ref() {
             PlanEffect::Authorize { task, .. }
-            | PlanEffect::Lock { task, .. }
+            | PlanEffect::Lock {
+                source: PlanLockSource::Operator { .. },
+                task,
+                ..
+            }
             | PlanEffect::Replace { task, .. } => {
                 (span.kind == "task" && names(&task.task, seed, span.id))
                     || (span.kind == "task_prompt"
@@ -543,9 +548,7 @@ fn verify_prefix(
                 if start != 0 || end != length as u64 || step.is_some() {
                     return Err(invalid_effect("task prompt prefix is not whole text"));
                 }
-                if let StatementEffect::Mark(MarkEffect::BeginTask { source, .. }) = effect
-                    && super::resolve_content(connection, seed, source)? != block
-                {
+                if task_prompt_source(connection, seed, effect)? != block {
                     return Err(invalid_effect(
                         "task prompt differs from its opening source",
                     ));
@@ -601,6 +604,72 @@ fn verify_prefix(
         return Err(invalid_effect("span has the wrong prefix cardinality"));
     }
     Ok(())
+}
+
+fn task_prompt_source(
+    connection: &Connection,
+    seed: &str,
+    effect: &StatementEffect,
+) -> Result<i64, FileFault> {
+    match effect {
+        StatementEffect::Mark(MarkEffect::BeginTask { source, .. }) => {
+            super::resolve_content(connection, seed, source)
+        }
+        StatementEffect::Plan(effect) => match effect.as_ref() {
+            PlanEffect::Authorize { source, .. }
+            | PlanEffect::Lock {
+                source: PlanLockSource::Operator { input: source },
+                ..
+            } => operator_task_source(connection, source),
+            PlanEffect::Replace {
+                expected, source, ..
+            } => {
+                let source_id = operator_task_source(connection, source)?;
+                let raw: String = connection.query_row(
+                    "SELECT context_raw FROM content_block WHERE id=?1",
+                    [source_id],
+                    |row| row.get(0),
+                )?;
+                let input: PlanInputContext = decode_strict(&raw)
+                    .map_err(|_| invalid_effect("task replacement context is malformed"))?;
+                let replacement = match &input.operation {
+                    PlanInputOperation::Replace(replacement)
+                    | PlanInputOperation::AnswerBreak { replacement } => replacement,
+                    _ => return Err(invalid_effect("task replacement lacks operator input")),
+                };
+                if replacement.task.is_some() {
+                    Ok(source_id)
+                } else {
+                    // A terminal task is renewed from its prior held prompt, not
+                    // from the replacement's block zero, which is a plan step.
+                    connection
+                        .query_row(
+                            "SELECT p.block_id FROM plan_revision r JOIN span_prefix p
+                         ON p.local_id=r.prompt_id AND p.revision=r.prompt_revision
+                         WHERE r.plan_id=?1 AND r.revision=?2 AND p.ordinal=?3",
+                            params![
+                                blob(expected.plan_id.local_id.0),
+                                blob(expected.revision.0),
+                                blob(0)
+                            ],
+                            |row| row.get(0),
+                        )
+                        .optional()?
+                        .ok_or_else(|| invalid_effect("renewed task lacks its previous prompt"))
+                }
+            }
+            _ => Err(invalid_effect("plan effect cannot allocate a task prompt")),
+        },
+        _ => Err(invalid_effect("task prompt lacks its opening effect")),
+    }
+}
+
+fn operator_task_source(connection: &Connection, source: &SourceBlockId) -> Result<i64, FileFault> {
+    if source.block.0 != 0 {
+        return Err(invalid_effect("operator task does not name block zero"));
+    }
+    super::source_id(connection, source)?
+        .ok_or_else(|| invalid_effect("operator task source is not held"))
 }
 
 fn check_ending(
