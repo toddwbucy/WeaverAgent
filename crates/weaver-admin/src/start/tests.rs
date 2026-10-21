@@ -585,6 +585,7 @@ fn every_exclusive_verb_records_its_name() {
         HolderVerb::Stop,
         HolderVerb::Validate,
         HolderVerb::Seed,
+        HolderVerb::BindState,
     ] {
         // Exhaustive: a new verb fails to compile here until it is listed.
         match verb {
@@ -595,7 +596,8 @@ fn every_exclusive_verb_records_its_name() {
             | HolderVerb::Restore
             | HolderVerb::Stop
             | HolderVerb::Validate
-            | HolderVerb::Seed => {}
+            | HolderVerb::Seed
+            | HolderVerb::BindState => {}
         }
         let mode = format!("take:{}", verb.spelled());
         let mut child = holding_invocation(&dir, &[("WEAVER_ADMIN_HOLDER_MODE", &mode)]);

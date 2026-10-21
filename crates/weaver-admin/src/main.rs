@@ -43,6 +43,9 @@ mod conclusion;
 mod containment;
 mod inventory;
 mod log;
+// Complete replacement operations, inactive until FOUNDATION-TRANSITION cutover.
+#[allow(dead_code)]
+mod offline_state;
 mod save_points;
 // Complete replacement component, inactive until FOUNDATION-TRANSITION cutover.
 #[allow(dead_code)]

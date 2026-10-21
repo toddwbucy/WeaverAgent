@@ -183,6 +183,18 @@ pub(crate) fn take_seed_inventory(
         diag!("boundary unverified: the seed member must be neither root nor the agent");
         return Err(LifecycleRefusal::BoundaryUnverified);
     }
+    take_serving_inventory(name, source, draft, boundary)
+}
+
+/// The shared operational judgments for a parsed serving authoring draft.
+/// Offline restore and bind start no agent member and need no seed certificate.
+/// The caller still judges the declaration's custody, sink and shell grant.
+pub(crate) fn take_serving_inventory(
+    name: &AgentName,
+    source: &str,
+    draft: &weaver_types::ServingDraft,
+    boundary: &Boundary,
+) -> Result<Inventory, LifecycleRefusal> {
     judge_config(name, source, draft.agent().clone(), boundary, None)
 }
 
