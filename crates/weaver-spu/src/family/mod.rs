@@ -159,6 +159,36 @@ pub fn render_each(family: &dyn Family, messages: &[Message]) -> Result<String, 
     Ok(rendered)
 }
 
+/// The complete generation input shared by append and placement measurement,
+/// under SPU-RENDER. Schemas form one trailing user message before the family's
+/// fold, so a final system message can fold into that message as usual.
+///
+/// This adapter authors no conversation event. It preserves the supplied
+/// messages, takes no identity preamble, and appends the supplied generation
+/// opener only after the complete sequence has rendered successfully. The
+/// caller tokenizes this complete string once against the resident vocabulary.
+pub fn render_generation(
+    family: &dyn Family,
+    delta: &[Message],
+    tool_schemas: &[String],
+    generation_opener: &str,
+) -> Result<String, RenderRefusal> {
+    let mut rendered = if tool_schemas.is_empty() {
+        render_each(family, delta)?
+    } else {
+        let mut messages = delta.to_vec();
+        messages.push(Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: tool_schemas.join("\n"),
+            }],
+        });
+        render_each(family, &messages)?
+    };
+    rendered.push_str(generation_opener);
+    Ok(rendered)
+}
+
 /// Renders a `System` message as user content, for the families whose
 /// template names no system turn, merging it into the `User` turn that
 /// follows where there is one.
@@ -1489,3 +1519,6 @@ pub fn judge_width(declaration: &Declaration, requested: u32) -> Result<(), Fami
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod generation_tests;

@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for the offline admin operations.
+Updated: 2026-10-21 for SPU placement and offline admin operations.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -34,9 +34,10 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | P1d | P1a, P1b, F4, C1 | Serving lifecycle and verified boot, admin/persistence amendments |
 | H1 | F1, T1b, F4, C1, P1 | Flow, receipts and halt, harness/foundation amendments |
 | H2 | H1, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
-| H3 | H1 | Marks, renderer and SPU buffer boundary, Spec 06 and SPU amendment |
-| H4 | H2, H3 | Plan operations and review evidence, Spec 07 and admin amendment |
-| H5 | H3, H4 | Sort, selection and injection ports, Spec 08 |
+| H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
+| H3b | H1, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
+| H4 | H2, H3b | Plan operations and review evidence, Spec 07 and admin amendment |
+| H5 | H3b, H4 | Sort, selection and injection ports, Spec 08 |
 | Q1 | All above | Serving qualification and coupled cutover, foundation transition |
 
 Spec 09's required evidence producers travel with the primitive that produces each
@@ -162,7 +163,7 @@ user-namespace substitute correctly refused unmapped host-root ancestors, so tha
 substitute was removed. Production host admission, the joined root-host fixture,
 qualified certificates and serving boot remain owed before cutover.
 
-P1o is the draft slice on code/state-offline-controls, stacked on #195. It adds
+P1o is [draft PR #196][offline-controls], stacked on #195. It adds
 the complete dormant bind-state and restore operations.
 Both authenticate before reading fixed inputs, hold the invocation and run locks,
 and require the existing cgroup ladder to report unloaded. Preparation judges the
@@ -179,7 +180,28 @@ The fixtures use actual filesystem publication and locks with synthetic host
 inventory and image bytes. They do not certify SQLite, root/NSS provisioning or
 a populated delegated cgroup. Existing containment instruments own that last duty.
 
-H3 has a named open-measurement gap. Spec 06 OPEN-FACTS requires an identity-prefix
+H3a is the draft slice on code/state-spu-placement, stacked on #191. It adds
+one complete generation renderer shared by the existing append path and immutable
+placement measurement on the existing open session owner. The session supplies
+checked actual prefix, resident and capacity counts. The open owner adds the resolved
+generation limit and single terminator count. Measurement retains no proposal,
+permits oversized counts and preserves malformed-render and component-fault outcomes.
+The host suite reports 229 passes. The required Olympus cuda,gguf suite reports
+295 passes, with the pace instrument explicitly skipped. Both all-target lint gates,
+formatting and lock checks pass. The new real-model tests use Qwen2.5-0.5B through
+GGUF and native CUDA and check the actual legacy decode socket as well as the
+internal operation. Registry fixtures cover every admitted renderer's bytes. These
+are not throughput, deployment-capacity or all-model qualification results.
+Fifteen compiled perturbations fail their protective assertions. Six cover rendering,
+three session bounds, two preparation failures and four the real GGUF measurement
+and append path. Exact source bytes are restored and the corresponding clean
+baselines pass. Independent source review has no open finding.
+This completes the internal SPU primitive, not its replacement socket protocol.
+H3b must change the paired floor, harness and diagnostic consumers together. It also
+owns marks and the harness's between-turn grant. The existing serving wire and loop
+remain active until the coupled cutover.
+
+H3b has a named open-measurement gap. Spec 06 OPEN-FACTS requires an identity-prefix
 label at open, while TYPES-DECODE specifies only four counts in Opened and leaves
 Generation unchanged. The existing SPU Spec section 6 emits no open measurement.
 No implementation may invent the missing carrier. The existing PromptPartition
@@ -232,3 +254,5 @@ quality, decoder capacity, throughput or absence of paging waits.
 [publication]: https://github.com/toddwbucy/WeaverAgent/pull/194
 
 [seed-driver]: https://github.com/toddwbucy/WeaverAgent/pull/195
+
+[offline-controls]: https://github.com/toddwbucy/WeaverAgent/pull/196
