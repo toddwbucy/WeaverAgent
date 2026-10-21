@@ -116,6 +116,17 @@ protective tests. The GPU pace instrument reports a skip, so no measured-pace cl
 follows from that run. Independent review found no unresolved mechanics defect.
 Its current head is 22cf33f4 after the shared-floor refresh.
 
+C1t is [draft PR #200][ste100-transport], stacked on #199 at 2b721285. It adds the
+concrete harness STE100 socket adapter with exact admission echoes, bounded fragments,
+strict replies and one outstanding request. Writable and buffered-work accessors let
+the common pump progress it without another clock. The full harness suite passes
+540 tests with 17 ignored instruments. All 37 new transport and recording tests run.
+Twelve compiled protective changes fail their intended assertions, exact bytes are
+restored, and independent review verifies that evidence. Lint, formatting, lock and
+diff checks pass. [The implementation record][ste100-transport-record] states the
+scope and the separate SPU empty-datagram correction still owed to C1a. Worker launch,
+the common pump, production artifacts and qualification remain open.
+
 P1a adds strict draft/bound declaration parsing, admin-owned canonical TOML,
 strict binding/index/guard codecs and descriptor-held artifact verification. It is
 stacked on #184, independently of #188. Its read half returns the checked copy and
@@ -297,6 +308,8 @@ quality, decoder capacity, throughput or absence of paging waits.
 [spu]: https://github.com/toddwbucy/WeaverAgent/pull/191
 
 [snapshot]: https://github.com/toddwbucy/WeaverAgent/pull/192
+[ste100-transport]: https://github.com/toddwbucy/WeaverAgent/pull/200
+[ste100-transport-record]: state-management-ste100-transport-2026-10-21.md
 
 [artifacts]: https://github.com/toddwbucy/WeaverAgent/pull/193
 

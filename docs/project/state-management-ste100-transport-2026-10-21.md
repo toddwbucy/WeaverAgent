@@ -2,8 +2,8 @@
 
 **Version:** 0.1, 2026-10-21.
 
-This act implements the harness side of Spec 02 CHANNEL and PORT, using the existing
-HARNESS-CLASSIFY trait. It is the transport part of C1. It is stacked on the filing
+Draft [PR #200][pr] implements the harness side of Spec 02 CHANNEL and PORT, using
+the existing HARNESS-CLASSIFY trait. It is the transport part of C1, stacked on the filing
 coordinator, PR #199 at 2b721285. The SPU's matching dispatcher is in PR #191. The
 shared vocabulary comes from PR #184. No harness dependency on the SPU is introduced.
 
@@ -102,3 +102,5 @@ No code in this act chooses their representations.
 The cross-end read also found that PR #191's SPU fragment helper reports a live empty
 datagram as EOF. This near side distinguishes malformed empty traffic from peer close.
 The corresponding SPU correction remains C1a follow-up, before production cutover.
+
+[pr]: https://github.com/toddwbucy/WeaverAgent/pull/200
