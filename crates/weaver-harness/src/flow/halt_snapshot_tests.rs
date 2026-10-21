@@ -493,15 +493,22 @@ fn classifier_mismatch_keeps_expected_source_and_received_id_without_using_bad_t
     assert_eq!(account.request.unwrap().id, request.request_id);
     assert_eq!(account.received_request.unwrap().id.0, 0);
     assert!(account.input_id.is_none());
-    let mut wrong_external = external();
-    wrong_external.input_id = Some(999.into());
-    let failed =
-        snapshot(&fx.flow, &fx.barrier, &fx.inbox, &fx.budget, wrong_external).unwrap_err();
-    assert_eq!(
-        failed.error,
-        ReportError::Invalid("input conflicts with classifier source")
-    );
-    assert_eq!(failed.external.input_id, Some(999.into()));
+    // A separate frame owner can be waiting behind this source's check. Its
+    // explicit identity is independent of the rejected reply's bogus target.
+    let mut independent_input = external();
+    independent_input.input_id = Some(17.into());
+    let with_input = snapshot(
+        &fx.flow,
+        &fx.barrier,
+        &fx.inbox,
+        &fx.budget,
+        independent_input,
+    )
+    .unwrap();
+    assert_eq!(with_input.input_id, Some(17.into()));
+    assert_eq!(with_input.source_id, Some(sources[0].clone()));
+    assert_eq!(with_input.request.unwrap().id, request.request_id);
+    assert_eq!(with_input.received_request.unwrap().id.0, 0);
 }
 
 #[test]

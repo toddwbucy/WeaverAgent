@@ -13,7 +13,7 @@ use weaver_trace::{Subsystem, TurnRef};
 use weaver_types::state_flow::{
     DecimalU64, MeasuredInterval, ReadLimits, STATE_CONTENT_SCHEMA, SchemeDeclaration,
     SourceBlockId, SourceEnvelope, StartIdentity, StateControl, StateFrame, Ste100Reply,
-    Ste100Request, Ste100Target,
+    Ste100Request, Ste100Result, Ste100Target,
 };
 
 use super::author::{AuthoredEvent, AuthoredSource, ServingAuthor};
@@ -96,10 +96,15 @@ impl ControlOperation {
 }
 
 /// The caller owns the source of this work. None of these operations grants
-/// selected-copy admission or manufactures a ledger entry. Gate input is
-/// deliberately absent until its intake, cancellation and counter owner exists.
+/// selected-copy admission or manufactures a ledger entry. Input submission is
+/// licensed only through its registered intake and measured submission method.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum CheckOperation {
+    Input {
+        input_id: DecimalU64,
+        offered_sequence: DecimalU64,
+        text: String,
+    },
     Template {
         template_id: String,
         text: String,
@@ -114,6 +119,10 @@ pub(super) enum CheckOperation {
 impl CheckOperation {
     fn target(&self) -> Ste100Target {
         match self {
+            Self::Input { input_id, .. } => Ste100Target::Input {
+                input_id: *input_id,
+                block: 0.into(),
+            },
             Self::Template { template_id, .. } => Ste100Target::Template {
                 template_id: template_id.clone(),
             },
@@ -123,7 +132,9 @@ impl CheckOperation {
 
     fn text(&self) -> &str {
         match self {
-            Self::Template { text, .. } | Self::UnselectedModel { text, .. } => text,
+            Self::Input { text, .. }
+            | Self::Template { text, .. }
+            | Self::UnselectedModel { text, .. } => text,
         }
     }
 }
@@ -148,6 +159,12 @@ pub(super) enum RefusedAuthor {
 // recording proof never needs a second allocation to publish its completion.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum OperationCompletion {
+    Input {
+        operation: CheckOperation,
+        reply: Ste100Reply,
+        reuse: Option<AcceptedReuse>,
+        recorded_ns: u64,
+    },
     Opened(StateCompletion),
     State {
         request: StateControl,
@@ -162,8 +179,20 @@ pub(super) enum OperationCompletion {
 
 #[derive(Clone)]
 struct Notice {
+    input_id: Option<u64>,
     point: SamplePoint,
     turn: Option<String>,
+}
+
+struct InputAccount {
+    id: DecimalU64,
+    began_ns: u64,
+    request_id: Option<DecimalU64>,
+}
+
+struct InputReuse {
+    grant: AcceptedReuse,
+    source_sequence: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -218,7 +247,9 @@ pub(super) struct FlowCoordinator<P> {
     snapshot_failure: Option<FlowFailure>,
     backlog_reported: bool,
     started_file: Option<SourceBlockId>,
-    reuse: Option<AcceptedReuse>,
+    reuse: Option<InputReuse>,
+    input_account: Option<InputAccount>,
+    last_input_id: u64,
     state_operation: Option<(StateControl, Option<TurnRef>)>,
     check_operation: Option<CheckOperation>,
     operation_completion: Option<OperationCompletion>,
@@ -274,6 +305,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             backlog_reported: false,
             started_file: None,
             reuse: None,
+            input_account: None,
+            last_input_id: 0,
             state_operation: None,
             check_operation: None,
             operation_completion: None,
@@ -428,6 +461,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             backlog_reported: false,
             started_file: None,
             reuse: None,
+            input_account: None,
+            last_input_id: 0,
             state_operation: None,
             check_operation: None,
             operation_completion: None,
@@ -514,6 +549,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             && self.notices.is_empty()
             && self.pending_record.is_none()
             && self.operation_completion.is_none()
+            && self.input_account.is_none()
+            && self.reuse.is_none()
             && self.state_operation.is_none()
             && self.check_operation.is_none()
             && self.admission_completion.is_none()
@@ -712,6 +749,17 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         cx: &mut FlowRecording<'_>,
         operation: CheckOperation,
     ) -> Result<OperationStart<CheckOperation>, FlowFailure> {
+        if matches!(operation, CheckOperation::Input { .. }) {
+            return Err(self.fail(cx, "classifier", "input requires measured submission"));
+        }
+        self.begin_check_inner(cx, operation)
+    }
+
+    fn begin_check_inner(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        operation: CheckOperation,
+    ) -> Result<OperationStart<CheckOperation>, FlowFailure> {
         self.require_active(cx)?;
         if self.classifier.is_none() {
             return Ok(OperationStart::Busy(operation));
@@ -757,6 +805,175 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         }
     }
 
+    /// The frame owner registers serialized intake before authoring input.offered.
+    /// The supplied start is the gate bound's original sample of this same clock.
+    /// Queued frames have no account and therefore cannot start a check clock here.
+    pub(super) fn input_started(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        input_id: DecimalU64,
+        began_ns: u64,
+    ) -> Result<(), FlowFailure> {
+        // The frame owner already transferred serialized intake. Mirror that
+        // ownership before a clock or asynchronously failed trace can latch.
+        // An existing failure is immutable and cannot acquire later work.
+        self.ensure_live()?;
+        if self.phase != CoordinatorPhase::Active {
+            return Err(self.fail(cx, "barrier", "input requires an active flow"));
+        }
+        if self.input_account.is_some() || input_id.0 <= self.last_input_id {
+            return Err(self.fail(
+                cx,
+                "counter",
+                "input intake is repeated or already occupied",
+            ));
+        }
+        self.last_input_id = input_id.0;
+        self.input_account = Some(InputAccount {
+            id: input_id,
+            began_ns,
+            request_id: None,
+        });
+        self.observations
+            .as_mut()
+            .expect("active observation owner")
+            .note_input_started()
+            .map_err(|error| self.fail(cx, "counter", error))?;
+        self.observe_failures(cx)?;
+        let now = io.now().map_err(|error| self.fail(cx, "clock", error))?;
+        if began_ns > now {
+            return Err(self.fail(cx, "clock", "input intake is after registration"));
+        }
+        Ok(())
+    }
+
+    /// This is the sole input submission path. Busy retains the complete operation
+    /// and the original intake account without counting a second submission.
+    pub(super) fn begin_input_check(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        operation: CheckOperation,
+    ) -> Result<OperationStart<CheckOperation>, FlowFailure> {
+        self.require_active(cx)?;
+        let CheckOperation::Input {
+            input_id,
+            offered_sequence,
+            ..
+        } = &operation
+        else {
+            return Err(self.fail(
+                cx,
+                "classifier",
+                "input submission requires an input target",
+            ));
+        };
+        let input_id = *input_id;
+        if input_id.0 == 0
+            || offered_sequence.0 == 0
+            || !self
+                .input_account
+                .as_ref()
+                .is_some_and(|input| input.id == input_id && input.request_id.is_none())
+        {
+            return Err(self.fail(
+                cx,
+                "classifier",
+                "input submission lacks its original intake",
+            ));
+        }
+        let result = self.begin_check_inner(cx, operation)?;
+        if let OperationStart::Started { request_id } = &result {
+            self.input_account
+                .as_mut()
+                .expect("registered input")
+                .request_id = Some(*request_id);
+            let mut transition = Transition::new(trace::FlowPhase::ClassificationStarted);
+            transition.input_id = Some(input_id.0);
+            transition.request_id = Some(request_id.0);
+            self.notice(cx, io, transition, None)?;
+        }
+        Ok(result)
+    }
+
+    /// The frame owner calls this only after its required result/refusal or
+    /// cancellation disposition. A still-submitted check cannot be forgotten.
+    pub(super) fn input_finished(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        input_id: DecimalU64,
+    ) -> Result<(), FlowFailure> {
+        let ended_ns = io.now().map_err(|error| self.fail(cx, "clock", error))?;
+        self.input_finished_at(cx, io, input_id, ended_ns)
+    }
+
+    /// The completion owner supplies its exact Recorded/response-ack sample.
+    /// Time spent reducing or publishing later measurements is not gate wait.
+    pub(super) fn input_finished_at(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        input_id: DecimalU64,
+        ended_ns: u64,
+    ) -> Result<(), FlowFailure> {
+        self.require_active(cx)?;
+        if self
+            .input_account
+            .as_ref()
+            .is_none_or(|input| input.id != input_id)
+            || matches!(self.check_operation, Some(CheckOperation::Input { .. }))
+            || matches!(
+                self.operation_completion,
+                Some(OperationCompletion::Input { .. })
+            )
+        {
+            return Err(self.fail(
+                cx,
+                "counter",
+                "input disposition is absent or still outstanding",
+            ));
+        }
+        let now = io.now().map_err(|error| self.fail(cx, "clock", error))?;
+        let account = self.input_account.as_ref().expect("matched input");
+        let elapsed = ended_ns
+            .checked_sub(account.began_ns)
+            .filter(|_| ended_ns <= now)
+            .ok_or_else(|| {
+                self.fail(
+                    cx,
+                    "clock",
+                    "input disposition is outside its clock interval",
+                )
+            })?;
+        let request_id = self
+            .input_account
+            .as_ref()
+            .expect("matched input")
+            .request_id;
+        self.observations
+            .as_mut()
+            .expect("active observation owner")
+            .note_input_completed()
+            .map_err(|error| self.fail(cx, "counter", error))?;
+        self.input_account.take();
+        let mut transition = Transition::new(trace::FlowPhase::WaitFinished);
+        transition.input_id = Some(input_id.0);
+        transition.request_id = request_id.map(|id| id.0);
+        transition.blocked_stage = Some(trace::BlockedStage::Gate);
+        transition.elapsed_ns = Some(elapsed);
+        self.notice(cx, io, transition, None)
+    }
+
+    pub(super) fn pending_input_id(&self) -> Option<DecimalU64> {
+        self.input_account.as_ref().map(|account| account.id)
+    }
+
+    pub(super) fn input_measurements_pending(&self) -> bool {
+        self.notices.iter().any(|notice| notice.input_id.is_some())
+    }
+
     pub(super) fn take_operation_completion(
         &mut self,
         cx: &mut FlowRecording<'_>,
@@ -796,7 +1013,47 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         {
             return Err(reuse);
         }
-        self.reuse = Some(reuse);
+        self.reuse = Some(InputReuse {
+            grant: reuse,
+            source_sequence: None,
+        });
+        Ok(())
+    }
+
+    /// A Recorded accepted message pins its actual source. An unselected or
+    /// zero-block copy owes no filing and cannot donate labels to a later event.
+    pub(super) fn finish_input_author(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: weaver_trace::Sequence,
+    ) -> Result<(), FlowFailure> {
+        self.require_active(cx)?;
+        let Some(reuse) = &mut self.reuse else {
+            return Ok(());
+        };
+        if sequence.0 <= reuse.grant.offered_sequence().0
+            || reuse
+                .source_sequence
+                .is_some_and(|source| source != sequence.0)
+        {
+            return Err(self.fail(
+                cx,
+                "copy_intake",
+                "accepted input source does not follow its offer",
+            ));
+        }
+        reuse.source_sequence = Some(sequence.0);
+        let owed = cx
+            .inbox
+            .queued()
+            .chain(cx.budget.waiting_copy())
+            .try_fold(false, |owed, copy| {
+                matches_input_copy(copy, reuse).map(|matches| owed || matches)
+            });
+        let owed = owed.map_err(|error| self.fail(cx, "copy_intake", error))?;
+        if !owed {
+            self.reuse.take();
+        }
         Ok(())
     }
 
@@ -857,13 +1114,18 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         })?;
         let gauges = self.gauges(cx)?;
         let now = io.now().map_err(|e| self.fail(cx, "clock", e))?;
+        let input_id = transition.input_id;
         let point = self
             .observations
             .as_mut()
             .expect("recorded open observation")
             .capture(transition, gauges, now)
             .map_err(|e| self.fail(cx, "observation", e))?;
-        self.notices.push_back(Notice { point, turn });
+        self.notices.push_back(Notice {
+            input_id,
+            point,
+            turn,
+        });
         Ok(())
     }
 
@@ -903,7 +1165,29 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 });
                 return Err(self.fail(cx, "copy_intake", "copy has no intake clock"));
             };
-            match self.ledger.install(copy, intake_ns, self.reuse.take()) {
+            let use_reuse = match self
+                .reuse
+                .as_ref()
+                .map(|reuse| matches_input_copy(&copy, reuse))
+                .transpose()
+            {
+                Ok(matched) => matched.unwrap_or(false),
+                Err(error) => {
+                    let _ = cx.inbox.preserve_failure(IntakeFailure {
+                        copy,
+                        detail: IntakeError::InvalidIdentity,
+                    });
+                    return Err(self.fail(cx, "copy_intake", error));
+                }
+            };
+            let selected_reuse = if use_reuse { self.reuse.take() } else { None };
+            let reuse_sequence = selected_reuse
+                .as_ref()
+                .and_then(|reuse| reuse.source_sequence);
+            match self
+                .ledger
+                .install(copy, intake_ns, selected_reuse.map(|reuse| reuse.grant))
+            {
                 Ok(installed) => {
                     copied.try_reserve(1).map_err(|_| {
                         self.fail(cx, "counter", "copied transition reservation failed")
@@ -912,7 +1196,12 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 }
                 Err(failure) => {
                     let detail = failure.error.to_string();
-                    self.reuse = failure.reuse;
+                    if let Some(grant) = failure.reuse {
+                        self.reuse = Some(InputReuse {
+                            grant,
+                            source_sequence: reuse_sequence,
+                        });
+                    }
                     let _ = cx.inbox.preserve_failure(IntakeFailure {
                         copy: failure.copy,
                         detail: IntakeError::InvalidIdentity,
@@ -1348,6 +1637,59 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 }
             }
             (Some(PendingRecord::Classifier), RecordProof::Classifier(proof)) => {
+                if let Some(CheckOperation::Input {
+                    input_id,
+                    offered_sequence,
+                    ..
+                }) = &self.check_operation
+                {
+                    let input_id = *input_id;
+                    let offered_sequence = *offered_sequence;
+                    // The completed proof is the gate's logical recording
+                    // boundary. Sample before releasing or authoring any notice.
+                    let recorded_ns = io.now().map_err(|error| self.fail(cx, "clock", error))?;
+                    let accepted = matches!(
+                        self.classifier().held().map(|reply| &reply.result),
+                        Some(Ste100Result::Accepted { .. })
+                    );
+                    let (reply, reuse) = if accepted {
+                        let reuse = self
+                            .classifier
+                            .as_mut()
+                            .expect("held classifier")
+                            .recorded_input(proof, offered_sequence)
+                            .map_err(|error| self.fail(cx, "classifier", error.detail))?;
+                        (reuse.reply().clone(), Some(reuse))
+                    } else {
+                        let reply = self
+                            .classifier
+                            .as_mut()
+                            .expect("held classifier")
+                            .recorded(proof)
+                            .map_err(|error| self.fail(cx, "classifier", error.detail))?;
+                        (reply, None)
+                    };
+                    if self.classifier().state() == ClassifierState::Failed {
+                        return Err(self.fail(
+                            cx,
+                            "classifier",
+                            "classifier reported component failure",
+                        ));
+                    }
+                    if accepted {
+                        let mut transition = Transition::new(trace::FlowPhase::Accepted);
+                        transition.input_id = Some(input_id.0);
+                        transition.request_id = Some(reply.request_id.0);
+                        self.notice(cx, io, transition, None)?;
+                    }
+                    self.operation_completion = Some(OperationCompletion::Input {
+                        operation: self.check_operation.take().expect("owned input operation"),
+                        reply,
+                        reuse,
+                        recorded_ns,
+                    });
+                    return Ok(Advance::Progress);
+                }
                 let reply = self
                     .classifier
                     .as_mut()
@@ -1539,7 +1881,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                     context_bytes: fact.context_bytes,
                     intake_ns: fact.intake_ns,
                 })),
-            0,
+            u64::from(self.input_account.is_some()),
             cx.budget.gauges(),
             waiting.as_ref().map(|(copy, turn)| WaitingSource {
                 copy,
@@ -1702,6 +2044,37 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
     }
 }
 
+/// Select reuse by its real offer correlation, never by inbox position.
+fn matches_input_copy(
+    copy: &weaver_trace::serving::AdmittedCopy,
+    reuse: &InputReuse,
+) -> io::Result<bool> {
+    let weaver_trace::serving::AdmittedCopy::Statement(statement) = copy else {
+        return Ok(false);
+    };
+    if statement.blocks.is_empty() {
+        return Ok(false);
+    }
+    let source: SourceEnvelope =
+        weaver_types::state_flow::decode_strict(&statement.source_envelope)
+            .map_err(io::Error::other)?;
+    if source.run != reuse.grant.run()
+        || source.kind != "message.user"
+        || source.causal_parent != Some(reuse.grant.offered_sequence())
+    {
+        return Ok(false);
+    }
+    if reuse
+        .source_sequence
+        .is_some_and(|sequence| sequence != source.sequence.0)
+    {
+        return Err(io::Error::other(
+            "input copy differs from its recorded source",
+        ));
+    }
+    Ok(true)
+}
+
 struct QueuedSource {
     source: SourceBlockId,
     turn: Option<String>,
@@ -1841,3 +2214,7 @@ fn copy_identity(
 #[cfg(test)]
 #[path = "coordinator_tests.rs"]
 pub(in crate::flow) mod tests;
+
+#[cfg(test)]
+#[path = "coordinator_input_tests.rs"]
+mod input_tests;

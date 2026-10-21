@@ -12,6 +12,7 @@ mod clock;
 pub(crate) mod context;
 mod coordinator;
 mod halt_snapshot;
+mod input;
 mod intake;
 mod ledger;
 mod mirror;

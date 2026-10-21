@@ -87,6 +87,10 @@ pub(crate) struct RecordingContext {
     open_start: Option<StartIdentity>,
     open_limits: Option<ReadLimits>,
     load_duty: Option<LoadDuty>,
+    input: super::input::InputSlot,
+    input_author: Option<input_driver::InputAuthorStage>,
+    input_turn: Option<input_driver::InputTurn>,
+    input_turns: std::collections::BTreeSet<String>,
     /// A caller's source remains owned if refusal happens before a ticket.
     /// It is distinct from the recorder's first pending author.
     refused_author: Option<AuthoredEvent>,
@@ -137,6 +141,8 @@ impl RecordingContext {
                     .map_err(|e| ContextError(e.to_string()))?,
             )
             .map_err(|e| ContextError(e.to_string()))?;
+        let input = super::input::InputSlot::new(run.clone(), declaration.scheme.scheme_id.clone())
+            .map_err(|error| ContextError(error.to_string()))?;
         Ok(Self {
             phase: RecordingPhase::Preflight,
             origin,
@@ -152,6 +158,10 @@ impl RecordingContext {
             open_start: None,
             open_limits: None,
             load_duty: None,
+            input,
+            input_author: None,
+            input_turn: None,
+            input_turns: std::collections::BTreeSet::new(),
             refused_author: None,
             waiting_content: None,
             completed_author: None,
@@ -188,6 +198,16 @@ impl RecordingContext {
         &mut self,
         external: super::halt_snapshot::ExternalFacts,
     ) -> Result<(), HaltAccountFailure> {
+        if external.input_id != self.input.snapshot().map(|input| input.input_id) {
+            return Err(HaltAccountFailure::Snapshot(
+                super::halt_snapshot::SnapshotFailure {
+                    external,
+                    error: super::report::ReportError::Invalid(
+                        "input differs from retained transaction",
+                    ),
+                },
+            ));
+        }
         if self.failed_wait.is_some() && external.wait != self.failed_wait {
             return Err(HaltAccountFailure::Snapshot(
                 super::halt_snapshot::SnapshotFailure {
@@ -357,6 +377,14 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
+        if self.input.snapshot().is_some() || self.input_turn.is_some() {
+            return Err(self.fail(
+                io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                "release requires the input disposition and source handoff",
+            ));
+        }
         if let Some(armed) = self.deadlines.get(PumpDeadline::Leave) {
             if armed != leave {
                 return Err(self.fail(
@@ -835,6 +863,7 @@ impl RecordingContext {
             wall_ms,
         );
         let advance = result.map_err(|failure| self.flow_failed(io, failure))?;
+        self.settle_recorded_input(io)?;
         self.live(io)?;
         Ok(advance)
     }
@@ -1054,6 +1083,7 @@ impl RecordingContext {
             detail: detail.clone(),
         };
         // Revoke before sampling or reporting. A broken clock cannot grant work.
+        self.input.halt();
         self.phase = RecordingPhase::Failed;
         self.failure = Some(failure.clone());
         self.barrier.stop_for_flow_failure();
@@ -1110,3 +1140,12 @@ mod edge_tests;
 #[cfg(test)]
 #[path = "context_review_tests.rs"]
 mod review_tests;
+
+#[path = "context_input.rs"]
+mod input_driver;
+#[allow(unused_imports)] // Dormant serving boundary, consumed at lifecycle cutover.
+pub(super) use input_driver::{InputBeginError, InputConsumeError, InputProgress, SeatedInput};
+
+#[cfg(test)]
+#[path = "context_input_tests.rs"]
+mod input_tests;

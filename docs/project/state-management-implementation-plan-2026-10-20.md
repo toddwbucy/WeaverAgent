@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for run recording, the common pump and frozen failure accounts.
+Updated: 2026-10-21 for the checked input transaction and source handoff.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -38,7 +38,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H1p | C1t | Bounded organ, decode and label packet owners, HARNESS-PUMP |
 | H1r | H1p | Bounded recording progress and typed operation results, harness/trace amendments |
 | H1c | H1r | Run recording, common pump and frozen failure-account support, harness amendment |
-| H1b2 | H1b1, H1c, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
+| H1i | H1c | Checked input transaction and single-use source handoff, Spec 02 and harness amendment |
+| H1b2 | H1b1, H1i, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
 | H2 | H1b2, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
@@ -137,7 +138,7 @@ H1r is [draft PR #202][recording-support], stacked on #201. It adds bounded
 trace wake/drain and preflight terminal APIs, original author custody, held state
 terminal observation, interruption-safe release and typed noncapture control and
 classifier operation results. H1c adds the phaseful recording and common pump
-components. Input ownership and lifecycle caller migration remain in H1b2. Its
+components. H1i adds input ownership. Lifecycle caller migration remains in H1b2. Its
 [implementation record][recording-support-record] carries the precise boundary and
 validation status. Both full affected-crate suites pass, totaling 726 tests with
 17 inherited ignored instruments. Fifteen compiled protective changes fail their
@@ -151,9 +152,18 @@ and drain, and supplies the common pump and the complete frozen account producer
 The full affected-crate suites pass 909 tests with 17 inherited ignored instruments
 and zero failures. All 26 compiled protective mutations fail their intended checks,
 and independent review verifies exact source restoration and the final passing
-suites. All-target lint, formatting, lock and diff checks pass. The lifecycle callers,
-input and capture owners, terminal report submission and failed-exit containment
-remain in H1b2.
+suites. All-target lint, formatting, lock and diff checks pass. H1i adds input
+ownership. Lifecycle callers, capture owners, terminal report submission and failed-exit
+containment remain in H1b2.
+
+H1i is the next [input-transaction slice][input-transaction-record], based on #203.
+It owns original frame custody, trace-first parsing, SPU check routing, revocable
+single-use tokens, exact source handoff, cancellation and original gate-wait accounting.
+The affected-crate suites pass 959 tests with 17 inherited ignored instruments.
+Twenty-two behavioral probes fail their intended assertions and one non-Clone type
+pin fails compilation. Sources are restored exactly and independent review checks the
+evidence. The existing serving path remains active. H1b2 still owes frame/lifecycle
+caller migration and Contribution integration before this port serves.
 
 P1a adds strict draft/bound declaration parsing, admin-owned canonical TOML,
 strict binding/index/guard codecs and descriptor-held artifact verification. It is
@@ -369,3 +379,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [recording-support]: https://github.com/toddwbucy/WeaverAgent/pull/202
 [run-context-record]: state-management-run-context-2026-10-21.md
 [run-context]: https://github.com/toddwbucy/WeaverAgent/pull/203
+[input-transaction-record]: state-management-input-transaction-2026-10-21.md

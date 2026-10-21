@@ -474,7 +474,7 @@ impl Fixture {
         panic!("classifier request did not reach its port");
     }
 
-    fn fill_trace_capacity(&mut self) -> String {
+    pub(super) fn fill_trace_capacity(&mut self) -> String {
         let large = "x".repeat(32768);
         for _ in 0..ORDINARY_CAPACITY + 64 {
             let now = self.time();
@@ -514,7 +514,7 @@ impl Fixture {
         panic!("bounded fixture did not reach real trace capacity");
     }
 
-    fn resume_external_ticket(&mut self) {
+    pub(super) fn resume_external_ticket(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
             let now = self.time();
@@ -541,7 +541,7 @@ impl Fixture {
             .collect()
     }
 
-    fn start_drain(&mut self) -> std::thread::JoinHandle<Vec<u8>> {
+    pub(super) fn start_drain(&mut self) -> std::thread::JoinHandle<Vec<u8>> {
         let mut reader = self.reader.take().unwrap();
         std::thread::spawn(move || {
             let mut bytes = Vec::new();
