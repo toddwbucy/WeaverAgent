@@ -5,6 +5,10 @@
 //! seed-member containment/cleanup, and live deadline/peer observations. Its
 //! checkpoint must refuse observed failure or expiry. No serialized protocol,
 //! caller-chosen path, new clock, or success inferred from file presence lives here.
+//!
+//! A failed broken-guard replacement can retain its .<id>.pending.broken
+//! temporary file. Failure evidence probes both that file and .<id>.pending
+//! and reports each confirmed retained guard without granting retry or load.
 
 use std::collections::BTreeMap;
 use std::fs::File;

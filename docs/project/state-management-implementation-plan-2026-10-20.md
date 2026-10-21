@@ -1,13 +1,38 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for SPU placement and offline admin operations.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
-start as drafts. The Planner controls the reviewed transition out of draft.
+start as drafts. Gates and Planner verification precede third-party review.
 The operator merges them.
 The crate remains weaver-state. The loop remains in worker/dev_loop and calls
 primitives. The SPU owns classification.
+
+## Consolidated review stack
+
+On 2026-10-21, the completed slices were folded into three roots. This landing
+map takes precedence over the historical slice descriptions below. A merge into
+a review branch does not mean the change has reached main.
+
+| Root or held branch | Contents and next step |
+| --- | --- |
+| #184 | Shared floor, store/member via #212, admin #193 through #196, and SPU #191 with #197. Complete consolidated gates and review, then the operator lands this root on main. |
+| #185 | Trace copy and recorder, including #187. Complete consolidated gates and review, then the operator lands this independent root on main. |
+| #198 | Harness #199 through #210 and model repair #214. Fix the inherited #203 observation-tick finding. After #184 and #185 land, retarget from code/state-member-flow to main and check the combined head. |
+| #190 | Independent pure recall query primitive. Its review and landing do not depend on the three roots. |
+| #215, #216, #217 | Typed tool causes, external pair execution and paged reads. Keep the descendant stack held for the coupled cutover. |
+| #218, #219, #220 | Paired decode wire, owned measurement and outbound identity sort. The #219 union preserves both #217 and #218. Keep that union and its descendants held for the coupled cutover. |
+| #189, #192, #213 | Separate Spec proposals. Approval and merge remain owed, so they are not implementation authority. |
+
+No further descendant needs folding into #184 or #185 before their review. Keep
+the paired wire out of either additive root. Preserve merge ancestry rather than
+squashing the joined stacks. The old serving path remains active until the qualified
+foundation cutover. The full implementation and epic #146 remain open.
+
+For #184, the contained seed fixture that launches the real member under root-owned
+host containment remains an open instrument. The reviewed scripted seed fixtures
+do not replace it. Production language artifacts and measured limits also remain
+unqualified. These limits stay explicit in the consolidated PR body.
 
 ## Dependency and merge order
 
@@ -93,8 +118,9 @@ guard removals failed their protective tests. Independent findings in continuati
 identity, page publication, canonical encoding and observation integrity are fixed.
 Copied and held byte counters remain explicitly uninstrumented. The optional build
 without SQLite still has its inherited legacy binary compile failure. Its current
-head is 9e3dab9c. The operator settled snapshot timing, with the narrow measurement
-amendment in [draft PR #192][snapshot]. Sampling code follows that review.
+head is 9e3dab9c. The narrow snapshot timing amendment remains a proposal in
+[draft PR #192][snapshot]. Its ruling and merge are still owed before the matching
+sampling change becomes implementation authority.
 
 IN1 is [draft PR #190][internal-recall], independently based on main at 7a8651d8.
 It supplies the pure recall query with an empty-only refusal and an exact borrowed
@@ -103,8 +129,9 @@ failed their protective tests, including two type pins. H2 owns the caller and r
 integration. No serving change or unused harness dependency is added here.
 
 C1a is [PR #191][spu], stacked on #184. It implements the SPU protocol and
-binding mechanics. Its remaining production dependencies are recorded in the
-[PR description][spu]. It adds no production checker, manifest locator or
+binding mechanics. The [mechanics record][spu-mechanics] and
+[PR description][spu] name its evidence and remaining production dependencies.
+It adds no production checker, manifest locator or
 serving activation. C1 in later dependency rows means all three C1 slices, including
 qualification.
 Host and Olympus cuda,gguf suites, lint, formatting and lock checks pass. Fifty
@@ -246,6 +273,7 @@ quality, decoder capacity, throughput or absence of paging waits.
 [recall]: https://github.com/toddwbucy/WeaverAgent/pull/189
 [internal-recall]: https://github.com/toddwbucy/WeaverAgent/pull/190
 [spu]: https://github.com/toddwbucy/WeaverAgent/pull/191
+[spu-mechanics]: state-management-spu-mechanics-2026-10-20.md
 
 [snapshot]: https://github.com/toddwbucy/WeaverAgent/pull/192
 
