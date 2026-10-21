@@ -31,6 +31,21 @@ use weaver_types::{ArtifactRef, DecoderInstruction, DeviceOrdinal, ModelBinding,
 /// out differently.
 const MODEL: &str = "/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf";
 
+fn assert_opened(answer: weaver_types::TokenAnswer) {
+    let weaver_types::TokenAnswer::Opened {
+        prefix_tokens,
+        capacity,
+        generation_limit,
+        terminal_tokens,
+    } = answer
+    else {
+        panic!("the session must open with complete token facts: {answer:?}")
+    };
+    assert!(prefix_tokens > 0 && prefix_tokens <= capacity);
+    assert!(generation_limit > 0);
+    assert_eq!(terminal_tokens, 1);
+}
+
 /// A fixture whose family declares no residual tap, for the readout refusal.
 ///
 /// **The refusal needs an untapping family and no longer accepts any GGUF.**
@@ -492,9 +507,10 @@ mod seam_success {
             column_ask: false,
             messages: vec![message("You count plainly.")],
         });
-        assert_eq!(recv(), TokenAnswer::Opened, "the session opens");
+        assert_opened(recv());
 
         send(&TokenDirective::AppendAndGenerate {
+            tool_schemas: vec![],
             turn: TurnKey("t-1".into()),
             delta: vec![message(
                 "Count upward from one, comma separated, without stopping.",
@@ -626,9 +642,10 @@ mod seam_success {
             column_ask: false,
             messages: vec![message("You count plainly.")],
         });
-        assert_eq!(recv(), TokenAnswer::Opened, "the session opens");
+        assert_opened(recv());
 
         send(&TokenDirective::AppendAndGenerate {
+            tool_schemas: vec![],
             turn: TurnKey("t-1".into()),
             delta: vec![message(
                 "Count upward from one, comma separated, without stopping.",
@@ -762,9 +779,10 @@ mod seam_success {
             column_ask: false,
             messages: vec![message("You answer in as few words as possible.")],
         });
-        assert_eq!(recv(), TokenAnswer::Opened, "the session opens");
+        assert_opened(recv());
 
         send(&TokenDirective::AppendAndGenerate {
+            tool_schemas: vec![],
             turn: TurnKey("t-1".into()),
             delta: vec![message("Say one word.")],
         });
@@ -1000,7 +1018,7 @@ mod seam_success {
                 }],
             }],
         });
-        assert_eq!(recv(), TokenAnswer::Opened, "the session opens");
+        assert_opened(recv());
 
         send(&TokenDirective::ReFeed {
             turn: TurnKey("t-1".into()),
@@ -1061,8 +1079,8 @@ mod seam_success {
     /// this one red, which is the whole reason it is here.
     ///
     /// Perturbation: drop `cancel.cancelled` from the re-feed arm's guard and
-    /// the process answers `ReFed` and exits clean. Watched under exactly that
-    /// removal.
+    /// the process answers `ReFed` instead of faulting and remains live. With
+    /// the parent's endpoints held open, the bounded exit wait fails.
     #[test]
     fn a_cancelled_refeed_faults_and_certifies_nothing() {
         use weaver_traits::{ContentBlock, Message, Role};
@@ -1095,6 +1113,9 @@ mod seam_success {
             &[child_lifecycle.as_raw_fd(), child_decode.as_raw_fd()],
         );
         let mut child = command.spawn().expect("the binary starts");
+        // The parent must not keep the peer alive after the child faults.
+        drop(child_lifecycle);
+        drop(child_decode);
         bound_receives(&lifecycle, 120);
         bound_receives(&decode_parent, 120);
         let decode = weaver_spu::channel::decode_from_owned(decode_parent);
@@ -1146,7 +1167,7 @@ mod seam_success {
         let opened: TokenAnswer =
             serde_json::from_slice(&decode.recv_octets().expect("the open answers"))
                 .expect("the answer parses");
-        assert_eq!(opened, TokenAnswer::Opened, "the session opens");
+        assert_opened(opened);
 
         // Both frames before the drive starts, so the first poll finds the
         // cancel rather than racing the device for it.
@@ -1159,21 +1180,8 @@ mod seam_success {
             turn: TurnKey("t-1".into()),
         });
 
-        // **No certificate crosses.** A read either fails on the closed socket
-        // or, where the peer's exit has not landed yet, returns no frame at
-        // all. Nothing else is in flight here, this admit electing no field
-        // and asking no column, so any frame at all is the answer that must
-        // not arrive.
-        match decode.recv_octets() {
-            Err(_) => {}
-            Ok(frame) => panic!(
-                "a cancelled re-feed answered instead of faulting: {}",
-                String::from_utf8_lossy(&frame)
-            ),
-        }
-
-        drop(decode);
-        drop(lifecycle);
+        // Keep the parent's endpoints open until the child exits. Its own fault,
+        // rather than our teardown, must end the process and close the peer.
         let status = wait_bounded(
             &mut child,
             30,
@@ -1182,6 +1190,20 @@ mod seam_success {
                 log_path.display()
             ),
         );
+        // **No certificate crosses.** Once the child is reaped, require actual
+        // EOF. A timeout or a still-held duplicate peer must not count as EOF.
+        let mut byte = [0_u8; 1];
+        assert_eq!(
+            nix::sys::socket::recv(
+                decode.as_fd().as_raw_fd(),
+                &mut byte,
+                nix::sys::socket::MsgFlags::MSG_DONTWAIT,
+            ),
+            Ok(0),
+            "a cancelled re-feed must close without any answer"
+        );
+        drop(decode);
+        drop(lifecycle);
         assert!(
             !status.success(),
             "the fault is the exit code as well as the line"
@@ -1333,14 +1355,11 @@ mod seam_success {
                 messages: identity(),
             },
         );
-        assert_eq!(
-            recv(&decode),
-            TokenAnswer::Opened,
-            "the source session opens"
-        );
+        assert_opened(recv(&decode));
         send(
             &decode,
             &TokenDirective::AppendAndGenerate {
+                tool_schemas: vec![],
                 turn: TurnKey("t-1".into()),
                 delta: vec![Message {
                     role: Role::User,
@@ -1389,11 +1408,7 @@ mod seam_success {
                 messages: identity(),
             },
         );
-        assert_eq!(
-            recv(&decode),
-            TokenAnswer::Opened,
-            "the replay session opens"
-        );
+        assert_opened(recv(&decode));
         send(
             &decode,
             &TokenDirective::ReFeed {
@@ -1585,9 +1600,10 @@ mod seam_success {
                 }],
             }],
         });
-        assert_eq!(recv(), TokenAnswer::Opened, "the asked open opens");
+        assert_opened(recv());
 
         send(&TokenDirective::AppendAndGenerate {
+            tool_schemas: vec![],
             turn: TurnKey("t-1".into()),
             delta: vec![Message {
                 role: Role::User,
@@ -1769,8 +1785,9 @@ mod seam_success {
             let frame = decode.recv_octets().expect("an answer arrives");
             serde_json::from_slice(&frame).expect("the answer parses")
         };
-        assert_eq!(recv(), TokenAnswer::Opened, "the plain open opens");
+        assert_opened(recv());
         send(&TokenDirective::AppendAndGenerate {
+            tool_schemas: vec![],
             turn: TurnKey("t-1".into()),
             delta: identity(),
         });

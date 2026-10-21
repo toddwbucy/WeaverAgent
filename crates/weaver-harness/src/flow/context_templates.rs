@@ -99,6 +99,7 @@ impl RecordingContext {
             || self.input_author.is_some()
             || self.member_capture.is_some()
             || self.read.is_some()
+            || self.measure_blocks_external()
             || self.open_turn.is_some()
             || self.barrier.pending().is_some()
             || self.barrier.pending_author().is_some()

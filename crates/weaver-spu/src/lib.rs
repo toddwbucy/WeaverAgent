@@ -8,7 +8,7 @@
 //!
 //! The organ that holds the model, per `weaver-spu-Spec`.
 //!
-//! One binary, forked and exec'd by the harness during the enter fan-out. This
+//! Binaries forked and exec'd by the harness during the enter fan-out. This
 //! lib target is not an API for a consumer: nothing links this crate, the seam
 //! being a socket rather than a link. It exists so that the Spec's doctest
 //! instruments execute, which they cannot do under a bin-only crate.
@@ -20,10 +20,9 @@
 //! establishes. `kernels/PROVENANCE.md` is what the reader reads, and it names
 //! both what crossed and what has not.
 //!
-//! **One submodule exists.** A later operation type is a sibling of `decoder/`,
-//! in its own process, and nothing is laid in for it: no trait, no variant, no
-//! feature, no socket bound early. That adding one is adding a directory beside
-//! `decoder/` is the reversibility test passing on this crate's own future.
+//! Semantic operations live beside `decoder/`, with their own process seams.
+//! The `ste100` module implements the new duty's protocol and binding mechanics.
+//! Its production grammar, backend and executable remain qualification work.
 
 pub mod artifact;
 pub mod channel;
@@ -37,3 +36,4 @@ pub mod measurement;
 pub mod readout;
 pub mod residency;
 pub mod sampling;
+pub mod ste100;

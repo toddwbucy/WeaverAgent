@@ -155,14 +155,57 @@ fn take_inventory_against(
     boundary: &Boundary,
     group: Option<&ResolvedGroup>,
 ) -> Result<Inventory, LifecycleRefusal> {
-    let identity = identity_for(name);
-
     let config = weaver_types::parse(source).map_err(|e| match e.kind {
         ConfigErrorKind::MissingField
         | ConfigErrorKind::UnknownField
         | ConfigErrorKind::BadValue
         | ConfigErrorKind::Malformed => LifecycleRefusal::ConfigInvalid { field: e.field },
     })?;
+
+    judge_config(name, source, config, boundary, group)
+}
+
+/// The same inventory judgments over the separate serving authoring grammar.
+/// Only the floor parser can construct the draft. The active legacy callers
+/// continue through `take_inventory` and its unchanged parser.
+pub(crate) fn take_seed_inventory(
+    name: &AgentName,
+    source: &str,
+    draft: &weaver_types::ServingDraft,
+    boundary: &Boundary,
+) -> Result<Inventory, LifecycleRefusal> {
+    // ADMIN-SEED starts the member under its own restricted identity. This
+    // seed-only judgment leaves the active legacy inventory unchanged.
+    if boundary
+        .member_account
+        .is_some_and(|member| member.uid == 0 || member.uid == boundary.agent_uid)
+    {
+        diag!("boundary unverified: the seed member must be neither root nor the agent");
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    }
+    take_serving_inventory(name, source, draft, boundary)
+}
+
+/// The shared operational judgments for a parsed serving authoring draft.
+/// Offline restore and bind start no agent member and need no seed certificate.
+/// The caller still judges the declaration's custody, sink and shell grant.
+pub(crate) fn take_serving_inventory(
+    name: &AgentName,
+    source: &str,
+    draft: &weaver_types::ServingDraft,
+    boundary: &Boundary,
+) -> Result<Inventory, LifecycleRefusal> {
+    judge_config(name, source, draft.agent().clone(), boundary, None)
+}
+
+fn judge_config(
+    name: &AgentName,
+    source: &str,
+    config: AgentConfig,
+    boundary: &Boundary,
+    group: Option<&ResolvedGroup>,
+) -> Result<Inventory, LifecycleRefusal> {
+    let identity = identity_for(name);
 
     // The kind conditions the gate instruction's presence, per
     // `weaver-types-Spec` section 2: a serving declaration requires it and a

@@ -70,6 +70,9 @@ impl RecordingContext {
         if self.templates_block_content() {
             return Err(RunFailure::TemplateBlocked);
         }
+        if self.measure_blocks_external() {
+            return Err(RunFailure::MeasureOwned);
+        }
         if self.phase != RecordingPhase::Entered
             || self.output.is_some()
             || self.filing.is_some()

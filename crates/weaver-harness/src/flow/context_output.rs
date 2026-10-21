@@ -106,6 +106,7 @@ impl RecordingContext {
             || self.input_author.is_some()
             || self.member_capture.is_some()
             || self.read.is_some()
+            || self.measure_blocks_external()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()

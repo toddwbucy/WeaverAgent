@@ -108,7 +108,10 @@ pub use config::{
     SpuInstruction, StateElection, StateStore, StoreEngine, ToolName, TraceSink,
 };
 #[cfg(feature = "config")]
-pub use config::{check_identity_roles, parse, parse_boundary};
+pub use config::{
+    DraftStateManagement, ServingDeclaration, ServingDraft, check_identity_roles, parse,
+    parse_boundary, parse_serving_declaration, parse_serving_draft,
+};
 pub use identity::{
     AccessRule, BoundaryFile, Cause, PeerIdentity, TraceControl, TraceHeader, TraceLine,
     TraceRequest, authorized,

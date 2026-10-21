@@ -13,7 +13,7 @@
 
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
@@ -25,7 +25,7 @@ use nix::sys::socket::{
 };
 use weaver_types::{
     DECODE_MESSAGE_BOUND, LabelDirective, MAX_ENVELOPE_BYTES, OrganEnvelope, SegmentPreamble,
-    TokenDirective,
+    TokenAnswer, TokenDirective,
 };
 
 use super::clock::PumpIo;
@@ -168,6 +168,98 @@ pub(super) enum TrackedStage {
 }
 
 #[derive(Debug)]
+struct DecodeReservationState {
+    sent: AtomicBool,
+    terminal_taken: AtomicBool,
+    invalid_reply: AtomicBool,
+    finished: AtomicBool,
+    abandoned: AtomicBool,
+    abandoned_failure: Failure,
+}
+
+/// Sole custody of one decode exchange, including its wait after the last
+/// request segment. Dropping an unfinished ticket does not unlock the port.
+#[derive(Debug)]
+pub(super) struct DecodeReservation {
+    identity: PortIdentity,
+    state: Arc<DecodeReservationState>,
+}
+
+impl DecodeReservation {
+    pub(super) fn sent(&self) -> bool {
+        self.state.sent.load(Ordering::Acquire)
+    }
+
+    pub(super) fn belongs_to(&self, port: &DecodePort) -> bool {
+        Arc::ptr_eq(&self.identity.0, &port.identity.0)
+    }
+}
+
+impl Drop for DecodeReservation {
+    fn drop(&mut self) {
+        if !self.state.finished.load(Ordering::Acquire) {
+            self.state.abandoned.store(true, Ordering::Release);
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) enum DecodeStage {
+    Queued(DecodeReservation),
+    Busy(TokenDirective),
+}
+
+#[derive(Debug)]
+pub(super) struct DecodeFinishError {
+    pub reservation: DecodeReservation,
+    pub failure: Failure,
+}
+
+#[derive(Debug)]
+struct DecodeReceipt {
+    state: Arc<DecodeReservationState>,
+    after_send: bool,
+}
+
+/// A complete reply received by the reserved decoder socket. Its exact bytes
+/// and receive-time send status remain attached to the typed view. This is
+/// transport evidence, not a successful measurement or placement grant.
+#[derive(Debug)]
+pub(super) struct ReceivedDecode {
+    reply: DecodeReply,
+    raw: Vec<u8>,
+    identity: PortIdentity,
+    receipt: DecodeReceipt,
+}
+
+impl ReceivedDecode {
+    pub(super) fn reply(&self) -> &DecodeReply {
+        &self.reply
+    }
+
+    pub(super) fn raw_bytes(&self) -> &[u8] {
+        &self.raw
+    }
+
+    pub(super) fn belongs_to(&self, port: &DecodePort) -> bool {
+        Arc::ptr_eq(&self.identity.0, &port.identity.0)
+    }
+
+    pub(super) fn matches(&self, reservation: &DecodeReservation) -> bool {
+        Arc::ptr_eq(&self.identity.0, &reservation.identity.0)
+            && Arc::ptr_eq(&self.receipt.state, &reservation.state)
+    }
+
+    pub(super) fn after_send(&self) -> bool {
+        self.receipt.after_send
+    }
+
+    pub(super) fn into_parts(self) -> (DecodeReply, Vec<u8>) {
+        (self.reply, self.raw)
+    }
+}
+
+#[derive(Debug)]
 pub(super) struct StageFailure<T> {
     pub input: T,
     pub failure: Failure,
@@ -200,6 +292,7 @@ struct Outbound {
     preamble_sent: bool,
     offset: usize,
     tracked: Option<Arc<TrackedSend>>,
+    decode_reservation: Option<Arc<DecodeReservationState>>,
 }
 
 #[derive(Debug)]
@@ -222,7 +315,9 @@ pub(super) struct PacketPort<T> {
     // The last complete packet is retained on decode failure. A held whole
     // message retains its exact wire bytes until its typed completion is taken.
     received_wire: Option<Vec<u8>>,
+    received_reservation: Option<DecodeReceipt>,
     held: Option<T>,
+    decode_reservation: Option<Arc<DecodeReservationState>>,
     failure: Option<Failure>,
     receive_interrupted: bool,
     send_interrupted: bool,
@@ -399,11 +494,200 @@ impl DecodePort {
                 .map_err(|error| Failure::invalid(error.to_string()))
         })
     }
+    // Return the exact proposal without allocating on the failure path.
+    #[allow(clippy::result_large_err)]
     pub(super) fn stage(
         &mut self,
         input: TokenDirective,
     ) -> Result<Stage<TokenDirective>, StageFailure<TokenDirective>> {
+        if self.decode_reservation.is_none() && matches!(input, TokenDirective::MeasureDelta { .. })
+        {
+            return Err(StageFailure {
+                input,
+                failure: Failure::invalid("measurement requires an owned decode reservation"),
+            });
+        }
         self.stage_encoded(input, serde_json::to_vec)
+    }
+
+    /// Reserve and stage atomically. Existing buffered work belongs to its
+    /// earlier caller and cannot become this exchange's evidence. The engine
+    /// must first settle earlier nonmeasurement exchanges. This transport
+    /// does not certify their generation/cancellation protocol or quiescence.
+    /// Every measurement itself enters only through this reserved interface.
+    #[allow(clippy::result_large_err)] // Refusal preserves the original owned proposal.
+    pub(super) fn stage_reserved(
+        &mut self,
+        input: TokenDirective,
+    ) -> Result<DecodeStage, StageFailure<TokenDirective>> {
+        if !matches!(input, TokenDirective::MeasureDelta { .. }) {
+            return Err(StageFailure {
+                input,
+                failure: Failure::invalid("only measurement has a reserved decode owner"),
+            });
+        }
+        if let Err(failure) = self.live() {
+            return Err(StageFailure { input, failure });
+        }
+        if self.decode_reservation.is_some()
+            || self.outgoing.is_some()
+            || self.held.is_some()
+            || self.series.is_some()
+            || self.received_wire.is_some()
+            || self.received_reservation.is_some()
+            || self.receive_interrupted
+            || self.send_interrupted
+            || self.zero_received
+        {
+            return Ok(DecodeStage::Busy(input));
+        }
+        match self.stage_encoded(input, serde_json::to_vec)? {
+            Stage::Busy(input) => Ok(DecodeStage::Busy(input)),
+            Stage::Queued => {
+                let state = Arc::new(DecodeReservationState {
+                    sent: AtomicBool::new(false),
+                    terminal_taken: AtomicBool::new(false),
+                    invalid_reply: AtomicBool::new(false),
+                    finished: AtomicBool::new(false),
+                    abandoned: AtomicBool::new(false),
+                    abandoned_failure: Failure::invalid("decode reservation was abandoned"),
+                });
+                self.outgoing
+                    .as_mut()
+                    .expect("reserved request was queued")
+                    .decode_reservation = Some(Arc::clone(&state));
+                self.decode_reservation = Some(Arc::clone(&state));
+                Ok(DecodeStage::Queued(DecodeReservation {
+                    identity: self.identity.clone(),
+                    state,
+                }))
+            }
+        }
+    }
+
+    fn check_reservation(&self, reservation: &DecodeReservation) -> Result<(), Failure> {
+        if !reservation.belongs_to(self)
+            || self
+                .decode_reservation
+                .as_ref()
+                .is_none_or(|held| !Arc::ptr_eq(held, &reservation.state))
+            || reservation.state.finished.load(Ordering::Acquire)
+            || reservation.state.abandoned.load(Ordering::Acquire)
+        {
+            return Err(Failure::invalid(
+                "decode reservation does not own this exchange",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Taking a fault emission retains the exchange. A matching terminal
+    /// received after the whole request is the only proof that permits finish.
+    pub(super) fn take_reserved(
+        &mut self,
+        reservation: &DecodeReservation,
+    ) -> Result<Option<ReceivedDecode>, Failure> {
+        self.check_reservation(reservation)?;
+        if self.held.is_some() {
+            let receipt = self
+                .received_reservation
+                .as_ref()
+                .ok_or_else(|| Failure::invalid("decode reply has no reserved receive evidence"))?;
+            if !Arc::ptr_eq(&receipt.state, &reservation.state) {
+                return Err(Failure::invalid(
+                    "decode reply belongs to another reservation",
+                ));
+            }
+            let reply = self.held.take().expect("held reply checked");
+            let receipt = self.received_reservation.take().expect("receipt checked");
+            let raw = self
+                .received_wire
+                .take()
+                .expect("complete decode reply retains its bytes");
+            match &reply {
+                DecodeReply::Answer(TokenAnswer::Fault(_)) => {}
+                DecodeReply::Answer(TokenAnswer::DeltaMeasured { .. })
+                | DecodeReply::Refusal(_)
+                    if receipt.after_send
+                        && !reservation.state.terminal_taken.load(Ordering::Acquire) =>
+                {
+                    reservation
+                        .state
+                        .terminal_taken
+                        .store(true, Ordering::Release);
+                }
+                _ => {
+                    reservation
+                        .state
+                        .invalid_reply
+                        .store(true, Ordering::Release);
+                }
+            }
+            return Ok(Some(ReceivedDecode {
+                reply,
+                raw,
+                identity: self.identity.clone(),
+                receipt,
+            }));
+        }
+        self.live()?;
+        Ok(None)
+    }
+
+    /// Failure returns the still-live ticket. In particular, an empty send
+    /// slot, a fault emission or a partially transmitted request cannot unlock
+    /// the decoder. A later EOF remains latched after valid terminal cleanup.
+    pub(super) fn finish_reserved(
+        &mut self,
+        reservation: DecodeReservation,
+    ) -> Result<(), DecodeFinishError> {
+        let refusal = self.check_reservation(&reservation).err().or_else(|| {
+            (!reservation.sent()
+                || !reservation.state.terminal_taken.load(Ordering::Acquire)
+                || reservation.state.invalid_reply.load(Ordering::Acquire)
+                || self.outgoing.is_some()
+                || self.held.is_some()
+                || self.series.is_some()
+                || self.received_wire.is_some()
+                || self.received_reservation.is_some()
+                || self.receive_interrupted
+                || self.send_interrupted
+                || (self.zero_received && self.failure.is_none()))
+            .then(|| Failure::invalid("decode reservation has unsettled transport work"))
+        });
+        if let Some(failure) = refusal {
+            return Err(DecodeFinishError {
+                reservation,
+                failure,
+            });
+        }
+        reservation.state.finished.store(true, Ordering::Release);
+        self.decode_reservation = None;
+        Ok(())
+    }
+
+    pub(super) fn failed_wire_reserved(
+        &self,
+        reservation: &DecodeReservation,
+    ) -> Result<Option<&[u8]>, Failure> {
+        self.check_reservation(reservation)?;
+        Ok(if self.failure().is_some() && self.held.is_none() {
+            self.received_wire.as_deref()
+        } else {
+            None
+        })
+    }
+
+    pub(super) fn take_failed_wire_reserved(
+        &mut self,
+        reservation: &DecodeReservation,
+    ) -> Result<Option<Vec<u8>>, Failure> {
+        self.check_reservation(reservation)?;
+        Ok(if self.failure().is_some() && self.held.is_none() {
+            self.received_wire.take()
+        } else {
+            None
+        })
     }
 }
 
@@ -460,7 +744,9 @@ impl<T> PacketPort<T> {
             outgoing: None,
             series: None,
             received_wire: None,
+            received_reservation: None,
             held: None,
+            decode_reservation: None,
             failure: None,
             receive_interrupted: false,
             send_interrupted: false,
@@ -474,21 +760,28 @@ impl<T> PacketPort<T> {
 
     pub(super) fn interest(&self) -> Interest {
         Interest {
-            readable: self.failure.is_none() && self.held.is_none(),
-            writable: self.failure.is_none() && self.outgoing.is_some(),
-            live: self.failure.is_none(),
+            readable: self.failure().is_none() && self.held.is_none(),
+            writable: self.failure().is_none() && self.outgoing.is_some(),
+            live: self.failure().is_none(),
         }
     }
 
     /// Interrupted work is revisited even if the consumed observation no longer
     /// makes the fd readable. A partial series alone waits for its next packet.
     pub(super) fn needs_progress(&self) -> bool {
-        self.failure.is_none()
+        self.failure().is_none()
             && (self.receive_interrupted || self.send_interrupted || self.zero_received)
     }
 
     pub(super) fn failure(&self) -> Option<&Failure> {
-        self.failure.as_ref()
+        self.failure.as_ref().or_else(|| {
+            self.decode_reservation.as_ref().and_then(|reservation| {
+                reservation
+                    .abandoned
+                    .load(Ordering::Acquire)
+                    .then_some(&reservation.abandoned_failure)
+            })
+        })
     }
     pub(super) fn held(&self) -> Option<&T> {
         self.held.as_ref()
@@ -505,9 +798,15 @@ impl<T> PacketPort<T> {
     /// judge that order. Taking it grants no decision permission and never
     /// clears a latched fault or permits another read or send.
     pub(super) fn take_completion(&mut self) -> Result<Option<T>, Failure> {
+        if self.decode_reservation.is_some() {
+            return Err(Failure::invalid(
+                "decode completion belongs to its reservation",
+            ));
+        }
         let completion = self.held.take();
         if completion.is_some() {
             self.received_wire = None;
+            self.received_reservation = None;
             return Ok(completion);
         }
         self.live()?;
@@ -515,7 +814,7 @@ impl<T> PacketPort<T> {
     }
 
     fn live(&self) -> Result<(), Failure> {
-        self.failure.clone().map_or(Ok(()), Err)
+        self.failure().cloned().map_or(Ok(()), Err)
     }
 
     fn fail(&mut self, failure: Failure) -> Failure {
@@ -534,7 +833,7 @@ impl<T> PacketPort<T> {
         if let Err(failure) = self.live() {
             return Err(StageFailure { input, failure });
         }
-        if self.outgoing.is_some() {
+        if self.outgoing.is_some() || self.decode_reservation.is_some() {
             return Ok(Stage::Busy(input));
         }
         let prepared = (|| {
@@ -566,6 +865,7 @@ impl<T> PacketPort<T> {
                 preamble_sent: false,
                 offset: 0,
                 tracked: None,
+                decode_reservation: None,
             })
         })();
         match prepared {
@@ -658,6 +958,9 @@ impl<T> PacketPort<T> {
         }
         if outbound.offset == outbound.body.len() {
             let tracked = outbound.tracked.clone();
+            if let Some(reservation) = &outbound.decode_reservation {
+                reservation.sent.store(true, Ordering::Release);
+            }
             if let Some(tracked) = &tracked {
                 tracked.status.store(SEND_SENT, Ordering::Release);
             }
@@ -726,6 +1029,13 @@ impl<T> PacketPort<T> {
             return self.resolve_status(status);
         }
         self.received_wire = Some(packet.bytes);
+        if self.series.is_none() {
+            self.received_reservation =
+                self.decode_reservation.as_ref().map(|state| DecodeReceipt {
+                    state: Arc::clone(state),
+                    after_send: state.sent.load(Ordering::Acquire),
+                });
+        }
         self.accept_packet().map_err(|failure| self.fail(failure))
     }
 
@@ -947,3 +1257,7 @@ mod tests;
 #[cfg(test)]
 #[path = "pump_transport_evidence_tests.rs"]
 mod evidence_tests;
+
+#[cfg(test)]
+#[path = "pump_transport_decode_reservation_tests.rs"]
+mod decode_reservation_tests;

@@ -202,6 +202,22 @@ pub fn take_invocation_lock(
     })
 }
 
+/// Take under an invocation's existing deadline. The courtesy wait behind
+/// `show` can consume only what remains, and expiry permits no holder record.
+/// The caller distinguishes its deadline from contention after this returns.
+pub(crate) fn take_invocation_lock_until(
+    run_directory: &Path,
+    verb: crate::verb_table::HolderVerb,
+    deadline: Instant,
+) -> Result<InvocationLock, LifecycleRefusal> {
+    take_invocation_lock_with_deadline(run_directory, verb, Some(deadline)).map_err(|refused| {
+        match refused {
+            TakeRefused::Starved => LifecycleRefusal::InvocationInFlight,
+            TakeRefused::Other(refusal) => refusal,
+        }
+    })
+}
+
 /// Why the exclusive take refused, for the one caller that acts on the
 /// difference, the force (#125).
 #[derive(Debug, PartialEq)]
@@ -219,13 +235,34 @@ pub fn take_invocation_lock_judged(
     run_directory: &Path,
     verb: crate::verb_table::HolderVerb,
 ) -> Result<InvocationLock, TakeRefused> {
+    take_invocation_lock_with_deadline(run_directory, verb, None)
+}
+
+fn take_invocation_lock_with_deadline(
+    run_directory: &Path,
+    verb: crate::verb_table::HolderVerb,
+    invocation_deadline: Option<Instant>,
+) -> Result<InvocationLock, TakeRefused> {
+    let check_invocation = || {
+        if invocation_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            Err(TakeRefused::Other(LifecycleRefusal::InvocationInFlight))
+        } else {
+            Ok(())
+        }
+    };
+    check_invocation()?;
     let path = run_directory.join("admin.lock");
     let file = open_lock_file(&path).map_err(TakeRefused::Other)?;
-    let deadline = Instant::now() + SHARED_HOLD_WAIT;
+    let courtesy_deadline = Instant::now() + SHARED_HOLD_WAIT;
+    let deadline = invocation_deadline.map_or(courtesy_deadline, |invocation| {
+        invocation.min(courtesy_deadline)
+    });
     loop {
+        check_invocation()?;
         let request = whole_file(nix::libc::F_WRLCK);
         // SAFETY: fcntl on a descriptor this frame owns, with a lock it built.
         if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_SETLK, &request) } == 0 {
+            check_invocation()?;
             return recorded(file, verb, &path).map_err(TakeRefused::Other);
         }
         contended(&run_directory.join("admin.lock")).map_err(TakeRefused::Other)?;
@@ -238,7 +275,14 @@ pub fn take_invocation_lock_judged(
             nix::libc::F_WRLCK => {
                 return Err(TakeRefused::Other(LifecycleRefusal::InvocationInFlight));
             }
-            nix::libc::F_RDLCK if Instant::now() < deadline => std::thread::sleep(POLL),
+            nix::libc::F_RDLCK if Instant::now() < deadline => {
+                let pause = if invocation_deadline.is_some() {
+                    POLL.min(deadline.saturating_duration_since(Instant::now()))
+                } else {
+                    POLL
+                };
+                std::thread::sleep(pause);
+            }
             nix::libc::F_RDLCK => {
                 diag!(
                     "weaver-admin: readers held the invocation lock past show's bound; \
