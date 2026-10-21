@@ -97,3 +97,34 @@ mod output_port_visibility {
     const _: fn(&mut RecordingContext) -> Option<OutputCancellation> =
         RecordingContext::take_cancelled_output;
 }
+
+#[cfg(test)]
+#[allow(clippy::type_complexity)] // Keep exact public method shapes in these compile pins.
+mod request_receipt_port_visibility {
+    use super::clock::testing::FakePumpIo;
+    use super::context::{RecordingContext, SourceReceiptError};
+    use super::coordinator::CheckedGeneration;
+    use super::ledger::{LeaseSlotStatus, LedgerError, SourceDisposition, SourceLease};
+    use weaver_types::state_flow::SourceBlockId;
+
+    const _: fn(&CheckedGeneration) -> Option<&SourceLease> = CheckedGeneration::receipt_lease;
+    const _: fn(&mut CheckedGeneration) -> Option<SourceLease> =
+        CheckedGeneration::take_receipt_lease;
+    const _: fn(
+        &mut RecordingContext,
+        &SourceLease,
+        &SourceBlockId,
+        &mut FakePumpIo,
+    ) -> Result<Option<SourceDisposition>, SourceReceiptError> =
+        RecordingContext::take_source_receipt;
+    const _: fn(
+        &mut RecordingContext,
+        &SourceLease,
+        &SourceBlockId,
+        &mut FakePumpIo,
+    ) -> Result<LeaseSlotStatus, SourceReceiptError> = RecordingContext::source_receipt_status;
+    const _: fn(&mut RecordingContext, &SourceLease, &SourceBlockId) -> Result<(), LedgerError> =
+        RecordingContext::release_source_receipt;
+    const _: fn(&mut RecordingContext, SourceLease) -> Result<(), (SourceLease, LedgerError)> =
+        RecordingContext::release_source_lease;
+}

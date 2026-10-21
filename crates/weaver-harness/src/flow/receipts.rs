@@ -102,7 +102,7 @@ impl SourceDisposition {
         }
     }
 
-    fn bytes(&self) -> u64 {
+    pub(super) fn bytes(&self) -> u64 {
         match self {
             Self::Committed(source) => source.terminal.bytes,
             Self::CorrectlyRejected(source) => source.terminal.bytes,

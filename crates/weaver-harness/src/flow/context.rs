@@ -1301,8 +1301,14 @@ mod receipt_tests;
 #[path = "context_output.rs"]
 mod output_driver;
 #[allow(unused_imports)] // Consumed by the complete repair and pair owner at cutover.
-pub(super) use output_driver::{OutputBeginError, OutputBeginRefusal, OutputProgress};
+pub(super) use output_driver::{
+    OutputBeginError, OutputBeginRefusal, OutputProgress, SourceReceiptError,
+};
 
 #[cfg(test)]
 #[path = "context_output_tests.rs"]
 mod output_tests;
+
+#[cfg(test)]
+#[path = "context_output_receipt_tests.rs"]
+mod output_receipt_tests;
