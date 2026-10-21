@@ -70,9 +70,10 @@ no unresolved defect in that scope. It has no dependency on the shared floor cra
 
 The serving recall payload needs an exact source/boot representation from its owning
 contract before that payload can be implemented. The operator authorized drafting
-that amendment for review. No serving recall constructor is supplied before approval.
+that amendment for review, now [draft PR #189][recall]. No serving recall constructor
+is supplied before approval.
 
-F4 is in progress on code/state-member-flow, stacked on #186. It supplies the
+F4 is [draft PR #188][member], stacked on #186. It supplies the
 state-flow/1 member, immutable paging, capture cleanup and seed process ports.
 The full state suite, lint, formatting and lock checks pass. Twenty-five deliberate
 guard removals failed their protective tests. Independent findings in continuation
@@ -112,3 +113,5 @@ quality, decoder capacity, throughput or absence of paging waits.
 [tap]: https://github.com/toddwbucy/WeaverAgent/pull/185
 [core]: https://github.com/toddwbucy/WeaverAgent/pull/186
 [recorder]: https://github.com/toddwbucy/WeaverAgent/pull/187
+[member]: https://github.com/toddwbucy/WeaverAgent/pull/188
+[recall]: https://github.com/toddwbucy/WeaverAgent/pull/189
