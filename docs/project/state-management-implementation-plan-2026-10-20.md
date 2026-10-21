@@ -204,7 +204,8 @@ run. Ten compiled protective mutations fail their intended assertions, and
 independent review verifies source restoration. All-target clippy, formatting, lock,
 editorial and link checks pass. The Planner grade remains owed.
 
-H1o follows #207. Its [implementation record][output-checks-record] covers the
+H1o is draft [PR #208][output-checks], after #207. Its
+[implementation record][output-checks-record] covers the
 complete assistant message and every original Text index. The check frontier is
 independent of ordinary statement filing. Correct rejection is retained for the
 repair owner and grants no successful answer. Repair and pair opening still owe
@@ -438,3 +439,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [filing-receipts-record]: state-management-filing-receipts-2026-10-21.md
 [filing-receipts]: https://github.com/toddwbucy/WeaverAgent/pull/207
 [output-checks-record]: state-management-output-checks-2026-10-21.md
+[output-checks]: https://github.com/toddwbucy/WeaverAgent/pull/208

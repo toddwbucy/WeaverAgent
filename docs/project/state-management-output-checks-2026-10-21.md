@@ -1,6 +1,6 @@
 # Harness whole-output checks
 
-Date: 2026-10-21. Status: implementation under review.
+Date: 2026-10-21. Status: draft [PR #208][draft], Planner grade owed.
 
 This component follows [PR #207][base]. It implements OUTPUT-UNIT and the checking
 portion of DECISION-BARRIER in [Spec 02][protocol]. One transaction owns the original
@@ -86,5 +86,6 @@ remain required before cutover. Orchestration remains in worker/dev_loop. These
 checks neither invoke the decoder nor elect repair attempts or a strategy.
 
 [base]: https://github.com/toddwbucy/WeaverAgent/pull/207
+[draft]: https://github.com/toddwbucy/WeaverAgent/pull/208
 [protocol]:
 ../crates/state-management/state-management-spec-02-protocol-classifier-gate.md
