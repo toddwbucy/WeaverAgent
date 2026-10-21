@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.18 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
+**Version:** 0.19 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
 
 ## 0. What this document is
 
@@ -987,13 +987,14 @@ ORDER BY operation_id
 
 Read member_observation and the rows inside one read transaction. Reconstruct each
 StoredOperationObservation with its source identity and validate its JSON against the
-indexed columns. A stored mismatch is component failure, not an empty success. The
-normal bounded-result writer, immutable paging, release and result_too_large rules
-apply. Other selectors, held counts, shape, SourcePosition, marks, plans and content
-grants exclude these tables. Querying observations is not permission to turn them into
-content units or place them automatically. The caller owns any separately requested
-presentation and must keep the typed query identity. [STORE-3, SEAM-3, MARK-6, COST-2,
-R20-19]
+indexed columns and its run's recorded instrument version. Historical /1 and /2 retain
+their original definitions. A stored mismatch is component failure, not an empty
+success. The normal bounded-result writer, immutable paging, release and
+result_too_large rules apply. Other selectors, held counts, shape, SourcePosition,
+marks, plans and content grants exclude these tables. Querying observations is not
+permission to turn them into content units or place them automatically. The caller owns
+any separately requested presentation and must keep the typed query identity. [STORE-3,
+SEAM-3, MARK-6, COST-2, R20-19]
 
 **STATE-PAGES.** One immutable QueryResult at most is held per serving channel.
 Serialize selected rows directly into a bounded RAM writer, without first copying the
@@ -1116,13 +1117,15 @@ wrappers. Refuse a complete oversized control result as answer_too_large. Large 
 use STATE-PAGES. No partial filing is admitted. [FLOW-4, SEAM-2, SEAM-3]
 
 **STATE-OBSERVE.** The serving answer_frame replacement brackets every request and
-persistence continuation with Spec 09's STORE-OBSERVATION. Allocate its operation ID
-once before validation. Finish the content transaction or read and encode the operation
-payload before closing the observation interval. Then atomically insert the observation
-and its source identity into operation_observation in a separate RAM bookkeeping
-transaction. For successful open, insert observation_run and the first observation
-together after all adoption and identity checks. Only then encode the wrapper and enter
-SendingAnswer. [COST-2, COST-5, SEAM-2, R20-19]
+persistence continuation with Spec 09's STORE-OBSERVATION. Capture began_ns before
+operation hint parsing and allocate its operation ID once before validation. Snapshot
+uses that same wall boundary. Its CPU/disk samples separately bracket capture work under
+SNAPSHOT-SAMPLING, inside the operation interval. Finish the content transaction or read
+and encode the operation payload before closing the observation interval. Then
+atomically insert the observation and its source identity into operation_observation in
+a separate RAM bookkeeping transaction. For successful open, insert observation_run and
+the first observation together after all adoption and identity checks. Only then encode
+the wrapper and enter SendingAnswer. [COST-2, COST-5, SEAM-2, R20-19]
 
 The metadata insert is not a received operation, generates no nested observation and
 runs no classifier. It writes no content table and has no external filing port. Its cost
@@ -1147,8 +1150,10 @@ that captured image. A later capture may include them. This is an explicit front
 a recursive rewrite of a hashed image. CaptureHeld permits only this internal
 bookkeeping for allowed continuations, never content filing. Observation metadata does
 not advance SourcePosition. On reload, old run rows remain historical and the new open
-uses a new run identity with operation_id one. [PERSIST-1, PERSIST-3, PERSIST-4, COST-2,
-R20-19]
+uses a new run identity with operation_id one. New runs use state-observation/2.
+Adoption validates historical /1 and /2 identities without rewriting them, and explicit
+observations reads return each run's original identity. This does not admit a current
+opened response using /1. [PERSIST-1, PERSIST-3, PERSIST-4, COST-2, COST-5, R20-19]
 
 STATE-PAGES reserves space for the observation and wrapper as frame accounting.
 ReadPage.octets holds only its typed QueryResult. Other queries never receive stored
@@ -1176,6 +1181,19 @@ commit-before-answer guard, run key, fixed read frontier or single-insert guard 
 separate mutations. Each must fail its fixture. Snapshot/reload must preserve exactly
 its captured metadata frontier. This pass proves accounting, not zero disk wait.
 [FLOW-4, SEAM-2, SEAM-3, COST-5, FALS-3, R20-19]
+
+The actual snapshot fixture records ordered hooks at the operation timestamp, hint
+parse, validation, before counters, serialization, room-file completion, after counters
+and payload encoding. Exercise success, preflight refusal, serialization failure,
+recoverable room-write failure and counter unavailability. Partial sends must reuse the
+completed observation without sampling again. Require the Spec 09 order, with no
+sampling on ordinary requests or a preflight refusal. The full wall interval includes
+both counter reads. Remove each ordering or sampling guard separately and require a
+behavioral assertion to fail. Adopt an image with historical /1 metadata, open a new /2
+run, and read the old records without relabeling them. Removing the
+current-versus-historical version check must fail its fixture. This proves timing
+boundaries and identity, not counter accuracy or absence of disk wait. [COST-1, COST-2,
+COST-4, COST-5, PERSIST-1, FALS-3]
 
 ## 4. Seed, adoption, and capture, destinations sections 2 and 3
 
@@ -1298,7 +1316,7 @@ weaver-state dependency of any kind. [FLOW-4, FLOW-5, SEAM-2, SCOPE-1]
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
 | STATE-CONNECTION | Seed and adopted-image connection fixtures read settings and build facts before use, with rejected fact variants | Remove the initializer, accept TEMP_STORE=0 or unknown build facts, or expose an adopted connection before rechecking |
-| STATE-OBSERVATION-SCHEMA/READ/OBSERVE | Exact metadata JSON, real response writes, explicit query and capture-frontier fixtures | Mix metadata with content, reobserve an insert, omit a required row, include the read itself, or send success after metadata failure |
+| STATE-OBSERVATION-SCHEMA/READ/OBSERVE | Exact metadata JSON, real response writes, explicit query, capture-frontier, ordered snapshot-sampling and historical-version fixtures | Mix metadata with content, reobserve an insert, omit a required row, include the read itself, send success after metadata failure, reorder sampling or relabel old evidence |
 | STATE-SCHEMA | Execute literal DDL, inspect catalog, EXPLAIN noun and verb queries | Remove index, source CHECK, or FK |
 | STATE-FILE | STATE-FILING-INSTRUMENTS and shared malformed corpus | Emit receipt before commit or accept partial noun rows |
 | STATE-PLAN-SCHEMA, STATE-PLAN-READ | Literal DDL, ordered reads and reload fixtures | Allow two unfinished plans/active steps, renumber IDs or omit historical references |
