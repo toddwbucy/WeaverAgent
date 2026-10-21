@@ -1,6 +1,6 @@
 # Harness and member capture transaction
 
-Date: 2026-10-21. Status: implementation under local review.
+Date: 2026-10-21. Status: implementation in [draft PR #205][capture].
 
 This slice is stacked on [PR #204][base]. It implements the harness/member exchange
 in [PERSIST-SAVE, PERSIST-BEGIN and PERSIST-EXPIRY][foundation], the correlated
@@ -115,6 +115,7 @@ qualification, save allowances or disk performance. Production STE100 artifacts,
 template certificates and the separately reviewed system prompt remain owed.
 
 [base]: https://github.com/toddwbucy/WeaverAgent/pull/204
+[capture]: https://github.com/toddwbucy/WeaverAgent/pull/205
 [foundation]: ../crates/state-management/state-management-foundation-Spec.md
 [persistence]: ../crates/state-management/persistence-contract-amendments.md
 [harness]: ../crates/state-management/weaver-harness-Spec-amendment.md

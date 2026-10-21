@@ -167,7 +167,8 @@ pin fails compilation. Sources are restored exactly and independent review check
 evidence. The existing serving path remains active. H1b2 still owes frame/lifecycle
 caller migration and Contribution integration before this port serves.
 
-H1s is stacked on #204. Its [implementation record][capture-transaction-record]
+H1s is [draft PR #205][capture-transaction], stacked on #204. Its
+[implementation record][capture-transaction-record]
 states the member-side boundary. It freezes admission at the recorded turn boundary,
 drains actual filing obligations, and keeps Snapshot, Acknowledge, Abort and
 ReleaseCapture on the existing state owner. Missing original results trigger correlated
@@ -395,5 +396,6 @@ quality, decoder capacity, throughput or absence of paging waits.
 [run-context]: https://github.com/toddwbucy/WeaverAgent/pull/203
 [input-transaction-record]: state-management-input-transaction-2026-10-21.md
 [capture-transaction-record]: state-management-capture-transaction-2026-10-21.md
+[capture-transaction]: https://github.com/toddwbucy/WeaverAgent/pull/205
 
 [input-transaction]: https://github.com/toddwbucy/WeaverAgent/pull/204
