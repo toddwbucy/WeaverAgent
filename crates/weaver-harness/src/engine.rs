@@ -1872,6 +1872,10 @@ impl<'a> Ports<'a> {
             .send_directive(&TokenDirective::AppendAndGenerate {
                 turn: turn.clone(),
                 delta,
+                // This retiring engine sent canonical messages alone. Keep
+                // those rendered bytes until the foundation's placement
+                // owner supplies its exact measured proposal and schemas.
+                tool_schemas: Vec::new(),
             })
             .map_err(|_| TurnError::ChannelLost)?;
 

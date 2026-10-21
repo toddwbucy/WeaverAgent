@@ -1,0 +1,310 @@
+//! Exact TYPES-DECODE shapes at the coupled serving cutover. These tests
+//! certify the shared representation, not a successful session, a cut,
+//! proposal custody or the SPU's measured values.
+
+use serde_json::{Value, json};
+use weaver_traits::{ContentBlock, Message, Role};
+use weaver_types::{RefusalRecord, TokenAnswer, TokenAsk, TokenDirective, TokenRefusal, TurnKey};
+
+fn delta() -> Vec<Message> {
+    vec![Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: "Read item.".into(),
+        }],
+    }]
+}
+
+fn append() -> TokenDirective {
+    TokenDirective::AppendAndGenerate {
+        turn: TurnKey("turn-7".into()),
+        delta: delta(),
+        tool_schemas: vec!["second".into(), "first\nlast".into()],
+    }
+}
+
+fn measure() -> TokenDirective {
+    TokenDirective::MeasureDelta {
+        keep: u64::MAX,
+        delta: delta(),
+        tool_schemas: vec!["second".into(), "first\nlast".into()],
+    }
+}
+
+fn opened() -> TokenAnswer {
+    TokenAnswer::Opened {
+        prefix_tokens: 13,
+        capacity: u64::MAX,
+        generation_limit: 42,
+        terminal_tokens: 1,
+    }
+}
+
+fn measured() -> TokenAnswer {
+    TokenAnswer::DeltaMeasured {
+        resident: 127,
+        prefix_tokens: 13,
+        keep: 91,
+        input_tokens: u64::MAX,
+        capacity: 32768,
+    }
+}
+
+#[test]
+fn append_keeps_internal_tag_and_exact_ordered_schemas() {
+    let value = append();
+    let bytes = serde_json::to_string(&value).unwrap();
+    assert_eq!(
+        bytes,
+        concat!(
+            r#"{"kind":"append_and_generate","turn":"turn-7","delta":["#,
+            r#"{"role":"user","content":[{"type":"text","text":"Read item."}]}],"#,
+            r#""tool_schemas":["second","first\nlast"]}"#,
+        )
+    );
+    assert_eq!(
+        serde_json::from_str::<TokenDirective>(&bytes).unwrap(),
+        value
+    );
+}
+
+#[test]
+fn measure_keeps_internal_tag_and_full_numeric_keep() {
+    let value = measure();
+    let bytes = serde_json::to_string(&value).unwrap();
+    assert_eq!(
+        bytes,
+        concat!(
+            r#"{"kind":"measure_delta","keep":18446744073709551615,"delta":["#,
+            r#"{"role":"user","content":[{"type":"text","text":"Read item."}]}],"#,
+            r#""tool_schemas":["second","first\nlast"]}"#,
+        )
+    );
+    assert_eq!(
+        serde_json::from_str::<TokenDirective>(&bytes).unwrap(),
+        value
+    );
+}
+
+#[test]
+fn opened_has_exact_required_numeric_body() {
+    let value = opened();
+    let bytes = serde_json::to_string(&value).unwrap();
+    assert_eq!(
+        bytes,
+        concat!(
+            r#"{"kind":"opened","body":{"prefix_tokens":13,"#,
+            r#""capacity":18446744073709551615,"generation_limit":42,"terminal_tokens":1}}"#,
+        )
+    );
+    assert_eq!(serde_json::from_str::<TokenAnswer>(&bytes).unwrap(), value);
+}
+
+#[test]
+fn measured_has_exact_required_numeric_body_without_capping_count() {
+    let value = measured();
+    let bytes = serde_json::to_string(&value).unwrap();
+    assert_eq!(
+        bytes,
+        concat!(
+            r#"{"kind":"delta_measured","body":{"resident":127,"prefix_tokens":13,"#,
+            r#""keep":91,"input_tokens":18446744073709551615,"capacity":32768}}"#,
+        )
+    );
+    assert_eq!(serde_json::from_str::<TokenAnswer>(&bytes).unwrap(), value);
+}
+
+#[test]
+fn every_proposal_member_is_required_and_null_is_not_a_default() {
+    for proposal in [append(), measure()] {
+        let canonical = serde_json::to_value(&proposal).unwrap();
+        for field in canonical.as_object().unwrap().keys() {
+            let mut missing = canonical.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_str::<TokenDirective>(&missing.to_string()).is_err(),
+                "absent {field} must refuse: {missing}"
+            );
+            let mut null = canonical.clone();
+            null[field] = Value::Null;
+            assert!(
+                serde_json::from_str::<TokenDirective>(&null.to_string()).is_err(),
+                "null {field} must refuse: {null}"
+            );
+        }
+    }
+    for proposal in [
+        TokenDirective::AppendAndGenerate {
+            turn: TurnKey("turn-7".into()),
+            delta: vec![],
+            tool_schemas: vec![],
+        },
+        TokenDirective::MeasureDelta {
+            keep: 0,
+            delta: vec![],
+            tool_schemas: vec![],
+        },
+    ] {
+        let bytes = serde_json::to_string(&proposal).unwrap();
+        assert!(bytes.contains(r#""tool_schemas":[]"#));
+        assert_eq!(
+            serde_json::from_str::<TokenDirective>(&bytes).unwrap(),
+            proposal
+        );
+    }
+}
+
+#[test]
+fn every_answer_fact_is_required_and_null_is_not_a_default() {
+    for answer in [opened(), measured()] {
+        let canonical = serde_json::to_value(&answer).unwrap();
+        for field in canonical["body"].as_object().unwrap().keys() {
+            let mut missing = canonical.clone();
+            missing["body"].as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_str::<TokenAnswer>(&missing.to_string()).is_err(),
+                "absent {field} must refuse: {missing}"
+            );
+            let mut null = canonical.clone();
+            null["body"][field] = Value::Null;
+            assert!(
+                serde_json::from_str::<TokenAnswer>(&null.to_string()).is_err(),
+                "null {field} must refuse: {null}"
+            );
+        }
+    }
+}
+
+#[test]
+fn legacy_or_retagged_decode_shapes_are_not_aliases() {
+    for bytes in [
+        r#"{"kind":"opened"}"#,
+        r#"{"kind":"opened","body":null}"#,
+        r#"{"kind":"opened","body":{}}"#,
+        r#"{"kind":"opened","prefix_tokens":13,"capacity":32768,"generation_limit":42,"terminal_tokens":1}"#,
+        r#"{"opened":{"prefix_tokens":13,"capacity":32768,"generation_limit":42,"terminal_tokens":1}}"#,
+        r#"{"kind":"delta_measured"}"#,
+        r#"{"kind":"delta_measured","body":null}"#,
+        r#"{"kind":"delta_measured","body":{}}"#,
+        r#"{"kind":"delta_measured","resident":127,"prefix_tokens":13,"keep":91,"input_tokens":42,"capacity":32768}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<TokenAnswer>(bytes).is_err(),
+            "{bytes}"
+        );
+    }
+    for bytes in [
+        r#"{"kind":"append_and_generate","turn":"t","delta":[]}"#,
+        r#"{"kind":"measure_delta","keep":0,"delta":[]}"#,
+        r#"{"kind":"measure_delta","body":{"keep":0,"delta":[],"tool_schemas":[]}}"#,
+        r#"{"measure_delta":{"keep":0,"delta":[],"tool_schemas":[]}}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<TokenDirective>(bytes).is_err(),
+            "{bytes}"
+        );
+    }
+}
+
+#[test]
+fn all_measurement_counts_keep_the_u64_number_domain() {
+    for answer in [opened(), measured()] {
+        let canonical = serde_json::to_value(&answer).unwrap();
+        for field in canonical["body"].as_object().unwrap().keys() {
+            for valid in [0, 1, u64::MAX] {
+                let mut candidate = canonical.clone();
+                candidate["body"][field] = json!(valid);
+                assert!(
+                    serde_json::from_str::<TokenAnswer>(&candidate.to_string()).is_ok(),
+                    "u64 {field} remains numeric: {candidate}"
+                );
+            }
+            for invalid in [json!(-1), json!(1.5), json!("1"), json!(true), json!([])] {
+                let mut candidate = canonical.clone();
+                candidate["body"][field] = invalid;
+                assert!(
+                    serde_json::from_str::<TokenAnswer>(&candidate.to_string()).is_err(),
+                    "invalid u64 {field} must refuse: {candidate}"
+                );
+            }
+            let mut overflow = canonical.clone();
+            overflow["body"][field] = json!("wire-overflow");
+            let overflow = overflow
+                .to_string()
+                .replace("\"wire-overflow\"", "18446744073709551616");
+            assert!(
+                serde_json::from_str::<TokenAnswer>(&overflow).is_err(),
+                "{overflow}"
+            );
+        }
+    }
+    for invalid in ["-1", "1.5", "\"1\"", "true", "[]", "18446744073709551616"] {
+        let bytes = format!(
+            "{{\"kind\":\"measure_delta\",\"keep\":{invalid},\"delta\":[],\"tool_schemas\":[]}}"
+        );
+        assert!(
+            serde_json::from_str::<TokenDirective>(&bytes).is_err(),
+            "{bytes}"
+        );
+    }
+}
+
+#[test]
+fn measurement_refusals_carry_the_exact_requested_keep() {
+    for (refusal, kind) in [
+        (TokenRefusal::NotOpen, "not_open"),
+        (TokenRefusal::OutOfOrder, "out_of_order"),
+        (TokenRefusal::MalformedDelta, "malformed_delta"),
+    ] {
+        let value = RefusalRecord::Decode {
+            asked: TokenAsk::MeasureDelta { keep: u64::MAX },
+            refusal,
+        };
+        let bytes = serde_json::to_string(&value).unwrap();
+        assert_eq!(
+            bytes,
+            format!(
+                concat!(
+                    "{{\"seam\":\"decode\",\"asked\":{{\"ask\":\"measure_delta\",",
+                    "\"keep\":18446744073709551615}},\"refusal\":{{\"kind\":\"{}\"}}}}"
+                ),
+                kind,
+            )
+        );
+        assert_eq!(
+            serde_json::from_str::<RefusalRecord>(&bytes).unwrap(),
+            value
+        );
+    }
+    for bytes in [
+        r#"{"ask":"measure_delta"}"#,
+        r#"{"ask":"measure_delta","keep":null}"#,
+        r#"{"ask":"measure_delta","keep":"1"}"#,
+        r#"{"ask":"measure_delta","keep":-1}"#,
+        r#"{"ask":"measure_delta","keep":18446744073709551616}"#,
+        r#"{"kind":"measure_delta","keep":0}"#,
+    ] {
+        assert!(serde_json::from_str::<TokenAsk>(bytes).is_err(), "{bytes}");
+    }
+}
+
+#[test]
+fn refeed_keeps_its_recorded_rendering_and_path_without_schema_member() {
+    let directive = TokenDirective::ReFeed {
+        turn: TurnKey("replay-1".into()),
+        rendered: "recorded\nbytes".into(),
+        path: vec![0, u32::MAX],
+    };
+    let bytes = serde_json::to_string(&directive).unwrap();
+    assert_eq!(
+        bytes,
+        concat!(
+            r#"{"kind":"re_feed","turn":"replay-1","rendered":"recorded\nbytes","#,
+            r#""path":[0,4294967295]}"#,
+        )
+    );
+    assert_eq!(
+        serde_json::from_str::<TokenDirective>(&bytes).unwrap(),
+        directive
+    );
+}

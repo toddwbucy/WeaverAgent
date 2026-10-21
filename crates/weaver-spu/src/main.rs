@@ -131,6 +131,7 @@ fn judge_decode(
         (
             DecodePosition::BeforeOpen,
             TokenDirective::AppendAndGenerate { .. }
+            | TokenDirective::MeasureDelta { .. }
             | TokenDirective::ReFeed { .. }
             | TokenDirective::Cancel { .. }
             | TokenDirective::Flush { .. }
@@ -140,7 +141,9 @@ fn judge_decode(
         (DecodePosition::AtRest, TokenDirective::Open { .. }) => Some(TokenRefusal::OutOfOrder),
         (
             DecodePosition::AtRest,
-            TokenDirective::AppendAndGenerate { .. } | TokenDirective::ReFeed { .. },
+            TokenDirective::AppendAndGenerate { .. }
+            | TokenDirective::MeasureDelta { .. }
+            | TokenDirective::ReFeed { .. },
         ) => None,
         // The elision is valid between turns on the flush's ground and for
         // its reason, per the decode contract: a span named against a
@@ -561,9 +564,26 @@ fn serve_decode(
                                 })
                             );
                         }
+                        let facts = match standing.open_facts() {
+                            Ok(facts) => facts,
+                            Err(fault) => {
+                                eprintln!("{}", decode_fault_line(&fault));
+                                return Err(());
+                            }
+                        };
                         opened = Some(standing);
                         position = DecodePosition::AtRest;
-                        if send_answer(decode, &TokenAnswer::Opened).is_err() {
+                        if send_answer(
+                            decode,
+                            &TokenAnswer::Opened {
+                                prefix_tokens: facts.prefix_tokens,
+                                capacity: facts.capacity,
+                                generation_limit: facts.generation_limit,
+                                terminal_tokens: facts.terminal_tokens,
+                            },
+                        )
+                        .is_err()
+                        {
                             return Err(());
                         }
                     }
@@ -574,7 +594,46 @@ fn serve_decode(
                 }
             }
 
-            TokenDirective::AppendAndGenerate { turn, delta } => {
+            TokenDirective::MeasureDelta {
+                keep,
+                delta,
+                tool_schemas,
+            } => {
+                let standing = opened.as_ref().expect("at rest implies an open session");
+                let measured = match standing.measure_delta(keep, &delta, &tool_schemas) {
+                    Ok(measured) => measured,
+                    Err(PlacementFailure::Render(refusal)) => {
+                        if send_refusal(decode, &refusal).is_err() {
+                            return Err(());
+                        }
+                        continue;
+                    }
+                    Err(PlacementFailure::Decode(fault)) => {
+                        eprintln!("{}", decode_fault_line(&fault));
+                        return Err(());
+                    }
+                };
+                if send_answer(
+                    decode,
+                    &TokenAnswer::DeltaMeasured {
+                        resident: measured.resident,
+                        prefix_tokens: measured.prefix_tokens,
+                        keep: measured.keep,
+                        input_tokens: measured.input_tokens,
+                        capacity: measured.capacity,
+                    },
+                )
+                .is_err()
+                {
+                    return Err(());
+                }
+            }
+
+            TokenDirective::AppendAndGenerate {
+                turn,
+                delta,
+                tool_schemas,
+            } => {
                 // The directive carries no sampling value to refuse: the
                 // values reached this crate in the declaration and the engine
                 // took them when the session opened.
@@ -584,13 +643,12 @@ fn serve_decode(
                 // the terminator the engine makes resident closes it. The
                 // identity prefix at open takes no opener: its turns are all
                 // complete.
-                // The legacy directive has no schema field. Its empty schema
-                // list takes the same complete rendering and tokenization as
-                // the placement primitive, without activating replacement wire.
+                // Measurement and append prepare the same complete proposal,
+                // including schemas and the family generation opener.
                 let PreparedDelta {
                     rendered: delta_text,
                     tokens: delta_tokens,
-                } = match standing.prepare_delta(&delta, &[]) {
+                } = match standing.prepare_delta(&delta, &tool_schemas) {
                     Ok(prepared) => prepared,
                     Err(PlacementFailure::Render(refusal)) => {
                         if send_refusal(decode, &refusal).is_err() {
