@@ -29,8 +29,8 @@ fn ports<I: PumpIo>(io: &mut I) -> PumpPorts<'_, I> {
     }
 }
 
-struct InputFixture {
-    run: Fixture,
+pub(super) struct InputFixture {
+    pub(super) run: Fixture,
     peer: Channel,
 }
 
@@ -89,7 +89,7 @@ fn flush_peer(peer: &mut Channel) {
 }
 
 impl InputFixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let (bootstrap, scheme, ready) = duty();
         let mut declaration = config();
         declaration.scheme = scheme;
@@ -228,7 +228,7 @@ impl InputFixture {
         assert!(self.records(Kind::TurnClosed).is_empty());
     }
 
-    fn begin(&mut self, frame: TurnFrame) {
+    pub(super) fn begin(&mut self, frame: TurnFrame) {
         self.run
             .context
             .begin_input(frame, &mut self.run.clock)
@@ -268,7 +268,7 @@ impl InputFixture {
         panic!("input did not reach {expected:?}");
     }
 
-    fn accepted_token(&mut self) -> (s::Ste100Request, s::Ste100Reply, AcceptedInput) {
+    pub(super) fn accepted_token(&mut self) -> (s::Ste100Request, s::Ste100Reply, AcceptedInput) {
         let request = self.request();
         let reply = accepted(&request);
         self.reply(&reply);

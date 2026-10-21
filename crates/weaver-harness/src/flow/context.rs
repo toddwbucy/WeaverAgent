@@ -70,6 +70,7 @@ pub(super) enum HaltAccountFailure {
 struct LoadDuty {
     scheme_text: String,
     instruction: serving::payloads::Ste100Instruction,
+    persistence: serving::payloads::PersistenceConfig,
 }
 
 pub(crate) struct RecordingContext {
@@ -91,6 +92,10 @@ pub(crate) struct RecordingContext {
     input_author: Option<input_driver::InputAuthorStage>,
     input_turn: Option<input_driver::InputTurn>,
     input_turns: std::collections::BTreeSet<String>,
+    member_capture: Option<capture_driver::MemberCapture>,
+    last_author_sequence: Option<Sequence>,
+    author_turn: Option<(Kind, Option<weaver_trace::TurnRef>)>,
+    open_turn: Option<weaver_trace::TurnRef>,
     /// A caller's source remains owned if refusal happens before a ticket.
     /// It is distinct from the recorder's first pending author.
     refused_author: Option<AuthoredEvent>,
@@ -162,6 +167,10 @@ impl RecordingContext {
             input_author: None,
             input_turn: None,
             input_turns: std::collections::BTreeSet::new(),
+            member_capture: None,
+            last_author_sequence: None,
+            author_turn: None,
+            open_turn: None,
             refused_author: None,
             waiting_content: None,
             completed_author: None,
@@ -213,6 +222,18 @@ impl RecordingContext {
                 super::halt_snapshot::SnapshotFailure {
                     external,
                     error: super::report::ReportError::Invalid("wait differs from latched bound"),
+                },
+            ));
+        }
+        if let Some(capture) = &self.member_capture
+            && external.capture.as_ref().map(|facts| facts.capture_id) != Some(capture.id)
+        {
+            return Err(HaltAccountFailure::Snapshot(
+                super::halt_snapshot::SnapshotFailure {
+                    external,
+                    error: super::report::ReportError::Invalid(
+                        "capture differs from retained member transaction",
+                    ),
                 },
             ));
         }
@@ -377,12 +398,16 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
-        if self.input.snapshot().is_some() || self.input_turn.is_some() {
+        if self.input.snapshot().is_some()
+            || self.input_turn.is_some()
+            || self.member_capture.is_some()
+            || self.open_turn.is_some()
+        {
             return Err(self.fail(
                 io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Barrier,
-                "release requires the input disposition and source handoff",
+                "release requires settled input, a closed turn and completed capture",
             ));
         }
         if let Some(armed) = self.deadlines.get(PumpDeadline::Leave) {
@@ -602,6 +627,7 @@ impl RecordingContext {
             self.load_duty = Some(LoadDuty {
                 scheme_text: load.ste100_scheme.clone(),
                 instruction: load.state_flow.ste100.clone(),
+                persistence: load.state_flow.persistence.clone(),
             });
         }
         let wall_ms = match wall_ms() {
@@ -616,6 +642,7 @@ impl RecordingContext {
                 ));
             }
         };
+        self.author_turn = Some((event.kind, event.turn.clone()));
         let progress = self.barrier.submit_authored_with_clock(
             event,
             purpose,
@@ -670,6 +697,14 @@ impl RecordingContext {
                     sequence,
                     proof: None,
                 } => {
+                    self.last_author_sequence = Some(sequence);
+                    if let Some((kind, turn)) = self.author_turn.take() {
+                        if kind == Kind::TurnStarted {
+                            self.open_turn = turn;
+                        } else if kind == Kind::TurnClosed && self.open_turn == turn {
+                            self.open_turn = None;
+                        }
+                    }
                     if self.phase == RecordingPhase::Preflight {
                         self.phase = RecordingPhase::Entered;
                     }
@@ -706,6 +741,12 @@ impl RecordingContext {
     }
 
     fn author_allowed(&self, event: &AuthoredEvent) -> bool {
+        if self.member_capture.is_some()
+            && (serving::content_schema(event.kind) != ContentSchema::None
+                || event.kind == Kind::TurnStarted)
+        {
+            return false;
+        }
         match self.phase {
             RecordingPhase::Preflight => {
                 event.kind == Kind::Load
@@ -864,6 +905,7 @@ impl RecordingContext {
         );
         let advance = result.map_err(|failure| self.flow_failed(io, failure))?;
         self.settle_recorded_input(io)?;
+        self.settle_recorded_capture(io)?;
         self.live(io)?;
         Ok(advance)
     }
@@ -936,7 +978,11 @@ impl RecordingContext {
             }
             PumpDeadline::Decision => (FlowHaltReason::DecisionBound, BlockedStage::Decision),
             PumpDeadline::StateControl => (FlowHaltReason::ControlBound, BlockedStage::Control),
-            PumpDeadline::Enter | PumpDeadline::Leave | PumpDeadline::Label => {
+            PumpDeadline::Enter
+            | PumpDeadline::Leave
+            | PumpDeadline::Label
+            | PumpDeadline::CaptureResult
+            | PumpDeadline::CaptureWindow => {
                 return RunFailure::Wait { key, bound };
             }
         };
@@ -1149,3 +1195,12 @@ pub(super) use input_driver::{InputBeginError, InputConsumeError, InputProgress,
 #[cfg(test)]
 #[path = "context_input_tests.rs"]
 mod input_tests;
+
+#[path = "context_capture.rs"]
+mod capture_driver;
+#[allow(unused_imports)] // Dormant member port, consumed by the paired save lifecycle.
+pub(super) use capture_driver::{CaptureAnswer, CaptureProgress};
+
+#[cfg(test)]
+#[path = "context_capture_tests.rs"]
+mod capture_tests;

@@ -1,7 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
-Updated: 2026-10-21 for the checked input transaction and source handoff.
+Updated: 2026-10-21 for the harness/member capture transaction.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -39,7 +39,8 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | H1r | H1p | Bounded recording progress and typed operation results, harness/trace amendments |
 | H1c | H1r | Run recording, common pump and frozen failure-account support, harness amendment |
 | H1i | H1c | Checked input transaction and single-use source handoff, Spec 02 and harness amendment |
-| H1b2 | H1b1, H1i, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
+| H1s | H1i | Member capture barrier, correlated cleanup and recorded results, foundation/persistence/harness amendments |
+| H1b2 | H1b1, H1i, H1s, C1, P1 | Author census, input, lifecycle migration and halt teardown, harness/foundation amendments |
 | H2 | H1b2, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
 | H3a | C1a | Shared SPU rendering and read-only placement counts, SPU amendment |
 | H3b | H1b2, H3a | Marks and paired decode protocol, Spec 06 and SPU amendment |
@@ -153,8 +154,8 @@ The full affected-crate suites pass 909 tests with 17 inherited ignored instrume
 and zero failures. All 26 compiled protective mutations fail their intended checks,
 and independent review verifies exact source restoration and the final passing
 suites. All-target lint, formatting, lock and diff checks pass. H1i adds input
-ownership. Lifecycle callers, capture owners, terminal report submission and failed-exit
-containment remain in H1b2.
+ownership. H1s adds the member capture owner. Lifecycle callers, terminal report
+submission and failed-exit containment remain in H1b2.
 
 H1i is [draft PR #204][input-transaction], based on #203. Its
 [implementation record][input-transaction-record] states the scope and evidence.
@@ -165,6 +166,18 @@ Twenty-two behavioral probes fail their intended assertions and one non-Clone ty
 pin fails compilation. Sources are restored exactly and independent review checks the
 evidence. The existing serving path remains active. H1b2 still owes frame/lifecycle
 caller migration and Contribution integration before this port serves.
+
+H1s is stacked on #204. Its [implementation record][capture-transaction-record]
+states the member-side boundary. It freezes admission at the recorded turn boundary,
+drains actual filing obligations, and keeps Snapshot, Acknowledge, Abort and
+ReleaseCapture on the existing state owner. Missing original results trigger correlated
+cleanup. Late results record and discard without renewing the cleanup bound. Final
+member completion alone never releases the admission hold. The admin lifecycle and
+publisher remain separate consumers to connect in P1d/H1b2. The harness suite passes
+750 tests with 17 inherited ignored instruments. All 38 new capture tests run, and
+20 protective mutations fail their intended assertions. Independent review verifies
+the scope, evidence and exact source restoration. The restored capture suite, lint,
+formatting and lock gate pass.
 
 P1a adds strict draft/bound declaration parsing, admin-owned canonical TOML,
 strict binding/index/guard codecs and descriptor-held artifact verification. It is
@@ -381,5 +394,6 @@ quality, decoder capacity, throughput or absence of paging waits.
 [run-context-record]: state-management-run-context-2026-10-21.md
 [run-context]: https://github.com/toddwbucy/WeaverAgent/pull/203
 [input-transaction-record]: state-management-input-transaction-2026-10-21.md
+[capture-transaction-record]: state-management-capture-transaction-2026-10-21.md
 
 [input-transaction]: https://github.com/toddwbucy/WeaverAgent/pull/204

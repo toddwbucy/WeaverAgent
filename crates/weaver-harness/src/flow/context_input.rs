@@ -76,6 +76,8 @@ impl RecordingContext {
             });
         }
         if self.input.snapshot().is_some()
+            || self.member_capture.is_some()
+            || self.open_turn.is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()
             || (self.barrier.pending().is_some() && !self.flow.has_pending_record())

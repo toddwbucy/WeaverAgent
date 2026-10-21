@@ -11,9 +11,9 @@ use std::io;
 use weaver_trace::serving::{Kind, Payload, payloads as trace};
 use weaver_trace::{Subsystem, TurnRef};
 use weaver_types::state_flow::{
-    DecimalU64, MeasuredInterval, ReadLimits, STATE_CONTENT_SCHEMA, SchemeDeclaration,
-    SourceBlockId, SourceEnvelope, StartIdentity, StateControl, StateFrame, Ste100Reply,
-    Ste100Request, Ste100Result, Ste100Target,
+    DecimalU64, Digest, MeasuredInterval, ReadLimits, STATE_CONTENT_SCHEMA, SchemeDeclaration,
+    SourceBlockId, SourceEnvelope, StartIdentity, StateControl, StateControlAnswer, StateFrame,
+    Ste100Reply, Ste100Request, Ste100Result, Ste100Target,
 };
 
 use super::author::{AuthoredEvent, AuthoredSource, ServingAuthor};
@@ -159,6 +159,11 @@ pub(super) enum RefusedAuthor {
 // recording proof never needs a second allocation to publish its completion.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum OperationCompletion {
+    Capture {
+        request: StateControl,
+        completion: StateCompletion,
+        recorded_ns: u64,
+    },
     Input {
         operation: CheckOperation,
         reply: Ste100Reply,
@@ -175,6 +180,38 @@ pub(super) enum OperationCompletion {
         operation: CheckOperation,
         reply: Ste100Reply,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CapturePhase {
+    Barrier,
+    SnapshotPending,
+    Held,
+    AcknowledgePending,
+    Finished,
+    ReleaseQueued,
+    Aborting,
+    Complete,
+}
+
+/// Read-only custody facts. The context owns save, leg and cleanup deadlines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CaptureSnapshot {
+    pub capture_id: DecimalU64,
+    pub frontier: u64,
+    pub request_id: Option<DecimalU64>,
+    pub phase: CapturePhase,
+}
+
+struct CaptureOwner {
+    snapshot: CaptureSnapshot,
+    leg: Option<StateControl>,
+    // The original leg remains owned until its exact observation is recorded.
+    // Abort is the channel's sole permitted second exchange.
+    cleanup: Option<StateControl>,
+    release_queued: Option<StateControl>,
+    refused_snapshot: bool,
+    queued_ns: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -251,9 +288,11 @@ pub(super) struct FlowCoordinator<P> {
     input_account: Option<InputAccount>,
     last_input_id: u64,
     state_operation: Option<(StateControl, Option<TurnRef>)>,
+    capture: Option<CaptureOwner>,
     check_operation: Option<CheckOperation>,
     operation_completion: Option<OperationCompletion>,
     state_release_timing: Option<(u64, u64)>,
+    state_recorded_ns: Option<u64>,
     refused_author: Option<RefusedAuthor>,
 }
 
@@ -308,9 +347,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             input_account: None,
             last_input_id: 0,
             state_operation: None,
+            capture: None,
             check_operation: None,
             operation_completion: None,
             state_release_timing: None,
+            state_recorded_ns: None,
             refused_author: None,
         })
     }
@@ -464,9 +505,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             input_account: None,
             last_input_id: 0,
             state_operation: None,
+            capture: None,
             check_operation: None,
             operation_completion: None,
             state_release_timing: None,
+            state_recorded_ns: None,
             refused_author: None,
         })
     }
@@ -541,6 +584,10 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     }
 
     fn clean_obligations(&self, cx: &FlowRecording<'_>) -> bool {
+        self.capture.is_none() && self.settled_obligations(cx)
+    }
+
+    fn settled_obligations(&self, cx: &FlowRecording<'_>) -> bool {
         self.ledger.facts().next().is_none()
             && cx.inbox.queued().next().is_none()
             && cx.inbox.failure().is_none()
@@ -712,6 +759,419 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         Ok(())
     }
 
+    pub(super) fn capture_snapshot(&self) -> Option<CaptureSnapshot> {
+        self.capture.as_ref().map(|owner| owner.snapshot)
+    }
+
+    pub(super) fn capture_queued_ns(&self) -> Option<u64> {
+        self.capture.as_ref().and_then(|owner| owner.queued_ns)
+    }
+
+    /// A Recorded leg may still owe the nonblocking final release probe. Its
+    /// deadline ends at this preserved boundary, not at a later EINTR retry.
+    pub(super) fn capture_recorded_ns(&self) -> Option<u64> {
+        self.capture.as_ref().and_then(|owner| {
+            owner.leg.as_ref()?;
+            // A late original's proof cannot end the cleanup leg's deadline.
+            if owner.cleanup.is_some() || owner.release_queued.is_some() {
+                return None;
+            }
+            matches!(self.pending_record, Some(PendingRecord::StateRelease))
+                .then_some(self.state_recorded_ns)
+                .flatten()
+        })
+    }
+
+    /// The context has frozen ordinary admission at a turn boundary. Existing
+    /// owed copies still drain through their actual classification and receipts.
+    pub(super) fn register_capture_barrier(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        capture_id: DecimalU64,
+        frontier: u64,
+    ) -> Result<(), FlowFailure> {
+        self.require_active(cx)?;
+        if capture_id.0 == 0 || self.capture.is_some() {
+            return Err(self.fail(cx, "barrier", "invalid or repeated capture barrier"));
+        }
+        self.check_capture_frontier(cx, frontier)?;
+        self.capture = Some(CaptureOwner {
+            snapshot: CaptureSnapshot {
+                capture_id,
+                frontier,
+                request_id: None,
+                phase: CapturePhase::Barrier,
+            },
+            leg: None,
+            cleanup: None,
+            release_queued: None,
+            refused_snapshot: false,
+            queued_ns: None,
+        });
+        Ok(())
+    }
+
+    fn check_capture_frontier(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        frontier: u64,
+    ) -> Result<(), FlowFailure> {
+        let later = self
+            .ledger
+            .facts()
+            .any(|fact| fact.source.sequence.0 > frontier)
+            || cx
+                .inbox
+                .queued()
+                .chain(cx.budget.waiting_copy())
+                .any(|copy| {
+                    super::intake::selected_blocks(copy)
+                        .iter()
+                        .any(|block| block.source.sequence.0 > frontier)
+                });
+        if later {
+            return Err(self.fail(cx, "barrier", "capture frontier precedes owned content"));
+        }
+        Ok(())
+    }
+
+    /// A maximum sequence alone is not a disposition. This checks every owned
+    /// ledger row, copy, proof, operation and observation, including later rows.
+    pub(super) fn capture_barrier_ready(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<bool, FlowFailure> {
+        self.require_active(cx)?;
+        let Some(owner) = self.capture.as_ref() else {
+            return Err(self.fail(cx, "barrier", "capture has no registered barrier"));
+        };
+        let snapshot = owner.snapshot;
+        if snapshot.phase != CapturePhase::Barrier {
+            return Ok(false);
+        }
+        self.check_capture_frontier(cx, snapshot.frontier)?;
+        Ok(self.settled_obligations(cx)
+            && self.state().can_begin_filing()
+            && self
+                .classifier
+                .as_ref()
+                .is_none_or(|port| port.state() == ClassifierState::Idle)
+            && self.starting_classifier.is_none())
+    }
+
+    pub(super) fn begin_capture_snapshot(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        capture_id: DecimalU64,
+    ) -> Result<OperationStart<DecimalU64>, FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        if !self.capture_barrier_ready(cx)? {
+            return Ok(OperationStart::Busy(capture_id));
+        }
+        let request_id = self.start_capture_leg(
+            cx,
+            io,
+            StateControl::Snapshot { capture_id },
+            CapturePhase::SnapshotPending,
+        )?;
+        self.capture
+            .as_mut()
+            .expect("registered capture")
+            .snapshot
+            .request_id = Some(request_id);
+        Ok(OperationStart::Started { request_id })
+    }
+
+    pub(super) fn acknowledge_capture(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        capture_id: DecimalU64,
+        dump_sha256: Digest,
+    ) -> Result<OperationStart<(DecimalU64, Digest)>, FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        if !self.capture_leg_ready(cx, CapturePhase::Held) {
+            return Ok(OperationStart::Busy((capture_id, dump_sha256)));
+        }
+        let request_id = self.start_capture_leg(
+            cx,
+            io,
+            StateControl::Acknowledge {
+                capture_id,
+                dump_sha256,
+            },
+            CapturePhase::AcknowledgePending,
+        )?;
+        Ok(OperationStart::Started { request_id })
+    }
+
+    pub(super) fn release_capture(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        capture_id: DecimalU64,
+    ) -> Result<OperationStart<DecimalU64>, FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        if !self.capture_leg_ready(cx, CapturePhase::Finished) {
+            return Ok(OperationStart::Busy(capture_id));
+        }
+        let request_id = self.start_capture_leg(
+            cx,
+            io,
+            StateControl::ReleaseCapture { capture_id },
+            CapturePhase::Finished,
+        )?;
+        Ok(OperationStart::Started { request_id })
+    }
+
+    /// Accept a fresh release intent for a Recorded Finished. The
+    /// context decides whether that original result was timely. Acceptance is
+    /// the queue-time anchor even if the original proof or a later trace author
+    /// still prevents the channel from beginning this new exchange.
+    pub(super) fn enqueue_capture_release(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        capture_id: DecimalU64,
+    ) -> Result<bool, FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        let owner = self.capture.as_ref().expect("checked capture");
+        if owner.release_queued.is_some() || owner.cleanup.is_some() {
+            return Ok(false);
+        }
+        let recorded_completion = matches!(
+            &self.operation_completion,
+            Some(OperationCompletion::Capture {
+                request: StateControl::Acknowledge { capture_id: id, .. },
+                completion: StateCompletion {
+                    answer: StateFrame::ControlAnswer {
+                        frame: StateControlAnswer::Finished { capture_id: returned, .. }, ..
+                    },
+                    discard_capture_result: false,
+                }, ..
+            }) if *id == capture_id && *returned == capture_id
+        );
+        let finished = match owner.snapshot.phase {
+            CapturePhase::Finished => {
+                owner.leg.is_none() && (recorded_completion || self.operation_completion.is_none())
+            }
+            CapturePhase::AcknowledgePending => {
+                self.operation_completion.is_none()
+                    && matches!(self.pending_record, Some(PendingRecord::StateRelease))
+                    && self.state_recorded_ns.is_some()
+                    && self.state().recorded_finished(capture_id)
+            }
+            _ => false,
+        };
+        if !finished {
+            return Ok(false);
+        }
+        let now = io.now().map_err(|error| self.fail(cx, "clock", error))?;
+        let owner = self.capture.as_mut().expect("checked capture");
+        owner.release_queued = Some(StateControl::ReleaseCapture { capture_id });
+        owner.snapshot.phase = CapturePhase::ReleaseQueued;
+        owner.queued_ns = Some(now);
+        if recorded_completion
+            && let Some(OperationCompletion::Capture { completion, .. }) =
+                &mut self.operation_completion
+        {
+            completion.discard_capture_result = true;
+        }
+        self.start_queued_capture_release(cx)?;
+        Ok(true)
+    }
+
+    fn start_queued_capture_release(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<bool, FlowFailure> {
+        if !self
+            .capture
+            .as_ref()
+            .is_some_and(|owner| owner.release_queued.is_some() && owner.leg.is_none())
+            || self.operation_completion.is_some()
+            || self.pending_record.is_some()
+            || cx.barrier.pending().is_some()
+            || !self.state().outstanding().is_empty()
+            || self.state().held_measurement().is_some()
+        {
+            return Ok(false);
+        }
+        let owner = self.capture.as_mut().expect("queued release owner");
+        let request = owner.release_queued.take().expect("queued release request");
+        let queued_ns = owner.queued_ns.expect("accepted release anchor");
+        owner.leg = Some(request.clone());
+        owner.snapshot.phase = CapturePhase::Finished;
+        self.state
+            .as_mut()
+            .expect("active state")
+            .begin(StateRequest::Control(request), queued_ns)
+            .map_err(|error| self.fail(cx, "state_send", error))?;
+        Ok(true)
+    }
+
+    /// Queue the one cleanup continuation without replacing an outstanding
+    /// Snapshot/Acknowledge or consuming its held measurement. The channel keeps
+    /// both partial-send offsets and identifies the original result as discard.
+    pub(super) fn abort_capture(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        capture_id: DecimalU64,
+    ) -> Result<OperationStart<DecimalU64>, FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        let owner = self.capture.as_ref().expect("checked capture");
+        let recorded_original = matches!(
+            &self.operation_completion,
+            Some(OperationCompletion::Capture {
+                request: StateControl::Snapshot { capture_id: id }
+                    | StateControl::Acknowledge { capture_id: id, .. },
+                completion,
+                ..
+            }) if *id == capture_id && !completion.discard_capture_result
+        );
+        if (self.operation_completion.is_some() && !recorded_original)
+            || owner.cleanup.is_some()
+            || owner.release_queued.is_some()
+            || !(matches!(
+                owner.snapshot.phase,
+                CapturePhase::SnapshotPending
+                    | CapturePhase::Held
+                    | CapturePhase::AcknowledgePending
+                    | CapturePhase::Finished
+            ) || (owner.snapshot.phase == CapturePhase::Complete && owner.refused_snapshot))
+            || matches!(owner.leg, Some(StateControl::ReleaseCapture { .. }))
+        {
+            return Ok(OperationStart::Busy(capture_id));
+        }
+        let now = io.now().map_err(|e| self.fail(cx, "clock", e))?;
+        let owner = self.capture.as_mut().expect("checked capture");
+        let request = StateControl::Abort { capture_id };
+        if owner.leg.is_some() {
+            owner.cleanup = Some(request);
+        } else {
+            owner.leg = Some(request);
+        }
+        owner.snapshot.phase = CapturePhase::Aborting;
+        owner.queued_ns = Some(now);
+        if recorded_original
+            && let Some(OperationCompletion::Capture { completion, .. }) =
+                &mut self.operation_completion
+        {
+            // The original proof already exists, but a later author may still
+            // block its consumer. Preserve that one result as explicit discard
+            // while the channel carries cleanup on the same capture identity.
+            completion.discard_capture_result = true;
+        }
+        let common = self
+            .state
+            .as_mut()
+            .expect("active state")
+            .abort_capture(now)
+            .map_err(|e| self.fail(cx, "state_send", e))?;
+        Ok(OperationStart::Started {
+            request_id: common.request_id,
+        })
+    }
+
+    /// The caller records the final save outcome before relinquishing this hold.
+    /// A refused capture retains its identity until Abort proves cleanup.
+    pub(super) fn finish_capture(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        capture_id: DecimalU64,
+    ) -> Result<(), FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        let owner = self.capture.as_ref().expect("checked capture");
+        if owner.snapshot.phase != CapturePhase::Complete
+            || owner.refused_snapshot
+            || owner.leg.is_some()
+            || owner.cleanup.is_some()
+            || owner.release_queued.is_some()
+            || !self.settled_obligations(cx)
+            || !self.state().can_begin_filing()
+        {
+            return Err(self.fail(cx, "barrier", "capture still owes result or cleanup"));
+        }
+        self.capture.take();
+        Ok(())
+    }
+
+    /// Expiry before Snapshot needs no member cleanup. The caller records the
+    /// refusal before dropping only this hold. Existing filing remains owned.
+    pub(super) fn cancel_capture_barrier(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        capture_id: DecimalU64,
+    ) -> Result<(), FlowFailure> {
+        self.require_capture(cx, capture_id)?;
+        let owner = self.capture.as_ref().expect("checked capture");
+        if owner.snapshot.phase != CapturePhase::Barrier
+            || owner.leg.is_some()
+            || owner.cleanup.is_some()
+            || cx.barrier.pending().is_some()
+        {
+            return Err(self.fail(
+                cx,
+                "barrier",
+                "capture cancellation already owes a member result",
+            ));
+        }
+        self.capture.take();
+        Ok(())
+    }
+
+    fn require_capture(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        capture_id: DecimalU64,
+    ) -> Result<(), FlowFailure> {
+        self.require_active(cx)?;
+        if self
+            .capture
+            .as_ref()
+            .is_none_or(|owner| owner.snapshot.capture_id != capture_id)
+        {
+            return Err(self.fail(cx, "barrier", "capture identity has no registered owner"));
+        }
+        Ok(())
+    }
+
+    fn capture_leg_ready(&self, cx: &FlowRecording<'_>, phase: CapturePhase) -> bool {
+        self.capture.as_ref().is_some_and(|owner| {
+            owner.snapshot.phase == phase
+                && owner.leg.is_none()
+                && owner.cleanup.is_none()
+                && owner.release_queued.is_none()
+        }) && self.operation_completion.is_none()
+            && self.pending_record.is_none()
+            && cx.barrier.pending().is_none()
+            && self.state().outstanding().is_empty()
+            && self.state().held_measurement().is_none()
+    }
+
+    fn start_capture_leg(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        request: StateControl,
+        phase: CapturePhase,
+    ) -> Result<DecimalU64, FlowFailure> {
+        let now = io.now().map_err(|e| self.fail(cx, "clock", e))?;
+        let owner = self.capture.as_mut().expect("registered capture");
+        owner.leg = Some(request.clone());
+        owner.snapshot.phase = phase;
+        owner.queued_ns = Some(now);
+        let common = self
+            .state
+            .as_mut()
+            .expect("active state")
+            .begin(StateRequest::Control(request), now)
+            .map_err(|e| self.fail(cx, "state_send", e))?;
+        Ok(common.request_id)
+    }
+
     /// Begin a nonfiling exchange through the same request counter and socket.
     /// A busy owner returns the entire control unchanged and assigns no identity.
     pub(super) fn begin_control(
@@ -721,7 +1181,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         request: ControlOperation,
     ) -> Result<OperationStart<ControlOperation>, FlowFailure> {
         self.require_active(cx)?;
-        if self.state_operation.is_some()
+        if self.capture.is_some()
+            || self.state_operation.is_some()
             || self.operation_completion.is_some()
             || !self.state().outstanding().is_empty()
             || self.state().held_measurement().is_some()
@@ -761,7 +1222,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         operation: CheckOperation,
     ) -> Result<OperationStart<CheckOperation>, FlowFailure> {
         self.require_active(cx)?;
-        if self.classifier.is_none() {
+        if self.classifier.is_none() || self.capture.is_some() {
             return Ok(OperationStart::Busy(operation));
         }
         if self.check_operation.is_some()
@@ -821,6 +1282,13 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.ensure_live()?;
         if self.phase != CoordinatorPhase::Active {
             return Err(self.fail(cx, "barrier", "input requires an active flow"));
+        }
+        if self.capture.is_some() {
+            return Err(self.fail(
+                cx,
+                "barrier",
+                "input cannot enter a registered save barrier",
+            ));
         }
         if self.input_account.is_some() || input_id.0 <= self.last_input_id {
             return Err(self.fail(
@@ -1156,6 +1624,15 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             }
             return Ok(());
         }
+        if let Some(owner) = &self.capture {
+            let snapshot = owner.snapshot;
+            self.check_capture_frontier(cx, snapshot.frontier)?;
+            if snapshot.phase != CapturePhase::Barrier
+                && (cx.inbox.queued().next().is_some() || cx.budget.waiting_copy().is_some())
+            {
+                return Err(self.fail(cx, "barrier", "content entered a held capture"));
+            }
+        }
         let mut copied = Vec::new();
         while let Some((copy, intake_ns)) = cx.inbox.pop_timed(cx.budget) {
             let Some(intake_ns) = intake_ns else {
@@ -1428,6 +1905,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         if self.operation_completion.is_some() {
             return Ok(Advance::Pending);
         }
+        if self.start_queued_capture_release(cx)? {
+            return Ok(Advance::Progress);
+        }
         if let Some(measurement) = self.state().held_measurement() {
             let measurement = measurement.clone();
             let turn = measurement
@@ -1474,7 +1954,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 PendingRecord::Classifier,
             );
         }
-        if self.state_operation.is_none()
+        if self
+            .capture
+            .as_ref()
+            .is_none_or(|owner| owner.snapshot.phase == CapturePhase::Barrier)
+            && self.state_operation.is_none()
             && self.state().can_begin_filing()
             && let Some(filing) = self.ledger.next_file()
         {
@@ -1491,7 +1975,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             self.started_file = None;
             return Ok(Advance::Progress);
         }
-        if self.check_operation.is_none()
+        if self
+            .capture
+            .as_ref()
+            .is_none_or(|owner| owner.snapshot.phase == CapturePhase::Barrier)
+            && self.check_operation.is_none()
             && self.classifier.is_some()
             && self.classifier().state() == ClassifierState::Idle
             && let Some(candidate) = self.ledger.next_classification()
@@ -1544,6 +2032,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             if gauges.work_pending()
                 || self.state_operation.is_some()
                 || self.check_operation.is_some()
+                || self.capture.is_some()
             {
                 Advance::Pending
             } else {
@@ -1728,6 +2217,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 }
             }
             (Some(PendingRecord::State), RecordProof::State(proof)) => {
+                // One sample at the Recorded boundary survives a pending final
+                // release probe and all later consumer delay.
+                self.state_recorded_ns = Some(io.now().map_err(|e| self.fail(cx, "clock", e))?);
                 self.state_release_timing = self
                     .state
                     .as_ref()
@@ -1759,6 +2251,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         };
         self.pending_record = None;
         let timing = self.state_release_timing.take();
+        let recorded_ns = self.state_recorded_ns.take();
         if self.open_pending {
             if !matches!(completion.answer, StateFrame::Opened { .. }) {
                 return Err(self.fail(cx, "open", "open released a non-open completion"));
@@ -1778,6 +2271,15 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             self.phase = CoordinatorPhase::Active;
             self.operation_completion = Some(OperationCompletion::Opened(completion));
             return Ok(Advance::Progress);
+        }
+        if self
+            .capture
+            .as_ref()
+            .is_some_and(|owner| owner.leg.is_some())
+        {
+            let recorded_ns = recorded_ns
+                .ok_or_else(|| self.fail(cx, "state_reply", "capture lost its recording time"))?;
+            return self.finish_capture_release(cx, completion, recorded_ns);
         }
         if let Some((request, turn)) = self.state_operation.take() {
             self.operation_completion = Some(OperationCompletion::State {
@@ -1804,6 +2306,98 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             Some(elapsed),
             Some(completion.answer.common().request_id.0),
         )?;
+        Ok(Advance::Progress)
+    }
+
+    fn finish_capture_release(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        mut completion: StateCompletion,
+        recorded_ns: u64,
+    ) -> Result<Advance, FlowFailure> {
+        let owner = self.capture.as_ref().expect("owned capture leg");
+        let request = owner.leg.as_ref().expect("owned capture request");
+        if completion.discard_capture_result {
+            if owner.snapshot.phase != CapturePhase::Aborting
+                || owner.cleanup.is_none()
+                || !matches!(
+                    request,
+                    StateControl::Snapshot { .. } | StateControl::Acknowledge { .. }
+                )
+            {
+                return Err(self.fail(
+                    cx,
+                    "state_reply",
+                    "discard does not name the cleanup's original leg",
+                ));
+            }
+            let owner = self.capture.as_mut().expect("owned capture leg");
+            owner.leg = owner.cleanup.take();
+            return Ok(Advance::Progress);
+        }
+        let StateFrame::ControlAnswer { frame, .. } = &completion.answer else {
+            return Err(self.fail(cx, "state_reply", "capture released a non-control answer"));
+        };
+        if owner.release_queued.is_some() {
+            if !matches!((request, frame),
+                (StateControl::Acknowledge { capture_id, .. }, StateControlAnswer::Finished { capture_id: id, .. })
+                    if capture_id == id)
+            {
+                return Err(self.fail(
+                    cx,
+                    "state_reply",
+                    "queued release lost its Recorded Finished",
+                ));
+            }
+            completion.discard_capture_result = true;
+            let owner = self.capture.as_mut().expect("queued release owner");
+            self.operation_completion = Some(OperationCompletion::Capture {
+                request: owner.leg.take().expect("recorded original request"),
+                completion,
+                recorded_ns,
+            });
+            return Ok(Advance::Progress);
+        }
+        let phase = match (request, frame) {
+            (StateControl::Snapshot { .. }, StateControlAnswer::Snapshot { .. }) => {
+                CapturePhase::Held
+            }
+            (StateControl::Acknowledge { .. }, StateControlAnswer::Finished { .. }) => {
+                CapturePhase::Finished
+            }
+            (StateControl::Abort { .. }, StateControlAnswer::Aborted { .. })
+            | (StateControl::ReleaseCapture { .. }, StateControlAnswer::CaptureReleased { .. })
+            | (StateControl::Snapshot { .. }, StateControlAnswer::ControlRefused { .. }) => {
+                CapturePhase::Complete
+            }
+            (StateControl::Acknowledge { .. }, StateControlAnswer::ControlRefused { .. }) => {
+                CapturePhase::Held
+            }
+            (StateControl::ReleaseCapture { .. }, StateControlAnswer::ControlRefused { .. }) => {
+                CapturePhase::Finished
+            }
+            _ => {
+                return Err(self.fail(
+                    cx,
+                    "state_reply",
+                    "capture answer differs from its owned leg",
+                ));
+            }
+        };
+        let owner = self.capture.as_mut().expect("owned capture leg");
+        owner.refused_snapshot = matches!(
+            (&owner.leg, frame),
+            (
+                Some(StateControl::Snapshot { .. }),
+                StateControlAnswer::ControlRefused { .. }
+            )
+        );
+        owner.snapshot.phase = phase;
+        self.operation_completion = Some(OperationCompletion::Capture {
+            request: owner.leg.take().expect("owned capture request"),
+            completion,
+            recorded_ns,
+        });
         Ok(Advance::Progress)
     }
 
@@ -2218,3 +2812,7 @@ pub(in crate::flow) mod tests;
 #[cfg(test)]
 #[path = "coordinator_input_tests.rs"]
 mod input_tests;
+
+#[cfg(test)]
+#[path = "coordinator_capture_tests.rs"]
+mod capture_tests;
