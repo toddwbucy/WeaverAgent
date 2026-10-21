@@ -132,7 +132,7 @@ diff checks pass. [The implementation record][ste100-transport-record] states th
 scope and the separate SPU empty-datagram correction now published in C1a. Worker
 launch, the common pump, production artifacts and qualification remain open.
 
-H1r is prepared on code/state-recording-context, stacked on #201. It adds bounded
+H1r is [draft PR #202][recording-support], stacked on #201. It adds bounded
 trace wake/drain and preflight terminal APIs, original author custody, held state
 terminal observation, interruption-safe release and typed noncapture control and
 classifier operation results. The complete phaseful RecordingContext, common pump,
@@ -355,3 +355,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [pump-transports]: https://github.com/toddwbucy/WeaverAgent/pull/201
 
 [recording-support-record]: state-management-recording-support-2026-10-21.md
+[recording-support]: https://github.com/toddwbucy/WeaverAgent/pull/202

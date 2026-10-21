@@ -2,7 +2,7 @@
 
 Date: 2026-10-21. Status: locally verified component implementation.
 
-This branch is stacked on [PR #201][base]. Its own PR number is pending. It adds
+This is [draft PR #202][implementation], stacked on [PR #201][base]. It adds
 recording and completion mechanics needed by the later run-wide context. The
 complete legacy serving path remains active under FOUNDATION-TRANSITION in the
 [foundation Spec][foundation].
@@ -185,3 +185,5 @@ transport retirement, and coupled foundation cutover remain later work.
 [recording]: ../../crates/weaver-harness/src/flow/recording.rs
 [channel]: ../../crates/weaver-harness/src/flow/channel.rs
 [coordinator]: ../../crates/weaver-harness/src/flow/coordinator.rs
+
+[implementation]: https://github.com/toddwbucy/WeaverAgent/pull/202
