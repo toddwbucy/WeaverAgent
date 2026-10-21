@@ -584,6 +584,8 @@ fn every_exclusive_verb_records_its_name() {
         HolderVerb::Restore,
         HolderVerb::Stop,
         HolderVerb::Validate,
+        HolderVerb::Seed,
+        HolderVerb::BindState,
     ] {
         // Exhaustive: a new verb fails to compile here until it is listed.
         match verb {
@@ -593,7 +595,9 @@ fn every_exclusive_verb_records_its_name() {
             | HolderVerb::SavePoint
             | HolderVerb::Restore
             | HolderVerb::Stop
-            | HolderVerb::Validate => {}
+            | HolderVerb::Validate
+            | HolderVerb::Seed
+            | HolderVerb::BindState => {}
         }
         let mode = format!("take:{}", verb.spelled());
         let mut child = holding_invocation(&dir, &[("WEAVER_ADMIN_HOLDER_MODE", &mode)]);
@@ -773,4 +777,74 @@ fn a_lock_file_is_judged_and_laid_on_its_descriptor() {
         open_lock_file(&fifo).err(),
         Some(LifecycleRefusal::BoundaryUnverified)
     );
+}
+
+/// The seed's expired original deadline cannot create, repair or replace the
+/// holder record. Removing the check ahead of open makes both probes fail.
+#[test]
+fn an_expired_invocation_deadline_never_touches_the_lock_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("invocation-expired");
+    let path = dir.0.join("admin.lock");
+    let deadline = Instant::now();
+    assert_eq!(
+        take_invocation_lock_until(&dir, crate::verb_table::HolderVerb::Seed, deadline).err(),
+        Some(LifecycleRefusal::InvocationInFlight)
+    );
+    assert!(!path.exists(), "an expired take created its lock file");
+    std::fs::write(&path, "previous holder").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+    assert_eq!(
+        take_invocation_lock_until(&dir, crate::verb_table::HolderVerb::Seed, deadline).err(),
+        Some(LifecycleRefusal::InvocationInFlight)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"previous holder");
+    assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o7777, 0o640);
+}
+
+/// A real reader in another process outlives the invocation's remaining budget.
+/// Granting a fresh courtesy window delays this answer past the watched bound.
+#[test]
+fn an_invocation_deadline_caps_the_shared_holder_wait() {
+    let dir = scratch("invocation-capped");
+    let path = dir.0.join("admin.lock");
+    drop(open_lock_file(&path).unwrap());
+    std::fs::write(&path, "previous holder").unwrap();
+    let holder = shared_holder(&path, Duration::from_secs(3));
+    let started = Instant::now();
+    let answer = take_invocation_lock_until(
+        &dir,
+        crate::verb_table::HolderVerb::Seed,
+        started + Duration::from_millis(80),
+    );
+    let elapsed = started.elapsed();
+    // Clean up before assertions, including when a deadline mutation fails.
+    // SAFETY: this is the child this test forked, still held for its waitpid.
+    unsafe { nix::libc::kill(holder.as_raw(), nix::libc::SIGKILL) };
+    let _ = nix::sys::wait::waitpid(holder, None);
+    assert_eq!(answer.err(), Some(LifecycleRefusal::InvocationInFlight));
+    assert!(elapsed < Duration::from_millis(500), "waited {elapsed:?}");
+    assert_eq!(std::fs::read(&path).unwrap(), b"previous holder");
+}
+
+/// A reader released while the original budget remains still permits a take.
+/// Refusing every shared hold fails this probe, so the cap is not a blanket refusal.
+#[test]
+fn an_invocation_deadline_keeps_the_brief_reader_courtesy() {
+    let dir = scratch("invocation-brief");
+    let path = dir.0.join("admin.lock");
+    drop(open_lock_file(&path).unwrap());
+    let holder = shared_holder(&path, Duration::from_millis(100));
+    let answer = take_invocation_lock_until(
+        &dir,
+        crate::verb_table::HolderVerb::Seed,
+        Instant::now() + Duration::from_secs(2),
+    );
+    let _ = nix::sys::wait::waitpid(holder, None);
+    let held = answer.expect("the reader released within both existing bounds");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        format!("seed {}", std::process::id())
+    );
+    drop(held);
 }
