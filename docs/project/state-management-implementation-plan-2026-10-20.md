@@ -265,8 +265,8 @@ contracts with real
 trace admission, Unix sockets and scripted classifier/state replies. They do not
 qualify production STE100, deployment limits or throughput.
 
-H1p supplies the bounded packet owners described in the
-[transport implementation record][pump-transport-record]. Its branch is stacked on
+H1p is [draft PR #201][pump-transports], with the bounded packet owners described in
+the [transport implementation record][pump-transport-record]. It is stacked on
 PR #200. It consumes existing organ, decode and label channels and leaves their
 legacy callers active until the coupled cutover. The shared wire types and decode
 segment format stay unchanged. Enter's initial ancillary descriptor transfer remains
@@ -340,3 +340,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [filing]: https://github.com/toddwbucy/WeaverAgent/pull/198
 [filing-coordinator]: https://github.com/toddwbucy/WeaverAgent/pull/199
 [pump-transport-record]: state-management-pump-transports-2026-10-21.md
+[pump-transports]: https://github.com/toddwbucy/WeaverAgent/pull/201

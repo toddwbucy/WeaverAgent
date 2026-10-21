@@ -2,6 +2,8 @@
 
 Date: 2026-10-21. Status: implementation evidence, not a Spec amendment.
 
+Draft [PR #201][pr] is stacked on PR #200. It implements H1p in the dependency map.
+
 The merged [harness amendment][harness] requires a common pump to keep transport
 moving while one trace event waits for capacity. The existing decode receive reads
 an entire segment series in one call. Organ reads and sends block, and the label
@@ -87,3 +89,4 @@ the byte tests, and carry the outstanding lifecycle census into the context act.
 [organ]: ../crates/contracts/weaver-organ-channel.md
 [decode]: ../crates/contracts/weaver-harness-spu-decode-contract.md
 [label]: ../crates/contracts/weaver-harness-spu-classify-contract.md
+[pr]: https://github.com/toddwbucy/WeaverAgent/pull/201
