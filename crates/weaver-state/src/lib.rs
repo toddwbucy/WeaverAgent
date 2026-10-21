@@ -12,8 +12,11 @@
 
 pub mod engine;
 pub mod save_point;
+mod serving_store;
 mod store;
 pub mod typed;
+
+pub use serving_store::{FileCommit, FileFault, ReadFault, ServingStore};
 
 pub use store::{
     Ask, CustodyFault, Distillate, Election, ImageFacts, RecalledEvent, Restored, RunShape,
