@@ -23,7 +23,8 @@ const DUMP: &str = "state.sqlite";
 const CONFIGURATION: &str = "agent.toml";
 const BINDING: &str = "binding.json";
 
-/// Values from the already judged territory, not from the authoring draft.
+/// Identity constraints from the independently judged territory declaration.
+/// Never derive these expectations from the candidate artifact being checked.
 /// Inventory still judges binaries, model artifacts and serving port elections.
 pub(crate) struct LoadScope<'a> {
     pub(crate) session: &'a SessionId,

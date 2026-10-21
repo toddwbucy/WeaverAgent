@@ -1,6 +1,7 @@
 # State management implementation map
 
 Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
+Updated: 2026-10-21 for the offline admin operations.
 
 The authority is the merged [state management set][set] from PR #182. All code PRs
 start as drafts. The Planner controls the reviewed transition out of draft.
@@ -29,6 +30,7 @@ it implements. Rows can be split further without changing the Spec or cutover.
 | P1a | F1 | Serving declaration, canonical artifacts and verified reads, admin/types amendments |
 | P1b | P1a | Staged artifact publication and restore append, admin/persistence amendments |
 | P1c | P1a, P1b, F4 | Contained seed driver, admin ADMIN-SEED and TYPES-SEED |
+| P1o | P1a, P1b | Offline bind and restore drivers, admin selection/rebind clauses |
 | P1d | P1a, P1b, F4, C1 | Serving lifecycle and verified boot, admin/persistence amendments |
 | H1 | F1, T1b, F4, C1, P1 | Flow, receipts and halt, harness/foundation amendments |
 | H2 | H1, IN1 | Pair ledger and gate containment, Spec 05 and gate amendment |
@@ -117,7 +119,8 @@ read-only image descriptor, refuses unindexed or guarded artifacts and retains N
 It does not append a restore selection, publish a save, spawn a seed member or
 activate the serving path. Publication and restore append are P1b. Seed process,
 boot and the existing locks with complete protocol producer/consumer integration
-remain P1c and P1d. P1 in dependency rows means all four slices.
+remain P1c and P1d. Offline callers are P1o. P1 in dependency rows means all five
+slices.
 P1a is [PR #193][artifacts], head 7aa326d9. Its 45 new admin tests pass within
 the full admin suite, as do the floor's default and config-feature suites. Fourteen
 compiled guard-removal probes failed their protective assertions. Independent
@@ -140,7 +143,7 @@ P1c supplies seed process, lock and cleanup callbacks. P1d supplies serving life
 callbacks, including the common windows and peer observations. P1b adds no active
 lifecycle grammar.
 
-P1c is the draft slice on code/state-seed-driver. Its dependency join combines
+P1c is [draft PR #195][seed-driver]. Its dependency join combines
 #194 and #188, so both must merge before this branch. It supplies the contained
 seed driver and its preparation, transport, cleanup and publication sequence.
 Admin verifies certificate attribution and exact bytes without starting a checker.
@@ -158,6 +161,31 @@ is written but unrun because passwordless root is unavailable here. Its attempte
 user-namespace substitute correctly refused unmapped host-root ancestors, so that
 substitute was removed. Production host admission, the joined root-host fixture,
 qualified certificates and serving boot remain owed before cutover.
+
+P1o is the draft slice on code/state-offline-controls, stacked on #195. It adds
+the complete dormant bind-state and restore operations.
+Both authenticate before reading fixed inputs, hold the invocation and run locks,
+and require the existing cgroup ladder to report unloaded. Preparation judges the
+fixed selector and territory draft without seed inputs or a live checker. Bind
+preserves the image and scheme while publishing a new bound declaration. Restore
+appends a verified indexed selection without rewriting its files. Append uncertainty
+and publication evidence remain in the typed failures. Command activation, stdout and
+admin.log adaptation remain part of the coupled cutover.
+The full admin suite passes 496 tests, with 36 inherited ignored instruments. All
+22 new offline tests run. Fifteen compiled guard removals fail their protective
+checks, and the restored source passes all 22 again. All-targets lint, formatting,
+lock and diff checks pass. Independent source review has no open finding.
+The fixtures use actual filesystem publication and locks with synthetic host
+inventory and image bytes. They do not certify SQLite, root/NSS provisioning or
+a populated delegated cgroup. Existing containment instruments own that last duty.
+
+H3 has a named open-measurement gap. Spec 06 OPEN-FACTS requires an identity-prefix
+label at open, while TYPES-DECODE specifies only four counts in Opened and leaves
+Generation unchanged. The existing SPU Spec section 6 emits no open measurement.
+No implementation may invent the missing carrier. The existing PromptPartition
+offset validator is also not wired into production measurement. Its unit tests
+cannot establish the section 6 tokenizer-offset requirement. These remain explicit
+work for the SPU slice, not evidence supplied by its binding mechanics.
 
 The later rows remain owed.
 This is a progress record, not a claim that the full goal or any serving cutover is
@@ -202,3 +230,5 @@ quality, decoder capacity, throughput or absence of paging waits.
 [artifacts]: https://github.com/toddwbucy/WeaverAgent/pull/193
 
 [publication]: https://github.com/toddwbucy/WeaverAgent/pull/194
+
+[seed-driver]: https://github.com/toddwbucy/WeaverAgent/pull/195
