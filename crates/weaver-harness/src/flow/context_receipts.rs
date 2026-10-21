@@ -11,6 +11,7 @@ pub(in crate::flow) enum FilingBeginRefusal {
     Busy,
     MissingWait,
     NotContent,
+    ReservedPair,
 }
 
 #[derive(Debug)]
@@ -58,7 +59,14 @@ pub(in crate::flow) struct FilingCancellation {
     pub receipts: Option<ReceiptSet>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FilingOwner {
+    Ordinary,
+    Pair,
+}
+
 pub(super) struct FilingTransaction {
+    owner: FilingOwner,
     key: PumpDeadline,
     bound: AbsoluteBound,
     sequence: Option<Sequence>,
@@ -77,6 +85,33 @@ impl RecordingContext {
         key: PumpDeadline,
         io: &mut impl PumpIo,
     ) -> Result<(), FilingBeginError> {
+        self.begin_owned_filing(event, key, FilingOwner::Ordinary, io)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn begin_owned_filing(
+        &mut self,
+        event: AuthoredEvent,
+        key: PumpDeadline,
+        owner: FilingOwner,
+        io: &mut impl PumpIo,
+    ) -> Result<(), FilingBeginError> {
+        if owner == FilingOwner::Ordinary
+            && matches!(event.kind, Kind::ToolCallStarted | Kind::ToolCallCompleted)
+        {
+            return Err(FilingBeginError {
+                event,
+                refusal: FilingBeginRefusal::ReservedPair,
+                failure: None,
+            });
+        }
+        if owner == FilingOwner::Ordinary && self.pair_work.is_some() {
+            return Err(FilingBeginError {
+                event,
+                refusal: FilingBeginRefusal::Busy,
+                failure: None,
+            });
+        }
         if let Err(failure) = self.live(io) {
             return Err(FilingBeginError {
                 event,
@@ -110,7 +145,8 @@ impl RecordingContext {
                 failure: None,
             });
         }
-        if self.filing.is_some()
+        if self.output.is_some()
+            || self.filing.is_some()
             || self.flow.has_filing_consumer()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()
@@ -147,6 +183,7 @@ impl RecordingContext {
             });
         }
         self.filing = Some(FilingTransaction {
+            owner,
             key,
             bound: bound.expect("existing borrowed bound"),
             sequence: None,
@@ -249,6 +286,21 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<FilingProgress, RunFailure> {
+        self.advance_owned_filing(FilingOwner::Ordinary, ports)
+    }
+
+    pub(super) fn advance_owned_filing<I: PumpIo>(
+        &mut self,
+        owner: FilingOwner,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<FilingProgress, RunFailure> {
+        if self
+            .filing
+            .as_ref()
+            .is_some_and(|filing| filing.owner != owner)
+        {
+            return Err(RunFailure::PairOwned);
+        }
         self.live(ports.io)?;
         self.filing_wait_matches(ports.io)?;
         let owner = self.filing.as_ref().expect("checked owner");
@@ -316,6 +368,21 @@ impl RecordingContext {
         &mut self,
         io: &mut impl PumpIo,
     ) -> Result<Option<FilingCompletion>, RunFailure> {
+        self.take_owned_filing(FilingOwner::Ordinary, io)
+    }
+
+    pub(super) fn take_owned_filing(
+        &mut self,
+        owner: FilingOwner,
+        io: &mut impl PumpIo,
+    ) -> Result<Option<FilingCompletion>, RunFailure> {
+        if self
+            .filing
+            .as_ref()
+            .is_some_and(|filing| filing.owner != owner)
+        {
+            return Err(RunFailure::PairOwned);
+        }
         if self.filing.is_none() {
             self.live(io)?;
             return Ok(None);
@@ -363,7 +430,7 @@ impl RecordingContext {
         let Some(owner) = self.filing.as_mut() else {
             return;
         };
-        if owner.cancelled {
+        if owner.owner != FilingOwner::Ordinary || owner.cancelled {
             return;
         }
         owner.cancelled = true;
@@ -379,7 +446,7 @@ impl RecordingContext {
         if !self
             .filing
             .as_ref()
-            .is_some_and(|r| r.cancelled && r.author_done)
+            .is_some_and(|r| r.owner == FilingOwner::Ordinary && r.cancelled && r.author_done)
         {
             return None;
         }

@@ -22,13 +22,31 @@ use super::classifier::{Classifier, ClassifierState, Ste100Port, Submit};
 use super::clock::PumpIo;
 use super::intake::{FlowInbox, IntakeError, IntakeFailure, IntakeOutcome, RetentionBudget};
 use super::ledger::{
-    AcceptedReuse, Classified, Ledger, LedgerState, TerminalCandidate, TerminalOutcome,
+    AcceptedReuse, Classified, Ledger, LedgerState, SourceLease, TerminalCandidate, TerminalOutcome,
 };
 use super::observation::{
     GaugeSnapshot, Observation, PendingSource, SamplePoint, Transition, WaitingSource,
 };
 use super::recording::{RecordBarrier, RecordProgress, RecordProof, RecordPurpose};
 use super::report::{HaltLatch, SecondaryFailure};
+
+#[path = "output.rs"]
+mod output;
+// The later repair owner names each block capability through this private port.
+#[allow(unused_imports)]
+pub(super) use output::{
+    CheckedGeneration, OutputCancellation, OutputChecks, OutputOriginal, RecordedOutputBlock,
+};
+
+#[path = "model_requests.rs"]
+mod model_requests;
+#[cfg(test)]
+pub(in crate::flow) use model_requests::tests::checked as checked_request_fixture;
+#[allow(unused_imports)]
+pub(super) use model_requests::{
+    AssociationError, AssociationFailure, AssociationRefusal, ModelRequestCandidate,
+    OriginalRequests, PendingAssociation, RequestScheme,
+};
 
 pub(super) struct FlowRecording<'a> {
     pub barrier: &'a mut RecordBarrier,
@@ -304,6 +322,12 @@ struct ReceiptReservation {
     recorded_ns: Option<u64>,
 }
 
+struct OutputReceiptReservation {
+    sequence: u64,
+    expected: Vec<SourceBlockId>,
+    lease: Option<SourceLease>,
+}
+
 /// No socket, mutable ledger or completion escapes through a caller-owned clone.
 /// The sole run-wide latch freezes this owner before reporting. Component
 /// notifications preserve every current source and transport fact for that latch.
@@ -311,6 +335,8 @@ pub(super) struct FlowCoordinator<P> {
     run: String,
     ledger: Ledger,
     receipt_reservation: Option<ReceiptReservation>,
+    output_checks: Option<OutputChecks>,
+    output_receipts: Option<OutputReceiptReservation>,
     classifier: Option<Classifier<P>>,
     starting_classifier: Option<P>,
     admission_completion: Option<super::ste100_socket::AdmissionPoll>,
@@ -371,6 +397,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             run,
             ledger,
             receipt_reservation: None,
+            output_checks: None,
+            output_receipts: None,
             scheme: classifier.scheme().clone(),
             classifier: Some(classifier),
             starting_classifier: None,
@@ -478,6 +506,251 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     pub(super) fn ledger(&self) -> &Ledger {
         &self.ledger
     }
+    /// Reserve complete model content before authoring. Source identity belongs
+    /// to the subsequent recorder completion, never to the caller.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn reserve_output_checks(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        original: OutputOriginal,
+    ) -> Result<(), (OutputOriginal, FlowFailure)> {
+        if let Err(failure) = self.observe_failures(cx) {
+            return Err((original, failure));
+        }
+        if self.phase != CoordinatorPhase::Active
+            || self.output_checks.is_some()
+            || self.receipt_reservation.is_some()
+            || self.capture.is_some()
+            || self.check_operation.is_some()
+            || self.operation_completion.is_some()
+            || self.classifier.is_none()
+        {
+            return Err((
+                original,
+                self.fail(cx, "output", "output check owner is unavailable"),
+            ));
+        }
+        let owner = OutputChecks::new(&self.run, &self.scheme, original)
+            .map_err(|(original, error)| (original, self.fail(cx, "output", error)))?;
+        self.output_checks = Some(owner);
+        Ok(())
+    }
+
+    pub(super) fn has_output_consumer(&self) -> bool {
+        self.output_checks.is_some()
+    }
+
+    pub(super) fn output_checks(&self) -> Option<&OutputChecks> {
+        self.output_checks.as_ref()
+    }
+
+    /// Intake has installed the copy or retained it whole for room. No result
+    /// may be reduced between that intake and this actual source binding.
+    pub(super) fn bind_output_checks(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: Sequence,
+        recorded_ns: u64,
+    ) -> Result<(), FlowFailure> {
+        self.observe_failures(cx)?;
+        if self
+            .output_checks
+            .as_ref()
+            .is_none_or(OutputChecks::is_bound)
+        {
+            return Err(self.fail(cx, "output", "output has no unbound original author"));
+        }
+        let installed: Vec<_> = self
+            .ledger
+            .facts()
+            .filter(|fact| fact.source.run == self.run && fact.source.sequence.0 == sequence.0)
+            .map(|fact| fact.source.clone())
+            .collect();
+        let pending = pending_receipt_sources(cx, &self.run, sequence, installed.is_empty())
+            .map_err(|error| self.fail(cx, "output", error))?;
+        let deferred = pending.is_some();
+        let selected = pending.unwrap_or(installed);
+        if self.output_checks.as_ref().unwrap().is_cancelled() {
+            // A cancelled author may still finish its one real trace ticket.
+            // Preserve that source, but never revive the abandoned consumer.
+            return self
+                .output_checks
+                .as_mut()
+                .unwrap()
+                .bind(sequence, recorded_ns, &selected)
+                .map_err(|error| self.fail(cx, "output_receipt", error));
+        }
+        let lease = if deferred {
+            None
+        } else {
+            Some(
+                self.ledger
+                    .register_source_lease(selected.clone())
+                    .map_err(|error| self.fail(cx, "output_receipt", error.error))?,
+            )
+        };
+        self.output_receipts = Some(OutputReceiptReservation {
+            sequence: sequence.0,
+            expected: selected.clone(),
+            lease,
+        });
+        self.output_checks
+            .as_mut()
+            .expect("unbound output")
+            .bind(sequence, recorded_ns, &selected)
+            .map_err(|error| self.fail(cx, "output", error))
+    }
+
+    fn register_deferred_output_receipts(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: u64,
+        sources: &[SourceBlockId],
+    ) -> Result<(), FlowFailure> {
+        let Some(owner) = self.output_receipts.as_ref() else {
+            return Ok(());
+        };
+        if owner.sequence != sequence {
+            return Ok(());
+        }
+        if owner.lease.is_some() || owner.expected != sources {
+            return Err(self.fail(cx, "output_receipt", "deferred output copy changed"));
+        }
+        let lease = self
+            .ledger
+            .register_source_lease(sources.to_vec())
+            .map_err(|error| self.fail(cx, "output_receipt", error.error))?;
+        self.output_receipts.as_mut().unwrap().lease = Some(lease);
+        Ok(())
+    }
+
+    pub(super) fn take_output_checks(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<Option<CheckedGeneration>, FlowFailure> {
+        self.observe_failures(cx)?;
+        if !self
+            .output_checks
+            .as_ref()
+            .is_some_and(OutputChecks::is_complete)
+        {
+            return Ok(None);
+        }
+        // The check proof is independent of unrelated pending filings or their
+        // observation records. No selected source obligation transfers here.
+        if self
+            .output_receipts
+            .as_ref()
+            .is_none_or(|owner| owner.lease.is_none())
+        {
+            return Err(self.fail(
+                cx,
+                "output_receipt",
+                "complete output lost its receipt lease",
+            ));
+        }
+        let owner = self.output_checks.take().expect("complete output");
+        match owner.complete() {
+            Ok(mut checked) => {
+                let lease = self.output_receipts.take().unwrap().lease.unwrap();
+                checked.attach_receipt_lease(lease);
+                Ok(Some(checked))
+            }
+            Err(owner) => {
+                self.output_checks = Some(owner);
+                Err(self.fail(cx, "output", "complete output could not transfer"))
+            }
+        }
+    }
+
+    pub(super) fn cancel_output_checks(&mut self) {
+        if let Some(reservation) = self.output_receipts.take()
+            && let Some(lease) = reservation.lease
+        {
+            // Cancellation removes consumer interest, never the copied filing.
+            self.ledger
+                .release_source_lease(lease)
+                .expect("owned output lease");
+        }
+        if let Some(owner) = &mut self.output_checks {
+            owner.cancel();
+        }
+    }
+
+    pub(super) fn take_cancelled_output_checks(&mut self) -> Option<OutputCancellation> {
+        if !self
+            .output_checks
+            .as_ref()
+            .is_some_and(|owner| owner.is_cancelled() && owner.is_settled())
+        {
+            return None;
+        }
+        let owner = self.output_checks.take().expect("settled cancellation");
+        match owner.cancellation() {
+            Ok(cancelled) => Some(cancelled),
+            Err(owner) => {
+                self.output_checks = Some(owner);
+                None
+            }
+        }
+    }
+
+    fn start_output_check(&mut self, cx: &mut FlowRecording<'_>) -> Result<bool, FlowFailure> {
+        let Some((source, text, turn)) = self
+            .output_checks
+            .as_ref()
+            .and_then(OutputChecks::next_unselected)
+        else {
+            return Ok(false);
+        };
+        let operation = CheckOperation::UnselectedModel { source, text, turn };
+        match self.begin_check_inner(cx, operation)? {
+            OperationStart::Busy(_) => Ok(false),
+            OperationStart::Started { .. } => {
+                let request = self.classifier().outstanding().cloned().ok_or_else(|| {
+                    self.fail(cx, "output", "submitted output request is not retained")
+                })?;
+                self.output_checks
+                    .as_mut()
+                    .expect("reserved output")
+                    .submitted(request)
+                    .map_err(|error| self.fail(cx, "output", error))?;
+                Ok(true)
+            }
+        }
+    }
+
+    pub(super) fn source_receipt_status(
+        &self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<super::ledger::LeaseSlotStatus, super::ledger::LedgerError> {
+        self.ledger.source_lease_status(lease, source)
+    }
+
+    pub(super) fn take_source_receipt(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<Option<super::ledger::SourceDisposition>, super::ledger::LedgerError> {
+        self.ledger.take_source_receipt(lease, source)
+    }
+
+    pub(super) fn release_source_receipt(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<(), super::ledger::LedgerError> {
+        self.ledger.release_source_receipt(lease, source)
+    }
+
+    pub(super) fn release_source_lease(
+        &mut self,
+        lease: SourceLease,
+    ) -> Result<(), (SourceLease, super::ledger::LedgerError)> {
+        self.ledger.release_source_lease(lease)
+    }
+
     /// Reserve the only consumer before its original author is submitted.
     /// This is not a source lookup or a way to recover a disposed receipt.
     pub(super) fn reserve_filing_receipts(
@@ -670,6 +943,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             run,
             ledger,
             receipt_reservation: None,
+            output_checks: None,
+            output_receipts: None,
             classifier: None,
             starting_classifier: None,
             admission_completion: None,
@@ -780,6 +1055,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
 
     fn settled_obligations(&self, cx: &FlowRecording<'_>) -> bool {
         self.receipt_reservation.is_none()
+            && self.output_checks.is_none()
             && self.ledger.receipts().is_none()
             && self.ledger.facts().next().is_none()
             && cx.inbox.queued().next().is_none()
@@ -1406,6 +1682,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         if matches!(operation, CheckOperation::Input { .. }) {
             return Err(self.fail(cx, "classifier", "input requires measured submission"));
         }
+        if self.output_checks.is_some() {
+            return Ok(OperationStart::Busy(operation));
+        }
         self.begin_check_inner(cx, operation)
     }
 
@@ -1754,6 +2033,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 .observe_progress(progress, self.state().first_sent_ns());
         }
         self.ledger.freeze();
+        if let Some(output) = &mut self.output_checks {
+            output.freeze();
+        }
         if let Some(owner) = &mut self.classifier {
             owner.fail();
         }
@@ -1860,6 +2142,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             {
                 Ok(installed) => {
                     self.register_deferred_receipts(
+                        cx,
+                        installed.source_sequence,
+                        &installed.sources,
+                    )?;
+                    self.register_deferred_output_receipts(
                         cx,
                         installed.source_sequence,
                         &installed.sources,
@@ -2173,6 +2460,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             self.started_file = None;
             return Ok(Advance::Progress);
         }
+        if self.start_output_check(cx)? {
+            return Ok(Advance::Progress);
+        }
         if self
             .capture
             .as_ref()
@@ -2231,6 +2521,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 || self.state_operation.is_some()
                 || self.check_operation.is_some()
                 || self.capture.is_some()
+                || self.output_checks.is_some()
             {
                 Advance::Pending
             } else {
@@ -2391,6 +2682,15 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                     return Ok(Advance::Progress);
                 }
                 let result_source = proof.source().clone();
+                let recorded_ns = io.now().map_err(|error| self.fail(cx, "clock", error))?;
+                let checked_request =
+                    self.classifier().outstanding().cloned().ok_or_else(|| {
+                        self.fail(
+                            cx,
+                            "classifier",
+                            "recorded reply has no outstanding request",
+                        )
+                    })?;
                 let reply = self
                     .classifier
                     .as_mut()
@@ -2404,6 +2704,38 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                         "classifier reported component failure",
                     ));
                 }
+                if self
+                    .output_checks
+                    .as_ref()
+                    .is_some_and(|owner| owner.owns_unselected(&checked_request))
+                {
+                    let Some(CheckOperation::UnselectedModel { source, text, turn }) =
+                        self.check_operation.take()
+                    else {
+                        return Err(self.fail(
+                            cx,
+                            "output",
+                            "owned output lost its check operation",
+                        ));
+                    };
+                    let owner = self.output_checks.as_ref().expect("owned output");
+                    if checked_request.target != Ste100Target::Source(source)
+                        || checked_request.text != text
+                        || owner.original().turn != turn
+                    {
+                        return Err(self.fail(
+                            cx,
+                            "output",
+                            "output operation differs from its request",
+                        ));
+                    }
+                    self.output_checks
+                        .as_mut()
+                        .expect("owned output")
+                        .record(checked_request, reply, result_source, recorded_ns, false)
+                        .map_err(|error| self.fail(cx, "output", error))?;
+                    return Ok(Advance::Progress);
+                }
                 if let Some(owner) = self.check_operation.take() {
                     self.operation_completion = Some(OperationCompletion::Check(RecordedCheck {
                         operation: owner,
@@ -2411,6 +2743,23 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                         source: result_source,
                     }));
                     return Ok(Advance::Progress);
+                }
+                if self
+                    .output_checks
+                    .as_ref()
+                    .is_some_and(|owner| owner.observes(&checked_request))
+                {
+                    self.output_checks
+                        .as_mut()
+                        .expect("observed output")
+                        .record(
+                            checked_request,
+                            reply.clone(),
+                            result_source,
+                            recorded_ns,
+                            true,
+                        )
+                        .map_err(|error| self.fail(cx, "output", error))?;
                 }
                 match self
                     .ledger

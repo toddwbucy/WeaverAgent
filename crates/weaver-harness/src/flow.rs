@@ -70,3 +70,85 @@ mod receipt_port_visibility {
     const _: fn(&mut RecordingContext) -> Option<FilingCancellation> =
         RecordingContext::take_cancelled_filing;
 }
+
+#[cfg(test)]
+mod output_port_visibility {
+    use super::clock::testing::FakePumpIo;
+    use super::context::{OutputBeginError, OutputProgress, RecordingContext, RunFailure};
+    use super::coordinator::{CheckedGeneration, OutputCancellation, OutputOriginal};
+    use super::pump::PumpPorts;
+    use weaver_trace::Sequence;
+
+    const _: fn(
+        &mut RecordingContext,
+        OutputOriginal,
+        Option<Sequence>,
+        &mut FakePumpIo,
+    ) -> Result<(), OutputBeginError> = RecordingContext::begin_output;
+    const _: fn(
+        &mut RecordingContext,
+        &mut PumpPorts<'_, FakePumpIo>,
+    ) -> Result<OutputProgress, RunFailure> = RecordingContext::advance_output;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<CheckedGeneration>, RunFailure> = RecordingContext::take_output;
+    const _: fn(&mut RecordingContext) = RecordingContext::cancel_output;
+    const _: fn(&mut RecordingContext) -> Option<OutputCancellation> =
+        RecordingContext::take_cancelled_output;
+}
+
+#[cfg(test)]
+#[allow(clippy::type_complexity)] // Keep exact public method shapes in these compile pins.
+mod request_receipt_port_visibility {
+    use super::clock::testing::FakePumpIo;
+    use super::context::{RecordingContext, SourceReceiptError};
+    use super::coordinator::CheckedGeneration;
+    use super::ledger::{LeaseSlotStatus, LedgerError, SourceDisposition, SourceLease};
+    use weaver_types::state_flow::SourceBlockId;
+
+    const _: fn(&CheckedGeneration) -> Option<&SourceLease> = CheckedGeneration::receipt_lease;
+    const _: fn(&mut CheckedGeneration) -> Option<SourceLease> =
+        CheckedGeneration::take_receipt_lease;
+    const _: fn(
+        &mut RecordingContext,
+        &SourceLease,
+        &SourceBlockId,
+        &mut FakePumpIo,
+    ) -> Result<Option<SourceDisposition>, SourceReceiptError> =
+        RecordingContext::take_source_receipt;
+    const _: fn(
+        &mut RecordingContext,
+        &SourceLease,
+        &SourceBlockId,
+        &mut FakePumpIo,
+    ) -> Result<LeaseSlotStatus, SourceReceiptError> = RecordingContext::source_receipt_status;
+    const _: fn(&mut RecordingContext, &SourceLease, &SourceBlockId) -> Result<(), LedgerError> =
+        RecordingContext::release_source_receipt;
+    const _: fn(&mut RecordingContext, SourceLease) -> Result<(), (SourceLease, LedgerError)> =
+        RecordingContext::release_source_lease;
+}
+
+#[cfg(test)]
+mod pair_port_visibility {
+    use super::clock::testing::FakePumpIo;
+    use super::context::{PairBeginError, PairProgress, RecordingContext, RunFailure};
+    use super::coordinator::OriginalRequests;
+    use super::pump::PumpPorts;
+    use weaver_types::state_flow::NonDispatchCause;
+
+    const _: fn(
+        &mut RecordingContext,
+        OriginalRequests,
+        NonDispatchCause,
+        &mut FakePumpIo,
+    ) -> Result<(), PairBeginError> = RecordingContext::begin_not_dispatched;
+    const _: fn(
+        &mut RecordingContext,
+        &mut PumpPorts<'_, FakePumpIo>,
+    ) -> Result<PairProgress, RunFailure> = RecordingContext::advance_pairs;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<OriginalRequests>, RunFailure> = RecordingContext::take_pair_accounting;
+}

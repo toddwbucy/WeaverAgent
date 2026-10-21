@@ -49,6 +49,8 @@ pub(super) enum RunFailure {
     /// Certification owns the content boundary. This operation did not start
     /// and does not latch a component failure.
     TemplateBlocked,
+    /// Another primitive owns this operation. This caller acquired no work.
+    PairOwned,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -101,6 +103,9 @@ pub(crate) struct RecordingContext {
     input_turns: std::collections::BTreeSet<String>,
     member_capture: Option<capture_driver::MemberCapture>,
     filing: Option<receipt_driver::FilingTransaction>,
+    output: Option<output_driver::OutputTransaction>,
+    pairs: pairs::PairLedger,
+    pair_work: Option<pair_driver::PairTransaction>,
     last_author_sequence: Option<Sequence>,
     author_turn: Option<(Kind, Option<weaver_trace::TurnRef>)>,
     open_turn: Option<weaver_trace::TurnRef>,
@@ -156,6 +161,12 @@ impl RecordingContext {
             .map_err(|e| ContextError(e.to_string()))?;
         let input = super::input::InputSlot::new(run.clone(), declaration.scheme.scheme_id.clone())
             .map_err(|error| ContextError(error.to_string()))?;
+        let pairs = pairs::PairLedger::new(
+            flow.state().identity().0.to_owned(),
+            run.clone(),
+            declaration.scheme.clone(),
+        )
+        .map_err(|error| ContextError(format!("pair identity: {error:?}")))?;
         Ok(Self {
             phase: RecordingPhase::Preflight,
             origin,
@@ -180,6 +191,9 @@ impl RecordingContext {
             input_turns: std::collections::BTreeSet::new(),
             member_capture: None,
             filing: None,
+            output: None,
+            pairs,
+            pair_work: None,
             last_author_sequence: None,
             author_turn: None,
             open_turn: None,
@@ -219,6 +233,14 @@ impl RecordingContext {
         &mut self,
         external: super::halt_snapshot::ExternalFacts,
     ) -> Result<(), HaltAccountFailure> {
+        if external.outstanding_pairs != self.outstanding_pairs() {
+            return Err(HaltAccountFailure::Snapshot(
+                super::halt_snapshot::SnapshotFailure {
+                    external,
+                    error: super::report::ReportError::Invalid("pairs differ from retained owner"),
+                },
+            ));
+        }
         if external.input_id != self.input.snapshot().map(|input| input.input_id) {
             return Err(HaltAccountFailure::Snapshot(
                 super::halt_snapshot::SnapshotFailure {
@@ -343,7 +365,7 @@ impl RecordingContext {
         self.live(io)?;
         // A template result belongs to its ordered transcript, never a second
         // operation consumer. Correct rejection keeps that boundary closed.
-        if self.templates_block_content() {
+        if self.templates_block_content() || self.output.is_some() {
             return Ok(None);
         }
         let result = self.flow.take_operation_completion(&mut FlowRecording {
@@ -406,6 +428,8 @@ impl RecordingContext {
         if self.failure.is_some()
             || self.phase == RecordingPhase::Closed
             || self.filing_wait_still_owned(key)
+            || self.output_wait_still_owned(key)
+            || self.pair_wait_still_owned(key)
             || (key == PumpDeadline::Enter
                 && self.phase == RecordingPhase::Entered
                 && self
@@ -424,7 +448,9 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
-        if self.filing.is_some()
+        if self.output.is_some()
+            || self.pair_work.is_some()
+            || self.filing.is_some()
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.member_capture.is_some()
@@ -592,13 +618,13 @@ impl RecordingContext {
             self.retain_refused(event);
             return Err(failure);
         }
-        if self.filing.is_some() {
+        if self.filing.is_some() || self.output.is_some() || self.pair_work.is_some() {
             self.retain_refused(event);
             return Err(self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Author,
-                "another author entered an owned filing transaction",
+                "another author entered an owned content transaction",
             ));
         }
         if self.template_blocked_author.is_some() {
@@ -622,6 +648,10 @@ impl RecordingContext {
             // resume_author_and_wait cannot turn it into admitted content.
             self.template_blocked_author = Some(event);
             return Err(RunFailure::TemplateBlocked);
+        }
+        if matches!(event.kind, Kind::ToolCallStarted | Kind::ToolCallCompleted) {
+            self.retain_refused(event);
+            return Err(RunFailure::PairOwned);
         }
         if !self.author_allowed(&event) {
             self.retain_refused(event);
@@ -721,12 +751,12 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
         self.live(ports.io)?;
-        if self.filing.is_some() {
+        if self.filing.is_some() || self.output.is_some() || self.pair_work.is_some() {
             return Err(self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Author,
-                "generic resume cannot consume a filing owner's author",
+                "generic resume cannot consume a content owner's author",
             ));
         }
         if let Some(sequence) = self.completed_author.take() {
@@ -758,6 +788,14 @@ impl RecordingContext {
         mut progress: RecordProgress,
     ) -> Result<Sequence, RunFailure> {
         loop {
+            // Record identity before any fallible intake, clock or deadline hook.
+            if let RecordProgress::Recorded {
+                sequence,
+                proof: None,
+            } = &progress
+            {
+                self.bind_pair_author(*sequence, ports.io)?;
+            }
             self.drain_intake(ports.io)?;
             match progress {
                 RecordProgress::Recorded {
@@ -777,6 +815,7 @@ impl RecordingContext {
                     }
                     self.completed_author = Some(sequence);
                     self.bind_filing_author(sequence, ports.io)?;
+                    self.bind_output_author(sequence, ports.io)?;
                     self.live(ports.io)?;
                     return Ok(self
                         .completed_author
@@ -1198,6 +1237,7 @@ impl RecordingContext {
         };
         // Revoke before sampling or reporting. A broken clock cannot grant work.
         self.input.halt();
+        self.pairs.freeze();
         self.phase = RecordingPhase::Failed;
         self.failure = Some(failure.clone());
         self.barrier.stop_for_flow_failure();
@@ -1292,3 +1332,31 @@ pub(super) use receipt_driver::{
 #[cfg(test)]
 #[path = "context_receipt_tests.rs"]
 mod receipt_tests;
+
+#[path = "context_output.rs"]
+mod output_driver;
+#[allow(unused_imports)] // Consumed by the complete repair and pair owner at cutover.
+pub(super) use output_driver::{
+    OutputBeginError, OutputBeginRefusal, OutputProgress, SourceReceiptError,
+};
+
+#[cfg(test)]
+#[path = "context_output_tests.rs"]
+mod output_tests;
+
+#[cfg(test)]
+#[path = "context_output_receipt_tests.rs"]
+mod output_receipt_tests;
+
+#[path = "context_pairs.rs"]
+mod pair_driver;
+#[path = "pairs.rs"]
+mod pairs;
+#[allow(unused_imports)] // The loop composes this port at the coupled cutover.
+pub(super) use pair_driver::{PairBeginError, PairBeginRefusal, PairProgress, PairReadError};
+#[allow(unused_imports)]
+pub(super) use pairs::CompletedPair;
+
+#[cfg(test)]
+#[path = "context_pair_tests.rs"]
+mod pair_tests;
