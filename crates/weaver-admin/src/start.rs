@@ -225,8 +225,8 @@ pub enum TakeRefused {
     /// Readers held the lock past `show`'s bound, the take having waited it
     /// out: the starved case, `InvocationInFlight` with readers named.
     Starved,
-    /// Any other refusal: an exclusive holder met at once, a probe that did
-    /// not read (both `InvocationInFlight`), or a lock file that refused.
+    /// Any other refusal: an exclusive holder, an expired invocation deadline,
+    /// a probe that did not read, or a lock file that refused.
     Other(LifecycleRefusal),
 }
 
@@ -243,8 +243,17 @@ fn take_invocation_lock_with_deadline(
     verb: crate::verb_table::HolderVerb,
     invocation_deadline: Option<Instant>,
 ) -> Result<InvocationLock, TakeRefused> {
+    take_invocation_lock_with_clock(run_directory, verb, invocation_deadline, Instant::now)
+}
+
+fn take_invocation_lock_with_clock(
+    run_directory: &Path,
+    verb: crate::verb_table::HolderVerb,
+    invocation_deadline: Option<Instant>,
+    now: impl Fn() -> Instant,
+) -> Result<InvocationLock, TakeRefused> {
     let check_invocation = || {
-        if invocation_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        if invocation_deadline.is_some_and(|deadline| now() >= deadline) {
             Err(TakeRefused::Other(LifecycleRefusal::InvocationInFlight))
         } else {
             Ok(())
@@ -253,7 +262,7 @@ fn take_invocation_lock_with_deadline(
     check_invocation()?;
     let path = run_directory.join("admin.lock");
     let file = open_lock_file(&path).map_err(TakeRefused::Other)?;
-    let courtesy_deadline = Instant::now() + SHARED_HOLD_WAIT;
+    let courtesy_deadline = now() + SHARED_HOLD_WAIT;
     let deadline = invocation_deadline.map_or(courtesy_deadline, |invocation| {
         invocation.min(courtesy_deadline)
     });
@@ -275,15 +284,18 @@ fn take_invocation_lock_with_deadline(
             nix::libc::F_WRLCK => {
                 return Err(TakeRefused::Other(LifecycleRefusal::InvocationInFlight));
             }
-            nix::libc::F_RDLCK if Instant::now() < deadline => {
+            nix::libc::F_RDLCK if now() < deadline => {
                 let pause = if invocation_deadline.is_some() {
-                    POLL.min(deadline.saturating_duration_since(Instant::now()))
+                    POLL.min(deadline.saturating_duration_since(now()))
                 } else {
                     POLL
                 };
                 std::thread::sleep(pause);
             }
             nix::libc::F_RDLCK => {
+                // The invocation may have expired during the lock attempt or
+                // holder probe, after the check at the top of this iteration.
+                check_invocation()?;
                 diag!(
                     "weaver-admin: readers held the invocation lock past show's bound; \
                      retry once the poller pauses"

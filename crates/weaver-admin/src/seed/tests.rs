@@ -2,10 +2,136 @@
 
 use super::*;
 use crate::save_points::MANIFEST;
+use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use weaver_types::state_flow::{DecimalU64, SeedCreated};
+
+fn coordination(fixture: &preparation::tests::Fixture) -> std::path::PathBuf {
+    fs::create_dir(&fixture.config.coordination_root).unwrap();
+    fs::set_permissions(
+        &fixture.config.coordination_root,
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    crate::prepare_run_directory(&fixture.config, nix::unistd::geteuid().as_raw()).unwrap()
+}
+
+#[test]
+fn seed_reads_the_unloaded_ladder_before_inventory_and_preserves_unverified_evidence() {
+    let fixture = preparation::tests::fixture();
+    let directory = coordination(&fixture);
+    let agent = AgentName(fixture.config.agent.clone());
+    repository(&fixture.config)
+        .unwrap()
+        .require_unseeded()
+        .unwrap();
+    // An absent record is the real ladder's Unloaded case and reaches inventory.
+    let absent = run_authorized(&fixture.config, &agent, Instant::now(), |_, _, _| {
+        Err(preparation::PreparationFailure::Certificate(
+            "inventory reached".into(),
+        ))
+    });
+    assert!(matches!(
+        absent,
+        Err(Failure::Preparation(preparation::PreparationFailure::Certificate(ref detail)))
+            if detail == "inventory reached"
+    ));
+
+    let record = directory.join(crate::containment::RECORD);
+    fs::write(&record, b"unverified cgroup record").unwrap();
+    let refused = run_authorized(&fixture.config, &agent, Instant::now(), |_, _, _| {
+        panic!("unverified cgroup reached seed inventory or member startup")
+    });
+    assert!(matches!(
+        refused,
+        Err(Failure::Admission(ref error)) if **error == LifecycleRefusal::BoundaryUnverified
+    ));
+    assert_eq!(fs::read(&record).unwrap(), b"unverified cgroup record");
+    assert!(
+        fs::read_dir(fixture.config.territory.join("save-points"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    // The refusal releases both actual locks without removing the evidence.
+    let _run = start::take_run_lock(&directory).unwrap().unwrap();
+    let _invocation =
+        start::take_invocation_lock(&directory, verb_table::HolderVerb::Seed).unwrap();
+}
+
+struct HeldChild(Child);
+
+impl Drop for HeldChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A free run lock does not establish Unloaded while the recorded cgroup has
+/// a surviving process. This uses the real kernel record and ladder, without
+/// standing a seed member or claiming the complete root-host seed instrument.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_seed_refuses_a_populated_recorded_cgroup_with_a_free_run_lock() {
+    let fixture = preparation::tests::fixture();
+    let directory = coordination(&fixture);
+    let directory_fd = crate::agent_cgroup::open_run_directory(&directory).unwrap();
+    let scratch = crate::containment::tests::ScratchCgroup::new("seed-refusal");
+    let cgroup = scratch
+        .cgroup
+        .make_child(&crate::agent_cgroup::cgroup_name(&fixture.config.agent))
+        .unwrap();
+    let mut child = HeldChild(crate::containment::tests::escaper_in(&cgroup));
+    assert_eq!(cgroup.populated(), Some(true));
+    assert!(cgroup.procs().unwrap().contains(&(child.0.id() as i32)));
+    let (dev, ino) = cgroup.identity().unwrap();
+    let record = crate::containment::Record {
+        path: cgroup.relative().to_string(),
+        dev,
+        ino,
+        run: "earlier-run-with-surviving-processes".into(),
+    };
+    crate::containment::write_record(directory_fd.as_fd(), &record).unwrap();
+    let before = fs::read(directory.join(crate::containment::RECORD)).unwrap();
+    let free = start::take_run_lock(&directory).unwrap().unwrap();
+    drop(free);
+    repository(&fixture.config)
+        .unwrap()
+        .require_unseeded()
+        .unwrap();
+    let refused = run_authorized(
+        &fixture.config,
+        &AgentName(fixture.config.agent.clone()),
+        Instant::now(),
+        |_, _, _| panic!("populated cgroup reached seed inventory or member startup"),
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(Failure::Refused {
+                case: PersistenceCase::SeedRequiresUnloaded,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+    assert!(child.0.try_wait().unwrap().is_none());
+    assert_eq!(cgroup.populated(), Some(true));
+    assert_eq!(
+        fs::read(directory.join(crate::containment::RECORD)).unwrap(),
+        before
+    );
+    assert!(
+        fs::read_dir(fixture.config.territory.join("save-points"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
 
 fn copied<'a>(
     fixture: &preparation::tests::Fixture,

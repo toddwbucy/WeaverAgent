@@ -827,6 +827,45 @@ fn an_invocation_deadline_caps_the_shared_holder_wait() {
     assert_eq!(std::fs::read(&path).unwrap(), b"previous holder");
 }
 
+/// The original deadline can cross after the loop's check but before the
+/// shared-holder probe returns. It must not become show's starvation cause.
+#[test]
+fn an_invocation_deadline_crossed_during_shared_probe_keeps_its_cause() {
+    let dir = scratch("invocation-probe-expiry");
+    let path = dir.0.join("admin.lock");
+    drop(open_lock_file(&path).unwrap());
+    std::fs::write(&path, "previous holder").unwrap();
+    let holder = shared_holder(&path, Duration::from_secs(3));
+    let started = Instant::now();
+    let deadline = started + Duration::from_millis(80);
+    let readings = std::cell::Cell::new(0);
+    let answer = take_invocation_lock_with_clock(
+        &dir,
+        crate::verb_table::HolderVerb::Seed,
+        Some(deadline),
+        || {
+            let reading = readings.get();
+            readings.set(reading + 1);
+            // Entry, courtesy-window creation and loop entry precede expiry.
+            // The first clock read after the real F_GETLK sees the deadline.
+            if reading < 3 { started } else { deadline }
+        },
+    );
+    // Clean up even when removing the post-probe guard changes the answer.
+    // SAFETY: this is the child this test forked, still held for its waitpid.
+    unsafe { nix::libc::kill(holder.as_raw(), nix::libc::SIGKILL) };
+    let _ = nix::sys::wait::waitpid(holder, None);
+    assert!(
+        readings.get() >= 4,
+        "the shared-holder probe was not reached"
+    );
+    assert_eq!(
+        answer.err(),
+        Some(TakeRefused::Other(LifecycleRefusal::InvocationInFlight))
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"previous holder");
+}
+
 /// A reader released while the original budget remains still permits a take.
 /// Refusing every shared hold fails this probe, so the cap is not a blanket refusal.
 #[test]

@@ -46,6 +46,7 @@ mod log;
 // Complete replacement operations, inactive until FOUNDATION-TRANSITION cutover.
 #[allow(dead_code)]
 mod offline_state;
+mod random;
 mod save_points;
 // Complete replacement component, inactive until FOUNDATION-TRANSITION cutover.
 #[allow(dead_code)]
@@ -2129,6 +2130,19 @@ fn unloaded_by_ladder(config: &ServiceConfig) -> Result<LifecycleAnswer, Lifecyc
             diag!("weaver-admin: the agent's cgroup: {why}");
             Err(LifecycleRefusal::BoundaryUnverified)
         }
+    }
+}
+
+/// Offline operations require the ladder's complete Unloaded judgment even
+/// when their caller already holds the run lock. Surviving cgroup members can
+/// outlive the process that held that lock.
+fn require_unloaded(config: &ServiceConfig) -> Result<(), LifecycleRefusal> {
+    match unloaded_by_ladder(config)? {
+        LifecycleAnswer::State {
+            state: weaver_types::AgentState::Unloaded,
+            ..
+        } => Ok(()),
+        _ => Err(LifecycleRefusal::AgentRunning),
     }
 }
 

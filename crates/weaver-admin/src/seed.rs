@@ -10,17 +10,16 @@ mod preparation;
 mod process;
 mod transport;
 
-use std::io::Read;
 use std::os::fd::AsFd;
-use std::path::Path;
 use std::time::Instant;
 
 use weaver_types::state_flow::{PersistenceCase, SeedRefusal, StartIdentity};
-use weaver_types::{AgentName, LifecycleRefusal, TraceSink};
+use weaver_types::{AgentName, LifecycleRefusal};
 
 use crate::save_points::Owner;
 use crate::save_points::serving::publication::{self, Progress, Publication, SeedImage};
 use crate::save_points::serving::repository::{LoadScope, Repository};
+use crate::save_points::serving::trace_path;
 use crate::{ServiceConfig, start, verb_table};
 
 /// Typed internal outcomes, adapted to the replacement lifecycle surface at
@@ -75,12 +74,27 @@ pub(crate) fn run(
     {
         return Err(LifecycleRefusal::Unauthorized.into());
     }
+    run_authorized(config, agent, accepted, preparation::prepare)
+}
+
+/// Only `run` enters after root authentication. Tests replace host inventory,
+/// while retaining the actual invocation/run locks and cgroup ladder.
+fn run_authorized(
+    config: &ServiceConfig,
+    agent: &AgentName,
+    accepted: Instant,
+    prepare: impl FnOnce(
+        &ServiceConfig,
+        &AgentName,
+        String,
+    ) -> Result<preparation::PreparedSeed, preparation::PreparationFailure>,
+) -> Result<StartIdentity, Failure> {
     crate::admissible(config, agent)?;
     let deadline = accepted
         .checked_add(config.load_bound)
         .ok_or_else(|| Failure::Component("load deadline overflow".into()))?;
     checkpoint(deadline).map_err(Failure::Component)?;
-    let run_directory = crate::prepare_run_directory(config, 0)?;
+    let run_directory = crate::prepare_run_directory(config, nix::unistd::geteuid().as_raw())?;
     let invocation =
         start::take_invocation_lock_until(&run_directory, verb_table::HolderVerb::Seed, deadline);
     checkpoint(deadline).map_err(Failure::Component)?;
@@ -90,12 +104,18 @@ pub(crate) fn run(
         detail: "the agent's run lock is held".into(),
     })?;
     checkpoint(deadline).map_err(Failure::Component)?;
+    crate::require_unloaded(config).map_err(|error| match error {
+        LifecycleRefusal::AgentRunning => Failure::Refused {
+            case: PersistenceCase::SeedRequiresUnloaded,
+            detail: "the agent's recorded cgroup still holds processes".into(),
+        },
+        other => Failure::from(other),
+    })?;
     let mut repository = repository(config)?;
     repository
         .require_unseeded()
         .map_err(seed_repository_fault)?;
-    let prepared =
-        preparation::prepare(config, agent, mint_seed_id()?).map_err(Failure::Preparation)?;
+    let prepared = prepare(config, agent, mint_seed_id()?).map_err(Failure::Preparation)?;
     checkpoint(deadline).map_err(Failure::Component)?;
     let child = process::SeedChild::start(config, agent, &prepared, &run_lock, deadline)
         .map_err(|error| Failure::Component(error.to_string()))?;
@@ -235,14 +255,6 @@ fn repository(config: &ServiceConfig) -> Result<Repository, Failure> {
         .map_err(seed_repository_fault)
 }
 
-fn trace_path(sink: &TraceSink) -> &Path {
-    match sink {
-        TraceSink::File { path, .. }
-        | TraceSink::Pipe { path, .. }
-        | TraceSink::Socket { path } => path,
-    }
-}
-
 fn checkpoint(deadline: Instant) -> Result<(), String> {
     if Instant::now() >= deadline {
         Err("seed operation exceeded its original load deadline".into())
@@ -252,11 +264,8 @@ fn checkpoint(deadline: Instant) -> Result<(), String> {
 }
 
 fn mint_seed_id() -> Result<String, Failure> {
-    let mut bytes = [0_u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut file| file.read_exact(&mut bytes))
-        .map_err(|error| Failure::Component(format!("seed randomness: {error}")))?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    crate::random::random_hex(16)
+        .map_err(|error| Failure::Component(format!("seed randomness: {error}")))
 }
 
 #[cfg(test)]

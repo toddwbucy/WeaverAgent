@@ -360,7 +360,7 @@ fn coordinator_holds_completion_until_the_exact_result_is_recorded() {
         assert_eq!(peer.submitted(), vec![first.clone()]);
         assert_eq!(classifier.next_request_id(), Ok(DecimalU64(2)));
     }
-    assert_eq!(classifier.recorded(recorded(&reply)), Ok(reply));
+    assert_eq!(classifier.recorded(recorded(&reply)), Ok(Some(reply)));
     assert_eq!(classifier.state(), ClassifierState::Idle);
     assert!(classifier.held().is_none());
     assert!(classifier.outstanding().is_none());
@@ -382,6 +382,7 @@ fn accepted_input_grant_consumes_the_exact_recorded_result_once() {
     classifier.try_result().unwrap();
     let grant = classifier
         .recorded_input(recorded(&reply), 2.into())
+        .unwrap()
         .unwrap();
     assert_eq!(grant.run(), "source run");
     assert_eq!(grant.offered_sequence(), DecimalU64(2));
@@ -396,6 +397,147 @@ fn accepted_input_grant_consumes_the_exact_recorded_result_once() {
         classifier
             .recorded_input(recorded(&reply), 2.into())
             .is_err()
+    );
+}
+
+#[test]
+fn interrupted_release_retains_the_exact_proof_and_input_grant_until_one_later_probe() {
+    let mut first = request(1, 0);
+    first.target = Ste100Target::Input {
+        input_id: 4.into(),
+        block: 0.into(),
+    };
+    let reply = accepted(&first);
+    let (mut classifier, mut peer) = guard([ScriptStep::Reply(reply.clone())]);
+    classifier.submit(first.clone()).unwrap();
+    peer.advance().unwrap();
+    classifier.try_result().unwrap();
+    classifier.interrupt_terminal_probes_for_test(3);
+    assert!(
+        classifier
+            .recorded_input(recorded(&reply), 2.into())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(classifier.interrupted_terminal_probes, 2);
+    for remaining in [1, 0] {
+        assert!(
+            classifier
+                .resume_recorded_input(2.into())
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(classifier.interrupted_terminal_probes, remaining);
+        assert!(classifier.terminal_interrupted);
+        let proof = classifier.recorded_proof.as_ref().unwrap();
+        assert_eq!(proof.run(), "source run");
+        assert!(proof.matches(&reply));
+        assert_eq!(classifier.held(), Some(&reply));
+        assert_eq!(classifier.outstanding(), Some(&first));
+        assert_eq!(classifier.state(), ClassifierState::ResultHeld);
+        assert!(classifier.failure().is_none());
+        let next = request(2, 1);
+        assert_eq!(classifier.submit(next.clone()), Ok(Submit::Busy(next)));
+    }
+    // An ordinary transport probe may become clear, but cannot consume the
+    // retained recording proof or mint the caller's input grant.
+    classifier.check_held_terminal().unwrap();
+    assert!(!classifier.terminal_interrupted);
+    assert!(classifier.recorded_proof.is_some());
+    assert_eq!(classifier.held(), Some(&reply));
+    let grant = classifier.resume_recorded_input(2.into()).unwrap().unwrap();
+    assert_eq!(grant.request(), &first);
+    assert_eq!(grant.reply(), &reply);
+    assert_eq!(grant.offered_sequence(), 2.into());
+    assert_eq!(peer.submitted(), vec![first]);
+    assert!(classifier.held().is_none());
+    assert!(classifier.outstanding().is_none());
+    assert!(classifier.recorded_proof.is_none());
+    assert!(classifier.resume_recorded_input(2.into()).is_err());
+}
+
+#[test]
+fn interrupted_recorded_acceptance_or_rejection_cannot_release_after_peer_loss() {
+    for rejected in [false, true] {
+        for terminal in [ScriptStep::Close, ScriptStep::ShutdownWrite] {
+            let first = request(1, 0);
+            let mut reply = accepted(&first);
+            if rejected {
+                reply.result = Ste100Result::NotSte100 {
+                    code: Ste100DefectCode::NonSte100,
+                    detail: "correct language rejection".into(),
+                    spans: vec![span(5, 10)],
+                };
+            }
+            let (mut classifier, mut peer) = guard([ScriptStep::Reply(reply.clone()), terminal]);
+            classifier.submit(first.clone()).unwrap();
+            peer.advance().unwrap();
+            classifier.try_result().unwrap();
+            classifier.interrupt_terminal_probes_for_test(1);
+            assert_eq!(classifier.recorded(recorded(&reply)), Ok(None));
+            peer.advance().unwrap();
+            await_terminal(classifier.readiness(), libc::POLLHUP | libc::POLLRDHUP);
+            assert_eq!(
+                classifier.resume_recorded().unwrap_err().kind,
+                PortFailureKind::Component(Ste100ComponentCode::Crashed)
+            );
+            assert_eq!(classifier.state(), ClassifierState::Failed);
+            assert_eq!(classifier.held(), Some(&reply));
+            assert_eq!(classifier.outstanding(), Some(&first));
+            assert!(classifier.recorded_proof.as_ref().unwrap().matches(&reply));
+            assert_eq!(peer.submitted(), vec![first]);
+        }
+    }
+}
+
+#[test]
+fn a_second_recording_proof_cannot_replace_an_interrupted_release() {
+    let first = request(1, 0);
+    let reply = accepted(&first);
+    let (mut classifier, mut peer) = guard([ScriptStep::Reply(reply.clone())]);
+    classifier.submit(first.clone()).unwrap();
+    peer.advance().unwrap();
+    classifier.try_result().unwrap();
+    classifier.interrupt_terminal_probes_for_test(1);
+    assert_eq!(classifier.recorded(recorded(&reply)), Ok(None));
+    // This second proof also matches the exact reply and run. It still cannot
+    // replace the already-owned recording boundary or release its completion.
+    let original = classifier.recorded_proof.as_ref().unwrap().source().clone();
+    assert_eq!(
+        classifier.recorded(recorded(&reply)).unwrap_err().kind,
+        PortFailureKind::ProtocolFailed
+    );
+    assert_eq!(classifier.state(), ClassifierState::Failed);
+    assert_eq!(
+        classifier.recorded_proof.as_ref().unwrap().source(),
+        &original
+    );
+    assert_eq!(classifier.held(), Some(&reply));
+    assert_eq!(classifier.outstanding(), Some(&first));
+    assert_eq!(peer.submitted(), vec![first]);
+}
+
+#[test]
+fn component_failure_release_never_waits_for_a_terminal_probe() {
+    let first = request(1, 0);
+    let mut reply = accepted(&first);
+    reply.result = Ste100Result::ComponentFailed {
+        code: Ste100ComponentCode::NoResult,
+        detail: "original terminal failure".into(),
+    };
+    let (mut classifier, mut peer) = guard([ScriptStep::Reply(reply.clone()), ScriptStep::Close]);
+    classifier.submit(first.clone()).unwrap();
+    peer.advance().unwrap();
+    classifier.try_result().unwrap();
+    peer.advance().unwrap();
+    classifier.interrupt_terminal_probes_for_test(3);
+    assert_eq!(classifier.recorded(recorded(&reply)), Ok(Some(reply)));
+    assert_eq!(classifier.interrupted_terminal_probes, 3);
+    assert_eq!(classifier.state(), ClassifierState::Failed);
+    assert_eq!(classifier.outstanding(), Some(&first));
+    assert_eq!(
+        classifier.failure().unwrap().kind,
+        PortFailureKind::Component(Ste100ComponentCode::NoResult)
     );
 }
 
@@ -511,7 +653,7 @@ fn no_result_is_recorded_before_terminal_failure_and_rejection_is_not_failure() 
         assert_eq!(classifier.try_result(), Ok(ClassifierPoll::ResultHeld));
         assert_eq!(classifier.state(), ClassifierState::ResultHeld);
         assert!(classifier.failure().is_none());
-        assert_eq!(classifier.recorded(recorded(&reply)), Ok(reply));
+        assert_eq!(classifier.recorded(recorded(&reply)), Ok(Some(reply)));
         match code {
             Some(code) => {
                 assert_eq!(classifier.state(), ClassifierState::Failed);
@@ -568,7 +710,7 @@ fn a_complete_component_failure_survives_the_required_peer_close_until_recorded(
             assert_eq!(classifier.submit(next.clone()), Ok(Submit::Busy(next)));
             assert_eq!(peer.submitted(), vec![first.clone()]);
 
-            assert_eq!(classifier.recorded(recorded(&reply)), Ok(reply));
+            assert_eq!(classifier.recorded(recorded(&reply)), Ok(Some(reply)));
             assert_eq!(classifier.state(), ClassifierState::Failed);
             let failure = classifier.failure().unwrap();
             assert_eq!(failure.kind, PortFailureKind::Component(code));
@@ -911,7 +1053,7 @@ fn submitted_source_targets_keep_the_callers_order_without_a_scheduler() {
         classifier.submit(request.clone()).unwrap();
         peer.advance().unwrap();
         classifier.try_result().unwrap();
-        classifier.recorded(recorded(&reply)).unwrap();
+        classifier.recorded(recorded(&reply)).unwrap().unwrap();
         submitted.push(request);
     }
     assert_eq!(peer.submitted(), submitted);

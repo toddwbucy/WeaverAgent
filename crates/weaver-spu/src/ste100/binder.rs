@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn compound_objects_and_multibyte_source_keep_exact_spans_and_whitespace() {
-        let text = "Read café  cache and INDEX when ready.";
+        let text = "Read caf\u{e9}  cache and INDEX when ready.";
         let words = [
             span(0, 4),
             span(5, 10),
@@ -506,7 +506,7 @@ mod tests {
             result[0].nouns,
             vec![
                 NounBinding {
-                    value: "café  cache".into(),
+                    value: "caf\u{e9}  cache".into(),
                     span: span(5, 17)
                 },
                 NounBinding {
@@ -708,7 +708,7 @@ mod tests {
         }
         assert_eq!(
             run(
-                "Read café.",
+                "Read caf\u{e9}.",
                 &[span(0, 4), span(5, 9)],
                 &[[0.0; 7]; 2],
                 &actions

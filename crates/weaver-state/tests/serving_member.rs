@@ -712,6 +712,100 @@ fn timeout_abort_in_both_capture_states_deletes_before_ready_and_keeps_exchange_
 }
 
 #[test]
+fn fresh_refused_controls_preserve_original_abort_in_both_capture_states() {
+    for finished in [false, true] {
+        let mut member = Member::serving();
+        let (common, part, _) = snapshot(&mut member, 43);
+        let name = if finished {
+            acknowledge(&mut member, common.clone(), 43, &part)
+        } else {
+            part
+        };
+        for control in [
+            StateControl::Read {
+                selector: ReadSelector::SystemPrompt {},
+            },
+            StateControl::Snapshot {
+                capture_id: 44.into(),
+            },
+            StateControl::ReleaseCapture {
+                capture_id: 44.into(),
+            },
+        ] {
+            capture_refused(member.control(control));
+            assert!(member.room().join(&name).exists());
+        }
+        let next_request = member.next_request;
+        capture_refused(member.control_at(
+            common.clone(),
+            StateControl::Abort {
+                capture_id: 44.into(),
+            },
+        ));
+        assert!(member.room().join(&name).exists());
+        assert_eq!(
+            member.control_at(
+                common.clone(),
+                StateControl::Abort {
+                    capture_id: 43.into(),
+                },
+            ),
+            StateControlAnswer::Aborted {
+                capture_id: 43.into(),
+            }
+        );
+        assert!(member.room_names().is_empty());
+        assert_eq!(
+            member.observations.last().unwrap().observation.request_id,
+            common.request_id
+        );
+        let filing = fixtures::statement(&member.seed, 1, "Read item.");
+        assert_filed(member.file(filing.clone()), &filing.block_id);
+        assert_eq!(
+            member.observations.last().unwrap().observation.request_id.0,
+            next_request,
+            "original-ID cleanup must neither rewind nor consume fresh IDs"
+        );
+    }
+}
+
+#[test]
+fn fresh_refused_control_preserves_original_acknowledgement_and_fresh_release() {
+    let mut member = Member::serving();
+    let (common, part, _) = snapshot(&mut member, 47);
+    capture_refused(member.control(StateControl::Read {
+        selector: ReadSelector::SystemPrompt {},
+    }));
+    let finished = acknowledge(&mut member, common.clone(), 47, &part);
+    assert!(member.room().join(&finished).exists());
+    assert_eq!(
+        member.observations.last().unwrap().observation.request_id,
+        common.request_id
+    );
+    capture_refused(member.control(StateControl::Read {
+        selector: ReadSelector::SystemPrompt {},
+    }));
+    let release_request = member.next_request;
+    assert_eq!(
+        member.control(StateControl::ReleaseCapture {
+            capture_id: 47.into(),
+        }),
+        StateControlAnswer::CaptureReleased {
+            capture_id: 47.into(),
+        }
+    );
+    assert!(member.room_names().is_empty());
+    assert_eq!(
+        member.observations.last().unwrap().observation.request_id.0,
+        release_request
+    );
+    assert_eq!(
+        member.control(StateControl::Held {}),
+        StateControlAnswer::Held { count: 1.into() }
+    );
+}
+
+#[test]
 fn eof_in_both_capture_states_deletes_unpublished_room_files() {
     for finished in [false, true] {
         let mut member = Member::serving();
@@ -864,6 +958,37 @@ fn refused_capture_cannot_be_acknowledged_through_its_retained_cleanup_identity(
 }
 
 #[test]
+fn fresh_request_retires_a_refused_capture_cleanup_identity() {
+    let mut member = Member::serving();
+    std::fs::write(member.room().join("capture-53.sqlite.part"), b"collision").unwrap();
+    let common = member.common();
+    assert!(matches!(
+        member.control_at(
+            common.clone(),
+            StateControl::Snapshot {
+                capture_id: 53.into(),
+            },
+        ),
+        StateControlAnswer::ControlRefused {
+            code: ControlRefusalCode::Capture(CaptureRefusalCode::SnapshotFailed),
+            ..
+        }
+    ));
+    assert_eq!(
+        member.control(StateControl::Held {}),
+        StateControlAnswer::Held { count: 1.into() }
+    );
+    member.send(&StateFrame::Control {
+        common,
+        frame: StateControl::Abort {
+            capture_id: 53.into(),
+        },
+    });
+    member.assert_closed();
+    assert!(member.room_names().is_empty());
+}
+
+#[test]
 fn capture_blocks_reads_and_second_open_in_both_held_states() {
     for finished in [false, true] {
         let mut member = Member::serving();
@@ -916,21 +1041,18 @@ fn failure_to_delete_a_capture_is_component_failure_never_a_successful_cleanup()
 fn only_acknowledge_and_abort_may_continue_the_original_capture_exchange() {
     for invalid_read in [true, false] {
         let mut member = Member::serving();
-        let (common, _, _) = snapshot(&mut member, 37);
+        let (common, part, _) = snapshot(&mut member, 37);
         let frame = if invalid_read {
             StateControl::Read {
                 selector: ReadSelector::SystemPrompt {},
             }
         } else {
-            capture_refused(member.control(StateControl::Read {
-                selector: ReadSelector::SystemPrompt {},
-            }));
-            StateControl::Abort {
+            acknowledge(&mut member, common.clone(), 37, &part);
+            StateControl::ReleaseCapture {
                 capture_id: 37.into(),
             }
         };
-        // An original-ID read is not a continuation. A fresh intervening ask also
-        // retires the old exchange, so a later original-ID abort is no longer one.
+        // Reads and successful capture release require fresh request IDs.
         member.send(&StateFrame::Control { common, frame });
         member.assert_closed();
         assert!(member.room_names().is_empty());

@@ -1098,6 +1098,42 @@ pub(super) mod filing {
     }
 
     #[test]
+    fn current_run_pair_cannot_be_abandoned_at_load_and_refusal_rolls_back() {
+        let mut store = store();
+        let send = statement(1, "message.assistant");
+        store.file(&send).unwrap();
+        let started = opening(&send);
+        store
+            .file_pair(&pair_file(2, PairRecord::Started(started.clone()), "model"))
+            .unwrap();
+        let abandoned = PairEnded {
+            call_id: started.call_id.clone(),
+            execution: None,
+            fate: TerminalPairFate::Failed,
+            reason: Some(PairFailure::AbandonedAtLoad {}),
+            outcome: None,
+            loaded_from: Some(store.context.start.clone()),
+        };
+        let mut terminal = pair_file(3, PairRecord::Ended(abandoned), "loop");
+        terminal.source.turn = None;
+        let before = rows(&store.connection);
+        assert_eq!(
+            store.file_pair(&terminal).unwrap_err().code,
+            StateRefusalCode::InvalidPair
+        );
+        assert_eq!(rows(&store.connection), before);
+        // Reusing the refused source for its real result proves that neither
+        // the source nor the pair terminal was committed by the refusal.
+        store
+            .file_pair(&pair_file(
+                3,
+                PairRecord::Ended(completion(&started)),
+                "tool",
+            ))
+            .unwrap();
+    }
+
+    #[test]
     fn inward_terminal_and_abandoned_pair_have_no_fabricated_gate_execution() {
         let mut store = store();
         let send = statement(1, "message.assistant");

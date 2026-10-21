@@ -94,6 +94,10 @@ pub(crate) struct Classifier<P> {
     next_id: Option<u64>,
     outstanding: Option<Ste100Request>,
     held: Option<Ste100Reply>,
+    recorded_proof: Option<super::RecordedSte100>,
+    terminal_interrupted: bool,
+    #[cfg(test)]
+    interrupted_terminal_probes: usize,
     failure: Option<PortFailure>,
 }
 
@@ -123,6 +127,10 @@ impl<P: Ste100Port> Classifier<P> {
             next_id: Some(1),
             outstanding: None,
             held: None,
+            recorded_proof: None,
+            terminal_interrupted: false,
+            #[cfg(test)]
+            interrupted_terminal_probes: 0,
             failure: None,
         }
     }
@@ -172,41 +180,62 @@ impl<P: Ste100Port> Classifier<P> {
         ) {
             return Ok(());
         }
-        let fd = self.port.readiness();
-        let mut status = libc::pollfd {
-            fd: fd.as_raw_fd(),
-            // POLLRDHUP also observes EOF from a peer's write-half shutdown.
-            // nix's PollFlags does not expose this Linux flag.
-            events: libc::POLLRDHUP,
-            revents: 0,
-        };
-        // SAFETY: status is one writable pollfd and fd stays borrowed for the
-        // immediate call. A zero timeout never introduces a second wait clock.
-        if unsafe { libc::poll(&mut status, 1, 0) } < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.kind() == std::io::ErrorKind::Interrupted {
-                // An interrupted probe observed no terminal status. The common
-                // pump may observe it next unit; this probe owns no retry wait.
+        let events = match self.terminal_status() {
+            Ok(events) => {
+                self.terminal_interrupted = false;
+                events
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                // No terminal observation grants release. Retain local work
+                // for one later bounded pump unit, without retrying here.
+                self.terminal_interrupted = true;
                 return Ok(());
             }
-            return self.stop(PortFailure::component(
-                Ste100ComponentCode::TransportFailed,
-                error.to_string(),
-            ));
-        }
-        if status.revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
+            Err(error) => {
+                return self.stop(PortFailure::component(
+                    Ste100ComponentCode::TransportFailed,
+                    error.to_string(),
+                ));
+            }
+        };
+        if events & (libc::POLLERR | libc::POLLNVAL) != 0 {
             return self.stop(PortFailure::component(
                 Ste100ComponentCode::TransportFailed,
                 "classifier readiness descriptor failed while a result was held",
             ));
         }
-        if status.revents & (libc::POLLHUP | libc::POLLRDHUP) != 0 {
+        if events & (libc::POLLHUP | libc::POLLRDHUP) != 0 {
             return self.stop(PortFailure::component(
                 Ste100ComponentCode::Crashed,
                 "classifier peer closed while a result was held",
             ));
         }
         Ok(())
+    }
+
+    fn terminal_status(&mut self) -> std::io::Result<i16> {
+        #[cfg(test)]
+        if self.interrupted_terminal_probes > 0 {
+            self.interrupted_terminal_probes -= 1;
+            return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+        }
+        let fd = self.port.readiness();
+        let mut status = libc::pollfd {
+            fd: fd.as_raw_fd(),
+            events: libc::POLLRDHUP,
+            revents: 0,
+        };
+        // SAFETY: status is writable and fd remains borrowed for this single
+        // zero-time probe. Interruption yields to the common pump.
+        if unsafe { libc::poll(&mut status, 1, 0) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(status.revents)
+    }
+
+    #[cfg(test)]
+    pub(super) fn interrupt_terminal_probes_for_test(&mut self, count: usize) {
+        self.interrupted_terminal_probes = count;
     }
 
     pub(crate) fn next_request_id(&mut self) -> Result<DecimalU64, PortFailure> {
@@ -288,17 +317,35 @@ impl<P: Ste100Port> Classifier<P> {
     pub(crate) fn recorded(
         &mut self,
         receipt: super::RecordedSte100,
-    ) -> Result<Ste100Reply, PortFailure> {
-        self.check_held_terminal()?;
+    ) -> Result<Option<Ste100Reply>, PortFailure> {
+        self.ensure_active()?;
         let Some(reply) = self.held.as_ref() else {
             return self.stop(PortFailure::protocol("no classifier result is held"));
         };
-        if receipt.run() != self.run || !receipt.matches(reply) {
+        if self.recorded_proof.is_some() || receipt.run() != self.run || !receipt.matches(reply) {
             return self.stop(PortFailure::protocol(
                 "classifier recording proof does not match",
             ));
         }
+        self.recorded_proof = Some(receipt);
+        self.resume_recorded()
+    }
+
+    /// The exact proof survives an interrupted probe. Transport may observe
+    /// terminal status, but only the original reduction consumes this slot.
+    pub(crate) fn resume_recorded(&mut self) -> Result<Option<Ste100Reply>, PortFailure> {
+        self.ensure_active()?;
+        if self.recorded_proof.is_none() {
+            return self.stop(PortFailure::protocol(
+                "classifier release has no recording proof",
+            ));
+        }
+        self.check_held_terminal()?;
+        if self.terminal_interrupted {
+            return Ok(None);
+        }
         let reply = self.held.take().expect("the matched reply remains held");
+        self.recorded_proof = None;
         if let Ste100Result::ComponentFailed { code, detail } = &reply.result {
             if self.failure.is_none() {
                 self.failure = Some(PortFailure::component(*code, detail.clone()));
@@ -308,7 +355,7 @@ impl<P: Ste100Port> Classifier<P> {
             self.outstanding = None;
             self.state = ClassifierState::Idle;
         }
-        Ok(reply)
+        Ok(Some(reply))
     }
 
     /// Release an accepted gate check into the single-use input filing grant.
@@ -318,7 +365,22 @@ impl<P: Ste100Port> Classifier<P> {
         &mut self,
         receipt: super::RecordedSte100,
         offered_sequence: DecimalU64,
-    ) -> Result<AcceptedReuse, PortFailure> {
+    ) -> Result<Option<AcceptedReuse>, PortFailure> {
+        self.release_input(Some(receipt), offered_sequence)
+    }
+
+    pub(super) fn resume_recorded_input(
+        &mut self,
+        offered_sequence: DecimalU64,
+    ) -> Result<Option<AcceptedReuse>, PortFailure> {
+        self.release_input(None, offered_sequence)
+    }
+
+    fn release_input(
+        &mut self,
+        receipt: Option<super::RecordedSte100>,
+        offered_sequence: DecimalU64,
+    ) -> Result<Option<AcceptedReuse>, PortFailure> {
         self.ensure_active()?;
         let Some(request) = self.outstanding.as_ref() else {
             return self.stop(PortFailure::protocol(
@@ -338,13 +400,19 @@ impl<P: Ste100Port> Classifier<P> {
             ));
         }
         let request = request.clone();
-        let reply = self.recorded(receipt)?;
-        Ok(AcceptedReuse {
+        let reply = match receipt {
+            Some(receipt) => self.recorded(receipt)?,
+            None => self.resume_recorded()?,
+        };
+        let Some(reply) = reply else {
+            return Ok(None);
+        };
+        Ok(Some(AcceptedReuse {
             run: self.run.clone(),
             offered_sequence,
             request: Box::new(request),
             reply: Box::new(reply),
-        })
+        }))
     }
 
     /// A trace failure or applicable bound is owned by the coordinator's halt
@@ -390,11 +458,14 @@ impl Classifier<super::ste100_socket::SocketPort> {
     /// A consumed zero-length packet can leave a terminal-status probe pending
     /// after EINTR, without any remaining POLLIN wake. The pump checks this
     /// buffered work before it waits, while preserving the held-result barrier.
-    pub(super) fn needs_progress(&self) -> bool {
-        matches!(
-            self.state,
-            ClassifierState::Idle | ClassifierState::InFlight
-        ) && self.port.needs_progress()
+    /// Proof-only work cannot wake a reduction blocked by another trace author.
+    pub(super) fn needs_progress(&self, release_ready: bool) -> bool {
+        (self.state == ClassifierState::ResultHeld
+            && (self.terminal_interrupted || (release_ready && self.recorded_proof.is_some())))
+            || matches!(
+                self.state,
+                ClassifierState::Idle | ClassifierState::InFlight
+            ) && self.port.needs_progress()
     }
 }
 

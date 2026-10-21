@@ -6,6 +6,7 @@ use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use weaver_types::TraceSink;
 use weaver_types::state_flow::{
     Confirmation, DecimalU64, PersistenceCause, PersistencePhase, PublicationState,
 };

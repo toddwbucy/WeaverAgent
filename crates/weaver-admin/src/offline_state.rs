@@ -6,16 +6,15 @@
 
 mod preparation;
 
-use std::path::Path;
-
 use weaver_types::state_flow::{PersistencePhase, StartIdentity};
-use weaver_types::{AgentName, Cause, LifecycleAnswer, LifecycleRefusal, TraceSink};
+use weaver_types::{AgentName, Cause, LifecycleRefusal};
 
 use crate::save_points::Owner;
 use crate::save_points::serving::Fault;
 use crate::save_points::serving::publication::{self, Progress, Publication};
 use crate::save_points::serving::repository::{LoadScope, Repository, RestoreFailure};
-use crate::{ServiceConfig, start, verb_table};
+use crate::save_points::serving::trace_path;
+use crate::{ServiceConfig, require_unloaded, start, verb_table};
 
 /// Preserve uncertainty and retained evidence from the artifact primitives.
 /// Adapting these outcomes to stdout and admin.log belongs to coupled cutover.
@@ -146,16 +145,6 @@ fn run_authorized(
     })
 }
 
-fn require_unloaded(config: &ServiceConfig) -> Result<(), LifecycleRefusal> {
-    match crate::unloaded_by_ladder(config)? {
-        LifecycleAnswer::State {
-            state: weaver_types::AgentState::Unloaded,
-            ..
-        } => Ok(()),
-        _ => Err(LifecycleRefusal::AgentRunning),
-    }
-}
-
 fn perform(
     repository: &mut Repository,
     prepared: preparation::Prepared,
@@ -204,14 +193,6 @@ fn perform(
                 }
             }
         }
-    }
-}
-
-fn trace_path(sink: &TraceSink) -> &Path {
-    match sink {
-        TraceSink::File { path, .. }
-        | TraceSink::Pipe { path, .. }
-        | TraceSink::Socket { path } => path,
     }
 }
 

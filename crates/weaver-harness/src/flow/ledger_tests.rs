@@ -473,6 +473,7 @@ fn accepted_input_reuse_requires_its_original_offer_bytes_scheme_and_source() {
         classifier.try_result().unwrap();
         let reuse = classifier
             .recorded_input(super::super::RecordedSte100::for_test(&reply), 1.into())
+            .unwrap()
             .unwrap();
         let AdmittedCopy::Statement(mut copy) = statement(2, &[0]) else {
             unreachable!()

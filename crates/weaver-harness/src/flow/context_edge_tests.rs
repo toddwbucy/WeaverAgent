@@ -75,6 +75,151 @@ fn statement_bytes(authored: &AuthoredEvent) -> &str {
 }
 
 #[test]
+fn final_drain_leave_wait_preserves_queued_records_for_successful_retry() {
+    use super::super::clock::{MonotonicIo, testing::FakePumpIo};
+    use nix::sys::socket::{setsockopt, sockopt::SndBuf};
+    use std::io::Read;
+    use std::os::unix::net::UnixStream;
+    use std::time::{Duration, Instant};
+
+    // Expiry at pump entry and inside its deadline check both return Wait.
+    for remaining in [1, 2] {
+        let (sink, reader) = UnixStream::pair().unwrap();
+        setsockopt(&sink, SndBuf, &4096).unwrap();
+        sink.set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        reader
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let (state, peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        peer.set_write_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut clock = FakePumpIo::new(100);
+        let context = RecordingContext::new(
+            sink.into(),
+            StateChannel::new(state, "session".into(), "run".into()).unwrap(),
+            "session".into(),
+            "run".into(),
+            42,
+            config(),
+            1_000_000_000,
+            &mut clock,
+        )
+        .unwrap();
+        let mut fx = Fixture {
+            context,
+            clock,
+            state: peer,
+            _reader: reader,
+        };
+        fx.activate();
+        fx.context.complete_wait(PumpDeadline::Enter).unwrap();
+        let prefix_len = fx
+            .context
+            .barrier
+            .recorder()
+            .structure()
+            .iter()
+            .map(|record| record.line.len())
+            .sum();
+        let mut prefix = vec![0; prefix_len];
+        fx._reader.read_exact(&mut prefix).unwrap();
+        let watch = Instant::now() + Duration::from_secs(3);
+        while fx.context.barrier.recorder().pressure().queued != 0 {
+            assert!(Instant::now() < watch, "initial records did not drain");
+            std::thread::yield_now();
+        }
+
+        // This complete untapped record exceeds the real socket's capacity.
+        // Later shutdown records must stay queued while its write is blocked.
+        fx.author(event(
+            Kind::Fault,
+            Some(Payload::Fault(
+                serde_json::value::RawValue::from_string(format!(
+                    "{{\"fixture\":\"{}\"}}",
+                    "x".repeat(131_072)
+                ))
+                .unwrap(),
+            )),
+        ))
+        .unwrap();
+        let leave = AbsoluteBound::after(104, 5).unwrap();
+        fx.context.begin_releasing(leave, &mut fx.clock).unwrap();
+        assert_eq!(
+            fx.context.retire_state(&mut fx.clock).unwrap(),
+            Advance::Progress
+        );
+        assert_eq!(
+            fx.context.retire_classifier(&mut fx.clock).unwrap(),
+            Advance::Progress
+        );
+        fx.author(event(Kind::SessionClosed, None)).unwrap();
+        let unload = fx
+            .author(event(
+                Kind::Unload,
+                Some(Payload::Unload(Box::new(serving::payloads::UnloadClose {
+                    grant_surface: None,
+                    cause: None,
+                    forced: false,
+                    forced_by: None,
+                    release: None,
+                    end_reason: None,
+                    state_flow_failure: None,
+                }))),
+            ))
+            .unwrap();
+        assert_eq!(fx.context.barrier.recorder().pressure().queued, 3);
+        let expected: Vec<u8> = fx
+            .context
+            .barrier
+            .recorder()
+            .structure()
+            .iter()
+            .flat_map(|record| record.line.as_bytes().iter().copied())
+            .collect();
+        let mut expiry = ExpireAfterReads {
+            remaining,
+            before: 104,
+            expired: leave.deadline_ns(),
+        };
+        assert_eq!(
+            fx.context.close_after_drain(&mut ports(&mut expiry)),
+            Err(RunFailure::Wait {
+                key: PumpDeadline::Leave,
+                bound: leave,
+            })
+        );
+        assert_eq!(fx.context.phase(), RecordingPhase::Releasing);
+        assert_eq!(fx.context.flow.phase(), CoordinatorPhase::Closed);
+        assert_eq!(fx.context.barrier.recorder().pressure().queued, 3);
+        assert!(fx.context.failure().is_none());
+        assert!(fx.context.halt().is_none());
+        assert_eq!(fx.context.deadlines.get(PumpDeadline::Leave), Some(leave));
+
+        // Acknowledge only the expired lifecycle wait, then resume these owners.
+        assert_eq!(fx.context.complete_wait(PumpDeadline::Leave), Some(leave));
+        let mut reader = fx._reader.try_clone().unwrap();
+        let remaining_bytes = expected.len() - prefix.len();
+        let drain = std::thread::spawn(move || {
+            let mut bytes = vec![0; remaining_bytes];
+            reader.read_exact(&mut bytes).map(|()| bytes)
+        });
+        let result = fx.context.close_after_drain(&mut ports(&mut MonotonicIo));
+        let received = drain.join().unwrap();
+        result.unwrap();
+        prefix.extend(received.expect("retry discarded queued trace records"));
+        assert_eq!(prefix, expected);
+        assert_eq!(fx.context.phase(), RecordingPhase::Closed);
+        assert_eq!(
+            fx.context.barrier.recorder().boundary().committed,
+            Some(unload)
+        );
+        assert_eq!(fx.context.barrier.recorder().pressure().queued, 0);
+    }
+}
+
+#[test]
 fn recorded_author_result_survives_a_post_record_lifecycle_deadline_once() {
     let mut fx = Fixture::new(config());
     fx.activate();

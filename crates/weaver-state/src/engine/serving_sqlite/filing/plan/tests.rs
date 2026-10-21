@@ -120,14 +120,8 @@ fn unchanged(store: &mut ServingSqlite, filing: &StatementFile) {
         .to_vec();
     let error = store.file(filing).unwrap_err();
     assert_eq!(error.code, StateRefusalCode::InvalidEffect, "{error}");
-    assert_eq!(
-        store
-            .connection
-            .serialize(rusqlite::MAIN_DB)
-            .unwrap()
-            .as_ref(),
-        before.as_slice()
-    );
+    let after = store.connection.serialize(rusqlite::MAIN_DB).unwrap();
+    assert_eq!(&*after, before.as_slice());
 }
 fn create(store: &mut ServingSqlite, count: u64, review: bool, group: bool) {
     let groups = if group {

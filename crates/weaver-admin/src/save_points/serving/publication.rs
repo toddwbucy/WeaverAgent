@@ -5,6 +5,10 @@
 //! seed-member containment/cleanup, and live deadline/peer observations. Its
 //! checkpoint must refuse observed failure or expiry. No serialized protocol,
 //! caller-chosen path, new clock, or success inferred from file presence lives here.
+//!
+//! A failed broken-guard replacement can retain its .<id>.pending.broken
+//! temporary file. Failure evidence probes both that file and .<id>.pending
+//! and reports each confirmed retained guard without granting retry or load.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -997,11 +1001,7 @@ fn before_io(error: impl std::fmt::Display) -> Failure {
 }
 
 fn check_scope(declaration: &ServingDeclaration, scope: &LoadScope<'_>) -> Result<(), Failure> {
-    let path = match &declaration.agent().trace_sink {
-        weaver_types::TraceSink::File { path, .. }
-        | weaver_types::TraceSink::Pipe { path, .. }
-        | weaver_types::TraceSink::Socket { path } => path,
-    };
+    let path = super::trace_path(&declaration.agent().trace_sink);
     if declaration.agent().session != *scope.session || path != scope.trace_path {
         return Err(Failure::before_work(
             PersistenceCase::ConfigurationMismatch,
@@ -1019,14 +1019,7 @@ fn valid_seed_id(value: &str) -> bool {
 }
 
 fn part_name() -> Result<String, Failure> {
-    let mut bytes = [0_u8; 16];
-    File::open("/dev/urandom")
-        .and_then(|mut file| file.read_exact(&mut bytes))
-        .map_err(before_io)?;
-    let random = bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let random = crate::random::random_hex(16).map_err(before_io)?;
     Ok(format!(".publication-{random}.part"))
 }
 

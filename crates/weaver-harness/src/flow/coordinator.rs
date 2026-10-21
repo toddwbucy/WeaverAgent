@@ -348,9 +348,15 @@ struct InputReuse {
 #[derive(Clone, Copy)]
 enum PendingRecord {
     Classifier,
+    ClassifierRelease,
     State,
     Flow,
     StateRelease,
+}
+
+struct ClassifierRelease {
+    source: SourcePosition,
+    recorded_ns: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -427,6 +433,7 @@ pub(super) struct FlowCoordinator<P> {
     operation_completion: Option<OperationCompletion>,
     state_release_timing: Option<(u64, u64)>,
     state_recorded_ns: Option<u64>,
+    classifier_release: Option<ClassifierRelease>,
     refused_author: Option<RefusedAuthor>,
 }
 
@@ -491,6 +498,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             operation_completion: None,
             state_release_timing: None,
             state_recorded_ns: None,
+            classifier_release: None,
             refused_author: None,
         })
     }
@@ -516,6 +524,68 @@ impl<P: Ste100Port> FlowCoordinator<P> {
 
     pub(super) fn has_pending_record(&self) -> bool {
         self.pending_record.is_some()
+    }
+
+    /// Trace admission is the logical recording boundary even when a final
+    /// terminal probe must yield. This exposes timing, never usable acceptance.
+    pub(super) fn pending_classifier_recorded(
+        &self,
+    ) -> Option<(&CheckOperation, &Ste100Reply, u64)> {
+        if !matches!(self.pending_record, Some(PendingRecord::ClassifierRelease)) {
+            return None;
+        }
+        Some((
+            self.check_operation.as_ref()?,
+            self.classifier.as_ref()?.held()?,
+            self.classifier_release.as_ref()?.recorded_ns,
+        ))
+    }
+
+    pub(super) fn pending_classifier_recorded_request(
+        &self,
+    ) -> Option<(&Ste100Request, &Ste100Reply, u64)> {
+        if !matches!(self.pending_record, Some(PendingRecord::ClassifierRelease)) {
+            return None;
+        }
+        let classifier = self.classifier.as_ref()?;
+        Some((
+            classifier.outstanding()?,
+            classifier.held()?,
+            self.classifier_release.as_ref()?.recorded_ns,
+        ))
+    }
+
+    #[cfg(test)]
+    pub(super) fn interrupt_classifier_terminal_probes_for_test(&mut self, count: usize) {
+        self.classifier
+            .as_mut()
+            .expect("standing classifier")
+            .interrupt_terminal_probes_for_test(count);
+    }
+
+    /// Wake the common pump for a sample only when reduction can author it.
+    /// A held author or transition coalesces the tick into its next recorded
+    /// sample, without replacing the frozen event or spinning on a past tick.
+    pub(super) fn observation_wake(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<Option<u64>, FlowFailure> {
+        self.ensure_live()?;
+        if self.phase != CoordinatorPhase::Active
+            || self.open_pending
+            || self.pending_record.is_some()
+            || !self.notices.is_empty()
+            || self.operation_completion.is_some()
+            || cx.barrier.pending().is_some()
+        {
+            return Ok(None);
+        }
+        let work_pending = self.gauges(cx)?.work_pending();
+        self.observations
+            .as_ref()
+            .expect("active observation owner")
+            .next_tick(work_pending)
+            .map_err(|error| self.fail(cx, "observation", error))
     }
 
     /// First-latch facts are captured before any teardown transport is probed.
@@ -1209,6 +1279,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             operation_completion: None,
             state_release_timing: None,
             state_recorded_ns: None,
+            classifier_release: None,
             refused_author: None,
         })
     }
@@ -2594,6 +2665,12 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 .map_err(|e| self.fail(cx, "state_reply", e))?;
             return self.finish_state_release(cx, io, completion);
         }
+        if matches!(self.pending_record, Some(PendingRecord::ClassifierRelease)) {
+            if cx.barrier.pending().is_some() {
+                return Ok(Advance::Pending);
+            }
+            return self.release_classifier(cx, io, None);
+        }
         if self.pending_record.is_some() {
             let progress = cx
                 .barrier
@@ -2952,164 +3029,12 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 }
             }
             (Some(PendingRecord::Classifier), RecordProof::Classifier(proof)) => {
-                if let Some(CheckOperation::Input {
-                    input_id,
-                    offered_sequence,
-                    ..
-                }) = &self.check_operation
-                {
-                    let input_id = *input_id;
-                    let offered_sequence = *offered_sequence;
-                    // The completed proof is the gate's logical recording
-                    // boundary. Sample before releasing or authoring any notice.
-                    let recorded_ns = io.now().map_err(|error| self.fail(cx, "clock", error))?;
-                    let accepted = matches!(
-                        self.classifier().held().map(|reply| &reply.result),
-                        Some(Ste100Result::Accepted { .. })
-                    );
-                    let (reply, reuse) = if accepted {
-                        let reuse = self
-                            .classifier
-                            .as_mut()
-                            .expect("held classifier")
-                            .recorded_input(proof, offered_sequence)
-                            .map_err(|error| self.fail(cx, "classifier", error.detail))?;
-                        (reuse.reply().clone(), Some(reuse))
-                    } else {
-                        let reply = self
-                            .classifier
-                            .as_mut()
-                            .expect("held classifier")
-                            .recorded(proof)
-                            .map_err(|error| self.fail(cx, "classifier", error.detail))?;
-                        (reply, None)
-                    };
-                    if self.classifier().state() == ClassifierState::Failed {
-                        return Err(self.fail(
-                            cx,
-                            "classifier",
-                            "classifier reported component failure",
-                        ));
-                    }
-                    if accepted {
-                        let mut transition = Transition::new(trace::FlowPhase::Accepted);
-                        transition.input_id = Some(input_id.0);
-                        transition.request_id = Some(reply.request_id.0);
-                        self.notice(cx, io, transition, None)?;
-                    }
-                    self.operation_completion = Some(OperationCompletion::Input {
-                        operation: self.check_operation.take().expect("owned input operation"),
-                        reply,
-                        reuse,
-                        recorded_ns,
-                    });
-                    return Ok(Advance::Progress);
-                }
-                let result_source = proof.source().clone();
-                let recorded_ns = io.now().map_err(|error| self.fail(cx, "clock", error))?;
-                let checked_request =
-                    self.classifier().outstanding().cloned().ok_or_else(|| {
-                        self.fail(
-                            cx,
-                            "classifier",
-                            "recorded reply has no outstanding request",
-                        )
-                    })?;
-                let reply = self
-                    .classifier
-                    .as_mut()
-                    .expect("held classifier")
-                    .recorded(proof)
-                    .map_err(|e| self.fail(cx, "classifier", e.detail))?;
-                if self.classifier().state() == ClassifierState::Failed {
-                    return Err(self.fail(
-                        cx,
-                        "classifier",
-                        "classifier reported component failure",
-                    ));
-                }
-                if self
-                    .output_checks
-                    .as_ref()
-                    .is_some_and(|owner| owner.owns_unselected(&checked_request))
-                {
-                    let Some(CheckOperation::UnselectedModel { source, text, turn }) =
-                        self.check_operation.take()
-                    else {
-                        return Err(self.fail(
-                            cx,
-                            "output",
-                            "owned output lost its check operation",
-                        ));
-                    };
-                    let owner = self.output_checks.as_ref().expect("owned output");
-                    if checked_request.target != Ste100Target::Source(source)
-                        || checked_request.text != text
-                        || owner.original().turn != turn
-                    {
-                        return Err(self.fail(
-                            cx,
-                            "output",
-                            "output operation differs from its request",
-                        ));
-                    }
-                    self.output_checks
-                        .as_mut()
-                        .expect("owned output")
-                        .record(checked_request, reply, result_source, recorded_ns, false)
-                        .map_err(|error| self.fail(cx, "output", error))?;
-                    return Ok(Advance::Progress);
-                }
-                if let Some(owner) = self.check_operation.take() {
-                    self.operation_completion = Some(OperationCompletion::Check(RecordedCheck {
-                        operation: owner,
-                        reply,
-                        source: result_source,
-                    }));
-                    return Ok(Advance::Progress);
-                }
-                // The exact result has passed the classifier's Recorded proof.
-                // Observation never consumes or replaces its ordinary filing.
-                self.observe_instruction_check(
-                    cx,
-                    &checked_request,
-                    &reply,
-                    &result_source,
-                    recorded_ns,
-                )?;
-                if self
-                    .output_checks
-                    .as_ref()
-                    .is_some_and(|owner| owner.observes(&checked_request))
-                {
-                    self.output_checks
-                        .as_mut()
-                        .expect("observed output")
-                        .record(
-                            checked_request,
-                            reply.clone(),
-                            result_source,
-                            recorded_ns,
-                            true,
-                        )
-                        .map_err(|error| self.fail(cx, "output", error))?;
-                }
-                match self
-                    .ledger
-                    .classify_recorded(&reply)
-                    .map_err(|e| self.fail(cx, "ledger", e))?
-                {
-                    Classified::Accepted(source) => {
-                        let mut transition = Transition::new(trace::FlowPhase::Accepted);
-                        transition.source_id = Some(source.clone());
-                        transition.request_id = Some(reply.request_id.0);
-                        self.notice(cx, io, transition, self.turn(&source))
-                            .map_err(|e| self.fail(cx, e.point, e.detail))?;
-                    }
-                    Classified::CorrectlyRejected(terminal) => {
-                        self.terminal(cx, io, terminal, None, Some(reply.request_id.0))?
-                    }
-                }
+                self.classifier_release = Some(ClassifierRelease {
+                    source: proof.source().clone(),
+                    recorded_ns: io.now().map_err(|error| self.fail(cx, "clock", error))?,
+                });
+                self.pending_record = Some(PendingRecord::ClassifierRelease);
+                return self.release_classifier(cx, io, Some(proof));
             }
             (Some(PendingRecord::State), RecordProof::State(proof)) => {
                 // One sample at the Recorded boundary survives a pending final
@@ -3130,6 +3055,171 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 return self.finish_state_release(cx, io, completion);
             }
             _ => return Err(self.fail(cx, "author", "record proof and pending transition differ")),
+        }
+        Ok(Advance::Progress)
+    }
+
+    /// Continue only the original recorded result after an interrupted final
+    /// probe. No second trace author or usable grant is produced while pending.
+    fn release_classifier(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        io: &mut impl PumpIo,
+        proof: Option<super::RecordedSte100>,
+    ) -> Result<Advance, FlowFailure> {
+        if let Some(CheckOperation::Input {
+            input_id,
+            offered_sequence,
+            ..
+        }) = &self.check_operation
+        {
+            let input_id = *input_id;
+            let offered_sequence = *offered_sequence;
+            let recorded_ns = self
+                .classifier_release
+                .as_ref()
+                .expect("recorded classifier")
+                .recorded_ns;
+            let accepted = matches!(
+                self.classifier().held().map(|reply| &reply.result),
+                Some(Ste100Result::Accepted { .. })
+            );
+            let (reply, reuse) = if accepted {
+                let owner = self.classifier.as_mut().expect("held classifier");
+                let reuse = match proof {
+                    Some(proof) => owner.recorded_input(proof, offered_sequence),
+                    None => owner.resume_recorded_input(offered_sequence),
+                }
+                .map_err(|error| self.fail(cx, "classifier", error.detail))?;
+                let Some(reuse) = reuse else {
+                    return Ok(Advance::Pending);
+                };
+                (reuse.reply().clone(), Some(reuse))
+            } else {
+                let owner = self.classifier.as_mut().expect("held classifier");
+                let reply = match proof {
+                    Some(proof) => owner.recorded(proof),
+                    None => owner.resume_recorded(),
+                }
+                .map_err(|error| self.fail(cx, "classifier", error.detail))?;
+                let Some(reply) = reply else {
+                    return Ok(Advance::Pending);
+                };
+                (reply, None)
+            };
+            if self.classifier().state() == ClassifierState::Failed {
+                return Err(self.fail(cx, "classifier", "classifier reported component failure"));
+            }
+            self.pending_record = None;
+            self.classifier_release = None;
+            if accepted {
+                let mut transition = Transition::new(trace::FlowPhase::Accepted);
+                transition.input_id = Some(input_id.0);
+                transition.request_id = Some(reply.request_id.0);
+                self.notice(cx, io, transition, None)?;
+            }
+            self.operation_completion = Some(OperationCompletion::Input {
+                operation: self.check_operation.take().expect("owned input operation"),
+                reply,
+                reuse,
+                recorded_ns,
+            });
+            return Ok(Advance::Progress);
+        }
+        let release = self
+            .classifier_release
+            .as_ref()
+            .expect("recorded classifier");
+        let result_source = release.source.clone();
+        let recorded_ns = release.recorded_ns;
+        let checked_request = self.classifier().outstanding().cloned().ok_or_else(|| {
+            self.fail(
+                cx,
+                "classifier",
+                "recorded reply has no outstanding request",
+            )
+        })?;
+        let owner = self.classifier.as_mut().expect("held classifier");
+        let reply = match proof {
+            Some(proof) => owner.recorded(proof),
+            None => owner.resume_recorded(),
+        }
+        .map_err(|error| self.fail(cx, "classifier", error.detail))?;
+        let Some(reply) = reply else {
+            return Ok(Advance::Pending);
+        };
+        if self.classifier().state() == ClassifierState::Failed {
+            return Err(self.fail(cx, "classifier", "classifier reported component failure"));
+        }
+        self.pending_record = None;
+        self.classifier_release = None;
+        if self
+            .output_checks
+            .as_ref()
+            .is_some_and(|owner| owner.owns_unselected(&checked_request))
+        {
+            let Some(CheckOperation::UnselectedModel { source, text, turn }) =
+                self.check_operation.take()
+            else {
+                return Err(self.fail(cx, "output", "owned output lost its check operation"));
+            };
+            let owner = self.output_checks.as_ref().expect("owned output");
+            if checked_request.target != Ste100Target::Source(source)
+                || checked_request.text != text
+                || owner.original().turn != turn
+            {
+                return Err(self.fail(cx, "output", "output operation differs from its request"));
+            }
+            self.output_checks
+                .as_mut()
+                .expect("owned output")
+                .record(checked_request, reply, result_source, recorded_ns, false)
+                .map_err(|error| self.fail(cx, "output", error))?;
+            return Ok(Advance::Progress);
+        }
+        if let Some(owner) = self.check_operation.take() {
+            self.operation_completion = Some(OperationCompletion::Check(RecordedCheck {
+                operation: owner,
+                reply,
+                source: result_source,
+            }));
+            return Ok(Advance::Progress);
+        }
+        // The exact result has passed the classifier's Recorded proof.
+        // Observation never consumes or replaces its ordinary filing.
+        self.observe_instruction_check(cx, &checked_request, &reply, &result_source, recorded_ns)?;
+        if self
+            .output_checks
+            .as_ref()
+            .is_some_and(|owner| owner.observes(&checked_request))
+        {
+            self.output_checks
+                .as_mut()
+                .expect("observed output")
+                .record(
+                    checked_request,
+                    reply.clone(),
+                    result_source,
+                    recorded_ns,
+                    true,
+                )
+                .map_err(|error| self.fail(cx, "output", error))?;
+        }
+        match self
+            .ledger
+            .classify_recorded(&reply)
+            .map_err(|e| self.fail(cx, "ledger", e))?
+        {
+            Classified::Accepted(source) => {
+                let mut transition = Transition::new(trace::FlowPhase::Accepted);
+                transition.source_id = Some(source.clone());
+                transition.request_id = Some(reply.request_id.0);
+                self.notice(cx, io, transition, self.turn(&source))
+                    .map_err(|e| self.fail(cx, e.point, e.detail))?;
+            }
+            Classified::CorrectlyRejected(terminal) => {
+                self.terminal(cx, io, terminal, None, Some(reply.request_id.0))?
+            }
         }
         Ok(Advance::Progress)
     }

@@ -91,6 +91,8 @@ pub(super) enum PumpStep {
     Progress {
         sources: Vec<PumpSource>,
     },
+    /// The owner can reduce a measurement tick without expiring an operation.
+    Observation,
     Deadline {
         key: PumpDeadline,
         bound: AbsoluteBound,
@@ -556,7 +558,12 @@ impl CommonPump {
         // refusal or component-failure reply before that close.
         let mut ready = readiness_hints(ports, coordinator.as_deref(), cx)?;
         for source in LIFECYCLE.into_iter().chain(ROTATING) {
-            if local_work(source, ports, coordinator.as_deref()) {
+            if local_work(
+                source,
+                ports,
+                coordinator.as_deref(),
+                cx.barrier.pending().is_none(),
+            ) {
                 ready[source as usize] |= PollFlags::POLLIN | PollFlags::POLLOUT;
             }
         }
@@ -584,6 +591,13 @@ impl CommonPump {
             }
         }
         if ready.iter().all(PollFlags::is_empty) && progressed.is_empty() {
+            let observation = coordinator
+                .as_deref_mut()
+                .map(|owner| owner.observation_wake(cx))
+                .transpose()
+                .map_err(PumpFailure::Flow)?
+                .flatten();
+            let wake = deadlines.nearest().into_iter().chain(observation).min();
             let mut interests = Vec::new();
             let mut sources = Vec::new();
             for source in LIFECYCLE.into_iter().chain(ROTATING) {
@@ -603,21 +617,27 @@ impl CommonPump {
             }
             // The recorder contributes a descriptor throughout a live context.
             // No-descriptor operation is still useful at the final closed edge.
-            if interests.is_empty() && deadlines.nearest().is_none() {
+            if interests.is_empty() && wake.is_none() {
                 return Ok(PumpStep::Idle);
             }
             match ports
                 .io
-                .wait(&interests, deadlines.nearest())
+                .wait(&interests, wake)
                 .map_err(PumpFailure::Clock)?
             {
                 WaitOutcome::Timeout => {
-                    return self.deadline(ports.io, deadlines)?.ok_or_else(|| {
-                        PumpFailure::Clock(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "wait returned timeout before any armed deadline",
-                        ))
-                    });
+                    // Terminal bounds win even when their expiry shares the
+                    // tick, or the clock advanced past both during the wait.
+                    if let Some(expired) = self.deadline(ports.io, deadlines)? {
+                        return Ok(expired);
+                    }
+                    if observation.is_some_and(|tick| self.previous >= tick) {
+                        return Ok(PumpStep::Observation);
+                    }
+                    return Err(PumpFailure::Clock(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "wait returned timeout before any armed wake",
+                    )));
                 }
                 WaitOutcome::Ready(wakes) => {
                     for wake in wakes {
@@ -810,6 +830,7 @@ fn local_work<I: PumpIo>(
     source: PumpSource,
     ports: &PumpPorts<'_, I>,
     coordinator: Option<&FlowCoordinator<SocketPort>>,
+    release_ready: bool,
 ) -> bool {
     match source {
         PumpSource::Listener => {
@@ -847,7 +868,7 @@ fn local_work<I: PumpIo>(
             owner.admission_needs_progress()
                 || owner
                     .standing_classifier()
-                    .is_some_and(|port| port.needs_progress())
+                    .is_some_and(|port| port.needs_progress(release_ready))
                 || owner.starting_classifier().is_some_and(|port| {
                     port.needs_progress()
                         && !owner.admission_refused()

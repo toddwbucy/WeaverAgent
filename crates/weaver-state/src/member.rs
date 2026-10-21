@@ -173,8 +173,9 @@ impl Session {
         {
             return Err(invalid("request is not in the opened channel"));
         }
+        // A held capture keeps its original continuation after fresh controls
+        // have been refused. Only a just-refused capture retires on a fresh ask.
         let continuation = self.capture.continuation() == Some(common.request_id)
-            && common.request_id.0 == self.last_request
             && matches!(
                 request,
                 StateFrame::Control {frame,..} if self.capture.allows_continuation(frame)
@@ -267,7 +268,6 @@ impl Session {
                 .capture
                 .control(room, common.request_id, control, sample);
         }
-        let page_budget = page_budget(common)?;
         match control {
             StateControl::Snapshot { capture_id } => {
                 self.capture
@@ -277,6 +277,7 @@ impl Session {
                 if self.pages.busy() {
                     return Ok(read_refusal(ReadRefusalCode::ReadBusy));
                 }
+                let page_budget = page_budget(common)?;
                 sample.phase_begin(PhaseName::Query)?;
                 let result = self.store.query_encoded(selector);
                 sample.phase_end(PhaseName::Query)?;
@@ -297,10 +298,13 @@ impl Session {
             StateControl::Next {
                 snapshot_id,
                 offset,
-            } => Ok(match self.pages.next(*snapshot_id, *offset, page_budget) {
-                Ok(page) => StateControlAnswer::ReadPage(page),
-                Err(code) => read_refusal(code),
-            }),
+            } => {
+                let page_budget = page_budget(common)?;
+                Ok(match self.pages.next(*snapshot_id, *offset, page_budget) {
+                    Ok(page) => StateControlAnswer::ReadPage(page),
+                    Err(code) => read_refusal(code),
+                })
+            }
             StateControl::Release { snapshot_id } => Ok(match self.pages.release(*snapshot_id) {
                 Ok(()) => StateControlAnswer::Released {
                     snapshot_id: *snapshot_id,
