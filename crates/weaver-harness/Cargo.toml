@@ -25,4 +25,6 @@ weaver-trace = { path = "../weaver-trace" }
 # kind selects the arm.
 weaver-diagnostic = { path = "../weaver-diagnostic" }
 serde_json.workspace = true
+# TEMPLATES binds the compiled inventory to its exact canonical bytes at load.
+sha2 = "0.10"
 nix = { version = "0.31", features = ["socket", "fs", "process", "uio", "user", "poll", "signal"] }

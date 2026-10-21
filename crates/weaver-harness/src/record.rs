@@ -9,6 +9,11 @@
 
 use weaver_trace::{Event, Kind, Pressure, Sequence, Subsystem, WorkingStructure};
 
+// The replacement lifetime has one home even while the legacy path remains
+// active until the qualified foundation cutover.
+#[allow(unused_imports)]
+pub(crate) use crate::flow::context::RecordingContext;
+
 /// The run's record: its arm, constructed once at the enter from the
 /// binding's kind and never re-selected, a run's record being one mechanism
 /// for its whole residency, and the latch of a failed authoring.
