@@ -309,3 +309,144 @@ fn normal_member_seed_open_file_read_and_capture_cleanup() {
         "abort removes room image"
     );
 }
+
+#[test]
+#[ignore = "requires WEAVER_STATE_BINARY built from the matching revision"]
+fn normal_member_paged_read_reassembles_exact_content_and_releases_snapshot() {
+    use super::read::{PageRead, ReadAdvance};
+
+    let binary = std::env::var_os("WEAVER_STATE_BINARY").expect("set matching member binary");
+    let scratch = crate::scratch::dir(format!("weaver-paged-member-{}", std::process::id()));
+    let seed_room = scratch.join("seed-room");
+    let room = scratch.join("room");
+    std::fs::create_dir(&seed_room).unwrap();
+    std::fs::create_dir(&room).unwrap();
+    let seed: SeedRequest = decode_strict(include_str!("fixtures/seed.json")).unwrap();
+    let (seeder, socket) = launch(Path::new(&binary), &seed_room, None);
+    let mut socket = BufReader::new(socket);
+    socket
+        .get_mut()
+        .write_all(
+            &encode_seed_line(
+                &SeedFrame::Seed {
+                    request: Box::new(seed.clone()),
+                },
+                FrameDirection::Request,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let mut line = Vec::new();
+    socket.read_until(b'\n', &mut line).unwrap();
+    let SeedFrame::Created { created } = decode_seed_line(&line, FrameDirection::Response).unwrap()
+    else {
+        panic!("seed refused")
+    };
+    let image = scratch.join("image.sqlite");
+    std::fs::copy(seed_room.join(created.room_name), &image).unwrap();
+    drop(socket);
+    drop(seeder);
+    let hash = Command::new("sha256sum").arg(&image).output().unwrap();
+    assert!(hash.status.success());
+    let digest = String::from_utf8(hash.stdout)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    let (_member, stream) = launch(Path::new(&binary), &room, Some(&image));
+    let mut channel = StateChannel::new(stream, "session".into(), "run".into()).unwrap();
+    let opened = exchange(
+        &mut channel,
+        StateRequest::Open {
+            schema_id: STATE_CONTENT_SCHEMA.into(),
+            scheme_id: seed.scheme_id.clone(),
+            start: StartIdentity {
+                seed_id: seed.seed_id.clone(),
+                artifact_id: "synthetic-seed".into(),
+                dump_sha256: Digest::new(digest).unwrap(),
+                config_sha256: Digest::new("b".repeat(64)).unwrap(),
+                parent_artifact_id: None,
+                position: None,
+            },
+            read_limits: ReadLimits {
+                max_result_bytes: 4_000_000.into(),
+                measurement_ref: "test-only-large-read".into(),
+            },
+        },
+    );
+    assert!(matches!(opened.answer, StateFrame::Opened { .. }));
+    let mut filed = statement(&seed);
+    filed.text.push_str(&" ".repeat(600_000));
+    filed.raw_block = serde_json::value::to_raw_value(&serde_json::json!({
+        "type":"text", "text":filed.text,
+    }))
+    .unwrap();
+    let answer = exchange(&mut channel, StateRequest::File(filed.clone()));
+    assert!(matches!(answer.answer, StateFrame::Filed { .. }));
+    let selector = ReadSelector::Subjects {
+        nouns: vec!["item".into()],
+    };
+    // The actual recorder barrier has its separate context tests. This fixture
+    // uses exchange's explicit proof double only for measurement release, and
+    // tests actual SQL, immutable paging and the read owner's protocol together.
+    let mut first_snapshot = None;
+    for attempt in 0..2 {
+        let mut read = PageRead::new(selector.clone(), 4_000_000.into()).unwrap();
+        let mut pages = 0;
+        let mut releases = 0;
+        let mut raw_pages = Vec::new();
+        let mut finished = false;
+        for _ in 0..32 {
+            let request = read.next_control().expect("read owes a request");
+            let completion = exchange(&mut channel, StateRequest::Control(request.clone()));
+            // The channel assigned and completed this exact request before the
+            // core sees its ID. Binding still precedes accepting any result.
+            read.bind_request(completion.answer.common().request_id, &request)
+                .unwrap();
+            let StateFrame::ControlAnswer { common, frame, .. } = &completion.answer else {
+                panic!("read did not receive a control answer")
+            };
+            match frame {
+                StateControlAnswer::ReadPage(page) => {
+                    pages += 1;
+                    raw_pages.extend(page.decode_octets(4_000_000.into()).unwrap());
+                }
+                StateControlAnswer::Released { .. } => releases += 1,
+                other => panic!("normal member refused the read: {other:?}"),
+            }
+            let progress = read.accept(common.request_id, &request, frame).unwrap();
+            if progress == ReadAdvance::Complete {
+                finished = true;
+                break;
+            }
+            assert!(read.take().is_none(), "a partial result escaped");
+        }
+        assert!(finished, "bounded fixture did not complete");
+        assert!(pages >= 3, "fixture did not cross actual page boundaries");
+        assert_eq!(releases, 1);
+        let completed = read.take().unwrap().unwrap();
+        assert_eq!(completed.selector(), &selector);
+        assert_eq!(completed.raw_bytes(), raw_pages);
+        let QueryResult::Entries { entries } = completed.result() else {
+            panic!("entries")
+        };
+        let [entry] = entries.as_slice() else {
+            panic!("one filed source")
+        };
+        assert_eq!(entry.text, filed.text);
+        assert_eq!(entry.raw_block.get(), filed.raw_block.get());
+        assert_eq!(entry.bindings[0].ordinal, 0.into());
+        assert_eq!(entry.bindings[0].value, filed.bindings[0]);
+        assert!(
+            matches!(&entry.source, ReadSource::Event(source) if source.block_id == filed.block_id)
+        );
+        assert!(read.next_control().is_none());
+        assert!(read.take().is_none());
+        if attempt == 0 {
+            first_snapshot = Some(completed.snapshot_id());
+        } else {
+            assert!(completed.snapshot_id() > first_snapshot.unwrap());
+        }
+    }
+}

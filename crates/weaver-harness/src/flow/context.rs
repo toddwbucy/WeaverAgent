@@ -105,6 +105,7 @@ pub(crate) struct RecordingContext {
     input_turn: Option<input_driver::InputTurn>,
     input_turns: std::collections::BTreeSet<String>,
     member_capture: Option<capture_driver::MemberCapture>,
+    read: Option<read_driver::ReadTransaction>,
     filing: Option<receipt_driver::FilingTransaction>,
     output: Option<output_driver::OutputTransaction>,
     pairs: pairs::PairLedger,
@@ -199,6 +200,7 @@ impl RecordingContext {
             input_turn: None,
             input_turns: std::collections::BTreeSet::new(),
             member_capture: None,
+            read: None,
             filing: None,
             output: None,
             pairs,
@@ -380,7 +382,7 @@ impl RecordingContext {
         self.live(io)?;
         // A template result belongs to its ordered transcript, never a second
         // operation consumer. Correct rejection keeps that boundary closed.
-        if self.templates_block_content() || self.output.is_some() {
+        if self.templates_block_content() || self.output.is_some() || self.read.is_some() {
             return Ok(None);
         }
         let result = self.flow.take_operation_completion(&mut FlowRecording {
@@ -446,6 +448,7 @@ impl RecordingContext {
             || self.output_wait_still_owned(key)
             || self.pair_wait_still_owned(key)
             || self.repair_wait_still_owned(key)
+            || self.read_wait_still_owned(key)
             || (key == PumpDeadline::Enter
                 && self.phase == RecordingPhase::Entered
                 && self
@@ -471,6 +474,7 @@ impl RecordingContext {
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.member_capture.is_some()
+            || self.read.is_some()
             || self.open_turn.is_some()
         {
             return Err(self.fail(
@@ -1065,6 +1069,7 @@ impl RecordingContext {
         let advance = result.map_err(|failure| self.flow_failed(io, failure))?;
         self.settle_recorded_input(io)?;
         self.settle_recorded_capture(io)?;
+        self.settle_recorded_read(io)?;
         self.live(io)?;
         Ok(advance)
     }
@@ -1292,6 +1297,9 @@ impl RecordingContext {
         self.input.halt();
         self.pairs.freeze();
         self.freeze_repair();
+        if let Some(read) = &mut self.read {
+            read.freeze();
+        }
         self.phase = RecordingPhase::Failed;
         self.failure = Some(failure.clone());
         self.barrier.stop_for_flow_failure();
@@ -1316,6 +1324,17 @@ impl RecordingContext {
                 author: &self.author,
             },
         );
+        if self.read.is_some()
+            && let Err(error) = self.flow.close_failed_read()
+            && let Some(halt) = self.flow.halt_mut()
+        {
+            let _ = halt.append_secondary(SecondaryFailure {
+                reason: FlowHaltReason::CarryFailed,
+                point: HaltPoint::Teardown,
+                detail: format!("close failed read: {error}"),
+                observed_ns: io.now().ok().map(Into::into),
+            });
+        }
         failure
     }
 }
@@ -1440,3 +1459,12 @@ pub(super) use repair_driver::{
 #[cfg(test)]
 #[path = "context_repair_tests.rs"]
 mod repair_tests;
+
+#[path = "context_read.rs"]
+mod read_driver;
+#[allow(unused_imports)] // Composed by dependent boot, recall and placement primitives.
+pub(super) use read_driver::{ReadBeginError, ReadBeginRefusal, ReadProgress};
+
+#[cfg(test)]
+#[path = "context_read_tests.rs"]
+mod read_tests;

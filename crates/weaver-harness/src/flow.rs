@@ -19,6 +19,8 @@ mod mirror;
 mod observation;
 mod pump;
 mod pump_transport;
+mod read;
+mod read_validate;
 mod record_owner;
 mod recording;
 mod report;
@@ -233,4 +235,31 @@ mod repair_port_visibility {
         &mut RecordingContext,
         &mut FakePumpIo,
     ) -> Result<Option<RepairAccount>, RunFailure> = RecordingContext::take_repair_accounting;
+}
+
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+mod read_port_visibility {
+    use super::clock::testing::FakePumpIo;
+    use super::context::{ReadBeginError, ReadProgress, RecordingContext, RunFailure};
+    use super::pump::PumpPorts;
+    use super::read::{CompletedRead, ReadFailure};
+    use weaver_trace::TurnRef;
+    use weaver_types::state_flow::ReadSelector;
+
+    const _: fn(
+        &mut RecordingContext,
+        ReadSelector,
+        Option<TurnRef>,
+        &mut FakePumpIo,
+    ) -> Result<(), ReadBeginError> = RecordingContext::begin_read;
+    const _: fn(
+        &mut RecordingContext,
+        &mut PumpPorts<'_, FakePumpIo>,
+    ) -> Result<ReadProgress, RunFailure> = RecordingContext::advance_read;
+    const _: fn(
+        &mut RecordingContext,
+        &mut FakePumpIo,
+    ) -> Result<Option<Result<CompletedRead, ReadFailure>>, RunFailure> =
+        RecordingContext::take_read;
 }
