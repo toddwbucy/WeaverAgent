@@ -890,3 +890,399 @@ fn halt_preserves_committed_but_unrecorded_receipt_evidence() {
     assert!(ledger.receipt_recorded(&receipt()).is_err());
     assert_eq!(budget.gauges(), charged);
 }
+
+fn commit(ledger: &mut Ledger, source: &SourceBlockId, request_id: u64) -> StateFrame {
+    let operation = ledger.next_file().unwrap().operation();
+    let mut exchange = common();
+    exchange.request_id = request_id.into();
+    ledger.begin_file(source, &exchange).unwrap();
+    ledger
+        .observe_progress(
+            &ExchangeProgress {
+                common: exchange.clone(),
+                operation,
+                source: Some(source.clone()),
+                bytes_sent: 100,
+                frame_bytes: 100,
+                commit: CommitEvidence::Committed,
+            },
+            Some(11),
+        )
+        .unwrap();
+    let mut observed = observation();
+    observed.operation = operation;
+    observed.request_id = request_id.into();
+    observed.operation_id = request_id.into();
+    let answer = StateFrame::Filed {
+        common: exchange,
+        block_id: source.clone(),
+        observation: observed,
+    };
+    ledger.receipt_recorded(&answer).unwrap();
+    answer
+}
+
+#[test]
+fn receipt_registration_is_atomic_exact_and_returns_every_refused_source() {
+    let mut ledger = ledger();
+    let mut budget = budget();
+    admit(&mut ledger, &mut budget, statement(2, &[0, 3]));
+    admit(&mut ledger, &mut budget, statement(4, &[0]));
+    let mut foreign = id(2, 0);
+    foreign.run = "another-run".into();
+    for sources in [
+        vec![id(2, 0), id(2, 0)],
+        vec![id(4, 0), id(2, 0)],
+        vec![id(2, 0), id(2, 2)],
+        vec![id(2, 0), id(99, 0)],
+        vec![foreign],
+    ] {
+        let failure = ledger.register_receipts(sources.clone()).unwrap_err();
+        assert_eq!(failure.sources, sources);
+        assert!(ledger.receipts().is_none());
+        assert_eq!(ledger.facts().count(), 3);
+    }
+    let sources = vec![id(2, 0), id(4, 0)];
+    ledger.register_receipts(sources.clone()).unwrap();
+    assert_eq!(
+        ledger
+            .receipts()
+            .unwrap()
+            .sources()
+            .cloned()
+            .collect::<Vec<_>>(),
+        sources
+    );
+    let refused = vec![id(2, 3)];
+    assert_eq!(
+        ledger
+            .register_receipts(refused.clone())
+            .unwrap_err()
+            .sources,
+        refused
+    );
+    assert_eq!(ledger.receipts().unwrap().pending().count(), 2);
+    assert!(ledger.take_receipts().unwrap().is_none());
+}
+
+#[test]
+fn subscribed_commit_moves_exact_filing_only_after_terminal_recorded() {
+    let mut ledger = ledger();
+    let mut budget = budget();
+    admit(&mut ledger, &mut budget, statement(2, &[0]));
+    ledger.register_receipts(vec![id(2, 0)]).unwrap();
+    check(&mut ledger, id(2, 0), 1, true);
+    let LedgerFile::Statement(original) = &ledger.entries[0].file else {
+        unreachable!()
+    };
+    let block_pointer = original.raw_block.get().as_ptr();
+    let original_json = serde_json::to_string(original).unwrap();
+    let charged = budget.gauges();
+    assert!(
+        ledger
+            .terminal_recorded(RecordedTerminal::for_test(id(2, 0)), &mut budget)
+            .is_err()
+    );
+    assert_eq!(ledger.receipts().unwrap().retained(), (0, 0));
+    let answer = commit(&mut ledger, &id(2, 0), 19);
+    assert!(ledger.take_receipts().unwrap().is_none());
+    assert_eq!(ledger.receipts().unwrap().retained(), (0, 0));
+    assert_eq!(budget.gauges(), charged);
+    assert!(
+        ledger
+            .terminal_recorded(rejected_proof(id(2, 0)), &mut budget)
+            .is_err()
+    );
+    assert_eq!(ledger.receipts().unwrap().pending().count(), 1);
+    let terminal = ledger
+        .terminal_recorded(RecordedTerminal::for_test(id(2, 0)), &mut budget)
+        .unwrap();
+    assert_eq!(budget.gauges(), (0, 0));
+    assert_eq!(ledger.receipts().unwrap().retained(), (1, terminal.bytes));
+    assert_eq!(ledger.receipts().unwrap().dispositions().count(), 0);
+    let set = ledger.take_receipts().unwrap().unwrap();
+    assert!(ledger.take_receipts().unwrap().is_none());
+    let mut results = set.into_dispositions().unwrap();
+    let SourceDisposition::Committed(committed) = results.next().unwrap() else {
+        panic!("commit expected")
+    };
+    let LedgerFile::Statement(file) = committed.file() else {
+        panic!("statement expected")
+    };
+    assert_eq!(
+        file.raw_block.get().as_ptr(),
+        block_pointer,
+        "move the ledger's exact allocation"
+    );
+    assert_eq!(serde_json::to_string(file).unwrap(), original_json);
+    assert_eq!(
+        serde_json::to_string(committed.receipt()).unwrap(),
+        serde_json::to_string(&answer).unwrap()
+    );
+    assert_eq!(committed.common().request_id.0, 19);
+    assert_eq!(committed.source(), &id(2, 0));
+    assert_eq!(committed.terminal(), &terminal);
+    assert!(results.next().is_none());
+}
+
+#[test]
+fn correct_rejection_is_retained_as_its_exact_result_never_as_commit() {
+    let mut ledger = ledger();
+    let mut budget = budget();
+    admit(&mut ledger, &mut budget, statement(2, &[0]));
+    ledger.register_receipts(vec![id(2, 0)]).unwrap();
+    check(&mut ledger, id(2, 0), 7, false);
+    let reply = ledger.entries[0].rejection.as_ref().unwrap().clone();
+    let LedgerFile::Statement(file) = &ledger.entries[0].file else {
+        unreachable!()
+    };
+    let original = file.raw_block.get().as_ptr();
+    assert!(ledger.take_receipts().unwrap().is_none());
+    assert!(ledger.next_file().is_none());
+    ledger
+        .terminal_recorded(rejected_proof(id(2, 0)), &mut budget)
+        .unwrap();
+    assert!(
+        ledger.barrier(&[id(2, 0)]).unwrap(),
+        "disposition is not acceptance"
+    );
+    let mut results = ledger
+        .take_receipts()
+        .unwrap()
+        .unwrap()
+        .into_dispositions()
+        .unwrap();
+    let SourceDisposition::CorrectlyRejected(rejected) = results.next().unwrap() else {
+        panic!("no committed grant for rejection")
+    };
+    assert_eq!(rejected.reply(), &reply);
+    assert_eq!(rejected.file().raw_block.get().as_ptr(), original);
+    assert_eq!(rejected.source(), &id(2, 0));
+    assert_eq!(
+        rejected.terminal().outcome,
+        TerminalOutcome::CorrectlyRejected
+    );
+    assert!(results.next().is_none());
+}
+
+#[test]
+fn receipt_set_keeps_source_order_while_later_rejection_records_first() {
+    let mut ledger = ledger();
+    let mut budget = budget();
+    admit(&mut ledger, &mut budget, statement(2, &[0, 3]));
+    admit(&mut ledger, &mut budget, statement(4, &[0]));
+    ledger
+        .register_receipts(vec![id(2, 0), id(2, 3), id(4, 0)])
+        .unwrap();
+    check(&mut ledger, id(2, 3), 1, false);
+    ledger
+        .terminal_recorded(rejected_proof(id(2, 3)), &mut budget)
+        .unwrap();
+    assert_eq!(
+        ledger
+            .receipts()
+            .unwrap()
+            .pending()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![id(2, 0), id(4, 0)]
+    );
+    assert!(ledger.take_receipts().unwrap().is_none());
+    check(&mut ledger, id(2, 0), 2, true);
+    commit(&mut ledger, &id(2, 0), 2);
+    ledger
+        .terminal_recorded(RecordedTerminal::for_test(id(2, 0)), &mut budget)
+        .unwrap();
+    check(&mut ledger, id(4, 0), 3, true);
+    commit(&mut ledger, &id(4, 0), 3);
+    ledger
+        .terminal_recorded(RecordedTerminal::for_test(id(4, 0)), &mut budget)
+        .unwrap();
+    let set = ledger.take_receipts().unwrap().unwrap();
+    assert_eq!(set.retained().0, 3);
+    let results: Vec<_> = set.into_dispositions().unwrap().collect();
+    assert_eq!(
+        results
+            .iter()
+            .map(SourceDisposition::source)
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![id(2, 0), id(2, 3), id(4, 0)]
+    );
+    assert!(matches!(results[0], SourceDisposition::Committed(_)));
+    assert!(matches!(
+        results[1],
+        SourceDisposition::CorrectlyRejected(_)
+    ));
+    assert!(matches!(results[2], SourceDisposition::Committed(_)));
+}
+
+#[test]
+fn cancelled_subscription_returns_custody_without_grants_or_erasing_obligations() {
+    let mut ledger = ledger();
+    let mut budget = budget();
+    admit(&mut ledger, &mut budget, statement(2, &[0, 3]));
+    ledger.register_receipts(vec![id(2, 0), id(2, 3)]).unwrap();
+    check(&mut ledger, id(2, 0), 1, true);
+    commit(&mut ledger, &id(2, 0), 2);
+    ledger
+        .terminal_recorded(RecordedTerminal::for_test(id(2, 0)), &mut budget)
+        .unwrap();
+    let charged = budget.gauges();
+    let cancelled = ledger.cancel_receipts().unwrap();
+    assert!(cancelled.is_cancelled());
+    assert_eq!(cancelled.retained().0, 1);
+    assert_eq!(
+        cancelled.dispositions().count(),
+        0,
+        "no borrowed authority after cancellation"
+    );
+    assert_eq!(
+        cancelled.pending().cloned().collect::<Vec<_>>(),
+        vec![id(2, 3)]
+    );
+    assert!(cancelled.into_dispositions().is_err());
+    assert_eq!(budget.gauges(), charged);
+    assert_eq!(ledger.facts().count(), 1);
+    assert!(ledger.receipts().is_none());
+    check(&mut ledger, id(2, 3), 3, false);
+    ledger
+        .terminal_recorded(rejected_proof(id(2, 3)), &mut budget)
+        .unwrap();
+    assert_eq!(budget.gauges(), (0, 0));
+    assert!(ledger.take_receipts().unwrap().is_none());
+}
+
+#[test]
+fn frozen_ledger_keeps_completed_custody_but_never_releases_a_grant() {
+    let mut ledger = ledger();
+    let mut budget = budget();
+    admit(&mut ledger, &mut budget, statement(2, &[0]));
+    ledger.register_receipts(vec![id(2, 0)]).unwrap();
+    check(&mut ledger, id(2, 0), 1, true);
+    commit(&mut ledger, &id(2, 0), 2);
+    ledger
+        .terminal_recorded(RecordedTerminal::for_test(id(2, 0)), &mut budget)
+        .unwrap();
+    ledger.freeze();
+    assert!(ledger.take_receipts().is_err());
+    assert_eq!(ledger.receipts().unwrap().retained().0, 1);
+    assert_eq!(ledger.receipts().unwrap().dispositions().count(), 0);
+    let cancelled = ledger.cancel_receipts().unwrap();
+    assert!(cancelled.is_complete());
+    assert!(cancelled.into_dispositions().is_err());
+    assert!(ledger.register_receipts(vec![]).is_err());
+}
+
+#[test]
+fn disposed_history_and_overflow_cannot_construct_receipts() {
+    let mut ledger = ledger();
+    let mut budget = budget();
+    admit(&mut ledger, &mut budget, statement(2, &[0, 3]));
+    check(&mut ledger, id(2, 0), 1, false);
+    ledger
+        .terminal_recorded(rejected_proof(id(2, 0)), &mut budget)
+        .unwrap();
+    assert!(ledger.barrier(&[id(2, 0)]).unwrap());
+    let sources = vec![id(2, 0)];
+    assert_eq!(
+        ledger
+            .register_receipts(sources.clone())
+            .unwrap_err()
+            .sources,
+        sources
+    );
+    assert!(ledger.receipts().is_none());
+    ledger.entries[0].raw_bytes = u64::MAX;
+    ledger.entries[0].context_bytes = 1;
+    assert!(ledger.register_receipts(vec![id(2, 3)]).is_err());
+    assert!(ledger.receipts().is_none());
+}
+
+#[test]
+fn empty_receipt_set_is_one_complete_operation_without_a_committed_source() {
+    let mut ledger = ledger();
+    ledger.register_receipts(vec![]).unwrap();
+    assert!(ledger.register_receipts(vec![]).is_err());
+    let set = ledger.take_receipts().unwrap().unwrap();
+    assert!(set.is_complete());
+    assert_eq!(set.retained(), (0, 0));
+    assert_eq!(set.into_dispositions().unwrap().count(), 0);
+    assert!(ledger.take_receipts().unwrap().is_none());
+}
+
+#[test]
+fn pair_receipt_preserves_the_whole_pair_file_without_statement_authority() {
+    let mut ledger = ledger();
+    let mut budget = budget();
+    admit(&mut ledger, &mut budget, pair_open(3));
+    ledger.register_receipts(vec![id(3, 0)]).unwrap();
+    let LedgerFile::Pair(file) = &ledger.entries[0].file else {
+        unreachable!()
+    };
+    let original = serde_json::to_string(file).unwrap();
+    let raw_pointer = file.raw_block.get().as_ptr();
+    let answer = commit(&mut ledger, &id(3, 0), 17);
+    ledger
+        .terminal_recorded(RecordedTerminal::for_test(id(3, 0)), &mut budget)
+        .unwrap();
+    let mut results = ledger
+        .take_receipts()
+        .unwrap()
+        .unwrap()
+        .into_dispositions()
+        .unwrap();
+    let SourceDisposition::Committed(committed) = results.next().unwrap() else {
+        panic!("pair committed")
+    };
+    let LedgerFile::Pair(file) = committed.file() else {
+        panic!("whole pair file")
+    };
+    assert_eq!(serde_json::to_string(file).unwrap(), original);
+    assert_eq!(file.raw_block.get().as_ptr(), raw_pointer);
+    assert_eq!(
+        serde_json::to_string(committed.receipt()).unwrap(),
+        serde_json::to_string(&answer).unwrap()
+    );
+    assert_eq!(committed.common().request_id.0, 17);
+}
+
+#[test]
+fn budget_release_failure_keeps_filing_and_receipt_slot_untransferred() {
+    let mut ledger = ledger();
+    let mut budget = budget();
+    admit(&mut ledger, &mut budget, statement(2, &[0]));
+    ledger.register_receipts(vec![id(2, 0)]).unwrap();
+    check(&mut ledger, id(2, 0), 1, true);
+    commit(&mut ledger, &id(2, 0), 2);
+    let charged = budget.gauges();
+    budget.freeze();
+    assert!(
+        ledger
+            .terminal_recorded(RecordedTerminal::for_test(id(2, 0)), &mut budget)
+            .is_err()
+    );
+    assert_eq!(budget.gauges(), charged);
+    assert_eq!(ledger.facts().next().unwrap().state, LedgerState::FiledHeld);
+    assert_eq!(ledger.receipts().unwrap().pending().count(), 1);
+    assert_eq!(ledger.receipts().unwrap().retained(), (0, 0));
+}
+
+#[test]
+fn committed_receipt_and_set_are_not_clone_or_default() {
+    trait AmbiguousIfClone<A> {
+        fn marker() {}
+    }
+    impl<T: ?Sized> AmbiguousIfClone<()> for T {}
+    impl<T: Clone> AmbiguousIfClone<u8> for T {}
+    let _ = <CommittedSource as AmbiguousIfClone<_>>::marker;
+    let _ = <RejectedSource as AmbiguousIfClone<_>>::marker;
+    let _ = <ReceiptSet as AmbiguousIfClone<_>>::marker;
+    trait AmbiguousIfDefault<A> {
+        fn marker() {}
+    }
+    impl<T: ?Sized> AmbiguousIfDefault<()> for T {}
+    impl<T: Default> AmbiguousIfDefault<u8> for T {}
+    let _ = <CommittedSource as AmbiguousIfDefault<_>>::marker;
+    let _ = <ReceiptSet as AmbiguousIfDefault<_>>::marker;
+}

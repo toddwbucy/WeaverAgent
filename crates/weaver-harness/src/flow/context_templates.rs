@@ -90,7 +90,10 @@ impl RecordingContext {
                 failure: None,
             });
         }
-        if self.input.snapshot().is_some()
+        if self.output.is_some()
+            || self.filing.is_some()
+            || self.pair_work.is_some()
+            || self.input.snapshot().is_some()
             || !self.input_turns.is_empty()
             || self.input_turn.is_some()
             || self.input_author.is_some()

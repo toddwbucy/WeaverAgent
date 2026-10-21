@@ -99,9 +99,43 @@ impl InputFixture {
         Self::with_templates(Some(inventory))
     }
 
-    fn with_templates(inventory: Option<&super::super::templates::CompiledInventory>) -> Self {
-        let (bootstrap, scheme, ready) = duty();
+    pub(super) fn with_pending_limit(blocks: u64) -> Self {
         let mut declaration = config();
+        declaration.backlog.max_pending_blocks = blocks.into();
+        Self::with_declaration(None, declaration)
+    }
+
+    fn with_templates(inventory: Option<&super::super::templates::CompiledInventory>) -> Self {
+        Self::with_declaration(inventory, config())
+    }
+
+    pub(super) fn with_declaration(
+        inventory: Option<&super::super::templates::CompiledInventory>,
+        declaration: FlowConfig,
+    ) -> Self {
+        Self::with_declaration_scheme(inventory, declaration, None)
+    }
+
+    pub(super) fn with_scheme(
+        declaration: FlowConfig,
+        scheme_text: String,
+        scheme: s::SchemeDeclaration,
+    ) -> Self {
+        Self::with_declaration_scheme(None, declaration, Some((scheme_text, scheme)))
+    }
+
+    fn with_declaration_scheme(
+        inventory: Option<&super::super::templates::CompiledInventory>,
+        mut declaration: FlowConfig,
+        override_scheme: Option<(String, s::SchemeDeclaration)>,
+    ) -> Self {
+        let (mut bootstrap, mut scheme, mut ready) = duty();
+        if let Some((text, declared)) = override_scheme {
+            bootstrap.scheme_text = text;
+            scheme = declared;
+            ready.scheme_id = scheme.scheme_id.clone();
+            ready.artifact_sha256 = scheme.artifact_sha256.clone();
+        }
         declaration.scheme = scheme;
         let mut run = Fixture::new(declaration);
         run.opened();
