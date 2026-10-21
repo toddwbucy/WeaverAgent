@@ -2,7 +2,7 @@
 
 Date: 2026-10-21. Status: implementation record, not a Spec amendment.
 
-This branch follows draft #208. It adds per-source receipt custody to the complete
+[Draft #209][draft] follows draft #208. It adds per-source receipt custody to the complete
 output check and derives original model requests from that checked message. The
 serving path remains on the legacy implementation until the coupled cutover. The
 loop still owns invocation, repair scheduling, execution eligibility and dispatch.
@@ -124,3 +124,5 @@ to each endpoint's local tests. This note carries that lesson into the next slic
 
 [protocol]: ../crates/state-management/state-management-spec-02-protocol-classifier-gate.md
 [pairs]: ../crates/state-management/state-management-spec-05-tool-pairs.md
+
+[draft]: https://github.com/toddwbucy/WeaverAgent/pull/209

@@ -216,7 +216,8 @@ instruments. All 27 added tests run. Twelve compiled protective probes fail thei
 intended assertions, with exact restoration independently checked. Lint, formatting,
 lock and documentation checks pass. The Planner grade remains owed.
 
-H1q follows #208. Its [implementation record][request-accounting-record] closes
+H1q is draft [PR #209][request-accounting], after #208. Its
+[implementation record][request-accounting-record] closes
 per-request source custody without an ordinary sibling filing barrier and derives
 original request identities from the complete recorded generation. Pair opening,
 repair and terminal accounting remain owed. Malformed recall still needs a Spec
@@ -453,3 +454,4 @@ quality, decoder capacity, throughput or absence of paging waits.
 [output-checks]: https://github.com/toddwbucy/WeaverAgent/pull/208
 
 [request-accounting-record]: state-management-request-accounting-2026-10-21.md
+[request-accounting]: https://github.com/toddwbucy/WeaverAgent/pull/209
