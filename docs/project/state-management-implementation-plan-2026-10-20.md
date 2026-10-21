@@ -237,12 +237,15 @@ The numeric clock and absolute-bound registry supply the common pump's timing
 primitive. They do not replace the existing six source adapters or choose measured
 bounds. Serving author preparation supplies exhaustive kind/source attribution.
 It does not complete the caller census or pending-author halt account.
-The full harness suite passes 499 tests with 17 ignored instruments. The matching
+The full harness suite passes 503 tests with 17 ignored instruments. The matching
 normal-member fixture passes separately. Lint, formatting, lock and diff checks
-pass. Twenty-two compiled guard removals fail their intended assertions and one
-type-pin check rejects a copyable input grant. Exact source bytes are restored
-and all affected baselines pass. Independent review verifies the failure logs and
-restored source hashes. The fixtures prove the filing contracts with real
+pass. Twenty-two initial guard removals and two terminal-reply calibrations fail
+their intended assertions. A type-pin check rejects a copyable input grant. Exact
+source bytes are restored and all affected baselines pass. A complete component-failure
+reply remains held for its exact trace record through the peer close required by the
+SPU contract. Accepted and rejected language results still refuse peer loss. Independent
+review checks this ordering and the calibration evidence. The fixtures prove the filing
+contracts with real
 trace admission, Unix sockets and scripted classifier/state replies. They do not
 qualify production STE100, deployment limits or throughput.
 

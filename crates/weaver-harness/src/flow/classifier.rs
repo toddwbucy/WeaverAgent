@@ -158,10 +158,18 @@ impl<P: Ste100Port> Classifier<P> {
 
     /// Observe terminal descriptor status without reading another completion
     /// into the full result slot. A readable second reply stays with the port;
-    /// a peer close or transport error freezes the exact held account.
+    /// a peer close or transport error freezes the exact held account. A valid
+    /// ComponentFailed already explains terminal loss: PORT requires the peer
+    /// to close after sending it, and its exact reply must be recorded first.
     pub(crate) fn check_held_terminal(&mut self) -> Result<(), PortFailure> {
         self.ensure_active()?;
         if self.state != ClassifierState::ResultHeld {
+            return Ok(());
+        }
+        if matches!(
+            self.held.as_ref().map(|reply| &reply.result),
+            Some(Ste100Result::ComponentFailed { .. })
+        ) {
             return Ok(());
         }
         let fd = self.port.readiness();

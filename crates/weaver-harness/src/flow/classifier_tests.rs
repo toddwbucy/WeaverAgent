@@ -531,6 +531,57 @@ fn no_result_is_recorded_before_terminal_failure_and_rejection_is_not_failure() 
 }
 
 #[test]
+fn a_complete_component_failure_survives_the_required_peer_close_until_recorded() {
+    for code in [
+        Ste100ComponentCode::NoResult,
+        Ste100ComponentCode::Crashed,
+        Ste100ComponentCode::InvalidResult,
+        Ste100ComponentCode::TransportFailed,
+    ] {
+        for half_close in [false, true] {
+            let first = request(1, 0);
+            let mut reply = accepted(&first);
+            let detail = format!("original terminal cause: {code:?}");
+            reply.result = Ste100Result::ComponentFailed {
+                code,
+                detail: detail.clone(),
+            };
+            let close = if half_close {
+                ScriptStep::ShutdownWrite
+            } else {
+                ScriptStep::Close
+            };
+            let (mut classifier, mut peer) = guard([ScriptStep::Reply(reply.clone()), close]);
+            classifier.submit(first.clone()).unwrap();
+            peer.advance().unwrap();
+            assert_eq!(classifier.try_result(), Ok(ClassifierPoll::ResultHeld));
+            peer.advance().unwrap();
+
+            // The complete terminal reply is the cause. PORT's required close
+            // cannot replace it with a new crash or bypass its trace record.
+            assert_eq!(classifier.check_held_terminal(), Ok(()));
+            assert_eq!(classifier.state(), ClassifierState::ResultHeld);
+            assert_eq!(classifier.held(), Some(&reply));
+            assert_eq!(classifier.outstanding(), Some(&first));
+            assert!(classifier.failure().is_none());
+            let next = request(2, 1);
+            assert_eq!(classifier.submit(next.clone()), Ok(Submit::Busy(next)));
+            assert_eq!(peer.submitted(), vec![first.clone()]);
+
+            assert_eq!(classifier.recorded(recorded(&reply)), Ok(reply));
+            assert_eq!(classifier.state(), ClassifierState::Failed);
+            let failure = classifier.failure().unwrap();
+            assert_eq!(failure.kind, PortFailureKind::Component(code));
+            assert_eq!(failure.detail, detail);
+            assert_eq!(classifier.outstanding(), Some(&first));
+            assert!(classifier.held().is_none());
+            assert!(classifier.submit(request(2, 1)).is_err());
+            assert_eq!(peer.submitted(), vec![first]);
+        }
+    }
+}
+
+#[test]
 fn unsolicited_results_fail_idle_and_held_without_erasing_the_account() {
     let first = request(1, 0);
     let reply = accepted(&first);
@@ -623,6 +674,31 @@ fn recording_itself_observes_peer_loss_before_releasing_the_held_result() {
         assert_eq!(classifier.try_result(), Ok(ClassifierPoll::ResultHeld));
         peer.advance().unwrap();
         // No transport call or try_result occurs between loss and release.
+        assert_eq!(
+            classifier.recorded(recorded(&reply)).unwrap_err().kind,
+            PortFailureKind::Component(Ste100ComponentCode::Crashed)
+        );
+        assert_eq!(classifier.state(), ClassifierState::Failed);
+        assert_eq!(classifier.held(), Some(&reply));
+        assert_eq!(classifier.outstanding(), Some(&first));
+    }
+}
+
+#[test]
+fn a_language_rejection_cannot_release_after_peer_loss() {
+    for terminal in [ScriptStep::Close, ScriptStep::ShutdownWrite] {
+        let first = request(1, 0);
+        let mut reply = accepted(&first);
+        reply.result = Ste100Result::NotSte100 {
+            code: Ste100DefectCode::NonSte100,
+            detail: "correct language rejection".into(),
+            spans: vec![span(5, 10)],
+        };
+        let (mut classifier, mut peer) = guard([ScriptStep::Reply(reply.clone()), terminal]);
+        classifier.submit(first.clone()).unwrap();
+        peer.advance().unwrap();
+        assert_eq!(classifier.try_result(), Ok(ClassifierPoll::ResultHeld));
+        peer.advance().unwrap();
         assert_eq!(
             classifier.recorded(recorded(&reply)).unwrap_err().kind,
             PortFailureKind::Component(Ste100ComponentCode::Crashed)

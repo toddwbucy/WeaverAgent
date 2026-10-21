@@ -458,6 +458,76 @@ impl Fixture {
         panic!("filing request did not reach real socket");
     }
 
+    fn until_classifier_request(&mut self) -> s::Ste100Request {
+        for _ in 0..128 {
+            self.transport().unwrap();
+            self.advance().unwrap();
+            let requests = self.classifier.submitted();
+            if let Some(request) = requests.first() {
+                return request.clone();
+            }
+        }
+        panic!("classifier request did not reach its port");
+    }
+
+    fn fill_trace_capacity(&mut self) -> String {
+        let large = "x".repeat(32768);
+        for _ in 0..ORDINARY_CAPACITY + 64 {
+            let now = self.time();
+            let event = self
+                .author
+                .prepare(
+                    &authored(
+                        Kind::ModelMeasurement,
+                        AuthoredSource::Runtime,
+                        Payload::ModelMeasurement(
+                            serde_json::value::to_raw_value(&serde_json::json!({"fixture":large}))
+                                .unwrap(),
+                        ),
+                        true,
+                    ),
+                    now,
+                    1,
+                )
+                .unwrap();
+            match self.barrier.submit_with_clock(
+                event,
+                RecordPurpose::Observation,
+                &mut self.inbox,
+                &mut self.budget,
+                &mut || Ok(now),
+            ) {
+                RecordProgress::Recorded { .. } => {}
+                RecordProgress::Pending => {
+                    return serde_json::to_string(self.barrier.pending().unwrap()).unwrap();
+                }
+                other => panic!(
+                    "fill trace: {other:?}, failure: {:?}",
+                    self.barrier.failure()
+                ),
+            }
+        }
+        panic!("bounded fixture did not reach real trace capacity");
+    }
+
+    fn resume_external_ticket(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let now = self.time();
+            match self
+                .barrier
+                .resume_with_clock(&mut self.inbox, &mut self.budget, &mut || Ok(now))
+            {
+                RecordProgress::Recorded { .. } => return,
+                RecordProgress::Pending => {
+                    assert!(Instant::now() < deadline);
+                    std::thread::yield_now();
+                }
+                other => panic!("pending author: {other:?}"),
+            }
+        }
+    }
+
     fn records(&self) -> Vec<serde_json::Value> {
         self.barrier
             .recorder()
@@ -827,6 +897,141 @@ fn classifier_loss_with_a_held_acceptance_stops_before_any_file_request() {
             record["payload"]["phase"] == "filed" || record["payload"]["phase"] == "accepted"
         }));
     }
+}
+
+fn assert_recorded_component_failure(
+    fx: &mut Fixture,
+    source: &SourceBlockId,
+    reply: &s::Ste100Reply,
+    failure: &FlowFailure,
+) {
+    assert_eq!(failure.point, "classifier");
+    assert_eq!(fx.flow.failure(), Some(failure));
+    let s::Ste100Result::ComponentFailed { code, detail } = &reply.result else {
+        panic!("component failure fixture");
+    };
+    let port_failure = fx.flow.classifier().failure().unwrap();
+    assert_eq!(
+        port_failure.kind,
+        crate::flow::classifier::PortFailureKind::Component(*code)
+    );
+    assert_eq!(&port_failure.detail, detail);
+    let records = fx.records();
+    let results = records
+        .iter()
+        .filter(|record| record["kind"] == "ste100.result")
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["payload"], serde_json::to_value(reply).unwrap());
+    assert!(fx.budget.is_frozen());
+    assert_eq!(fx.budget.gauges().0, 1);
+    assert!(fx.barrier.recorder().tap_stopped());
+    let facts = fx.flow.ledger().facts().collect::<Vec<_>>();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].source, source);
+    assert_eq!(facts[0].state, LedgerState::AwaitingClassification);
+    assert_eq!(
+        fx.flow.classifier().outstanding().unwrap().request_id,
+        reply.request_id
+    );
+    fx.collect_requests();
+    assert!(fx.requests.is_empty());
+    assert!(!records.iter().any(|record| {
+        matches!(
+            record["payload"]["phase"].as_str(),
+            Some("accepted" | "file_started" | "filed" | "correctly_rejected")
+        )
+    }));
+    let record_count = records.len();
+    assert_eq!(fx.advance().unwrap_err(), *failure);
+    assert_eq!(fx.transport().unwrap_err(), *failure);
+    assert_eq!(fx.records().len(), record_count);
+}
+
+#[test]
+fn complete_component_failure_is_recorded_before_halt_when_the_classifier_closes() {
+    for code in [
+        s::Ste100ComponentCode::Crashed,
+        s::Ste100ComponentCode::NoResult,
+        s::Ste100ComponentCode::InvalidResult,
+        s::Ste100ComponentCode::TransportFailed,
+    ] {
+        for half_close in [false, true] {
+            let mut fx = Fixture::new(4);
+            let source = fx.admit(&["Read retained."]).remove(0);
+            let request = fx.until_classifier_request();
+            let mut reply = accepted(&request);
+            reply.result = s::Ste100Result::ComponentFailed {
+                code,
+                detail: format!("fixture terminal result {code:?}"),
+            };
+            fx.classifier.push(ScriptStep::Reply(reply.clone()));
+            assert!(fx.classifier.advance().unwrap());
+            fx.classifier.push(if half_close {
+                ScriptStep::ShutdownWrite
+            } else {
+                ScriptStep::Close
+            });
+            assert!(fx.classifier.advance().unwrap());
+            fx.transport().unwrap();
+            assert_eq!(fx.flow.classifier().held(), Some(&reply));
+            let failure = (0..128)
+                .find_map(|_| {
+                    fx.transport().unwrap();
+                    fx.advance().err()
+                })
+                .expect("recorded terminal reply must halt the flow");
+            assert_recorded_component_failure(&mut fx, &source, &reply, &failure);
+        }
+    }
+}
+
+#[test]
+fn trace_pressure_keeps_terminal_classifier_reply_until_its_exact_record_after_close() {
+    let mut fx = Fixture::new(4);
+    let source = fx.admit(&["Read retained."]).remove(0);
+    let request = fx.until_classifier_request();
+    let pending = fx.fill_trace_capacity();
+    let mut reply = accepted(&request);
+    reply.result = s::Ste100Result::ComponentFailed {
+        code: s::Ste100ComponentCode::NoResult,
+        detail: "fixture reported no_result before closing".into(),
+    };
+    fx.classifier.push(ScriptStep::Reply(reply.clone()));
+    assert!(fx.classifier.advance().unwrap());
+    fx.classifier.push(ScriptStep::Close);
+    assert!(fx.classifier.advance().unwrap());
+    fx.transport().unwrap();
+    let charge = fx.budget.gauges();
+    for _ in 0..4 {
+        fx.transport().unwrap();
+        assert_eq!(fx.advance().unwrap(), Advance::Pending);
+        assert_eq!(fx.flow.classifier().held(), Some(&reply));
+        assert!(fx.flow.failure().is_none());
+        assert_eq!(fx.budget.gauges(), charge);
+        assert_eq!(
+            serde_json::to_string(fx.barrier.pending().unwrap()).unwrap(),
+            pending
+        );
+        assert!(
+            !fx.records()
+                .iter()
+                .any(|record| record["kind"] == "ste100.result")
+        );
+        fx.collect_requests();
+        assert!(fx.requests.is_empty());
+    }
+    let reader = fx.start_drain();
+    fx.resume_external_ticket();
+    let failure = (0..128)
+        .find_map(|_| {
+            fx.transport().unwrap();
+            fx.advance().err()
+        })
+        .expect("recorded terminal reply must halt after trace capacity returns");
+    assert_recorded_component_failure(&mut fx, &source, &reply, &failure);
+    drop(fx);
+    reader.join().unwrap();
 }
 
 #[test]
