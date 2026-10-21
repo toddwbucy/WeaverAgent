@@ -1,5 +1,9 @@
 use super::*;
 
+pub(super) mod process;
+
+pub(super) mod timing;
+
 #[test]
 fn observed_reply_bytes_match_the_shared_canonical_codec() {
     let common = Common {

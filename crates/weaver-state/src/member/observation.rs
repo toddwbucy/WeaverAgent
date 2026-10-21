@@ -82,11 +82,46 @@ impl OperationSample {
         operation: StateOperation,
         metrics: &mut impl Metrics,
     ) -> io::Result<Self> {
+        Self::begin_with_start(operation_id, request_id, operation, None, metrics)
+    }
+
+    /// Keep the timestamp sampled before the ordinary request's preparsing.
+    /// Snapshot resource counters must precede its own start timestamp instead.
+    pub(super) fn begin_at(
+        operation_id: DecimalU64,
+        request_id: DecimalU64,
+        operation: StateOperation,
+        began_ns: DecimalU64,
+    ) -> io::Result<Self> {
+        if operation == StateOperation::Snapshot {
+            return Err(invalid(
+                "snapshot needs counters before its start timestamp",
+            ));
+        }
+        Self::begin_with_start(
+            operation_id,
+            request_id,
+            operation,
+            Some(began_ns),
+            &mut Kernel,
+        )
+    }
+
+    fn begin_with_start(
+        operation_id: DecimalU64,
+        request_id: DecimalU64,
+        operation: StateOperation,
+        received_ns: Option<DecimalU64>,
+        metrics: &mut impl Metrics,
+    ) -> io::Result<Self> {
         if operation_id.0 == 0 || request_id.0 == 0 {
             return Err(invalid("zero operation or request ID"));
         }
         let before = (operation == StateOperation::Snapshot).then(|| metrics.snapshot());
-        let began_ns = monotonic_ns()?;
+        let began_ns = match received_ns {
+            Some(received_ns) => received_ns,
+            None => monotonic_ns()?,
+        };
         let mut phases = Vec::new();
         phases.try_reserve_exact(6).map_err(io::Error::other)?;
         Ok(Self {

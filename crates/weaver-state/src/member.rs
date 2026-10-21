@@ -20,7 +20,7 @@ mod tests;
 use capture::Capture;
 use channel::{Channel, invalid};
 pub(crate) use entry::dispatch;
-use observation::{OperationSample, sample_member_identity};
+use observation::{OperationSample, monotonic_ns, sample_member_identity};
 use paging::Pages;
 use room::Room;
 
@@ -130,6 +130,12 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
         let encoded = encoded?;
         sample.phase_end(PhaseName::Encode)?;
         let observation = sample.finish(None, None)?;
+        #[cfg(test)]
+        tests::process::before_record_observation(
+            &mut session.store,
+            source.as_ref(),
+            &observation,
+        )?;
         session
             .store
             .record_observation(&StoredOperationObservation {
@@ -361,8 +367,16 @@ fn read_fault(error: ReadFault) -> io::Result<StateControlAnswer> {
 }
 
 fn sampled_request(line: &[u8], operation_id: u64) -> io::Result<(OperationSample, StateFrame)> {
+    let received_ns = monotonic_ns()?;
     let (request_id, operation) = peek_operation(line)?;
-    let mut sample = OperationSample::begin(operation_id.into(), request_id, operation)?;
+    // Ordinary operations include the full size-dependent hint parse. Snapshot
+    // sampling retains its required counters-before-clock order. Its parsing
+    // interval is the separate Spec 09 timing conflict recorded in the PR.
+    let mut sample = if operation == StateOperation::Snapshot {
+        OperationSample::begin(operation_id.into(), request_id, operation)?
+    } else {
+        OperationSample::begin_at(operation_id.into(), request_id, operation, received_ns)?
+    };
     sample.phase_begin(PhaseName::Validate)?;
     let request =
         decode_state_line(line, FrameDirection::Request).map_err(|e| invalid(e.to_string()))?;
@@ -376,6 +390,8 @@ fn sampled_request(line: &[u8], operation_id: u64) -> io::Result<(OperationSampl
 /// This hint decides only whether to sample lifecycle resources. The strict floor
 /// decoder below remains the sole authority for all request shape and identity.
 fn peek_operation(line: &[u8]) -> io::Result<(DecimalU64, StateOperation)> {
+    #[cfg(test)]
+    tests::timing::before_peek();
     let fields: BTreeMap<String, Box<RawValue>> =
         serde_json::from_slice(line).map_err(|e| invalid(e.to_string()))?;
     let request = fields
