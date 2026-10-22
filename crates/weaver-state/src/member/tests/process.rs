@@ -87,11 +87,14 @@ fn metadata_failure_child() {
     let stream = unsafe { UnixStream::from_raw_fd(3) };
     let mut channel = Channel::new(stream).unwrap();
     let mode = std::env::var(CHILD_MODE).unwrap();
-    assert!(matches!(mode.as_str(), "metadata" | "timing"));
-    if mode == "timing" {
-        super::timing::enable();
-    } else {
+    assert!(matches!(
+        mode.as_str(),
+        "metadata" | "timing" | "oversized-control"
+    ));
+    if mode == "metadata" {
         INJECT_AFTER_COMMIT.with(|armed| armed.set(true));
+    } else {
+        super::timing::enable();
     }
     let result = run(&mut channel, &room, image);
     if mode == "metadata" {
@@ -108,7 +111,10 @@ fn metadata_failure_child() {
         );
     } else {
         result.unwrap();
-        assert_eq!(OBSERVATIONS_CHECKED.with(Cell::get), 2);
+        assert_eq!(
+            OBSERVATIONS_CHECKED.with(Cell::get),
+            if mode == "oversized-control" { 4 } else { 2 }
+        );
     }
     drop(channel);
     room.clear_remnants().unwrap();
@@ -315,6 +321,99 @@ fn serving_snapshot_and_preflight_refusal_finish_after_real_payload_encoding() {
             );
         }
     }
+    peer.get_ref().shutdown(std::net::Shutdown::Write).unwrap();
+    let mut after = [0; 1];
+    assert_eq!(peer.read(&mut after).unwrap(), 0);
+    fixture.finish();
+}
+
+#[test]
+fn serving_oversized_position_returns_answer_too_large_and_keeps_the_read_cursor() {
+    fn exchange(peer: &mut BufReader<UnixStream>, request: &StateFrame) -> StateFrame {
+        let bytes = encode_state_line(request, FrameDirection::Request).unwrap();
+        assert!(bytes.len() <= STATE_REQUEST_LINE_BOUND);
+        peer.get_mut().write_all(&bytes).unwrap();
+        let mut answer = Vec::new();
+        assert!(
+            peer.read_until(b'\n', &mut answer).unwrap() > 0,
+            "run closed instead of publishing its control-answer fallback"
+        );
+        let answer = decode_state_line(&answer, FrameDirection::Response).unwrap();
+        answer
+            .validate_response_to(request, request.common().request_id)
+            .unwrap();
+        answer
+    }
+
+    let (mut fixture, mut peer, seed) = launch("oversized-control");
+    let mut filing = fixtures::statement(&seed, 1, "Read committed.");
+    // Turn identities are opaque. This valid filing fits the 8 MiB request
+    // allowance, and its Filed receipt carries only the small block identity.
+    // Position must later encode the retained turn under the 1 MiB answer bound.
+    filing.source.turn = Some("t".repeat(STATE_ANSWER_LINE_BOUND));
+    assert!(matches!(
+        exchange(
+            &mut peer,
+            &StateFrame::File {
+                common: fixtures::common(2),
+                filing,
+            },
+        ),
+        StateFrame::Filed { .. }
+    ));
+
+    let answer = exchange(
+        &mut peer,
+        &StateFrame::Control {
+            common: fixtures::common(3),
+            frame: StateControl::Read {
+                selector: ReadSelector::SystemPrompt {},
+            },
+        },
+    );
+    let StateFrame::ControlAnswer {
+        frame: StateControlAnswer::ReadPage(page),
+        ..
+    } = answer
+    else {
+        panic!("the prompt read must acquire a cursor");
+    };
+    assert!(page.done);
+    assert!(!page.decode_octets(1_000_000.into()).unwrap().is_empty());
+
+    assert!(matches!(
+        exchange(
+            &mut peer,
+            &StateFrame::Control {
+                common: fixtures::common(4),
+                frame: StateControl::Position {},
+            },
+        ),
+        StateFrame::ControlAnswer {
+            frame: StateControlAnswer::ControlRefused {
+                code: ControlRefusalCode::Read(ReadRefusalCode::AnswerTooLarge),
+                ..
+            },
+            ..
+        }
+    ));
+    // The unrelated control refusal may roll back an unpublished page, but
+    // must not discard the previously acquired cursor or terminate the session.
+    assert!(matches!(
+        exchange(
+            &mut peer,
+            &StateFrame::Control {
+                common: fixtures::common(5),
+                frame: StateControl::Release {
+                    snapshot_id: page.snapshot_id,
+                },
+            },
+        ),
+        StateFrame::ControlAnswer {
+            frame: StateControlAnswer::Released { snapshot_id },
+            ..
+        } if snapshot_id == page.snapshot_id
+    ));
     peer.get_ref().shutdown(std::net::Shutdown::Write).unwrap();
     let mut after = [0; 1];
     assert_eq!(peer.read(&mut after).unwrap(), 0);
