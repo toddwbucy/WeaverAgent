@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #235
+**Landing PR:** #241
 
-**Version:** 0.5 **Date filed:** 2026-10-21 **Document ID:**
+**Version:** 0.6 **Date filed:** 2026-10-21 **Document ID:**
 weaver-harness-spu-ste100-contract **Parent:** weaver-agent-PRD, invariant 5.3
 **Editorial:** Per the Working Rules.
 
@@ -82,6 +82,13 @@ representation and correlation before using it. Acceptance is a qualified
 language/binding judgment, not a claim of truth, safety or authorization. The checker
 does not know whether the partition selected that source for state. [CLASS-2, CLASS-4,
 STORE-2, STORE-3, TAP-1]
+
+Each accepted Text binding has one or more nouns. An Accepted reply with no noun for
+a binding is a malformed result and follows component failure, not an invented
+accepted recall request. A valid compound or conditional binding can instead violate
+the recall operation's narrower shape. Spec 02 RECALL-REFUSAL belongs to the harness
+and does not change the checker's grammar or authorize a fabricated non_ste100 result.
+[CLASS-2, CLASS-8, CLASS-9, READ-3]
 
 For a template, acceptance means that every substitution from its declared classes
 satisfies the checked grammar. It is not sampled approval of a few example expansions

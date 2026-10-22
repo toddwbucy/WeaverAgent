@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #235
+**Landing PR:** #241
 
-**Version:** 0.15 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
+**Version:** 0.16 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -590,11 +590,11 @@ event is repair_exhausted. [CLASS-9, COST-5, FALS-2]
 
 | Repair state | Event | Action and next state |
 | --- | --- | --- |
-| CheckingGeneration | All Text accepted | Return EffectiveEmission to the caller |
-| CheckingGeneration | One or more correct defects | Hold actions, enqueue sources, NeedRestatement |
+| CheckingGeneration | All Text accepted | Complete required RECALL-REFUSAL accounting, then return EffectiveEmission to the caller |
+| CheckingGeneration | One or more correct defects | Complete required RECALL-REFUSAL accounting, hold actions, enqueue sources, NeedRestatement |
 | NeedRestatement | Request recorded | Return RestatementRequest, AwaitingCorrection |
 | AwaitingCorrection | At least one Text block, all correction Text accepted, no attempted calls | Resolve that source, advance queue or release held generation |
-| AwaitingCorrection | Correct defect, correction attempts a call, or empty correction under EMPTY-CORRECTION | Record defect/protocol refusal, increment failed_corrections once |
+| AwaitingCorrection | Correct defect, correction attempts a call, or empty correction under EMPTY-CORRECTION | Complete required defect, refusal and pair accounting, then increment failed_corrections once |
 | AwaitingCorrection | Failed corrections below cap | NeedRestatement for the unresolved source |
 | AwaitingCorrection | Cap reached | Record repair_exhausted, account conforming requests without dispatch, return RepairExhausted, no successful answer grant |
 | Any repair state | Stop or operator leave | Cancel ledger, retain dispositions, no successful answer grant |
@@ -635,6 +635,12 @@ the existing OUTPUT-UNIT and DECISION-BARRIER behavior.
 
 Every conforming request in a forbidden correction pass still takes Spec 05's start and
 terminal path, ending not_dispatched/pass_purpose. This includes a valid recall binding.
+An accepted recall binding with invalid operation shape is also an attempted call.
+Record correction_call once for that correction pass and each RECALL-REFUSAL separately
+for its identified invalid request. Complete all required refusal and pair accounting
+before incrementing failed_corrections once or retiring that pass's request account.
+Several invalid requests never consume several attempts. [CLASS-9, CLASS-10, PAIR-1]
+
 Correctly rejected or unassociated call blocks have no accepted send and do not acquire
 a pair by inference. On repair exhaustion, conforming requests held from the original
 pass end not_dispatched/repair_exhausted. Discarding their proposed execution does not
@@ -642,18 +648,18 @@ discard their ledger account. [CLASS-9, CLASS-10, PAIR-1, PAIR-4]
 
 **EFFECTIVE-EMISSION.** After repair, expose a private EffectiveEmission to the caller.
 Its fields are source:SourcePosition, finish:weaver_types::Finish,
-statements:Vec<StatementRef>, requests:Vec<PairStarted>, text:String and
-attempted_call:bool. source and finish are the original generation's. requests contains
-the pending model request records in Spec 05's dispatch order, not receipts or
-permission to execute them. Review requests are never model records. text joins the
-effective statement spans with a single LF. attempted_call is true if the original parse
-found ToolCall or UnrecoveredCall, or the effective bindings request recall. Replace
-each rejected original Text in that logical list with its successful correction's
-bindings, in correction-block and binding order. Accepted original siblings keep their
-positions. A rejected correction contributes nothing to the list. Physical argument
-Messages and trace events are never edited by this substitution. For a held external
-call, the replacement still meets TOOL-STATEMENT's one-statement rule. [CLASS-9,
-CLASS-10, STORE-3, OUT-1]
+statements:Vec<StatementRef>, requests:Vec<PairStarted>, text:String,
+attempted_call:bool and account:RepairAccount. source and finish are the original
+generation's. requests contains the pending model request records in Spec 05's dispatch
+order, not receipts or permission to execute them. Review requests are never model
+records. text joins the effective statement spans with a single LF. attempted_call is
+true if the original parse found ToolCall or UnrecoveredCall, or the effective bindings
+request recall. Replace each rejected original Text in that logical list with its
+successful correction's bindings, in correction-block and binding order. Accepted
+original siblings keep their positions. A rejected correction contributes nothing to the
+list. Physical argument Messages and trace events are never edited by this substitution.
+For a held external call, the replacement still meets TOOL-STATEMENT's one-statement
+rule. [CLASS-9, CLASS-10, STORE-3, OUT-1]
 
 Text-only plan or summary consumers use this complete logical list, including
 corrections from later emissions. They cannot select convenient accepted sentences from
@@ -663,14 +669,29 @@ corrected text order. Reason: repair changes what may be acted on without rewrit
 record or forcing a valid correction back into its old source ID. [CLASS-9, PLAN-1,
 STRAT-2, FLOW-3]
 
+RepairAccount is the private owner of original and correction-pass evidence under their
+own generation identities. Its inspection view is
+recall_refusals:Vec<RecordedRecallRefusal>, with each entry
+{refusal:RecallRequestRefusal,sequence:DecimalU64}. Only the owner can construct an
+entry after its exact RECALL-REFUSAL event is Recorded. sequence is that event's trace
+sequence. The view preserves record order across the original and correction passes and
+confers no constructor or mutable access. EffectiveEmission exposes that retained
+account alongside its valid request list. A refused CallId is absent from requests,
+while its accepted effective statement remains in statements and text. Failed
+corrections still contribute no effective statements. The refusal account grants no
+dispatch or model-facing result and chooses no subsequent workflow or final-answer
+policy. [CLASS-9, CLASS-10, OUT-1, FLOW-3]
+
 **REPAIR-REFUSAL.** RepairExhausted is {source:SourceBlockId,
-failed_corrections:DecimalU64,retry_cap:DecimalU64}. The ledger records state.flow phase
-repair_exhausted before returning it. This is a conformance outcome, not component
-failure. It grants no successful response or action. The caller uses the existing
-stopped/refused surface, with run and turn only when answering an open turn. The service
-remains available for another input. Lifecycle callers retain their existing earlier
-deadline. How they schedule correction passes belongs to the loop. [CLASS-9, COST-5,
-FALS-2, R20-12]
+failed_corrections:DecimalU64,retry_cap:DecimalU64,account:RepairAccount}. Its account
+retains the same RecordedRecallRefusal view and original/correction evidence defined by
+EFFECTIVE-EMISSION. Exhaustion does not discard that account. The ledger records
+state.flow phase repair_exhausted before returning it. This is a conformance outcome,
+not component failure. It grants no successful response or action. The caller uses the
+existing stopped/refused surface, with run and turn only when answering an open turn.
+The service remains available for another input. Lifecycle callers retain their existing
+earlier deadline. How they schedule correction passes belongs to the loop. [CLASS-9,
+COST-5, FALS-2, R20-12]
 
 **TOOL-STATEMENT.** Keep Message and ToolCall unchanged. For a recovered ToolCall, the
 immediately preceding Text block supplies its STE100 request statement. Require one
@@ -701,9 +722,10 @@ no socket, clock or store. The selected request statement still enters state by 
 and file seam. Reason: READ-3 fixes the action and lets the model supply only the
 subject, while R10 preserves other classification consumers. [READ-1, READ-3, SEAM-3]
 
-The internal call uses the pair amendment's send/return accounting and the store's
-bounded read result. A correct bad recall shape or refused read becomes that call's
-typed refusal, never an empty successful history. Its result can be placed only in a
+A conforming internal call uses the pair amendment's send/return accounting and the
+store's bounded read result. A refused read completes that valid pair with its typed
+refusal, never an empty successful history. An invalid operation shape instead follows
+RECALL-REFUSAL below before pair creation. A valid pair's result can be placed only in a
 later decode round, through the existing tool-result grant. It supplements the automatic
 retrieval floor. This adds one framework internal member and amends the calculator-only
 cap explicitly in section 8. It does not advertise a callable schema or enlarge the
@@ -713,6 +735,54 @@ The exact constructor, borrow and refusal representations are INTERNAL-QUERY and
 HARNESS-RECALL in the [internal amendment][internal]. That amendment also names the
 harness dependency-set change and its instruments. It carries no store implementation
 into the library. [READ-3, SEAM-3]
+
+**RECALL-REFUSAL.** An accepted recall Binding with more than one noun or a
+non-null governing condition is a correct operation refusal. Reserve its CallId in
+PAIR-IDENTITY's enumeration and retain its original Text index as call_block and its
+exact StatementRef. Author RefusalRecord::RecallRequest, defined by
+TYPES-RECALL-REFUSAL, before releasing the disposition. Do not choose or concatenate a
+subject, invoke the query helper, read state, open a pair or grant a ToolResult for this
+request. No empty-history success or not_dispatched cause represents it. Its selected
+accepted Text still files normally, and unrelated conforming requests keep their
+identities and dispositions. Reason: the language result is valid, but it supplies no
+single unconditional noun-history operation. [READ-3, CLASS-9, CLASS-10, PAIR-1]
+
+This choice supplies trace and caller evidence only. It gives the model no ToolResult
+or other new feedback for this request, and attempted_call remains true. A later model
+round may repeat the same malformed recall until the caller's existing round bound.
+This refusal does not itself request a restatement or choose another workflow. Providing
+a stored pair and model-facing refusal instead requires the alternative PairRequest
+election, not an invented result grant. [READ-3, CLASS-9, OUT-1, STRAT-2]
+
+An Accepted Text reply containing any binding with zero nouns violates MODEL and BINDING
+before a checked generation exists. PORT treats it as invalid_result/component failure,
+not RecallRequest refusal. A correctly reported non_ste100 result instead follows
+ordinary repair. Neither case invents an accepted StatementRef or recall CallId from
+rejected or unclassified text. This rule does not change the checker's grammar.
+[CLASS-2, CLASS-8]
+
+Use kind refusal, channel internal, origin runtime and subsystem harness, on the same
+open turn. causal_parent names the message.assistant sequence containing the referenced
+checked statement. Record the exact original CallId and associated StatementRef as
+separate identities. Never rebuild one from the other, substitute a guessed original
+recall for a correction's attempted recall, or renumber later requests after a refusal.
+A repaired external sibling keeps its original CallId and corrected StatementRef.
+[FLOW-3, CLASS-9, PAIR-1, STORE-5]
+
+| Refusal state | Event | Required disposition |
+| --- | --- | --- |
+| Checked invalid operation | Construct exact identity-bearing refusal | Retain the refusal and its checked evidence before fallible author admission |
+| Awaiting author | Capacity or recoverable lifecycle wait | Retain the same event, source and original Decision bound |
+| Awaiting author | Recorded | Preserve the exact receipt before other fallible work, release the typed operation refusal once |
+| Any occupied state | Stop or leave | Revoke successful continuation, retain the required refusal account under existing lifecycle permissions and bounds |
+| Any occupied state | Component failure or expired bound | Follow the existing halt account, with no successful operation result or invented pair |
+
+Cancellation does not erase an admitted event or a Recorded receipt. Before Releasing,
+settle retained required refusal work while ordinary authoring remains permitted. A
+component halt accounts unfinished work under HARNESS-HALT. This rule adds no teardown
+reserve, permission to author in Closed or fresh wait interval. A correct refusal alone
+never latches component failure. The caller chooses later work through existing ports.
+[CLASS-8, FLOW-3, FLOW-4, FLOW-5]
 
 ## 7. What is enforced, and by which instrument
 
@@ -748,6 +818,7 @@ a serving declaration. [CLASS-4, CLASS-7, PROMPT-2, FLOW-7]
 | DECISION-BARRIER, REPAIR | Multiple-block generation, delayed rejection, repair cap, stop/leave and fake-clock cases | Deliver success early, dispatch before acceptance, omit cap evidence or halt on correct rejection |
 | EMPTY-CORRECTION | Requested empty correction below and at cap, held refusal recording, empty original, empty Text and call-only correction fixtures | Resolve the rejected source with no text, count an attempt twice, continue before the refusal is recorded, fabricate a checker result or change the original-generation rule |
 | TOOL-STATEMENT, RECALL | Pair and read-port doubles, shell schema regression, real pure helper tests | Bind unrelated text, execute a correction call, register recall at gate or omit the internal return |
+| RECALL-REFUSAL | Mixed valid and invalid recall bindings, correction calls, cap, recorder pressure, stop/leave and zero-noun Accepted fixtures | Select a subject, open a pair, renumber a call, lose a corrected source, return before Recorded, count one correction twice or treat invalid classifier evidence as an operation refusal |
 | QUALIFICATION | Review of frozen protocol plus held-out qualification run | Accept a tuple whose thresholds were changed after its held-out results |
 
 Every behavioral invariant above must fail under the named removal or inversion. Type
@@ -803,10 +874,11 @@ SEAM-2]
 | C02-3 | HARNESS-CLASSIFY/CLOCK/PUMP add decision_wait, decision_bound and blocked_stage decision. Each result/receipt barrier has one absolute deadline, disarmed during decode or tool execution and never reset by partial traffic. |
 | C02-4 | FlowObservation adds repair_requested and repair_exhausted phases, failed_corrections and retry_cap only for those phases. Repair records require source_id. Other phases reject those fields. |
 | C02-5 | RefusalRecord gains ProtocolRepair {source_id,case,detail}, case correction_call, empty_correction, missing_tool_statement or ambiguous_tool_statement. These use kind refusal and authorize no filing or halt. EMPTY-CORRECTION defines the added case. TYPES-INPUT defines source_id for each case. |
+| C02-6 | TYPES-RECALL-REFUSAL adds the exact RecallRequestRefusal carrier. RECALL-REFUSAL accounts a valid binding with invalid recall shape before pair creation, preserving request identity and correction-attempt accounting. |
 
-The foundation port's logical request/reply shapes are unchanged. C02-1 through C02-5
-now have their named owning clauses in the assembled foundation. Spec 05 supplies inward
-pair accounting, and 07 shares the scheme's step:<local_id> condition spelling. The
+The foundation port's logical request/reply shapes are unchanged. C02-1 through C02-6
+have their named owning clauses in this set. Spec 05 supplies inward pair accounting,
+and 07 shares the scheme's step:<local_id> condition spelling. The
 final consumer and finding checks still assess those joined texts. This list is not a
 runtime-conformance claim. [CLASS-3, CLASS-9, PAIR-1, PLAN-3]
 
