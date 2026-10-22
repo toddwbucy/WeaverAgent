@@ -965,17 +965,17 @@ MARK-3, PERSIST-6]
 | --- | --- | --- |
 | Awaiting full result | Valid page, more pages remain | Hold bytes, author no recall, keep the original deadline |
 | Awaiting full result | Initial or later valid refusal | Keep its typed refusal, perform existing acquired-snapshot cleanup, author no recall |
-| Checking | Complete result matches the selector and source rules | Construct exactly one immutable Read or Boot record |
+| Checking | Complete result matches the selector and source rules, and HARNESS-READ has completed snapshot release | Construct exactly one immutable Read or Boot record |
 | Recording | CapacityPending | Retain that record and result, service the pump, do not requery, refile or rebuild an empty success |
-| Recording | Recorded | Finish existing snapshot cleanup, then expose the checked result or seat BootHead |
+| Recording | Recorded | Snapshot release is already complete under HARNESS-READ. Expose the checked result or seat BootHead |
 | Any read state | Malformed result, failed seam or applicable bound | Existing failure account and latch, no inferred successful recall |
 
 Recording retains the read's original deadline and the existing pump's stop/leave
-handling. A recorded result cannot be recorded a second time on cleanup or resume.
-Snapshot release remains HARNESS-READ's single acquired-cursor obligation. A valid empty
-result records an empty success with its real selector and snapshot ID. A refusal does
-not. This state table adds no clock or release exchange. [FLOW-3, FLOW-4, SEAM-3,
-CLASS-8]
+handling. A recorded result cannot be recorded a second time on resume. Snapshot release
+remains HARNESS-READ's single acquired-cursor obligation, completed before recall
+construction or recording for both Read and Boot. A valid empty result records an empty
+success with its real selector and snapshot ID. A refusal does not. This state table
+adds no clock or release exchange. [FLOW-3, FLOW-4, SEAM-3, CLASS-8]
 
 A pass certifies faithful provenance for the completed typed result and recording before
 its consumer. It does not certify selection quality, permit a metadata result to be
@@ -996,8 +996,8 @@ NonZeroU64 is std::num::NonZeroU64. ReadEntry is TYPES-READ's shared type. ReadF
 defined in flow/read.rs, is Refused {code:ReadRefusalCode, detail:String} or FlowFailed.
 The latter returns only after the common failure latch is set. Correct operation refusal
 preserves the exact store code and detail. It never becomes None or an empty successful
-vector. recall submits conversation with the positive bound, completes paging, records
-provenance and releases the snapshot before returning. session_shape uses the typed
+vector. recall submits conversation with the positive bound, completes paging and
+snapshot release, then records provenance before returning. session_shape uses the typed
 shape control. Both drive the common pump and its existing read deadline. Reason: the
 old public readers must have a concrete replacement, not leave each Rust caller to
 invent a failure convention. [SEAM-3, READ-1, READ-5, FLOW-4]
@@ -1147,7 +1147,7 @@ claim that a between-turn pause has zero elapsed cost is made. [COST-2, COST-4]
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
 | HARNESS-READ | Real member pagination and query-result trace checks | Place partial bytes, restart deadline per page, or file a recall |
-| HARNESS-RECALL | Every selector/result pair, null and populated plan snapshots, repeated prefixes, whole pairs, filtered ordinals, empty/refused reads and pending recorder fixtures | Walk metadata in another order, renumber bindings, deduplicate spans, invent a source for the seed, record a partial/refused read, expose before Recorded or author twice after a wake |
+| HARNESS-RECALL | Every selector/result pair, null and populated plan snapshots, repeated prefixes, whole pairs, filtered ordinals, empty/refused reads, held or failed release and pending recorder fixtures | Walk metadata in another order, renumber bindings, deduplicate spans, invent a source for the seed, record a partial/refused read or before Released, expose before Recorded or author twice after a wake |
 | HARNESS-MATERIAL | Filtered binding, whole-pair, current-result and stored-span fixtures plus private-constructor pins | Renumber a binding, omit an attached return, duplicate the live request or mint a live grant from a stored record |
 | HARNESS-SELECTION-INPUT | Explicit criterion and complete unit fixtures | Invent a default strategy or accept an incomplete unit |
 | HARNESS-MARKS | One input/task fixture, stop/leave rows, concurrent plan-operation and template-defect cases | Start generation before mark receipt, reuse an uncertain ID, skip input coverage or turn a correct defect into a halt |

@@ -516,10 +516,12 @@ comparison with the lifecycle frame. [PERSIST-4, TAP-3, COST-4]
 
 **TRACE-RECALL.** Add trace-owned serialize-only RecallRecord and
 Payload::RecallRecord. RecallRecord is externally tagged read or boot, with these
-fields in the declared order. Define local mirrors of the referenced floor types, not
-an internal crate dependency. Use TYPES-CANONICAL's compact typed rendering and exact
-DecimalU64 strings. Reason: one complete provenance shape must cover the already
-specified read results and boot evidence. [FLOW-3, SEAM-3, STORE-3, PERSIST-6]
+fields in the declared order. Reuse the trace's existing ReadSelector, SelectionRead,
+ContentRef, SpanRef, StatementRef, StepQueryRef and PlanRef types where those shapes are
+needed. Add only missing trace-owned shapes, with no internal crate dependency. Preserve
+the flat selector and snapshot_id fields below. Use TYPES-CANONICAL's compact typed
+rendering and exact DecimalU64 strings. Reason: one complete provenance shape must cover
+the specified read results and boot evidence. [FLOW-3, SEAM-3, STORE-3, PERSIST-6]
 
 | Type or variant | Fields in serialization order |
 | --- | --- |
