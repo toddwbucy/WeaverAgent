@@ -24,19 +24,22 @@ impl Drop for Child {
     }
 }
 
-fn high_copy(fd: RawFd) -> OwnedFd {
-    // SAFETY: duplicate a borrowed descriptor above the child's fixed slots.
-    let raw = unsafe { nix::libc::fcntl(fd, nix::libc::F_DUPFD_CLOEXEC, 100) };
-    assert!(raw >= 100);
+fn duplicate_above(fd: RawFd, minimum: RawFd) -> OwnedFd {
+    // SAFETY: duplicate a borrowed descriptor without replacing an owned slot.
+    let raw = unsafe { nix::libc::fcntl(fd, nix::libc::F_DUPFD_CLOEXEC, minimum) };
+    assert!(raw >= minimum);
     // SAFETY: the successful duplicate is owned by no other value.
     unsafe { OwnedFd::from_raw_fd(raw) }
 }
 
 #[test]
 fn no_engine_refuses_every_start_mode_without_answering_or_touching_holdings() {
-    for mode in ["legacy", "legacy-preload", "serving", "diagnostic", "seed"] {
+    for (mode, has_run_lock) in ["legacy", "legacy-preload", "serving", "diagnostic", "seed"]
+        .into_iter()
+        .flat_map(|mode| [true, false].map(|has_run_lock| (mode, has_run_lock)))
+    {
         let scratch = Scratch(std::env::temp_dir().join(format!(
-            "weaver-state-no-engine-{}-{mode}",
+            "weaver-state-no-engine-{}-{mode}-{has_run_lock}",
             std::process::id()
         )));
         std::fs::create_dir(&scratch.0).unwrap();
@@ -44,9 +47,13 @@ fn no_engine_refuses_every_start_mode_without_answering_or_touching_holdings() {
         std::fs::write(&sentinel, b"retained before startup").unwrap();
         let preload = scratch.0.join("preload.sock");
         let lock_file = std::fs::File::create(scratch.0.join("run.lock")).unwrap();
-        let lock = high_copy(lock_file.as_raw_fd());
+        let lock = duplicate_above(lock_file.as_raw_fd(), 100);
+        // Keep descriptor 9 occupied in the parent while std creates its exec
+        // status pipe. The child can then close that slot deliberately without
+        // accidentally closing the pipe used to report an exec failure.
+        let _reserved_fd9 = duplicate_above(lock_file.as_raw_fd(), 9);
         let (mut ours, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
-        let door = high_copy(theirs.as_raw_fd());
+        let door = duplicate_above(theirs.as_raw_fd(), 100);
         drop(theirs);
         let door_raw = door.as_raw_fd();
         let lock_raw = lock.as_raw_fd();
@@ -79,8 +86,18 @@ fn no_engine_refuses_every_start_mode_without_answering_or_touching_holdings() {
         // a legacy first load, and each dup2 clears CLOEXEC on its destination.
         unsafe {
             command.pre_exec(move || {
-                if nix::libc::dup2(door_raw, 3) == -1 || nix::libc::dup2(lock_raw, 9) == -1 {
+                if nix::libc::dup2(door_raw, 3) == -1 {
                     return Err(std::io::Error::last_os_error());
+                }
+                if has_run_lock {
+                    if nix::libc::dup2(lock_raw, 9) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                } else if nix::libc::close(9) == -1 {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() != Some(nix::libc::EBADF) {
+                        return Err(error);
+                    }
                 }
                 if nix::libc::close(4) == -1 {
                     let error = std::io::Error::last_os_error();
@@ -103,16 +120,20 @@ fn no_engine_refuses_every_start_mode_without_answering_or_touching_holdings() {
         };
         assert_eq!(status.code(), Some(1), "{mode}: refusal is not success");
         let log = std::fs::read_to_string(&log_path).unwrap();
-        let faults: Vec<serde_json::Value> = log
+        let records: Vec<serde_json::Value> = log
             .lines()
-            .map(|line| serde_json::from_str(line).expect("structured startup fault"))
+            .map(|line| serde_json::from_str(line).expect("structured startup record"))
             .collect();
-        assert_eq!(faults.len(), 1, "{mode}: {log}");
+        let mut expected = Vec::new();
+        if !has_run_lock {
+            expected.push(serde_json::json!({"state_notice":
+                "no run lock at descriptor 9: not started by admin's start step"}));
+        }
+        expected.push(serde_json::json!({"state_fault":
+            "StoreUnavailable(\"sqlite engine is not compiled into this binary\")"}));
         assert_eq!(
-            faults[0],
-            serde_json::json!({"state_fault":
-                "StoreUnavailable(\"sqlite engine is not compiled into this binary\")"}),
-            "{mode}"
+            records, expected,
+            "{mode}, run lock present={has_run_lock}: run-lock handling precedes refusal"
         );
         let mut stdout = Vec::new();
         child
