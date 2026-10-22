@@ -54,3 +54,25 @@ Logs, source hashes and mutation/restoration manifests are deposited under
 store. /tmp/weaver-146-evidence/gate is staging only. These are author checks, not
 the Planner's grade or production qualification. The PR is submitted as a draft.
 Only the operator merges; issue #146 and the coupled cutover remain open.
+
+## Leader-reap review follow-up
+
+Planner review 5609027238 graded both Implements rows conforms, with nine of ten
+protective mutations biting. G9 survived: changing only the production leader-reap
+wait to omit its delivery deadline had no behavioral test. The production argument
+was correct; the uncovered call path was the defect in the evidence.
+
+The leader-reap closure is now one private helper shared by run_in_home and a real
+child/socket regression. The fixture retains an actual OutOfOrder envelope, crosses
+the original deadline at the poll boundary and requires that exact refusal to remain
+unsent. It then requires DeliveryBound at the same bound. Its child cleanup is bounded
+also when a mutant causes an assertion failure. No new production interval, deadline
+ownership policy, outcome or wire case is introduced.
+
+The updated gate suite passed 85 tests with 56 inherited ignored cases. Strict
+all-target clippy, formatting, lock and diff checks passed. G9 changed the exact
+shared production forwarding call, compiled and failed the new assertion. Its
+byte-exact source restoration passed. Independent source review found no concrete
+defect. The 84-test and twelve-mutation results above belong to the earlier source.
+The review's other filed/batched findings retain their separate disposition in #146.
+Follow-up logs and source hashes are in the shared gate/reap evidence deposit.
