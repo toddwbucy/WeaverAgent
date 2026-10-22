@@ -135,6 +135,7 @@ impl RecordingContext {
         }
         if self.inspection.is_some()
             || self.marks.is_some()
+            || self.boot_pairs.is_some()
             || self.read.is_some()
             || self.measure.is_some()
             || self.member_capture.is_some()

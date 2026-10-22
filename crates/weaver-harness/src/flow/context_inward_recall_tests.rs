@@ -218,6 +218,10 @@ impl InwardFixture {
                     s::StateControl::Release { snapshot_id } => s::StateControlAnswer::Released {
                         snapshot_id: *snapshot_id,
                     },
+                    s::StateControl::Shape {} => s::StateControlAnswer::Shape(vec![]),
+                    s::StateControl::Grants {} => s::StateControlAnswer::Grants {
+                        surface: vec!["observed".into()],
+                    },
                     _ => panic!("inward emitted another control"),
                 }
             };
@@ -245,6 +249,38 @@ impl InwardFixture {
             self.pairs.answered[index] = true;
         }
         self.pairs.output.transport(TransportSource::State);
+    }
+    fn drain_statement(&mut self) {
+        for _ in 0..128 {
+            self.pairs.checker();
+            self.member();
+            let run = &mut self.pairs.output.input.run;
+            run.context.reduce_flow(&mut run.clock).unwrap();
+            if !run.context.flow.has_pending_record()
+                && run.context.flow.pending_check().is_none()
+                && run.context.flow.pending_control().is_none()
+                && run.context.flow.operation_completion().is_none()
+                && run.context.flow.state().outstanding().is_empty()
+                && run.context.flow.ledger().next_file().is_none()
+                && self.pairs.requests.iter().zip(&self.pairs.answered).any(|(request, answered)| {
+                    *answered && matches!(request, s::StateFrame::File { .. })
+                })
+            {
+                return;
+            }
+        }
+        panic!("the original selected statement did not finish its real filing");
+    }
+    fn settle_inspection(&mut self) {
+        for _ in 0..128 {
+            let run = &mut self.pairs.output.input.run;
+            let progress = run.context.advance_inspection(&mut ports(&mut run.clock)).unwrap();
+            self.member();
+            if progress == InspectionProgress::Complete {
+                return;
+            }
+        }
+        panic!("inspection did not settle");
     }
     fn until_control(&mut self, expected: HoldRead) {
         for _ in 0..512 {
@@ -1168,4 +1204,143 @@ fn inward_recall_recorder_pressure_keeps_one_ticket_before_terminal_filing() {
             .count(),
         1
     );
+}
+
+#[test]
+fn inspection_rejects_inward_batch_initial_between_legs_and_complete_until_take() {
+    for point in 0..4 {
+        let mut fx = InwardFixture::new(vec![text("Recall file.")]);
+        if point == 0 {
+            fx.drain_statement();
+        }
+        if point != 0 {
+            fx.begin(0);
+        }
+        match point {
+            0 => {}
+            1 => {
+                fx.held = HoldRead::Release;
+                fx.until_control(HoldRead::Release);
+            }
+            2 => assert!((0..512).any(|_| {
+                fx.step().unwrap();
+                let run = &fx.pairs.output.input.run;
+                run.context.read.is_none()
+                    && run.context.pair_work.as_ref().unwrap().inward.is_none()
+                    && fx.pairs.output.input.records(Kind::Recall).len() == 1
+            })),
+            3 => fx.complete(0),
+            _ => unreachable!(),
+        }
+        let request_count = fx.pairs.requests.len();
+        let turn = Some(weaver_trace::TurnRef(format!("blocked-inward-inspection-{point}")));
+        let run = &mut fx.pairs.output.input.run;
+        let outstanding: Vec<_> = run.context.flow.state().outstanding().iter().map(|item| item.common.request_id).collect();
+        let decision = run.context.deadlines.get(PumpDeadline::Decision);
+        let control = run.context.deadlines.get(PumpDeadline::StateControl);
+        assert!(run.context.pair_work.is_some());
+        if point != 1 {
+            assert!(run.context.read.is_none() && run.context.filing.is_none());
+            assert!(outstanding.is_empty());
+        }
+        let error = run.context.begin_inspection(InspectionKind::Grants, turn.clone(), &mut run.clock).unwrap_err();
+        assert_eq!(error.kind, InspectionKind::Grants);
+        assert_eq!(error.turn, turn);
+        assert_eq!(error.refusal, InspectionBeginRefusal::Busy);
+        assert!(error.failure.is_none());
+        assert!(run.context.inspection.is_none());
+        assert_eq!(run.context.flow.state().outstanding().iter().map(|item| item.common.request_id).collect::<Vec<_>>(), outstanding);
+        assert_eq!(run.context.deadlines.get(PumpDeadline::Decision), decision);
+        assert_eq!(run.context.deadlines.get(PumpDeadline::StateControl), control);
+        let mut byte = [0];
+        assert_eq!(run.state.read(&mut byte).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(fx.pairs.requests.len(), request_count);
+        fx.held = HoldRead::None;
+        if point == 0 {
+            fx.begin(0);
+        }
+        fx.complete(0);
+        let run = &mut fx.pairs.output.input.run;
+        let pair = run.context.completed_pair(&fx.calls[0], &mut run.clock).unwrap().unwrap();
+        assert_eq!(&pair.ended().call_id, &fx.calls[0]);
+        assert_eq!(pair.ended().outcome, Some(ToolOutcome::Result { content: String::from_utf8(fx.raw.clone()).unwrap() }));
+        let effective = run.context.take_executed_pairs(&mut run.clock).unwrap().unwrap();
+        assert_eq!(effective.requests().iter().map(|request| request.call_id.clone()).collect::<Vec<_>>(), fx.calls);
+        assert!(run.context.pair_work.is_none());
+        run.context.begin_inspection(InspectionKind::Grants, None, &mut run.clock).unwrap();
+        fx.settle_inspection();
+        let run = &mut fx.pairs.output.input.run;
+        let Some(InspectionCompletion::Grants { surface, evidence }) = run.context.take_inspection(&mut run.clock).unwrap() else {
+            panic!("inspection did not start after inward batch transfer")
+        };
+        assert_eq!(surface, vec!["observed"]);
+        assert_eq!(evidence.request(), &s::StateControl::Grants {});
+        assert_eq!(fx.pairs.output.input.records(Kind::Recall).len(), 1);
+        assert_eq!(fx.pairs.output.input.records(Kind::ToolCallCompleted).len(), 1);
+    }
+}
+
+#[test]
+fn inspection_returns_exact_inward_emission_while_pending_or_complete() {
+    for completed in [false, true] {
+        let mut pairs = PairFixture::new();
+        let original = pairs.generation(vec![text("Recall file.")]);
+        let effective = super::super::repair::effective_fixture(original);
+        let calls: Vec<_> = effective.requests().iter().map(|request| request.call_id.clone()).collect();
+        let expected_requests = effective.requests().to_vec();
+        let mut fx = InwardFixture {
+            pairs,
+            calls,
+            raw: EMPTY.to_vec(),
+            held: HoldRead::None,
+            hold_pair: Hold::None,
+            refusal: Refuse::No,
+        };
+        fx.drain_statement();
+        let run = &mut fx.pairs.output.input.run;
+        let decision = run.context.deadlines.get(PumpDeadline::Decision);
+        run.context.begin_inspection(InspectionKind::Shape, None, &mut run.clock).unwrap();
+        let inspection_id = run.context.flow.state().outstanding()[0].common.request_id;
+        if completed {
+            fx.settle_inspection();
+        }
+        let count = fx.pairs.requests.len();
+        let run = &mut fx.pairs.output.input.run;
+        let outstanding: Vec<_> = run.context.flow.state().outstanding().iter().map(|item| item.common.request_id).collect();
+        let control = run.context.deadlines.get(PumpDeadline::StateControl);
+        let error = run.context.begin_pair_execution(effective, &mut run.clock).unwrap_err();
+        assert_eq!(error.refusal, PairBeginRefusal::Busy);
+        assert!(error.failure.is_none());
+        assert_eq!(error.effective.requests(), expected_requests);
+        assert!(run.context.pair_work.is_none());
+        assert!(run.context.inspection.is_some());
+        assert_eq!(run.context.deadlines.get(PumpDeadline::Decision), decision);
+        assert_eq!(run.context.deadlines.get(PumpDeadline::StateControl), control);
+        assert_eq!(run.context.flow.state().outstanding().iter().map(|item| item.common.request_id).collect::<Vec<_>>(), outstanding);
+        let mut byte = [0];
+        assert_eq!(run.state.read(&mut byte).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(fx.pairs.requests.len(), count);
+        if !completed {
+            fx.settle_inspection();
+        }
+        let run = &mut fx.pairs.output.input.run;
+        let Some(InspectionCompletion::Shape { shape, evidence }) = run.context.take_inspection(&mut run.clock).unwrap() else {
+            panic!("pair admission stole the recorded inspection")
+        };
+        assert!(shape.runs.is_empty());
+        assert_eq!(evidence.request(), &s::StateControl::Shape {});
+        assert_eq!(evidence.answer().common().request_id, inspection_id);
+        // The refused call returns the same checked emission, with no new
+        // generation or repair proof constructed for this retry.
+        run.context.begin_pair_execution(error.effective, &mut run.clock).unwrap();
+        fx.begin(0);
+        fx.complete(0);
+        let run = &mut fx.pairs.output.input.run;
+        let pair = run.context.completed_pair(&fx.calls[0], &mut run.clock).unwrap().unwrap();
+        assert_eq!(pair.ended().outcome, Some(ToolOutcome::Result { content: String::from_utf8(fx.raw.clone()).unwrap() }));
+        let effective = run.context.take_executed_pairs(&mut run.clock).unwrap().unwrap();
+        assert_eq!(effective.requests(), expected_requests);
+        assert_eq!(fx.controls().iter().filter(|control| matches!(control, s::StateControl::Shape {})).count(), 1);
+        assert_eq!(fx.pairs.output.input.records(Kind::Recall).len(), 1);
+    }
 }
