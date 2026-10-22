@@ -4,8 +4,9 @@
 
 This act proposes the missing OPEN-FACTS carrier for
 [Issue #146](https://github.com/toddwbucy/WeaverAgent/issues/146). It changes documents
-only. It records no operator approval, Planner pass, implementation result or production
-qualification. The owning documents use merge-time MERGED headers under Working Process
+only. The [operator approved the revised carrier on 2026-10-22][ruling], subject
+to review and merge. No implementation result or production qualification is claimed.
+The owning documents use merge-time MERGED headers under Working Process
 section 2. Their proposed delta is not implementation authority before approval and
 merge. The existing serving implementation and coupled foundation cutover remain held.
 
@@ -45,7 +46,7 @@ identity-prefix label at that same cutover. Their version index changes together
 | Use ordinary writer capacity for that teardown account | Preserves the seven terminal reserves and their existing priorities. A failed or unavailable trace can leave an incomplete account |
 | Diagnostic clients validate and consume the new wire, without a new diagnostic event | Preserves their separate vocabulary and the serving-placement conversion refusal |
 
-These are proposed choices for operator and Planner review, not a numbered ruling.
+The operator approved these revised choices. Review and merge remain required.
 No timing field is present, optional or zero-filled. The request and measurement are
 separate from generation payloads, which remain unchanged and turn-bound.
 
@@ -139,11 +140,11 @@ failure preserves any already Recorded sequence and does not turn it into a succ
 sink write. No evidence
 box is shortened.
 
-The second prompt copy is a proposed, explicit custody tradeoff: both the
+The second prompt copy is the approved, explicit custody tradeoff: both the
 canonical prompt and family-framed render become operator-readable trace
 content. Excluding placement from state projection prevents refiling, not trace
 disclosure. No independent telemetry destination or broader reader permission
-is elected. The operator must accept this duplication with the carrier.
+is elected. The operator explicitly accepted this duplication with the carrier.
 
 The decode contract's general typed-overflow guarantee is broader than its failure
 list, which specifically names the next delta. This act does not reclassify
@@ -198,3 +199,5 @@ separate Issue #146 work. Approval cannot activate an incomplete replacement.
 [source-recorder]: ../../crates/weaver-trace/src/serving/recorder.rs
 [source-writer]: ../../crates/weaver-trace/src/serving/writer.rs
 [source-tee]: ../../crates/weaver-trace/src/serving/tee.rs
+
+[ruling]: https://github.com/toddwbucy/WeaverAgent/pull/232#issuecomment-6333208562
