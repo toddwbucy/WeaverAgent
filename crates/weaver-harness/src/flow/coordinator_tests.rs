@@ -1329,6 +1329,7 @@ fn control_completion_is_recorded_once_without_a_ledger_obligation() {
         request,
         turn,
         completion,
+        ..
     } = fx.take_operation().unwrap().unwrap()
     else {
         panic!("typed state completion");
@@ -1859,6 +1860,7 @@ fn interrupted_release_waits_for_a_later_external_author_without_recording_twice
         measurement.harness_received_ns.0,
         measurement.harness_sent_ns.0,
     ));
+    fx.flow.state_recorded_ns = Some(fx.clock.now().unwrap());
     let result = fx
         .flow
         .state

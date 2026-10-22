@@ -14,7 +14,7 @@ use weaver_types::state_flow::{
 use super::repair::{EffectiveEmission, RepairAccount};
 use crate::flow::coordinator::{CheckedGeneration, OriginalRequests};
 use crate::flow::ledger::{CommittedSource, LedgerFile, SourceLease, TerminalOutcome};
-use crate::flow::pump_transport::ReceivedOrgan;
+use crate::flow::pump_transport::{OrganPort, OrganSend, ReceivedOrgan};
 use crate::flow::report::{OutstandingPair, PairState};
 use weaver_types::{
     ExchangeId, KillCause, Opener, OrganEnvelope, Position, ToolExecution, ToolName, ToolOutcome,
@@ -102,6 +102,7 @@ pub(in crate::flow) struct CompletedPair {
     receipt: FiledReceipt,
     result: crate::tools::ToolResult,
     received: Option<ReceivedOrgan>,
+    inward: Option<super::inward_recall::InwardEvidence>,
 }
 
 impl CompletedPair {
@@ -134,6 +135,15 @@ impl CompletedPair {
     pub(in crate::flow) fn result(&self) -> &crate::tools::ToolResult {
         &self.result
     }
+    pub(in crate::flow) fn recalled(&self) -> Option<&super::RecordedRead> {
+        let super::inward_recall::InwardEvidence::Read(completion) = self.inward.as_ref()? else {
+            return None;
+        };
+        match completion.as_ref() {
+            super::ReadCompletion::Recorded(read) => Some(read),
+            _ => None,
+        }
+    }
 }
 
 struct Entry {
@@ -149,6 +159,8 @@ struct Entry {
     sent: bool,
     received: Option<ReceivedOrgan>,
     gate_terminal: bool,
+    internal_started: bool,
+    inward: Option<super::inward_recall::InwardEvidence>,
 }
 
 /// Only the association or repair owner can construct either proof. A public
@@ -258,6 +270,7 @@ impl PairLedger {
             .find(|entry| entry.completed.is_none())?;
         if entry.opening.is_none()
             || entry.execution.is_some()
+            || entry.internal_started
             || entry.ending.is_some()
             || !batch
                 .statements
@@ -267,6 +280,65 @@ impl PairLedger {
             return None;
         }
         Some(&entry.started)
+    }
+
+    /// Exercise the helper's defensive empty-input boundary after real receipts.
+    /// This deliberately differs from the immutable opening evidence and cannot
+    /// be produced by checked noun spans. It creates no production proof door.
+    #[cfg(test)]
+    pub(super) fn empty_ready_inward_subject_for_test(&mut self, call: &CallId) {
+        assert_eq!(self.next_ready().map(|ready| &ready.call_id), Some(call));
+        let PairRequest::Recall { subject } = &mut self.entry_mut(call).unwrap().started.request
+        else {
+            panic!("fixture requires a ready recall");
+        };
+        subject.clear();
+    }
+
+    pub(super) fn start_inward(&mut self, call: &CallId) -> Result<(), PairError> {
+        self.live()?;
+        let ready = self
+            .next_ready()
+            .filter(|ready| &ready.call_id == call)
+            .ok_or(PairError::WrongPhase)?;
+        if ready.lane != PairLane::Recall || !matches!(ready.request, PairRequest::Recall { .. }) {
+            return Err(PairError::UnsupportedLane);
+        }
+        self.entry_mut(call)?.internal_started = true;
+        Ok(())
+    }
+
+    pub(super) fn finish_inward(
+        &mut self,
+        call: &CallId,
+        evidence: super::inward_recall::InwardEvidence,
+    ) -> Result<(), (super::inward_recall::InwardEvidence, PairError)> {
+        let checked = (|| {
+            self.live()?;
+            let entry = self.entry(call)?;
+            if !entry.internal_started || entry.ending.is_some() || entry.completed.is_some() {
+                return Err(PairError::WrongPhase);
+            }
+            let PairRequest::Recall { subject } = &entry.started.request else {
+                return Err(PairError::UnsupportedLane);
+            };
+            evidence.outcome(subject).ok_or(PairError::Protocol)
+        })();
+        let outcome = match checked {
+            Ok(outcome) => outcome,
+            Err(error) => return Err((evidence, error)),
+        };
+        let entry = self.entry_mut(call).expect("checked inward owner");
+        entry.ending = Some(PairEnded {
+            call_id: call.clone(),
+            execution: None,
+            fate: TerminalPairFate::Completed,
+            reason: None,
+            outcome: Some(outcome),
+            loaded_from: None,
+        });
+        entry.inward = Some(evidence);
+        Ok(())
     }
 
     /// Bind before staging bytes. The context supplies the clock from its exact
@@ -382,6 +454,51 @@ impl PairLedger {
         })
     }
 
+    /// Frozen inspection keeps an already received terminal attached to its
+    /// execution. It grants no new dispatch or ordinary terminal filing.
+    pub(super) fn halt_execution(&self) -> Option<(&CallId, &ExchangeId, bool)> {
+        if !self.frozen {
+            return None;
+        }
+        self.active.as_ref()?.entries.iter().find_map(|entry| {
+            if entry.completed.is_some() || (entry.ending.is_some() && entry.received.is_none()) {
+                return None;
+            }
+            Some((
+                &entry.started.call_id,
+                entry.execution.as_ref()?,
+                entry.sent,
+            ))
+        })
+    }
+
+    /// Only the same context's retained whole-send ticket can settle a send
+    /// whose healthy reducer did not run before failure. No deadline retires.
+    pub(super) fn reconcile_halt_send(
+        &mut self,
+        gate: &OrganPort,
+        ticket: &OrganSend,
+    ) -> Result<(), PairError> {
+        if !self.frozen || !ticket.belongs_to(gate) || !ticket.sent() {
+            return Err(PairError::WrongPhase);
+        }
+        let (call, exchange, _) = self.halt_execution().ok_or(PairError::WrongPhase)?;
+        if !ticket.matches_exchange(exchange) {
+            return Err(PairError::WrongPhase);
+        }
+        let call = call.clone();
+        self.entry_mut(&call)?.sent = true;
+        Ok(())
+    }
+
+    pub(super) fn halt_gate_terminal(&self, call: &CallId) -> Option<(&PairEnded, &[u8])> {
+        if !self.frozen {
+            return None;
+        }
+        let entry = self.entry(call).ok()?;
+        Some((entry.ending.as_ref()?, entry.received.as_ref()?.raw_bytes()))
+    }
+
     /// No terminal can be attributed to the gate without the owned packet.
     /// A frozen flow may retain its trace-only outcome, but cannot file it.
     #[allow(clippy::result_large_err)]
@@ -389,7 +506,7 @@ impl PairLedger {
         &mut self,
         received: ReceivedOrgan,
     ) -> Result<GateObservation, (ReceivedOrgan, PairError)> {
-        if self.rejected.is_some() {
+        if self.rejected.is_some() && !self.frozen {
             return Err((received, PairError::Busy));
         }
         let envelope = received.envelope();
@@ -460,6 +577,11 @@ impl PairLedger {
             } else {
                 GateObservation::Matched(call)
             });
+        }
+        // A frozen, already-sent execution may retain its own terminal while
+        // an older rejection remains owed. A second rejection never replaces it.
+        if self.rejected.is_some() {
+            return Err((received, PairError::Busy));
         }
         let known = mapped
             .map(|entry| (&entry.started.call_id, entry.ending.as_ref()))
@@ -805,6 +927,8 @@ impl PairLedger {
                     sent: false,
                     received: None,
                     gate_terminal: false,
+                    internal_started: false,
+                    inward: None,
                 });
             }
             Ok((entries, statements))
@@ -1080,6 +1204,7 @@ impl PairLedger {
             if !entry.terminal_authoring
                 && entry.completed.is_none()
                 && entry.execution.is_none()
+                && !entry.internal_started
                 && (entry.ending.is_none()
                     || matches!(
                         entry.ending.as_ref().and_then(|end| end.reason.as_ref()),
@@ -1147,6 +1272,7 @@ impl PairLedger {
             receipt: filed,
             result,
             received: entry.received.take(),
+            inward: entry.inward.take(),
         });
         Ok(())
     }
@@ -1246,9 +1372,12 @@ impl PairLedger {
                 Some(OutstandingPair {
                     call_id: entry.started.call_id.clone(),
                     state: if entry.terminal_authoring
-                        || (entry.execution.is_some() && entry.ending.is_some())
+                        || ((entry.execution.is_some() || entry.internal_started)
+                            && entry.ending.is_some())
                     {
                         PairState::Ending
+                    } else if entry.internal_started {
+                        PairState::ExecutingInternal
                     } else if entry.execution.is_some() {
                         PairState::Executing
                     } else if entry.opening.is_some() && has_statement {
