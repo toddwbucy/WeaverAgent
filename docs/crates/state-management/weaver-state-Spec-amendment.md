@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #192
+**Landing PR:** #244
 
 **Version:** 0.20 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
 
@@ -541,9 +541,12 @@ and all content IDs back to source identities. For the returned last_source,
 resolve its content key to SourcePosition with the stored source's exact nullable
 turn. Resolve operator_source to its held PlanInputContext and return that
 context's document_sha256. Both facts belong to the same immutable result as the
-revision, including historical plan reads and reload. Do not derive either from
-caller input or the current run. This is PLAN-SUMMARY-EVIDENCE and changes no SQL
-schema or stored source key. Decode canonical typed JSON strictly. Never
+revision, including historical plan reads and reload. The member owns consistency
+with these held sources, under existing adoption and read validation. The harness
+cannot independently check a well-shaped false boot digest or turn without an
+already-held trusted expectation. Do not derive either from caller input or the
+current run. This is PLAN-SUMMARY-EVIDENCE and changes no SQL schema or stored
+source key. Decode canonical typed JSON strictly. Never
 expose SQL keys. The result has Spec 07's exact PLAN-READ shape. Reason: one store-owned
 read supplies every consumer's stable step and review account. [PLAN-1, PLAN-2, SEAM-3,
 STORE-5]
@@ -1325,7 +1328,7 @@ weaver-state dependency of any kind. [FLOW-4, FLOW-5, SEAM-2, SCOPE-1]
 | STATE-OBSERVATION-SCHEMA/READ/OBSERVE | Exact metadata JSON, real response writes, explicit query, capture-frontier, ordered snapshot-sampling and historical-version fixtures | Mix metadata with content, reobserve an insert, omit a required row, include the read itself, send success after metadata failure, reorder sampling or relabel old evidence |
 | STATE-SCHEMA | Execute literal DDL, inspect catalog, EXPLAIN noun and verb queries | Remove index, source CHECK, or FK |
 | STATE-FILE | STATE-FILING-INSTRUMENTS and shared malformed corpus | Emit receipt before commit or accept partial noun rows |
-| STATE-PLAN-SCHEMA, STATE-PLAN-READ | Literal DDL, ordered reads and reload fixtures | Allow two unfinished plans/active steps, renumber IDs or omit historical references |
+| STATE-PLAN-SCHEMA, STATE-PLAN-READ | Literal DDL, ordered current/historical reads and reload, exact operator digest and null/non-null last-transition turn | Allow two unfinished plans/active steps, renumber IDs, omit references, hash the snapshot or substitute another source/digest/turn |
 | STATE-PLAN-FILE | Every effect guard and atomic source/plan/mark transaction | Skip expected status, close without category-required review evidence, preserve changed evidence or commit one half |
 | STATE-PLAN-FLAGS | Literal target/count queries, stale source/revision checks, empty plans and maximum unsigned IDs | Count nouns, case-fold addresses, accept an overflowing/noncanonical ID, use an old target set or change a held sample after filing |
 | STATE-MARK-FILE | Atomic source/effect fixtures for every operation row | Commit the source without the mark, skip context equality, permit a crossed scope or edit terminal membership |

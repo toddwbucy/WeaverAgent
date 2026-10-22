@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #244
 
-**Version:** 0.18 **Date filed:** 2026-10-20 **Document ID:**
+**Version:** 0.19 **Date filed:** 2026-10-20 **Document ID:**
 `state-management-foundation-Spec` **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -294,12 +294,19 @@ Closed span membership and its pair frontier are fixed at closure, so a later pa
 cannot change the addressed content. The read adapter preserves these distinctions
 before issuing held-content or cut grants. [MARK-1, MARK-3, MARK-5, MARK-6]
 
-plan_current and plan return Spec 07's typed plan snapshots. plan_flags returns its
-attributed count snapshot for an exact PlanRef and last-effect source. These are
-metadata reads and cannot become held-content or cut grants. Their result tags, count
-sum, stale-source refusal and measurement consumer are defined by PLAN-FLAG-READ and the
-owning amendments. They use the same channel and bounded read lifetime, with no
-additional writer. [PLAN-1, PLAN-3, SEAM-3, COST-4]
+plan_current and plan return Spec 07's typed plan snapshots with
+PLAN-SUMMARY-EVIDENCE's operator document digest and exact last-transition
+SourcePosition. The member validates their stored provenance. The harness checks
+strict shape and already-held trusted expectations, then projects its summary at
+HARNESS-RECALL's Recording/Recorded transition. A failed mandatory boot read cannot
+establish enter success. A failed required refresh after a committed effect latches
+component failure and cannot expose a successful stale Observe/show summary.
+plan_flags returns its attributed count snapshot for an exact PlanRef and
+last_source.block_id as the last-effect SourceBlockId. These are metadata reads and
+cannot become held-content or cut grants. Their result tags, count sum, stale-source
+refusal and measurement consumer are defined by PLAN-FLAG-READ and the owning
+amendments. They use the same channel and bounded read lifetime, with no additional
+writer. [PLAN-1, PLAN-3, SEAM-3, COST-4]
 
 observations returns the bounded, run-keyed metadata range defined by
 TYPES-OBSERVATION-READ and STATE-OBSERVATION-READ. Its read does not include its own

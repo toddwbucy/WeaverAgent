@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #189
+**Landing PR:** #244
 
 **Version:** 0.23 **Date filed:** 2026-10-20 **Parent:** weaver-trace-PRD
 
@@ -608,16 +608,15 @@ They are not copied into RecallSpan, which records selected_span occurrences onl
 | observations | observations, no content-source visits, sources and spans empty |
 
 For PlanSnapshot, visit operator_source, nonnull lock_source, then
-last_source.block_id. Visit
-steps in their returned ordinal order. For each step, visit instruction as a
-StatementRef, nonnull work.through.block_id, then nonnull closure_source. Finally, if
-broken is nonnull, visit its nonnull proposed_source and then source. This is the entire
-walk. Do not recursively traverse task, review, categories, group_drafts, groups,
-PlanRef, StepId, CallId, SpanRef or digest fields. They are metadata identities, not
-returned content. The marks walk likewise does not turn current_task, parent or
-replacement addresses into selected spans. Reason: metadata reads cite their recorded
-sources without pretending that marked content was fetched. [PLAN-1, PLAN-2, PLAN-3,
-MARK-1, MARK-3, SEAM-3, FLOW-3]
+last_source.block_id. Visit steps in their returned ordinal order. For each step,
+visit instruction as a StatementRef, nonnull work.through.block_id, then nonnull
+closure_source. Finally, if broken is nonnull, visit its nonnull proposed_source and
+then source. This is the entire walk. Do not recursively traverse task, review,
+categories, group_drafts, groups, PlanRef, StepId, CallId, SpanRef or digest fields.
+They are metadata identities, not returned content. The marks walk likewise does not
+turn current_task, parent or replacement addresses into selected spans. Reason:
+metadata reads cite their recorded sources without pretending that marked content was
+fetched. [PLAN-1, PLAN-2, PLAN-3, MARK-1, MARK-3, SEAM-3, FLOW-3]
 
 A complete empty entries or open_pairs result produces both arrays empty. An empty
 metadata result follows its row, so plan_current with current null also produces empty

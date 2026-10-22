@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #244
 
 **Version:** 0.9 **Date filed:** 2026-10-20
 
@@ -55,17 +55,20 @@ PERSIST-7, October 18 R2, R3]
 This replacement applies at the [foundation cutover][cutover]. Until then, the previous
 serving contract remains applicable.
 
-**PERSIST-ENTER.** Admin provides the verified start, operational declaration and judged
-component identities. The harness may assume custody and binding checks passed, but must
-verify the member's adoption result and exact echoed identity. It records the untapped
-trace head, validates its partition, checks its templates, reads and seats the system
-prompt, and repairs loaded open pairs through the normal feed, then reads the committed
-plan summary before opening input. The plan_current snapshot carries the exact
-PLAN-SUMMARY-EVIDENCE fields. The summary is cached only after its Released and
-Recorded boundaries, with no reconstructed document digest or turn. A failure
-refuses enter and invokes the existing
-failed-enter rollback. A successful enter certifies these duties, not semantic truth or
-future model fidelity. [PERSIST-3, PERSIST-6, PROMPT-1, FLOW-3, PAIR-1]
+**PERSIST-ENTER.** Admin provides the verified start, operational declaration and
+judged component identities. The harness may assume custody and binding checks
+passed, but must verify the member's adoption result and exact echoed identity. It
+records the untapped trace head, validates its partition, checks its templates, reads
+and seats the system prompt, and repairs loaded open pairs through the normal feed,
+then reads the committed plan summary before opening input. The plan_current snapshot
+carries the exact PLAN-SUMMARY-EVIDENCE fields. The summary is cached at
+HARNESS-RECALL's Recording/Recorded transition, after HARNESS-READ has completed
+snapshot release. The member owns stored provenance validation. The harness checks
+strict shape and already-held trusted expectations, without a new lookup or
+reconstructed digest or turn. A failed mandatory read refuses enter and invokes
+existing failed-enter rollback. A successful enter certifies these duties, not
+semantic truth or future model fidelity. [PERSIST-3, PERSIST-6, PROMPT-1, FLOW-3,
+PAIR-1]
 
 **PERSIST-CAPTURE.** A save uses the loaded declaration and occurs at a between-turn
 boundary. The harness freezes a source frontier and accounts for every item owed through

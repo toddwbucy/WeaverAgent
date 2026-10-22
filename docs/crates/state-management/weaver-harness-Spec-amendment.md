@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #192
+**Landing PR:** #244
 
 **Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
@@ -1272,17 +1272,33 @@ The boot summary must reflect any boot-repair receipts before loaded is reported
 [PERSIST-6, PLAN-2]
 
 At boot, after pair repair and before enter confirmation/user admission, read
-plan_current through HARNESS-READ. After Released and recall Recorded, cache
-PlanSummary by projecting plan, status, document_sha256 and last_source from that
-checked PlanSnapshot under PLAN-SUMMARY-EVIDENCE. Preserve its exact nullable turn.
-Do not reconstruct either missing fact from the current run, trace sequence, model
-text or a newly hashed plan. A refused or malformed read cannot clear the previous
-committed cache or establish a successful boot. After every
-plan-effect receipt, refresh it before the control answer or next generation. Observe
-reads this committed cache only. An update in progress still shows the previous receipt,
-under the existing InTransition convention. No null or proposed plan is reported as an
-accepted update. The boot read consumes the existing load budget and is not a filing.
+plan_current through HARNESS-READ. At HARNESS-RECALL's Recording/Recorded
+transition, cache PlanSummary by projecting plan, status, document_sha256 and
+last_source under PLAN-SUMMARY-EVIDENCE. Snapshot release is already complete.
+Preserve the exact nullable turn. Do not reconstruct missing facts from the
+current run, trace sequence, model text or a newly hashed plan. The member owns
+stored provenance validation. The harness checks strict shape, result association
+and any already-held trusted expected facts. Without such an expectation, boot
+cannot independently detect a well-shaped false member digest or turn. A refused
+or malformed boot read cannot establish enter success and follows failed-enter
+rollback. The boot read consumes the existing load budget and is not a filing.
 [PLAN-1, PLAN-6, PERSIST-6, SEAM-3]
+
+After every plan-effect receipt, refresh the committed cache through that same
+read and Recording/Recorded transition before the control answer or next
+generation. Require the returned last_source to equal the effect's exact
+SourcePosition, including nullable turn. Where an expected operator document
+digest for that revision is already held through trusted input or prior committed
+evidence, compare it too. Do not obtain a new source lookup or derive the expected
+value from this response. An update in progress retains its previous receipt
+under the existing InTransition convention. [PLAN-1, PLAN-6, FLOW-3, SEAM-3]
+
+If this required post-receipt refresh refuses, fails, is malformed or disagrees
+with a held trusted expectation, latch component failure through the foundation
+path. The old cache may remain prior evidence but is not a successful committed
+Observe/show result. Do not answer PlanUpdated or grant another generation. Do
+not roll back the committed effect or report null or a proposed plan as accepted.
+Only a successful refresh replaces the cache. [PLAN-1, PLAN-6, FLOW-4, SEAM-3]
 
 A root PlanUpdate is accepted only at rest with no save, leave, other plan operation or
 open review. Validate the exact document digest and strict shape before authoring its
@@ -1300,7 +1316,8 @@ undone. [PLAN-6, MARK-5, FLOW-4]
 | Input | Correct rejection | Finish dispositions, record/refuse non_ste100, Idle |
 | Effect | Valid private grant | Expand certified template, author/classify/file effect, AwaitReceipt |
 | Effect | Ordinary invalid proposal | Trace PlanUpdateRefused, Idle, no effect |
-| AwaitReceipt | Matching committed receipt | Refresh committed plan summary, answer PlanUpdated, Idle |
+| AwaitReceipt | Matching committed receipt | Refresh summary through Recording/Recorded, check held expectations, answer PlanUpdated, Idle |
+| AwaitReceipt | Required post-receipt refresh refused, failed, malformed or mismatched | Foundation latch, no successful stale Observe/show, PlanUpdated or generation |
 | Any pre-receipt phase | Correct template defect | Trace state_template_rejected and refuse operation, no halt |
 | Any phase | Component failure, refused filing or deadline | Foundation latch, no success answer |
 | Any phase | Admin disconnect | Continue already accepted operation under its original bound, retain trace outcome |
@@ -1332,7 +1349,7 @@ has no store write or progression handle. A typed read refusal is unavailable, n
 
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
-| HARNESS-PLAN | Root update and source/receipt lifecycle rows | Mint authority from model input or answer before commit |
+| HARNESS-PLAN | Root update and source/receipt lifecycle rows, held receipt/digest mismatches, delayed Recording/Recorded, boot refusal and failed post-receipt refresh | Mint model authority, answer before commit, ignore held expectation, cache before Recorded or serve stale successful Observe/show after refresh failure |
 | HARNESS-PLAN-PORTS | Private-grant and exact work/pair fixtures | Close on model prose, reuse evidence or start review without a caller request |
 | HARNESS-PLAN-OBSERVE | Explicit call, receipt and duplicate sample corpus | Invent zero or count one assembly twice |
 

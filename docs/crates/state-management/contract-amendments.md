@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #244
 
 **Version:** 0.18 **Date filed:** 2026-10-20
 
@@ -380,19 +380,26 @@ SEAM-3]
 Both plan_current and historical plan return Spec 07 PLAN-SUMMARY-EVIDENCE in
 their PlanSnapshot: the held operator source's document_sha256 and the exact
 last-transition SourcePosition, including required nullable turn. The state
-member derives them with that revision's read snapshot. The harness validates the
-closed shape and caches the projection only after Released and recall Recorded.
-A missing fact does not authorize an extra source lookup, an inferred value or a
-successful null plan. The wire change and all producers/consumers land together
-at the qualified cutover. [PLAN-1, PLAN-6, FLOW-3, SEAM-3]
+member validates held provenance and derives them with that revision's read
+snapshot. The harness validates the closed shape and already-held trusted expected
+facts, then caches the projection at HARNESS-RECALL's Recording/Recorded
+transition. HARNESS-READ has already completed snapshot release. After its own
+effect receipt it requires that exact last-source SourcePosition and any held
+trusted expected operator digest. A mandatory boot failure cannot establish enter
+success. A failed required post-receipt refresh latches component failure and
+cannot expose a successful stale Observe/show summary. A missing fact authorizes
+no extra source lookup, inferred value or successful null plan. The wire change
+and all producers/consumers land together at the qualified cutover. [PLAN-1,
+PLAN-6, FLOW-3, FLOW-4, SEAM-3]
 
-The plan_flags read supplies PlanRef and the exact last-effect source. The store may
-assume the caller requests a mechanical count, but must refuse an absent, wrong-seed or
-stale identity. It returns PLAN-FLAG-READ's one snapshot and counts, with ordinary
-bounded paging and release. The harness must check the result tag, identity echo and
-count sum before recording it. It must preserve a typed refusal as an unavailable
-reading, never zero or a reversal of the committed update. Neither party writes a flag's
-target or decides task relevance. [PLAN-3, SEAM-3, COST-4, SCOPE-1]
+The plan_flags read supplies PlanRef and last_source.block_id as its exact
+last-effect SourceBlockId. The store may assume the caller requests a mechanical
+count, but must refuse an absent, wrong-seed or stale identity. It returns
+PLAN-FLAG-READ's one snapshot and counts, with ordinary bounded paging and release.
+The harness must check the result tag, identity echo and count sum before recording
+it. It must preserve a typed refusal as an unavailable reading, never zero or a
+reversal of the committed update. Neither party writes a flag's target or decides
+task relevance. [PLAN-3, SEAM-3, COST-4, SCOPE-1]
 
 For the harness-trace agreement, PLAN-OBSERVATION has one author in the plan
 coordinator. The trace receives the exact tagged reading and enforces its payload and

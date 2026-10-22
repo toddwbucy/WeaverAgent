@@ -31,7 +31,7 @@ work remains at the deferred seams already named by the PRD and these Specs.
 | Document | Version |
 | --- | --- |
 | [State Management Primitives - PRD](state-management-primitives-prd-v0_6.md) | 0.6 |
-| [State management foundation - Spec](state-management-foundation-Spec.md) | 0.18 |
+| [State management foundation - Spec](state-management-foundation-Spec.md) | 0.19 |
 | [State management Spec 02 - STE100 protocol, classifier and input check](state-management-spec-02-protocol-classifier-gate.md) | 0.14 |
 | [State management Spec 05 - Tool-call pairs](state-management-spec-05-tool-pairs.md) | 0.8 |
 | [State Management Spec 06 - Marks, Place, and the Decode Boundary](state-management-spec-06-marks-renderer-engine.md) | 0.11 |
