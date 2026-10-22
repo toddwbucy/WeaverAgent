@@ -2,7 +2,7 @@
 
 ## Problem and authority boundary
 
-This Spec proposal for issue #146 items D and E is draft PR #244 on
+This Spec proposal for issue #146 items D and E is PR #244 on
 branch docs/state-plan-summary-evidence. The merged HARNESS-PLAN requires a
 plan_current read after boot pair repair and before enter confirmation, then
 caching PlanSummary from that snapshot. It already requires refreshing the cache
@@ -137,24 +137,26 @@ carrier design alternative above, with the merged read requirement retained.
 
 Row 3 identifies an inherited PLAN-READ endpoint limitation: exhausted allocation
 refuses counter_exhausted even when the committed plan remains intact. A mandatory
-boot summary then cannot succeed. Issue #246 tracks this endpoint decision. This proposal
-leaves the refusal and endpoint unchanged and does not add another query or mask
-it as no plan.
+boot summary then cannot succeed. After allocating the last StepId or PlanId, the
+effect commits but its required summary refresh refuses counter_exhausted and
+latches component failure under the approved rule above. Issue #246 tracks the
+endpoint decision for both boot and post-effect refresh. This proposal leaves the
+refusal and endpoint unchanged and does not add another query or mask it as no
+plan.
 
 Proposals #232, #235, #237 and #241 are merged. This branch joins main at
 1acf0bdf and reconciles the shared document headers and README versions while
 preserving their paired text.
 
-Current-revision checks pass for ASCII, added prose width, local links, paired
-versions, preserved Date filed values, Landing PR fields and whitespace. The
-second independent reading and root lock check passed. No Cargo result,
-runtime fix, production qualification or issue completion follows from this
-proposal. Planner review 5610257792 found no remaining review rows; the later
-main join at a19d2412 changed shared headers only.
+The prior independent reading and root lock check passed. Validation results for
+later revisions belong to their review records. No Cargo result, runtime fix,
+production qualification or issue completion follows from this proposal.
+Planner review 5610257792 found no remaining review rows. The later main join at
+a19d2412 changed shared headers only.
 
 On 2026-10-22 the operator approved the revised proposal in this document:
 document_sha256 plus complete SourcePosition, the stated independent-validation
 boundary, and component failure after an unsuccessful required post-effect
 refresh. The real commit remains evidence and stale success or generation is
-forbidden. This records the election; review and merge remain required before
+forbidden. This records the election. Review and merge remain required before
 implementation.

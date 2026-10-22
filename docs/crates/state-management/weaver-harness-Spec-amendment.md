@@ -1474,7 +1474,9 @@ SourcePosition, including nullable turn. Where an expected operator document
 digest for that revision is already held through trusted input or prior committed
 evidence, compare it too. Do not obtain a new source lookup or derive the expected
 value from this response. An update in progress retains its previous receipt
-under the existing InTransition convention. [PLAN-1, PLAN-6, FLOW-3, SEAM-3]
+under the existing InTransition convention. Observe/show reads this committed
+cache only and never reports null or a proposed plan as an accepted update.
+[PLAN-1, PLAN-6, FLOW-3, SEAM-3]
 
 If this required post-receipt refresh refuses, fails, is malformed or disagrees
 with a held trusted expectation, latch component failure through the foundation

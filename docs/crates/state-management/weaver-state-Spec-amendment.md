@@ -542,12 +542,11 @@ resolve its content key to SourcePosition with the stored source's exact nullabl
 turn. Resolve operator_source to its held PlanInputContext and return that
 context's document_sha256. Both facts belong to the same immutable result as the
 revision, including historical plan reads and reload. The member owns consistency
-with these held sources, under existing adoption and read validation. The harness
-cannot independently check a well-shaped false boot digest or turn without an
-already-held trusted expectation. Do not derive either from caller input or the
-current run. This is PLAN-SUMMARY-EVIDENCE and changes no SQL schema or stored
-source key. Decode canonical typed JSON strictly. Never
-expose SQL keys. The result has Spec 07's exact PLAN-READ shape. Reason: one store-owned
+with these held sources, under existing adoption and read validation. Do not derive
+either from caller input or the current run. PLAN-SUMMARY-EVIDENCE in Spec 07 owns
+the harness validation boundary. This changes no SQL schema or stored source key.
+Decode canonical typed JSON strictly. Never expose SQL keys. The result has Spec 07's
+exact PLAN-READ shape. Reason: one store-owned
 read supplies every consumer's stable step and review account. [PLAN-1, PLAN-2, SEAM-3,
 STORE-5]
 
@@ -578,9 +577,10 @@ PERSIST-6]
 **STATE-PLAN-FLAGS.** plan_flags is a read-only aggregate with Spec 07's exact
 PLAN-FLAG-READ result. In one read transaction, check store_meta.seed_id, resolve the
 plan and source, and compare the requested plan/after against STATE-PLAN-READ's current
-revision and last_source. Refuse wrong_seed, not_found or invalid_selector as that
-contract states. Resolve position in the same transaction for through. This selector
-calculates no next ID and does not refuse merely because allocation is exhausted.
+revision and stored last_source (its block_id). Refuse wrong_seed, not_found or
+invalid_selector as that contract states. Resolve position in the same transaction
+for through. This selector calculates no next ID and does not refuse merely because
+allocation is exhausted.
 Reason: the flags and their possible targets must describe one boundary. [PLAN-3,
 PLAN-6, STORE-5, SEAM-3, COST-4]
 

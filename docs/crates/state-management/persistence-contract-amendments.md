@@ -67,10 +67,10 @@ carries the exact PLAN-SUMMARY-EVIDENCE fields. The summary is cached at
 HARNESS-RECALL's Recording/Recorded transition, after HARNESS-READ has completed
 snapshot release. The member owns stored provenance validation. The harness checks
 strict shape and already-held trusted expectations, without a new lookup or
-reconstructed digest or turn. A failed mandatory read refuses enter and invokes
-existing failed-enter rollback. A successful enter certifies these duties, not
-semantic truth or future model fidelity. [PERSIST-3, PERSIST-6, PROMPT-1, FLOW-3,
-PAIR-1]
+reconstructed digest or turn. A failure of any of these duties, including a refused
+or malformed mandatory read, refuses enter and invokes existing failed-enter
+rollback. A successful enter certifies these duties, not semantic truth or future
+model fidelity. [PERSIST-3, PERSIST-6, PROMPT-1, FLOW-3, PAIR-1]
 
 **PERSIST-CAPTURE.** A save uses the loaded declaration and occurs at a between-turn
 boundary. The harness freezes its current-run Recorded trace boundary under
