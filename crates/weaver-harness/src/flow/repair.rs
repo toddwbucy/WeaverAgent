@@ -59,7 +59,7 @@ pub(super) enum RepairIntent {
     ExhaustedAccounting,
     Complete,
     Exhausted,
-    EmptyCorrectionGap {
+    EmptyCorrectionRefusal {
         source: SourceBlockId,
         correction: SourcePosition,
     },
@@ -77,7 +77,7 @@ pub(in crate::flow) enum CorrectionProgress {
     Retry,
     ProtocolRefusal,
     Exhausted,
-    EmptyCorrectionGap,
+    EmptyCorrectionRefusal,
     Cancelled,
 }
 
@@ -257,7 +257,7 @@ enum Stage {
     ExhaustedOut,
     Complete,
     Exhausted,
-    EmptyGap,
+    EmptyRefusal,
     RecallGap,
     Cancelled,
     Frozen,
@@ -384,7 +384,7 @@ impl RepairLedger {
             Stage::ExhaustedAccounting | Stage::ExhaustedOut => RepairIntent::ExhaustedAccounting,
             Stage::Complete => RepairIntent::Complete,
             Stage::Exhausted => RepairIntent::Exhausted,
-            Stage::EmptyGap => RepairIntent::EmptyCorrectionGap {
+            Stage::EmptyRefusal => RepairIntent::EmptyCorrectionRefusal {
                 source: self.context().source.clone(),
                 correction: self.pending.as_ref().unwrap().generation().source().clone(),
             },
@@ -478,8 +478,8 @@ impl RepairLedger {
         }
         if correction.generation().blocks().is_empty() {
             self.pending = Some(correction);
-            self.stage = Stage::EmptyGap;
-            return Ok(CorrectionProgress::EmptyCorrectionGap);
+            self.stage = Stage::EmptyRefusal;
+            return Ok(CorrectionProgress::EmptyCorrectionRefusal);
         }
         let failed = correction
             .generation()
@@ -510,6 +510,23 @@ impl RepairLedger {
         self.require(Stage::ProtocolRefusal)?;
         self.record(recorded)?;
         self.stage = Stage::CorrectionAccounting;
+        Ok(())
+    }
+
+    pub(super) fn recorded_empty_correction_refusal(
+        &mut self,
+        recorded: SourcePosition,
+    ) -> Result<(), RepairError> {
+        self.require(Stage::EmptyRefusal)?;
+        self.record(recorded)?;
+        let correction = self
+            .pending
+            .take()
+            .expect("empty refusal retains its correction");
+        self.account.as_mut().unwrap().corrections.push(correction);
+        // The refusal's actual record is the only transition that counts this
+        // attempt. No pair or replacement statement is created for empty output.
+        self.failed_attempt();
         Ok(())
     }
 

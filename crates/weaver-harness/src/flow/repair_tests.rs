@@ -666,27 +666,82 @@ fn cancellation_and_freeze_preserve_evidence_without_a_success_grant() {
 }
 
 #[test]
-fn a_completely_empty_correction_remains_an_owned_spec_gap_without_success_retry_or_halt() {
+fn empty_corrections_count_once_after_recorded_refusal_and_reach_the_cap() {
+    let original = original_at(10, vec![text("bad")], vec![rejected()]);
+    let mut ledger = RepairLedger::begin(original, 2).unwrap();
+    request(&mut ledger, 40);
+    for (index, correction_sequence) in [100, 200].into_iter().enumerate() {
+        let empty = original_at(correction_sequence, vec![], vec![]);
+        assert_eq!(
+            ledger.observe_correction(&source(10, 0), empty).unwrap(),
+            CorrectionProgress::EmptyCorrectionRefusal
+        );
+        assert_eq!(
+            ledger.intent(),
+            RepairIntent::EmptyCorrectionRefusal {
+                source: source(10, 0),
+                correction: record(correction_sequence),
+            }
+        );
+        assert_eq!(ledger.failed_corrections(), Some(index as u32));
+        assert!(ledger.take_effective().unwrap().is_none());
+        assert!(ledger.take_exhausted().is_none());
+        assert!(ledger.take_correction_accounting().is_none());
+        assert_eq!(
+            ledger.recorded_empty_correction_refusal(record(correction_sequence)),
+            Err(RepairError::OutOfOrder)
+        );
+        assert_eq!(ledger.failed_corrections(), Some(index as u32));
+        ledger
+            .recorded_empty_correction_refusal(record(correction_sequence + 1))
+            .unwrap();
+        assert_eq!(ledger.failed_corrections(), Some(index as u32 + 1));
+        assert_eq!(
+            ledger.recorded_empty_correction_refusal(record(correction_sequence + 2)),
+            Err(RepairError::WrongPhase)
+        );
+        assert_eq!(ledger.failed_corrections(), Some(index as u32 + 1));
+        if index == 0 {
+            assert!(
+                matches!(ledger.intent(), RepairIntent::Instruction { attempt, .. } if attempt.0 == 2)
+            );
+            let account = ledger.account.as_ref().unwrap();
+            let instruction = expansion("run", account.scheme());
+            ledger
+                .recorded_instruction(instruction, record(140))
+                .unwrap();
+        }
+    }
+    assert!(
+        matches!(ledger.intent(), RepairIntent::ExhaustedRecord { failed_corrections, .. } if failed_corrections.0 == 2)
+    );
+    assert_eq!(ledger.account.as_ref().unwrap().corrections().len(), 2);
+    assert!(ledger.account.as_ref().unwrap().requests().is_empty());
+    assert!(ledger.take_effective().unwrap().is_none());
+}
+
+#[test]
+fn empty_correction_cancellation_retains_original_and_pending_generation() {
     let original = original_at(10, vec![text("bad")], vec![rejected()]);
     let mut ledger = RepairLedger::begin(original, 2).unwrap();
     request(&mut ledger, 40);
     let empty = original_at(100, vec![], vec![]);
+    ledger.observe_correction(&source(10, 0), empty).unwrap();
+    ledger.cancel();
     assert_eq!(
-        ledger.observe_correction(&source(10, 0), empty).unwrap(),
-        CorrectionProgress::EmptyCorrectionGap
+        ledger.recorded_empty_correction_refusal(record(101)),
+        Err(RepairError::WrongPhase)
     );
-    assert!(matches!(
-        ledger.intent(),
-        RepairIntent::EmptyCorrectionGap { .. }
-    ));
     assert_eq!(ledger.failed_corrections(), Some(0));
     assert!(ledger.take_effective().unwrap().is_none());
-    assert!(ledger.take_exhausted().is_none());
-    ledger.cancel();
+    let cancelled = ledger.take_cancelled().unwrap();
+    assert_eq!(cancelled.account().source(), &record(10));
+    assert_eq!(
+        cancelled.pending().unwrap().generation().source(),
+        &record(100)
+    );
     assert!(
-        ledger
-            .take_cancelled()
-            .unwrap()
+        cancelled
             .pending()
             .unwrap()
             .generation()
@@ -695,6 +750,48 @@ fn a_completely_empty_correction_remains_an_owned_spec_gap_without_success_retry
             .content
             .is_empty()
     );
+}
+
+#[test]
+fn empty_original_empty_text_and_call_only_corrections_remain_distinct() {
+    let mut empty_original = RepairLedger::begin(original_at(10, vec![], vec![]), 2).unwrap();
+    assert!(
+        empty_original
+            .take_effective()
+            .unwrap()
+            .unwrap()
+            .statements()
+            .is_empty()
+    );
+    for (content, results, expected) in [
+        (vec![text("")], vec![rejected()], CorrectionProgress::Retry),
+        (
+            vec![call("opaque")],
+            vec![],
+            CorrectionProgress::ProtocolRefusal,
+        ),
+        (
+            vec![ContentBlock::UnrecoveredCall {
+                fragment: "<partial>".into(),
+            }],
+            vec![],
+            CorrectionProgress::ProtocolRefusal,
+        ),
+    ] {
+        let mut ledger =
+            RepairLedger::begin(original_at(10, vec![text("bad")], vec![rejected()]), 2).unwrap();
+        request(&mut ledger, 40);
+        assert_eq!(
+            ledger
+                .observe_correction(&source(10, 0), original_at(100, content, results))
+                .unwrap(),
+            expected
+        );
+        assert!(!matches!(
+            ledger.intent(),
+            RepairIntent::EmptyCorrectionRefusal { .. }
+        ));
+    }
 }
 
 #[test]
