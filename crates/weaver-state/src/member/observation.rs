@@ -195,13 +195,9 @@ impl OperationSample {
 
     /// Call after the operation payload has been encoded. Metadata insertion
     /// and wrapper encoding happen later, outside this operation interval.
-    pub(super) fn finish(
-        self,
-        copied_bytes: impl Into<BufferBytes>,
-        held_bytes: impl Into<BufferBytes>,
-    ) -> io::Result<StateOperationObservation> {
-        let copied_bytes = copied_bytes.into().value();
-        let held_bytes = held_bytes.into().value();
+    pub(super) fn finish(self) -> io::Result<StateOperationObservation> {
+        let copied_bytes = self.copied.value();
+        let held_bytes = self.held.value();
         let ended_ns = monotonic_ns()?;
         #[cfg(test)]
         super::tests::timing::observation_end(ended_ns);
