@@ -1075,8 +1075,9 @@ fn begin_task_rejects_out_of_range_and_nonadjacent_catalog_ids() {
             failure,
             RunFailure::Flow {
                 reason: FlowHaltReason::ProtocolFailed,
+                ref detail,
                 ..
-            }
+            } if detail == "malformed begin_task mark catalog"
         ));
         assert!(fx.input.records(Kind::StateMark).is_empty());
         assert!(
