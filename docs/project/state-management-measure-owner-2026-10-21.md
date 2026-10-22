@@ -54,9 +54,11 @@ and deployment remain held until the coupled foundation cutover. The
 
 The later place owner still owes BootHead, budget admission, source maps, the journal,
 marks, recorded placement and the single-use append grant. This measurement result
-does not replace any of them. The known OPEN-FACTS identity-prefix carrier gap and
-the unmerged recall amendment #189 remain open. Production language and capacity
-qualification are also separate obligations.
+does not replace any of them. The paired OPEN-FACTS carrier is specified in
+[Spec 06] and [TYPES-DECODE]; this slice implements no Open evidence owner or
+producer. The carrier proposal's approval and merge precede that implementation.
+Recall provenance #189 is merged, with boot/placement consumption still owed.
+Production language and capacity qualification remain separate obligations.
 
 ## Validation
 
