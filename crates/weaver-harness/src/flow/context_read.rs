@@ -171,6 +171,7 @@ impl RecordingContext {
         self.begin_read_with_purpose(ReadSelector::Marks {}, Some(turn), ReadPurpose::Marks, io)
     }
 
+    #[allow(clippy::result_large_err)] // Return the exact selector with admission refusal.
     pub(super) fn begin_inward_read(
         &mut self,
         call: weaver_types::state_flow::CallId,
@@ -211,7 +212,12 @@ impl RecordingContext {
         let inward = match &purpose {
             ReadPurpose::Inward(call) if self.inward_read_allowed(call) => Some(call.clone()),
             ReadPurpose::Inward(_) => {
-                return Err(ReadBeginError { selector, turn, refusal: ReadBeginRefusal::Busy, failure: None });
+                return Err(ReadBeginError {
+                    selector,
+                    turn,
+                    refusal: ReadBeginRefusal::Busy,
+                    failure: None,
+                });
             }
             _ => None,
         };
@@ -297,10 +303,15 @@ impl RecordingContext {
             complete: false,
             rejected: None,
         });
-        if let Some(call) = &inward {
-            if let Err(failure) = self.admit_inward_read(call, io) {
-                return Err(ReadBeginError { selector, turn, refusal: ReadBeginRefusal::WrongPhase, failure: Some(failure) });
-            }
+        if let Some(call) = &inward
+            && let Err(failure) = self.admit_inward_read(call, io)
+        {
+            return Err(ReadBeginError {
+                selector,
+                turn,
+                refusal: ReadBeginRefusal::WrongPhase,
+                failure: Some(failure),
+            });
         }
         match self.queue_read_leg(io) {
             Ok(true) => Ok(()),

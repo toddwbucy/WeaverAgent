@@ -136,10 +136,13 @@ impl CompletedPair {
         &self.result
     }
     pub(in crate::flow) fn recalled(&self) -> Option<&super::RecordedRead> {
-        self.inward.as_ref().and_then(|evidence| match evidence {
-            super::inward_recall::InwardEvidence::Read(super::ReadCompletion::Recorded(read)) => Some(read),
+        let super::inward_recall::InwardEvidence::Read(completion) = self.inward.as_ref()? else {
+            return None;
+        };
+        match completion.as_ref() {
+            super::ReadCompletion::Recorded(read) => Some(read),
             _ => None,
-        })
+        }
     }
 }
 
@@ -281,7 +284,9 @@ impl PairLedger {
 
     pub(super) fn start_inward(&mut self, call: &CallId) -> Result<(), PairError> {
         self.live()?;
-        let ready = self.next_ready().filter(|ready| &ready.call_id == call)
+        let ready = self
+            .next_ready()
+            .filter(|ready| &ready.call_id == call)
             .ok_or(PairError::WrongPhase)?;
         if ready.lane != PairLane::Recall || !matches!(ready.request, PairRequest::Recall { .. }) {
             return Err(PairError::UnsupportedLane);
@@ -312,9 +317,12 @@ impl PairLedger {
         };
         let entry = self.entry_mut(call).expect("checked inward owner");
         entry.ending = Some(PairEnded {
-            call_id: call.clone(), execution: None,
-            fate: TerminalPairFate::Completed, reason: None,
-            outcome: Some(outcome), loaded_from: None,
+            call_id: call.clone(),
+            execution: None,
+            fate: TerminalPairFate::Completed,
+            reason: None,
+            outcome: Some(outcome),
+            loaded_from: None,
         });
         entry.inward = Some(evidence);
         Ok(())
@@ -1301,7 +1309,8 @@ impl PairLedger {
                 Some(OutstandingPair {
                     call_id: entry.started.call_id.clone(),
                     state: if entry.terminal_authoring
-                        || ((entry.execution.is_some() || entry.internal_started) && entry.ending.is_some())
+                        || ((entry.execution.is_some() || entry.internal_started)
+                            && entry.ending.is_some())
                     {
                         PairState::Ending
                     } else if entry.internal_started {

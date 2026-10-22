@@ -39,8 +39,7 @@ before acceptance retains the still-unexecuted pair under its existing request w
 Partial pages, unrelated progress and cleanup never restart the read bound.
 
 A success retains the private RecordedRead after complete validation, one
-acquired-cursor
-release and recall Recorded. Its entire original encoded QueryResult becomes the
+acquired-cursor release and recall Recorded. Its entire original encoded QueryResult becomes the
 ToolOutcome::Result content. The pair retains that read provenance after completion.
 Nested held statements remain their original sources and are not filed again.
 
@@ -72,8 +71,7 @@ continues to refuse invalid recall shape before this owner receives a ready requ
 
 HARNESS-CLOCK locates Cut after the preceding turn closes and before decode work for the
 next turn. HARNESS-READ requires prepare_cut before mandatory fresh history, then
-retires
-Cut before the read deadline starts. Model-elected inward recall is an active-turn
+retires Cut before the read deadline starts. Model-elected inward recall is an active-turn
 operation with its ordinary bounded read contract. This slice adds no active-turn Cut
 or new freshness policy. The between-turn freshness primitive keeps its open-turn and
 pair-owner exclusions. Mandatory automatic retrieval composes that primitive separately.
@@ -114,7 +112,6 @@ pending the root's serialized Cargo lane. No test pass or protective kill is cla
 No worker/dev_loop, serving activation, instruction policy or final-answer policy is
 changed. RETURN-CARRY placement acknowledgement, fresh-result material, review lane,
 boot repair, complete journal/place ownership, failed-run integration and coupled
-cutover
-remain separate obligations. Production artifacts, prompts, corpus qualification and
+cutover remain separate obligations. Production artifacts, prompts, corpus qualification and
 measured limits remain owed. Synthetic peers and the supplied reference PDF qualify none
 of those artifacts. The operator alone merges, and all new PRs remain drafts.

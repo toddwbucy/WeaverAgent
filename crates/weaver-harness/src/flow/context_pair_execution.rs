@@ -329,7 +329,10 @@ impl RecordingContext {
         }
     }
 
-    pub(super) fn arm_pair_terminal_wait(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+    pub(super) fn arm_pair_terminal_wait(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
         if self
             .pair_work
             .as_ref()

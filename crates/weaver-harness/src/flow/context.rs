@@ -1541,12 +1541,12 @@ mod output_tests;
 #[path = "context_output_receipt_tests.rs"]
 mod output_receipt_tests;
 
+#[path = "context_inward_recall.rs"]
+mod inward_recall;
 #[path = "context_pairs.rs"]
 mod pair_driver;
 #[path = "context_pair_execution.rs"]
 mod pair_execution;
-#[path = "context_inward_recall.rs"]
-mod inward_recall;
 #[allow(unused_imports)]
 pub(super) use inward_recall::{InwardProgress, InwardRefusal};
 #[path = "pairs.rs"]

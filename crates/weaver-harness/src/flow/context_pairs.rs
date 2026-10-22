@@ -338,7 +338,11 @@ impl RecordingContext {
             return Ok(PairProgress::Pending);
         }
         self.pair_wait_matches(ports.io)?;
-        if self.pair_work.as_ref().is_some_and(|work| work.inward.is_some()) {
+        if self
+            .pair_work
+            .as_ref()
+            .is_some_and(|work| work.inward.is_some())
+        {
             return Ok(PairProgress::Pending);
         }
         if self
