@@ -68,7 +68,7 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
                 detail: error.detail,
                 block_id: None,
             };
-            let (observation, payload) = complete(payload, sample)?;
+            let (observation, payload) = complete(payload, sample, None)?;
             // A rejected open has no adopted run in which to retain metadata.
             channel.send(wrap(&common, "refused", &payload, &observation)?)?;
             return Ok(());
@@ -82,7 +82,7 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
         read_limits: read_limits.clone(),
         member_observation: identity.clone(),
     };
-    let (observation, payload) = complete(payload, sample)?;
+    let (observation, payload) = complete(payload, sample, None)?;
     store
         .begin_observations(&identity, &observation)
         .map_err(|e| invalid(e.to_string()))?;
@@ -109,29 +109,18 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
             StateFrame::FilePair { filing, .. } => Some(filing.block_id.clone()),
             _ => None,
         };
-        let (mut payload, initial_read) = session.dispatch(request, room, &mut sample)?;
+        let (payload, initial_read) = session.dispatch(request, room, &mut sample)?;
         let op = payload.op();
         let close = matches!(payload, Reply::Refused { .. });
-        sample.phase_begin(PhaseName::Encode)?;
-        let mut encoded = encode_payload(&payload);
-        let reserve = wrapper_reserve(&common, op)?;
-        if op == "control_answer"
-            && encoded.as_ref().map_or(true, |b| {
-                b.len().saturating_add(reserve) > STATE_ANSWER_LINE_BOUND
-            })
-        {
-            session.pages.refuse_page(initial_read);
-            payload = Reply::Control(StateControlAnswer::ControlRefused {
-                code: ControlRefusalCode::Read(ReadRefusalCode::AnswerTooLarge),
-                detail: "complete control answer exceeds ANSWER_BOUND".into(),
-            });
-            encoded = encode_payload(&payload);
-        }
-        let encoded = encoded?;
-        sample.phase_end(PhaseName::Encode)?;
-        // The encoded answer remains owned here at the ended_ns boundary.
-        // Complete copy/holding accounting is still unavailable, not zero.
-        let observation = sample.finish(None, None)?;
+        let (observation, encoded) = complete(
+            payload,
+            sample,
+            Some(CompletionBounds {
+                common: &common,
+                pages: &mut session.pages,
+                initial_read,
+            }),
+        )?;
         #[cfg(test)]
         tests::process::before_record_observation(
             &mut session.store,
@@ -389,8 +378,9 @@ fn sampled_request(line: &[u8], operation_id: u64) -> io::Result<(OperationSampl
     Ok((sample, request))
 }
 
-/// This hint decides only whether to sample lifecycle resources. The strict floor
-/// decoder below remains the sole authority for all request shape and identity.
+/// This hint labels the operation while preserving its pre-parse timestamp. The
+/// strict floor decoder remains the authority for request shape and identity;
+/// snapshot resource sampling starts later, after capture preflight.
 fn peek_operation(line: &[u8]) -> io::Result<(DecimalU64, StateOperation)> {
     #[cfg(test)]
     tests::timing::before_peek();
@@ -439,13 +429,40 @@ fn peek_operation(line: &[u8]) -> io::Result<(DecimalU64, StateOperation)> {
     Ok((request, op))
 }
 
+struct CompletionBounds<'a> {
+    common: &'a Common,
+    pages: &'a mut Pages,
+    initial_read: bool,
+}
+
+/// All serving replies share this payload-encoding and observation boundary.
+/// Open has no page state; later replies retain the complete-answer fallback.
 fn complete(
-    payload: Reply,
+    mut payload: Reply,
     mut sample: OperationSample,
+    bounds: Option<CompletionBounds<'_>>,
 ) -> io::Result<(StateOperationObservation, Vec<u8>)> {
     sample.phase_begin(PhaseName::Encode)?;
-    let encoded = encode_payload(&payload)?;
+    let mut encoded = encode_payload(&payload);
+    if let Some(bounds) = bounds {
+        let reserve = wrapper_reserve(bounds.common, payload.op())?;
+        if payload.op() == "control_answer"
+            && encoded.as_ref().map_or(true, |bytes| {
+                bytes.len().saturating_add(reserve) > STATE_ANSWER_LINE_BOUND
+            })
+        {
+            bounds.pages.refuse_page(bounds.initial_read);
+            payload = Reply::Control(StateControlAnswer::ControlRefused {
+                code: ControlRefusalCode::Read(ReadRefusalCode::AnswerTooLarge),
+                detail: "complete control answer exceeds ANSWER_BOUND".into(),
+            });
+            encoded = encode_payload(&payload);
+        }
+    }
+    let encoded = encoded?;
     sample.phase_end(PhaseName::Encode)?;
+    // The encoded answer remains owned here at the ended_ns boundary.
+    // Complete copy/holding accounting is still unavailable, not zero.
     let observation = sample.finish(None, None)?;
     Ok((observation, encoded))
 }

@@ -595,7 +595,7 @@ pub(crate) fn load_record() -> LoadRecord {
         clock_source: ClockSource::ClockMonotonic,
         origin_ns: 9_007_199_254_740_993.into(),
         state_member_observation: MemberObservationIdentity {
-            instrument_version: "state-observation/1".into(),
+            instrument_version: "state-observation/2".into(),
             pid: 123,
             start_ticks: Some(100.into()),
             ticks_per_second: Some(100.into()),
