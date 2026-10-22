@@ -86,6 +86,7 @@ impl RecordingContext {
             });
         }
         if self.freshness.is_some()
+            || self.open_turn.is_some()
             || self.input.snapshot().is_some()
             || self.input_author.is_some()
             || self.input_turn.is_some()

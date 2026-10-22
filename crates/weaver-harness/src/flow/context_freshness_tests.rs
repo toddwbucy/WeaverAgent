@@ -76,6 +76,68 @@ fn finish(fx: &mut ReceiptFixture, reject: Option<&str>) -> FreshnessCompletion 
 }
 
 #[test]
+fn freshness_refuses_a_recorded_open_turn_until_its_close_records() {
+    let mut fx = fixture(100);
+    let turn = weaver_trace::TurnRef("freshness-boundary".into());
+    fx.input
+        .run
+        .author(AuthoredEvent {
+            kind: Kind::TurnStarted,
+            subsystem: weaver_trace::Subsystem::Harness,
+            turn: Some(turn.clone()),
+            source: AuthoredSource::Runtime,
+            causal_parent: None,
+            payload: None,
+        })
+        .unwrap();
+    assert_eq!(fx.input.run.context.open_turn.as_ref(), Some(&turn));
+    assert!(fx.input.run.context.input.snapshot().is_none());
+    assert!(fx.input.run.context.input_turn.is_none());
+    assert!(fx.input.run.context.output.is_none());
+    let ids = sources(Sequence(987), 1);
+    let error = fx
+        .input
+        .run
+        .context
+        .prepare_cut(ids.clone(), &mut fx.input.run.clock)
+        .unwrap_err();
+    assert_eq!(error.refusal, FreshnessBeginRefusal::Busy);
+    assert_eq!(error.required_ids, ids);
+    assert!(error.failure.is_none());
+    assert!(fx.input.run.context.freshness.is_none());
+    assert!(
+        fx.input
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::Cut)
+            .is_none()
+    );
+    assert_eq!(fx.input.run.context.open_turn.as_ref(), Some(&turn));
+    fx.input
+        .run
+        .author(AuthoredEvent {
+            kind: Kind::TurnClosed,
+            subsystem: weaver_trace::Subsystem::Harness,
+            turn: Some(turn),
+            source: AuthoredSource::Runtime,
+            causal_parent: None,
+            payload: Some(Payload::TurnClosed(weaver_trace::TurnClose::Clean)),
+        })
+        .unwrap();
+    assert!(fx.input.run.context.open_turn.is_none());
+    assert_eq!(fx.input.records(Kind::TurnStarted).len(), 1);
+    assert_eq!(fx.input.records(Kind::TurnClosed).len(), 1);
+    let bound = begin(&mut fx, vec![]);
+    let FreshnessCompletion::Prepared(prepared) = finish(&mut fx, None) else {
+        panic!("closed turn did not admit the filing pause");
+    };
+    assert_eq!(prepared.bound(), bound);
+    assert!(prepared.required_ids().is_empty());
+    assert!(fx.input.run.context.failure().is_none());
+}
+
+#[test]
 fn freshness_requires_each_selected_recorded_disposition_and_releases_cut_before_read() {
     let mut fx = fixture(100);
     let sequence = fx
