@@ -1,12 +1,13 @@
 # Malformed recall request proposal
 
-## Election requested
+## Approved election
 
 Issue #146 still needs a disposition for an accepted recall Binding with several nouns
 or a governing condition. This proposal elects a typed refusal before pair creation,
 retaining the reserved CallId, original Text index and exact StatementRef. It does not
-select a subject or manufacture a model-facing tool return. The operator has not ruled
-on that choice. Review and merge of the owning clauses must precede implementation.
+select a subject or manufacture a model-facing tool return. The [operator approved this
+choice on 2026-10-22][ruling], including the documented model-feedback tradeoff. This
+election supplies no runtime implementation. PR #241 carries review and merge status.
 
 The baseline is merged main c2646e293c8c1bb4376c4b9ea1d41cbebcc080b2. The edited Spec
 headers describe the intended documents after merge, not an approval of this draft.
@@ -135,11 +136,11 @@ This act changes documentation only. Static checks passed for ASCII and 88-colum
 prose in all 12 changed or new files, all ten README/header versions, all ten preserved
 Date filed values, 49 local link targets, added prose without semicolons and diff
 whitespace. A second author reading found no concrete semantic contradiction in the
-proposed rule. This is not a Planner grade or operator approval.
+proposed rule. These static checks are not a Planner grade or runtime evidence.
 
-The lock gate passed. Draft PR #241 retains this proposal and the required evidence
-list. No Cargo test, runtime source change or qualification run is claimed. Planner
-verification, operator election and merge remain required before implementation.
+The lock gate passed. PR #241 retains this proposal and the required evidence list.
+No Cargo test, runtime source change or qualification run is claimed. A design ruling
+does not replace review or the merged-Spec authority required for implementation.
 
 ## Planner consistency follow-up
 
@@ -148,13 +149,15 @@ correction supplies the exact private account carriers, the saved-pair adoption 
 and its existing open_failed family, the per-binding noun minimum, the precise
 message.assistant parent, the existing Answer act representation and the distinction
 between pre-pair refusal recording and conforming pair order. The model-feedback
-tradeoff is explicit above and remains part of the operator's pending election.
+tradeoff is explicit above and was included in the operator's approval on 2026-10-22.
 
-These are proposal corrections, not an approval or implementation result. ASCII,
+These consistency corrections supply no runtime implementation result. ASCII,
 88-column added prose, no added semicolons or prohibited words, all 20 local link
 targets, seven header/index versions and preserved Date filed values, and diff
-whitespace checks
-pass across this follow-up's eight changed files. The earlier lock result describes the
-initial published proposal. No Cargo or runtime check is claimed for these corrections.
+whitespace checks pass across this follow-up's eight changed files. The lock gate also
+passed after these consistency corrections. No Cargo or runtime check is claimed for
+these corrections.
 
 [review]: https://github.com/toddwbucy/WeaverAgent/pull/241#pullrequestreview-5609645425
+
+[ruling]: https://github.com/toddwbucy/WeaverAgent/pull/241#issuecomment-6333814785
