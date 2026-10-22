@@ -950,9 +950,13 @@ fn malformed_or_mismatched_results_and_eof_preserve_the_outstanding_request() {
         ScriptStep::Bytes(b"{broken}\n".to_vec()),
         ScriptStep::Close,
     ] {
+        let closes = matches!(&step, ScriptStep::Close);
         let (mut classifier, mut peer) = guard([step]);
         classifier.submit(first.clone()).unwrap();
         peer.advance().unwrap();
+        if closes {
+            await_terminal(classifier.readiness(), libc::POLLHUP);
+        }
         assert!(classifier.try_result().is_err());
         assert_eq!(classifier.state(), ClassifierState::Failed);
         assert_eq!(classifier.outstanding(), Some(&first));

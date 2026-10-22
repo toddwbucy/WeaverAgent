@@ -55,6 +55,8 @@ pub(super) enum RunFailure {
     RepairOwned,
     /// A measurement owns the decode exchange or its exact pending author.
     MeasureOwned,
+    /// A read retains its result, recall author or completed proof.
+    ReadOwned,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -652,6 +654,10 @@ impl RecordingContext {
                 return Err(failure);
             }
         };
+        if self.read.is_some() {
+            self.retain_refused(event);
+            return Err(RunFailure::ReadOwned);
+        }
         if self.repair_blocks_external() {
             self.retain_refused(event);
             return Err(RunFailure::RepairOwned);
@@ -810,6 +816,9 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
         self.live(ports.io)?;
+        if self.read.is_some() {
+            return Err(RunFailure::ReadOwned);
+        }
         if self.repair_blocks_external() {
             return Err(RunFailure::RepairOwned);
         }
@@ -1095,6 +1104,9 @@ impl RecordingContext {
     /// Lifecycle, gate, decoder and label completions remain in their own slots.
     pub(super) fn reduce_flow(&mut self, io: &mut impl PumpIo) -> Result<Advance, RunFailure> {
         self.live(io)?;
+        if self.read_blocks_reduction() {
+            return Ok(Advance::Pending);
+        }
         let wall_ms = wall_ms().map_err(|detail| {
             self.fail(io, FlowHaltReason::TraceFailed, HaltPoint::Author, detail)
         })?;
@@ -1513,7 +1525,9 @@ mod repair_tests;
 #[path = "context_read.rs"]
 mod read_driver;
 #[allow(unused_imports)] // Composed by dependent boot, recall and placement primitives.
-pub(super) use read_driver::{ReadBeginError, ReadBeginRefusal, ReadProgress};
+pub(super) use read_driver::{
+    CancelledRead, ReadBeginError, ReadBeginRefusal, ReadCompletion, ReadProgress, RecordedRead,
+};
 
 #[cfg(test)]
 #[path = "context_read_tests.rs"]
