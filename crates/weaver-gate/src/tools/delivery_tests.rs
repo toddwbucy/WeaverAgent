@@ -201,3 +201,61 @@ fn peer_closure_observed_by_a_wait_keeps_its_identity_when_that_wait_crosses_the
         Err(ShellEnd::Channel(ChannelFault::Closed))
     ));
 }
+
+/// A failed assertion or a protective mutant must not leave the real child.
+/// Its cleanup is bounded even if the host cannot reap a killed process.
+struct ReapChild(std::process::Child);
+
+impl Drop for ReapChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let end = Instant::now() + Duration::from_secs(2);
+        loop {
+            match self.0.try_wait() {
+                Ok(Some(_)) | Err(_) => break,
+                Ok(None) if Instant::now() >= end => break,
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+    }
+}
+
+#[test]
+fn a_retained_refusal_cannot_cross_the_original_bound_during_leader_reap() {
+    let (gate, peer) = pair();
+    let foreign = misplaced(&peer);
+    let active = exchange();
+    let mut supervisor = ContainmentSupervisor::new(
+        Supervision::new(&gate, &active),
+        Ok(Some(KillCause::Unload)),
+    );
+    supervisor.wait(Duration::ZERO, None);
+    let retained = supervisor.supervision.pending_refusal.clone().unwrap();
+    let mut child = ReapChild(
+        std::process::Command::new("/bin/sleep")
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    assert!(child.0.try_wait().unwrap().is_none());
+    let deadline = Instant::now() + Duration::from_millis(100);
+    // reap_within progresses the channel even before its first nonblocking
+    // child check. Force that actual zero-time wait past the shared deadline.
+    delay_next_wait_until(deadline + Duration::from_millis(1));
+    assert!(reap_supervised(&mut child.0, deadline, &mut supervisor).is_none());
+    assert_wait_delay_consumed();
+    assert!(Instant::now() >= deadline);
+    assert_eq!(
+        supervisor.supervision.pending_refusal.as_ref(),
+        Some(&retained)
+    );
+    assert_no_peer_answer(&peer);
+    assert!(
+        matches!(supervisor.finish(deadline), Err(ShellEnd::DeliveryBound {
+        exchange: failed, answer: UndeliveredAnswer::OutOfOrder,
+    }) if failed == foreign)
+    );
+}
