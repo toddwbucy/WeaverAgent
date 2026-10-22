@@ -230,7 +230,7 @@ impl RecordingContext {
             .pair_work
             .as_ref()
             .and_then(|work| work.send.as_ref())
-            .is_some_and(|ticket| ticket.sent())
+            .is_some_and(|ticket| ticket.sent() && ticket.matches_exchange(exchange))
         {
             return Ok(false);
         }

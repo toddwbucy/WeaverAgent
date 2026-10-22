@@ -52,7 +52,7 @@ fn fail_state(fx: &mut PairFixture) -> RunFailure {
     ));
     failure
 }
-fn report(fx: &mut PairFixture) {
+fn install_report(fx: &mut PairFixture) {
     let run = &mut fx.output.input.run;
     let context = &mut run.context;
     context
@@ -64,8 +64,12 @@ fn report(fx: &mut PairFixture) {
         })
         .unwrap();
     context.begin_halt_report().unwrap();
+}
+fn report(fx: &mut PairFixture) {
+    install_report(fx);
+    let run = &mut fx.output.input.run;
     assert!(matches!(
-        context.advance_halt_trace(&mut run.clock).unwrap(),
+        run.context.advance_halt_trace(&mut run.clock).unwrap(),
         super::super::super::HaltTraceProgress::FaultRecorded(_)
     ));
 }
@@ -323,24 +327,21 @@ fn halt_gate_foreign_port_cannot_supply_a_matching_execution_number() {
 }
 
 #[test]
-fn halt_gate_wrong_exchange_position_and_forged_fault_retain_raw_without_a_terminal() {
-    for changed in 0..4 {
+fn halt_gate_wrong_position_and_forged_fault_retain_raw_without_a_terminal() {
+    for forged_fault in [false, true] {
         let mut fx = fixture(true);
         let call = ready(&mut fx);
         let (mut port, peer) = gate();
         sent(&mut fx, &mut port, &peer, &call);
         start(&mut fx, &port);
         let mut frame = killed();
-        match changed {
-            0 => frame.exchange.ordinal += 1,
-            1 => frame.exchange.opener = Opener::Gate,
-            2 => frame.position = Position::Continue,
-            _ => {
-                frame.payload = OrganPayload::ToolAnswer(ToolOutcome::Killed {
-                    by: KillCause::Fault,
-                    partial: None,
-                })
-            }
+        if forged_fault {
+            frame.payload = OrganPayload::ToolAnswer(ToolOutcome::Killed {
+                by: KillCause::Fault,
+                partial: None,
+            });
+        } else {
+            frame.position = Position::Continue;
         }
         let raw = reply(&peer, &frame);
         assert_eq!(advance(&mut fx, &mut port), Progress::Unavailable);
@@ -693,3 +694,6 @@ fn halt_gate_raced_result_withdraws_the_backpressured_interrupt() {
             .interrupt_sent()
     );
 }
+
+#[path = "context_halt_gate_review_tests.rs"]
+mod review;

@@ -1,6 +1,6 @@
 //! Fresh material consumes a real completed begin_task, not an inspection copy.
 use super::*;
-use crate::flow::material::{HeldMaterial, MaterialFailure, SelectedUnit};
+use crate::flow::material::{HeldMaterial, MaterialFailure, SelectedUnit, TaskMaterialError};
 use std::sync::Arc;
 use weaver_traits::{ContentBlock, Message, Role};
 
@@ -231,6 +231,7 @@ fn task_material_foreign_context_returns_exact_owner_even_with_equal_source_ids(
         error.failure,
         Some(RunFailure::Flow {
             reason: FlowHaltReason::ProtocolFailed,
+            point: HaltPoint::Barrier,
             ..
         })
     ));
@@ -244,6 +245,209 @@ fn task_material_foreign_context_returns_exact_owner_even_with_equal_source_ids(
     assert!(held.units()[0].belongs_to(&first.input.run.context));
     assert!(!held.units()[0].belongs_to(&second.input.run.context));
     assert!(!Arc::ptr_eq(held.units()[0].origin(), second_task.origin()));
+}
+
+fn empty_input_request(fx: &mut TaskFixture) -> s::Ste100Request {
+    fx.input.begin(TurnFrame::carry_from(br#"{"text":""}"#, 42));
+    for _ in 0..128 {
+        fx.input
+            .run
+            .context
+            .advance_input(&mut ports(&mut fx.input.run.clock))
+            .unwrap();
+        fx.input.classifier_transport();
+        if let Receive::Complete(message) = fx.input.peer.try_receive().unwrap() {
+            assert_eq!(message.tag, Tag::Request);
+            let request: s::Ste100Request =
+                s::decode_strict(std::str::from_utf8(&message.payload).unwrap()).unwrap();
+            assert!(request.text.is_empty());
+            assert!(matches!(request.target, s::Ste100Target::Input { .. }));
+            return request;
+        }
+    }
+    panic!("empty input did not cross the actual classifier socket");
+}
+
+#[test]
+fn task_material_empty_input_refusal_never_produces_a_successful_task() {
+    let mut fx = TaskFixture::new();
+    let prior_results = fx.input.records(Kind::Ste100Result).len();
+    let request = empty_input_request(&mut fx);
+    let reply = s::Ste100Reply {
+        request_id: request.request_id,
+        target: request.target,
+        scheme_id: request.scheme_id,
+        result: s::Ste100Result::NotSte100 {
+            code: s::Ste100DefectCode::NonSte100,
+            detail: "empty Text is non_ste100".into(),
+            spans: vec![],
+        },
+    };
+    fx.input.reply(&reply);
+    let mut closed = false;
+    for _ in 0..128 {
+        let progress = fx
+            .input
+            .run
+            .context
+            .advance_input(&mut ports(&mut fx.input.run.clock))
+            .unwrap();
+        assert!(
+            fx.input
+                .run
+                .context
+                .take_accepted_input(&mut fx.input.run.clock)
+                .unwrap()
+                .is_none()
+        );
+        if progress == InputProgress::CloseReady {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "the real non_ste100 refusal must settle");
+    assert_eq!(fx.input.run.context.phase(), RecordingPhase::Entered);
+    assert!(fx.input.run.context.marks.is_none());
+    let results = fx.input.records(Kind::Ste100Result);
+    assert_eq!(results.len(), prior_results + 1);
+    assert_eq!(
+        results[prior_results]["payload"],
+        serde_json::to_value(&reply).unwrap()
+    );
+    assert_eq!(fx.input.records(Kind::Refusal).len(), 1);
+    for kind in [
+        Kind::TurnStarted,
+        Kind::MessageUser,
+        Kind::StateMark,
+        Kind::Recall,
+    ] {
+        assert!(fx.input.records(kind).is_empty());
+    }
+    assert!(fx.requests.is_empty());
+}
+
+#[test]
+fn task_material_empty_input_cannot_acquire_an_accepted_classifier_grant() {
+    let mut fx = TaskFixture::new();
+    let prior_results = fx.input.records(Kind::Ste100Result);
+    let request = empty_input_request(&mut fx);
+    let reply = s::Ste100Reply {
+        request_id: request.request_id,
+        target: request.target,
+        scheme_id: request.scheme_id,
+        result: s::Ste100Result::Accepted { bindings: vec![] },
+    };
+    // Deliberately malformed peer bytes, not an AcceptedInput or BegunTask.
+    fx.input
+        .peer
+        .begin_send(
+            Tag::Reply,
+            reply.request_id.0,
+            serde_json::to_vec(&reply).unwrap(),
+        )
+        .unwrap();
+    for _ in 0..128 {
+        if !fx.input.peer.has_pending_send() {
+            break;
+        }
+        fx.input.peer.try_send().unwrap();
+    }
+    assert!(!fx.input.peer.has_pending_send());
+    let run = &mut fx.input.run;
+    assert!(
+        run.context
+            .flow
+            .transport_one(
+                &mut FlowRecording {
+                    barrier: &mut run.context.barrier,
+                    inbox: &mut run.context.inbox,
+                    budget: &mut run.context.budget,
+                    author: &run.context.author,
+                },
+                &mut run.clock,
+                TransportSource::Classifier,
+            )
+            .is_err()
+    );
+    let mut failure = None;
+    for _ in 0..128 {
+        if let Err(error) = run.context.advance_input(&mut ports(&mut run.clock)) {
+            failure = Some(error);
+            break;
+        }
+    }
+    assert!(matches!(
+        failure,
+        Some(RunFailure::Flow {
+            reason: FlowHaltReason::ClassifierFailed,
+            point: HaltPoint::Classifier,
+            ..
+        })
+    ));
+    let rejected = run
+        .context
+        .flow
+        .standing_classifier()
+        .unwrap()
+        .failure()
+        .unwrap();
+    assert_eq!(rejected.received.as_deref(), Some(&reply));
+    assert!(run.context.take_accepted_input(&mut run.clock).is_err());
+    assert!(run.context.marks.is_none());
+    assert_eq!(fx.input.records(Kind::Ste100Result), prior_results);
+    for kind in [Kind::TurnStarted, Kind::MessageUser, Kind::StateMark] {
+        assert!(fx.input.records(kind).is_empty());
+    }
+    assert!(fx.requests.is_empty());
+}
+
+#[test]
+fn task_material_internal_shape_fault_mapping_retains_the_real_task() {
+    let mut fx = TaskFixture::new();
+    fx.begin();
+    let task = begun(&mut fx);
+    let source = task.input().source().clone();
+    let message = task.input().message().clone();
+    let scope = task.scope().clone();
+    let origin = task.origin().clone();
+    let mark = task.mark().unwrap().sequence();
+    let requests = fx.requests.len();
+    // Defensive error-mapping probe. The real task remains valid and unchanged.
+    // No actual successful producer can supply an empty input or another role.
+    let error = fx.input.run.context.task_material_error(
+        TaskMaterialError {
+            kind: MaterialFailure::Invalid("defensive internal task shape probe"),
+            task: Box::new(task),
+            failure: None,
+        },
+        &mut fx.input.run.clock,
+    );
+    let failure = error.failure.as_ref().expect("internal defects must latch");
+    assert_eq!(
+        failure,
+        &RunFailure::Flow {
+            reason: FlowHaltReason::ProtocolFailed,
+            point: HaltPoint::Barrier,
+            detail: "defensive internal task shape probe".into(),
+        }
+    );
+    assert_eq!(fx.input.run.context.failure(), Some(failure));
+    assert_eq!(fx.input.run.context.phase(), RecordingPhase::Failed);
+    assert_eq!(
+        fx.input.run.context.halt().unwrap().first().point,
+        HaltPoint::Barrier
+    );
+    assert_eq!(error.task.input().source(), &source);
+    assert_eq!(error.task.input().message(), &message);
+    assert_eq!(error.task.scope(), &scope);
+    assert!(Arc::ptr_eq(error.task.origin(), &origin));
+    assert_eq!(error.task.mark().unwrap().sequence(), mark);
+    marks_driver::validation_tests::input_associations(&error.task);
+    marks_driver::validation_tests::mark_associations(&error.task);
+    assert_eq!(fx.requests.len(), requests);
+    assert_eq!(fx.input.records(Kind::MessageUser).len(), 1);
+    assert_eq!(fx.input.records(Kind::StateMark).len(), 1);
+    assert_eq!(fx.input.records(Kind::Recall).len(), 1);
 }
 
 #[test]

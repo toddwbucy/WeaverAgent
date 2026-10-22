@@ -45,8 +45,9 @@ A matching result already held, or received before the interrupt, keeps its
 original outcome. If it wins while the interrupt is still wholly unsent, that
 interrupt is withdrawn. PairLedger retains the exact raw answer beside its
 terminal account. A later socket failure cannot erase an already held result.
-Wrong-exchange, wrong-position, malformed or forged gate-death replies retain
-available raw evidence and never manufacture a valid terminal.
+Wrong-exchange tool replies retain their existing rejection account. Unrelated
+world/control traffic stays with its port owner. Wrong-position, malformed or
+forged gate-death replies retain available raw evidence without a valid terminal.
 
 Every advance checks the original halt deadline and common monotonic clock
 before and after bounded work. The earlier Leave cap is unchanged. Received
@@ -107,6 +108,67 @@ weaver-testing/state-management-146-olympus-2026-10-21/halt-gate. These are auth
 checks, not a Planner grade or complete production teardown qualification.
 The capture-admission defense has no fabricated capture fixture. Its prerequisite
 is part of the still-owed publication owner.
+
+## Planner follow-up at 872b545c
+
+Review 5611305834 found two blocking custody defects despite passing gates. Its
+independent perturbation pass killed eight of fourteen probes. Admission probes
+G2/G3 lacked fixtures, G4 still lacks a real capture prerequisite, and G10/G12/G13
+were equivalent under existing callers. The earlier author mutation report above
+is historical evidence, not a claim that the Planner reproduced every probe.
+
+The correction gives OrganSend its immutable staged ExchangeId. Healthy send
+reconciliation, halt admission and frozen reconciliation each require that exact
+exchange. A completed first call's ticket remains true evidence of that call
+when the second stage fails. It cannot mark the second call sent, authorize its
+interrupt or manufacture a withdrawal. The second call's exact failed input
+remains in PairTransaction.refused_send.
+
+Non-ToolAnswer traffic on another exchange stays held for its owner while the
+owed interrupt can cross. A late answer for a closed exchange enters the existing
+rejection account. That pending rejection cannot block the frozen, already-sent
+execution's matching terminal. Ordinary healthy rejection exclusivity remains.
+A second foreign tool return stays held rather than overwriting the rejection.
+Its later disposition remains owed to the teardown composition. No ordinary
+post-latch rejection author or state filing was introduced.
+
+A ledger entry already ended by harness gate-death closure, with no received gate
+terminal, is excluded from interruption admission. A received terminal remains
+eligible for retained accounting. Failed or busy interrupt staging preserves its
+original input in unstaged_interrupt. interrupt and its sealed send ticket exist
+only after successful staging. No kernel containment conclusion follows from
+these checks.
+
+Six added context tests use real generation, receipt, socket and report owners.
+They cover the oversized second stage, a held world frame, a closed-call late
+answer followed by the current terminal, a second foreign return, unattempted
+and aborted reports, and defensive staging-input retention. The staging helper
+test deliberately supplies actual busy/dead ports below the outer precheck. It
+pins that defensive transition without claiming an intervening reachable race.
+The additional private ledger test assumes the separate verified-death boundary
+and checks only that an existing GateFault closure is not reopened. It does not
+manufacture a public containment grant. The malformed fixture still checks wrong
+position and a forged Killed/Fault. Wrong ordinal/opener now check rejection.
+
+G4 remains unpinned by a truthful capture fixture because this slice does not own
+capture publication. G10 remains redundant behind the caller's sent check, and
+G13 behind Failed admission. G12's call check remains defensive behind exact
+execution matching and the ledger's sequential execution invariant. The original
+halt bound and post-work AbortRequired behavior are unchanged. Common-clock
+helper extraction and a new secondary-reason taxonomy are outside this fix.
+Context-port and ticket-port checks name separate retained owners. Neither
+substitutes for the new exchange association.
+
+The correction passed 20 focused halt-gate tests and the gate-death ledger
+regression, then the full harness suite: 1458 passed, with 18 inherited ignored
+cases. Strict all-target harness clippy, formatting and lock checks passed. All
+13 protective mutations compiled and failed their intended assertions. Every exact
+restored baseline passed and all 490 tested source hashes matched after restoration.
+The recipe is /tmp/weaver-pr251-followup-mutations.json. New logs and source hashes
+are retained at /tmp/weaver-146-evidence/review-round2-251/ and have not been
+deposited in shared storage. Independent author source review found no remaining
+concrete defect in this scoped correction. No production qualification, Planner
+re-grade, capture containment or completed teardown is claimed.
 
 ## Remaining executable work
 

@@ -798,6 +798,8 @@ impl RecordingContext {
 
         if !self.measure.as_ref().unwrap().failed_refusal_queued {
             if self.barrier.pending().is_some() {
+                // The barrier retains any actual trace-only sequence. This
+                // method's Some result remains exclusive to its own refusal.
                 if let Err(error) = self.barrier.resume_trace_only() {
                     self.measure_refusal_report_failed(
                         Some(now),

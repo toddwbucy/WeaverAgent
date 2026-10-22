@@ -437,7 +437,7 @@ pub(super) struct FlowCoordinator<P> {
     classifier_release: Option<ClassifierRelease>,
     refused_author: Option<RefusedAuthor>,
     #[cfg(test)]
-    control_busy_for_test: usize,
+    control_busy_for_test: VecDeque<ControlOperation>,
 }
 
 impl<P: Ste100Port> FlowCoordinator<P> {
@@ -504,7 +504,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             classifier_release: None,
             refused_author: None,
             #[cfg(test)]
-            control_busy_for_test: 0,
+            control_busy_for_test: VecDeque::new(),
         })
     }
 
@@ -575,8 +575,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
 
     /// Defensive boundary injection, not a competing operation or a receipt.
     #[cfg(test)]
-    pub(super) fn defer_control_for_test(&mut self, count: usize) {
-        self.control_busy_for_test = count;
+    pub(super) fn defer_control_once_for_test(&mut self, expected: ControlOperation) {
+        self.control_busy_for_test.push_back(expected);
     }
 
     /// Wake the common pump for a sample only when reduction can author it.
@@ -1312,7 +1312,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             classifier_release: None,
             refused_author: None,
             #[cfg(test)]
-            control_busy_for_test: 0,
+            control_busy_for_test: VecDeque::new(),
         })
     }
 
@@ -2037,8 +2037,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             return Ok(OperationStart::Busy(request));
         }
         #[cfg(test)]
-        if self.control_busy_for_test > 0 {
-            self.control_busy_for_test -= 1;
+        if let Some(expected) = self.control_busy_for_test.pop_front() {
+            assert_eq!(request, expected, "deferred control must match its owner");
             return Ok(OperationStart::Busy(request));
         }
         let now = io.now().map_err(|e| self.fail(cx, "clock", e))?;

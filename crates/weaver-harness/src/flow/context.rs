@@ -429,11 +429,10 @@ impl RecordingContext {
         if self.marks.is_some() {
             return Err(RunFailure::MarksOwned);
         }
-        if self.templates_block_content()
-            || self.output.is_some()
-            || self.read.is_some()
-            || self.inspection.is_some()
-        {
+        if self.inspection.is_some() {
+            return Err(RunFailure::InspectionOwned);
+        }
+        if self.templates_block_content() || self.output.is_some() || self.read.is_some() {
             return Ok(None);
         }
         let result = self.flow.take_operation_completion(&mut FlowRecording {
@@ -1188,6 +1187,7 @@ impl RecordingContext {
     /// Lifecycle, gate, decoder and label completions remain in their own slots.
     pub(super) fn reduce_flow(&mut self, io: &mut impl PumpIo) -> Result<Advance, RunFailure> {
         self.live(io)?;
+        self.resume_accepted_read(io)?;
         if self.read_blocks_reduction() {
             return Ok(Advance::Pending);
         }

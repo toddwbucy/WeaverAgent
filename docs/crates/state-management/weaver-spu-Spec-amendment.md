@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #232
 
-**Version:** 0.5 **Date filed:** 2026-10-20 **Parent:** weaver-spu-PRD
+**Version:** 0.7 **Date filed:** 2026-10-21 **Parent:** weaver-spu-PRD
 
 ## 0. Scope and owning clauses
 
@@ -46,7 +46,9 @@ check over this metadata. Identity rendering remains render_identity with no sch
 Message and no generation opener. No new Family trait method or family-independent
 marker syntax is needed. [FLOW-3, PROMPT-1, PLACE-1, CLASS-4]
 
-**SPU-OPEN.** After session.open succeeds, answer Opened with prefix_tokens from
+**SPU-OPEN.** Render the supplied identity once with render_identity and tokenize that
+complete string once. After session.open succeeds, answer Opened with the exact
+Open.session echo, prefix_tokens from
 Session::prefix_len, capacity from Session::capacity, generation_limit from the resolved
 max_tokens_per_turn and terminal_tokens equal to one. Use checked u64 conversion. The
 current renderer supplies one promoted terminator token under SPU Spec 4.3. A different
@@ -56,10 +58,48 @@ residency by existing failed-enter teardown, not a second Open. Reason: a resolv
 OperatorTunable generation limit is an SPU fact even when no declaration key carries it.
 [PLACE-1, PLACE-3, PLACE-5, PERSIST-6]
 
-Keep the request's template identity in model.request only. The prefix's reported count
-is the identity-prefix boundary, not another copy of its text. The first placement
-record correlates it with the earlier boot recall. No prompt is read or filed again.
-[PROMPT-1, FLOW-3, STORE-8]
+Opened also carries the following required, closed request and measurement objects as
+raw JSON boxes. These field orders are their emitted order. Unknown, missing or
+duplicate members are invalid at every object level. Counts, token IDs and offsets are
+JSON numbers with checked unsigned conversion. Strings retain their exact decoded
+contents. [PLACE-1, PLACE-5, FLOW-3, SEAM-2]
+
+```text
+request = {rendered: String, template: String}
+measurement = {
+    model: String,
+    weights_hash: String,
+    prefix_token_ids: Vec<u32>,
+    blocks: [{label: "identity-prefix", start: 0, end: u64}]
+}
+```
+
+request.rendered is the complete identity render used for this Open, including the
+family preamble, with no schema Message or generation opener. request.template uses
+the existing renderer template identity. measurement.model and weights_hash use the
+admitted residency's existing section 6 meanings. prefix_token_ids is the actual ordered
+vector supplied to this successful session.open, not a second tokenization. Its checked
+length equals prefix_tokens. blocks contains exactly one block, whose label is
+identity-prefix and whose UTF-8 byte interval is [0, request.rendered.len()). It covers
+the complete render, not token indices or the stored prompt's byte interval. No new
+positive-count assumption replaces the family's existing Open validity rules.
+[PROMPT-1, PLACE-1, PLACE-5, FLOW-3]
+
+The Open measurement has no timings, output tokens, entropy, surprisal, perplexity,
+generation seed, stop reason or residual reading. Open does not sample. No zero stands
+for an absent reading. Template identity appears only in the request box, as it does in
+the existing generation model.request. The harness carries these two Open boxes in the
+boot placement defined by Spec 06. They are not turnless model.request or
+model.measurement events. The generation events and their payloads remain unchanged.
+No prompt is read or filed again. [PROMPT-1, FLOW-3, STORE-8, COST-2]
+
+Only a successful Open returns these boxes. Existing ordering, column and family
+refusals grant no Opened evidence. Backend, encoding, channel or checked-conversion
+failure follows the existing component-failure path. If the complete evidence cannot fit
+DECODE_MESSAGE_BOUND (8 MiB for the complete decode JSON message), fail the exchange
+without truncation or a second Open. Release temporary rendering and evidence after the
+answer, while retaining only the resident session's existing state. No new cancel
+exchange or success acknowledgment is added. [SEAM-2, PLACE-5, FLOW-4]
 
 ## 2. Measurement protocol, destinations sections 4.2, 6 and 9
 
@@ -120,11 +160,15 @@ serving contract remains applicable.
 
 **SPU-WIRE.** Use the exact types in TYPES-DECODE. DecodeSocket's current segmented
 whole-message transport, not a new socket or organ envelope, carries the request and
-reply. Opened retains TokenAnswer's adjacent tagging and gains its required body.
+reply. Opened retains TokenAnswer's adjacent tagging and requires its session, four
+counts and both SPU-OPEN boxes. Neither the old unit nor the four-count-only answer is
+accepted after cutover.
 AppendAndGenerate requires tool_schemas, even when empty. There is no alias for the old
 shape after cutover. The paired harness and SPU amendments must deploy together.
-Diagnostic senders use the new shape with an empty schema list when their recorded
-rendering supplies none. ReFeed stays unchanged. [SEAM-2, PLACE-3, SCOPE-1]
+Diagnostic senders validate the same Opened shape and session echo. They consume the
+answer without authoring a new diagnostic event or a serving placement. They use an
+empty schema list when their recorded rendering supplies none. ReFeed stays unchanged.
+[SEAM-2, PLACE-3, SCOPE-1]
 
 The harness associates one outstanding MeasureDelta with one complete DeltaMeasured or
 refusal. Fault emissions retain their existing non-answer role. It holds the exact
@@ -152,12 +196,12 @@ serving contract remains applicable.
 | Claim | Instrument and evidence | Protective change that must fail |
 | --- | --- | --- |
 | SPU-RENDER | Family fixture for empty/nonempty schemas, tool content, folding and generation opener | Use separate render paths, omit schemas or tokenize fragments independently |
-| SPU-OPEN | Real session plus fixed and tunable limits, empty old-answer corpus | Omit effective limit, report a guessed prefix or accept old unit Opened |
+| SPU-OPEN | Real session for every admitted family, actual render/token vector and prefix count, fixed/tunable limits, refusal and bounded-answer cases | Tokenize twice, omit preamble, add schema/opener, change identity-prefix byte range, invent a reading, truncate evidence or answer Opened on refusal |
 | SPU-MEASURE | Every protocol row with exact datagram/segment boundaries | Queue an out-of-order request, accept partial answer or truncate a count |
 | SPU-UNCHANGED | Session/backend/RNG counter snapshot around a measurement | Perform any decode, clear a reduction, advance RNG or alter resident tokens |
 | Measure/append agreement | Same proposal measured then appended, compare input count and rendered request bytes | Use another family fold or schema order on append |
 | Prefix and cut | Existing Flush/Elide fixtures plus harness turn-grant test | Permit a cut below prefix or grant one inside an external turn |
-| SPU-WIRE | Cross-crate enum/serde corpus and one-reader socket fixture | Accept a missing body, missing schemas, wrong reply or concurrent second ask |
+| SPU-WIRE | Cross-crate enum/serde corpus and one-reader socket fixture, including old unit and four-count Opened | Accept missing/duplicate/unknown evidence, wrong session, missing schemas, wrong reply or concurrent second ask |
 
 These are implementation acceptance instruments, not results from this document pass.
 They run for every admitted rendering family on the supported engine lane.
@@ -187,7 +231,8 @@ instrument below pins the binary set. Amend section 11 to distinguish the score 
 from this span-binding duty. Add the binary target
 weaver-spu-ste100 at src/bin/ste100.rs and the library module ste100. Its grammar,
 binder and protocol dispatcher live in src/ste100/. It implements [Spec 02][protocol]
-PROTOCOL-OWNER, SCHEME, PARSER, MODEL, BINDING, CAPACITY, CHANNEL, PORT and TEMPLATES as
+PROTOCOL-OWNER, SCHEME, MANIFEST-LOCATOR, PARSER, MODEL, BINDING, CAPACITY, CHANNEL,
+PORT and TEMPLATES as
 normative parts of this section. Their score labels, tie rule, complete-block results,
 fragment header, state tables and refusal mapping are the definition sites, not
 alternatives for the implementation to choose. The [STE100 contract][contract] governs
@@ -205,6 +250,14 @@ Absent backend support is unsupported_artifact, not an implicit fallback to the 
 scorer or a test model. The active backend and feature selection are pinned by O02-2's
 qualified artifact. No lifecycle or decode handler is exposed on this duty's port.
 [CLASS-2, CLASS-7, CLASS-8, PERSIST-6]
+
+The SPU owns MANIFEST-LOCATOR acquisition after exec, as the agent uid. Pin the artifact
+root during acquisition and keep each checked byte/file owner through the adapter's
+last read. Retaining the root does not permit reopening a checked pathname after Ready.
+The model identity is Spec 02's manifest SHA-256 plus verification of its named files,
+not Spec section 3's legacy BLAKE3 file-or-directory walk. No legacy decoder or label
+binding is reinterpreted. Acquisition failure uses unsupported_artifact before Ready
+and does not weaken the inherited descriptor boundary. [CLASS-2, CLASS-7, SEAM-2]
 
 Several declared instances run inside this one process and share the exact scheme and
 artifact identities. They may analyze independent sentences in the one outstanding
@@ -231,6 +284,7 @@ October 18 R10]
 | --- | --- | --- |
 | SPU-STE100 target and custody | New tests/manifest.rs::ste100_binary_set pins the three [[bin]] names and paths in Spec section 1, separate from the existing fixture TABLE. Dependency and fork/exec descriptor checks use the existing organ launch path | Replace or omit a binary, link an interior crate or inherit a state/gate/trace handle |
 | Admission and transport | CHANNEL corpus over real SEQPACKET plus TYPES-STE100-ADMISSION fixtures | Accept a mismatched initial limit, wrong identity, legacy ready body or incomplete logical message |
+| Manifest acquisition | Spec 02 MANIFEST-LOCATOR acquisition and retained-owner fixtures | Resolve a directory by guessing, follow an escaping link, reopen checked inputs or load an unreferenced file |
 | Whole result and internal instances | PORT state-table rows with held/faulting sentence workers | Return a prefix, overlap requests or reorder sentence bindings |
 | Grammar and model judgment | PARSER/MODEL/BINDING/TEMPLATES instruments in Spec 02 | Interpret sequence scores as spans, silently skip a grammar rule or certify examples instead of inclusion |
 | Conformance versus component failure | Accepted, not_ste100, capacity, invalid-output and process-death corpus | Kill the checker for correct rejection or keep serving after a terminal component result |

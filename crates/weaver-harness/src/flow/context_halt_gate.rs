@@ -20,6 +20,7 @@ pub(in crate::flow) enum HaltGateRefusal {
     NoExecution,
     ForeignPort,
     MissingSend,
+    MismatchedSend,
 }
 
 /// These are retained progress observations, never containment or filing grants.
@@ -40,6 +41,7 @@ pub(in crate::flow) struct HaltGate {
     exchange: ExchangeId,
     identity: PortIdentity,
     interrupt: Option<OrganEnvelope>,
+    unstaged_interrupt: Option<OrganEnvelope>,
     interrupt_send: Option<OrganSend>,
     withdrawn: Option<OrganEnvelope>,
     refused: Option<ReceivedOrgan>,
@@ -59,6 +61,9 @@ impl HaltGate {
     }
     pub(in crate::flow) fn interrupt(&self) -> Option<&OrganEnvelope> {
         self.interrupt.as_ref()
+    }
+    pub(in crate::flow) fn unstaged_interrupt(&self) -> Option<&OrganEnvelope> {
+        self.unstaged_interrupt.as_ref()
     }
     pub(in crate::flow) fn interrupt_sent(&self) -> bool {
         self.interrupt_send.as_ref().is_some_and(OrganSend::sent)
@@ -136,11 +141,15 @@ impl RecordingContext {
         if !ticket.belongs_to(gate) {
             return Err(HaltGateRefusal::ForeignPort);
         }
+        if !ticket.matches_exchange(exchange) {
+            return Err(HaltGateRefusal::MismatchedSend);
+        }
         self.halt_gate = Some(HaltGate {
             call: call.clone(),
             exchange: exchange.clone(),
             identity: ticket.port_identity(),
             interrupt: None,
+            unstaged_interrupt: None,
             interrupt_send: None,
             withdrawn: None,
             refused: None,
@@ -241,15 +250,22 @@ impl RecordingContext {
         {
             return self.halt_gate_transport_failed(gate, failure);
         }
-        if gate.held().is_some() {
+        let take_terminal = gate.held().is_some_and(|frame| {
+            let matches = frame.exchange == self.halt_gate.as_ref().unwrap().exchange;
+            // Other owners keep unrelated world/control traffic. Late tool
+            // returns use the rejection account, whose single slot cannot be
+            // overwritten. Neither prevents the one owed interrupt.
+            matches
+                || (matches!(frame.payload, OrganPayload::ToolAnswer(_))
+                    && self.pairs.pending_rejection().is_none())
+        });
+        if take_terminal {
             let received = match gate.take_received() {
                 Ok(Some(received)) => received,
                 Ok(None) => unreachable!("held gate result remains owned"),
                 Err(failure) => return self.halt_gate_transport_failed(gate, failure),
             };
-            let expected = &self.halt_gate.as_ref().unwrap().exchange;
-            if received.envelope().exchange != *expected
-                || received.envelope().position != Position::Close
+            if received.envelope().position != Position::Close
                 || !matches!(received.envelope().payload, OrganPayload::ToolAnswer(_))
             {
                 self.halt_gate.as_mut().unwrap().refused = Some(received);
@@ -265,6 +281,7 @@ impl RecordingContext {
                     self.halt_gate.as_mut().unwrap().terminal = true;
                     return self.finish_halt_gate_terminal(gate);
                 }
+                Ok(GateObservation::Rejected) => {}
                 Err((received, error)) => {
                     self.halt_gate.as_mut().unwrap().refused = Some(received);
                     return self.halt_gate_unavailable(
@@ -292,19 +309,8 @@ impl RecordingContext {
             if gate.send_pending() {
                 return HaltGateProgress::Pending;
             }
-            let owner = self.halt_gate.as_mut().unwrap();
-            let frame = OrganEnvelope {
-                exchange: owner.exchange.clone(),
-                position: Position::Continue,
-                payload: OrganPayload::ToolInterrupt {
-                    by: KillCause::FlowFailure,
-                },
-            };
-            owner.interrupt = Some(frame.clone());
-            match gate.stage_tracked(frame) {
-                Ok(TrackedStage::Queued(ticket)) => owner.interrupt_send = Some(ticket),
-                Ok(TrackedStage::Busy(_)) => return HaltGateProgress::Pending,
-                Err(failure) => return self.halt_gate_transport_failed(gate, failure.failure),
+            if let Some(progress) = self.stage_halt_interrupt(gate) {
+                return progress;
             }
         }
         match gate.try_send_observed(io) {
@@ -314,6 +320,46 @@ impl RecordingContext {
             Ok(_) => HaltGateProgress::Pending,
             Err(failure) => self.halt_gate_transport_failed(gate, failure),
         }
+    }
+
+    // Keep failed/busy staging input distinct from an accepted transport stage.
+    // This helper also preserves custody if a future port rejects admission
+    // after the outer send-slot check.
+    fn stage_halt_interrupt(&mut self, gate: &mut OrganPort) -> Option<HaltGateProgress> {
+        let owner = self.halt_gate.as_mut().unwrap();
+        let frame = owner
+            .unstaged_interrupt
+            .take()
+            .unwrap_or_else(|| OrganEnvelope {
+                exchange: owner.exchange.clone(),
+                position: Position::Continue,
+                payload: OrganPayload::ToolInterrupt {
+                    by: KillCause::FlowFailure,
+                },
+            });
+        match gate.stage_tracked(frame.clone()) {
+            Ok(TrackedStage::Queued(ticket)) => {
+                owner.interrupt = Some(frame);
+                owner.interrupt_send = Some(ticket);
+                None
+            }
+            Ok(TrackedStage::Busy(frame)) => {
+                owner.unstaged_interrupt = Some(frame);
+                Some(HaltGateProgress::Pending)
+            }
+            Err(failure) => {
+                owner.unstaged_interrupt = Some(failure.input);
+                Some(self.halt_gate_transport_failed(gate, failure.failure))
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn stage_halt_interrupt_for_test(
+        &mut self,
+        gate: &mut OrganPort,
+    ) -> Option<HaltGateProgress> {
+        self.stage_halt_interrupt(gate)
     }
 
     fn finish_halt_gate_terminal(&mut self, gate: &mut OrganPort) -> HaltGateProgress {

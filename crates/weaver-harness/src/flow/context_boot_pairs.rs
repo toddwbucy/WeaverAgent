@@ -109,6 +109,9 @@ impl BootPairsAccount {
     pub(in crate::flow) fn cancelled_event(&self) -> Option<&AuthoredEvent> {
         self.work.cancelled_event.as_ref()
     }
+    pub(in crate::flow) fn refusal(&self) -> Option<BootPairsRefusal> {
+        self.work.refusal
+    }
     pub(in crate::flow) fn read_refusal(&self) -> Option<&ReadFailure> {
         [&self.work.initial, &self.work.recheck]
             .into_iter()

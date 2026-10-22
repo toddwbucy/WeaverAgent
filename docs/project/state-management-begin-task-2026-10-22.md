@@ -199,8 +199,9 @@ boundary and needs a separate Spec decision. This act preserves the specified en
 
 The eleven added tests comprise ten real owner/receipt fixtures and one direct catalog
 inspection. Some real-owner fixtures then inspect altered copies as described above.
-All twelve review survivors have a scoped instrument. The receipt source test supplies
-three distinct mutation anchors for run, sequence and block. M17 remains equivalent
+The receipt source test supplies three distinct mutation anchors for run, sequence
+and block. The later Planner review identified one remaining cancellation transition
+gap, corrected below. M17 remains equivalent
 under the existing input reservation/open-turn exclusions. No forged public grant is
 used to make a redundant guard appear mutation-sensitive.
 
@@ -217,6 +218,31 @@ All 23 begin-task tests, strict clippy and formatting passed after that assertio
 change. The full-suite count belongs to abdf624 before this final assertion tightening.
 The earlier 1289-test and eleven-mutation results remain historical evidence, not the
 new head's count. These additions claim no production qualification.
+
+## Input-stage cancellation receipt follow-up
+
+Planner review 5610366374 found that forcing the input-stage cancellation transition
+to Read still passed. The earlier cancellation fixture stopped after the input
+receipt had already moved the owner to Read. Its mutation removed the later Read
+guard, so that result did not pin the distinct input-stage transition.
+
+The added fixture consumes accepted input through the real owner and holds its
+scripted member's Filed response. It cancels while that filing remains owned, then
+delivers the response. The advance that consumes the receipt must complete the
+cancelled task and retire its original Decision bound together. An extra Read stage
+would add another fallible admission boundary before settling the cancellation.
+After the original bound passes, the retained cancelled account remains retrievable,
+with no unconsumed input, marks read, mark or new generation grant.
+
+The exact Planner mutation now targets the input-stage transition rather than the
+later Read guard. It compiled and failed the new same-advance completion assertion.
+Exact-byte restoration passed. The full harness suite passed 1321 tests with 18
+inherited ignored cases. Strict all-target harness clippy, formatting and lock passed
+using /tmp/weaver-146-begin-task-target on the join with the documentation-only
+freshness follow-up c431dda. Evidence and source hashes are in begin-task/m21 under
+the shared #146 deposit. The fixture uses actual recording, framing and owner
+transitions with a scripted member, not production qualification or a fabricated
+receipt-bearing owner.
 
 Follow-up logs, recipes and exact source hashes are deposited in the same shared bulk
 store under begin-task/review-batch. This is an author check, not a Planner grade.

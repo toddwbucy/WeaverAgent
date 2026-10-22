@@ -32,11 +32,20 @@ fn record_terminal(fx: &mut RepairFixture) -> usize {
 #[test]
 fn boot_pairs_receipt_association_defenses_inspect_real_committed_values() {
     let mut fx = RepairFixture::new(vec![old_pair("old-run")]);
+    let context = &fx.run().context;
+    let session = context.flow.state().identity().0.to_owned();
+    let run = context.flow.run().to_owned();
+    let scheme = context.declaration.scheme.scheme_id.clone();
     fx.begin();
     let BootPairsCompletion::Repaired(proof) = fx.complete() else {
         panic!("no actual repair proof");
     };
-    boot_pair_driver::validation_tests::receipt_associations(&proof.terminals()[0]);
+    boot_pair_driver::validation_tests::receipt_associations(
+        &proof.terminals()[0],
+        &session,
+        &run,
+        &scheme,
+    );
     assert!(proof.terminals()[0].receipts().is_complete());
     assert_eq!(fx.terminals().len(), 1);
     assert!(fx.run().context.failure().is_none());
@@ -98,14 +107,33 @@ fn boot_pairs_terminal_window_keeps_exact_enter_cap_and_expiry_attribution() {
 
 #[test]
 fn boot_pairs_receipt_recorded_at_or_after_bound_does_not_retire_decision() {
-    let (mut baseline, _) = answered_terminal();
-    let steps = record_terminal(&mut baseline);
     for late_by in [0, 1] {
         let (mut fx, bound) = answered_terminal();
-        for _ in 1..steps {
+        let source = fx.terminals()[0].block_id.clone();
+        // Wait for this actual source's member receipt to produce a terminal
+        // candidate. Its Filed observation has not yet been Recorded. No step
+        // count or relative scheduling from another fixture chooses this edge.
+        for _ in 0..64 {
             let run = fx.run();
+            if run
+                .context
+                .flow
+                .ledger()
+                .terminal_candidate(&source)
+                .is_some()
+            {
+                break;
+            }
             run.context.reduce_flow(&mut run.clock).unwrap();
         }
+        let context = &fx.run().context;
+        let candidate = context.flow.ledger().terminal_candidate(&source).unwrap();
+        assert_eq!(
+            candidate.outcome,
+            crate::flow::ledger::TerminalOutcome::Filed
+        );
+        assert!(!context.flow.has_pending_record());
+        assert!(context.barrier.pending().is_none());
         assert!(fx.run().context.flow.filing_recorded_ns().is_none());
         // The outer admission sample passes. The bounded recorder work then
         // crosses the deadline and produces a real, late Recorded receipt.
@@ -246,10 +274,16 @@ fn boot_pairs_release_refuses_initial_between_leg_and_completed_ownership() {
 
 #[test]
 fn boot_pairs_cancel_after_completion_keeps_read_and_terminal_evidence_without_grant() {
-    for refused in [false, true] {
+    for refusal in [
+        None,
+        Some(BootPairsRefusal::Read),
+        Some(BootPairsRefusal::NonemptyRecheck),
+    ] {
         let mut fx = RepairFixture::new(vec![old_pair("old-run")]);
-        if refused {
+        if refusal == Some(BootPairsRefusal::Read) {
             fx.read_refusal = Some(2);
+        } else if refusal == Some(BootPairsRefusal::NonemptyRecheck) {
+            fx.final_read = fx.initial.clone();
         }
         fx.begin();
         assert!((0..256).any(|_| fx.step().unwrap() == BootPairsProgress::Complete));
@@ -268,7 +302,8 @@ fn boot_pairs_cancel_after_completion_keeps_read_and_terminal_evidence_without_g
         assert_eq!(account.terminals().len(), 1);
         assert!(account.terminals()[0].receipts().is_complete());
         assert!(account.cancelled_event().is_none());
-        if refused {
+        assert_eq!(account.refusal(), refusal);
+        if refusal == Some(BootPairsRefusal::Read) {
             assert!(matches!(
                 account.recheck(),
                 Some(ReadCompletion::Refused(_))
@@ -345,9 +380,20 @@ fn boot_pairs_first_control_busy_keeps_original_admitted_read_and_window() {
     fx.begin();
     let run = fx.run();
     // Normal admission checks the same synchronous Busy predicates. This
-    // per-instance hook exercises only the defensive returned-Busy boundary.
-    // It allocates no competing operation, ticket or request identity.
-    run.context.flow.defer_control_for_test(usize::MAX);
+    // Two exact deferrals cover begin_read and the same step's advance_read.
+    // They allocate no competing operation, ticket or request identity.
+    for _ in 0..2 {
+        run.context.flow.defer_control_once_for_test(
+            (
+                s::StateControl::Read {
+                    selector: s::ReadSelector::OpenPairs {},
+                },
+                None,
+            )
+                .try_into()
+                .unwrap(),
+        );
+    }
     assert_eq!(fx.advance().unwrap(), BootPairsProgress::Pending);
     let run = fx.run();
     let window = run
@@ -359,7 +405,6 @@ fn boot_pairs_first_control_busy_keeps_original_admitted_read_and_window() {
     assert!(run.context.flow.pending_control().is_none());
     assert!(run.context.flow.state().outstanding().is_empty());
     assert!(run.context.deadlines.get(PumpDeadline::Decision).is_none());
-    run.context.flow.defer_control_for_test(0);
     run.clock.advance_to(window.began_ns() + 17).unwrap();
     fx.until_held(Hold::Read(1));
     assert_eq!(

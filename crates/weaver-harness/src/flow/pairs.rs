@@ -461,7 +461,7 @@ impl PairLedger {
             return None;
         }
         self.active.as_ref()?.entries.iter().find_map(|entry| {
-            if entry.completed.is_some() {
+            if entry.completed.is_some() || (entry.ending.is_some() && entry.received.is_none()) {
                 return None;
             }
             Some((
@@ -482,11 +482,11 @@ impl PairLedger {
         if !self.frozen || !ticket.belongs_to(gate) || !ticket.sent() {
             return Err(PairError::WrongPhase);
         }
-        let call = self
-            .halt_execution()
-            .ok_or(PairError::WrongPhase)?
-            .0
-            .clone();
+        let (call, exchange, _) = self.halt_execution().ok_or(PairError::WrongPhase)?;
+        if !ticket.matches_exchange(exchange) {
+            return Err(PairError::WrongPhase);
+        }
+        let call = call.clone();
         self.entry_mut(&call)?.sent = true;
         Ok(())
     }
@@ -506,7 +506,7 @@ impl PairLedger {
         &mut self,
         received: ReceivedOrgan,
     ) -> Result<GateObservation, (ReceivedOrgan, PairError)> {
-        if self.rejected.is_some() {
+        if self.rejected.is_some() && !self.frozen {
             return Err((received, PairError::Busy));
         }
         let envelope = received.envelope();
@@ -577,6 +577,11 @@ impl PairLedger {
             } else {
                 GateObservation::Matched(call)
             });
+        }
+        // A frozen, already-sent execution may retain its own terminal while
+        // an older rejection remains owed. A second rejection never replaces it.
+        if self.rejected.is_some() {
+            return Err((received, PairError::Busy));
         }
         let known = mapped
             .map(|entry| (&entry.started.call_id, entry.ending.as_ref()))
