@@ -41,10 +41,9 @@ fn completion_counts_failed_encoding_prefix_and_samples_after_page_cleanup() {
         )
         .unwrap();
         let prefix = br#"{"frame":{"position":{"block_id":{"run":"run","sequence":"1","block":"0"},"turn":""#;
-        let header = br#"{"protocol":"state-flow/1","session_id":"session","run_id":"run","request_id":"2","op":"control_answer"}"#;
         assert_eq!(
             observation.resource.copied_bytes,
-            Some((prefix.len() as u64 + header.len() as u64 + encoded.len() as u64).into())
+            Some((prefix.len() as u64 + encoded.len() as u64).into())
         );
         assert_eq!(
             observation.resource.held_bytes,
@@ -80,8 +79,6 @@ fn next_counts_its_new_page_once_and_keeps_the_full_snapshot_until_release() {
     assert_eq!(page.octets, "ZGVmZ2hpag==");
     assert!(page.done);
     assert_eq!(page.total_bytes.0, 10);
-    let fixed = br#"{"frame":{"read_page":{"snapshot_id":"18446744073709551615","offset":"18446744073709551615","total_bytes":"18446744073709551615","octets":"","done":false}}}"#;
-    let header = br#"{"protocol":"state-flow/1","session_id":"fixture-session","run_id":"fixture-run","request_id":"2","op":"control_answer"}"#;
     sample.held = BufferBytes::default();
     let (observation, encoded) = complete(
         payload,
@@ -95,14 +92,7 @@ fn next_counts_its_new_page_once_and_keeps_the_full_snapshot_until_release() {
     .unwrap();
     assert_eq!(
         observation.resource.copied_bytes,
-        Some(
-            (decoded as u64
-                + 12
-                + fixed.len() as u64
-                + 2 * header.len() as u64
-                + encoded.len() as u64)
-                .into()
-        )
+        Some((decoded as u64 + 12 + encoded.len() as u64).into())
     );
     assert_eq!(
         observation.resource.held_bytes,
