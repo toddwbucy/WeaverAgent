@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #213
+**Landing PR:** #235
 
-**Version:** 0.14 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
+**Version:** 0.15 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -104,18 +104,38 @@ CLASS-9]
 Add the root key `ste100-binary` with the existing organ-binary custody judgment. It
 stays in admin's root, outside the bound declaration. Add its executable digest to the
 load tuple. The serving enter payload carries `Ste100Instruction` once at
-state_management.ste100 and the scheme bytes at ste100_scheme. Loaded facts retain those
-same fields, without changing legacy ClassifyInstruction. Admin syntax errors are
-ConfigInvalid naming the field. Semantic artifact failure during enter is
-StateManagementInvalid with stage template and template_failed or scheme_mismatch, and
-follows after-load rollback. [FLOW-3, CLASS-8, PERSIST-6]
+state_management.ste100 and the scheme bytes at ste100_scheme. Loaded facts retain
+those same fields, without changing legacy ClassifyInstruction. Admin syntax errors
+are ConfigInvalid naming the field. Semantic artifact failure during enter is
+StateManagementInvalid and follows EnterFailure::AfterLoad's existing refusal and
+rollback path in HARNESS-CLASSIFY, under the original load deadline. Map the checker
+admission result as follows. The code vocabularies remain distinct. [FLOW-3, CLASS-8,
+PERSIST-6]
 
-Ste100Instruction has the seven fields of state-management.ste100 above, using the same
-floor types. The model artifact's manifest supplies its supported binder ABI, encoder
-family, tokenizer, weight files and their digests. model_artifact_sha256 hashes the
-manifest bytes. Admission verifies each named file against it before reporting Ready.
-That check supplements the existing ModelBinding admission, never assumes that a
-sequence-classifier artifact has a compatible head. [CLASS-2, CLASS-7, FLOW-3]
+| Checker admission code | Lifecycle stage | Lifecycle code |
+| --- | --- | --- |
+| scheme_mismatch | template | scheme_mismatch |
+| unsupported_artifact, invalid_grammar, insufficient_capacity, invalid_instruction | template | template_failed |
+
+Retain the checker code and its exact detail in the lifecycle detail when the complete
+encoded lifecycle refusal fits MAX_ENVELOPE_BYTES. A failed artifact path or reference
+identified by the checker remains within that exact detail. Do not parse checker prose
+to populate the optional lifecycle path. That field is present only when independently
+attributable under its owning contract. Check the whole serialized envelope, including
+its wrapper and JSON escaping. An over-bound refusal follows the existing channel-fault
+and after-load cleanup path. Do not truncate, substitute a new refusal or restart the
+load deadline. Qualification must fit the complete worst-case admission-failure
+envelope as well as the enter. No Ready or template grant is produced. This mapping adds
+no lifecycle code, carrier limit or fresh timeout. [CLASS-8, FLOW-3, PERSIST-6, SEAM-2]
+
+Ste100Instruction has the seven fields of state-management.ste100 above, using the
+same floor types. The model artifact's manifest supplies its supported binder ABI,
+encoder family, tokenizer, weight files and their digests. model_artifact_sha256
+hashes the manifest bytes. Admission verifies each named file against it before
+reporting Ready. For Ste100Instruction this manifest admission replaces ModelBinding's
+legacy container resolution and read. Its shared syntax and device-assignment
+judgments remain. It never assumes that a sequence-classifier artifact has a
+compatible head. [CLASS-2, CLASS-7, FLOW-3]
 
 The manifest is UTF-8 JSON with format ste100-model/1, checker_abi ste100-span/1,
 encoder:{family:String,config:ArtifactFile,weights:Vec<ArtifactFile>},
@@ -127,6 +147,63 @@ supplied by O02-2. The label array is exactly MODEL's seven labels in that order
 Duplicate/unknown fields refuse. checker_artifact_sha256 on ready and seed certificates
 is this manifest digest. artifact_sha256 on ready is the scheme digest. The checker
 executable's separate digest remains in the load tuple. [CLASS-2, CLASS-7, FLOW-3]
+
+**MANIFEST-LOCATOR.** For Ste100Instruction only, ModelBinding.artifact is an absolute
+pathname naming the exact ste100-model/1 manifest file. A relative value is a syntax
+failure at admin. The SPU independently refuses it with invalid_instruction before
+filesystem acquisition, including a bootstrap supplied outside admin's TOML path.
+Neither party resolves it against a working directory. It does not name a directory,
+a weight container or a model catalog entry. There is no conventional manifest basename,
+directory scan or filename fallback. The SPU resolves this pathname as the agent uid
+during bootstrap admission. Admin and the harness carry the declared binding unchanged.
+Neither discovers the model files or sends extra artifact descriptors across exec.
+Legacy decoder and label-classifier bindings keep their existing resolution rules.
+[CLASS-2, CLASS-7, SEAM-2, October 18 R10]
+
+Resolve the absolute parent pathname through the filesystem as the agent uid, including
+symlinked ancestors and parent components. Do not lexically collapse a parent component
+across a symbolic link. Pin the resulting directory instance before opening the
+manifest's final path component relative to it. That acquired instance defines the
+artifact root, not a lexical pathname prefix. The final component must be a regular
+file, not a symbolic link. Check object kind without waiting for special-file data,
+for both the manifest and every referenced file. An ordinary blocking open followed by
+a check is insufficient. Read and retain its exact bytes. Parsing and
+model_artifact_sha256 verification use
+those same bytes, including whitespace. The pinned parent is the artifact root for
+every ArtifactFile.name. Resolve those names beneath that root, with DECLARATION's
+component checks and no symbolic-link escape. A relative link is permitted only when
+every intermediate resolution step stays beneath the root, as with RESOLVE_BENEATH.
+Leaving that root and later re-entering it still refuses. Absolute link targets and
+magic links refuse. No alternate root is tried. Every referenced object must resolve
+to a readable regular file. [CLASS-2, CLASS-7, SEAM-1]
+
+Acquire referenced files relative to that retained root and verify every declared
+digest before Ready. The compiled adapter consumes the retained owned bytes that were
+hashed, or the same acquired file instance through its retained descriptor or mapping.
+The file-backed choice relies on the provisioned content stability below. It cannot
+reopen a pathname for configuration, tokenization, alignment, the span head or weights
+after checking a different instance. Keep each required owner until the adapter's last
+read, including deferred reads after Ready. Repeated names may share one acquired
+instance, but every declared digest must agree with it. Unreferenced files are not
+adapter inputs. Their presence alone does not refuse admission, and they are not
+discovered or consumed implicitly. The manifest digest hashes only its exact bytes.
+Each referenced file has its own declared SHA-256. [CLASS-2, CLASS-7, FLOW-3]
+
+The model artifact retains SPU PRD section 7's provisioned custody: it is owned
+outside the agent uid, readable into the agent and not alterable by it. Pinning a
+descriptor prevents pathname replacement from substituting a different instance;
+it does not make externally writable file contents immutable. Provisioning must
+preserve the admitted bytes for any retained mapping or deferred file read. This
+does not apply admin's root-file ownership rule to model files or relocate them
+into admin's config root. [CLASS-2, CLASS-7, SEAM-1]
+
+A missing, unreadable, nonregular, escaping or digest-mismatched model artifact
+refuses bootstrap with unsupported_artifact and identifies the failed path or
+reference in detail. It grants no Ready and uses DECLARATION's lifecycle mapping and
+HARNESS-CLASSIFY's after-load refusal and rollback under the original load budget.
+This locator adds no wire field, digest
+algorithm, grammar format, model adapter, language qualification or serving cutover.
+[CLASS-7, CLASS-8, PERSIST-6]
 
 The scheme-load pass certifies byte identity, the fixed vocabulary and compatible
 checker ABI under the recorded qualification. It does not certify safety, truth, or
@@ -659,6 +736,7 @@ a serving declaration. [CLASS-4, CLASS-7, PROMPT-2, FLOW-7]
 | --- | --- | --- |
 | PROTOCOL-OWNER, PORT | Manifest, fd-count and fork/exec integration tests, loop-thread review | Link an organ into harness, give the duty a store/gate fd, or replace the legacy label consumer |
 | SCHEME, CUSTODY, DECLARATION | Strict-codec and root-custody fixtures, load digest and immutable dictionary tests | Change artifact after inventory, accept an unknown key, or invent a runtime verb |
+| MANIFEST-LOCATOR | Agent-uid acquisition fixtures with pinned directories/files, path replacement, link confinement, nonregular files and exact-byte digest checks | Guess a manifest basename, escape the pinned root, reopen a checked path or load unhashed sidecars |
 | PARSER, CAPACITY | Normative boundary and long-name corpus with a deliberately undersized adapter | Call capacity a language defect or file an accepted prefix |
 | MODEL, BINDING | Model-adapter shape tests plus exact-span held-out corpus | Return sequence scores, accept NaN, select a condition's verb or case-fold a noun |
 | CHANNEL | Real SEQPACKET tests at exact datagram and whole-message bounds | Skip total/offset check, accept MSG_TRUNC, or use an incomplete reply |
