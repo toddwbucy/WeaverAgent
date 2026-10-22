@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #192
 
-**Version:** 0.12 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-09`
+**Version:** 0.13 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-09`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -164,7 +164,7 @@ source_revision uses the full Git object ID form above. The task manifest suppli
 task ID, attempt ordinal and run/turn ranges. Those instance identities stay outside the
 qualification tuple. protocol_sha256 names CALIBRATE-THEN-TEST's frozen protocol.
 instrument_versions is a string map with exactly run_evidence, store, flow, plan and
-observer. The first four are state-run-evidence/1, state-observation/1,
+observer. The first four are state-run-evidence/1, state-observation/2,
 state-flow-observation/1 and plan-observation/1. observer is the nonempty version of the
 external collector's definitions. The reader checks store and plan against the trace
 versions, and flow against the producer definition and binary provenance. [CLASS-7,
@@ -222,7 +222,7 @@ monotonic source. [COST-4, CLASS-8]
 
 **OBSERVATION-IDENTITY.** opened also carries member_observation:
 MemberObservationIdentity {instrument_version, pid, start_ticks, ticks_per_second,
-unavailable_reason}. instrument_version is the literal state-observation/1 for the
+unavailable_reason}. instrument_version is the literal state-observation/2 for the
 definitions in this Spec. pid is the member's positive u32 process ID. start_ticks and
 ticks_per_second are both present DecimalU64 or both null. They come from its own
 /proc/self/stat start time and sysconf(_SC_CLK_TCK), with a positive tick rate.
@@ -303,7 +303,9 @@ release_capture report filesystem when they touch the room. The member sorts pha
 (began_ns, name), permits nesting, and requires every interval inside [began_ns,
 ended_ns]. Analysis unions intersecting intervals. [COST-1, COST-2, COST-4]
 
-began_ns is sampled after the complete request frame is in hand, before its validation.
+began_ns is sampled after the complete request frame is in hand, before any operation
+hint parsing, decoded-frame allocation or validation. This includes snapshot. Retain
+that timestamp when the operation is identified. Resource sampling never moves it.
 ended_ns follows encoding of the answer's operation payload, before the observation and
 final wrapper are encoded. The encode phase is that payload encoding, including
 construction of an explicit refusal when necessary. It does not claim to measure its own
@@ -327,17 +329,64 @@ identity evidence and retains OBSERVATION-IDENTITY's existing process reads. Mon
 wall timestamps and local byte counters remain on every operation. [STORE-1, COST-2,
 COST-4, R20-4]
 
-For snapshot alone, cpu_ns is the CLOCK_THREAD_CPUTIME_ID delta bracketing the capture.
-Read before counters before began_ns and after counters after ended_ns. Their cost
-appears in the harness interval. This sample characterizes lifecycle capture, not
-per-turn disk wait. copied_bytes counts bytes in buffers owned by the serving adapter:
+**SNAPSHOT-SAMPLING.** For snapshot alone, cpu_ns and disk counters bracket capture work
+separately from the full operation interval. cpu_ns is the CLOCK_THREAD_CPUTIME_ID delta
+across these samples. After validation and capture preflight, read the before counters
+immediately before image serialization. Read the after counters when capture work ends,
+after its attempted room-file write and any recoverable cleanup, before constructing and
+encoding the answer payload. The capture phase still covers serialization and filesystem
+covers the room write and its cleanup. Neither is renamed or expanded to stand for the
+resource bracket. This follows the operator's ruling of 2026-10-20: include parsing in
+wall time and bracket capture separately. [COST-1, COST-2, COST-4, STORE-1]
+
+A snapshot refused before capture starts reads no resource counters. cpu_ns is null
+with not_sampled, and disk uses the same not_sampled form as an ordinary operation. If
+capture starts and yields a recoverable refusal, take both samples and report their
+availability under the existing rules. A terminal failure retains the existing missing
+observation behavior. A failed optional counter read never turns a valid capture or
+refusal into component failure. [COST-2, COST-5, FLOW-4]
+
+Counter collection is inside the operation wall interval and therefore the enclosing
+harness interval. It is outside the capture and filesystem phase intervals. Sequential
+CPU and disk reads may include sampler overhead in their deltas. Do not subtract an
+estimated overhead or equate those deltas with either phase's wall duration. The sample
+characterizes lifecycle capture, not per-turn disk wait. [COST-1, COST-2, COST-4,
+STORE-1]
+
+| Sampling state | Event | Required result |
+| --- | --- | --- |
+| Frame complete | Any operation hint parse | Preserve the earlier began_ns |
+| Validated snapshot | Preflight refuses before capture | No counter reads, not_sampled |
+| Validated snapshot | Capture starts | Before samples, then image serialization |
+| Capture started | Room-file result or recoverable failure | After samples before answer encoding |
+| Sampling | Optional source unavailable or counter reset | Existing null and reason, no new halt |
+| Payload encoded | Observation finish | ended_ns after any samples, metadata rules unchanged |
+
+The state-observation/2 identity distinguishes this bracket from the earlier /1
+definition. Current opened and load require /2. Historical /1 records retain their
+original identity when adopted or read, and are never rewritten as /2. Qualification
+under the current definition requires /2 evidence. Analysis must use the recorded
+version's definitions when interpreting historical records. The /1 source is pinned to
+a commit reachable from main, under the Working Process archive rule. [COST-5,
+PERSIST-1]
+
+| Instrument | Measurement definition |
+| --- | --- |
+| state-observation/1 | [Spec 09 section 2 at 7a8651d8](https://github.com/toddwbucy/WeaverAgent/blob/7a8651d8/docs/crates/state-management/state-management-spec-09-qualification-costs.md#2-producer-records-and-store-carriage) |
+| state-observation/2 | STORE-OBSERVATION and SNAPSHOT-SAMPLING in this Spec. held_bytes samples the ended_ns observation boundary after payload encoding, including the retained answer payload buffer |
+
+copied_bytes counts bytes in buffers owned by the serving adapter:
 decoded Text/raw/context copies, encoded result/page buffers, and captured image
 buffers, each materialization once. It excludes SQLite's and the allocator's internal
-copies. held_bytes is the sum of live read-snapshot buffers, capture buffers and
-in-flight request/answer buffers at the end sample. It excludes the SQLite heap,
-allocator capacity and kernel queues. The instrument version pins these definitions.
-Neither quantity claims total RAM or device memory. A path with an uninstrumented copy
-or holding category reports null, not a partial total. [COST-1, COST-2, STORE-1]
+copies. For state-observation/2, held_bytes is the sum of live read-snapshot buffers,
+capture buffers and in-flight request/answer buffers at the ended_ns observation
+boundary, after the operation answer payload is encoded and before observation metadata
+and the final wrapper are encoded. It includes the retained encoded answer payload
+buffer, including for snapshot. This is separate from snapshot's earlier CPU/disk after
+sample. It excludes the SQLite heap, allocator capacity and kernel queues. The
+instrument version pins these definitions. Neither quantity claims total RAM or device
+memory. A path with an uninstrumented copy or holding category reports null, not a
+partial total. [COST-1, COST-2, STORE-1]
 
 disk is {enabled, before, after, unavailable_reason}. enabled is bool or null, sampled
 only at snapshot from the member's readable delay-accounting setting. before and after
@@ -640,6 +689,7 @@ ownership kept explicit. [COST-1 through COST-5, FALS-1]
 | RECORD-OWNERS | Trace schema/consumer fixture | Count one generation or cap twice |
 | OBSERVATION-IDENTITY | Open/load/observer identity fixture | Attribute counters from a reused PID or unknown instrument |
 | STORE-OBSERVATION, OBSERVATION-CARRY | Store response corpus and process fixture | Omit a required phase, use the wrong continuation ID, count a partial send twice or encode unknown as zero |
+| SNAPSHOT-SAMPLING | Deterministic clock/counter hooks around the real member parse, capture, refusal and encoding paths, plus old-run read/adoption fixtures | Start wall timing after parsing, use operation edges instead of the capture bracket, sample on preflight refusal or ordinary requests, turn unavailable counters into failure, or relabel historical /1 as /2 |
 | FLOW-COUNTS | Pump fixture with no receipts and later recovery | Suppress zero-rate interval |
 | CALIBRATE-THEN-TEST | Analysis report verifier | Accept post-run threshold or missing protocol hash |
 | DISK-EVIDENCE | Root qualification fixture with induced I/O/swap wait | Report pass with absent accounting or dropped samples |
