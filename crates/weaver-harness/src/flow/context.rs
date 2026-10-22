@@ -1535,6 +1535,10 @@ mod output_receipt_tests;
 mod pair_driver;
 #[path = "context_pair_execution.rs"]
 mod pair_execution;
+#[path = "context_inward_recall.rs"]
+mod inward_recall;
+#[allow(unused_imports)]
+pub(super) use inward_recall::{InwardProgress, InwardRefusal};
 #[path = "pairs.rs"]
 mod pairs;
 #[allow(unused_imports)] // The loop composes this port at the coupled cutover.

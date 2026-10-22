@@ -1455,3 +1455,6 @@ fn generic_cancellation_cannot_drop_or_duplicate_a_repaired_pair_filing() {
 
 #[path = "context_pair_execution_tests.rs"]
 mod execution;
+
+#[path = "context_inward_recall_tests.rs"]
+mod inward;

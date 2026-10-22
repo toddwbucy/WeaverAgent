@@ -92,7 +92,7 @@ impl RecordingContext {
             || self
                 .pair_work
                 .as_ref()
-                .is_none_or(|work| work.leg.is_some())
+                .is_none_or(|work| work.leg.is_some() || work.inward.is_some())
         {
             return None;
         }
@@ -272,7 +272,7 @@ impl RecordingContext {
         if self
             .pair_work
             .as_ref()
-            .is_some_and(|work| work.leg.is_some())
+            .is_some_and(|work| work.leg.is_some() || work.inward.is_some())
             || self.pair_rejected_authoring
             || self.pair_refused_gate.is_some()
             || self.pairs.pending_rejection().is_some()
@@ -329,7 +329,7 @@ impl RecordingContext {
         }
     }
 
-    fn arm_pair_terminal_wait(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+    pub(super) fn arm_pair_terminal_wait(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         if self
             .pair_work
             .as_ref()
@@ -396,7 +396,7 @@ impl RecordingContext {
         if self
             .pair_work
             .as_ref()
-            .is_some_and(|work| work.leg.is_some())
+            .is_some_and(|work| work.leg.is_some() || work.inward.is_some())
             || self.pairs.pending_rejection().is_none()
             || self.repair_blocks_external()
             || self.output.is_some()
