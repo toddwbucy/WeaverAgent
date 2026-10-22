@@ -37,9 +37,14 @@ pub(in crate::flow) enum ReadProgress {
 pub(in crate::flow) struct RecordedRead {
     read: CompletedRead,
     sequence: Sequence,
+    origin: std::sync::Arc<()>,
 }
 
 impl RecordedRead {
+    pub(in crate::flow) fn belongs_to(&self, context: &RecordingContext) -> bool {
+        std::sync::Arc::ptr_eq(&self.origin, &context.read_origin)
+    }
+
     pub(in crate::flow) fn selector(&self) -> &ReadSelector {
         self.read.selector()
     }
@@ -281,6 +286,7 @@ impl RecordingContext {
         let result = match result {
             Ok(completed) => Ok(RecordedRead {
                 read: completed,
+                origin: self.read_origin.clone(),
                 sequence: read
                     .recorded
                     .expect("successful read keeps its recall proof"),

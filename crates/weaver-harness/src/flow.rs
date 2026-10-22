@@ -15,6 +15,7 @@ mod halt_snapshot;
 mod input;
 mod intake;
 mod ledger;
+mod material;
 mod mirror;
 mod observation;
 mod pump;
