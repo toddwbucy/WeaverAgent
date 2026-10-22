@@ -55,7 +55,7 @@ state.mark. TRACE-VALIDATION requires these projections, so downstream empty-sel
 guards are defensive equivalents under current admission. No fabricated active
 partition or bypassed AcceptedInput is used. The corrected run and compiled mutations
 remain pending the root's serialized Cargo lane. The focused harness filter is
-context::marks_tests. Eleven tests use the real recorder, classifier packet channel,
+context::marks_tests. Thirteen tests use the real recorder, classifier packet channel,
 member stream and existing accepted-input owner with synthetic replies. They exercise:
 
 - Delayed input filing, release and mark filing, with no earlier task result.
@@ -66,6 +66,9 @@ member stream and existing accepted-input owner with synthetic replies. They exe
 - Closed-prompt reuse in the open path and exclusion of unrelated read/author calls.
 - Original Decision expiry, timely completion before late retrieval, and thirteen
   nested Leave checkpoints through the original input handoff.
+- Mutual mark/freshness exclusion with active and completed retained owners. A genuine
+  foreign token tests Busy admission priority and unchanged return, then completes in
+  its original context. No capability or owner is fabricated.
 
 Compile-time pins reject Clone for both BegunTask and FiledTaskInput. They also reject
 conversion from a public TaskScopeRef into BegunTask, or from SeatedInput into
@@ -89,7 +92,13 @@ The production instruction words, language artifacts and measured limits remain 
 Journal mark registration, Open evidence, native mark constructors, plan effects,
 placement and generation confirmation remain separate work.
 
-The sibling freshness owner is being developed in a separate worktree. When their
-ancestry joins, marks admission must exclude retained freshness ownership, and freshness
-admission must exclude retained marks ownership, including completed results. This
-record does not claim that join or its gates are complete.
+The freshness owner at 3415405 is joined. Mark admission excludes retained freshness
+ownership, and freshness admission excludes retained marks ownership, including
+completed results. Existing generic-author continuation and each port's two exclusions
+are preserved. The combined gates remain pending.
+
+Current input admission already makes a local AcceptedInput and freshness mutually
+exclusive. A retained mark also retains its input snapshot. The explicit freshness-side
+mark check is therefore a defensive equivalent of existing snapshot exclusion. Its
+removal alone cannot be sold as a killed behavioral mutation. The completed freshness
+check in mark admission has a distinct Busy-before-input-validation regression.

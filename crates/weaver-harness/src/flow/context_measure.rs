@@ -309,6 +309,7 @@ impl RecordingContext {
             || self.input_turn.is_some()
             || self.input_author.is_some()
             || self.member_capture.is_some()
+            || self.freshness.is_some()
             || self.read.is_some()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()

@@ -59,6 +59,8 @@ pub(super) enum RunFailure {
     ReadOwned,
     /// The explicit mark operation retains input, read or filing custody.
     MarksOwned,
+    /// A filing pause owns admission until its freshness result is taken.
+    FreshnessOwned,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -111,6 +113,7 @@ pub(crate) struct RecordingContext {
     input_turn: Option<input_driver::InputTurn>,
     input_turns: std::collections::BTreeSet<String>,
     member_capture: Option<capture_driver::MemberCapture>,
+    freshness: Option<freshness_driver::FreshnessTransaction>,
     read: Option<read_driver::ReadTransaction>,
     marks: Option<marks_driver::MarksTransaction>,
     // Pointer identity survives moves and is never recreated from trace IDs.
@@ -216,6 +219,7 @@ impl RecordingContext {
             input_turn: None,
             input_turns: std::collections::BTreeSet::new(),
             member_capture: None,
+            freshness: None,
             read: None,
             marks: None,
             read_origin: std::sync::Arc::new(()),
@@ -477,6 +481,7 @@ impl RecordingContext {
             || self.read_wait_still_owned(key)
             || self.measure_wait_still_owned(key)
             || (key == PumpDeadline::Decision && self.marks.is_some())
+            || self.freshness_wait_still_owned(key)
             || (key == PumpDeadline::Enter
                 && self.phase == RecordingPhase::Entered
                 && self
@@ -502,6 +507,7 @@ impl RecordingContext {
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.member_capture.is_some()
+            || self.freshness.is_some()
             || self.read.is_some()
             || self.measure.is_some()
             || self.open_turn.is_some()
@@ -664,6 +670,15 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
         event: AuthoredEvent,
     ) -> Result<Sequence, RunFailure> {
+        self.admit_author_and_wait(ports, event, false)
+    }
+
+    fn admit_author_and_wait<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+        event: AuthoredEvent,
+        retained_retry: bool,
+    ) -> Result<Sequence, RunFailure> {
         let initial_wait = match self.live(ports.io) {
             Ok(()) => None,
             Err(failure @ RunFailure::Wait { .. }) => Some(failure),
@@ -675,6 +690,10 @@ impl RecordingContext {
         if self.marks_blocks_external() {
             self.retain_refused(event);
             return Err(RunFailure::MarksOwned);
+        }
+        if self.freshness.is_some() && !retained_retry {
+            self.retain_refused(event);
+            return Err(RunFailure::FreshnessOwned);
         }
         if self.read.is_some() {
             self.retain_refused(event);
@@ -768,7 +787,7 @@ impl RecordingContext {
                 .take()
                 .expect("deferred author keeps its original");
             self.author_admission_pending = false;
-            return self.author_and_wait(ports, event);
+            return self.admit_author_and_wait(ports, event, true);
         }
         let kind = self
             .waiting_content
@@ -1571,6 +1590,14 @@ mod read_driver;
 pub(super) use read_driver::{
     BootHead, BootReadBeginError, BootReadBeginRefusal, BootReadCompletion, CancelledRead,
     ReadBeginError, ReadBeginRefusal, ReadCompletion, ReadProgress, RecordedRead,
+};
+
+#[path = "context_freshness.rs"]
+mod freshness_driver;
+#[allow(unused_imports)] // Composed by fresh-history owners at the held cutover.
+pub(super) use freshness_driver::{
+    FreshnessBeginError, FreshnessBeginRefusal, FreshnessCompletion, FreshnessProgress,
+    PreparedFreshness,
 };
 
 #[cfg(test)]

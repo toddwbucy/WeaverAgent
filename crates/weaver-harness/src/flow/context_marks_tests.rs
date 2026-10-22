@@ -780,6 +780,84 @@ fn begin_task_timely_completion_retires_the_bound_before_late_retrieval() {
     }
 }
 
+#[test]
+fn begin_task_active_and_completed_owner_excludes_freshness() {
+    let mut fx = TaskFixture::new();
+    fx.begin();
+    for complete in [false, true] {
+        if complete {
+            assert!((0..512).any(|_| fx.step().unwrap() == TaskProgress::Complete));
+        }
+        let decision = fx.input.run.context.deadlines.get(PumpDeadline::Decision);
+        let error = fx
+            .input
+            .run
+            .context
+            .prepare_cut(vec![], &mut fx.input.run.clock)
+            .unwrap_err();
+        assert_eq!(error.refusal, FreshnessBeginRefusal::Busy);
+        assert!(error.failure.is_none());
+        assert!(error.required_ids.is_empty());
+        assert!(fx.input.run.context.freshness.is_none());
+        assert!(fx.input.run.context.marks.is_some());
+        assert_eq!(fx.input.run.context.deadlines.get(PumpDeadline::Decision), decision);
+        assert!(fx.input.run.context.deadlines.get(PumpDeadline::Cut).is_none());
+    }
+    assert!(matches!(
+        fx.input.run.context.take_task(&mut fx.input.run.clock).unwrap(),
+        Some(TaskCompletion::Begun(_))
+    ));
+    assert!(fx.input.run.context.failure().is_none());
+}
+
+#[test]
+fn begin_task_refuses_active_and_completed_freshness_before_consuming_input() {
+    for complete in [false, true] {
+        let mut source = TaskFixture::new();
+        let token = source.token();
+        let mut busy = TaskFixture::new();
+        busy.input.run.context.prepare_cut(vec![], &mut busy.input.run.clock).unwrap();
+        if complete {
+            assert_eq!(
+                busy.input.run.context.advance_prepare_cut(&mut ports(&mut busy.input.run.clock)).unwrap(),
+                FreshnessProgress::Complete
+            );
+        }
+        let cut = busy.input.run.context.deadlines.get(PumpDeadline::Cut);
+        // A real token from another context reaches only admission. A local
+        // AcceptedInput cannot coexist with freshness under the public guards.
+        // Busy must return custody before validating or consuming this token.
+        let error = busy.input.run.context.begin_task(
+            token,
+            TurnRef("task-turn".into()),
+            &busy.certificate,
+            &mut busy.input.run.clock,
+        ).unwrap_err();
+        assert_eq!(error.refusal, marks_driver::BeginTaskRefusal::Busy);
+        assert!(error.failure.is_none());
+        assert!(busy.input.run.context.marks.is_none());
+        assert!(busy.input.run.context.freshness.is_some());
+        assert_eq!(busy.input.run.context.deadlines.get(PumpDeadline::Cut), cut);
+        assert!(busy.input.run.context.failure().is_none());
+        source.input.run.context.begin_task(
+            error.input,
+            TurnRef("task-turn".into()),
+            &source.certificate,
+            &mut source.input.run.clock,
+        ).unwrap();
+        assert!(matches!(source.finish(), TaskCompletion::Begun(_)));
+        assert_eq!(
+            busy.input.run.context.advance_prepare_cut(&mut ports(&mut busy.input.run.clock)).unwrap(),
+            FreshnessProgress::Complete
+        );
+        let Some(FreshnessCompletion::Prepared(prepared)) = busy.input.run.context.take_prepared_cut(&mut busy.input.run.clock).unwrap() else {
+            panic!("admission refusal lost the freshness result");
+        };
+        assert!(prepared.belongs_to(&busy.input.run.context));
+        assert!(prepared.required_ids().is_empty());
+    }
+}
+
 struct HandoffClock<'a> {
     clock: &'a mut crate::flow::clock::testing::FakePumpIo,
     before_reads: usize,

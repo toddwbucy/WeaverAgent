@@ -156,6 +156,7 @@ impl RecordingContext {
             });
         }
         if self.output.is_some()
+            || self.freshness.is_some()
             || self.filing.is_some()
             || self.flow.has_filing_consumer()
             || self.templates_block_content()
