@@ -128,8 +128,8 @@ No implementation or runtime gate result is claimed by this draft. The prior loc
 and two document readings preceded that Planner return and are not validation of this
 revision. Static checks of this revision cover ASCII, prose width, synchronized
 versions, local links and diff hygiene. The fresh lock gate passed, and the
-coordinating review found no remaining concrete contradiction. Renewed Planner review
-and merge remain owed. The operator election is recorded. PR #237 remains a draft.
+coordinating review found no remaining concrete contradiction. The dated operator
+election is recorded above.
 
 [review]:
 https://github.com/toddwbucy/WeaverAgent/pull/229#pullrequestreview-5609135461
