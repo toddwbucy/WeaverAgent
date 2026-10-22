@@ -126,6 +126,9 @@ pub(crate) struct RecordingContext {
     /// It is distinct from the recorder's first pending author.
     refused_author: Option<AuthoredEvent>,
     waiting_content: Option<AuthoredEvent>,
+    // An initial lifecycle wait retained a valid original before admission.
+    // Its retry must pass the generic admission checks again.
+    author_admission_pending: bool,
     completed_author: Option<Sequence>,
     failure: Option<RunFailure>,
     failed_wait: Option<WaitAtHalt>,
@@ -220,6 +223,7 @@ impl RecordingContext {
             open_turn: None,
             refused_author: None,
             waiting_content: None,
+            author_admission_pending: false,
             completed_author: None,
             failure: None,
             failed_wait: None,
@@ -640,10 +644,14 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
         event: AuthoredEvent,
     ) -> Result<Sequence, RunFailure> {
-        if let Err(failure) = self.live(ports.io) {
-            self.retain_refused(event);
-            return Err(failure);
-        }
+        let initial_wait = match self.live(ports.io) {
+            Ok(()) => None,
+            Err(failure @ RunFailure::Wait { .. }) => Some(failure),
+            Err(failure) => {
+                self.retain_refused(event);
+                return Err(failure);
+            }
+        };
         if self.repair_blocks_external() {
             self.retain_refused(event);
             return Err(RunFailure::RepairOwned);
@@ -715,6 +723,10 @@ impl RecordingContext {
             ));
         }
         self.waiting_content = Some(event);
+        if let Some(failure) = initial_wait {
+            self.author_admission_pending = true;
+            return Err(failure);
+        }
         self.continue_waiting_content(ports)
     }
 
@@ -722,6 +734,14 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
+        if self.author_admission_pending {
+            let event = self
+                .waiting_content
+                .take()
+                .expect("deferred author keeps its original");
+            self.author_admission_pending = false;
+            return self.author_and_wait(ports, event);
+        }
         let kind = self
             .waiting_content
             .as_ref()

@@ -1333,6 +1333,122 @@ fn generic_author_and_resume_cannot_steal_the_pending_repair_record() {
 }
 
 #[test]
+fn repair_instruction_resumes_after_leave_interrupts_initial_author_admission() {
+    struct AdmissionClock<'a> {
+        clock: &'a mut crate::flow::clock::testing::FakePumpIo,
+        checked: bool,
+        deadline: u64,
+    }
+    impl PumpIo for AdmissionClock<'_> {
+        fn now(&mut self) -> std::io::Result<u64> {
+            if self.checked {
+                self.clock.advance_to(self.deadline)?;
+            }
+            self.checked = true;
+            self.clock.now()
+        }
+        fn wait(
+            &mut self,
+            _: &[crate::flow::clock::WaitInterest<'_>],
+            _: Option<u64>,
+        ) -> std::io::Result<crate::flow::clock::WaitOutcome> {
+            panic!("instruction admission has not submitted a trace ticket");
+        }
+    }
+
+    let mut fx = RepairFixture::new();
+    let original = fx.generation(vec![text("bad original")], true);
+    let source = original.generation().source().clone();
+    fx.begin(original);
+    for _ in 0..128 {
+        fx.step(false);
+        if fx.repair_records("repair_requested").len() == 1 {
+            break;
+        }
+    }
+    assert_eq!(fx.repair_records("repair_requested").len(), 1);
+    // The recorded repair request has advanced the ledger. Stage its certified
+    // instruction; the following step takes that event into the shared author.
+    fx.step(false);
+    assert!(fx.input.records(Kind::LoopInstruction).is_empty());
+    assert!(fx.input.run.context.waiting_content.is_none());
+    let decision = fx
+        .input
+        .run
+        .context
+        .deadlines
+        .get(PumpDeadline::Decision)
+        .unwrap();
+    let leave = AbsoluteBound::after(fx.input.run.clock.now().unwrap(), 10).unwrap();
+    fx.input
+        .run
+        .context
+        .arm(PumpDeadline::Leave, leave, &mut fx.input.run.clock)
+        .unwrap();
+    // The repair entry check passes. Leave expires after the repair owner has
+    // taken its original and marked author.started, at nested author admission.
+    let mut clock = AdmissionClock {
+        clock: &mut fx.input.run.clock,
+        checked: false,
+        deadline: leave.deadline_ns(),
+    };
+    assert_eq!(
+        fx.input
+            .run
+            .context
+            .advance_repair(&mut ports(&mut clock))
+            .unwrap_err(),
+        RunFailure::Wait {
+            key: PumpDeadline::Leave,
+            bound: leave
+        }
+    );
+    assert!(fx.input.run.context.author_admission_pending);
+    let kept = fx.input.run.context.waiting_content.as_ref().unwrap();
+    assert_eq!(kept.kind, Kind::LoopInstruction);
+    assert_eq!(
+        kept.causal_parent,
+        Some(Sequence(source.block_id.sequence.0))
+    );
+    let Some(Payload::LoopInstruction(instruction)) = &kept.payload else {
+        panic!("the deferred owner must keep the exact certified instruction");
+    };
+    let payload = serde_json::to_value(instruction).unwrap();
+    assert!(fx.input.run.context.pending_author().is_none());
+    assert!(fx.input.run.context.refused_author().is_none());
+    assert!(fx.input.records(Kind::LoopInstruction).is_empty());
+    assert!(fx.input.run.context.halt().is_none());
+    assert_eq!(
+        fx.input.run.context.deadlines.get(PumpDeadline::Decision),
+        Some(decision)
+    );
+    assert_eq!(
+        fx.input.run.context.complete_wait(PumpDeadline::Leave),
+        Some(leave)
+    );
+
+    let request = fx.restatement(true);
+    assert_eq!(request.source(), &source.block_id);
+    assert_eq!(request.instruction().text(), "Read correction.");
+    let records = fx.input.records(Kind::LoopInstruction);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["payload"], payload);
+    assert_eq!(
+        sequence(&records[0]),
+        request.recorded().block_id.sequence.0
+    );
+    assert!(!fx.input.run.context.author_admission_pending);
+    assert!(fx.input.run.context.waiting_content.is_none());
+    assert!(fx.input.run.context.refused_author().is_none());
+    let correction = fx.generation(vec![text("Read replacement.")], true);
+    fx.observe(request.source(), correction);
+    assert_eq!(fx.effective(true).text(), "Read replacement.");
+    assert_eq!(fx.input.records(Kind::LoopInstruction).len(), 1);
+    assert_eq!(fx.repair_records("repair_requested").len(), 1);
+    assert!(fx.input.run.context.halt().is_none());
+}
+
+#[test]
 fn cancellation_resumes_the_same_pending_instruction_without_releasing_its_grant() {
     let mut fx = RepairFixture::new();
     let original = fx.generation(vec![text("bad original")], true);

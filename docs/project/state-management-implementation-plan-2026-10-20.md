@@ -22,7 +22,7 @@ combined head.
 | #184 | Shared floor, store/member via #212, admin #193 through #196, and SPU #191 with #197. Merged to main at b18e7d34. |
 | #185 | Trace copy and recorder, including #187. Merged to main at ba17720d. |
 | #198 | Harness #199 through #210, model repair #214 and subsequent review fixes. Merged to main at 50a00944. |
-| #215 | Consolidation root for typed tool causes, external pair execution, paged reads, paired decode measurements and outbound identity sort. The operator authorized retargeting to main and integrating main at 50a00944. Combined author checks pass. Fresh Planner and third-party reviews remain owed. |
+| #215 | Consolidation root for typed tool causes, external pair execution, paged reads, paired decode measurements and outbound identity sort. The operator authorized main consolidation. The full checks at 2ef9657 are historical. Current continuation, shared-author and held-gate corrections pass 1,167 harness tests and 13 protective mutations. Fresh review remains owed. |
 | #216, #217, #219, #220 | Merged down into #215, preserving the original commits and merge ancestry. Their earlier slice evidence does not grade the consolidated root. |
 | #218 | Closed as already incorporated. Its exact head 8b387eff entered #219 through merge 32a57b57 and is now an ancestor of #215. No separate content merge is owed. |
 | #190 | Independent pure recall query primitive, held until the foundation cutover by the [operator's ruling][recall-hold]. It does not land ahead of that cutover. |
@@ -52,11 +52,23 @@ and an armed Gate or Cut barrier even without a pending channel operation.
 An inward pair will need its own explicit read entry. No inward caller is wired here.
 
 The [consolidation record][consolidation-record] states the exact integration parents,
-Spec answers, regression coverage and retained batch/file findings. Combined author
-checks pass, including 1,157 harness tests with 18 ignored instruments and 22 compiled
-protective mutations rejected by their intended assertions. All restored named tests
-pass and source hashes match. The record carries the other crate, device and delegated
-gate results. Fresh Planner and third-party reviews remain owed.
+Spec answers, regression coverage and batch/file dispositions. At 2ef9657, combined
+checks passed 1,157 harness tests with 18 ignored instruments, the other crate and
+device gates, and 22 protective mutations with exact restoration. Those results and
+their source manifest do not validate the current review corrections.
+
+The new round retains accepted read progress, records measurement-author successors
+before yielding, and checks the clock before consuming a measurement reservation.
+Shared author admission retains a valid original across an initial lifecycle wait
+and repeats its checks before submission. The pump no longer reports an already held
+gate reply as new progress. Current author validation passes 1,167 harness tests
+with 18 ignored instruments and all 13 compiled protective mutations, plus lint,
+formatting, lock and diff checks. The current source manifest and evidence are in
+/tmp/weaver-pr215-review-round2. Fresh review remains owed. The class sweep confirms
+template and outbound continuations already retain their state. The inherited capture
+refusal cleanup gap is filed separately as [#223][capture-followup], and gate findings
+1 and 2 are tracked in [#222][gate-followup]. The six slice records now separate their
+historical inputs from current #215-to-main landing guidance.
 
 The operator authorized consolidating #215 onto main. Runtime activation and
 deployment remain held until the coordinated foundation cutover. The paired wire
@@ -497,7 +509,7 @@ a Planner grade. The loop still owes actual controls, lower/reap routing and ser
 migration. Inward recall, trusted review, boot repair and placement acknowledgment
 remain H2 work. The original branch dependencies are now consolidated in #215. The
 current landing map and consolidation record describe the later multi-call and retry
-corrections, whose combined author checks pass. Activating and deploying the
+corrections, whose author checks passed at 2ef9657. Activating and deploying the
 replacement still waits for the coordinated cutover.
 
 H1d was published in [PR #217][paged-read] on code/state-paged-read, originally based on
@@ -592,6 +604,8 @@ quality, decoder capacity, throughput or absence of paging waits.
 [measure-owner-record]: state-management-measure-owner-2026-10-21.md
 [consolidation-record]: state-management-consolidation-2026-10-21.md
 [consolidation-review]: https://github.com/toddwbucy/WeaverAgent/pull/215#pullrequestreview-5607348857
+[gate-followup]: https://github.com/toddwbucy/WeaverAgent/issues/222
+[capture-followup]: https://github.com/toddwbucy/WeaverAgent/issues/223
 [catalog]: https://github.com/toddwbucy/WeaverAgent/pull/183
 [floor]: https://github.com/toddwbucy/WeaverAgent/pull/184
 [tap]: https://github.com/toddwbucy/WeaverAgent/pull/185

@@ -21,26 +21,93 @@ original slice and its evidence separately from this combined revision.
 The review fixes follow the history-preserving main merge in a separate commit.
 
 The merged Specs authorize these corrections. The [#216 review][pair-review] reports
-the multi-call stall. The [#215 review][review] also requests the inherited #217
-tests and Spec readings. This record answers those findings without reopening the
-earlier gate batch/file dispositions. It does not close epic #146.
+the multi-call stall. The [earlier #215 review][review] requests the inherited #217
+tests and Spec readings. Those fixes and their validation reached 2ef9657. The
+[next review][continuation-review] adds the continuation and pump corrections below.
+This record does not close epic #146.
 
 ## Implements and author grades
 
-Implements: [Spec 05] PAIR-STATES and RETRY, [harness amendment] HARNESS-READ and
-HARNESS-BARRIERS, and [state amendment] STATE-PAGES and STATE-CHANNEL as consumed
-by the harness.
-These are bounded author grades for the corrected paths, supported by the final
-restored-source suites and protective mutations below. They do not grade the complete
-serving implementation. The Planner's grade and third-party review remain owed.
+Implements: [Spec 05] PAIR-STATES and RETRY, [Spec 06] MEASURE-DELTA,
+[harness amendment] HARNESS-READ, HARNESS-BARRIERS, HARNESS-AWAIT-AUTHOR,
+HARNESS-RECORD-LIFETIME, HARNESS-PUMP and the measurement portion of HARNESS-PLACE,
+and [state amendment] STATE-PAGES and STATE-CHANNEL as consumed by the harness.
+Grades are bounded to these ports and supported by the current harness gates and
+protective mutations. Grades tied to 2ef9657 describe that earlier tested revision.
+Fresh Planner and third-party review remain separate.
 
 | Owning section | Grade and implemented correction |
 | --- | --- |
-| Spec 05 PAIR-STATES | Conforms in the external execution owner. Serialize effective pair openings around the preceding terminal commit and give each blocking send/terminal barrier its own absolute window. |
-| Spec 05 RETRY | Conforms in lineage validation. Accept an exact same-run external predecessor whose terminal is filed, including one retained in the active batch. |
-| Harness HARNESS-READ | Conforms in paged acquisition. Exclude unrelated pair, input and author owners and distinguish each read protocol leg before releasing or exposing a result. |
-| Harness HARNESS-BARRIERS, read admission | Conforms at this entry. Refuse an external read while Gate or Cut is armed, preserving the existing critical barrier. |
-| State STATE-PAGES and STATE-CHANNEL, harness consumer | Conforms in page/refusal handling. Preserve the acquired cursor through a valid later page refusal and reject refusal codes from another protocol leg. |
+| Spec 05 PAIR-STATES and RETRY | Conforms at 2ef9657 within external execution and lineage validation. Serial openings, separate windows and filed active-batch predecessors. |
+| Harness HARNESS-READ | Conforms within the tested correction. Retain accepted page/release progress before a recoverable post-validation wait. |
+| Harness HARNESS-BARRIERS, read admission | Conforms at 2ef9657 within this entry. Preserve armed Gate/Cut and unrelated owner barriers. |
+| State STATE-PAGES and STATE-CHANNEL, harness consumer | Conforms at 2ef9657 within page/refusal handling. Preserve acquired cursors and check exact protocol legs. |
+| Spec 06 MEASURE-DELTA and harness HARNESS-PLACE, measurement owner | Conforms within the tested corrections. Save recorded-author successors before yielding and check the clock before consuming a reservation. |
+| Harness HARNESS-AWAIT-AUTHOR and HARNESS-RECORD-LIFETIME, shared author admission | Conforms within the tested correction. Retain a valid original through initial lifecycle wait and repeat admission checks before its later submission. |
+| Harness HARNESS-PUMP, held gate completion | Conforms within the tested correction. An already held gate reply is not fresh progress and does not permit another read. |
+
+## Current continuation review
+
+The restored corrections after 2ef9657 pass 1,167 harness tests, with 18 inherited
+ignored instruments. The harness all-target lint, workspace formatting, lock and
+diff checks pass. Cargo used the pinned toolchain, --locked and the private target
+/tmp/weaver-pr215-target. Only the harness changed in this correction. The earlier
+full suites, GPU run, 22 mutations and manifest below remain historical evidence.
+
+All 13 new protective mutations compiled and failed their intended assertions.
+Every restored named test passed, with exact byte and SHA-256 restoration.
+
+| Protective group | Compiled mutations rejected | Restored tests passed |
+| --- | ---: | ---: |
+| Measurement author and reservation handoffs, final check | 3 | 3 |
+| Read accepted continuation, resumption and final bound | 3 | 3 |
+| Held Gate receive progress | 1 | 1 |
+| Shared author callers, readmission, invalid input and fatal priority | 6 | 6 |
+
+The ten new tests cover intermediate pages and release acknowledgements, all three
+measurement author purposes, measured/refused/cancelled result custody, all five
+input/repair author callers, admission rechecking and fatal priority. The real-socket
+pump fixture checks false progress, exact completion custody and the original Leave
+bound. It does not claim the old bug independently caused a spin.
+
+Current evidence is under /tmp/weaver-pr215-review-round2. harness-results.json
+records the final gates. mutations/ holds results.json, restorations.json and logs.
+pre-format/ retains the initial successful tests/lint and the formatting-check
+failure. Formatting was corrected before the mutations and final full gates.
+All 475 source hashes match source-sha256.json after the final run. Its SHA-256 is:
+
+```text
+f4985fc07e518612339ce51013ec659d668ca4a36eddb8ce07145ba3d9a41fa6
+```
+
+The read owner saves accepted progress before the post-validation clock check. A
+recoverable lifecycle wait resumes that continuation without replaying the answer,
+issuing another request or losing the final release. Measurement saves each recorded
+author's successor state before its post-work check, and checks the clock before
+settling the decode reservation. Original read and enclosing measurement bounds remain
+authoritative.
+
+Shared author admission retains an unchanged event only after its admission checks
+pass. An initial lifecycle wait leaves an explicit deferred-admission flag. Resumption
+repeats those checks before submitting the event, so refused authors do not become
+admitted content. The pump also distinguishes a gate reply already held in its slot
+from new receive progress when another descriptor is ready.
+
+| Swept site | Current disposition |
+| --- | --- |
+| Read accepted answer before post-validation live check | Retained continuation implemented and regression-pinned. |
+| Measurement recorded author before post-work live check | Purpose-specific successor stored first and regression-pinned. |
+| Measurement reservation settlement before final live check | Final check moved before settlement and regression-pinned. |
+| Template acceptance before live check | Safe. Transcript and pending-request state already advance before the check. |
+| Outbound fault author before live check | Safe. fault_source already retains the recorded result. |
+| Repair's initial author call | Shared admission correction implemented and regression-pinned. |
+| Input Offered and Refusal author calls | Same correction covers both callers, with regressions. |
+| Input TurnStarted and MessageUser author calls | Same correction covers both handoffs, with regressions. |
+| Capture refusal before Abort admission | Unchanged from main 50a00944. Filed separately as [#223][capture-followup], with no runtime reproduction claimed in this sweep. |
+
+The five initial review sites and five additional author callers are accounted above.
+The capture-file diff from main changes only entry guards, not the inherited refusal
+transition. Its separate regression must preserve the original deadline ownership.
 
 ## Pair execution and retry
 
@@ -127,25 +194,26 @@ RecordFailure, which begin_read's initial live check rejects. The existing
 failure_before_admission_keeps_original_but_no_invented_sequence fixture covers
 that failure state without inventing an admitted sequence.
 
-## Retained gate findings
+## Gate findings and followups
 
-The [posted review][review] keeps these earlier gate findings outside this fix act.
-They retain their existing dispositions and are not reported as resolved here.
+The [posted review][review] assigned the earlier dispositions below. Gate findings
+1 and 2 are tracked in [#222][gate-followup]. The dated banner is corrected in this
+round. The remaining batch/file items are not reported as resolved.
 
 | Review item | Existing disposition |
 | --- | --- |
-| 1. send_answer deadline before first try_send | File |
-| 2. Deadline or unsendable result becomes Closed with successful exit and no line | Batch |
+| 1. send_answer deadline before first try_send | File, #222 |
+| 2. Deadline or unsendable result becomes Closed with successful exit and no line | Batch, #222 |
 | 3. Control crossing a refused Tool opens a second Close | File |
 | 4. answered_tools grows with each ordinal/call | Batch |
 | 5. Duplicate late-control rule | Batch |
 | 6. WouldBlock polling uses POLLIN and an unbounded None wait | Batch |
 | 7. Unused Tools contain/wait_empty methods | Batch |
-| 8. Dated banner in the gate interrupt evidence record | Batch |
+| 8. Dated banner in the gate interrupt evidence record | Corrected in this round. Date retained, stale status removed. |
 
-## Validation and remaining scope
+## Historical validation at 2ef9657
 
-The restored suites passed on the combined checkout:
+These restored suites passed for 2ef9657. They do not validate the current corrections:
 
 | Suite | Passed | Ignored |
 | --- | ---: | ---: |
@@ -188,15 +256,16 @@ serialized opening still reproduces the original stall. No production code chang
 after that preflight. The final full restored harness suite and its all-target lint
 passed. The failed preflight is not counted as a final passing run.
 
-Local evidence is under /tmp/weaver-pr215-review. The foundation-results.json,
+Historical evidence is under /tmp/weaver-pr215-review. The foundation-results.json,
 spu-results.json and gate-delegated-results.json files record their completed gates.
 mutations-pair/ and mutations-read/ each retain results.json, restorations.json and
 individual logs. Final harness results are in harness-results.json, with
 harness-test.log, harness-clippy.log, fmt.log and diff.log. busybox-build.log records
 the pinned fixture build. These are local evidence, not production qualification.
 
-All 475 source hashes match /tmp/weaver-pr215-review/source-sha256.json after the
-final gates. The manifest's SHA-256 is:
+All 475 source hashes matched /tmp/weaver-pr215-review/source-sha256.json after that
+revision's final gates. This is the old manifest, not the current source snapshot.
+Its SHA-256 is:
 
 ```text
 28ed4f7ade98e91fcac07b6c1bf1318fb7c93b8f4bdf1457109737b191bfc964
@@ -204,6 +273,8 @@ final gates. The manifest's SHA-256 is:
 
 Earlier slice counts remain historical evidence in the map. Independent source
 readings do not replace the Planner's grade or third-party review.
+
+## Remaining scope
 
 The operator authorized consolidation onto main. Runtime activation and deployment
 remain held until the coupled foundation cutover, and the old serving path stays
@@ -218,7 +289,11 @@ SPU classification. Only the operator merges.
 
 [map]: state-management-implementation-plan-2026-10-20.md
 [Spec 05]: ../crates/state-management/state-management-spec-05-tool-pairs.md
+[Spec 06]: ../crates/state-management/state-management-spec-06-marks-renderer-engine.md
 [harness amendment]: ../crates/state-management/weaver-harness-Spec-amendment.md
 [state amendment]: ../crates/state-management/weaver-state-Spec-amendment.md
 [pair-review]: https://github.com/toddwbucy/WeaverAgent/pull/216#pullrequestreview-5604724227
 [review]: https://github.com/toddwbucy/WeaverAgent/pull/215#pullrequestreview-5607348857
+[continuation-review]: https://github.com/toddwbucy/WeaverAgent/pull/215#pullrequestreview-5607907692
+[gate-followup]: https://github.com/toddwbucy/WeaverAgent/issues/222
+[capture-followup]: https://github.com/toddwbucy/WeaverAgent/issues/223

@@ -516,3 +516,183 @@ pub(in crate::flow) fn with_frozen_source<T>(
         &fx.context.budget,
     )
 }
+
+fn author_ports<I: PumpIo>(io: &mut I) -> PumpPorts<'_, I> {
+    PumpPorts {
+        lifecycle: LifecyclePorts::default(),
+        gate: None,
+        decode: None,
+        label: None,
+        io,
+    }
+}
+
+#[test]
+fn deferred_author_rechecks_phase_after_a_real_release_transition() {
+    let mut fx = Fixture::new(config());
+    fx.activate();
+    fx.context.complete_wait(PumpDeadline::Enter).unwrap();
+    let now = fx.clock.now().unwrap();
+    let leave = AbsoluteBound::after(now, 5).unwrap();
+    fx.context
+        .arm(PumpDeadline::Leave, leave, &mut fx.clock)
+        .unwrap();
+    fx.clock.advance_to(leave.deadline_ns()).unwrap();
+    let mut original = event(
+        Kind::ModelMeasurement,
+        Some(Payload::ModelMeasurement(
+            serde_json::value::to_raw_value(&serde_json::json!({"fixture":"deferred measurement"}))
+                .unwrap(),
+        )),
+    );
+    original.turn = Some(TurnRef("measurement-turn".into()));
+    assert_eq!(
+        fx.author(original.clone()).unwrap_err(),
+        RunFailure::Wait {
+            key: PumpDeadline::Leave,
+            bound: leave
+        }
+    );
+    assert!(fx.context.author_admission_pending);
+    assert!(fx.context.pending_author().is_none());
+    assert!(fx.context.refused_author.is_none());
+    assert_eq!(fx.context.complete_wait(PumpDeadline::Leave), Some(leave));
+    let releasing = AbsoluteBound::after(leave.deadline_ns(), 100).unwrap();
+    fx.context
+        .begin_releasing(releasing, &mut fx.clock)
+        .unwrap();
+    assert_eq!(fx.context.phase(), RecordingPhase::Releasing);
+    assert!(matches!(
+        fx.context
+            .resume_author_and_wait(&mut author_ports(&mut fx.clock)),
+        Err(RunFailure::Flow {
+            reason: FlowHaltReason::ProtocolFailed,
+            point: HaltPoint::Author,
+            ..
+        })
+    ));
+    assert_eq!(
+        format!("{:?}", fx.context.refused_author.as_ref().unwrap()),
+        format!("{original:?}")
+    );
+    assert!(fx.context.waiting_content.is_none());
+    assert!(!fx.context.author_admission_pending);
+    assert_eq!(
+        fx.context
+            .barrier
+            .recorder()
+            .structure()
+            .by_kind(Kind::ModelMeasurement)
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn initial_author_wait_never_promotes_an_invalid_original() {
+    for kind in [Kind::ToolCallStarted, Kind::Load] {
+        let mut fx = Fixture::new(config());
+        fx.activate();
+        fx.context.complete_wait(PumpDeadline::Enter).unwrap();
+        let now = fx.clock.now().unwrap();
+        let leave = AbsoluteBound::after(now, 5).unwrap();
+        fx.context
+            .arm(PumpDeadline::Leave, leave, &mut fx.clock)
+            .unwrap();
+        fx.clock.advance_to(leave.deadline_ns()).unwrap();
+        let original = event(kind, None);
+        let count = fx.context.barrier.recorder().structure().len();
+        let error = fx.author(original.clone()).unwrap_err();
+        if kind == Kind::ToolCallStarted {
+            assert_eq!(error, RunFailure::PairOwned);
+        } else {
+            assert!(matches!(
+                error,
+                RunFailure::Flow {
+                    reason: FlowHaltReason::ProtocolFailed,
+                    point: HaltPoint::Author,
+                    ..
+                }
+            ));
+        }
+        assert_eq!(
+            format!("{:?}", fx.context.refused_author.as_ref().unwrap()),
+            format!("{original:?}")
+        );
+        assert!(fx.context.waiting_content.is_none());
+        assert!(!fx.context.author_admission_pending);
+        assert!(fx.context.pending_author().is_none());
+        assert_eq!(fx.context.barrier.recorder().structure().len(), count);
+    }
+}
+
+#[test]
+fn initial_author_wait_keeps_template_refusal_and_fatal_liveness_distinct() {
+    use crate::flow::templates::CompiledInventory;
+    for fatal in [false, true] {
+        let templates = Box::leak(
+            vec![s::TemplateSpec {
+                template_id: "fixture.deferred-author".into(),
+                kind: "loop.instruction".into(),
+                parts: vec![s::TemplatePart::Literal("Read file.".into())],
+            }]
+            .into_boxed_slice(),
+        );
+        let inventory = CompiledInventory::new(templates).unwrap();
+        let mut fx = super::input_tests::InputFixture::with_template_inventory(&inventory);
+        fx.run
+            .context
+            .begin_template_checks(inventory, &mut fx.run.clock)
+            .unwrap();
+        let now = fx.run.clock.now().unwrap();
+        let bound = AbsoluteBound::after(now, 5).unwrap();
+        let key = if fatal {
+            PumpDeadline::Decision
+        } else {
+            PumpDeadline::Leave
+        };
+        fx.run.context.arm(key, bound, &mut fx.run.clock).unwrap();
+        fx.run.clock.advance_to(bound.deadline_ns()).unwrap();
+        let mut original = event(Kind::TurnStarted, None);
+        original.turn = Some(TurnRef("blocked-turn".into()));
+        let error = fx.run.author(original.clone()).unwrap_err();
+        if fatal {
+            assert!(matches!(
+                error,
+                RunFailure::Flow {
+                    reason: FlowHaltReason::DecisionBound,
+                    ..
+                }
+            ));
+            assert!(fx.run.context.template_blocked_author.is_none());
+            assert_eq!(
+                format!("{:?}", fx.run.context.refused_author.as_ref().unwrap()),
+                format!("{original:?}")
+            );
+        } else {
+            assert_eq!(error, RunFailure::TemplateBlocked);
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    fx.run.context.template_blocked_author.as_ref().unwrap()
+                ),
+                format!("{original:?}")
+            );
+            assert!(fx.run.context.refused_author.is_none());
+            assert_eq!(
+                fx.run.context.complete_wait(PumpDeadline::Leave),
+                Some(bound)
+            );
+            assert!(
+                fx.run
+                    .context
+                    .resume_author_and_wait(&mut author_ports(&mut fx.run.clock))
+                    .is_err()
+            );
+        }
+        assert!(fx.run.context.waiting_content.is_none());
+        assert!(!fx.run.context.author_admission_pending);
+        assert!(fx.run.context.pending_author().is_none());
+        assert!(fx.records(Kind::TurnStarted).is_empty());
+    }
+}

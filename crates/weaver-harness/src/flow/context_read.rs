@@ -36,6 +36,9 @@ pub(super) struct ReadTransaction {
     turn: Option<TurnRef>,
     bound: AbsoluteBound,
     expected: Option<(DecimalU64, StateControl)>,
+    // Validation consumed this answer, but its final clock check can yield a
+    // lifecycle wait. Resume that check without replaying or losing the answer.
+    accepted: Option<ReadAdvance>,
     complete: bool,
     // Preserve the received answer if higher-level validation fails after its
     // operation measurement was recorded. A failure never becomes empty data.
@@ -150,6 +153,7 @@ impl RecordingContext {
             turn: turn.clone(),
             bound,
             expected: None,
+            accepted: None,
             complete: false,
             rejected: None,
         });
@@ -272,6 +276,9 @@ impl RecordingContext {
         if read.complete {
             return Ok(());
         }
+        if read.accepted.is_some() {
+            return self.finish_accepted_read(io);
+        }
         let Some(completion) = self.flow.operation_completion() else {
             return Ok(());
         };
@@ -329,22 +336,30 @@ impl RecordingContext {
             .accept(common.request_id, request, frame);
         match accepted {
             Ok(progress) => {
-                // Validation and the final release reduction belong to this
-                // same wait. Recheck before publishing or disarming it.
-                self.live(io)?;
-                let read = self.read.as_mut().unwrap();
-                read.expected = None;
-                if progress == ReadAdvance::Complete {
-                    read.complete = true;
-                    self.deadlines.disarm(PumpDeadline::StateControl);
-                }
-                Ok(())
+                self.read.as_mut().unwrap().accepted = Some(progress);
+                self.finish_accepted_read(io)
             }
             Err(error) => {
                 self.read.as_mut().unwrap().rejected = Some(result);
                 Err(self.read_fault(io, error.to_string()))
             }
         }
+    }
+
+    fn finish_accepted_read(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        // Validation and the final release reduction belong to this same wait.
+        // Retain their continuation across a recoverable lifecycle yield, and
+        // recheck before publishing another request or disarming the read bound.
+        self.read_wait_matches(io)?;
+        self.live(io)?;
+        let read = self.read.as_mut().unwrap();
+        let progress = read.accepted.take().expect("validated read continuation");
+        read.expected = None;
+        if progress == ReadAdvance::Complete {
+            read.complete = true;
+            self.deadlines.disarm(PumpDeadline::StateControl);
+        }
+        Ok(())
     }
 
     fn read_fault(&mut self, io: &mut impl PumpIo, detail: impl Into<String>) -> RunFailure {

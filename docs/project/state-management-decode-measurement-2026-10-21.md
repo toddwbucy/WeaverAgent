@@ -1,15 +1,14 @@
 # Paired decode measurement implementation
 
-Date: 2026-10-21. Status: implementation evidence, not a Spec amendment.
-Branch: code/state-decode-measurement, based on #184 at 6d5e6b0d.
+Date: 2026-10-21.
 
 ## Contract and scope
 
 This slice implements TYPES-DECODE in the [types amendment][types] and the wire
 portions of SPU-OPEN, SPU-MEASURE and SPU-WIRE in the [SPU amendment][spu]. It reuses
-SPU-RENDER from #197, now folded into #184. The existing session owns rendering,
-tokenization and the counts. Measurement is read-only and holds no proposal after
-its answer. The loop owns orchestration and this slice changes no loop policy.
+SPU-RENDER from #197, which reached main through #184. The existing session owns
+rendering, tokenization and the counts. Measurement is read-only and holds no proposal
+after its answer. The loop owns orchestration and this slice changes no loop policy.
 
 Open retains its existing request. Its successful answer now requires numeric
 prefix_tokens, capacity, generation_limit and terminal_tokens, taken from the open
@@ -33,23 +32,29 @@ before the paired vocabulary deploys.
 
 ## Remaining consumer and cutover obligations
 
-The [harness amendment][harness] still owes its sole-pump measurement owner, exact
-proposal custody, cached boot facts, checked head/tail budgets, cancellation,
-PlacementGrant and Generated reconciliation. The old open adapter structurally
-decodes counts but does not validate those placement contracts. Marks, cuts and the
-placement journal remain H3b work in the [implementation map][map].
+The later [measurement owner][owner] in #219 supplies the harness's sole-pump
+measurement exchange, exact proposal custody and cancellation. Cached boot facts,
+checked head/tail budgets, PlacementGrant and Generated reconciliation remain owed
+under the [harness amendment][harness]. The old open adapter structurally decodes
+counts but does not validate those placement contracts. Marks, cuts and the placement
+journal remain H3b work in the [implementation map][map].
 
 The existing Spec gap remains explicit: OPEN-FACTS asks for an identity-prefix open
 measurement label, while TYPES-DECODE defines only four Opened counts and leaves
 Generation unchanged. This slice invents no carrier for that label. The unmerged
 recall amendment #189 remains a separate boot/placement provenance dependency.
 
-This branch is based on #184 rather than the harness stack. Review its diff against
-that root. Integrate the exact paired change into the harness descendant of #217
-before the coordinated foundation cutover. Do not deploy this wire independently or
-claim that the legacy caller adaptations qualify the replacement serving path.
+Original #218 used code/state-decode-measurement from #184 at 6d5e6b0d. Its exact
+head 8b387eff joined #217 at bdfa3a76 through merge 32a57b57 in #219. Those changes
+are now incorporated in #215, and #218 was closed as already incorporated. Review
+the combined #215 against main. Runtime activation and deployment remain held until
+the coordinated foundation cutover. The paired wire must deploy with its complete
+consumers. The [consolidation record][consolidation] carries current checks.
 
 ## Validation
+
+These results describe the original #218 slice. The consolidation record separates
+later combined-head checks from this original producer/consumer evidence.
 
 The restored types and harness suites passed 498 tests, with 16 inherited ignored
 instruments. The types config-feature suite passed 171 tests. Both host all-target
@@ -108,3 +113,5 @@ are in /tmp/state-decode-host-mutations/. Device logs and probes are held under
 [spu]: ../crates/state-management/weaver-spu-Spec-amendment.md
 [harness]: ../crates/state-management/weaver-harness-Spec-amendment.md
 [map]: state-management-implementation-plan-2026-10-20.md
+[owner]: state-management-measure-owner-2026-10-21.md
+[consolidation]: state-management-consolidation-2026-10-21.md

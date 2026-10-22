@@ -1,6 +1,6 @@
 # State read acquisition implementation
 
-Date: 2026-10-21. Status: draft implementation evidence, not a Spec amendment.
+Date: 2026-10-21.
 
 This slice implements the paged acquisition part of [HARNESS-READ][harness] on
 its existing state channel and the consumer checks for [STATE-PAGES][state].
@@ -63,6 +63,9 @@ or cut authority. The store still owns plan legality and commit ordering.
 
 ## Evidence
 
+These results describe the original #217 slice. Later combined-head checks and
+review fixes are recorded in the [consolidation record][consolidation].
+
 The normal harness suite passed 1,055 tests with no failures and 18 ignored
 instruments. This includes 45 new active tests: 14 paging tests, 13 structural
 validation tests and 18 actual-context tests. The context fixtures use real
@@ -103,14 +106,16 @@ CARGO_INCREMENTAL=0 and --locked on resolving Cargo commands.
 
 The local review found and fixed deadline retirement and lifecycle-release
 ownership errors. It also added explicit whole-statement and seeded-prompt
-binding checks. The review is not a Planner grade, and the draft remains
-subject to the repository's review process.
+binding checks. That original author review is not a Planner grade. The current
+consolidated #215 remains subject to the repository's review process.
 
-## Remaining work and merge order
+## Remaining work and current landing
 
-Draft [PR #217][pr] is code/state-paged-read, based on #216 at 8f5aa872. Fold
-this child into #216 before folding #216 into #215 and #215 into #198. Those merges
-consolidate review branches. They do not qualify the replacement for deployment.
+[PR #217][pr] was published on code/state-paged-read from #216 at 8f5aa872.
+It has merged through #216 into #215. #198 is already on main, and #215 is the
+current consolidated review against main. The operator authorized that main
+consolidation. Runtime activation and deployment remain held until the coupled
+foundation cutover. No further child merge into #198 is owed.
 
 HARNESS-READ-CALLERS and HARNESS-MATERIAL still need the approved recall payload
 and their complete consumer adapters. Fresh-history barriers remain a caller
@@ -123,5 +128,6 @@ qualification on the declared tuple.
 [harness]: ../crates/state-management/weaver-harness-Spec-amendment.md
 [state]: ../crates/state-management/weaver-state-Spec-amendment.md
 [map]: state-management-implementation-plan-2026-10-20.md
+[consolidation]: state-management-consolidation-2026-10-21.md
 
 [pr]: https://github.com/toddwbucy/WeaverAgent/pull/217

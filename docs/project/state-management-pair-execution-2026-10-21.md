@@ -1,20 +1,23 @@
 # External pair execution implementation record
 
-Date: 2026-10-21. Status: draft PR #216, Planner grade owed.
+Date: 2026-10-21.
 
 ## Scope and authority
 
 This slice implements the external execution portion of [Spec 05][pairs]
 sections 1 through 3. It extends PAIR-OPEN, PAIR-END, PAIR-MATCH, PAIR-STATES
 and RETRY. RETURN-CARRY's placement acknowledgment remains a later consumer.
-The branch starts at c9aa7709, the head of draft #215 above #198.
+Original #216 started at c9aa7709, then the head of #215 above #198.
 
 The primitive retains checked emission, statement receipts, pair receipts,
 exchange identity and received bytes. The loop chooses execution, retry,
 cancellation, placement and lifecycle transitions. This slice adds no worker
 activation, automatic retry, tool timeout or production language artifact.
-Keep it above #215 for the coordinated foundation cutover. Its parent changes
-both ends of the interrupt wire and is not independently landable on main.
+#216 has merged into #215, and #198 is already on main. Review the consolidated
+#215 against main under the operator's authorization. Runtime activation and
+deployment of the paired interrupt wire remain held until the coordinated
+foundation cutover. The [consolidation record][consolidation] records later
+multi-call, timing and retry corrections and their evidence.
 
 ## Contracts
 
@@ -69,6 +72,9 @@ placement acknowledgment. There is no boolean delivered shortcut.
 
 ## Validation
 
+These results describe the original #216 slice. They do not grade later review
+fixes or replace the combined-head checks in the consolidation record.
+
 The restored full harness suite passes 1,010 tests with zero failures and
 17 inherited ignored instruments. All 58 new tests run: 17 ledger cases,
 18 context cases and 23 transport evidence cases. The tests use real Unix
@@ -110,3 +116,4 @@ and its dependencies remain open in the [implementation map][map].
 
 [pairs]: ../crates/state-management/state-management-spec-05-tool-pairs.md
 [map]: state-management-implementation-plan-2026-10-20.md
+[consolidation]: state-management-consolidation-2026-10-21.md

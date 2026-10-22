@@ -1,16 +1,14 @@
 # Outbound identity sort implementation
 
-Date: 2026-10-21. Status: implementation evidence, not a Spec amendment.
-Branch: code/state-outbound-sort.
-Draft PR: https://github.com/toddwbucy/WeaverAgent/pull/220.
-Base: #219 at 7da5366cadeecc785114f679e570a273e902b245.
+Date: 2026-10-21.
 
 ## Contract and scope
 
 This slice implements [Spec 08] SUBJECTS and OUTBOUND, its outbound SORT-RECORD,
 and the corresponding [HARNESS-SORT] recording adapter. It advances issue #1 and
 epic #146's delivery item "Implement and qualify the merged primitive contracts".
-Neither issue is complete. The branch preserves #219's exact #217 and #218 ancestry.
+Neither issue is complete. Original #220 used code/state-outbound-sort from #219 at
+7da5366cadeecc785114f679e570a273e902b245, preserving its #217 and #218 ancestry.
 
 The pure noun function returns unique exact noun bytes in UTF-8 order. It keeps
 compound nouns intact and performs no query or classification. The identity sort
@@ -52,10 +50,13 @@ does not complete the run's later teardown and author migration.
 
 ## Review and remaining work
 
-Review this child against #219 and keep it in the held harness stack. The paired
-wire inherited from #218 remains held for the coupled cutover. No serving loop,
-deployment declaration, SPU implementation or store implementation changes here.
-Only the operator merges. Planner verification and external review remain owed.
+#220 has merged through #219, #217 and #216 into #215. Review the consolidated
+#215 against main under the operator's authorization. Runtime activation and
+deployment remain held until the coupled cutover, including the paired wire
+incorporated from the now-closed #218. This slice changed no serving loop,
+deployment declaration, SPU implementation or store implementation. The
+[consolidation record][consolidation] and [implementation map][map] carry current
+checks and remaining work. Only the operator merges.
 
 The Executor checked the local diff and exercised its guards. The named code-review
 skill was not available in this session's skill catalog or local SKILL.md search.
@@ -63,6 +64,9 @@ The available Claude plugin command is a different workflow that excludes drafts
 No invocation or Planner grade is claimed for that missing review step.
 
 ## Validation
+
+These results describe the original #220 slice. Later combined-head checks and
+review dispositions are recorded separately in the consolidation record.
 
 On 2026-10-21, the final source passed the lock gate, the complete weaver-harness
 suite with 1,121 passing tests and 18 inherited ignored cases, the harness
@@ -131,3 +135,5 @@ filing path was exercised. Keep those conditions with the test result.
 
 [Spec 08]: ../crates/state-management/state-management-spec-08-sort-selection.md
 [HARNESS-SORT]: ../crates/state-management/weaver-harness-Spec-amendment.md
+[consolidation]: state-management-consolidation-2026-10-21.md
+[map]: state-management-implementation-plan-2026-10-20.md

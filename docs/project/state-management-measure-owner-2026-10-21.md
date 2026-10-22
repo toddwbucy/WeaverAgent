@@ -1,7 +1,6 @@
 # Owned decode measurement implementation
 
-Date: 2026-10-21. Status: implementation evidence, not a Spec amendment.
-Branch: code/state-measure-owner.
+Date: 2026-10-21.
 
 ## Contract and scope
 
@@ -42,10 +41,16 @@ the old generation/cancel protocol's idle state from an empty outgoing buffer.
 
 ## Dependency and remaining work
 
-The branch starts from #217 at bdfa3a76 and incorporates #218 at 8b387eff. The
-combining commit is 32a57b57. Its only manual merge resolution was the implementation
-map. The implementation changes follow that merge and can be reviewed separately.
-Both parent reviews remain required. No deployed serving path changes in this slice.
+Original #219 used code/state-measure-owner, joining #217 at bdfa3a76 and #218 at
+8b387eff through merge 32a57b57. Its only manual merge resolution was the
+implementation map. The implementation changes followed that merge. Those exact
+parent revisions remain the historical review inputs.
+
+#219 and #217 have merged down into #215. #218 was closed as already incorporated
+through that preserved ancestry, so no separate parent merge or review is a current
+landing prerequisite. Review the combined #215 against main. Runtime activation
+and deployment remain held until the coupled foundation cutover. The
+[consolidation record][consolidation] carries the current integration evidence.
 
 The later place owner still owes BootHead, budget admission, source maps, the journal,
 marks, recorded placement and the single-use append grant. This measurement result
@@ -54,6 +59,9 @@ the unmerged recall amendment #189 remain open. Production language and capacity
 qualification are also separate obligations.
 
 ## Validation
+
+These results describe the original #219 slice. They do not grade later review
+fixes or replace the combined-head checks in the consolidation record.
 
 The harness suite passed 1,101 tests, with 18 inherited ignored instruments. The
 shared-types suite passed 127 tests, and its config-feature suite passed 182 tests.
@@ -106,3 +114,4 @@ for the foundation's production qualification evidence.
 [HARNESS-PLACE]: ../crates/state-management/weaver-harness-Spec-amendment.md
 [TYPES-DECODE]: ../crates/state-management/weaver-types-Spec-amendment.md
 [paired]: state-management-decode-measurement-2026-10-21.md
+[consolidation]: state-management-consolidation-2026-10-21.md

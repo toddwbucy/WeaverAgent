@@ -1326,6 +1326,136 @@ impl PumpIo for ValidationClock {
 }
 
 #[test]
+fn read_validation_retains_page_and_release_continuations_across_leave() {
+    for at_release in [false, true] {
+        let mut member = Member::new();
+        let initial = member.begin();
+        let bound = member.bound();
+        if at_release {
+            member.respond(&initial, page(3, 0, EMPTY.len(), EMPTY));
+            let release = member.next_request();
+            member.respond(
+                &release,
+                s::StateControlAnswer::Released {
+                    snapshot_id: 3.into(),
+                },
+            );
+        } else {
+            member.respond(&initial, page(3, 0, EMPTY.len(), &EMPTY[..8]));
+        }
+        member.record_completion_only();
+        let recorded = member.records(Kind::StateStoreMeasurement).len();
+        let now = member.now();
+        let leave = AbsoluteBound::after(now, 10).unwrap();
+        member
+            .run
+            .context
+            .arm(PumpDeadline::Leave, leave, &mut member.run.clock)
+            .unwrap();
+        let mut clock = ValidationClock {
+            before: now,
+            deadline: leave.deadline_ns(),
+            reads: 0,
+        };
+        assert_eq!(
+            member
+                .run
+                .context
+                .settle_recorded_read(&mut clock)
+                .unwrap_err(),
+            RunFailure::Wait {
+                key: PumpDeadline::Leave,
+                bound: leave,
+            }
+        );
+        assert!(
+            clock.reads >= 2,
+            "Leave must interrupt the post-validation check"
+        );
+        assert!(member.run.context.flow.operation_completion().is_none());
+        assert!(member.run.context.flow.state().outstanding().is_empty());
+        assert!(member.run.context.flow.state().held_measurement().is_none());
+        assert_eq!(member.bound(), bound);
+        assert!(member.run.context.halt().is_none());
+        assert!(
+            member
+                .run
+                .context
+                .complete_wait(PumpDeadline::StateControl)
+                .is_none()
+        );
+        // No partial content or completed release bypasses the lifecycle wait.
+        assert_eq!(
+            member.run.context.take_read(&mut clock).unwrap_err(),
+            RunFailure::Wait {
+                key: PumpDeadline::Leave,
+                bound: leave,
+            }
+        );
+        member.no_request();
+        assert_eq!(member.records(Kind::StateStoreMeasurement).len(), recorded);
+        assert_eq!(
+            member.run.context.complete_wait(PumpDeadline::Leave),
+            Some(leave)
+        );
+        member.run.clock.advance_to(leave.deadline_ns()).unwrap();
+        // Resume through the public owner. It must continue the consumed answer,
+        // without waiting for a second copy or issuing the same request again.
+        let progress = member.advance().unwrap();
+        assert_eq!(member.records(Kind::StateStoreMeasurement).len(), recorded);
+        if at_release {
+            assert_eq!(progress, ReadProgress::Complete);
+        } else {
+            assert_eq!(progress, ReadProgress::Progress);
+            assert_eq!(member.bound(), bound);
+            let next = member.sent();
+            assert!(matches!(
+                &next,
+                s::StateFrame::Control {
+                    frame: s::StateControl::Next { snapshot_id, offset },
+                    ..
+                } if *snapshot_id == 3.into() && *offset == 8.into()
+            ));
+            assert_eq!(
+                next.common().request_id.0,
+                initial.common().request_id.0 + 1
+            );
+            member.respond(&next, page(3, 8, EMPTY.len(), &EMPTY[8..]));
+            let release = member.next_request();
+            assert_eq!(member.bound(), bound);
+            member.respond(
+                &release,
+                s::StateControlAnswer::Released {
+                    snapshot_id: 3.into(),
+                },
+            );
+        }
+        let result = member.finish().unwrap();
+        assert_eq!(result.raw_bytes(), EMPTY);
+        assert_eq!(
+            member
+                .requests
+                .iter()
+                .filter(|request| matches!(request, s::StateControl::Release { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(member.requests.len(), if at_release { 2 } else { 3 });
+        assert!(
+            member
+                .run
+                .context
+                .deadlines
+                .get(PumpDeadline::StateControl)
+                .is_none()
+        );
+        member.no_result();
+        member.no_request();
+        assert!(member.run.context.halt().is_none());
+    }
+}
+
+#[test]
 fn validation_crossing_the_deadline_cannot_publish_a_page_or_released_result() {
     for at_release in [false, true] {
         let mut member = Member::new();

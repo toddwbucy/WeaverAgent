@@ -602,25 +602,29 @@ impl RecordingContext {
             .purpose;
         let sequence = self.resume_owned_author_and_wait(ports)?;
         self.measure_wait_matches(ports.io)?;
-        self.live(ports.io)?;
+        // The shared author has transferred this sequence. Save the next
+        // measurement state before a lifecycle check can yield, so resumption
+        // cannot ask the shared author to return the consumed sequence again.
         let owner = self.measure.as_mut().unwrap();
         owner.author = None;
-        match purpose {
+        let progress = match purpose {
             AuthorPurpose::Fault => {
                 // The fault is now on the trace. It closes no decode exchange.
                 owner.received = None;
-                Ok(MeasureProgress::Progress)
+                MeasureProgress::Progress
             }
             AuthorPurpose::DecodeRefusal => {
                 owner.decode_source = Some(sequence);
                 self.stage_measure_placement_refusal(ports.io)?;
-                Ok(MeasureProgress::Progress)
+                MeasureProgress::Progress
             }
             AuthorPurpose::PlacementRefusal => {
                 owner.placement_source = Some(sequence);
-                Ok(owner.progress())
+                owner.progress()
             }
-        }
+        };
+        self.live(ports.io)?;
+        Ok(progress)
     }
 
     /// Cancellation revokes only the result. The pump must still finish a staged
@@ -665,6 +669,10 @@ impl RecordingContext {
             self.retain_measure_transport_evidence(decode);
             return Err(self.measure_fault(io, detail));
         }
+        // Settlement consumes the reservation. Check the completed work before
+        // that irreversible handoff, then transfer its exact owner without a
+        // recoverable yield between those two ownership changes.
+        self.live(io)?;
         let ticket = self
             .measure
             .as_mut()
@@ -678,7 +686,6 @@ impl RecordingContext {
                 self.measure_fault(io, format!("measurement settlement: {:?}", error.failure))
             );
         }
-        self.live(io)?;
         let owner = self.measure.take().unwrap();
         let evidence = MeasureEvidence {
             request: owner.request,

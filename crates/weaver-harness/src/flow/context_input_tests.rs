@@ -1128,6 +1128,180 @@ impl PumpIo for RecordBoundaryClock {
 }
 
 #[test]
+fn input_offer_and_refusal_resume_when_initial_author_admission_meets_leave() {
+    for at_refusal in [false, true] {
+        let mut fx = InputFixture::new();
+        let frame = TurnFrame::carry_from(b"not JSON", 43);
+        fx.begin(frame.clone());
+        if at_refusal {
+            assert_eq!(fx.advance().unwrap(), InputProgress::Progress);
+            assert_eq!(fx.records(Kind::InputOffered).len(), 1);
+        }
+        let now = fx.run.clock.now().unwrap();
+        let leave = AbsoluteBound::after(now, 5).unwrap();
+        fx.run
+            .context
+            .arm(PumpDeadline::Leave, leave, &mut fx.run.clock)
+            .unwrap();
+        let mut io = RecordBoundaryClock {
+            before_reads: 1,
+            before: now,
+            after: leave.deadline_ns(),
+        };
+        assert_eq!(
+            fx.run
+                .context
+                .advance_input(&mut ports(&mut io))
+                .unwrap_err(),
+            RunFailure::Wait {
+                key: PumpDeadline::Leave,
+                bound: leave
+            }
+        );
+        let kind = if at_refusal {
+            Kind::Refusal
+        } else {
+            Kind::InputOffered
+        };
+        let held = fx.run.context.waiting_content.as_ref().unwrap();
+        assert_eq!(held.kind, kind);
+        let original = format!("{held:?}");
+        assert!(fx.run.context.author_admission_pending);
+        assert!(fx.run.context.pending_author().is_none());
+        assert!(fx.run.context.refused_author.is_none());
+        assert!(fx.records(kind).is_empty());
+        assert!(fx.run.context.input_author.is_some());
+        assert_eq!(
+            fx.run.context.complete_wait(PumpDeadline::Leave),
+            Some(leave)
+        );
+        fx.run.clock.advance_to(leave.deadline_ns()).unwrap();
+
+        // A second expiry during admission retry keeps the same original and
+        // the caller's stage, rather than promoting it or manufacturing a ticket.
+        let next_leave = AbsoluteBound::after(leave.deadline_ns(), 5).unwrap();
+        fx.run
+            .context
+            .arm(PumpDeadline::Leave, next_leave, &mut fx.run.clock)
+            .unwrap();
+        let mut retry = RecordBoundaryClock {
+            before_reads: 2,
+            before: leave.deadline_ns(),
+            after: next_leave.deadline_ns(),
+        };
+        assert_eq!(
+            fx.run
+                .context
+                .advance_input(&mut ports(&mut retry))
+                .unwrap_err(),
+            RunFailure::Wait {
+                key: PumpDeadline::Leave,
+                bound: next_leave
+            }
+        );
+        assert_eq!(
+            format!("{:?}", fx.run.context.waiting_content.as_ref().unwrap()),
+            original
+        );
+        assert!(fx.run.context.author_admission_pending);
+        assert!(fx.records(kind).is_empty());
+        assert!(fx.run.context.pending_author().is_none());
+        assert!(fx.run.context.halt().is_none());
+        assert_eq!(
+            fx.run.context.complete_wait(PumpDeadline::Leave),
+            Some(next_leave)
+        );
+        fx.run.clock.advance_to(next_leave.deadline_ns()).unwrap();
+        fx.until(InputProgress::CloseReady);
+        assert_eq!(fx.records(Kind::InputOffered).len(), 1);
+        assert_eq!(
+            fx.records(Kind::InputOffered)[0]["payload"]["octets"],
+            frame.octets
+        );
+        assert_eq!(fx.records(Kind::Refusal).len(), 1);
+        assert_eq!(
+            fx.records(Kind::Refusal)[0]["payload"]["case"],
+            "invalid_input_shape"
+        );
+        assert!(fx.run.context.waiting_content.is_none());
+        assert!(!fx.run.context.author_admission_pending);
+        assert!(fx.run.context.input_author.is_none());
+        assert!(fx.run.context.halt().is_none());
+        fx.no_turn();
+        fx.no_request();
+    }
+}
+
+#[test]
+fn input_turn_and_source_resume_when_initial_author_admission_meets_leave() {
+    for (before_reads, kind, turns) in [(2, Kind::TurnStarted, 0), (5, Kind::MessageUser, 1)] {
+        let mut fx = InputFixture::new();
+        fx.begin(TurnFrame::carry_from(br#"{"text":"Read file."}"#, 42));
+        let (request, _, token) = fx.accepted_token();
+        let now = fx.run.clock.now().unwrap();
+        let leave = AbsoluteBound::after(now, 5).unwrap();
+        fx.run
+            .context
+            .arm(PumpDeadline::Leave, leave, &mut fx.run.clock)
+            .unwrap();
+        let mut io = RecordBoundaryClock {
+            before_reads,
+            before: now,
+            after: leave.deadline_ns(),
+        };
+        let error = fx
+            .run
+            .context
+            .consume_input(token, TurnRef("deferred-input".into()), &mut ports(&mut io))
+            .unwrap_err();
+        assert!(error.token.is_none());
+        assert_eq!(
+            error.failure,
+            RunFailure::Wait {
+                key: PumpDeadline::Leave,
+                bound: leave
+            }
+        );
+        assert_eq!(fx.run.context.waiting_content.as_ref().unwrap().kind, kind);
+        assert!(fx.run.context.author_admission_pending);
+        assert!(fx.run.context.pending_author().is_none());
+        assert!(fx.run.context.completed_author.is_none());
+        assert!(fx.run.context.refused_author.is_none());
+        assert!(fx.run.context.input_turn.is_some());
+        assert_eq!(fx.records(Kind::TurnStarted).len(), turns);
+        assert!(fx.records(Kind::MessageUser).is_empty());
+        assert_eq!(
+            fx.run.context.complete_wait(PumpDeadline::Leave),
+            Some(leave)
+        );
+        fx.run.clock.advance_to(leave.deadline_ns()).unwrap();
+        let seated = fx
+            .run
+            .context
+            .resume_input_turn(&mut ports(&mut fx.run.clock))
+            .unwrap()
+            .unwrap();
+        assert_eq!(seated.turn, TurnRef("deferred-input".into()));
+        assert_eq!(
+            seated.message.content,
+            vec![ContentBlock::Text { text: request.text }]
+        );
+        assert_eq!(fx.records(Kind::TurnStarted).len(), 1);
+        assert_eq!(fx.records(Kind::MessageUser).len(), 1);
+        assert_eq!(
+            seated.source.sequence.0,
+            sequence(&fx.records(Kind::MessageUser)[0])
+        );
+        assert!(fx.run.context.input_turn.is_none());
+        assert!(fx.run.context.input.snapshot().is_none());
+        assert!(fx.run.context.waiting_content.is_none());
+        assert!(!fx.run.context.author_admission_pending);
+        assert!(fx.run.context.halt().is_none());
+        fx.no_request();
+    }
+}
+
+#[test]
 fn acceptance_recorded_at_the_gate_bound_never_mints_a_token() {
     let mut fx = InputFixture::new();
     fx.begin(TurnFrame::carry_from(br#"{"text":"Read file."}"#, 42));

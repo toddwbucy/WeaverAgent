@@ -1061,6 +1061,30 @@ struct ValidationClock {
     reads: usize,
 }
 
+/// Expire a lifecycle bound at a specific owner handoff without advancing a
+/// second clock. These checkpoints have complete wire/trace evidence and wait
+/// for no descriptor.
+struct HandoffClock<'a> {
+    clock: &'a mut FakePumpIo,
+    before_reads: usize,
+    deadline: u64,
+}
+
+impl PumpIo for HandoffClock<'_> {
+    fn now(&mut self) -> io::Result<u64> {
+        if self.before_reads == 0 {
+            self.clock.advance_to(self.deadline)?;
+        } else {
+            self.before_reads -= 1;
+        }
+        self.clock.now()
+    }
+
+    fn wait(&mut self, _: &[WaitInterest<'_>], _: Option<u64>) -> io::Result<WaitOutcome> {
+        panic!("the measurement handoff already owns its complete evidence");
+    }
+}
+
 impl PumpIo for ValidationClock {
     fn now(&mut self) -> io::Result<u64> {
         self.reads += 1;
@@ -1114,6 +1138,248 @@ fn validation_crossing_the_original_bound_cannot_publish_measurement_facts() {
             .take_measurement(3.into(), &mut peer.decode, &mut io)
             .is_err()
     );
+}
+
+#[test]
+fn recorded_measure_authors_resume_after_leave_consumes_the_shared_sequence() {
+    // Fault, decode refusal and placement refusal each have a distinct
+    // continuation after their original author is Recorded.
+    for (malformed, placement) in [(false, false), (true, false), (true, true)] {
+        let mut peer = Peer::new();
+        let bound = peer.begin(request(), PumpDeadline::Decision);
+        peer.sent();
+        let raw = if malformed {
+            serde_json::to_vec(&TokenRefusal::MalformedDelta).unwrap()
+        } else {
+            serde_json::to_vec(&TokenAnswer::Fault(weaver_types::FaultReport {
+                case: weaver_types::FaultCase::ReadoutFaultWhileElected,
+                account: serde_json::value::RawValue::from_string(
+                    "{ \"retained\" : \"original fault account\" }".into(),
+                )
+                .unwrap(),
+            }))
+            .unwrap()
+        };
+        send_bytes(peer.peer.as_fd(), &raw);
+        for _ in 0..64 {
+            peer.advance(PollFlags::POLLIN).unwrap();
+            if peer.run.context.waiting_content.is_some() {
+                break;
+            }
+        }
+        assert!(peer.run.context.waiting_content.is_some());
+        if placement {
+            peer.advance(PollFlags::POLLIN).unwrap();
+            assert_eq!(peer.records(Kind::Refusal).len(), 1);
+            assert!(peer.run.context.waiting_content.is_some());
+        }
+        let now = peer.run.clock.now().unwrap();
+        let leave = AbsoluteBound::after(now, 10).unwrap();
+        peer.run
+            .context
+            .arm(PumpDeadline::Leave, leave, &mut peer.run.clock)
+            .unwrap();
+        // Entry and the original envelope sample precede the shared author's
+        // Recorded check, which retains completed_author when Leave expires.
+        let mut clock = HandoffClock {
+            clock: &mut peer.run.clock,
+            before_reads: 2,
+            deadline: leave.deadline_ns(),
+        };
+        assert_eq!(
+            peer.run
+                .context
+                .advance_measurement(&mut ports(&mut peer.decode, &mut clock))
+                .unwrap_err(),
+            RunFailure::Wait {
+                key: PumpDeadline::Leave,
+                bound: leave,
+            }
+        );
+        let recorded = peer.run.context.completed_author.unwrap();
+        assert!(peer.run.context.waiting_content.is_none());
+        assert!(peer.run.context.pending_author().is_none());
+        assert_eq!(peer.run.context.pending_measure_raw(), Some(raw.as_slice()));
+        assert_eq!(
+            peer.run.context.complete_wait(PumpDeadline::Leave),
+            Some(leave)
+        );
+
+        let now = peer.run.clock.now().unwrap();
+        let later_leave = AbsoluteBound::after(now, 10).unwrap();
+        peer.run
+            .context
+            .arm(PumpDeadline::Leave, later_leave, &mut peer.run.clock)
+            .unwrap();
+        // The entry check passes; the owner's post-work check expires after
+        // resume_owned_author_and_wait transfers that same recorded sequence.
+        let mut clock = HandoffClock {
+            clock: &mut peer.run.clock,
+            before_reads: 1,
+            deadline: later_leave.deadline_ns(),
+        };
+        assert_eq!(
+            peer.run
+                .context
+                .advance_measurement(&mut ports(&mut peer.decode, &mut clock))
+                .unwrap_err(),
+            RunFailure::Wait {
+                key: PumpDeadline::Leave,
+                bound: later_leave,
+            }
+        );
+        assert!(peer.run.context.completed_author.is_none());
+        assert!(peer.run.context.halt().is_none());
+        assert_eq!(
+            peer.run.context.deadlines.get(PumpDeadline::Decision),
+            Some(bound)
+        );
+        assert_eq!(
+            peer.run.context.complete_wait(PumpDeadline::Leave),
+            Some(later_leave)
+        );
+        let completed = if malformed {
+            peer.finish()
+        } else {
+            peer.send_answer(&answer(17));
+            peer.finish()
+        };
+        if let MeasureCompletion::Refused(refused) = &completed {
+            assert!(malformed);
+            let (decode, placement_source) = refused.sources();
+            assert_eq!(
+                if placement {
+                    Some(placement_source)
+                } else {
+                    decode
+                },
+                Some(recorded)
+            );
+            assert_eq!(completed.raw_bytes(), raw);
+            assert_eq!(peer.records(Kind::Refusal).len(), 2);
+        } else {
+            assert!(!malformed);
+            assert!(matches!(completed, MeasureCompletion::Measured(_)));
+            assert_eq!(peer.records(Kind::Fault).len(), 1);
+            assert!(
+                peer.run
+                    .context
+                    .barrier
+                    .recorder()
+                    .structure()
+                    .by_kind(Kind::Fault)
+                    .next()
+                    .unwrap()
+                    .line
+                    .contains("{ \"retained\" : \"original fault account\" }")
+            );
+        }
+        assert!(peer.run.context.halt().is_none());
+        assert_eq!(completed.request().assembly_id, request().assembly_id);
+        assert_eq!(completed.bound(), bound);
+        assert_eq!(
+            peer.run.context.deadlines.get(PumpDeadline::Decision),
+            Some(bound)
+        );
+    }
+}
+
+#[test]
+fn measurement_take_keeps_its_reservation_when_the_final_check_yields_leave() {
+    for disposition in 0..3 {
+        let mut peer = Peer::new();
+        let bound = peer.begin(request(), PumpDeadline::Decision);
+        peer.sent();
+        if disposition == 2 {
+            peer.run
+                .context
+                .cancel_measurement(&mut peer.run.clock)
+                .unwrap();
+        }
+        let raw = if disposition == 1 {
+            serde_json::to_vec(&TokenRefusal::MalformedDelta).unwrap()
+        } else {
+            serde_json::to_vec(&answer(17)).unwrap()
+        };
+        send_bytes(peer.peer.as_fd(), &raw);
+        let mut complete = false;
+        for _ in 0..64 {
+            if matches!(
+                peer.advance(PollFlags::POLLIN).unwrap(),
+                MeasureProgress::Complete | MeasureProgress::Cancelled
+            ) {
+                complete = true;
+                break;
+            }
+        }
+        assert!(complete);
+        let now = peer.run.clock.now().unwrap();
+        let leave = AbsoluteBound::after(now, 10).unwrap();
+        peer.run
+            .context
+            .arm(PumpDeadline::Leave, leave, &mut peer.run.clock)
+            .unwrap();
+        let mut clock = HandoffClock {
+            clock: &mut peer.run.clock,
+            before_reads: 1,
+            deadline: leave.deadline_ns(),
+        };
+        assert_eq!(
+            peer.run
+                .context
+                .take_measurement(3.into(), &mut peer.decode, &mut clock)
+                .unwrap_err(),
+            RunFailure::Wait {
+                key: PumpDeadline::Leave,
+                bound: leave,
+            }
+        );
+        assert_eq!(peer.run.context.pending_measure_raw(), Some(raw.as_slice()));
+        let next = TokenDirective::Cancel {
+            turn: TurnKey("still-owned".into()),
+        };
+        assert!(matches!(
+            peer.decode.stage(next.clone()).unwrap(),
+            Stage::Busy(returned) if returned == next
+        ));
+        assert_eq!(
+            peer.run.context.deadlines.get(PumpDeadline::Decision),
+            Some(bound)
+        );
+        assert_eq!(
+            peer.run.context.complete_wait(PumpDeadline::Leave),
+            Some(leave)
+        );
+        let completed = peer
+            .run
+            .context
+            .take_measurement(3.into(), &mut peer.decode, &mut peer.run.clock)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            (&completed, disposition),
+            (MeasureCompletion::Measured(_), 0)
+                | (MeasureCompletion::Refused(_), 1)
+                | (MeasureCompletion::Cancelled(_), 2)
+        ));
+        assert_eq!(completed.raw_bytes(), raw);
+        assert_eq!(completed.request().delta, request().delta);
+        assert_eq!(completed.request().tool_schemas, request().tool_schemas);
+        assert_eq!(completed.bound(), bound);
+        assert!(
+            peer.run
+                .context
+                .take_measurement(3.into(), &mut peer.decode, &mut peer.run.clock)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(peer.decode.stage(next).unwrap(), Stage::Queued));
+        assert!(peer.run.context.halt().is_none());
+        assert_eq!(
+            peer.run.context.deadlines.get(PumpDeadline::Decision),
+            Some(bound)
+        );
+    }
 }
 
 #[test]

@@ -1,6 +1,6 @@
 # Gate fault interrupt implementation record
 
-Date: 2026-10-21. Status: draft PR #215, Planner grade owed.
+Date: 2026-10-21.
 
 ## Scope and authority
 
@@ -10,16 +10,18 @@ The slice implements GATE-FAULT-INTERRUPT in the merged
 [Spec 05][pairs]. The code remains in the gate primitive. The loop selects when
 an interrupt is needed. The store remains weaver-state.
 
-The branch starts at a1ce2df5, the consolidated #198 head after #214 merged.
+The original #215 slice started at a1ce2df5, the #198 head after #214 merged.
 It supplies both ends of the changed wire. Every existing unload sender now
 sends ToolInterrupt with Unload explicitly. FlowFailure is a separate cause in
 the shared wire and the trace mirror. The store still refuses to file a
 flow_failure terminal account through a broken flow.
 
-This wire replacement applies only at the coordinated foundation cutover.
-Keep this draft stacked on #198 until that cutover is ready. Its code is not
-an independently landable update to the old serving contract. The failed-flow
+#198 is now on main, and #215 contains its merged descendants for review against
+main. The operator authorized that consolidation. Runtime activation and deployment
+of this wire remain held until the coordinated foundation cutover. The failed-flow
 caller, lifecycle teardown and trace-only terminal account remain H1b2/H2 work.
+The [consolidation record][consolidation] carries current checks and retained
+review followups.
 
 ## Contract implemented
 
@@ -41,6 +43,9 @@ the execution unanswered and exits through the existing gate-death path.
 No new harness execution clock or measured timeout is introduced.
 
 ## Validation
+
+These results describe the original gate interrupt slice. Later combined-head
+checks and review dispositions are in the consolidation record.
 
 The restored full suites pass: gate 75, harness 952, state 188, trace 137 and
 shared types 115 tests. The types config-feature suite separately passes 159.
@@ -99,3 +104,4 @@ review and test evidence do not replace the Planner grade or operator approval.
 [contract]: ../crates/state-management/contract-amendments.md
 [pairs]: ../crates/state-management/state-management-spec-05-tool-pairs.md
 [map]: state-management-implementation-plan-2026-10-20.md
+[consolidation]: state-management-consolidation-2026-10-21.md

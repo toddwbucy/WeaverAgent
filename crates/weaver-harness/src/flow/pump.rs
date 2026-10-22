@@ -745,8 +745,11 @@ impl CommonPump {
                         .map(|progress| progress != super::pump_transport::SendProgress::Pending)
                         .map_err(transport)
                 } else {
+                    let was_held = port.held().is_some();
                     port.try_receive()
-                        .map(|progress| progress != super::pump_transport::ReceiveProgress::Pending)
+                        .map(|progress| {
+                            !was_held && progress != super::pump_transport::ReceiveProgress::Pending
+                        })
                         .map_err(transport)
                 }
             }

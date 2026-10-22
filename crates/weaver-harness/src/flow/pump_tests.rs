@@ -886,6 +886,81 @@ fn malformed_lifecycle_envelope_retains_the_actual_decode_detail() {
 }
 
 #[test]
+fn an_already_held_gate_completion_is_not_progress_while_other_sources_are_ready() {
+    let mut fixture = Fixture::new(false);
+    let (gate, gate_peer) = pair();
+    let mut gate = OrganPort::from_owned(gate).unwrap();
+    send_envelope(&gate_peer, 101);
+    assert_eq!(gate.try_receive().unwrap(), ReceiveProgress::Held);
+    // Another answer in the real socket must stay unread while the first is held.
+    send_envelope(&gate_peer, 102);
+    let (admin, admin_peer) = pair();
+    let mut admin = LifecyclePeer::from_owned(admin).unwrap();
+    send_envelope(&admin_peer, 91);
+    let mut io = FakePumpIo::new(100);
+    let bound = AbsoluteBound::after(100, 5).unwrap();
+    let mut deadlines = DeadlineRegistry::new();
+    deadlines.arm(PumpDeadline::Leave, bound).unwrap();
+    let mut pump = CommonPump::new(ClockOrigin::at(100));
+    let mut ports = empty_ports(&mut io);
+    ports.lifecycle.peer = Some(&mut admin);
+    ports.gate = Some(&mut gate);
+    // Real admin readiness causes the pump to probe every standing source.
+    let sources = progress(
+        pump.step(&mut ports, None, &mut fixture.cx(), &deadlines)
+            .unwrap(),
+    );
+    assert!(sources.contains(&PumpSource::Admin));
+    assert!(!sources.contains(&PumpSource::Gate));
+    assert_eq!(
+        ports
+            .gate
+            .as_ref()
+            .unwrap()
+            .held()
+            .unwrap()
+            .exchange
+            .ordinal,
+        101
+    );
+    // Once the other source is held too, neither held answer causes a spin.
+    // A real trace-capacity notification may race the next blocking wait.
+    let mut expired = false;
+    for _ in 0..8 {
+        match pump
+            .step(&mut ports, None, &mut fixture.cx(), &deadlines)
+            .unwrap()
+        {
+            PumpStep::Deadline {
+                key,
+                bound: observed,
+            } => {
+                assert_eq!(key, PumpDeadline::Leave);
+                assert_eq!(observed, bound);
+                expired = true;
+                break;
+            }
+            PumpStep::Progress { sources } => assert!(!sources.contains(&PumpSource::Gate)),
+            other => panic!("held owners must wait under the original bound: {other:?}"),
+        }
+    }
+    assert!(
+        expired,
+        "held completions must not spin before the real wait"
+    );
+    assert_eq!(io.waits().len(), 1);
+    assert_eq!(
+        gate.take_completion().unwrap().unwrap().exchange.ordinal,
+        101
+    );
+    assert_eq!(gate.try_receive().unwrap(), ReceiveProgress::Held);
+    assert_eq!(
+        gate.take_completion().unwrap().unwrap().exchange.ordinal,
+        102
+    );
+}
+
+#[test]
 fn an_already_held_residency_completion_does_not_spin_as_new_progress() {
     let mut fixture = Fixture::new(false);
     let (residency, peer) = pair();
