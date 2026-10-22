@@ -215,17 +215,32 @@ impl RecordingContext {
         Ok(())
     }
 
-    pub(super) fn owned_filing_recorded_before(&self, owner: FilingOwner, bound: AbsoluteBound) -> bool {
-        self.filing.as_ref().is_some_and(|filing| filing.owner == owner
-            && filing.bound == bound && filing.author_done && !filing.cancelled)
-            && self.flow.filing_receipts().is_some_and(ReceiptSet::is_complete)
-            && self.flow.filing_recorded_ns().is_some_and(|at| !bound.expired(at))
+    pub(super) fn owned_filing_recorded_before(
+        &self,
+        owner: FilingOwner,
+        bound: AbsoluteBound,
+    ) -> bool {
+        self.filing.as_ref().is_some_and(|filing| {
+            filing.owner == owner
+                && filing.bound == bound
+                && filing.author_done
+                && !filing.cancelled
+        }) && self
+            .flow
+            .filing_receipts()
+            .is_some_and(ReceiptSet::is_complete)
+            && self
+                .flow
+                .filing_recorded_ns()
+                .is_some_and(|at| !bound.expired(at))
     }
 
     pub(super) fn withdraw_unstarted_boot_pair(&mut self) -> Option<AuthoredEvent> {
         let owner = self.filing.as_ref()?;
-        if owner.owner != FilingOwner::BootPairs || owner.sequence.is_some()
-            || self.barrier.pending_author().is_some() || self.waiting_content.is_none()
+        if owner.owner != FilingOwner::BootPairs
+            || owner.sequence.is_some()
+            || self.barrier.pending_author().is_some()
+            || self.waiting_content.is_none()
         {
             return None;
         }

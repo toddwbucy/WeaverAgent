@@ -184,7 +184,10 @@ impl RecordingContext {
     }
 
     #[allow(clippy::result_large_err)] // Keep the exact selector on a refused admission.
-    pub(super) fn begin_boot_pairs_read(&mut self, io: &mut impl PumpIo) -> Result<(), ReadBeginError> {
+    pub(super) fn begin_boot_pairs_read(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<(), ReadBeginError> {
         self.begin_read_with_purpose(ReadSelector::OpenPairs {}, None, ReadPurpose::BootPairs, io)
     }
 
@@ -628,7 +631,10 @@ impl RecordingContext {
             } else {
                 let completed = read.released.as_ref().unwrap().as_ref().unwrap();
                 let record = match &mut read.purpose {
-                    ReadPurpose::Ordinary | ReadPurpose::Marks | ReadPurpose::BootPairs | ReadPurpose::Inward(_) => {
+                    ReadPurpose::Ordinary
+                    | ReadPurpose::Marks
+                    | ReadPurpose::BootPairs
+                    | ReadPurpose::Inward(_) => {
                         completed.recall().map_err(|error| error.to_string())
                     }
                     ReadPurpose::Boot {
