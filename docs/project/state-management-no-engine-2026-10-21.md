@@ -1,6 +1,6 @@
 # State member without a compiled engine
 
-Date: 2026-10-21. Implementation for issue #211, encountered during issue #146.
+Implementation for issue #211, encountered during issue #146.
 Branch: `code/state-no-engine-refusal`, stacked on draft PR #229 with the
 reviewed observation, trace and capture corrections retained as merge ancestry.
 
@@ -18,21 +18,32 @@ Default builds retain the existing dispatch, descriptor checks, room opening and
 SQLite construction order. There is no replacement engine or fallback store.
 
 Implements: weaver-state-Spec section 1, scoped to the optional engine feature;
-section 2, scoped to the run-lock first act and startup refusal; section 3, scoped
-to constructing the declared engine behind Store. Author assessment: conforms for
-these scoped clauses. Planner review remains separate. The Spec
-keeps the engine behind a named feature and elects only SQLite for this deployment.
-An absent implementation follows the existing unavailable-store fault path; it
-adds no control response or serving capability.
+section 2, scoped to the existing run-lock first act; section 3, scoped to
+constructing the declared engine behind Store. Author assessment: conforms for
+these scoped clauses. The missing-engine startup refusal is a Spec gap pending the
+operator's choice on issue #211. The alternative is to require SQLite when building
+the binary. The current proposal uses the existing unavailable-store fault vocabulary
+and adds no control response or serving capability; that vocabulary alone does not
+supply authority for the new startup disposition.
+
+[Planner review 5609164787][planner] confirms sections 1 and 3 and reserves the
+startup election to the operator. This record does not claim that election was made.
+The code and test proposal remains in draft until the choice and owning Spec agree.
 
 ## Instruments and validation
 
 The Linux no-engine process fixture starts the actual Cargo-built executable with
-first-door fd3, absent image fd4 and run-lock fd9. For each argument mode it requires
-exit status 1, the structured missing-engine fault, no stdout or seam answer, and
-no preload socket. A .part-held sentinel survives, proving refusal precedes the
-legacy room cleanup that would otherwise remove it. The child has a five-second
-test deadline and is killed and reaped if an assertion fails.
+first-door fd3 and absent image fd4. Each argument mode runs with run-lock fd9
+present and absent. The absent case requires exactly the existing state_notice line
+followed by the missing-engine state_fault line. Moving the engine refusal before
+keep_run_lock loses that notice and fails the ordered-record assertion. The parent
+keeps fd9 occupied while spawning, so the child's intentional close cannot hit the
+standard library's exec-status pipe.
+
+Both descriptor cases require exit status 1, no stdout or seam answer, and no preload
+socket. A .part-held sentinel survives, proving refusal precedes the legacy room
+cleanup that would otherwise remove it. The child has a five-second test deadline
+and is killed and reaped if an assertion fails.
 
 The live-serving run-lock integration fixture now requires SQLite, as its process
 must stay alive serving a store. The engine-independent run-lock unit fixture still
@@ -67,5 +78,37 @@ Evidence, tested source hashes and mutation/restoration records are deposited at
 `weaver-testing/state-management-146-olympus-2026-10-21/no-engine/` on the shared
 bulk store. /tmp/weaver-146-evidence/no-engine is local staging.
 
+## Review followups and conditional gate
+
+The present/absent descriptor fixture answers Planner rows 1 and 4. The current
+no-default-feature suite passed 30 tests, with strict all-target clippy, formatting
+and lock checks passing. N1 moved the complete engine refusal before keep_run_lock,
+compiled and failed the ordered-record assertion. Exact restoration passed. Two
+independent source readings found no concrete defect in descriptor custody or the
+ten process cases. The earlier matrix and two mutations above describe the prior
+fixture. This followup changes tests and documentation only. Its evidence is in
+the shared no-engine/review deposit.
+
+If the operator elects startup refusal, add the following regular gate alongside the
+existing per-crate test commands, after lock.sh, using a private target directory:
+
+```sh
+cargo test -p weaver-state --no-default-features --locked
+```
+
+This exact command already ran in the prior author and Planner checks. Making it a
+regular gate answers row 3 only after the proposal is approved; no CLAUDE.md or gate
+policy is changed by this test followup. The conditional owning-Spec text is prepared
+outside the repository at /tmp/weaver-146-no-engine-conditional-spec.md.
+
+Row 5's unreachable no-engine constructor refusal and row 8's shared process-test
+helpers remain batch cleanup. Removing the fallback constructor arm would require a
+wider feature-boundary edit and is not needed to pin startup ordering. Row 6's
+missing-engine refusal before usage validation remains part of the pending election,
+not an additional ruling inferred from the test. No production behavior changes in
+this followup.
+
 These changes qualify neither an engine-less serving agent nor the state management
 cutover. Issue #146 remains open and only the operator merges.
+
+[planner]: https://github.com/toddwbucy/WeaverAgent/pull/230#pullrequestreview-5609164787

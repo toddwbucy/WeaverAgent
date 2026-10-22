@@ -361,14 +361,14 @@ fn run_in_home(
     // table states, never plus twice it.
     let deadline = std::time::Instant::now() + cgroup::CONTAINMENT_BOUND;
     *containment_deadline = Some(deadline);
-    let mut supervision = ContainmentSupervisor::new(supervision, ending);
+    let mut supervision = ContainmentSupervisor::new(supervision, ending, deadline);
     let killed = tools.kill().is_ok();
     #[cfg(test)]
     if killed {
         interrupt_tests::containment_entered();
     }
-    let contained = killed
-        && tools.wait_empty_until_with(deadline, |slice| supervision.wait(slice, Some(deadline)));
+    let contained =
+        killed && tools.wait_empty_until_with(deadline, |slice| supervision.wait(slice));
     // **The leader is signalled by its pid, then reaped within the bound**
     // (Codex on #167): the shell runs as the agent's account and may have
     // moved itself out of `tools/` (6.1, C1's first stated exception), where
@@ -378,6 +378,8 @@ fn run_in_home(
     // execution not contained.
     let reaped = if contained {
         let _ = nix::sys::signal::kill(group, nix::sys::signal::Signal::SIGKILL);
+        #[cfg(test)]
+        delivery_tests::reap_entered(deadline);
         reap_supervised(&mut child, deadline, &mut supervision)
     } else {
         None
@@ -397,7 +399,7 @@ fn run_in_home(
         return Err(ShellEnd::Uncontained);
     };
     let drained = finish_draining(&finished, out_reader, err_reader);
-    let killed_by = supervision.finish(deadline)?;
+    let killed_by = supervision.finish()?;
     let status = reaped.map_err(|error| ShellEnd::Errored {
         detail: format!("the supervision failed: {error}"),
     })?;
@@ -452,16 +454,14 @@ fn reap_within(
 }
 
 /// Keep the actual leader-reap path and its channel progress under one bound.
-/// The helper is also the test boundary: fixtures exercise this exact forwarding
-/// call instead of copying the closure and leaving production unprotected.
+/// Every progress call inherits the supervisor's stored deadline. The actual
+/// run_in_home path also has a delegated child/socket regression.
 fn reap_supervised(
     child: &mut std::process::Child,
     deadline: std::time::Instant,
     supervision: &mut ContainmentSupervisor<'_>,
 ) -> Option<std::io::Result<std::process::ExitStatus>> {
-    reap_within(child, deadline, |slice| {
-        supervision.wait(slice, Some(deadline))
-    })
+    reap_within(child, deadline, |slice| supervision.wait(slice))
 }
 
 /// One bounded channel operation per slice. A misplaced frame retains one
@@ -578,28 +578,71 @@ impl<'a> Supervision<'a> {
 
 /// Containment does not elect another outcome. Only an unsent unload kill can
 /// be upgraded, and transport failure must still allow the cleanup to finish.
-struct ContainmentSupervisor<'a> {
+struct ContainmentSupervisor<'a, D = std::time::Instant> {
     supervision: Supervision<'a>,
     ending: Result<Option<KillCause>, ShellEnd>,
     channel_failed: bool,
+    deadline: D,
+}
+
+// Actual containment always stores an Instant. Only answer delivery may retain
+// None, for an ExecutionAnswer that refused before any process was started.
+trait DeliveryDeadline {
+    fn deadline(&self) -> Option<std::time::Instant>;
+}
+impl DeliveryDeadline for std::time::Instant {
+    fn deadline(&self) -> Option<std::time::Instant> {
+        Some(*self)
+    }
+}
+impl DeliveryDeadline for Option<std::time::Instant> {
+    fn deadline(&self) -> Option<std::time::Instant> {
+        *self
+    }
 }
 
 impl<'a> ContainmentSupervisor<'a> {
-    fn new(supervision: Supervision<'a>, ending: Result<Option<KillCause>, ShellEnd>) -> Self {
+    fn new(
+        supervision: Supervision<'a>,
+        ending: Result<Option<KillCause>, ShellEnd>,
+        deadline: std::time::Instant,
+    ) -> Self {
         let channel_failed = matches!(ending, Err(ShellEnd::Channel(_)));
         Self {
             supervision,
             ending,
             channel_failed,
+            deadline,
         }
     }
+}
 
-    fn wait(&mut self, slice: std::time::Duration, delivery_deadline: Option<std::time::Instant>) {
+impl<'a> ContainmentSupervisor<'a, Option<std::time::Instant>> {
+    fn for_answer(
+        supervision: Supervision<'a>,
+        ending: Result<Option<KillCause>, ShellEnd>,
+        deadline: Option<std::time::Instant>,
+    ) -> Self {
+        let channel_failed = matches!(ending, Err(ShellEnd::Channel(_)));
+        Self {
+            supervision,
+            ending,
+            channel_failed,
+            deadline,
+        }
+    }
+}
+
+impl<D: DeliveryDeadline> ContainmentSupervisor<'_, D> {
+    fn wait(&mut self, slice: std::time::Duration) {
         if self.channel_failed {
             std::thread::sleep(slice);
             return;
         }
-        match self.supervision.wait_for_delivery(slice, delivery_deadline) {
+        match self
+            .supervision
+            .wait_for_delivery(slice, self.deadline.deadline())
+        {
             Ok(Some(KillCause::FlowFailure))
                 if matches!(self.ending, Ok(Some(KillCause::Unload))) =>
             {
@@ -612,21 +655,21 @@ impl<'a> ContainmentSupervisor<'a> {
             }
         }
     }
+}
 
-    fn finish(mut self, deadline: std::time::Instant) -> Result<Option<KillCause>, ShellEnd> {
+impl ContainmentSupervisor<'_> {
+    fn finish(mut self) -> Result<Option<KillCause>, ShellEnd> {
+        let deadline = self.deadline;
         // Drain controls already readable before choosing the unsent answer.
         // An endless stream cannot move the one original containment deadline.
         while !self.channel_failed && std::time::Instant::now() < deadline {
-            self.wait(std::time::Duration::ZERO, Some(deadline));
+            self.wait(std::time::Duration::ZERO);
             if !self.supervision.progressed {
                 if self.supervision.pending_refusal.is_none() {
                     break;
                 }
                 let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                self.wait(
-                    remaining.min(std::time::Duration::from_millis(10)),
-                    Some(deadline),
-                );
+                self.wait(remaining.min(std::time::Duration::from_millis(10)));
             }
         }
         if !self.channel_failed
@@ -655,9 +698,10 @@ pub fn send_answer(
         ToolOutcome::Killed { by, .. } => Some(*by),
         _ => None,
     };
-    let mut supervision = ContainmentSupervisor::new(
+    let mut supervision = ContainmentSupervisor::for_answer(
         Supervision::with_answered(channel, exchange, Some(answered_tools)),
         Ok(ending),
+        answer.containment_deadline,
     );
     loop {
         // A fault already observed during the preceding bounded wait keeps
@@ -681,7 +725,7 @@ pub fn send_answer(
                 answer,
             });
         }
-        supervision.wait(std::time::Duration::ZERO, answer.containment_deadline);
+        supervision.wait(std::time::Duration::ZERO);
         if supervision.channel_failed {
             continue;
         }
@@ -716,7 +760,7 @@ pub fn send_answer(
             .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()))
             .unwrap_or(std::time::Duration::from_millis(10))
             .min(std::time::Duration::from_millis(10));
-        supervision.wait(slice, answer.containment_deadline);
+        supervision.wait(slice);
     }
 }
 
