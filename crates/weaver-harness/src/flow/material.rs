@@ -1,5 +1,5 @@
-//! Private, read-backed canonical material. Inspection records are not grants.
-//! Every unit retains the exact released/Recorded read evidence that built it.
+//! Private canonical material from completed reads or filed task input.
+//! Every unit retains its actual source owner. Inspection records are not grants.
 
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use weaver_types::state_flow::{
     SpanRef, StatementRef, StepQueryRef, UnitId, decode_strict,
 };
 
-use super::context::{RecordedRead, RecordingContext, RunFailure};
+use super::context::{BegunTask, RecordedRead, RecordingContext, RunFailure};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum MaterialFailure {
@@ -32,6 +32,13 @@ pub(super) struct MaterialError {
     pub failure: Option<RunFailure>,
 }
 
+#[derive(Debug)]
+pub(super) struct TaskMaterialError {
+    pub kind: MaterialFailure,
+    pub task: Box<BegunTask>,
+    pub failure: Option<RunFailure>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SourceMapEntry {
     pub material: MaterialRef,
@@ -48,8 +55,41 @@ pub(super) struct StepQueryOccurrence {
 }
 
 #[derive(Debug)]
-struct Evidence {
-    reads: Vec<RecordedRead>,
+enum Evidence {
+    Reads(Vec<RecordedRead>),
+    FiledTask(Box<BegunTask>),
+}
+
+impl Evidence {
+    fn origin(&self) -> &Arc<()> {
+        match self {
+            // Read constructors retain at least one read and check every owner.
+            Self::Reads(reads) => reads[0].origin(),
+            Self::FiledTask(task) => task.origin(),
+        }
+    }
+
+    fn reads(&self) -> &[RecordedRead] {
+        match self {
+            Self::Reads(reads) => reads,
+            // The retained marks catalog is not candidate-producing content.
+            Self::FiledTask(_) => &[],
+        }
+    }
+
+    fn task(&self) -> Option<&BegunTask> {
+        match self {
+            Self::Reads(_) => None,
+            Self::FiledTask(task) => Some(task),
+        }
+    }
+
+    fn belongs_to(&self, context: &RecordingContext) -> bool {
+        match self {
+            Self::Reads(reads) => reads.iter().all(|read| read.belongs_to(context)),
+            Self::FiledTask(task) => task.belongs_to(context),
+        }
+    }
 }
 
 /// Immutable source-backed unit. No Deserialize, Clone, raw constructor or
@@ -62,9 +102,7 @@ pub(super) struct SelectedUnit {
 
 impl SelectedUnit {
     pub(super) fn origin(&self) -> &Arc<()> {
-        // Constructors retain at least one read. RecordingContext checks every
-        // input read's owner before invoking the paired-read constructor.
-        self.evidence.reads[0].origin()
+        self.evidence.origin()
     }
 
     pub(super) fn unit_id(&self) -> &UnitId {
@@ -85,19 +123,21 @@ impl SelectedUnit {
     pub(super) fn step_queries(&self) -> &[StepQueryOccurrence] {
         &self.unit.step_queries
     }
+    /// Candidate-producing content reads only. Fresh task input has no read
+    /// rank and is mandatory-only under SORT-PORT.
     pub(super) fn reads(&self) -> &[RecordedRead] {
-        &self.evidence.reads
+        self.evidence.reads()
+    }
+    pub(super) fn task(&self) -> Option<&BegunTask> {
+        self.evidence.task()
     }
     pub(super) fn belongs_to(&self, context: &RecordingContext) -> bool {
-        self.evidence
-            .reads
-            .iter()
-            .all(|read| read.belongs_to(context))
+        self.evidence.belongs_to(context)
     }
 }
 
-/// One admitted read conversion. Each resulting unit independently retains its
-/// evidence when this container is consumed, without cloning a read capability.
+/// One admitted source conversion. Each resulting unit independently retains
+/// its evidence when this container is consumed, without cloning a capability.
 #[derive(Debug)]
 pub(super) struct HeldMaterial {
     units: Vec<SelectedUnit>,
@@ -113,15 +153,15 @@ impl HeldMaterial {
     }
     pub(super) fn recall_sequences(&self) -> impl Iterator<Item = Sequence> + '_ {
         self.evidence
-            .reads
+            .reads()
             .iter()
             .map(RecordedRead::recall_sequence)
     }
+    pub(super) fn task(&self) -> Option<&BegunTask> {
+        self.evidence.task()
+    }
     pub(super) fn belongs_to(&self, context: &RecordingContext) -> bool {
-        self.evidence
-            .reads
-            .iter()
-            .all(|read| read.belongs_to(context))
+        self.evidence.belongs_to(context)
     }
 }
 
@@ -606,6 +646,60 @@ pub(super) fn from_read(read: RecordedRead) -> Result<HeldMaterial, MaterialErro
     finish(vec![read], result)
 }
 
+fn task_unit(task: &BegunTask) -> Result<Unit, MaterialFailure> {
+    let message = task.input().message();
+    let [ContentBlock::Text { text }] = message.content.as_slice() else {
+        return Err(MaterialFailure::Invalid("filed task input is not one Text"));
+    };
+    if message.role != Role::User || text.is_empty() {
+        return Err(MaterialFailure::Invalid(
+            "filed task input is not user Text",
+        ));
+    }
+    let source = ContentRef::Event {
+        block_id: task.input().source().clone(),
+    };
+    let mut unit = Unit::new(UnitId::Block {
+        source: source.clone(),
+    });
+    unit.messages.push(message.clone());
+    unit.map(
+        MaterialRef::Text {
+            source,
+            span: Span {
+                start: 0.into(),
+                end: (text.len() as u64).into(),
+            },
+        },
+        0,
+        Some((0, text.len() as u64)),
+    );
+    unit.validate_map()?;
+    Ok(unit)
+}
+
+pub(super) fn from_task(task: BegunTask) -> Result<HeldMaterial, TaskMaterialError> {
+    match task_unit(&task) {
+        Ok(unit) => {
+            // Keep the complete task owner, including both receipts and the
+            // marks catalog. None of those becomes content-read provenance.
+            let evidence = Arc::new(Evidence::FiledTask(Box::new(task)));
+            Ok(HeldMaterial {
+                units: vec![SelectedUnit {
+                    evidence: evidence.clone(),
+                    unit,
+                }],
+                evidence,
+            })
+        }
+        Err(kind) => Err(TaskMaterialError {
+            kind,
+            task: Box::new(task),
+            failure: None,
+        }),
+    }
+}
+
 pub(super) fn from_pair(
     read: RecordedRead,
     entry: usize,
@@ -622,7 +716,7 @@ fn finish(
 ) -> Result<HeldMaterial, MaterialError> {
     match units {
         Ok(units) => {
-            let evidence = Arc::new(Evidence { reads });
+            let evidence = Arc::new(Evidence::Reads(reads));
             Ok(HeldMaterial {
                 units: units
                     .into_iter()

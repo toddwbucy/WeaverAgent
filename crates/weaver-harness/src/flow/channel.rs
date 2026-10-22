@@ -233,6 +233,8 @@ pub(super) struct StateChannel {
     receive_interrupted: bool,
     send_interrupted: bool,
     terminal_interrupted: bool,
+    #[cfg(test)]
+    interrupt_next_release: bool,
 }
 
 impl StateChannel {
@@ -261,6 +263,8 @@ impl StateChannel {
             receive_interrupted: false,
             send_interrupted: false,
             terminal_interrupted: false,
+            #[cfg(test)]
+            interrupt_next_release: false,
         })
     }
 
@@ -668,7 +672,16 @@ impl StateChannel {
         &mut self,
         recorded: RecordedStateMeasurement,
     ) -> Result<Option<StateCompletion>, ChannelFailure> {
+        #[cfg(test)]
+        if std::mem::take(&mut self.interrupt_next_release) {
+            return self.release_interrupted_for_test(recorded);
+        }
         self.release_with(recorded, Self::peek)
+    }
+
+    #[cfg(test)]
+    pub(super) fn interrupt_next_release_for_test(&mut self) {
+        self.interrupt_next_release = true;
     }
 
     /// Exercise the coordinator's continuation with a real recording proof.
