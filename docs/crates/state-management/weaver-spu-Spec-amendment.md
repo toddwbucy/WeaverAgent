@@ -207,10 +207,11 @@ scorer or a test model. The active backend and feature selection are pinned by O
 qualified artifact. No lifecycle or decode handler is exposed on this duty's port.
 [CLASS-2, CLASS-7, CLASS-8, PERSIST-6]
 
-The SPU owns MANIFEST-LOCATOR acquisition after exec, as the agent uid. Keep its pinned
-artifact root and checked byte/file owners through every adapter read. The model
-identity is Spec 02's manifest SHA-256 plus verification of its named files, not
-Spec section 3's legacy BLAKE3 file-or-directory walk. No legacy decoder or label
+The SPU owns MANIFEST-LOCATOR acquisition after exec, as the agent uid. Pin the artifact
+root during acquisition and keep each checked byte/file owner through the adapter's
+last read. Retaining the root does not permit reopening a checked pathname after Ready.
+The model identity is Spec 02's manifest SHA-256 plus verification of its named files,
+not Spec section 3's legacy BLAKE3 file-or-directory walk. No legacy decoder or label
 binding is reinterpreted. Acquisition failure uses unsupported_artifact before Ready
 and does not weaken the inherited descriptor boundary. [CLASS-2, CLASS-7, SEAM-2]
 

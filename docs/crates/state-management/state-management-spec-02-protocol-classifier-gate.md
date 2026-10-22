@@ -117,9 +117,16 @@ PERSIST-6]
 | scheme_mismatch | template | scheme_mismatch |
 | unsupported_artifact, invalid_grammar, insufficient_capacity, invalid_instruction | template | template_failed |
 
-Retain the checker code and its exact detail in the lifecycle detail. The failed
-artifact path or reference remains attributed there. No Ready or template grant is
-produced. This mapping adds no lifecycle code or fresh timeout. [CLASS-8, FLOW-3]
+Retain the checker code and its exact detail in the lifecycle detail when the complete
+encoded lifecycle refusal fits MAX_ENVELOPE_BYTES. A failed artifact path or reference
+identified by the checker remains within that exact detail. Do not parse checker prose
+to populate the optional lifecycle path. That field is present only when independently
+attributable under its owning contract. Check the whole serialized envelope, including
+its wrapper and JSON escaping. An over-bound refusal follows the existing channel-fault
+and after-load cleanup path. Do not truncate, substitute a new refusal or restart the
+load deadline. Qualification must fit the complete worst-case admission-failure
+envelope as well as the enter. No Ready or template grant is produced. This mapping adds
+no lifecycle code, carrier limit or fresh timeout. [CLASS-8, FLOW-3, PERSIST-6, SEAM-2]
 
 Ste100Instruction has the seven fields of state-management.ste100 above, using the
 same floor types. The model artifact's manifest supplies its supported binder ABI,
@@ -143,20 +150,25 @@ executable's separate digest remains in the load tuple. [CLASS-2, CLASS-7, FLOW-
 
 **MANIFEST-LOCATOR.** For Ste100Instruction only, ModelBinding.artifact is an absolute
 pathname naming the exact ste100-model/1 manifest file. A relative value is a syntax
-failure, not relative to the launcher's working directory. It does not name a
-directory, a weight container
-or a model catalog entry. There is no conventional manifest basename, directory scan
-or filename fallback. The SPU resolves this pathname as the agent uid during
-bootstrap admission. Admin and the harness carry the declared binding unchanged;
-neither discovers the model files or sends extra artifact descriptors across exec.
+failure at admin. The SPU independently refuses it with invalid_instruction before
+filesystem acquisition, including a bootstrap supplied outside admin's TOML path.
+Neither party resolves it against a working directory. It does not name a directory,
+a weight container or a model catalog entry. There is no conventional manifest basename,
+directory scan or filename fallback. The SPU resolves this pathname as the agent uid
+during bootstrap admission. Admin and the harness carry the declared binding unchanged.
+Neither discovers the model files or sends extra artifact descriptors across exec.
 Legacy decoder and label-classifier bindings keep their existing resolution rules.
 [CLASS-2, CLASS-7, SEAM-2, October 18 R10]
 
-Pin the manifest's parent directory before opening its final path component relative
-to that directory. The final component must be a regular file, not a symbolic link.
-Check object kind without waiting for special-file data, for both the manifest and
-every referenced file. An ordinary blocking open followed by a check is insufficient.
-Read and retain its exact bytes; parsing and model_artifact_sha256 verification use
+Resolve the absolute parent pathname through the filesystem as the agent uid, including
+symlinked ancestors and parent components. Do not lexically collapse a parent component
+across a symbolic link. Pin the resulting directory instance before opening the
+manifest's final path component relative to it. That acquired instance defines the
+artifact root, not a lexical pathname prefix. The final component must be a regular
+file, not a symbolic link. Check object kind without waiting for special-file data,
+for both the manifest and every referenced file. An ordinary blocking open followed by
+a check is insufficient. Read and retain its exact bytes. Parsing and
+model_artifact_sha256 verification use
 those same bytes, including whitespace. The pinned parent is the artifact root for
 every ArtifactFile.name. Resolve those names beneath that root, with DECLARATION's
 component checks and no symbolic-link escape. A relative link is permitted only when

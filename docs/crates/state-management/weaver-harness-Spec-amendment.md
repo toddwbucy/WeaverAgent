@@ -319,13 +319,15 @@ at load. No label-score answer satisfies this trait. The production adapter uses
 02's CHANNEL and PORT, preserving this near side. [CLASS-2, CLASS-7, CLASS-8, R10]
 
 The production bootstrap carries the declared model binding unchanged. Spec 02's
-MANIFEST-LOCATOR makes its artifact the exact manifest file; the SPU acquires it
-and its referenced files. The worker does no directory discovery or model-file
-preopening and passes no extra artifact descriptor across exec. Map admission refusal
-to StateManagementInvalid using Spec 02 DECLARATION's table, retaining the checker
-code and exact detail. It keeps EnterFailure::AfterLoad's existing refusal and
-rollback path and the original load deadline. [CLASS-2,
-CLASS-8, PERSIST-6, SEAM-2]
+MANIFEST-LOCATOR makes its artifact the exact manifest file. The SPU acquires it and its
+referenced files. The worker does no directory discovery or model-file preopening and
+passes no extra artifact descriptor across exec. Map admission refusal to
+StateManagementInvalid using Spec 02 DECLARATION's table and bounded envelope rule.
+Retain the checker code and exact detail when the complete encoded lifecycle refusal
+fits its existing bound. Do not infer the optional path from checker prose. An
+over-bound envelope remains a channel fault, without truncation or a substitute
+lifecycle refusal. It keeps EnterFailure::AfterLoad's existing refusal and cleanup
+behavior and the original load deadline. [CLASS-2, CLASS-8, PERSIST-6, SEAM-2]
 
 Validate bindings for a Text block without normalizing its bytes: target and scheme,
 nonempty ordered statements, valid UTF-8 spans, nouns within statements, condition

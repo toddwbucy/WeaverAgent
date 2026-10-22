@@ -51,11 +51,11 @@ concrete encoder, tokenizer, span-head and alignment adapter, followed by measur
 qualification. The existing ModernBERT sequence scorer cannot supply word spans.
 
 Spec 02's MANIFEST-LOCATOR defines the exact manifest-file locator and its pinned
-parent for relative file acquisition. The [locator proposal][locator] records the
+parent for relative file acquisition. The [locator record][locator] records the
 election and owed instruments. This source slice still accepts already acquired
 immutable bytes; it implements no path custody, symlink confinement or
-file-descriptor pinning. Protected filesystem admission remains a separate act
-after the locator proposal is approved and merged.
+file-descriptor pinning. Protected filesystem admission remains a separate
+implementation act under that rule.
 
 The third binary, descriptor-count and dumpable entry checks, compiled adapter
 selection, internal sentence-worker assembly and real driver remain with that duty.

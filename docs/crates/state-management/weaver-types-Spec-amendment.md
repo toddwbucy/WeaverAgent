@@ -225,8 +225,15 @@ Optional rule_id and path are omitted. Stage/code combinations are closed:
 
 Spec 02 DECLARATION maps checker admission scheme_mismatch to template/scheme_mismatch
 and the other admission codes, including unsupported_artifact, to
-template/template_failed. Preserve the checker code and exact detail in detail. This
-does not add a lifecycle code or restart the original load deadline. [CLASS-8, FLOW-3]
+template/template_failed. Preserve the checker code and exact detail in detail when the
+complete encoded lifecycle refusal fits MAX_ENVELOPE_BYTES, under DECLARATION's bounded
+mapping. This includes a failed reference already present in checker detail. The
+optional path is not parsed from that prose. Include it only when independently
+attributable under its owning contract. Qualification checks the complete encoded
+admission-failure envelope, including its wrapper and JSON escaping, at the bound and
+one byte over. Existing over-bound channel failure and after-load cleanup remain
+unchanged. No truncation, new lifecycle code or restart of the original load deadline is
+added. [CLASS-8, FLOW-3, PERSIST-6, SEAM-2]
 
 Admin syntax failures, including invalid bounds, remain ConfigInvalid with field
 attribution. There is no semantic invalid_bound code. EnterBinding::Serving keeps its
