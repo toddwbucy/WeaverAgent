@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #241
 
-**Version:** 0.13 **Date filed:** 2026-10-20 **Document ID:** state-management-spec-02
+**Version:** 0.16 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -104,18 +104,38 @@ CLASS-9]
 Add the root key `ste100-binary` with the existing organ-binary custody judgment. It
 stays in admin's root, outside the bound declaration. Add its executable digest to the
 load tuple. The serving enter payload carries `Ste100Instruction` once at
-state_management.ste100 and the scheme bytes at ste100_scheme. Loaded facts retain those
-same fields, without changing legacy ClassifyInstruction. Admin syntax errors are
-ConfigInvalid naming the field. Semantic artifact failure during enter is
-StateManagementInvalid with stage template and template_failed or scheme_mismatch, and
-follows after-load rollback. [FLOW-3, CLASS-8, PERSIST-6]
+state_management.ste100 and the scheme bytes at ste100_scheme. Loaded facts retain
+those same fields, without changing legacy ClassifyInstruction. Admin syntax errors
+are ConfigInvalid naming the field. Semantic artifact failure during enter is
+StateManagementInvalid and follows EnterFailure::AfterLoad's existing refusal and
+rollback path in HARNESS-CLASSIFY, under the original load deadline. Map the checker
+admission result as follows. The code vocabularies remain distinct. [FLOW-3, CLASS-8,
+PERSIST-6]
 
-Ste100Instruction has the seven fields of state-management.ste100 above, using the same
-floor types. The model artifact's manifest supplies its supported binder ABI, encoder
-family, tokenizer, weight files and their digests. model_artifact_sha256 hashes the
-manifest bytes. Admission verifies each named file against it before reporting Ready.
-That check supplements the existing ModelBinding admission, never assumes that a
-sequence-classifier artifact has a compatible head. [CLASS-2, CLASS-7, FLOW-3]
+| Checker admission code | Lifecycle stage | Lifecycle code |
+| --- | --- | --- |
+| scheme_mismatch | template | scheme_mismatch |
+| unsupported_artifact, invalid_grammar, insufficient_capacity, invalid_instruction | template | template_failed |
+
+Retain the checker code and its exact detail in the lifecycle detail when the complete
+encoded lifecycle refusal fits MAX_ENVELOPE_BYTES. A failed artifact path or reference
+identified by the checker remains within that exact detail. Do not parse checker prose
+to populate the optional lifecycle path. That field is present only when independently
+attributable under its owning contract. Check the whole serialized envelope, including
+its wrapper and JSON escaping. An over-bound refusal follows the existing channel-fault
+and after-load cleanup path. Do not truncate, substitute a new refusal or restart the
+load deadline. Qualification must fit the complete worst-case admission-failure
+envelope as well as the enter. No Ready or template grant is produced. This mapping adds
+no lifecycle code, carrier limit or fresh timeout. [CLASS-8, FLOW-3, PERSIST-6, SEAM-2]
+
+Ste100Instruction has the seven fields of state-management.ste100 above, using the
+same floor types. The model artifact's manifest supplies its supported binder ABI,
+encoder family, tokenizer, weight files and their digests. model_artifact_sha256
+hashes the manifest bytes. Admission verifies each named file against it before
+reporting Ready. For Ste100Instruction this manifest admission replaces ModelBinding's
+legacy container resolution and read. Its shared syntax and device-assignment
+judgments remain. It never assumes that a sequence-classifier artifact has a
+compatible head. [CLASS-2, CLASS-7, FLOW-3]
 
 The manifest is UTF-8 JSON with format ste100-model/1, checker_abi ste100-span/1,
 encoder:{family:String,config:ArtifactFile,weights:Vec<ArtifactFile>},
@@ -127,6 +147,63 @@ supplied by O02-2. The label array is exactly MODEL's seven labels in that order
 Duplicate/unknown fields refuse. checker_artifact_sha256 on ready and seed certificates
 is this manifest digest. artifact_sha256 on ready is the scheme digest. The checker
 executable's separate digest remains in the load tuple. [CLASS-2, CLASS-7, FLOW-3]
+
+**MANIFEST-LOCATOR.** For Ste100Instruction only, ModelBinding.artifact is an absolute
+pathname naming the exact ste100-model/1 manifest file. A relative value is a syntax
+failure at admin. The SPU independently refuses it with invalid_instruction before
+filesystem acquisition, including a bootstrap supplied outside admin's TOML path.
+Neither party resolves it against a working directory. It does not name a directory,
+a weight container or a model catalog entry. There is no conventional manifest basename,
+directory scan or filename fallback. The SPU resolves this pathname as the agent uid
+during bootstrap admission. Admin and the harness carry the declared binding unchanged.
+Neither discovers the model files or sends extra artifact descriptors across exec.
+Legacy decoder and label-classifier bindings keep their existing resolution rules.
+[CLASS-2, CLASS-7, SEAM-2, October 18 R10]
+
+Resolve the absolute parent pathname through the filesystem as the agent uid, including
+symlinked ancestors and parent components. Do not lexically collapse a parent component
+across a symbolic link. Pin the resulting directory instance before opening the
+manifest's final path component relative to it. That acquired instance defines the
+artifact root, not a lexical pathname prefix. The final component must be a regular
+file, not a symbolic link. Check object kind without waiting for special-file data,
+for both the manifest and every referenced file. An ordinary blocking open followed by
+a check is insufficient. Read and retain its exact bytes. Parsing and
+model_artifact_sha256 verification use
+those same bytes, including whitespace. The pinned parent is the artifact root for
+every ArtifactFile.name. Resolve those names beneath that root, with DECLARATION's
+component checks and no symbolic-link escape. A relative link is permitted only when
+every intermediate resolution step stays beneath the root, as with RESOLVE_BENEATH.
+Leaving that root and later re-entering it still refuses. Absolute link targets and
+magic links refuse. No alternate root is tried. Every referenced object must resolve
+to a readable regular file. [CLASS-2, CLASS-7, SEAM-1]
+
+Acquire referenced files relative to that retained root and verify every declared
+digest before Ready. The compiled adapter consumes the retained owned bytes that were
+hashed, or the same acquired file instance through its retained descriptor or mapping.
+The file-backed choice relies on the provisioned content stability below. It cannot
+reopen a pathname for configuration, tokenization, alignment, the span head or weights
+after checking a different instance. Keep each required owner until the adapter's last
+read, including deferred reads after Ready. Repeated names may share one acquired
+instance, but every declared digest must agree with it. Unreferenced files are not
+adapter inputs. Their presence alone does not refuse admission, and they are not
+discovered or consumed implicitly. The manifest digest hashes only its exact bytes.
+Each referenced file has its own declared SHA-256. [CLASS-2, CLASS-7, FLOW-3]
+
+The model artifact retains SPU PRD section 7's provisioned custody: it is owned
+outside the agent uid, readable into the agent and not alterable by it. Pinning a
+descriptor prevents pathname replacement from substituting a different instance;
+it does not make externally writable file contents immutable. Provisioning must
+preserve the admitted bytes for any retained mapping or deferred file read. This
+does not apply admin's root-file ownership rule to model files or relocate them
+into admin's config root. [CLASS-2, CLASS-7, SEAM-1]
+
+A missing, unreadable, nonregular, escaping or digest-mismatched model artifact
+refuses bootstrap with unsupported_artifact and identifies the failed path or
+reference in detail. It grants no Ready and uses DECLARATION's lifecycle mapping and
+HARNESS-CLASSIFY's after-load refusal and rollback under the original load budget.
+This locator adds no wire field, digest
+algorithm, grammar format, model adapter, language qualification or serving cutover.
+[CLASS-7, CLASS-8, PERSIST-6]
 
 The scheme-load pass certifies byte identity, the fixed vocabulary and compatible
 checker ABI under the recorded qualification. It does not certify safety, truth, or
@@ -513,11 +590,11 @@ event is repair_exhausted. [CLASS-9, COST-5, FALS-2]
 
 | Repair state | Event | Action and next state |
 | --- | --- | --- |
-| CheckingGeneration | All Text accepted | Return EffectiveEmission to the caller |
-| CheckingGeneration | One or more correct defects | Hold actions, enqueue sources, NeedRestatement |
+| CheckingGeneration | All Text accepted | Complete required RECALL-REFUSAL accounting, then return EffectiveEmission to the caller |
+| CheckingGeneration | One or more correct defects | Complete required RECALL-REFUSAL accounting, hold actions, enqueue sources, NeedRestatement |
 | NeedRestatement | Request recorded | Return RestatementRequest, AwaitingCorrection |
-| AwaitingCorrection | All correction Text accepted, no attempted calls | Resolve that source, advance queue or release held generation |
-| AwaitingCorrection | Correct defect or correction attempts a call | Record defect/protocol refusal, increment failed_corrections |
+| AwaitingCorrection | At least one Text block, all correction Text accepted, no attempted calls | Resolve that source, advance queue or release held generation |
+| AwaitingCorrection | Correct defect, correction attempts a call, or empty correction under EMPTY-CORRECTION | Complete required defect, refusal and pair accounting, then increment failed_corrections once |
 | AwaitingCorrection | Failed corrections below cap | NeedRestatement for the unresolved source |
 | AwaitingCorrection | Cap reached | Record repair_exhausted, account conforming requests without dispatch, return RepairExhausted, no successful answer grant |
 | Any repair state | Stop or operator leave | Cancel ledger, retain dispositions, no successful answer grant |
@@ -532,8 +609,38 @@ erased from state. Rejected text owes no filing. Original and correction remain 
 trace, and training-pair analysis remains external. [CLASS-8, CLASS-9, CLASS-10,
 SCOPE-1]
 
+**EMPTY-CORRECTION.** The [2026-10-21 operator ruling][empty-correction-ruling]
+counts a correction with zero Text blocks and no attempted call as one failed
+correction for its current rejected source. It neither resolves that source nor
+contributes an empty replacement to EffectiveEmission. Record the complete correction
+as its ordinary message.assistant, then record RefusalRecord::ProtocolRepair with case
+empty_correction. Its detail is exactly
+`correction contains no Text block or attempted call`.
+source_id names the current rejected original Text. The refusal's
+causal_parent names the empty correction's message.assistant sequence, and its turn is
+the same open turn. Do not invent a source block inside the empty correction. Reason:
+an empty correction supplies no replacement for the unresolved statement. Counting it
+under the existing cap gives that repair a finite outcome without erasing the source.
+[CLASS-9, CLASS-10, FLOW-3]
+
+After that refusal is recorded, increment failed_corrections once and follow the same
+below-cap or cap-reached row. This is an operation refusal, never non_ste100 fabricated
+without a checker result and never component failure. It creates no statement, binding
+or pair. A correction containing a ToolCall or UnrecoveredCall follows correction_call
+instead, even if it contains no Text. A Text block whose text is empty still takes
+OUTPUT-UNIT's normal classifier path and its recorded non_ste100 outcome. This rule
+applies only to a requested correction. An original generation with no Text retains
+the existing OUTPUT-UNIT and DECISION-BARRIER behavior.
+[CLASS-8, CLASS-9, CLASS-10, FLOW-3]
+
 Every conforming request in a forbidden correction pass still takes Spec 05's start and
 terminal path, ending not_dispatched/pass_purpose. This includes a valid recall binding.
+An accepted recall binding with invalid operation shape is also an attempted call.
+Record correction_call once for that correction pass and each RECALL-REFUSAL separately
+for its identified invalid request. Complete all required refusal and pair accounting
+before incrementing failed_corrections once or retiring that pass's request account.
+Several invalid requests never consume several attempts. [CLASS-9, CLASS-10, PAIR-1]
+
 Correctly rejected or unassociated call blocks have no accepted send and do not acquire
 a pair by inference. On repair exhaustion, conforming requests held from the original
 pass end not_dispatched/repair_exhausted. Discarding their proposed execution does not
@@ -541,18 +648,18 @@ discard their ledger account. [CLASS-9, CLASS-10, PAIR-1, PAIR-4]
 
 **EFFECTIVE-EMISSION.** After repair, expose a private EffectiveEmission to the caller.
 Its fields are source:SourcePosition, finish:weaver_types::Finish,
-statements:Vec<StatementRef>, requests:Vec<PairStarted>, text:String and
-attempted_call:bool. source and finish are the original generation's. requests contains
-the pending model request records in Spec 05's dispatch order, not receipts or
-permission to execute them. Review requests are never model records. text joins the
-effective statement spans with a single LF. attempted_call is true if the original parse
-found ToolCall or UnrecoveredCall, or the effective bindings request recall. Replace
-each rejected original Text in that logical list with its successful correction's
-bindings, in correction-block and binding order. Accepted original siblings keep their
-positions. A rejected correction contributes nothing to the list. Physical argument
-Messages and trace events are never edited by this substitution. For a held external
-call, the replacement still meets TOOL-STATEMENT's one-statement rule. [CLASS-9,
-CLASS-10, STORE-3, OUT-1]
+statements:Vec<StatementRef>, requests:Vec<PairStarted>, text:String,
+attempted_call:bool and account:RepairAccount. source and finish are the original
+generation's. requests contains the pending model request records in Spec 05's dispatch
+order, not receipts or permission to execute them. Review requests are never model
+records. text joins the effective statement spans with a single LF. attempted_call is
+true if the original parse found ToolCall or UnrecoveredCall, or the effective bindings
+request recall. Replace each rejected original Text in that logical list with its
+successful correction's bindings, in correction-block and binding order. Accepted
+original siblings keep their positions. A rejected correction contributes nothing to the
+list. Physical argument Messages and trace events are never edited by this substitution.
+For a held external call, the replacement still meets TOOL-STATEMENT's one-statement
+rule. [CLASS-9, CLASS-10, STORE-3, OUT-1]
 
 Text-only plan or summary consumers use this complete logical list, including
 corrections from later emissions. They cannot select convenient accepted sentences from
@@ -562,14 +669,29 @@ corrected text order. Reason: repair changes what may be acted on without rewrit
 record or forcing a valid correction back into its old source ID. [CLASS-9, PLAN-1,
 STRAT-2, FLOW-3]
 
+RepairAccount is the private owner of original and correction-pass evidence under their
+own generation identities. Its inspection view is
+recall_refusals:Vec<RecordedRecallRefusal>, with each entry
+{refusal:RecallRequestRefusal,sequence:DecimalU64}. Only the owner can construct an
+entry after its exact RECALL-REFUSAL event is Recorded. sequence is that event's trace
+sequence. The view preserves record order across the original and correction passes and
+confers no constructor or mutable access. EffectiveEmission exposes that retained
+account alongside its valid request list. A refused CallId is absent from requests,
+while its accepted effective statement remains in statements and text. Failed
+corrections still contribute no effective statements. The refusal account grants no
+dispatch or model-facing result and chooses no subsequent workflow or final-answer
+policy. [CLASS-9, CLASS-10, OUT-1, FLOW-3]
+
 **REPAIR-REFUSAL.** RepairExhausted is {source:SourceBlockId,
-failed_corrections:DecimalU64,retry_cap:DecimalU64}. The ledger records state.flow phase
-repair_exhausted before returning it. This is a conformance outcome, not component
-failure. It grants no successful response or action. The caller uses the existing
-stopped/refused surface, with run and turn only when answering an open turn. The service
-remains available for another input. Lifecycle callers retain their existing earlier
-deadline. How they schedule correction passes belongs to the loop. [CLASS-9, COST-5,
-FALS-2, R20-12]
+failed_corrections:DecimalU64,retry_cap:DecimalU64,account:RepairAccount}. Its account
+retains the same RecordedRecallRefusal view and original/correction evidence defined by
+EFFECTIVE-EMISSION. Exhaustion does not discard that account. The ledger records
+state.flow phase repair_exhausted before returning it. This is a conformance outcome,
+not component failure. It grants no successful response or action. The caller uses the
+existing stopped/refused surface, with run and turn only when answering an open turn.
+The service remains available for another input. Lifecycle callers retain their existing
+earlier deadline. How they schedule correction passes belongs to the loop. [CLASS-9,
+COST-5, FALS-2, R20-12]
 
 **TOOL-STATEMENT.** Keep Message and ToolCall unchanged. For a recovered ToolCall, the
 immediately preceding Text block supplies its STE100 request statement. Require one
@@ -600,9 +722,10 @@ no socket, clock or store. The selected request statement still enters state by 
 and file seam. Reason: READ-3 fixes the action and lets the model supply only the
 subject, while R10 preserves other classification consumers. [READ-1, READ-3, SEAM-3]
 
-The internal call uses the pair amendment's send/return accounting and the store's
-bounded read result. A correct bad recall shape or refused read becomes that call's
-typed refusal, never an empty successful history. Its result can be placed only in a
+A conforming internal call uses the pair amendment's send/return accounting and the
+store's bounded read result. A refused read completes that valid pair with its typed
+refusal, never an empty successful history. An invalid operation shape instead follows
+RECALL-REFUSAL below before pair creation. A valid pair's result can be placed only in a
 later decode round, through the existing tool-result grant. It supplements the automatic
 retrieval floor. This adds one framework internal member and amends the calculator-only
 cap explicitly in section 8. It does not advertise a callable schema or enlarge the
@@ -612,6 +735,54 @@ The exact constructor, borrow and refusal representations are INTERNAL-QUERY and
 HARNESS-RECALL in the [internal amendment][internal]. That amendment also names the
 harness dependency-set change and its instruments. It carries no store implementation
 into the library. [READ-3, SEAM-3]
+
+**RECALL-REFUSAL.** An accepted recall Binding with more than one noun or a
+non-null governing condition is a correct operation refusal. Reserve its CallId in
+PAIR-IDENTITY's enumeration and retain its original Text index as call_block and its
+exact StatementRef. Author RefusalRecord::RecallRequest, defined by
+TYPES-RECALL-REFUSAL, before releasing the disposition. Do not choose or concatenate a
+subject, invoke the query helper, read state, open a pair or grant a ToolResult for this
+request. No empty-history success or not_dispatched cause represents it. Its selected
+accepted Text still files normally, and unrelated conforming requests keep their
+identities and dispositions. Reason: the language result is valid, but it supplies no
+single unconditional noun-history operation. [READ-3, CLASS-9, CLASS-10, PAIR-1]
+
+This choice supplies trace and caller evidence only. It gives the model no ToolResult
+or other new feedback for this request, and attempted_call remains true. A later model
+round may repeat the same malformed recall until the caller's existing round bound.
+This refusal does not itself request a restatement or choose another workflow. Providing
+a stored pair and model-facing refusal instead requires the alternative PairRequest
+election, not an invented result grant. [READ-3, CLASS-9, OUT-1, STRAT-2]
+
+An Accepted Text reply containing any binding with zero nouns violates MODEL and BINDING
+before a checked generation exists. PORT treats it as invalid_result/component failure,
+not RecallRequest refusal. A correctly reported non_ste100 result instead follows
+ordinary repair. Neither case invents an accepted StatementRef or recall CallId from
+rejected or unclassified text. This rule does not change the checker's grammar.
+[CLASS-2, CLASS-8]
+
+Use kind refusal, channel internal, origin runtime and subsystem harness, on the same
+open turn. causal_parent names the message.assistant sequence containing the referenced
+checked statement. Record the exact original CallId and associated StatementRef as
+separate identities. Never rebuild one from the other, substitute a guessed original
+recall for a correction's attempted recall, or renumber later requests after a refusal.
+A repaired external sibling keeps its original CallId and corrected StatementRef.
+[FLOW-3, CLASS-9, PAIR-1, STORE-5]
+
+| Refusal state | Event | Required disposition |
+| --- | --- | --- |
+| Checked invalid operation | Construct exact identity-bearing refusal | Retain the refusal and its checked evidence before fallible author admission |
+| Awaiting author | Capacity or recoverable lifecycle wait | Retain the same event, source and original Decision bound |
+| Awaiting author | Recorded | Preserve the exact receipt before other fallible work, release the typed operation refusal once |
+| Any occupied state | Stop or leave | Revoke successful continuation, retain the required refusal account under existing lifecycle permissions and bounds |
+| Any occupied state | Component failure or expired bound | Follow the existing halt account, with no successful operation result or invented pair |
+
+Cancellation does not erase an admitted event or a Recorded receipt. Before Releasing,
+settle retained required refusal work while ordinary authoring remains permitted. A
+component halt accounts unfinished work under HARNESS-HALT. This rule adds no teardown
+reserve, permission to author in Closed or fresh wait interval. A correct refusal alone
+never latches component failure. The caller chooses later work through existing ports.
+[CLASS-8, FLOW-3, FLOW-4, FLOW-5]
 
 ## 7. What is enforced, and by which instrument
 
@@ -635,6 +806,7 @@ a serving declaration. [CLASS-4, CLASS-7, PROMPT-2, FLOW-7]
 | --- | --- | --- |
 | PROTOCOL-OWNER, PORT | Manifest, fd-count and fork/exec integration tests, loop-thread review | Link an organ into harness, give the duty a store/gate fd, or replace the legacy label consumer |
 | SCHEME, CUSTODY, DECLARATION | Strict-codec and root-custody fixtures, load digest and immutable dictionary tests | Change artifact after inventory, accept an unknown key, or invent a runtime verb |
+| MANIFEST-LOCATOR | Agent-uid acquisition fixtures with pinned directories/files, path replacement, link confinement, nonregular files and exact-byte digest checks | Guess a manifest basename, escape the pinned root, reopen a checked path or load unhashed sidecars |
 | PARSER, CAPACITY | Normative boundary and long-name corpus with a deliberately undersized adapter | Call capacity a language defect or file an accepted prefix |
 | MODEL, BINDING | Model-adapter shape tests plus exact-span held-out corpus | Return sequence scores, accept NaN, select a condition's verb or case-fold a noun |
 | CHANNEL | Real SEQPACKET tests at exact datagram and whole-message bounds | Skip total/offset check, accept MSG_TRUNC, or use an incomplete reply |
@@ -644,7 +816,9 @@ a serving declaration. [CLASS-4, CLASS-7, PROMPT-2, FLOW-7]
 | INPUT, REUSE | Gate-to-worker integration with byte/UID substitution, queued input, delayed check and held trace capacity | Parse content in gate, open a turn early, trust payload origin, reuse changed text, start the check clock on queued arrival or after input.offered records |
 | OUTPUT-UNIT | Mixed Text/ToolCall messages with sparse selected indices | Renumber indices or skip checking unselected Text |
 | DECISION-BARRIER, REPAIR | Multiple-block generation, delayed rejection, repair cap, stop/leave and fake-clock cases | Deliver success early, dispatch before acceptance, omit cap evidence or halt on correct rejection |
+| EMPTY-CORRECTION | Requested empty correction below and at cap, held refusal recording, empty original, empty Text and call-only correction fixtures | Resolve the rejected source with no text, count an attempt twice, continue before the refusal is recorded, fabricate a checker result or change the original-generation rule |
 | TOOL-STATEMENT, RECALL | Pair and read-port doubles, shell schema regression, real pure helper tests | Bind unrelated text, execute a correction call, register recall at gate or omit the internal return |
+| RECALL-REFUSAL | Mixed valid and invalid recall bindings, correction calls, cap, recorder pressure, stop/leave and zero-noun Accepted fixtures | Select a subject, open a pair, renumber a call, lose a corrected source, return before Recorded, count one correction twice or treat invalid classifier evidence as an operation refusal |
 | QUALIFICATION | Review of frozen protocol plus held-out qualification run | Accept a tuple whose thresholds were changed after its held-out results |
 
 Every behavioral invariant above must fail under the named removal or inversion. Type
@@ -699,11 +873,12 @@ SEAM-2]
 | C02-2 | TEMPLATE-CHECK accepts canonical TemplateSpec text for template targets, bindings:[] on accepted template replies, and complete inventory bytes in load. Text targets still require nonempty bindings. |
 | C02-3 | HARNESS-CLASSIFY/CLOCK/PUMP add decision_wait, decision_bound and blocked_stage decision. Each result/receipt barrier has one absolute deadline, disarmed during decode or tool execution and never reset by partial traffic. |
 | C02-4 | FlowObservation adds repair_requested and repair_exhausted phases, failed_corrections and retry_cap only for those phases. Repair records require source_id. Other phases reject those fields. |
-| C02-5 | RefusalRecord gains ProtocolRepair {source_id,case,detail}, case correction_call or missing_tool_statement or ambiguous_tool_statement. These use kind refusal and authorize no filing or halt. |
+| C02-5 | RefusalRecord gains ProtocolRepair {source_id,case,detail}, case correction_call, empty_correction, missing_tool_statement or ambiguous_tool_statement. These use kind refusal and authorize no filing or halt. EMPTY-CORRECTION defines the added case. TYPES-INPUT defines source_id for each case. |
+| C02-6 | TYPES-RECALL-REFUSAL adds the exact RecallRequestRefusal carrier. RECALL-REFUSAL accounts a valid binding with invalid recall shape before pair creation, preserving request identity and correction-attempt accounting. |
 
-The foundation port's logical request/reply shapes are unchanged. C02-1 through C02-5
-now have their named owning clauses in the assembled foundation. Spec 05 supplies inward
-pair accounting, and 07 shares the scheme's step:<local_id> condition spelling. The
+The foundation port's logical request/reply shapes are unchanged. C02-1 through C02-6
+have their named owning clauses in this set. Spec 05 supplies inward pair accounting,
+and 07 shares the scheme's step:<local_id> condition spelling. The
 final consumer and finding checks still assess those joined texts. This list is not a
 runtime-conformance claim. [CLASS-3, CLASS-9, PAIR-1, PLAN-3]
 
@@ -734,3 +909,5 @@ state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 [internal]: weaver-internal-Spec-amendment.md
 [spu]: weaver-spu-Spec-amendment.md
 [ste100-contract]: weaver-harness-spu-ste100-contract.md
+[empty-correction-ruling]:
+https://github.com/toddwbucy/WeaverAgent/pull/213#issuecomment-6330669954

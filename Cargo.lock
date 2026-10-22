@@ -1989,6 +1989,7 @@ version = "0.1.0"
 dependencies = [
  "nix",
  "serde_json",
+ "sha2",
  "weaver-diagnostic",
  "weaver-trace",
  "weaver-traits",
@@ -2016,6 +2017,7 @@ dependencies = [
  "nix",
  "safetensors 0.7.0",
  "serde_json",
+ "sha2",
  "tokenizers 0.21.4",
  "walkdir",
  "weaver-traits",

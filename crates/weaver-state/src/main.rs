@@ -22,6 +22,9 @@
 
 use std::io::Read;
 
+#[cfg(feature = "sqlite")]
+mod member;
+
 use weaver_state::save_point::{Room, SavePoint, schema_digest};
 use weaver_state::{
     Ask, Election, Restored, SavePointAnswer, Store, parse_ask, parse_distillate,
@@ -89,7 +92,38 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     }
-    member_entry(std::env::args().skip(1), FIRST_DOOR_FD, SAVE_POINT_FD)
+    // Refuse before either mode can read the channel or open a room. Room::open
+    // clears stale parts, which an engine-less build has no reason to touch.
+    if !cfg!(feature = "sqlite") {
+        eprintln!(
+            "{}",
+            serde_json::json!({"state_fault": format!("{:?}", missing_engine())})
+        );
+        return std::process::ExitCode::FAILURE;
+    }
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(feature = "sqlite")]
+    if let Some(result) = member::dispatch(&arguments, FIRST_DOOR_FD, SAVE_POINT_FD) {
+        return result;
+    }
+    member_entry(arguments.into_iter(), FIRST_DOOR_FD, SAVE_POINT_FD)
+}
+
+fn missing_engine() -> weaver_state::CustodyFault {
+    weaver_state::CustodyFault::StoreUnavailable(
+        "sqlite engine is not compiled into this binary".into(),
+    )
+}
+
+fn stand_store() -> Result<Box<dyn Store>, weaver_state::CustodyFault> {
+    #[cfg(feature = "sqlite")]
+    {
+        Ok(Box::new(weaver_state::engine::sqlite::Sqlite::stand()?))
+    }
+    #[cfg(not(feature = "sqlite"))]
+    {
+        Err(missing_engine())
+    }
 }
 
 /// Marks the inherited run lock close-on-exec and never closes it: the member
@@ -208,8 +242,8 @@ fn member_entry(
             return std::process::ExitCode::FAILURE;
         }
     };
-    let mut store: Box<dyn Store> = match weaver_state::engine::sqlite::Sqlite::stand() {
-        Ok(store) => Box::new(store),
+    let mut store = match stand_store() {
+        Ok(store) => store,
         Err(fault) => {
             eprintln!(
                 "{}",

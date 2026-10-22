@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #241
 
-**Version:** 0.18 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
+**Version:** 0.21 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
 
 ## 0. What this document is
 
@@ -705,6 +705,15 @@ adjacent ToolCall that was not projected. Refuse an unknown or already terminal 
 and roll back the entire new source row. Never treat a file_pair refusal as an ordinary
 conformance outcome. [PAIR-1, PAIR-4, CLASS-8]
 
+For a recall opening, require exactly one noun on the held binding, no governing
+condition and subject bytes equal to that noun. Membership among several nouns is not
+sufficient. A live filing refuses invalid_pair with full rollback on mismatch.
+STATE-ADOPT applies the same shape check to saved pairs under its open refusal family.
+The harness owns recall-key recognition
+and the distinct RECALL-REFUSAL operation before pair creation. These store checks
+enforce the existing valid recall shape, without a new pair variant, classifier call or
+catalog change. [READ-3, PAIR-4, PERSIST-4, CLASS-2]
+
 ## 2. Read service and the old readers, destinations sections 3 and 4
 
 This replacement applies at the [foundation cutover][cutover]. Until then, the previous
@@ -963,9 +972,11 @@ PERSIST-6]
 
 Conversation and span text queries select statement rows. Pair returns are attached
 whole through ReadPair. Shape, held and position continue to include both content types,
-so a pair terminal can be the save frontier. Paging bounds the complete encoded tagged
-result with all attachments. It never drops an over-large pair. [STORE-5, READ-5,
-PAIR-4]
+so a pair terminal can be the image's captured SourcePosition. This content position is
+distinct from HARNESS-CAPTURE's local Recorded trace watermark. Untapped recall and
+trace observations create no content row or SourcePosition. Paging bounds the complete
+encoded tagged result with all attachments. It never drops an over-large pair.
+[STORE-5, READ-5, PAIR-4, PERSIST-4]
 
 **STATE-OBSERVATION-READ.** Only the observations selector reads these tables. It
 carries {run:String,after:DecimalU64,through:Option<DecimalU64>}. run must be a valid
@@ -987,13 +998,14 @@ ORDER BY operation_id
 
 Read member_observation and the rows inside one read transaction. Reconstruct each
 StoredOperationObservation with its source identity and validate its JSON against the
-indexed columns. A stored mismatch is component failure, not an empty success. The
-normal bounded-result writer, immutable paging, release and result_too_large rules
-apply. Other selectors, held counts, shape, SourcePosition, marks, plans and content
-grants exclude these tables. Querying observations is not permission to turn them into
-content units or place them automatically. The caller owns any separately requested
-presentation and must keep the typed query identity. [STORE-3, SEAM-3, MARK-6, COST-2,
-R20-19]
+indexed columns and its run's recorded instrument version. Historical /1 and /2 retain
+their original definitions. A stored mismatch is component failure, not an empty
+success. The normal bounded-result writer, immutable paging, release and
+result_too_large rules apply. Other selectors, held counts, shape, SourcePosition,
+marks, plans and content grants exclude these tables. Querying observations is not
+permission to turn them into content units or place them automatically. The caller owns
+any separately requested presentation and must keep the typed query identity. [STORE-3,
+SEAM-3, MARK-6, COST-2, R20-19]
 
 **STATE-PAGES.** One immutable QueryResult at most is held per serving channel.
 Serialize selected rows directly into a bounded RAM writer, without first copying the
@@ -1116,13 +1128,15 @@ wrappers. Refuse a complete oversized control result as answer_too_large. Large 
 use STATE-PAGES. No partial filing is admitted. [FLOW-4, SEAM-2, SEAM-3]
 
 **STATE-OBSERVE.** The serving answer_frame replacement brackets every request and
-persistence continuation with Spec 09's STORE-OBSERVATION. Allocate its operation ID
-once before validation. Finish the content transaction or read and encode the operation
-payload before closing the observation interval. Then atomically insert the observation
-and its source identity into operation_observation in a separate RAM bookkeeping
-transaction. For successful open, insert observation_run and the first observation
-together after all adoption and identity checks. Only then encode the wrapper and enter
-SendingAnswer. [COST-2, COST-5, SEAM-2, R20-19]
+persistence continuation with Spec 09's STORE-OBSERVATION. Capture began_ns before
+operation hint parsing and allocate its operation ID once before validation. Snapshot
+uses that same wall boundary. Its CPU/disk samples separately bracket capture work under
+SNAPSHOT-SAMPLING, inside the operation interval. Finish the content transaction or read
+and encode the operation payload before closing the observation interval. Then
+atomically insert the observation and its source identity into operation_observation in
+a separate RAM bookkeeping transaction. For successful open, insert observation_run and
+the first observation together after all adoption and identity checks. Only then encode
+the wrapper and enter SendingAnswer. [COST-2, COST-5, SEAM-2, R20-19]
 
 The metadata insert is not a received operation, generates no nested observation and
 runs no classifier. It writes no content table and has no external filing port. Its cost
@@ -1143,12 +1157,15 @@ separate. [FLOW-3, SEAM-2, SCOPE-1, R20-19]
 
 A dump includes metadata committed before capture began. The snapshot operation's own
 observation, its acknowledgement and release are later RAM records and are absent from
-that captured image. A later capture may include them. This is an explicit frontier, not
-a recursive rewrite of a hashed image. CaptureHeld permits only this internal
-bookkeeping for allowed continuations, never content filing. Observation metadata does
-not advance SourcePosition. On reload, old run rows remain historical and the new open
-uses a new run identity with operation_id one. [PERSIST-1, PERSIST-3, PERSIST-4, COST-2,
-R20-19]
+that captured image. A later capture may include them. This is an explicit metadata
+cutoff, not a recursive rewrite of a hashed image. CaptureHeld permits only this
+internal bookkeeping for allowed continuations, never content filing. Observation
+metadata does not advance SourcePosition. On reload, old run rows remain historical and
+the new open uses a new run identity with operation_id one. New runs use
+state-observation/2. Adoption validates historical /1 and /2 identities without
+rewriting them, and explicit observations reads return each run's original identity.
+This does not admit a current opened response using /1. [PERSIST-1, PERSIST-3,
+PERSIST-4, COST-2, COST-5, R20-19]
 
 STATE-PAGES reserves space for the observation and wrapper as frame accounting.
 ReadPage.octets holds only its typed QueryResult. Other queries never receive stored
@@ -1174,8 +1191,21 @@ queries and counts exclude it. Inject metadata-commit failure after a content co
 require channel closure without resend. Remove the separate-table rule,
 commit-before-answer guard, run key, fixed read frontier or single-insert guard in
 separate mutations. Each must fail its fixture. Snapshot/reload must preserve exactly
-its captured metadata frontier. This pass proves accounting, not zero disk wait.
+its captured metadata cutoff. This pass proves accounting, not zero disk wait.
 [FLOW-4, SEAM-2, SEAM-3, COST-5, FALS-3, R20-19]
+
+The actual snapshot fixture records ordered hooks at the operation timestamp, hint
+parse, validation, before counters, serialization, room-file completion, after counters
+and payload encoding. Exercise success, preflight refusal, serialization failure,
+recoverable room-write failure and counter unavailability. Partial sends must reuse the
+completed observation without sampling again. Require the Spec 09 order, with no
+sampling on ordinary requests or a preflight refusal. The full wall interval includes
+both counter reads. Remove each ordering or sampling guard separately and require a
+behavioral assertion to fail. Adopt an image with historical /1 metadata, open a new /2
+run, and read the old records without relabeling them. Removing the
+current-versus-historical version check must fail its fixture. This proves timing
+boundaries and identity, not counter accuracy or absence of disk wait. [COST-1, COST-2,
+COST-4, COST-5, PERSIST-1, FALS-3]
 
 ## 4. Seed, adoption, and capture, destinations sections 2 and 3
 
@@ -1200,19 +1230,22 @@ exact state-content/1 catalog, quick_check success, no foreign_key_check rows, o
 store_meta row, one complete system_prompt span and valid bindings. Compare that row's
 scheme_id to open.scheme_id and its seed_id to open.start.seed_id. Compare the last
 committed source position to open.start.position. Refuse scheme_mismatch on a scheme
-difference and open_failed on any other structural difference. Echo the verified scheme
-and StartIdentity in opened. Adopt once only after every check. For marks, validate
-consecutive local IDs, revision 1, permitted parent/kind pairs, one open path, one
-prompt child per task, source and prefix references, all UTF-8 and binding boundaries,
-and matching source contexts/effects. Recompute every runtime terminal span's canonical
-members at its recorded end and compare them with span_member byte for byte and ordinal
-for ordinal. Check its fixed pair frontier. Open spans have no finalized members. The
-seed is the sole source-free closed span. Refuse a structurally inconsistent image
-rather than repairing it. [MARK-1, MARK-3, MARK-5, PERSIST-6] No old Election argument
-or index_election runs. A failure leaves no serving store and refuses open. Pass means
-schema and structural integrity of those bytes, not semantic truth or authorization of
-an operator's prior choices. The evidence is the verified image A and the measured
-catalog/check results. [PERSIST-3, PERSIST-6, STORE-3]
+difference and open_failed on any other structural difference. For every saved recall
+pair, require its held binding to have exactly one noun, no governing condition and
+subject bytes equal to that noun, as in STATE-PAIR-FILE. A mismatch refuses open_failed
+before adoption. It is not a live invalid_pair filing refusal and changes no saved row.
+Echo the verified scheme and StartIdentity in opened. Adopt once only after every check.
+For marks, validate consecutive local IDs, revision 1, permitted parent/kind pairs, one
+open path, one prompt child per task, source and prefix references, all UTF-8 and
+binding boundaries, and matching source contexts/effects. Recompute every runtime
+terminal span's canonical members at its recorded end and compare them with span_member
+byte for byte and ordinal for ordinal. Check its fixed pair frontier. Open spans have no
+finalized members. The seed is the sole source-free closed span. Refuse a structurally
+inconsistent image rather than repairing it. [MARK-1, MARK-3, MARK-5, PERSIST-6] No old
+Election argument or index_election runs. A failure leaves no serving store and refuses
+open. Pass means schema and structural integrity of those bytes, not semantic truth or
+authorization of an operator's prior choices. The evidence is the verified image A and
+the measured catalog/check results. [PERSIST-3, PERSIST-6, STORE-3]
 
 **STATE-CAPTURE.** After the harness barrier, serialize the current in-memory SQLite
 connection to a complete RAM image, as Store::image does today. Serving remains paused
@@ -1298,7 +1331,7 @@ weaver-state dependency of any kind. [FLOW-4, FLOW-5, SEAM-2, SCOPE-1]
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
 | STATE-CONNECTION | Seed and adopted-image connection fixtures read settings and build facts before use, with rejected fact variants | Remove the initializer, accept TEMP_STORE=0 or unknown build facts, or expose an adopted connection before rechecking |
-| STATE-OBSERVATION-SCHEMA/READ/OBSERVE | Exact metadata JSON, real response writes, explicit query and capture-frontier fixtures | Mix metadata with content, reobserve an insert, omit a required row, include the read itself, or send success after metadata failure |
+| STATE-OBSERVATION-SCHEMA/READ/OBSERVE | Exact metadata JSON, real response writes, explicit query, capture metadata-cutoff, ordered snapshot-sampling and historical-version fixtures | Mix metadata with content, reobserve an insert, omit a required row, include the read itself, send success after metadata failure, reorder sampling or relabel old evidence |
 | STATE-SCHEMA | Execute literal DDL, inspect catalog, EXPLAIN noun and verb queries | Remove index, source CHECK, or FK |
 | STATE-FILE | STATE-FILING-INSTRUMENTS and shared malformed corpus | Emit receipt before commit or accept partial noun rows |
 | STATE-PLAN-SCHEMA, STATE-PLAN-READ | Literal DDL, ordered reads and reload fixtures | Allow two unfinished plans/active steps, renumber IDs or omit historical references |
@@ -1308,7 +1341,7 @@ weaver-state dependency of any kind. [FLOW-4, FLOW-5, SEAM-2, SCOPE-1]
 | STATE-MARK-MEMBERS | Literal recursive query with nested prefixes, ignored events and closure outcomes | Exclude the shared opening/closing anchor, include bookkeeping or reorder by trace run |
 | STATE-MARK-PAIRS | Fixed-frontier fixtures with partial, open and later pairs | Omit the opening cutoff or accept a return beyond the frontier |
 | STATE-MARK-READ | Tagged marks/preview results and dump/reload fixtures | Write on preview, accept an open span as closed, omit allocation exhaustion or alter membership on load |
-| STATE-PAIR-FILE | Pair lifecycle transactions and failure injection | Accept a second terminal, leave an orphan source row or emit receipt before commit |
+| STATE-PAIR-FILE | Pair lifecycle transactions, compound/conditional recall openings, matching adoption fixtures and failure injection | Accept a second terminal, weaken the exact one-noun/unconditional shape, leave an orphan source row or emit receipt before commit |
 | STATE-PAIR-READ | History/open-pair queries with complete raw returns | Lose an attachment, parse a pair as Text or omit terminals from position |
 | STATE-READ | Prepared-query fixtures across two runs and compound nouns | Query old event table, reorder sessions, mutate on read, or hide seed |
 | STATE-SUBJECTS | Literal SQL with compound nouns, two runs, bookkeeping and an unmatched binding's pair | Remove source-kind restriction, order by run, return only matched bindings or lose the pair |
@@ -1318,7 +1351,7 @@ weaver-state dependency of any kind. [FLOW-4, FLOW-5, SEAM-2, SCOPE-1]
 | STATE-MODE | Process launch matrix and preload probes | Infer mode from frame or allow serving preload |
 | STATE-CHANNEL | Every row, partial writes, exact frame limits | Accept second open, over-bound frame, or premature second exchange |
 | STATE-SEED | Seed-mode process test, TYPES-SEED corpus and live-writer refusal | Seed an existing store, ignore a supplied scheme/checker mismatch or admit prompt without end mark |
-| STATE-ADOPT | Wrong catalog/hash/span/foreign-key images | Adopt before every check or accept old one-file format |
+| STATE-ADOPT | Wrong catalog/hash/span/foreign-key images and saved compound/conditional recall pairs | Adopt before every check, weaken recall shape to noun membership, use a live filing refusal for an invalid image or accept old one-file format |
 | STATE-CAPTURE | Member-room process fixture with size and disk failures | Publish partial image or mutate during capture |
 | STATE-CIRCUIT-INSTRUMENT | Spawned member, real recorder and response proxy | Skip a missing binary, accept a held/corrupted receipt, resend uncertain filing or query a hidden test door |
 | STATE-NO-SAVE | Kill at each capture/confirmation boundary | Recover an unconfirmed image as latest |

@@ -39,6 +39,10 @@ pub enum HolderVerb {
     Restore,
     Stop,
     Validate,
+    /// Replacement seed driver. The command surface stays inactive until cutover.
+    Seed,
+    /// Replacement offline binding. Its command is inactive until cutover.
+    BindState,
 }
 
 impl HolderVerb {
@@ -53,6 +57,8 @@ impl HolderVerb {
             HolderVerb::Restore => "restore",
             HolderVerb::Stop => "stop",
             HolderVerb::Validate => "validate",
+            HolderVerb::Seed => "seed",
+            HolderVerb::BindState => "bind-state",
         }
     }
 
@@ -69,6 +75,8 @@ impl HolderVerb {
             "restore" => HolderVerb::Restore,
             "stop" => HolderVerb::Stop,
             "validate" => HolderVerb::Validate,
+            "seed" => HolderVerb::Seed,
+            "bind-state" => HolderVerb::BindState,
             _ => return None,
         };
         (verb.spelled() == spelled).then_some(verb)
@@ -194,7 +202,9 @@ pub fn class_of(seen: Seen) -> AdminView {
             | HolderVerb::SavePoint
             | HolderVerb::Restore
             | HolderVerb::Stop
-            | HolderVerb::Validate,
+            | HolderVerb::Validate
+            | HolderVerb::Seed
+            | HolderVerb::BindState,
         ) => AdminView::HeldByOther,
         Seen::RunLockFree => AdminView::Down,
         Seen::RunLockHeld(WorkerSeen::Idle | WorkerSeen::Active) => AdminView::Serving,

@@ -148,6 +148,8 @@ mod structure;
 mod tee;
 mod writer;
 
+pub mod serving;
+
 pub use canonical::{MonotonicNs, Sequence};
 pub use event::{
     Branch, Candidate, Cause, ClassifyAsk, ClassifyScored, Elections, ElisionSpan, Envelope, Event,
@@ -161,4 +163,5 @@ pub use structure::{Record, WorkingStructure};
 pub use tee::{ElectedKind, Election, Tee, distill, opener};
 pub use writer::{
     Boundary, Drained, HIGH_WATER_MARK, Pressure, QUEUE_DEPTH, Recorder, UNLOAD_RESERVE,
+    payload_pairing_licensed,
 };

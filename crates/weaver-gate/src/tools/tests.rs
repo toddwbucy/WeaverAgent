@@ -16,7 +16,7 @@ use weaver_types::ToolName;
 /// constructor alone (#29). The clock, the cancel and the containment are
 /// program-neutral, and these fixtures need what the confined busybox does not
 /// hold. The confinement has its own suite (`confine/tests.rs`).
-fn bare() -> super::Shell {
+pub(super) fn bare() -> super::Shell {
     super::Shell::bare("bash")
 }
 
@@ -85,7 +85,7 @@ impl Drop for ScratchTools {
     }
 }
 
-fn pair() -> (Channel, Channel) {
+pub(super) fn pair() -> (Channel, Channel) {
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
     let (near, far) = socketpair(
         AddressFamily::Unix,
@@ -100,7 +100,7 @@ fn pair() -> (Channel, Channel) {
     )
 }
 
-fn exchange() -> ExchangeId {
+pub(super) fn exchange() -> ExchangeId {
     ExchangeId {
         opener: weaver_types::Opener::Harness,
         ordinal: 1,
@@ -109,9 +109,25 @@ fn exchange() -> ExchangeId {
 
 std::thread_local! {
     static WAIT_ENTERED: std::cell::RefCell<Option<std::sync::mpsc::SyncSender<()>>> = const { std::cell::RefCell::new(None) };
+    static WAIT_DELAY_UNTIL: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// Delay precisely inside the next production poll boundary on this thread.
+/// This models descheduling after a caller's deadline check, without signals.
+pub(super) fn delay_next_wait_until(until: std::time::Instant) {
+    WAIT_DELAY_UNTIL.with(|slot| assert!(slot.replace(Some(until)).is_none()));
+}
+
+pub(super) fn assert_wait_delay_consumed() {
+    WAIT_DELAY_UNTIL.with(|slot| assert!(slot.get().is_none(), "the production wait was reached"));
 }
 
 pub(super) fn wait_entered() {
+    WAIT_DELAY_UNTIL.with(|slot| {
+        if let Some(until) = slot.take() {
+            std::thread::sleep(until.saturating_duration_since(std::time::Instant::now()));
+        }
+    });
     WAIT_ENTERED.with(|slot| {
         if let Some(sender) = slot.borrow_mut().take() {
             sender.send(()).unwrap();
@@ -218,7 +234,9 @@ fn an_interrupt_kills_an_open_execution_by_unload() {
             .send(&OrganEnvelope {
                 exchange: exchange(),
                 position: Position::Continue,
-                payload: Payload::ToolInterrupt,
+                payload: Payload::ToolInterrupt {
+                    by: KillCause::Unload,
+                },
             })
             .unwrap();
         harness
@@ -341,8 +359,10 @@ fn an_absent_grant_refuses_every_execution_by_name() {
         },
         &near,
         &exchange(),
+        &BTreeSet::new(),
     )
-    .expect("an answer");
+    .expect("an answer")
+    .outcome;
     let ToolOutcome::Refused { reason } = outcome else {
         panic!("refused: {outcome:?}");
     };
@@ -373,7 +393,7 @@ fn a_name_that_is_not_the_shells_refuses_by_name() {
 /// the shell declares, and both refuse naming the bound.
 #[test]
 fn a_clock_outside_the_maximum_refuses_rather_than_clamps() {
-    for clock in [0, SHELL_MAX_CLOCK_MS + 1] {
+    for clock in [0, weaver_types::state_flow::SHELL_MAX_CLOCK_MS + 1] {
         let outcome = refused(r#"{"command":"true"}"#, clock);
         let ToolOutcome::Refused { reason } = outcome else {
             panic!("a refusal answers for {clock}: {outcome:?}");
@@ -383,6 +403,18 @@ fn a_clock_outside_the_maximum_refuses_rather_than_clamps() {
             "the refusal names the bound: {reason}"
         );
     }
+}
+
+/// The shared maximum passes the clock check before malformed arguments refuse.
+/// No shell runs, so this exercises the accepted boundary without a cgroup fixture.
+#[test]
+fn the_shared_clock_maximum_reaches_argument_validation() {
+    assert_eq!(
+        refused("{}", weaver_types::state_flow::SHELL_MAX_CLOCK_MS),
+        ToolOutcome::Refused {
+            reason: "the arguments carry no command string".into()
+        }
+    );
 }
 
 /// Malformed arguments are the gate's refusal - nothing ran, so no

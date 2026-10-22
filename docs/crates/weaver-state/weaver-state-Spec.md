@@ -6,7 +6,7 @@
 **Document ID:** `weaver-state-Spec`
 **Parent:** `weaver-state-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #72
+**Landing PR:** #230
 
 ---
 
@@ -130,6 +130,15 @@ nothing, holding it being the whole of its use, and it closes no descriptor it w
 told about, so no sweep of unknown numbers can drop it. Where the number holds no
 descriptor, a hand-run member's case, there is nothing to keep and the member serves
 as it would, naming the absence on its standard error so it is never silent.
+
+A binary built without a compiled store engine performs the run-lock first act,
+then reports StoreUnavailable on standard error and exits unsuccessfully. An absent
+run-lock descriptor still produces the existing notice before the engine fault.
+Failure in run-lock handling itself retains its existing refusal. The no-engine
+refusal precedes argument validation, including usage errors, in every start mode.
+It reads no first-door input, adopts no save-point image, opens or cleans no room,
+and stands no preload door. SQLite remains an optional build feature under the
+[operator's ruling of 2026-10-22][no-engine-ruling].
 
 ## 3. The store
 
@@ -972,3 +981,6 @@ operator's ruling of 2026-10-02 moves that landing toward the loop's schema.
   seam: reconsidered when real traffic is measurable, and a build that has
   produced that traffic and not reconsidered has an open election reading
   as settled.
+
+[no-engine-ruling]:
+https://github.com/toddwbucy/WeaverAgent/pull/230#issuecomment-6333210363

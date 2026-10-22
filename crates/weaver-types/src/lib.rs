@@ -98,6 +98,7 @@
 
 mod config;
 mod identity;
+pub mod state_flow;
 mod wire;
 
 pub use config::{
@@ -107,18 +108,22 @@ pub use config::{
     SpuInstruction, StateElection, StateStore, StoreEngine, ToolName, TraceSink,
 };
 #[cfg(feature = "config")]
-pub use config::{check_identity_roles, parse, parse_boundary};
+pub use config::{
+    DraftStateManagement, ServingDeclaration, ServingDraft, check_identity_roles, parse,
+    parse_boundary, parse_serving_declaration, parse_serving_draft,
+};
 pub use identity::{
     AccessRule, BoundaryFile, Cause, PeerIdentity, TraceControl, TraceHeader, TraceLine,
     TraceRequest, authorized,
 };
 pub use wire::{
     AgentName, AgentState, Branch, CallGrammar, Candidate, Composer, DECODE_MESSAGE_BOUND,
-    EnterBinding, EnterPayload, ExchangeId, FaultCase, FaultReport, Finish, Generation, KillCause,
-    LEAVE_BOUND_MS, LOWER_BOUND_MS, LOWER_SETTLE_MARGIN_MS, LabelAnswer, LabelDirective,
-    LabelRefusal, LifecycleAnswer, LifecycleAsk, LifecycleDirective, LifecycleRefusal, Lineage,
-    LoadFacts, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload, Position, RefusalRecord,
-    RefusingOrgan, Reset, ResetReason, RunId, SavePointLeg, SavePointReport, ScoredLabel,
-    SegmentPreamble, SessionId, TokenAnswer, TokenAsk, TokenDirective, TokenRefusal, ToolExecution,
-    ToolOutcome, TurnFrame, TurnKey, TurnRequest, UnrecoveredCall, UnrecoveredReason,
+    EnterBinding, EnterPayload, ExchangeId, FaultCase, FaultReport, Finish, Generation,
+    InputRefusal, KillCause, LEAVE_BOUND_MS, LOWER_BOUND_MS, LOWER_SETTLE_MARGIN_MS, LabelAnswer,
+    LabelDirective, LabelRefusal, LifecycleAnswer, LifecycleAsk, LifecycleDirective,
+    LifecycleRefusal, Lineage, LoadFacts, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload,
+    Position, RefusalRecord, RefusingOrgan, Reset, ResetReason, RunId, SavePointLeg,
+    SavePointReport, ScoredLabel, SegmentPreamble, SessionId, TokenAnswer, TokenAsk,
+    TokenDirective, TokenRefusal, ToolExecution, ToolOutcome, TurnFrame, TurnKey, TurnRequest,
+    UnrecoveredCall, UnrecoveredReason,
 };

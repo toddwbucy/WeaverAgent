@@ -8792,7 +8792,12 @@ fn a_forced_leave_closes_a_call_its_gate_never_answers_within_the_lower_bound() 
         // held open well past the lower's bound.
         let interrupt = gate_peer.recv().expect("the interrupt");
         assert!(
-            matches!(interrupt.payload, weaver_types::Payload::ToolInterrupt),
+            matches!(
+                interrupt.payload,
+                weaver_types::Payload::ToolInterrupt {
+                    by: weaver_types::KillCause::Unload
+                }
+            ),
             "{interrupt:?}"
         );
         std::thread::sleep(std::time::Duration::from_secs(60));
@@ -9093,4 +9098,51 @@ fn containment_an_undelivered_unwind_sweep_is_its_own_fault() {
             .any(|e| e["payload"]["case"] == "organ_death_observed"),
         "no death is recorded: {faults:?}"
     );
+}
+
+/// The retiring boot adapter must consume the complete paired Opened shape.
+/// It owns no placement budget. The foundation boot owner supplies that check.
+#[test]
+fn opening_requires_the_complete_paired_answer_and_not_a_measurement() {
+    let opened = r#"{"kind":"opened","body":{"prefix_tokens":20,"capacity":4096,"generation_limit":128,"terminal_tokens":1}}"#;
+    let cases = [
+        (opened, Ok(())),
+        (r#"{"kind":"opened"}"#, Err(LifecycleRefusal::NoResidency)),
+        (
+            r#"{"kind":"opened","body":{"prefix_tokens":20,"capacity":4096,"generation_limit":128}}"#,
+            Err(LifecycleRefusal::NoResidency),
+        ),
+        (
+            r#"{"kind":"delta_measured","body":{"resident":20,"prefix_tokens":20,"keep":20,"input_tokens":9,"capacity":4096}}"#,
+            Err(LifecycleRefusal::DeviceCannotAdmit),
+        ),
+        (
+            r#"{"kind":"not_open"}"#,
+            Err(LifecycleRefusal::DeviceCannotAdmit),
+        ),
+    ];
+    for (body, expected) in cases {
+        use nix::sys::socket::{MsgFlags, recv, send};
+        use std::os::fd::AsRawFd;
+        let (decode, peer) = DecodeChannel::pair().unwrap();
+        let task = std::thread::spawn(move || {
+            let mut buffer = [0u8; 4096];
+            let count = recv(peer.as_fd().as_raw_fd(), &mut buffer, MsgFlags::empty()).unwrap();
+            let directive: TokenDirective = serde_json::from_slice(&buffer[..count]).unwrap();
+            assert_eq!(
+                directive,
+                TokenDirective::Open {
+                    session: SessionId("paired-open".into()),
+                    messages: vec![],
+                    column_ask: false,
+                }
+            );
+            send(peer.as_fd().as_raw_fd(), body.as_bytes(), MsgFlags::empty()).unwrap();
+        });
+        assert_eq!(
+            open_session(&decode, SessionId("paired-open".into()), vec![], false),
+            expected
+        );
+        task.join().unwrap();
+    }
 }

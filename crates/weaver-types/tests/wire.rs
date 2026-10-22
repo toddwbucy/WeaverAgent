@@ -197,6 +197,7 @@ fn the_token_directive_round_trips_through_bytes() {
     let directive = weaver_types::TokenDirective::AppendAndGenerate {
         turn: weaver_types::TurnKey("t-7".into()),
         delta: vec![],
+        tool_schemas: vec![],
     };
     let bytes = serde_json::to_string(&directive).expect("serializes");
     assert!(
@@ -651,10 +652,15 @@ fn the_lifecycle_vocabulary_round_trips() {
             cause
         );
     }
-    let interrupt = serde_json::to_string(&Payload::ToolInterrupt).unwrap();
+    let interrupt = serde_json::to_string(&Payload::ToolInterrupt {
+        by: weaver_types::KillCause::Unload,
+    })
+    .unwrap();
     assert_eq!(
         serde_json::from_str::<Payload>(&interrupt).unwrap(),
-        Payload::ToolInterrupt
+        Payload::ToolInterrupt {
+            by: weaver_types::KillCause::Unload
+        }
     );
 }
 
@@ -945,4 +951,29 @@ fn the_tools_containment_case_crosses_snake_case() {
     assert_eq!(bytes, r#""tools_containment_undelivered""#);
     let back: weaver_types::FaultCase = serde_json::from_str(&bytes).expect("returns");
     assert_eq!(back, case);
+}
+
+/// The cause is required on the coordinated gate wire. A legacy unit frame
+/// must never silently become an unload, and a flow failure stays distinct.
+#[test]
+fn typed_tool_interrupt_pins_both_causes_and_refuses_missing_cause() {
+    for (by, name) in [
+        (weaver_types::KillCause::Unload, "unload"),
+        (weaver_types::KillCause::FlowFailure, "flow_failure"),
+    ] {
+        let payload = Payload::ToolInterrupt { by };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert_eq!(
+            json,
+            format!(r#"{{"kind":"tool_interrupt","body":{{"by":"{name}"}}}}"#)
+        );
+        assert_eq!(serde_json::from_str::<Payload>(&json).unwrap(), payload);
+    }
+    for json in [
+        r#"{"kind":"tool_interrupt"}"#,
+        r#"{"kind":"tool_interrupt","body":{}}"#,
+        r#"{"kind":"tool_interrupt","body":{"by":"unknown"}}"#,
+    ] {
+        assert!(serde_json::from_str::<Payload>(json).is_err(), "{json}");
+    }
 }

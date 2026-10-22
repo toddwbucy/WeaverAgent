@@ -1,15 +1,105 @@
-//! The RAM connection and fixed state-content/1 catalog, under STATE-CONNECTION
-//! and STATE-SCHEMA of the state-management weaver-state Spec amendment.
+//! The RAM state-content/1 store under the state-management weaver-state Spec
+//! amendment: atomic filing, read-only queries and verified seed/image ports.
 //!
 //! This additive foundation is not selected by the member's existing serving
-//! path. An empty catalog is not a seed or an adopted serving store. Seed content,
-//! semantic image validation and the typed file/read contracts are later layers.
+//! path. An empty catalog is not a seed or an adopted serving store. Only complete
+//! image validation exposes a ServingSqlite. The member owns its socket protocol.
 
 use std::fmt;
 
 use rusqlite::Connection;
+use weaver_types::state_flow::{
+    PairFile, QueryResult, ReadLimits, ReadSelector, StartIdentity, StatementFile,
+};
 
+use crate::{FileCommit, FileFault, ReadFault, ServingStore};
+
+mod filing;
+mod image;
+mod observation;
+mod reads;
 mod schema;
+
+pub use image::{CaptureFault, ObservedAdoption, OpenFault, SeedFault, SeedImage, seed_image};
+
+/// Runtime attribution established by the verified open, never by a filing.
+#[derive(Clone, Debug)]
+struct ServingContext {
+    session_id: String,
+    run_id: String,
+    scheme_id: String,
+    seed_id: String,
+    start: StartIdentity,
+}
+
+/// A verified replacement store. Only image adoption can construct this value.
+/// Its connection stays in RAM and is never a caller SQL port.
+pub struct ServingSqlite {
+    connection: Connection,
+    context: ServingContext,
+    read_limits: ReadLimits,
+    #[cfg(test)]
+    filing_hooks: Option<Box<dyn filing::FilingTestHooks>>,
+}
+
+impl ServingStore for ServingSqlite {
+    fn file(&mut self, filing: &StatementFile) -> Result<FileCommit, FileFault> {
+        filing::file(self, filing)
+    }
+
+    fn file_pair(&mut self, filing: &PairFile) -> Result<FileCommit, FileFault> {
+        filing::file_pair(self, filing)
+    }
+
+    fn query(&self, selector: &ReadSelector) -> Result<QueryResult, ReadFault> {
+        reads::query(self, selector).map_err(ReadFault::from)
+    }
+}
+
+impl From<reads::ReadFailure> for ReadFault {
+    fn from(failure: reads::ReadFailure) -> Self {
+        match failure {
+            reads::ReadFailure::Refused(code) => Self::Refused(code),
+            reads::ReadFailure::ComponentCorruption(detail) => Self::ComponentFailure {
+                detail: detail.into(),
+            },
+            reads::ReadFailure::Sqlite(error) => Self::ComponentFailure {
+                detail: error.to_string(),
+            },
+        }
+    }
+}
+
+impl ServingSqlite {
+    /// Serialize a complete bounded query result for the member's immutable
+    /// cursor. No row or page is visible until this method succeeds.
+    /// An optional tally counts actual writes, including a refused prefix. It
+    /// does not establish coverage of the query's decoded content copies.
+    pub fn query_encoded(
+        &self,
+        selector: &ReadSelector,
+        copied: Option<&mut crate::serving_bytes::BufferBytes>,
+    ) -> Result<Vec<u8>, ReadFault> {
+        reads::query_encoded(self, selector, copied).map_err(ReadFault::from)
+    }
+
+    pub fn held(&self) -> Result<weaver_types::state_flow::DecimalU64, ReadFault> {
+        reads::held(&self.connection).map_err(ReadFault::from)
+    }
+
+    pub fn position(&self) -> Result<Option<weaver_types::state_flow::SourcePosition>, ReadFault> {
+        reads::position(&self.connection).map_err(ReadFault::from)
+    }
+
+    /// Retain the bounded shape encoding's writes even on a size refusal.
+    pub fn shape(
+        &self,
+        copied: Option<&mut crate::serving_bytes::BufferBytes>,
+    ) -> Result<Vec<weaver_types::state_flow::ShapeRow>, ReadFault> {
+        reads::shape(&self.connection, self.read_limits.max_result_bytes, copied)
+            .map_err(ReadFault::from)
+    }
+}
 
 /// An empty, verified state-content/1 catalog in RAM.
 ///
@@ -20,7 +110,7 @@ pub struct ServingCatalog {
 }
 
 /// A failure to construct or verify this catalog, before a seed or serving store
-/// exists. The eventual seed/open boundary maps it to write_failed/open_failed.
+/// exists. The seed/open boundary maps it to write_failed/open_failed.
 #[derive(Debug)]
 pub enum CatalogFault {
     Sqlite(rusqlite::Error),

@@ -9,6 +9,11 @@
 
 use weaver_trace::{Event, Kind, Pressure, Sequence, Subsystem, WorkingStructure};
 
+// The replacement lifetime has one home even while the legacy path remains
+// active until the qualified foundation cutover.
+#[allow(unused_imports)]
+pub(crate) use crate::flow::context::RecordingContext;
+
 /// The run's record: its arm, constructed once at the enter from the
 /// binding's kind and never re-selected, a run's record being one mechanism
 /// for its whole residency, and the latch of a failed authoring.
@@ -26,18 +31,22 @@ enum Arm {
 /// Why a submission failed, in the arm's own vocabulary. The two writers'
 /// failure sets are each their own, per the shared-shape-unshared-types
 /// election, so this carries whichever arm answered rather than translating
-/// one closed set into the other.
+/// one closed set into the other. The converter also uses the diagnostic
+/// submission-refusal vocabulary for a malformed compatible event before writing.
 #[derive(Debug)]
 pub enum RecordFailure {
     Serving(weaver_trace::Failure),
     Diagnostic(weaver_diagnostic::Failure),
-    /// The event's kind or subsystem has no diagnostic counterpart. The
+    /// The event's kind, payload or subsystem has no diagnostic counterpart. The
     /// diagnostic record holds twenty kinds, per `weaver-diagnostic-Spec`
     /// section 3, and an authoring that reaches this arm with a kind outside
     /// them is a defect in the caller: the run brackets are the replay's
     /// own, tools do not execute, and nothing classifies under a replay. An
     /// elision does map since 2026-09-26, the replay reproducing a source's.
     OutsideDiagnosticVocabulary,
+    /// A diagnostic-only entry was called on the run's fixed serving arm.
+    /// Neither writer was called and the run's record mechanism did not change.
+    DiagnosticDoorOnServingRecord,
 }
 
 /// A serving run's record, through `weaver-trace`.
@@ -63,14 +72,33 @@ impl From<weaver_diagnostic::Recorder> for Record {
 impl Record {
     /// One event submitted through whichever mechanism the run holds. The
     /// event arrives in the serving vocabulary because the authorship path
-    /// composes one form, and the diagnostic arm converts at this one site:
-    /// the envelope member for member, the kind by its shared spelling, and
-    /// the payload as the rendered bytes it would have carried, spliced,
-    /// which the mirror's field-for-field claim licenses.
+    /// composes one form. The diagnostic arm checks the legacy kind/payload
+    /// pairing before copying its envelope and splicing its exact payload.
     pub fn submit(&mut self, event: Event) -> Result<Sequence, RecordFailure> {
         let submitted = match &mut self.arm {
             Arm::Serving(recorder) => recorder.submit(event).map_err(RecordFailure::Serving),
             Arm::Diagnostic(recorder) => convert(event).and_then(|converted| {
+                recorder
+                    .submit(converted)
+                    .map(|sequence| Sequence(sequence.0))
+                    .map_err(RecordFailure::Diagnostic)
+            }),
+        };
+        self.latch(submitted)
+    }
+
+    /// Shared authoring in the replacement trace vocabulary, admitted only
+    /// to a diagnostic binding. DIAGNOSTIC-CONVERT keeps its legacy schema:
+    /// new kinds and payloads refuse before the diagnostic writer is called.
+    /// This door neither selects the replacement serving recorder nor sends
+    /// a serving event through the legacy recorder or around its barrier.
+    pub fn submit_shared_diagnostic(
+        &mut self,
+        event: weaver_trace::serving::Event,
+    ) -> Result<Sequence, RecordFailure> {
+        let submitted = match &mut self.arm {
+            Arm::Serving(_) => Err(RecordFailure::DiagnosticDoorOnServingRecord),
+            Arm::Diagnostic(recorder) => convert_shared(event).and_then(|converted| {
                 recorder
                     .submit(converted)
                     .map(|sequence| Sequence(sequence.0))
@@ -141,7 +169,7 @@ impl Record {
         event: weaver_diagnostic::Event,
     ) -> Result<weaver_diagnostic::Sequence, RecordFailure> {
         let submitted = match &mut self.arm {
-            Arm::Serving(_) => Err(RecordFailure::OutsideDiagnosticVocabulary),
+            Arm::Serving(_) => Err(RecordFailure::DiagnosticDoorOnServingRecord),
             Arm::Diagnostic(recorder) => recorder.submit(event).map_err(RecordFailure::Diagnostic),
         };
         self.latch(submitted)
@@ -213,10 +241,11 @@ impl Record {
     }
 }
 
-/// The serving-vocabulary event rendered into the diagnostic one, member
-/// for member. The sixteen shared kinds map by spelling, per
-/// `weaver-diagnostic-Spec` section 3.2, and the payload crosses as the
-/// bytes it would have carried, spliced whole.
+/// The legacy event rendered into the diagnostic one. The sixteen shared
+/// kinds map by spelling and explicitly licensed payload variant. The
+/// converter preserves the supplied session, run and sequence. On submission the
+/// diagnostic writer replaces those three with its own identity and next sequence,
+/// which are the values carried by the emitted record.
 fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
     let kind = match event.envelope.kind {
         Kind::TurnStarted => weaver_diagnostic::Kind::TurnStarted,
@@ -255,6 +284,15 @@ fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
             return Err(RecordFailure::OutsideDiagnosticVocabulary);
         }
     };
+    if !weaver_trace::payload_pairing_licensed(event.envelope.kind, event.payload.as_ref()) {
+        let refusal = match event.payload {
+            None => weaver_diagnostic::SubmitRefusal::RequiredFieldAbsent {
+                field: weaver_diagnostic::FieldName("payload".into()),
+            },
+            Some(_) => weaver_diagnostic::SubmitRefusal::PayloadKindMismatch,
+        };
+        return Err(diagnostic_refusal(refusal));
+    }
     let subsystem = match event.envelope.subsystem {
         Subsystem::Harness => weaver_diagnostic::Subsystem::Harness,
         Subsystem::Spu => weaver_diagnostic::Subsystem::Spu,
@@ -264,10 +302,18 @@ fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
     let payload = match event.payload {
         None => None,
         Some(payload) => {
-            let rendered = serde_json::to_string(&payload)
-                .map_err(|_| RecordFailure::OutsideDiagnosticVocabulary)?;
-            let raw = serde_json::value::RawValue::from_string(rendered)
-                .map_err(|_| RecordFailure::OutsideDiagnosticVocabulary)?;
+            use weaver_trace::Payload as P;
+            let raw = match payload {
+                P::Message(raw)
+                | P::Fault(raw)
+                | P::ModelRequest(raw)
+                | P::ModelMeasurement(raw)
+                | P::Refusal(raw)
+                | P::UnrecoveredCall(raw) => raw,
+                structured => serde_json::value::to_raw_value(&structured).map_err(|_| {
+                    diagnostic_refusal(weaver_diagnostic::SubmitRefusal::PayloadMalformed)
+                })?,
+            };
             Some(weaver_diagnostic::Payload::Spliced(raw))
         }
     };
@@ -276,9 +322,7 @@ fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
             session: weaver_diagnostic::SessionRef(event.envelope.session.0),
             run: weaver_diagnostic::RunRef(event.envelope.run.0),
             turn: event.envelope.turn.map(|t| weaver_diagnostic::TurnRef(t.0)),
-            // The recorder assigns the run-scoped sequence, as the sibling
-            // does.
-            sequence: weaver_diagnostic::Sequence(0),
+            sequence: weaver_diagnostic::Sequence(event.envelope.sequence.0),
             kind,
             subsystem,
             causal_parent: event
@@ -287,6 +331,134 @@ fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
                 .map(|s| weaver_diagnostic::Sequence(s.0)),
             wall_ms: event.envelope.wall_ms,
             monotonic_ns: weaver_diagnostic::MonotonicNs(event.envelope.monotonic_ns.0),
+        },
+        payload,
+    })
+}
+
+fn diagnostic_refusal(refusal: weaver_diagnostic::SubmitRefusal) -> RecordFailure {
+    RecordFailure::Diagnostic(weaver_diagnostic::Failure::SubmitRefused { refusal })
+}
+
+/// DIAGNOSTIC-CONVERT's envelope mapping discards only channel and origin.
+/// Keep this destructure exhaustive so a new envelope field needs a judgment.
+/// Payloads cross through typed legacy counterparts, never a schema-erasing
+/// JSON conversion. The shared legacy checker then verifies their pairing.
+fn convert_shared(
+    event: weaver_trace::serving::Event,
+) -> Result<weaver_diagnostic::Event, RecordFailure> {
+    use weaver_trace::serving::{Kind as K, Payload as P};
+    let weaver_trace::serving::Envelope {
+        session,
+        run,
+        turn,
+        sequence,
+        kind,
+        channel: _,
+        origin: _,
+        subsystem,
+        causal_parent,
+        wall_ms,
+        monotonic_ns,
+    } = event.envelope;
+    let kind = match kind {
+        K::TurnStarted => Kind::TurnStarted,
+        K::TurnClosed => Kind::TurnClosed,
+        K::MessageSystem => Kind::MessageSystem,
+        K::MessageUser => Kind::MessageUser,
+        K::MessageAssistant => Kind::MessageAssistant,
+        K::MessageToolResult => Kind::MessageToolResult,
+        K::ModelRequest => Kind::ModelRequest,
+        K::ModelOutput => Kind::ModelOutput,
+        K::ModelMeasurement => Kind::ModelMeasurement,
+        K::ModelField => Kind::ModelField,
+        K::Flush => Kind::Flush,
+        K::Refusal => Kind::Refusal,
+        K::Fault => Kind::Fault,
+        K::Elision => Kind::Elision,
+        K::ModelUnrecoveredCall => Kind::ModelUnrecoveredCall,
+        // These kinds never belonged to the diagnostic vocabulary. All
+        // unloads refuse, including either or both TRACE-HALT extensions.
+        K::Load
+        | K::Unload
+        | K::SessionClosed
+        | K::MessageRestored
+        | K::Score
+        | K::SavePoint
+        | K::ToolCallStarted
+        | K::ToolCallCompleted
+        | K::ClassifyRequest
+        | K::ClassifyOutput
+        // Serving recall has no legacy RecallAccount payload variant.
+        | K::Recall
+        | K::ToolReturnRejected
+        | K::LoopInstruction
+        | K::SortDecision
+        | K::StateSortMeasurement
+        | K::StepOutcome
+        | K::PlanEvent
+        | K::PlanBreak
+        | K::StatePlanMeasurement
+        | K::StateMark
+        | K::StateMarkPosition
+        | K::StatePlacement
+        | K::InputOffered
+        | K::StateFlow
+        | K::StateStoreMeasurement
+        | K::Ste100Result => return Err(RecordFailure::OutsideDiagnosticVocabulary),
+    };
+    let payload = match event.payload {
+        None => None,
+        Some(payload) => Some(match payload {
+            P::Message(value) => weaver_trace::Payload::Message(value),
+            P::TurnClosed(value) => weaver_trace::Payload::TurnClosed(value),
+            P::Fault(value) => weaver_trace::Payload::Fault(value),
+            P::ModelRequest(value) => weaver_trace::Payload::ModelRequest(value),
+            P::ModelOutput(value) => weaver_trace::Payload::ModelOutput(value),
+            P::ModelField(value) => weaver_trace::Payload::ModelField(value),
+            P::Flush(value) => weaver_trace::Payload::Flush(value),
+            P::Elision(value) => weaver_trace::Payload::Elision(value),
+            P::Refusal(value) => weaver_trace::Payload::Refusal(value),
+            P::ModelMeasurement(value) => weaver_trace::Payload::ModelMeasurement(value),
+            P::UnrecoveredCall(value) => weaver_trace::Payload::UnrecoveredCall(value),
+            P::Unload(_)
+            | P::Elections(_)
+            | P::ClassifyRequest(_)
+            | P::ClassifyOutput(_)
+            | P::Score(_)
+            | P::PairStarted(_)
+            | P::PairEnded(_)
+            | P::RejectedReturn(_)
+            | P::LoopInstruction(_)
+            | P::SortDecision(_)
+            | P::SortMeasurement(_)
+            | P::StepOutcome(_)
+            | P::PlanInput(_)
+            | P::PlanEffect(_)
+            | P::PlanBreak(_)
+            | P::PlanMeasurement(_)
+            | P::StateMark(_)
+            | P::MarkPosition(_)
+            | P::Placement(_)
+            | P::InputOffered(_)
+            | P::FlowObservation(_)
+            | P::StateStoreMeasurement(_)
+            | P::Ste100Result(_)
+            | P::SavePointRecord(_)
+            | P::RecallRecord(_) => return Err(RecordFailure::OutsideDiagnosticVocabulary),
+        }),
+    };
+    convert(Event {
+        envelope: weaver_trace::Envelope {
+            session,
+            run,
+            turn,
+            sequence,
+            kind,
+            subsystem,
+            causal_parent,
+            wall_ms,
+            monotonic_ns,
         },
         payload,
     })

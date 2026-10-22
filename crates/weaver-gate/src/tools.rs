@@ -28,6 +28,7 @@ pub mod confine;
 use crate::channel::{Channel, ChannelFault};
 use cgroup::Tools;
 use confine::Shell;
+use std::collections::BTreeSet;
 use weaver_types::{
     ExchangeId, KillCause, LifecycleRefusal, OrganEnvelope, Payload, Position, ToolExecution,
     ToolOutcome,
@@ -51,21 +52,44 @@ pub fn grant(shell: Shell) {
 
 /// The maximum clock the shell declares, in milliseconds. A caller may ask
 /// for less and never more, per the one-clock rule.
-pub const SHELL_MAX_CLOCK_MS: u64 = 60_000;
+pub use weaver_types::state_flow::SHELL_MAX_CLOCK_MS;
 
 /// The capture bound per pipe. Output past it is drained and discarded so
 /// the pipe empties, and the truncation marks itself in the answer.
 const SHELL_OUTPUT_BOUND: usize = 32 * 1024;
 
-/// Why an execution has no answer: the channel failed, or the gate could not
-/// contain it (`weaver-gate-Spec` section 8), and then it exits with the
-/// execution unanswered so the harness meets its death.
+/// Why an execution has no answer: the channel failed, bounded delivery failed,
+/// or the gate could not contain it (`weaver-gate-Spec` section 8). The gate exits
+/// with the execution unanswered so the harness meets its death.
 #[derive(Debug)]
 pub enum Unanswered {
     Channel(ChannelFault),
+    /// The existing containment deadline expired before this answer was sent.
+    /// This is non-delivery, not evidence that the peer closed its channel.
+    DeliveryBound {
+        exchange: ExchangeId,
+        answer: UndeliveredAnswer,
+    },
     /// The write of `tools/cgroup.kill` failed, or `tools/` did not empty
     /// within the containment bound.
     Uncontained,
+}
+
+/// Which retained answer could not cross the channel within the original bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndeliveredAnswer {
+    ToolAnswer,
+    OutOfOrder,
+}
+
+/// An execution has finished containment, but its answer has not crossed the
+/// channel yet. Only send_answer consumes this owner, so a pending unload may
+/// still become flow_failure before the actual send. The existing containment
+/// deadline travels with it and is never renewed by channel pressure.
+#[derive(Debug)]
+pub struct ExecutionAnswer {
+    outcome: ToolOutcome,
+    containment_deadline: Option<std::time::Instant>,
 }
 
 /// Execute one call in the `tools/` entry adopted, answering one of the
@@ -74,23 +98,37 @@ pub fn execute(
     execution: &ToolExecution,
     channel: &Channel,
     exchange: &ExchangeId,
-) -> Result<ToolOutcome, Unanswered> {
+    answered_tools: &BTreeSet<u64>,
+) -> Result<ExecutionAnswer, Unanswered> {
     // **An absent grant is no shell** (`weaver-gate-Spec` section 3, #29):
     // every execution refuses by name with nothing run.
     let Some(shell) = GRANTED.get() else {
-        return Ok(ToolOutcome::Refused {
-            reason: format!(
-                "no tool is granted to this agent - its declaration elects none, so {} is not held",
-                execution.name.0
-            ),
+        return Ok(ExecutionAnswer {
+            outcome: ToolOutcome::Refused {
+                reason: format!(
+                    "no tool is granted to this agent - its declaration elects none, so {} is not held",
+                    execution.name.0
+                ),
+            },
+            containment_deadline: None,
         });
     };
     match cgroup::adopted() {
-        Some(tools) => execute_in(execution, channel, exchange, tools, shell),
+        Some(tools) => execute_answer_in(
+            execution,
+            channel,
+            exchange,
+            tools,
+            shell,
+            Some(answered_tools),
+        ),
         // Entry refuses a gate with no handle, so no execution reaches here
         // without one; answered as the machinery's all the same.
-        None => Ok(ToolOutcome::Errored {
-            detail: "no tools/ cgroup was handed to the gate".to_string(),
+        None => Ok(ExecutionAnswer {
+            outcome: ToolOutcome::Errored {
+                detail: "no tools/ cgroup was handed to the gate".to_string(),
+            },
+            containment_deadline: None,
         }),
     }
 }
@@ -98,6 +136,7 @@ pub fn execute(
 /// [`execute`] in a named `tools/`: the one adopted, or the suite's
 /// scratch one. Not public: no caller outside this crate may run a shell in
 /// any `tools/` but the one entry adopted at descriptor 4.
+#[cfg(test)]
 pub(crate) fn execute_in(
     execution: &ToolExecution,
     channel: &Channel,
@@ -105,19 +144,45 @@ pub(crate) fn execute_in(
     tools: &Tools,
     shell: &Shell,
 ) -> Result<ToolOutcome, Unanswered> {
-    execute_inner(execution, channel, exchange, tools, shell).or_else(|end| match end {
-        ShellEnd::Channel(fault) => Err(Unanswered::Channel(fault)),
-        ShellEnd::Uncontained => Err(Unanswered::Uncontained),
-        other => Ok(other.into_outcome()),
-    })
+    execute_answer_in(execution, channel, exchange, tools, shell, None).map(|answer| answer.outcome)
 }
 
-fn execute_inner(
+fn execute_answer_in(
     execution: &ToolExecution,
     channel: &Channel,
     exchange: &ExchangeId,
     tools: &Tools,
     shell: &Shell,
+    answered_tools: Option<&BTreeSet<u64>>,
+) -> Result<ExecutionAnswer, Unanswered> {
+    let mut containment_deadline = None;
+    let outcome = execute_inner(
+        execution,
+        Supervision::with_answered(channel, exchange, answered_tools),
+        tools,
+        shell,
+        &mut containment_deadline,
+    )
+    .or_else(|end| match end {
+        ShellEnd::Channel(fault) => Err(Unanswered::Channel(fault)),
+        ShellEnd::DeliveryBound { exchange, answer } => {
+            Err(Unanswered::DeliveryBound { exchange, answer })
+        }
+        ShellEnd::Uncontained => Err(Unanswered::Uncontained),
+        other => Ok(other.into_outcome()),
+    })?;
+    Ok(ExecutionAnswer {
+        outcome,
+        containment_deadline,
+    })
+}
+
+fn execute_inner(
+    execution: &ToolExecution,
+    supervision: Supervision<'_>,
+    tools: &Tools,
+    shell: &Shell,
+    containment_deadline: &mut Option<std::time::Instant>,
 ) -> Result<ToolOutcome, ShellEnd> {
     if execution.name.0 != SHELL_NAME {
         return Ok(ToolOutcome::Refused {
@@ -153,9 +218,9 @@ fn execute_inner(
         command,
         shell,
         std::time::Duration::from_millis(execution.clock_ms),
-        channel,
-        exchange,
+        supervision,
         tools,
+        containment_deadline,
     ) {
         Ok(content) => Ok(ToolOutcome::Result { content }),
         Err(end) => Err(end),
@@ -166,6 +231,7 @@ fn execute_inner(
 /// or the clock/cancel killed the group, or the channel failed. The split is the
 /// contract's - the speaker differs - and the conversion to the wire's
 /// contents happens here so `run_in_home` stays a plain function.
+#[derive(Debug)]
 enum ShellEnd {
     Errored {
         detail: String,
@@ -175,6 +241,10 @@ enum ShellEnd {
         by: KillCause,
     },
     Channel(ChannelFault),
+    DeliveryBound {
+        exchange: ExchangeId,
+        answer: UndeliveredAnswer,
+    },
     /// The kill of `tools/` failed or did not empty it within the bound.
     Uncontained,
 }
@@ -184,7 +254,7 @@ impl ShellEnd {
         match self {
             ShellEnd::Errored { detail } => ToolOutcome::Errored { detail },
             ShellEnd::Killed { partial, by } => ToolOutcome::Killed { partial, by },
-            ShellEnd::Channel(_) | ShellEnd::Uncontained => {
+            ShellEnd::Channel(_) | ShellEnd::DeliveryBound { .. } | ShellEnd::Uncontained => {
                 unreachable!("an unanswered end stays below the exchange")
             }
         }
@@ -197,9 +267,9 @@ fn run_in_home(
     command: &str,
     shell_program: &Shell,
     deadline: std::time::Duration,
-    channel: &Channel,
-    exchange: &ExchangeId,
+    mut supervision: Supervision<'_>,
     tools: &Tools,
+    containment_deadline: &mut Option<std::time::Instant>,
 ) -> Result<String, ShellEnd> {
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
@@ -264,7 +334,7 @@ fn run_in_home(
                     break Ok(Some(KillCause::Clock));
                 }
                 let slice = remaining.min(std::time::Duration::from_millis(25));
-                match supervision_wait(channel, exchange, slice) {
+                match supervision.wait(slice) {
                     Ok(Some(by)) => break Ok(Some(by)),
                     Ok(None) => {}
                     Err(fault) => break Err(ShellEnd::Channel(fault)),
@@ -290,7 +360,15 @@ fn run_in_home(
     // exchange completes within the caller's number plus the bound, as 6.1's
     // table states, never plus twice it.
     let deadline = std::time::Instant::now() + cgroup::CONTAINMENT_BOUND;
-    let contained = tools.contain(cgroup::CONTAINMENT_BOUND);
+    *containment_deadline = Some(deadline);
+    let mut supervision = ContainmentSupervisor::new(supervision, ending, deadline);
+    let killed = tools.kill().is_ok();
+    #[cfg(test)]
+    if killed {
+        interrupt_tests::containment_entered();
+    }
+    let contained =
+        killed && tools.wait_empty_until_with(deadline, |slice| supervision.wait(slice));
     // **The leader is signalled by its pid, then reaped within the bound**
     // (Codex on #167): the shell runs as the agent's account and may have
     // moved itself out of `tools/` (6.1, C1's first stated exception), where
@@ -300,7 +378,9 @@ fn run_in_home(
     // execution not contained.
     let reaped = if contained {
         let _ = nix::sys::signal::kill(group, nix::sys::signal::Signal::SIGKILL);
-        reap_within(&mut child, deadline)
+        #[cfg(test)]
+        delivery_tests::reap_entered(deadline);
+        reap_supervised(&mut child, &mut supervision)
     } else {
         None
     };
@@ -319,7 +399,7 @@ fn run_in_home(
         return Err(ShellEnd::Uncontained);
     };
     let drained = finish_draining(&finished, out_reader, err_reader);
-    let killed_by = ending?;
+    let killed_by = supervision.finish()?;
     let status = reaped.map_err(|error| ShellEnd::Errored {
         detail: format!("the supervision failed: {error}"),
     })?;
@@ -356,56 +436,332 @@ fn run_in_home(
 fn reap_within(
     child: &mut std::process::Child,
     deadline: std::time::Instant,
+    mut progress: impl FnMut(std::time::Duration),
 ) -> Option<std::io::Result<std::process::ExitStatus>> {
     loop {
+        progress(std::time::Duration::ZERO);
         match child.try_wait() {
             Ok(Some(status)) => return Some(Ok(status)),
             Ok(None) => {}
             Err(error) => return Some(Err(error)),
         }
-        if std::time::Instant::now() >= deadline {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
             return None;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        progress(remaining.min(std::time::Duration::from_millis(10)));
     }
 }
 
-/// Wait for a cancel or the unload's interrupt without postponing the next
-/// unreaped exit check, answering which one ended the execution: the cancel,
-/// or the interrupt, which ends it by the same path and names the unload
-/// (`weaver-harness-gate-contract` section 2).
-fn supervision_wait(
-    channel: &Channel,
-    exchange: &ExchangeId,
-    slice: std::time::Duration,
-) -> Result<Option<KillCause>, ChannelFault> {
-    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
-    let mut fds = [PollFd::new(channel.as_fd(), PollFlags::POLLIN)];
-    let timeout = PollTimeout::try_from(slice).expect("the supervision slice fits poll");
-    // Test-only hook kept here (#118): tells the supervision tests the poll wait is entered.
+/// Keep the actual leader-reap path and its channel progress under one bound.
+/// Every progress call inherits the supervisor's stored deadline. The actual
+/// run_in_home path also has a delegated child/socket regression.
+fn reap_supervised(
+    child: &mut std::process::Child,
+    supervision: &mut ContainmentSupervisor<'_>,
+) -> Option<std::io::Result<std::process::ExitStatus>> {
+    let deadline = supervision.deadline;
+    reap_within(child, deadline, |slice| supervision.wait(slice))
+}
+
+/// One bounded channel operation per slice. A misplaced frame retains one
+/// refusal until writable instead of blocking containment in Channel::send.
+struct Supervision<'a> {
+    channel: &'a Channel,
+    exchange: &'a ExchangeId,
+    answered_tools: Option<&'a BTreeSet<u64>>,
+    pending_refusal: Option<OrganEnvelope>,
+    progressed: bool,
+}
+
+impl<'a> Supervision<'a> {
     #[cfg(test)]
-    tests::wait_entered();
-    match poll(&mut fds, timeout) {
-        Ok(0) | Err(nix::errno::Errno::EINTR) => return Ok(None),
-        Err(_) => return Err(ChannelFault::Closed),
-        Ok(_) => {}
+    fn new(channel: &'a Channel, exchange: &'a ExchangeId) -> Self {
+        Self::with_answered(channel, exchange, None)
     }
-    let envelope = channel.recv()?;
-    if envelope.exchange == *exchange && envelope.position == Position::Continue {
-        match envelope.payload {
-            Payload::ToolCancel => return Ok(Some(KillCause::Cancel)),
-            Payload::ToolInterrupt => return Ok(Some(KillCause::Unload)),
-            _ => {}
+
+    fn with_answered(
+        channel: &'a Channel,
+        exchange: &'a ExchangeId,
+        answered_tools: Option<&'a BTreeSet<u64>>,
+    ) -> Self {
+        Self {
+            channel,
+            exchange,
+            answered_tools,
+            pending_refusal: None,
+            progressed: false,
         }
     }
-    // A misplaced message is refused as at rest. Continue supervising the
-    // live group regardless, and never let a bad sender bypass cleanup.
-    channel.send(&OrganEnvelope {
-        exchange: envelope.exchange,
-        position: Position::Close,
-        payload: Payload::Refusal(LifecycleRefusal::OutOfOrder),
-    })?;
-    Ok(None)
+
+    fn wait(&mut self, slice: std::time::Duration) -> Result<Option<KillCause>, ChannelFault> {
+        self.wait_for_delivery(slice, None)
+    }
+
+    fn wait_for_delivery(
+        &mut self,
+        slice: std::time::Duration,
+        delivery_deadline: Option<std::time::Instant>,
+    ) -> Result<Option<KillCause>, ChannelFault> {
+        use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+        self.progressed = false;
+        let interest = if self.pending_refusal.is_some() {
+            PollFlags::POLLOUT
+        } else {
+            PollFlags::POLLIN
+        };
+        let mut fds = [PollFd::new(self.channel.as_fd(), interest)];
+        let timeout = PollTimeout::try_from(slice).expect("the supervision slice fits poll");
+        #[cfg(test)]
+        tests::wait_entered();
+        match poll(&mut fds, timeout) {
+            Ok(0) | Err(nix::errno::Errno::EINTR) => return Ok(None),
+            Err(_) => return Err(ChannelFault::Closed),
+            Ok(_) => {}
+        }
+        if let Some(refusal) = &self.pending_refusal {
+            // Poll may return after the original bound. Preserve a transport
+            // failure already observed, but never start a late refusal send.
+            if fds[0].revents().is_some_and(|events| {
+                events.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL)
+            }) {
+                return Err(ChannelFault::Closed);
+            }
+            if delivery_deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+                return Ok(None);
+            }
+            if self.channel.try_send(refusal)? {
+                self.pending_refusal = None;
+                self.progressed = true;
+            }
+            return Ok(None);
+        }
+        let envelope = self.channel.recv()?;
+        self.progressed = true;
+        // The cause is closed independently of position and correlation. A
+        // known but invalid kill cause is a protocol fault, never a refusal.
+        if let Payload::ToolInterrupt { by } = &envelope.payload
+            && !matches!(by, KillCause::Unload | KillCause::FlowFailure)
+        {
+            return Err(ChannelFault::Undecodable);
+        }
+        // A control can cross an answer and arrive during the next execution.
+        // The successful-send set survives that boundary. Discard only a valid
+        // control for that exact answered harness exchange, never a new close.
+        if envelope.exchange.opener == weaver_types::Opener::Harness
+            && envelope.position == Position::Continue
+            && matches!(
+                &envelope.payload,
+                Payload::ToolCancel | Payload::ToolInterrupt { .. }
+            )
+            && self
+                .answered_tools
+                .is_some_and(|answered| answered.contains(&envelope.exchange.ordinal))
+        {
+            return Ok(None);
+        }
+        if envelope.exchange == *self.exchange && envelope.position == Position::Continue {
+            match envelope.payload {
+                Payload::ToolCancel => return Ok(Some(KillCause::Cancel)),
+                Payload::ToolInterrupt { by } => return Ok(Some(by)),
+                _ => {}
+            }
+        }
+        self.pending_refusal = Some(OrganEnvelope {
+            exchange: envelope.exchange,
+            position: Position::Close,
+            payload: Payload::Refusal(LifecycleRefusal::OutOfOrder),
+        });
+        Ok(None)
+    }
+}
+
+/// Containment does not elect another outcome. Only an unsent unload kill can
+/// be upgraded, and transport failure must still allow the cleanup to finish.
+struct ContainmentSupervisor<'a, D = std::time::Instant> {
+    supervision: Supervision<'a>,
+    ending: Result<Option<KillCause>, ShellEnd>,
+    channel_failed: bool,
+    deadline: D,
+}
+
+// Actual containment always stores an Instant. Only answer delivery may retain
+// None, for an ExecutionAnswer that refused before any process was started.
+trait DeliveryDeadline {
+    fn deadline(&self) -> Option<std::time::Instant>;
+}
+impl DeliveryDeadline for std::time::Instant {
+    fn deadline(&self) -> Option<std::time::Instant> {
+        Some(*self)
+    }
+}
+impl DeliveryDeadline for Option<std::time::Instant> {
+    fn deadline(&self) -> Option<std::time::Instant> {
+        *self
+    }
+}
+
+impl<'a> ContainmentSupervisor<'a> {
+    fn new(
+        supervision: Supervision<'a>,
+        ending: Result<Option<KillCause>, ShellEnd>,
+        deadline: std::time::Instant,
+    ) -> Self {
+        let channel_failed = matches!(ending, Err(ShellEnd::Channel(_)));
+        Self {
+            supervision,
+            ending,
+            channel_failed,
+            deadline,
+        }
+    }
+}
+
+impl<'a> ContainmentSupervisor<'a, Option<std::time::Instant>> {
+    fn for_answer(
+        supervision: Supervision<'a>,
+        ending: Result<Option<KillCause>, ShellEnd>,
+        deadline: Option<std::time::Instant>,
+    ) -> Self {
+        let channel_failed = matches!(ending, Err(ShellEnd::Channel(_)));
+        Self {
+            supervision,
+            ending,
+            channel_failed,
+            deadline,
+        }
+    }
+}
+
+impl<D: DeliveryDeadline> ContainmentSupervisor<'_, D> {
+    fn wait(&mut self, slice: std::time::Duration) {
+        if self.channel_failed {
+            std::thread::sleep(slice);
+            return;
+        }
+        match self
+            .supervision
+            .wait_for_delivery(slice, self.deadline.deadline())
+        {
+            Ok(Some(KillCause::FlowFailure))
+                if matches!(self.ending, Ok(Some(KillCause::Unload))) =>
+            {
+                self.ending = Ok(Some(KillCause::FlowFailure));
+            }
+            Ok(_) => {}
+            Err(fault) => {
+                self.ending = Err(ShellEnd::Channel(fault));
+                self.channel_failed = true;
+            }
+        }
+    }
+}
+
+impl ContainmentSupervisor<'_> {
+    fn finish(mut self) -> Result<Option<KillCause>, ShellEnd> {
+        let deadline = self.deadline;
+        // Drain controls already readable before choosing the unsent answer.
+        // An endless stream cannot move the one original containment deadline.
+        while !self.channel_failed && std::time::Instant::now() < deadline {
+            self.wait(std::time::Duration::ZERO);
+            if !self.supervision.progressed {
+                if self.supervision.pending_refusal.is_none() {
+                    break;
+                }
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                self.wait(remaining.min(std::time::Duration::from_millis(10)));
+            }
+        }
+        if !self.channel_failed
+            && let Some(refusal) = &self.supervision.pending_refusal
+        {
+            return Err(ShellEnd::DeliveryBound {
+                exchange: refusal.exchange.clone(),
+                answer: UndeliveredAnswer::OutOfOrder,
+            });
+        }
+        self.ending
+    }
+}
+
+/// Deliver a contained outcome once. An unload remains revisable until the
+/// actual datagram send succeeds, including while socket capacity is absent.
+/// There is no new kill clock or fresh containment interval at this boundary.
+/// The contract bounds completion, so even the first send is refused at expiry.
+pub fn send_answer(
+    channel: &Channel,
+    exchange: &ExchangeId,
+    mut answer: ExecutionAnswer,
+    answered_tools: &BTreeSet<u64>,
+) -> Result<(), Unanswered> {
+    let ending = match &answer.outcome {
+        ToolOutcome::Killed { by, .. } => Some(*by),
+        _ => None,
+    };
+    let mut supervision = ContainmentSupervisor::for_answer(
+        Supervision::with_answered(channel, exchange, Some(answered_tools)),
+        Ok(ending),
+        answer.containment_deadline,
+    );
+    loop {
+        // A fault already observed during the preceding bounded wait keeps
+        // its identity, even when that wait returned at the deadline.
+        if supervision.channel_failed {
+            let Err(ShellEnd::Channel(fault)) = supervision.ending else {
+                unreachable!("a failed channel retains its exact fault")
+            };
+            return Err(Unanswered::Channel(fault));
+        }
+        if answer
+            .containment_deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            let (exchange, answer) = match &supervision.supervision.pending_refusal {
+                Some(refusal) => (&refusal.exchange, UndeliveredAnswer::OutOfOrder),
+                None => (exchange, UndeliveredAnswer::ToolAnswer),
+            };
+            return Err(Unanswered::DeliveryBound {
+                exchange: exchange.clone(),
+                answer,
+            });
+        }
+        supervision.wait(std::time::Duration::ZERO);
+        if supervision.channel_failed {
+            continue;
+        }
+        if supervision.supervision.progressed {
+            continue;
+        }
+        if supervision.supervision.pending_refusal.is_none() {
+            if let (ToolOutcome::Killed { by, .. }, Ok(Some(current))) =
+                (&mut answer.outcome, &supervision.ending)
+            {
+                *by = *current;
+            }
+            let envelope = OrganEnvelope {
+                exchange: exchange.clone(),
+                position: Position::Close,
+                payload: Payload::ToolAnswer(answer.outcome.clone()),
+            };
+            // Even a zero-time poll, control parse or envelope clone can
+            // cross the bound. Recheck immediately before the first write.
+            if answer
+                .containment_deadline
+                .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            {
+                continue;
+            }
+            if channel.try_send(&envelope).map_err(Unanswered::Channel)? {
+                return Ok(());
+            }
+        }
+        let slice = answer
+            .containment_deadline
+            .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap_or(std::time::Duration::from_millis(10))
+            .min(std::time::Duration::from_millis(10));
+        supervision.wait(slice);
+    }
 }
 
 /// Captured bytes from one pipe. I/O failure travels as an error, never as
@@ -520,3 +876,11 @@ fn drain_bounded(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "tools/interrupt_tests.rs"]
+mod interrupt_tests;
+
+#[cfg(test)]
+#[path = "tools/delivery_tests.rs"]
+mod delivery_tests;

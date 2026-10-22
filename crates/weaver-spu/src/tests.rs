@@ -365,6 +365,7 @@ fn open() -> TokenDirective {
 
 fn append() -> TokenDirective {
     TokenDirective::AppendAndGenerate {
+        tool_schemas: vec![],
         turn: weaver_types::TurnKey("t-1".into()),
         delta: vec![],
     }
@@ -404,6 +405,11 @@ fn a_directive_before_any_open_answers_not_open() {
             turn: weaver_types::TurnKey("t-1".into()),
         },
         TokenDirective::Flush { keep: 0 },
+        TokenDirective::MeasureDelta {
+            keep: 0,
+            delta: vec![],
+            tool_schemas: vec![],
+        },
     ] {
         assert_eq!(
             judge_decode(DecodePosition::BeforeOpen, true, &directive),
@@ -430,8 +436,8 @@ fn a_second_open_refuses_rather_than_rewinding_on_the_seam() {
 /// alone.
 ///
 /// What this reads is the refusal arriving at the seam's own vocabulary,
-/// so it exercises the family's render and the [`From`] that carries its
-/// answer across. The role arm's wildcard is the future's alone and no
+/// so it exercises the live generation preparation and refusal mapping,
+/// before tokenization. The role arm's wildcard is the future's alone and no
 /// test can construct its subject, `Role` being non-exhaustive with every
 /// current case rendered by the families that call the shared name kernel.
 #[test]
@@ -444,8 +450,16 @@ fn a_non_text_block_refuses_as_malformed_delta() {
         })],
     };
     assert_eq!(
-        render_delta(family::qwen2::renderer(), &[message]),
-        Err(TokenRefusal::MalformedDelta),
+        placement::prepare_generation(
+            family::qwen2::renderer(),
+            family::qwen2::GENERATION_OPENER,
+            &[message],
+            &[],
+            |_| panic!("malformed input reached tokenization"),
+        ),
+        Err(placement::PlacementFailure::Render(
+            TokenRefusal::MalformedDelta
+        )),
     );
 }
 
@@ -469,8 +483,16 @@ fn gemma4_refuses_a_tool_result_rather_than_inventing_a_turn() {
         }],
     };
     assert_eq!(
-        render_delta(family::gemma4::renderer(), &[message]),
-        Err(TokenRefusal::MalformedDelta),
+        placement::prepare_generation(
+            family::gemma4::renderer(),
+            family::gemma4::GENERATION_OPENER,
+            &[message],
+            &[],
+            |_| panic!("unrenderable tool result reached tokenization"),
+        ),
+        Err(placement::PlacementFailure::Render(
+            TokenRefusal::MalformedDelta
+        )),
     );
 
     // The contrast, so this reads as a distinction rather than as a family
@@ -482,7 +504,19 @@ fn gemma4_refuses_a_tool_result_rather_than_inventing_a_turn() {
             content: "42".to_string(),
         })],
     };
-    assert!(render_delta(family::qwen2::renderer(), &[message]).is_ok());
+    let mut tokenized = false;
+    let prepared = placement::prepare_generation(
+        family::qwen2::renderer(),
+        family::qwen2::GENERATION_OPENER,
+        &[message],
+        &[],
+        |_| {
+            tokenized = true;
+            Ok(vec![])
+        },
+    );
+    assert!(prepared.is_ok());
+    assert!(tokenized, "a renderable tool result reaches tokenization");
 }
 
 /// At rest, a cancel and a flush are both in order for the seam: the
@@ -490,6 +524,18 @@ fn gemma4_refuses_a_tool_result_rather_than_inventing_a_turn() {
 /// answer and not this judgment's refusal.
 #[test]
 fn cancel_and_flush_are_in_order_at_rest() {
+    assert_eq!(
+        judge_decode(
+            DecodePosition::AtRest,
+            true,
+            &TokenDirective::MeasureDelta {
+                keep: u64::MAX,
+                delta: vec![],
+                tool_schemas: vec!["schema".into()],
+            },
+        ),
+        None
+    );
     assert_eq!(
         judge_decode(
             DecodePosition::AtRest,
@@ -508,6 +554,63 @@ fn cancel_and_flush_are_in_order_at_rest() {
         ),
         None
     );
+}
+
+#[test]
+fn active_decode_refuses_measurement_without_cancelling_or_queuing_it() {
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, setsockopt, socketpair};
+    use nix::sys::time::TimeVal;
+    use weaver_spu::channel::decode_from_owned;
+
+    let (client, server) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+    setsockopt(
+        &client,
+        nix::sys::socket::sockopt::ReceiveTimeout,
+        &TimeVal::new(2, 0),
+    )
+    .unwrap();
+    let client = decode_from_owned(client);
+    let server = decode_from_owned(server);
+    client
+        .send_octets(
+            &serde_json::to_vec(&TokenDirective::MeasureDelta {
+                keep: 0,
+                delta: vec![],
+                tool_schemas: vec!["schema".into()],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    // This is the same poll used by active generation and diagnostic re-feed.
+    let mut poll = SeamCancel {
+        socket: &server,
+        cancelled: false,
+        fatal: false,
+    };
+    assert!(!poll.cancelled());
+    assert!(!poll.cancelled && !poll.fatal);
+    assert_eq!(
+        serde_json::from_slice::<TokenRefusal>(&client.recv_octets().unwrap()).unwrap(),
+        TokenRefusal::OutOfOrder,
+    );
+    assert!(client.try_recv_octets().unwrap().is_none());
+    assert!(!poll.cancelled());
+    client
+        .send_octets(
+            &serde_json::to_vec(&TokenDirective::Cancel {
+                turn: weaver_types::TurnKey("active".into()),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    assert!(poll.cancelled());
+    assert!(poll.cancelled && !poll.fatal);
 }
 
 /// **The report crosses on the answer**, per Spec section 10 on the

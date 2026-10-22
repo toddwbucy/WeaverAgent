@@ -7,7 +7,7 @@ Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-spu-Spec`
 **Parent:** `weaver-spu-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #141
+**Landing PR:** #232
 
 ---
 
@@ -344,6 +344,12 @@ argued and this crate inherits: the calls are `recvmsg`, `fcntl`, the dumpable
 backend's weights, `half` and `bytemuck` for host-side tensor math,
 `tokenizers` for the artifacts' tokenizers, `blake3` and `walkdir` for the weights
 hash of section 3.
+
+`sha2` supplies SHA-256 for the STE100 scheme, grammar blobs, model manifest and
+manifest-named files under state-management Spec 02 SCHEME and DECLARATION. It uses
+the workspace lock's existing 0.10 package. The older weight-container BLAKE3
+identity keeps its separate meaning. The admission tests pin exact-byte hashing and
+refuse mutated blobs and files before a compiled adapter receives them.
 
 **What does not cross, from a working tree that had it.** No HTTP client and no
 model downloader: an artifact this crate cannot reach is a refused admit, per
@@ -2073,18 +2079,24 @@ the operator's ruling of 2026-08-10.** The organ originates the service, so the
 organ declares the vocabulary, and the trace's block takes what the organ
 declares with the harness converting nothing and inventing nothing. The names
 are functionally descriptive, saying what a span does in the render, and the
-declared set is what the render produces today and nothing more:
-`turn-delta`, one span per appended turn in append order. The identity
-prefix's own span, `identity-prefix`, arrives with the act that renders the
-prefix into a measurement, named here in that act, the open exchange
-producing no measurement today for a span to sit in. **The
-binding property is consistency rather than the set:** the same span kind
+declared set is `turn-delta`, one span per appended turn in append order,
+and `identity-prefix`, one span covering the complete Open identity render.
+The latter applies at the [foundation cutover][open-cutover] through
+[SPU-OPEN][open-facts], whose separate Open measurement has no output or
+generation readings. Before that coupled cutover, Open retains its previous
+contract and emits no measurement. **The binding property is consistency
+rather than the set:** the same span kind
 carries the same label in every measurement this seam ever emits, and a new
 span kind arrives with the act that renders it, named in this list in the same
 act, so a label appearing in a measurement and absent here is a defect in one
 of them. The declaration rides the partition's existing record: what the
 labels are is stated here, and that the partition they label covers exactly is
 the assertion above.
+
+[open-cutover]:
+../state-management/state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
+[open-facts]:
+../state-management/weaver-spu-Spec-amendment.md
 
 ```graph
 node: spu-prompt-partition-covers-exactly

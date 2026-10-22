@@ -3,7 +3,7 @@
 //! The granted tool result, per `weaver-harness-Spec` section 6 and the tool
 //! workflow's opening act: the loop closes at the type level here.
 //!
-//! **The grant is constructed through one door, at four sites in the one
+//! **The legacy grant is constructed through one door, at four sites in the one
 //! function that closes a call** (`weaver-harness-Spec` section 6):
 //! - the completion of the execution exchange of
 //!   `weaver-harness-gate-contract` section 2, whichever of its four contents
@@ -19,6 +19,12 @@
 //! that could not author a tool-result turn would leave the conversation with
 //! a hole where the answer goes.
 //!
+//! The replacement pair port grants a result only after its exact statement,
+//! opening and terminal commits. Its one `granted` call site owns the received
+//! outcome through that final receipt. It also constructs a harness-authored
+//! non-dispatch notice, through one `not_dispatched` call site. Both stay behind
+//! the coupled cutover while the legacy path remains live.
+//!
 //! **Three negatives, each a compile property**, the `PeerIdentity` pattern
 //! one seam over: the gate exchange supplies it and no code asserts it.
 //!
@@ -30,7 +36,7 @@
 //! de::<weaver_harness::ToolResult>();
 //! ```
 //!
-//! No public construction: the fields are private and the one constructor is
+//! No public construction: the fields are private and each constructor is
 //! `pub(crate)`, so the struct literal below does not compile and no public
 //! function returns one from anything a consumer can supply.
 //!
@@ -113,20 +119,41 @@ use weaver_types::ToolOutcome;
 /// they do not, a model that answers every result with one more call.
 pub(crate) const MAX_TOOL_ROUNDS: usize = 32;
 
-/// A tool result the gate exchange granted.
+/// A tool result granted by the gate exchange or committed pair coordinator.
 ///
-/// Obtainable from that exchange's completion alone, per the module note. The
+/// Obtainable from the completion paths in the module note. The
 /// interior is deliberately not public: nobody inspects a tool result's
 /// fields to know it came through the gate - holding the value is the proof,
 /// which is what box granularity means.
+#[derive(Debug)]
 pub struct ToolResult {
     content: String,
 }
 
 impl ToolResult {
-    /// The one door, crate-private: called at the four sites of
-    /// `Engine::execute_call` that close a call (the module's header) and
-    /// nowhere else, which `tests/manifest.rs` pins.
+    /// The replacement pair coordinator calls this once, only after its real
+    /// terminal receipt. It carries a harness notice, never a gate outcome.
+    /// No constructor is exported to the model, wire, or replay reader.
+    pub(crate) fn not_dispatched(cause: weaver_types::state_flow::NonDispatchCause) -> Self {
+        use weaver_types::state_flow::NonDispatchCause as Cause;
+        let reason = match cause {
+            Cause::PassPurpose => "this pass does not permit execution",
+            Cause::RepairExhausted => "the statement repair limit was reached",
+            Cause::PlanBreak => "the request does not fit the locked plan",
+            Cause::RoundLimit => "the tool round limit was reached",
+            Cause::Stop => "the operator stopped the turn",
+            Cause::Unload => "the agent is unloading",
+            Cause::NoGate => "no gate is available",
+        };
+        Self {
+            content: format!("The harness did not dispatch this call: {reason}."),
+        }
+    }
+
+    /// Crate-private: four legacy sites in `Engine::execute_call` and one
+    /// replacement site in the pair owner's `install_terminal`. The manifest
+    /// recursively pins those sites across the crate. The replacement requires
+    /// the exact terminal commit before construction.
     ///
     /// Every outcome becomes renderable content, in words the model reasons
     /// over, whichever of the exchange's four contents arrived: a result is
@@ -134,37 +161,7 @@ impl ToolResult {
     /// names its cause and carries what drained before it - marked as
     /// partial, so a fragment cannot read as an answer.
     pub(crate) fn granted(outcome: &ToolOutcome) -> ToolResult {
-        let content = match outcome {
-            ToolOutcome::Result { content } => content.clone(),
-            ToolOutcome::Refused { reason } => {
-                format!("the call was refused: {reason}")
-            }
-            ToolOutcome::Errored { detail } => {
-                format!("the tool machinery failed: {detail}")
-            }
-            ToolOutcome::Killed { partial, by } => {
-                let ending = match by {
-                    weaver_types::KillCause::Clock => {
-                        "the command ran past the clock and was killed"
-                    }
-                    weaver_types::KillCause::Cancel => {
-                        "the command was killed by the operator's stop"
-                    }
-                    weaver_types::KillCause::Unload => {
-                        "the command was interrupted by the agent's unload"
-                    }
-                    weaver_types::KillCause::Fault => {
-                        "the gate failed with the command open, and its outcome is unknown"
-                    }
-                };
-                match partial {
-                    Some(partial) => {
-                        format!("{ending}. Partial output before the kill:\n{partial}")
-                    }
-                    None => format!("{ending}, with no output before the kill"),
-                }
-            }
-        };
+        let content = outcome_content(outcome);
         ToolResult { content }
     }
 
@@ -174,6 +171,40 @@ impl ToolResult {
     pub(crate) fn block(&self) -> ToolResultBlock {
         ToolResultBlock {
             content: self.content.clone(),
+        }
+    }
+}
+
+/// Pure presentation shared with held records; this creates no live tool grant.
+pub(crate) fn outcome_content(outcome: &ToolOutcome) -> String {
+    match outcome {
+        ToolOutcome::Result { content } => content.clone(),
+        ToolOutcome::Refused { reason } => {
+            format!("the call was refused: {reason}")
+        }
+        ToolOutcome::Errored { detail } => {
+            format!("the tool machinery failed: {detail}")
+        }
+        ToolOutcome::Killed { partial, by } => {
+            let ending = match by {
+                weaver_types::KillCause::Clock => "the command ran past the clock and was killed",
+                weaver_types::KillCause::Cancel => "the command was killed by the operator's stop",
+                weaver_types::KillCause::Unload => {
+                    "the command was interrupted by the agent's unload"
+                }
+                weaver_types::KillCause::FlowFailure => {
+                    "the command was contained after the agent's state flow failed"
+                }
+                weaver_types::KillCause::Fault => {
+                    "the gate failed with the command open, and its outcome is unknown"
+                }
+            };
+            match partial {
+                Some(partial) => {
+                    format!("{ending}. Partial output before the kill:\n{partial}")
+                }
+                None => format!("{ending}, with no output before the kill"),
+            }
         }
     }
 }

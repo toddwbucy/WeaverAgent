@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #241
 
-**Version:** 0.22 **Date filed:** 2026-10-20 **Parent:** weaver-types-PRD
+**Version:** 0.28 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -121,6 +121,14 @@ representation defined above. The TOML form is kebab-case, the wire form snake_c
 There is one decision_wait, under ste100, not another flow key. [CLASS-2, CLASS-6,
 CLASS-8, CLASS-9]
 
+Within Ste100Instruction, model_binding.artifact must be an absolute pathname for
+Spec 02's exact manifest file under MANIFEST-LOCATOR. Keep ModelBinding and
+ArtifactRef's shared shape and existing syntax judgment, with this duty's added
+absolute-path requirement. Filesystem resolution and named-file digest checks belong
+to SPU admission. Neither the declaration codec nor the wire rewrites this locator
+to a directory. Decoder and legacy ClassifyInstruction bindings are unchanged.
+[CLASS-2, CLASS-7, SEAM-2]
+
 ToolPolicies is a closed map with sh as its only possible key. ToolPolicy has
 clock_ms:u64 and measurement_ref:String. Require a nonempty reference and a clock in
 1..=SHELL_MAX_CLOCK_MS. Move that existing 60000 ms ceiling into the shared tool
@@ -214,6 +222,18 @@ Optional rule_id and path are omitted. Stage/code combinations are closed:
 | template | template_rejected, template_failed, scheme_mismatch |
 | open | open_failed, scheme_mismatch |
 | serving | invalid_span |
+
+Spec 02 DECLARATION maps checker admission scheme_mismatch to template/scheme_mismatch
+and the other admission codes, including unsupported_artifact, to
+template/template_failed. Preserve the checker code and exact detail in detail when the
+complete encoded lifecycle refusal fits MAX_ENVELOPE_BYTES, under DECLARATION's bounded
+mapping. This includes a failed reference already present in checker detail. The
+optional path is not parsed from that prose. Include it only when independently
+attributable under its owning contract. Qualification checks the complete encoded
+admission-failure envelope, including its wrapper and JSON escaping, at the bound and
+one byte over. Existing over-bound channel failure and after-load cleanup remain
+unchanged. No truncation, new lifecycle code or restart of the original load deadline is
+added. [CLASS-8, FLOW-3, PERSIST-6, SEAM-2]
 
 Admin syntax failures, including invalid bounds, remain ConfigInvalid with field
 attribution. There is no semantic invalid_bound code. EnterBinding::Serving keeps its
@@ -380,11 +400,14 @@ contracts. [SEAM-3, COST-2, R20-19]
 
 Add MemberObservationIdentity with Spec 09's OBSERVATION-IDENTITY shape. opened requires
 member_observation, and all other frames refuse that member. Its PID is a u32 JSON
-number, its start/tick values are explicit nullable DecimalU64, and its version must be
-state-observation/1. The harness copies it into load, never StartIdentity. The store
-retains its run-keyed historical copy in observation_run and ordinary dumps under
-R20-19. Missing optional start facts keep their reason and do not become an open
-refusal. [FLOW-3, COST-5]
+number and its start/tick values are explicit nullable DecimalU64. A current opened
+requires state-observation/2, the sampling definition in Spec 09 SNAPSHOT-SAMPLING. The
+harness copies it into load, never StartIdentity. Historical observation_run identities
+and observations query results permit /1 or /2 and retain the recorded value. The
+shared validator separates historical identity validation from the current-open version
+check. Unknown versions refuse both contexts. The store retains the run-keyed copy in
+ordinary dumps under R20-19. Missing optional start facts keep their reason and do not
+become an open refusal. [FLOW-3, COST-5, PERSIST-1]
 
 The response parser requires observation on opened, filed, refused and control_answer,
 including control_refused. Requests refuse it. The dispatcher supplies the expected
@@ -405,8 +428,10 @@ not a measured capacity election. [COST-2, SEAM-3]
 The shared cross-crate corpus also checks the observations selector/result identity,
 after/through bounds, unique ordered operation IDs, request_source nullability and exact
 same-tag query association. Remove each check and require its negative case to fail. An
-ordinary entries query must never decode an observations result. [SEAM-3, COST-2,
-R20-19]
+ordinary entries query must never decode an observations result. Current opened must
+refuse /1 while an explicit historical observations result preserves /1. Both refuse an
+unknown version. Remove each context check and require its case to fail. [SEAM-3,
+COST-2, COST-5, R20-19]
 
 The shared cross-crate corpus covers every StateOperation, every response kind, unknown
 counters and each phase rule. It includes two valid snapshot continuations with one
@@ -520,9 +545,59 @@ qualification. [CLASS-2, CLASS-7, CLASS-8, PERSIST-6]
 **TYPES-INPUT.** Add RefusalRecord::Input with InputRefusal {input_id, case, detail},
 where case is non_ste100 or invalid_input_shape. The JSON tagged refusal names seam
 input. Also add RefusalRecord::ProtocolRepair {source_id:SourceBlockId,case,detail},
-with seam protocol_repair and case correction_call, missing_tool_statement or
-ambiguous_tool_statement. Both use the existing trace kind refusal. A correct protocol
-refusal grants neither filing nor component halt. [CLASS-9, CLASS-10]
+with seam protocol_repair and case correction_call, empty_correction,
+missing_tool_statement or ambiguous_tool_statement. Both use the existing trace kind
+refusal. A correct protocol refusal grants neither filing nor component halt.
+[CLASS-9, CLASS-10]
+
+source_id names evidence according to the case. For correction_call, it is the
+correction generation's SourcePosition.block_id, block zero of the recorded
+message.assistant. That block exists because the pass attempted a call. For
+empty_correction, it is the current rejected original Text source. The empty
+correction has no block, and no block is invented for it.
+[CLASS-9, CLASS-10]
+
+For missing_tool_statement and ambiguous_tool_statement at initial association,
+source_id names the recovered ToolCall block. For ambiguous_tool_statement after
+repair, it names the original rejected Text whose correction cannot supply the held
+external call's one-statement association. These IDs identify refusal evidence, not
+an accepted Binding or permission to dispatch. [CLASS-9, CLASS-10, PAIR-1]
+
+Harness-to-trace fixtures cover each case and both ambiguous_tool_statement contexts.
+Changing the required source_id to another generation or block must fail those
+fixtures. [CLASS-9, CLASS-10, FLOW-3]
+
+ProtocolRepairCase::EmptyCorrection serializes as empty_correction. Spec 02's
+EMPTY-CORRECTION owns its meaning, source attribution and exact detail under the
+[operator's ruling of 2026-10-21][empty-correction-ruling]. The trace carries that
+existing refusal payload without a new event kind or a fabricated content block.
+The strict-codec fixture requires this case to preserve source_id and the exact detail
+defined there. The harness-to-trace fixture requires that same detail and requires the
+refusal envelope to keep the same open turn and set causal_parent to the empty
+correction's message.assistant sequence. Both fixtures require unknown cases to refuse.
+Removing the case or changing its detail must fail both fixtures. Changing source_id
+must fail the strict-codec fixture. Changing the turn or causal_parent must fail the
+harness-to-trace fixture. [CLASS-9, CLASS-10, FLOW-3]
+
+**TYPES-RECALL-REFUSAL.** Add RecallRequestRefusal and
+RefusalRecord::RecallRequest. Its tagged wire object has seam recall_request and exactly
+the following remaining fields, in this order: call_id:CallId,
+call_block:DecimalU64, statement:StatementRef, noun_count:DecimalU64,
+has_condition:bool and detail:String. Reuse the existing identity types. The sole
+meaning is Spec 02 RECALL-REFUSAL, with detail exactly
+`recall requires exactly one noun and no governing condition`.
+Require positive noun_count and either noun_count different from one or has_condition
+true. There is no subject, optional field or additional case tag. TYPES-CODEC rejects
+missing, extra or duplicate fields and invalid decimal identities. [READ-3, CLASS-9,
+CLASS-10, PAIR-1]
+
+The harness derives this value from its checked association account. call_block is the
+original Text content index, and statement names the accepted Binding. CallId and
+StatementRef are separately validated identities, not aliases whose sequence must be
+made equal by the codec. Any zero-noun binding in an Accepted reply remains a malformed
+classifier result and cannot construct this refusal. Another binding's noun cannot
+satisfy this requirement. The floor carrier grants no pair, store read
+or model-facing result. [CLASS-2, CLASS-8, STORE-5, PAIR-1]
 
 ToolInterrupt becomes `ToolInterrupt { by: KillCause }`, allowing only unload or
 flow_failure on this command. Add KillCause::FlowFailure with wire spelling
@@ -543,6 +618,7 @@ both absent. The floor defines no second unload payload or operator_leave spelli
 | TYPES-LIMITS | Exact-bound and one-byte-over socket fixtures | Permit over-bound allocation or silently truncate |
 | TYPES-CLASSIFIER | Compile pin plus valid, rejected, failed, and wrong-target corpus | Reuse the state request counter or erase target |
 | TYPES-INPUT | Round trips consumed by harness and gate | Conflate live-gate flow_failure with gate-death fault, encode it as unload, or lose input attribution |
+| TYPES-RECALL-REFUSAL | Exact tagged bytes, identity round trips and strict invalid-shape corpus | Lose call_block or corrected StatementRef, accept zero nouns or valid recall shape, change detail, accept unknown/duplicate fields or invent a subject |
 
 The fixture dictionary is exactly scheme_id fixture-read/1 with verbs [read] and a
 recorded SHA-256 of its fixture artifact. It is accepted only by the test constructor.
@@ -745,9 +821,10 @@ config_sha256} and SavePointCommit {capture_id} on the existing lifecycle channe
 Existing SavePointTaken/Left retain their role as outcomes. Replace SavePointReport with
 {start:StartIdentity, capture_id:DecimalU64, event_run:RunId,
 event_sequence:DecimalU64}. The event fields name the confirmed save_point record. The
-captured source frontier appears once, at start.position. These fields replace the old
-one-file name, save_point, run, sequence, turn, event_run and position fields, not
-aliases for them. Only a Published capture produces this report. Diagnostic takes no
+captured content SourcePosition appears once, at start.position. It is not the harness's
+frozen trace boundary. These fields replace the old one-file name, save_point, run,
+sequence, turn, event_run and position fields, not aliases for them. Only a Published
+capture produces this report. Diagnostic takes no
 save point and uses Left.no_state without a report. SavePointNotTaken remains for
 explicit operation refusal. Its missing snapshot/finished use remains under R20-6.
 Prepared is an admin request to confirm a frozen healthy capture. Commit is the worker's
@@ -916,18 +993,33 @@ PLACE-3, PLACE-5, PLACE-6]
 | --- | --- |
 | TokenDirective::AppendAndGenerate | Existing turn:TurnKey and delta:Vec<Message>, plus tool_schemas:Vec<String> |
 | TokenDirective::MeasureDelta | keep:u64, delta:Vec<Message>, tool_schemas:Vec<String> |
-| TokenAnswer::Opened | prefix_tokens:u64, capacity:u64, generation_limit:u64, terminal_tokens:u64 |
+| TokenAnswer::Opened(Opened) | Adjacent-tag body is the named Opened wrapper below |
 | TokenAnswer::DeltaMeasured | resident:u64, prefix_tokens:u64, keep:u64, input_tokens:u64, capacity:u64 |
 | TokenAsk::MeasureDelta | keep:u64, under TokenAsk's existing ask tag |
 | RefusalRecord::Placement | assembly_id:DecimalU64, code:PlacementCode, detail:String, seam value placement |
+
+Opened is a named struct with session:SessionId, prefix_tokens:u64, capacity:u64,
+generation_limit:u64, terminal_tokens:u64, request:Box<RawValue> and
+measurement:Box<RawValue>, in that wire field order. It derives Debug, Clone,
+Serialize and Deserialize, and implements PartialEq manually: compare the session
+and every count normally and compare each raw box's get() bytes exactly. This keeps
+TokenAnswer's PartialEq contract without requiring RawValue to implement it. Use
+Generation's existing raw-box comparison pattern; no parse or normalization enters
+equality. Unknown or duplicate outer fields refuse. [PLACE-1, PLACE-5, SEAM-2]
 
 PlacementCode is invalid_span, invalid_pair, invalid_cut, head_over_capacity,
 tail_over_capacity, generation_room or stale_position, as PLACE-PORT uses. No new
 TokenRefusal variant is required. NotOpen, OutOfOrder and MalformedDelta answer
 measurement where appropriate, while a physically oversized proposal can still return
-its count. Opened is no longer a unit answer after cutover, and an absent body or
-schemas member is not defaulted. An empty schema list is explicit. [PLACE-3, PLACE-4,
-PLACE-5]
+its count. Opened is no longer a unit or four-count-only answer after cutover. No body,
+session, evidence box or schemas member is defaulted. An empty schema list is explicit.
+Reject unknown or duplicate outer fields. SessionId is the unchanged String newtype
+and echoes the exact Open.session. The floor carries the two raw boxes without
+normalization or interpreting their contents, as Generation does. SPU-OPEN owns their
+closed contents and HARNESS-OPEN validates them. TRACE-PLACEMENT owns only its
+outer wrapper and envelope checks, retaining those contents as opaque boxes.
+No new floor measurement mirror or generation variant is introduced.
+[PLACE-3, PLACE-4, PLACE-5, SEAM-2]
 
 CUT-RELOAD's ReloadTail, ReloadItem, StagedTail, Staged, ReloadRefused, Busy and
 ReloadCode are private harness types defined by Spec 06. They add no wire arm.
@@ -946,7 +1038,7 @@ facts. UnitOccurrenceId cannot stand in for MarkOccurrenceId. [MARK-6, PLACE-5]
 
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
-| TYPES-DECODE | Shared Rust enum/serde corpus at both peers | Accept old unit Opened, default schemas, confuse count and SpanRef, or decode a wrong response arm |
+| TYPES-DECODE | Shared Rust enum/serde corpus at both peers, including exact raw boxes and required Opened fields | Accept old unit/four-count Opened, missing/unknown/duplicate fields, normalize raw boxes, default schemas, confuse count and SpanRef, or decode a wrong response arm |
 | PlacementConfig | Parser and load-fit cases with a resolved OperatorTunable SPU generation limit | Guess an absent tunable value, wrap capacity arithmetic or open user channel after failed fit |
 
 ## 7. Open elections
@@ -961,3 +1053,5 @@ classifier and pair amendments.
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 
 [canonical]: ../weaver-trace/weaver-trace-Spec.md#2-canonical-form
+[empty-correction-ruling]:
+https://github.com/toddwbucy/WeaverAgent/pull/213#issuecomment-6330669954

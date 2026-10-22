@@ -2,7 +2,7 @@
 //! `weaver-state-Spec` sections 2 and 5: the descriptor admin's start step
 //! hands across the exec at the run lock's number is marked close-on-exec as
 //! the member's first act and kept while it serves.
-#![cfg(target_os = "linux")]
+#![cfg(all(target_os = "linux", feature = "sqlite"))]
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;

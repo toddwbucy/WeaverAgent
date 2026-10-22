@@ -152,11 +152,11 @@ pub enum Payload {
     ToolAnswer(ToolOutcome),
     /// Cancel the open execution at the continue position.
     ToolCancel,
-    /// **Interrupt the open execution for the agent's unload**, at the continue
-    /// position, per `weaver-harness-gate-contract` section 2 as of the
-    /// lifecycle act (2026-10-09): the gate ends it by the cancel's path and
-    /// answers `Killed { by: unload }`, the first outcome winning.
-    ToolInterrupt,
+    /// Interrupt the open execution for unload or a failed state flow. The
+    /// gate accepts only those two causes and answers after containment.
+    ToolInterrupt {
+        by: KillCause,
+    },
 }
 
 /// One tool call as it crosses the gate seam: the name and arguments exactly
@@ -215,6 +215,9 @@ pub enum KillCause {
     /// The agent's unload interrupted the call (`ToolInterrupt`): never
     /// finished, and re-runnable after the reload.
     Unload,
+    /// The state flow failed. The gate contained the call, but the failed run
+    /// cannot publish a save point or treat this as an operator unload.
+    FlowFailure,
     /// The gate died with the call open and the harness closed it: its outcome
     /// indeterminate, never re-run automatically.
     Fault,
@@ -934,13 +937,12 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// The decode seam's ask, per `weaver-types-Spec` section 4.4: the cases are
-/// `weaver-harness-spu-decode-contract` section 2's four exchanges read from
-/// the harness's side, the seam's fifth message being the SPU's emitted
-/// report, owed nothing back and taking its wire case with `FaultReport`'s
-/// shape, and this crate holds rather than creates them. The
-/// messages are `weaver-traits`' [`weaver_traits::Message`], drawn rather than
-/// restated.
+/// The decode seam's asks, per `weaver-types-Spec` section 4.4 and
+/// TYPES-DECODE. The harness supplies these values under the existing
+/// decode contract. The SPU's emitted fault report travels in TokenAnswer
+/// and answers no ask. This crate defines the values, not their dispatch.
+/// Messages are `weaver-traits`' [`weaver_traits::Message`], drawn rather
+/// than restated.
 ///
 /// **No sampling value crosses this seam inbound.** The tunable map left this
 /// directive when the values moved to the declaration, per `weaver-spu-Spec`
@@ -965,6 +967,18 @@ pub enum TokenDirective {
     AppendAndGenerate {
         turn: TurnKey,
         delta: Vec<weaver_traits::Message>,
+        /// Exact granted schemas in assembly order. An empty grant is an
+        /// explicit empty list, never an absent member or a legacy default.
+        tool_schemas: Vec<String>,
+    },
+    /// Read-only sizing through the same whole rendering and tokenizer as
+    /// append, under TYPES-DECODE and SPU-MEASURE. The returned keep is
+    /// clamped to the open session's prefix and resident count. Neither the
+    /// request nor its answer grants a cut or an append.
+    MeasureDelta {
+        keep: u64,
+        delta: Vec<weaver_traits::Message>,
+        tool_schemas: Vec<String>,
     },
     /// The re-feed drive, per `weaver-spu-PRD` section 13.14 and the decode
     /// contract's sixth exchange: the recorded generation's rendered
@@ -1006,12 +1020,10 @@ pub enum TokenDirective {
     },
 }
 
-/// The decode seam's answer, per `weaver-types-Spec` section 4.4. A cancel
-/// with nothing in flight answers `AtRest` rather than refusing, an answer
-/// because it is not a failure of the ask. The SPU's fault report takes no
-/// case here: it is the seam's one emission, owed nothing back per the
-/// ruling of 2026-08-12, and its wire case arrives with `FaultReport`'s
-/// shape.
+/// The decode seam's answers and intermediates, per `weaver-types-Spec`
+/// section 4.4 and TYPES-DECODE. A cancel with nothing in flight answers
+/// `AtRest` rather than refusing. `Fault` carries the SPU's emitted report
+/// under the ruling of 2026-08-12. It answers nothing and closes no exchange.
 ///
 /// Adjacently tagged under the spliced-member arm of section 4.3's test:
 /// `Generated` wraps the one struct in the vocabulary carrying a `RawValue`,
@@ -1023,7 +1035,24 @@ pub enum TokenDirective {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "body", rename_all = "snake_case")]
 pub enum TokenAnswer {
-    Opened,
+    /// Actual facts from the one open residency, under TYPES-DECODE. The
+    /// generation limit is resolved by the SPU, including tunable values.
+    /// This required body replaces the former unit answer at cutover.
+    Opened {
+        prefix_tokens: u64,
+        capacity: u64,
+        generation_limit: u64,
+        terminal_tokens: u64,
+    },
+    /// Count-only result for the exact measured proposal. Numeric facts do
+    /// not carry a rendered prefix, a placement grant or a saved proposal.
+    DeltaMeasured {
+        resident: u64,
+        prefix_tokens: u64,
+        keep: u64,
+        input_tokens: u64,
+        capacity: u64,
+    },
     /// The stream's intermediate, per the contract's section 2 as of the
     /// streaming ruling: any number cross before the close and none closes
     /// the exchange, which stays `Generated`'s alone. The identifier is a
@@ -1100,6 +1129,16 @@ pub enum TokenAnswer {
     Fault(FaultReport),
 }
 
+/// One refused input, attributed to the run-local offer under TYPES-INPUT.
+/// This record grants neither filing nor a component halt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputRefusal {
+    pub input_id: crate::state_flow::DecimalU64,
+    pub case: crate::state_flow::InputRefusalCase,
+    pub detail: String,
+}
+
 /// What a seam turned away, as the record carries it, per
 /// `weaver-types-Spec` section 4 and `weaver-trace-PRD` section 3.1's
 /// twenty-first kind.
@@ -1111,11 +1150,18 @@ pub enum TokenAnswer {
 /// refusal typed there would make it hold and version four seam
 /// vocabularies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "seam", rename_all = "snake_case")]
+#[serde(tag = "seam", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RefusalRecord {
     Decode {
         asked: TokenAsk,
         refusal: TokenRefusal,
+    },
+    /// An attributed placement refusal under TYPES-DECODE. This is an
+    /// operation outcome and carries no decoder mutation or halt authority.
+    Placement {
+        assembly_id: crate::state_flow::DecimalU64,
+        code: crate::state_flow::PlacementCode,
+        detail: String,
     },
     Lifecycle {
         asked: LifecycleAsk,
@@ -1124,6 +1170,21 @@ pub enum RefusalRecord {
     /// **Classify carries no ask**, its content standing in the
     /// `classify.request` event the harness authored before the exchange.
     Classify { refusal: LabelRefusal },
+    /// The pre-turn input check's attributed operation refusal.
+    Input(InputRefusal),
+    /// A model pass cannot supply a usable tool statement, attempts a call
+    /// during restatement, or returns an empty correction. This is no component halt.
+    ProtocolRepair {
+        source_id: crate::state_flow::SourceBlockId,
+        case: crate::state_flow::ProtocolRepairCase,
+        detail: String,
+    },
+    /// Structural refusal of a compiled instruction's template or provenance.
+    Instruction {
+        template_id: String,
+        case: crate::state_flow::InstructionRefusal,
+        detail: String,
+    },
 }
 
 /// Which decode ask a refusal answered.
@@ -1140,6 +1201,11 @@ pub enum RefusalRecord {
 pub enum TokenAsk {
     Open,
     AppendAndGenerate,
+    /// A refused measurement names its requested keep, not a token guess
+    /// derived from the proposal's message bytes.
+    MeasureDelta {
+        keep: u64,
+    },
     /// The re-feed drive, per the decode contract's sixth exchange.
     ReFeed,
     Cancel,
@@ -1430,18 +1496,9 @@ impl PartialEq for FaultReport {
     }
 }
 
-/// The three charters' closed twelve, per `weaver-types-Spec` section 4.2:
-/// three of `weaver-spu-PRD` section 13.10, three of `weaver-gate-PRD`
-/// section 13.4, six of `weaver-harness-PRD` section 5. **A thirteenth case
-/// is a charter act before it is a code change**, and the tenth, eleventh
-/// and twelfth were each exactly that: the act typing these found the
-/// harness authoring an assembly fault no case covered, the act answering
-/// #369 found it leaving a seated prefix unaccounted for, and #111's PR C
-/// found the unwind's sweep of `tools/` with nothing to name its failure
-/// but a death that never happened. The charter widened before this enum
-/// did, each time. The harness's six ride the same shape
-/// although they cross no socket, one shape serving the wire and the `fault`
-/// event's payload.
+/// The closed fault vocabulary from the organ charters and TYPES-FAULT.
+/// New cases require a charter act. Harness faults use the same carrier even
+/// when they cross no socket, with their account owned by the reporting member.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FaultCase {
@@ -1472,6 +1529,11 @@ pub enum FaultCase {
     /// holds is left unsignalled for the run end's kill of the agent's
     /// cgroup (C2). `Left` is answered all the same.
     ToolsContainmentUndelivered,
+    /// Component failure of the one serving flow. The harness owns its account.
+    StateFlowFailed,
+    /// A correct conformance result exposed an invalid template certificate.
+    /// This reports an operation defect and never implies a component halt.
+    StateTemplateRejected,
 }
 
 #[cfg(test)]

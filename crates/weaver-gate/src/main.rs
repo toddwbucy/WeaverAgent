@@ -13,6 +13,7 @@
 //! before-raise, raised, draining and lowered, the last terminal
 //! (`weaver-gate-Spec` section 4).
 
+use std::collections::BTreeSet;
 use std::process::ExitCode;
 
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
@@ -135,6 +136,7 @@ struct Stopping {
 /// which happens on the way out of this function.
 fn serve(channel: Channel) -> ExitCode {
     let mut state = HookState::BeforeRaise;
+    let mut answered_tools = BTreeSet::new();
 
     /// What one poll slot waits for, carried beside its `PollFd` so a wake
     /// names its origin without re-deriving it from a position.
@@ -273,7 +275,7 @@ fn serve(channel: Channel) -> ExitCode {
                 if revents
                     .intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR) =>
             {
-                if let Err(code) = serve_channel_event(&channel, &mut state) {
+                if let Err(code) = serve_channel_event(&channel, &mut state, &mut answered_tools) {
                     drop(state);
                     return code;
                 }
@@ -377,9 +379,37 @@ fn serve(channel: Channel) -> ExitCode {
     }
 }
 
+/// Only a control crossing a known terminal answer is late. An interrupt
+/// without a live or answered exchange must reach the lifecycle refusal.
+/// Invalid interrupt causes are channel faults even after an answer.
+fn idle_tool_control(
+    envelope: &OrganEnvelope,
+    answered_tools: &BTreeSet<u64>,
+) -> Result<bool, ChannelFault> {
+    if let Payload::ToolInterrupt { by } = &envelope.payload
+        && !matches!(
+            by,
+            weaver_types::KillCause::Unload | weaver_types::KillCause::FlowFailure
+        )
+    {
+        return Err(ChannelFault::Undecodable);
+    }
+    Ok(envelope.exchange.opener == Opener::Harness
+        && envelope.position == Position::Continue
+        && answered_tools.contains(&envelope.exchange.ordinal)
+        && matches!(
+            envelope.payload,
+            Payload::ToolCancel | Payload::ToolInterrupt { .. }
+        ))
+}
+
 /// One channel event: a response frame routed to the connection its
 /// exchange names, or a directive judged and answered.
-fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), ExitCode> {
+fn serve_channel_event(
+    channel: &Channel,
+    state: &mut HookState,
+    answered_tools: &mut BTreeSet<u64>,
+) -> Result<(), ExitCode> {
     let envelope = match channel.recv() {
         Ok(envelope) => envelope,
         Err(ChannelFault::Closed) => {
@@ -405,41 +435,28 @@ fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), E
         return Ok(());
     }
 
-    // A cancel or the unload's interrupt may cross the answer in flight:
-    // the result already sent stands (the first outcome wins), and neither
-    // has an answer of its own.
-    if envelope.exchange.opener == Opener::Harness
-        && envelope.position == Position::Continue
-        && matches!(
-            envelope.payload,
-            Payload::ToolCancel | Payload::ToolInterrupt
-        )
-    {
-        return Ok(());
+    match idle_tool_control(&envelope, answered_tools) {
+        Ok(true) => return Ok(()),
+        Ok(false) => {}
+        Err(fault) => {
+            eprintln!("{}", fault_line(&fault));
+            return Err(ExitCode::FAILURE);
+        }
     }
     let payload = if let Payload::Tool(execution) = &envelope.payload
         && envelope.exchange.opener == Opener::Harness
         && envelope.position == Position::Open
         && matches!(state, HookState::Raised(_, _))
     {
-        match weaver_gate::tools::execute(execution, channel, &envelope.exchange) {
-            Ok(outcome) => Payload::ToolAnswer(outcome),
-            Err(Unanswered::Channel(ChannelFault::Closed)) => return Err(ExitCode::SUCCESS),
-            Err(Unanswered::Channel(fault)) => {
-                eprintln!("{}", fault_line(&fault));
-                return Err(ExitCode::FAILURE);
+        match weaver_gate::tools::execute(execution, channel, &envelope.exchange, answered_tools)
+            .and_then(|answer| {
+                weaver_gate::tools::send_answer(channel, &envelope.exchange, answer, answered_tools)
+            }) {
+            Ok(()) => {
+                answered_tools.insert(envelope.exchange.ordinal);
+                return Ok(());
             }
-            // **An execution this gate cannot contain is never answered**
-            // (`weaver-gate-Spec` section 8): the gate exits, the harness
-            // meets its death, closes the call `Killed { by: fault }`, and
-            // kills `tools/` itself.
-            Err(Unanswered::Uncontained) => {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"died": "tools/ could not be contained: the execution is unanswered"})
-                );
-                return Err(ExitCode::FAILURE);
-            }
+            Err(failure) => return Err(unanswered_exit(failure)),
         }
     } else {
         // **The quiesce and the lower answer after every admitted frame**
@@ -501,6 +518,41 @@ fn serve_channel_event(channel: &Channel, state: &mut HookState) -> Result<(), E
         Err(fault) => {
             eprintln!("{}", fault_line(&fault));
             Err(ExitCode::FAILURE)
+        }
+    }
+}
+
+/// Closure observed during teardown remains clean. A deadline that prevented
+/// delivery is a different fact, even when the execution was fully contained.
+fn unanswered_exit(failure: Unanswered) -> ExitCode {
+    match failure {
+        Unanswered::Channel(ChannelFault::Closed) => ExitCode::SUCCESS,
+        Unanswered::Channel(fault) => {
+            eprintln!("{}", fault_line(&fault));
+            ExitCode::FAILURE
+        }
+        Unanswered::DeliveryBound { exchange, answer } => {
+            let answer = match answer {
+                weaver_gate::tools::UndeliveredAnswer::ToolAnswer => "tool_answer",
+                weaver_gate::tools::UndeliveredAnswer::OutOfOrder => "out_of_order",
+            };
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "fault": "bounded_nondelivery", "exchange": exchange,
+                    "answer": answer, "at": "containment_deadline",
+                })
+            );
+            ExitCode::FAILURE
+        }
+        // The harness observes gate death and closes the unanswered execution
+        // Killed { by: fault }, completing containment under its own contract.
+        Unanswered::Uncontained => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"died": "tools/ could not be contained: the execution is unanswered"})
+            );
+            ExitCode::FAILURE
         }
     }
 }
@@ -854,3 +906,6 @@ mod test_common;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod answer_failure_tests;

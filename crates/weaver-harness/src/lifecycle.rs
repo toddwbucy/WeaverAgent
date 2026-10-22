@@ -3341,7 +3341,10 @@ fn open_session(
         })
         .map_err(|_| LifecycleRefusal::NoResidency)?;
     match decode.recv_reply() {
-        Ok(crate::channel::DecodeReply::Answer(TokenAnswer::Opened)) => Ok(()),
+        // The complete replacement body must decode even on the retiring
+        // boot path. The foundation boot/place owner caches and checks these
+        // facts against its declared budgets at the coordinated cutover.
+        Ok(crate::channel::DecodeReply::Answer(TokenAnswer::Opened { .. })) => Ok(()),
         // The emission, matched by name: a fault at open is the residency
         // unfit to serve, not the load's shape refused, and the wildcard
         // below would misname it. No recorder stands this early, so the
