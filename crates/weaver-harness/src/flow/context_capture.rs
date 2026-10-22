@@ -17,6 +17,7 @@ enum Phase {
     Held,
     Acknowledge,
     Finished,
+    AbortPending,
     Aborting,
     Releasing,
     ReleaseCleanup,
@@ -420,6 +421,14 @@ impl RecordingContext {
         &mut self,
         io: &mut impl PumpIo,
     ) -> Result<bool, RunFailure> {
+        if self
+            .member_capture
+            .as_ref()
+            .is_some_and(|owner| owner.phase == Phase::AbortPending)
+        {
+            self.enqueue_capture_abort(io)?;
+            return Ok(true);
+        }
         if matches!(self.flow.operation_completion(),
             Some(OperationCompletion::Capture { completion, .. }) if completion.discard_capture_result)
         {
@@ -657,6 +666,10 @@ impl RecordingContext {
     }
 
     fn enqueue_capture_abort(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        // Retain the successor before the lifecycle check can yield. In
+        // particular, a recorded refusal has already consumed its completion
+        // and retired its original wait, so that result cannot trigger us again.
+        self.member_capture.as_mut().expect("capture owner").phase = Phase::AbortPending;
         self.allow_capture_cleanup(io)?;
         let id = self.member_capture.as_ref().expect("capture owner").id;
         let result = self

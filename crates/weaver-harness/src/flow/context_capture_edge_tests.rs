@@ -30,6 +30,145 @@ impl PumpIo for JumpAtSample<'_> {
 }
 
 #[test]
+fn recorded_refusal_resumes_abort_after_leave_interrupts_cleanup_admission() {
+    for finished in [false, true] {
+        let mut run = active();
+        let mut member = Member::new(&mut run);
+        let snapshot = member.snapshot(41, SAVE_NS);
+        let pending = if finished {
+            let image = member.image(&snapshot, 41);
+            member.result(CaptureProgress::ImageReady, &image);
+            member
+                .run
+                .context
+                .acknowledge_member_capture(
+                    41.into(),
+                    s::Digest::new("6".repeat(64)).unwrap(),
+                    &mut member.run.clock,
+                )
+                .unwrap();
+            member.sent()
+        } else {
+            snapshot
+        };
+        let original = member.answer(
+            &pending,
+            s::StateControlAnswer::ControlRefused {
+                code: s::ControlRefusalCode::Capture(s::CaptureRefusalCode::SnapshotFailed),
+                detail: "retain this refusal through cleanup admission".into(),
+            },
+        );
+        member.receive(&original).unwrap();
+        // Obtain the coordinator's real Recorded proof without letting the
+        // context consume it before the lifecycle interruption is installed.
+        for _ in 0..256 {
+            member
+                .run
+                .context
+                .flow
+                .advance(
+                    &mut FlowRecording {
+                        barrier: &mut member.run.context.barrier,
+                        inbox: &mut member.run.context.inbox,
+                        budget: &mut member.run.context.budget,
+                        author: &member.run.context.author,
+                    },
+                    &mut member.run.clock,
+                    1,
+                )
+                .unwrap();
+            if member.run.context.flow.operation_completion().is_some() {
+                break;
+            }
+        }
+        assert!(matches!(
+            member.run.context.flow.operation_completion(),
+            Some(OperationCompletion::Capture { .. })
+        ));
+        let now = member.now();
+        let leave = AbsoluteBound::from_absolute(now, now + 10).unwrap();
+        member
+            .run
+            .context
+            .arm(PumpDeadline::Leave, leave, &mut member.run.clock)
+            .unwrap();
+        let mut jumping = JumpAtSample {
+            clock: &mut member.run.clock,
+            samples: 0,
+            at: 1,
+            to: leave.deadline_ns(),
+        };
+        assert!(matches!(
+            member.run.context.settle_recorded_capture(&mut jumping),
+            Err(RunFailure::Wait { key: PumpDeadline::Leave, bound }) if bound == leave
+        ));
+        assert!(member.run.context.flow.operation_completion().is_none());
+        assert!(member.run.context.capture_timeout().is_none());
+        assert!(member.run.context.capture_refusal().is_none());
+        assert!(member.run.context.flow.state().outstanding().is_empty());
+        for _ in 0..2 {
+            assert!(matches!(
+                member.advance(),
+                Err(RunFailure::Wait { key: PumpDeadline::Leave, bound }) if bound == leave
+            ));
+            assert!(member.run.context.flow.state().outstanding().is_empty());
+        }
+        // Lifecycle handles its own wait. Ordinary capture progress must now
+        // find the retained cleanup obligation without a second cancellation.
+        assert_eq!(
+            member.run.context.complete_wait(PumpDeadline::Leave),
+            Some(leave)
+        );
+        member.advance().unwrap();
+        let requests = member.run.context.flow.state().outstanding();
+        assert_eq!(
+            requests.len(),
+            1,
+            "the original refusal still owes one Abort"
+        );
+        assert_eq!(requests[0].operation, s::StateOperation::Abort);
+        assert_eq!(requests[0].common, *pending.common());
+        let cleanup = member
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::StateControl)
+            .unwrap();
+        for _ in 0..3 {
+            member.advance().unwrap();
+            assert_eq!(member.run.context.flow.state().outstanding().len(), 1);
+            assert_eq!(
+                member.run.context.deadlines.get(PumpDeadline::StateControl),
+                Some(cleanup),
+                "retrying cleanup must not renew its deadline"
+            );
+        }
+        let abort = member.sent();
+        assert!(member.run.context.capture_refusal().is_none());
+        let answer = member.answer(
+            &abort,
+            s::StateControlAnswer::Aborted {
+                capture_id: 41.into(),
+            },
+        );
+        member.result(CaptureProgress::Complete, &answer);
+        let refusal = member.run.context.capture_refusal().unwrap();
+        assert_eq!(
+            s::encode_state_line(&refusal.answer, s::FrameDirection::Response).unwrap(),
+            s::encode_state_line(&original, s::FrameDirection::Response).unwrap()
+        );
+        assert!(member.run.context.capture_timeout().is_none());
+        assert!(member.run.context.flow.state().outstanding().is_empty());
+        member
+            .run
+            .context
+            .finish_member_capture(41.into(), &mut member.run.clock)
+            .unwrap();
+        assert!(member.run.context.halt().is_none());
+    }
+}
+
+#[test]
 fn window_expiry_at_actual_snapshot_enqueue_retains_request_for_abort() {
     let mut run = active();
     let mut member = Member::new(&mut run);
