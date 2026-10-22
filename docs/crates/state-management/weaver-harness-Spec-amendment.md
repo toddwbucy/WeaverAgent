@@ -1238,8 +1238,8 @@ fit, after the truthful boot placement, and run failed-enter teardown. An SPU ty
 Open refusal follows the existing refusal account and failed enter, with no placement.
 A wrong source, session, reply arm, malformed evidence or inconsistent count is a
 protocol failure, not a fit refusal. It grants no accepted placement or readiness.
-An answer exceeding DECODE_MESSAGE_BOUND is component failure. Trace encoding or sink errors follow
-the existing trace failure path. Allocation failure grants no readiness, and this
+An answer exceeding DECODE_MESSAGE_BOUND is component failure. Trace encoding or
+sink errors follow the existing trace failure path. Allocation failure grants no readiness, and this
 carrier adds no process-wide allocation-failure recovery. TRACE-PLACEMENT
 states the distinct record-size qualification obligation; the recorder has no
 per-record byte ceiling to borrow here. Never truncate evidence or retry Open.

@@ -134,8 +134,9 @@ Use the actual escaping and envelope, not decoded prompt length or an assumed
 second escaping of raw JSON boxes. Entry capacity limits count, not bytes.
 Encoding or sink errors follow their existing component-failure paths. Current
 infallible allocations may terminate the process; no graceful allocation-failure
-recovery is claimed or elected. A failed submission grants no Recorded; a later sink failure preserves any already
-Recorded sequence and does not turn it into a successful sink write. No evidence
+recovery is claimed or elected. A failed submission grants no Recorded; a later sink
+failure preserves any already Recorded sequence and does not turn it into a successful
+sink write. No evidence
 box is shortened.
 
 The second prompt copy is a proposed, explicit custody tradeoff: both the

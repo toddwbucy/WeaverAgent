@@ -345,8 +345,8 @@ of the complete encoded line and retained memory, including envelope and escapin
 The state member's request-line bound does not apply to this unprojectable record.
 Encoding or sink errors keep their existing failure disposition. Allocation failure
 never grants readiness; this carrier adds no recovery guarantee for process-wide
-allocation failure. No party truncates evidence or retries Open. The paired cutover includes every decode
-client and serving trace reader. Diagnostic decode clients
+allocation failure. No party truncates evidence or retries Open. The paired cutover
+includes every decode client and serving trace reader. Diagnostic decode clients
 validate the new Opened body and consume it without a new diagnostic trace event.
 Generation request/measurement events remain turn-bound, and diagnostic conversion of
 serving placement remains refused. No earlier additive deployment of the new wire is
