@@ -474,12 +474,14 @@ impl InputSlot {
         current.accepted.take()
     }
 
-    pub(super) fn consume_input(
-        &mut self,
-        token: AcceptedInput,
+    /// Read-only pre-admission check for the explicit mark owner. Consumption
+    /// below repeats this check and remains the sole revoking transfer.
+    pub(super) fn validate_accepted(
+        &self,
+        token: &AcceptedInput,
         run: &str,
         scheme_id: &str,
-    ) -> Result<ConsumedInput, ConsumeFailure> {
+    ) -> Result<(), InputError> {
         let error = if run != self.run
             || scheme_id != self.scheme_id
             || token.reuse.run() != self.run
@@ -499,7 +501,16 @@ impl InputSlot {
         } else {
             None
         };
-        if let Some(error) = error {
+        error.map_or(Ok(()), Err)
+    }
+
+    pub(super) fn consume_input(
+        &mut self,
+        token: AcceptedInput,
+        run: &str,
+        scheme_id: &str,
+    ) -> Result<ConsumedInput, ConsumeFailure> {
+        if let Err(error) = self.validate_accepted(&token, run, scheme_id) {
             return Err(ConsumeFailure { token, error });
         }
         let current = self.current.as_mut().expect("checked owning operation");

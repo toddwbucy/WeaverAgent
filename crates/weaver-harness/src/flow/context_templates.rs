@@ -69,7 +69,10 @@ impl RecordingContext {
                 failure: Some(failure),
             });
         }
-        if self.template_checks.is_some() || self.template_setup_refusal.is_some() {
+        if self.marks.is_some()
+            || self.template_checks.is_some()
+            || self.template_setup_refusal.is_some()
+        {
             return Err(TemplateBeginError {
                 inventory,
                 refusal: TemplateBeginRefusal::AlreadyStarted,
@@ -91,6 +94,7 @@ impl RecordingContext {
             });
         }
         if self.output.is_some()
+            || self.freshness.is_some()
             || self.filing.is_some()
             || self.pair_work.is_some()
             || self.input.snapshot().is_some()
