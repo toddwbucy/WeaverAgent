@@ -548,15 +548,16 @@ Changing the required source_id to another generation or block must fail those
 fixtures. [CLASS-9, CLASS-10, FLOW-3]
 
 ProtocolRepairCase::EmptyCorrection serializes as empty_correction. Spec 02's
-EMPTY-CORRECTION owns its meaning and source attribution. The trace carries that
+EMPTY-CORRECTION owns its meaning, source attribution and exact detail under the
+[operator's ruling of 2026-10-21][empty-correction-ruling]. The trace carries that
 existing refusal payload without a new event kind or a fabricated content block.
-The strict-codec fixture requires this case to preserve source_id and detail. The
-harness-to-trace fixture requires the refusal envelope to keep the same open turn and
-set causal_parent to the empty correction's message.assistant sequence. Both fixtures
-require unknown cases to refuse. Removing the case must fail both fixtures. Changing
-source_id or detail must fail the strict-codec fixture. Changing the turn or
-causal_parent must fail the harness-to-trace fixture. [CLASS-9, CLASS-10, FLOW-3,
-amendment proposed 2026-10-21]
+The strict-codec fixture requires this case to preserve source_id and the exact detail
+defined there. The harness-to-trace fixture requires that same detail and requires the
+refusal envelope to keep the same open turn and set causal_parent to the empty
+correction's message.assistant sequence. Both fixtures require unknown cases to refuse.
+Removing the case or changing its detail must fail both fixtures. Changing source_id
+must fail the strict-codec fixture. Changing the turn or causal_parent must fail the
+harness-to-trace fixture. [CLASS-9, CLASS-10, FLOW-3]
 
 ToolInterrupt becomes `ToolInterrupt { by: KillCause }`, allowing only unload or
 flow_failure on this command. Add KillCause::FlowFailure with wire spelling
@@ -995,3 +996,5 @@ classifier and pair amendments.
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 
 [canonical]: ../weaver-trace/weaver-trace-Spec.md#2-canonical-form
+[empty-correction-ruling]:
+https://github.com/toddwbucy/WeaverAgent/pull/213#issuecomment-6330669954

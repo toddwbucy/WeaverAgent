@@ -532,17 +532,19 @@ erased from state. Rejected text owes no filing. Original and correction remain 
 trace, and training-pair analysis remains external. [CLASS-8, CLASS-9, CLASS-10,
 SCOPE-1]
 
-**EMPTY-CORRECTION.** A correction with zero Text blocks and no attempted call is one
-failed correction for its current rejected source. It neither resolves that source nor
+**EMPTY-CORRECTION.** The [2026-10-21 operator ruling][empty-correction-ruling]
+counts a correction with zero Text blocks and no attempted call as one failed
+correction for its current rejected source. It neither resolves that source nor
 contributes an empty replacement to EffectiveEmission. Record the complete correction
 as its ordinary message.assistant, then record RefusalRecord::ProtocolRepair with case
-empty_correction. source_id names the current rejected original Text. The refusal's
+empty_correction. Its detail is exactly
+`correction contains no Text block or attempted call`.
+source_id names the current rejected original Text. The refusal's
 causal_parent names the empty correction's message.assistant sequence, and its turn is
 the same open turn. Do not invent a source block inside the empty correction. Reason:
 an empty correction supplies no replacement for the unresolved statement. Counting it
 under the existing cap gives that repair a finite outcome without erasing the source.
-[CLASS-9, CLASS-10, FLOW-3,
-amendment proposed 2026-10-21]
+[CLASS-9, CLASS-10, FLOW-3]
 
 After that refusal is recorded, increment failed_corrections once and follow the same
 below-cap or cap-reached row. This is an operation refusal, never non_ste100 fabricated
@@ -551,8 +553,8 @@ or pair. A correction containing a ToolCall or UnrecoveredCall follows correctio
 instead, even if it contains no Text. A Text block whose text is empty still takes
 OUTPUT-UNIT's normal classifier path and its recorded non_ste100 outcome. This rule
 applies only to a requested correction. An original generation with no Text retains
-the existing OUTPUT-UNIT and DECISION-BARRIER behavior. [CLASS-8, CLASS-9, CLASS-10,
-FLOW-3, amendment proposed 2026-10-21]
+the existing OUTPUT-UNIT and DECISION-BARRIER behavior.
+[CLASS-8, CLASS-9, CLASS-10, FLOW-3]
 
 Every conforming request in a forbidden correction pass still takes Spec 05's start and
 terminal path, ending not_dispatched/pass_purpose. This includes a valid recall binding.
@@ -757,3 +759,5 @@ state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 [internal]: weaver-internal-Spec-amendment.md
 [spu]: weaver-spu-Spec-amendment.md
 [ste100-contract]: weaver-harness-spu-ste100-contract.md
+[empty-correction-ruling]:
+https://github.com/toddwbucy/WeaverAgent/pull/213#issuecomment-6330669954
