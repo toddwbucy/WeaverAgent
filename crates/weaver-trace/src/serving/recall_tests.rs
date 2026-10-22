@@ -5,6 +5,9 @@ use serde_json::value::RawValue;
 
 const SEED: &str = "0123456789abcdef0123456789abcdef";
 
+#[path = "recall_fixture_tests.rs"]
+mod shared_fixtures;
+
 fn raw(value: &str) -> Box<RawValue> {
     RawValue::from_string(value.into()).unwrap()
 }
