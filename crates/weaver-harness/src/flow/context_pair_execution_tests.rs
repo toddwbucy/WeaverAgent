@@ -9,6 +9,9 @@ use weaver_types::{
     ExchangeId, Opener, OrganEnvelope, Payload as OrganPayload, Position, ToolOutcome,
 };
 
+#[path = "context_halt_gate_tests.rs"]
+mod halted;
+
 fn gate() -> (OrganPort, OwnedFd) {
     let (owner, peer) = socketpair(
         AddressFamily::Unix,

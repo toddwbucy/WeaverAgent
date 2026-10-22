@@ -14,7 +14,7 @@ use weaver_types::state_flow::{
 use super::repair::{EffectiveEmission, RepairAccount};
 use crate::flow::coordinator::{CheckedGeneration, OriginalRequests};
 use crate::flow::ledger::{CommittedSource, LedgerFile, SourceLease, TerminalOutcome};
-use crate::flow::pump_transport::ReceivedOrgan;
+use crate::flow::pump_transport::{OrganPort, OrganSend, ReceivedOrgan};
 use crate::flow::report::{OutstandingPair, PairState};
 use weaver_types::{
     ExchangeId, KillCause, Opener, OrganEnvelope, Position, ToolExecution, ToolName, ToolOutcome,
@@ -439,6 +439,43 @@ impl PairLedger {
                 entry.sent,
             ))
         })
+    }
+
+    /// Frozen inspection keeps an already received terminal attached to its
+    /// execution. It grants no new dispatch or ordinary terminal filing.
+    pub(super) fn halt_execution(&self) -> Option<(&CallId, &ExchangeId, bool)> {
+        if !self.frozen {
+            return None;
+        }
+        self.active.as_ref()?.entries.iter().find_map(|entry| {
+            if entry.completed.is_some() {
+                return None;
+            }
+            Some((&entry.started.call_id, entry.execution.as_ref()?, entry.sent))
+        })
+    }
+
+    /// Only the same context's retained whole-send ticket can settle a send
+    /// whose healthy reducer did not run before failure. No deadline retires.
+    pub(super) fn reconcile_halt_send(
+        &mut self,
+        gate: &OrganPort,
+        ticket: &OrganSend,
+    ) -> Result<(), PairError> {
+        if !self.frozen || !ticket.belongs_to(gate) || !ticket.sent() {
+            return Err(PairError::WrongPhase);
+        }
+        let call = self.halt_execution().ok_or(PairError::WrongPhase)?.0.clone();
+        self.entry_mut(&call)?.sent = true;
+        Ok(())
+    }
+
+    pub(super) fn halt_gate_terminal(&self, call: &CallId) -> Option<(&PairEnded, &[u8])> {
+        if !self.frozen {
+            return None;
+        }
+        let entry = self.entry(call).ok()?;
+        Some((entry.ending.as_ref()?, entry.received.as_ref()?.raw_bytes()))
     }
 
     /// No terminal can be attributed to the gate without the owned packet.
