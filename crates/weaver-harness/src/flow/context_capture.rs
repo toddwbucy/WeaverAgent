@@ -17,7 +17,6 @@ enum Phase {
     Held,
     Acknowledge,
     Finished,
-    AbortPending,
     Aborting,
     Releasing,
     ReleaseCleanup,
@@ -33,6 +32,9 @@ pub(super) struct MemberCapture {
     answer: Option<CaptureAnswer>,
     refusal: Option<CaptureAnswer>,
     timeout: Option<CaptureTimeout>,
+    // A consumed refusal or timeout still owes cleanup if lifecycle admission
+    // yields. Preserve the original leg and its bound until Abort is enqueued.
+    abort_pending: bool,
 }
 
 #[derive(Debug)]
@@ -160,6 +162,7 @@ impl RecordingContext {
             answer: None,
             refusal: None,
             timeout: None,
+            abort_pending: false,
         });
         self.arm_capture_wait(PumpDeadline::CaptureWindow, window, io)?;
         let cut = AbsoluteBound::after(self.last_ns, self.declaration.cut_wait.elapsed_ns.0)
@@ -332,7 +335,6 @@ impl RecordingContext {
         id: DecimalU64,
         io: &mut impl PumpIo,
     ) -> Result<Advance, RunFailure> {
-        self.settle_recorded_capture(io)?;
         if self
             .member_capture
             .as_ref()
@@ -341,6 +343,7 @@ impl RecordingContext {
             return Err(self.capture_fault(io, "cancellation names another capture"));
         }
         self.allow_capture_cleanup(io)?;
+        self.settle_recorded_capture(io)?;
         if self.member_capture.as_ref().expect("checked capture").phase == Phase::Barrier {
             self.flow
                 .cancel_capture_barrier(
@@ -364,6 +367,9 @@ impl RecordingContext {
         }
         if phase == Phase::Complete {
             return Ok(Advance::Progress);
+        }
+        if phase == Phase::Releasing {
+            return Err(self.capture_fault(io, "cancellation cannot replace capture release"));
         }
         if phase == Phase::Finished
             || (phase == Phase::Acknowledge
@@ -389,7 +395,9 @@ impl RecordingContext {
                 return Ok(Advance::Progress);
             }
         }
-        self.enqueue_capture_abort(io)?;
+        // Cancellation passed its admission check above. Do not introduce a
+        // second recoverable boundary before carrying that accepted intent.
+        self.start_capture_abort(io)?;
         Ok(Advance::Progress)
     }
 
@@ -424,7 +432,7 @@ impl RecordingContext {
         if self
             .member_capture
             .as_ref()
-            .is_some_and(|owner| owner.phase == Phase::AbortPending)
+            .is_some_and(|owner| owner.abort_pending)
         {
             self.enqueue_capture_abort(io)?;
             return Ok(true);
@@ -666,11 +674,20 @@ impl RecordingContext {
     }
 
     fn enqueue_capture_abort(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
-        // Retain the successor before the lifecycle check can yield. In
-        // particular, a recorded refusal has already consumed its completion
-        // and retired its original wait, so that result cannot trigger us again.
-        self.member_capture.as_mut().expect("capture owner").phase = Phase::AbortPending;
+        // The obligation survives independently of the original leg. A consumed
+        // refusal cannot trigger it again, and an outstanding leg must retain
+        // its identity while a recoverable lifecycle wait prevents enqueue.
+        self.member_capture
+            .as_mut()
+            .expect("capture owner")
+            .abort_pending = true;
         self.allow_capture_cleanup(io)?;
+        self.start_capture_abort(io)
+    }
+
+    /// The caller has checked lifecycle admission. Enqueue and install the
+    /// cleanup owner without another recoverable yield between those actions.
+    fn start_capture_abort(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         let id = self.member_capture.as_ref().expect("capture owner").id;
         let result = self
             .flow
@@ -690,7 +707,9 @@ impl RecordingContext {
         }
         self.deadlines.disarm(PumpDeadline::CaptureResult);
         self.deadlines.disarm(PumpDeadline::CaptureWindow);
-        self.member_capture.as_mut().expect("capture owner").answer = None;
+        let owner = self.member_capture.as_mut().expect("capture owner");
+        owner.answer = None;
+        owner.abort_pending = false;
         self.begin_capture_wait(Phase::Aborting, SMALL_CONTROL_NS, io)
     }
 
