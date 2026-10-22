@@ -12,7 +12,7 @@ reshaped this charter are recorded in it rather than pending against it, and sec
 **External boundary:** `weaver-admin-operator-contract`, for the granted command lines,
 the record's exit and the trace door, its party outside the program
 **Editorial:** Per the Working Rules.
-**Landing PR:** #72
+**Landing PR:** #235
 
 ---
 
@@ -581,8 +581,10 @@ answer at admission under the agent's identity, per `weaver-spu-PRD` section 4.1
 a look taken here runs as root: an artifact readable to root under a directory the
 agent uid cannot traverse passes such a check and fails the load, so the check turns
 unenforced into documented as enforced, which is worse than no check. The inventory
-therefore checks that the artifact is named and nothing more, an empty member refusing
-as the declaration's fault, and the SPU's refusal is the one that names the path and
+therefore checks that the artifact is named. An empty member is the declaration's fault.
+For the STE100 duty it also checks the declared locator's absolute-path syntax,
+under the operator's ruling of 2026-10-22 on #235. That syntax check opens no model file
+and judges no filesystem property. The SPU's refusal is the one that names the path and
 the identity it was judged under, per that charter's section 7.
 
 Reached as the front half of a load, a clean inventory flows into step 4 and a failure

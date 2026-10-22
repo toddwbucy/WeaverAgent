@@ -4,7 +4,7 @@
 
 **Landing PR:** #232
 
-**Version:** 0.6 **Date filed:** 2026-10-21 **Parent:** weaver-spu-PRD
+**Version:** 0.7 **Date filed:** 2026-10-21 **Parent:** weaver-spu-PRD
 
 ## 0. Scope and owning clauses
 
@@ -231,7 +231,8 @@ instrument below pins the binary set. Amend section 11 to distinguish the score 
 from this span-binding duty. Add the binary target
 weaver-spu-ste100 at src/bin/ste100.rs and the library module ste100. Its grammar,
 binder and protocol dispatcher live in src/ste100/. It implements [Spec 02][protocol]
-PROTOCOL-OWNER, SCHEME, PARSER, MODEL, BINDING, CAPACITY, CHANNEL, PORT and TEMPLATES as
+PROTOCOL-OWNER, SCHEME, MANIFEST-LOCATOR, PARSER, MODEL, BINDING, CAPACITY, CHANNEL,
+PORT and TEMPLATES as
 normative parts of this section. Their score labels, tie rule, complete-block results,
 fragment header, state tables and refusal mapping are the definition sites, not
 alternatives for the implementation to choose. The [STE100 contract][contract] governs
@@ -249,6 +250,14 @@ Absent backend support is unsupported_artifact, not an implicit fallback to the 
 scorer or a test model. The active backend and feature selection are pinned by O02-2's
 qualified artifact. No lifecycle or decode handler is exposed on this duty's port.
 [CLASS-2, CLASS-7, CLASS-8, PERSIST-6]
+
+The SPU owns MANIFEST-LOCATOR acquisition after exec, as the agent uid. Pin the artifact
+root during acquisition and keep each checked byte/file owner through the adapter's
+last read. Retaining the root does not permit reopening a checked pathname after Ready.
+The model identity is Spec 02's manifest SHA-256 plus verification of its named files,
+not Spec section 3's legacy BLAKE3 file-or-directory walk. No legacy decoder or label
+binding is reinterpreted. Acquisition failure uses unsupported_artifact before Ready
+and does not weaken the inherited descriptor boundary. [CLASS-2, CLASS-7, SEAM-2]
 
 Several declared instances run inside this one process and share the exact scheme and
 artifact identities. They may analyze independent sentences in the one outstanding
@@ -275,6 +284,7 @@ October 18 R10]
 | --- | --- | --- |
 | SPU-STE100 target and custody | New tests/manifest.rs::ste100_binary_set pins the three [[bin]] names and paths in Spec section 1, separate from the existing fixture TABLE. Dependency and fork/exec descriptor checks use the existing organ launch path | Replace or omit a binary, link an interior crate or inherit a state/gate/trace handle |
 | Admission and transport | CHANNEL corpus over real SEQPACKET plus TYPES-STE100-ADMISSION fixtures | Accept a mismatched initial limit, wrong identity, legacy ready body or incomplete logical message |
+| Manifest acquisition | Spec 02 MANIFEST-LOCATOR acquisition and retained-owner fixtures | Resolve a directory by guessing, follow an escaping link, reopen checked inputs or load an unreferenced file |
 | Whole result and internal instances | PORT state-table rows with held/faulting sentence workers | Return a prefix, overlap requests or reorder sentence bindings |
 | Grammar and model judgment | PARSER/MODEL/BINDING/TEMPLATES instruments in Spec 02 | Interpret sequence scores as spans, silently skip a grammar rule or certify examples instead of inclusion |
 | Conformance versus component failure | Accepted, not_ste100, capacity, invalid-output and process-death corpus | Kill the checker for correct rejection or keep serving after a terminal component result |

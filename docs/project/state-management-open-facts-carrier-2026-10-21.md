@@ -8,7 +8,8 @@ only. The [operator approved the revised carrier on 2026-10-22][ruling], subject
 to review and merge. No implementation result or production qualification is claimed.
 The owning documents use merge-time MERGED headers under Working Process
 section 2. Their proposed delta is not implementation authority before approval and
-merge. The replacement serving implementation is held for the coupled foundation cutover.
+merge. The replacement serving implementation is held for the coupled foundation
+cutover.
 
 ## 1. Gap and proposed election
 
