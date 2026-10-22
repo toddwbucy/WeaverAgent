@@ -160,6 +160,7 @@ mod tests {
                 detail: "synthetic serialization refusal".into(),
             }),
             sample,
+            None,
         )
         .unwrap();
         let expected = wrap(

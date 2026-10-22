@@ -268,3 +268,55 @@ fn file_and_pair_observations_start_before_the_real_operation_hint_parse() {
     assert_eq!(peer.read(&mut after).unwrap(), 0);
     fixture.finish();
 }
+
+#[test]
+fn serving_snapshot_and_preflight_refusal_finish_after_real_payload_encoding() {
+    let (mut fixture, mut peer, _) = launch("timing");
+    for request_id in [2, 3] {
+        let request = StateFrame::Control {
+            common: fixtures::common(request_id),
+            frame: StateControl::Snapshot {
+                capture_id: 7.into(),
+            },
+        };
+        peer.get_mut()
+            .write_all(&encode_state_line(&request, FrameDirection::Request).unwrap())
+            .unwrap();
+        let mut bytes = Vec::new();
+        assert!(
+            peer.read_until(b'\n', &mut bytes).unwrap() > 0,
+            "serving run failed its encode/finish assertion before publishing"
+        );
+        let answer = decode_state_line(&bytes, FrameDirection::Response).unwrap();
+        answer
+            .validate_response_to(&request, request_id.into())
+            .unwrap();
+        let StateFrame::ControlAnswer {
+            frame, observation, ..
+        } = answer
+        else {
+            panic!("expected snapshot control answer");
+        };
+        if request_id == 2 {
+            assert!(matches!(frame, StateControlAnswer::Snapshot { .. }));
+            assert_eq!(observation.resource.cpu_ns, Some(10.into()));
+        } else {
+            assert!(matches!(
+                frame,
+                StateControlAnswer::ControlRefused {
+                    code: ControlRefusalCode::Capture(CaptureRefusalCode::InvalidCaptureState),
+                    ..
+                }
+            ));
+            assert!(observation.resource.cpu_ns.is_none());
+            assert_eq!(
+                observation.disk.unavailable_reason,
+                Some(ObservationUnavailable::NotSampled)
+            );
+        }
+    }
+    peer.get_ref().shutdown(std::net::Shutdown::Write).unwrap();
+    let mut after = [0; 1];
+    assert_eq!(peer.read(&mut after).unwrap(), 0);
+    fixture.finish();
+}
