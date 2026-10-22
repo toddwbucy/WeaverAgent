@@ -137,7 +137,10 @@ impl Journal {
             }
         }
         let kept = layout::prefix(&self.layout, &end)?;
-        let (n, rebuild_start) = if end == layout::end(&self.layout) && !self.rebuild_pending {
+        let (n, rebuild_start) = if position
+            == layout::position(&self.layout, &layout::end(&self.layout))?
+            && !self.rebuild_pending
+        {
             (self.resident, kept.len())
         } else {
             let boundary = self.boundaries.iter().rev().find(|boundary| {
@@ -207,9 +210,7 @@ impl Journal {
             for message in unit.messages() {
                 let id = next_message;
                 next_message = id.checked_add(1).ok_or(JournalError::Exhausted)?;
-                if message.role == Role::System {
-                    return Err(JournalError::InvalidMap);
-                }
+                validate_delta_message(message)?;
                 new_messages.push(RetainedMessage {
                     id: id.into(),
                     message: message.clone(),
@@ -251,31 +252,7 @@ impl Journal {
                 .iter()
                 .flat_map(|m| &m.sources)
                 .collect();
-            for request in &sources {
-                if let MaterialRef::Request { call_id } = &request.material {
-                    let mut returns = sources.iter().filter(|source|
-                        matches!(&source.material, MaterialRef::Returned { call_id: found } if found == call_id));
-                    let returned = returns.next().ok_or(JournalError::InvalidPair)?;
-                    if returns.next().is_some() {
-                        return Err(JournalError::InvalidPair);
-                    }
-                    new_pairs.push(PairLink {
-                        call: call_id.clone(),
-                        request: (*request).clone(),
-                        returned: (**returned).clone(),
-                    });
-                }
-            }
-            for returned in sources {
-                if let MaterialRef::Returned { call_id } = &returned.material
-                    && !new_pairs
-                        .iter()
-                        .any(|pair| pair.call == *call_id && pair.returned == *returned)
-                {
-                    // Fresh result-only authority is deliberately not implemented.
-                    return Err(JournalError::InvalidPair);
-                }
-            }
+            new_pairs.extend(unit_pair_links(&sources)?);
         }
         let assistant_id = next_message.into();
         next_message = next_message.checked_add(1).ok_or(JournalError::Exhausted)?;
@@ -443,6 +420,45 @@ impl Journal {
     }
 }
 
+// These are pure checks of inspection values, not material constructors. The
+// current SelectedUnit producers already prevent system and unmatched returns.
+fn validate_delta_message(message: &Message) -> Result<()> {
+    if message.role == Role::System {
+        return Err(JournalError::InvalidMap);
+    }
+    Ok(())
+}
+
+fn unit_pair_links(sources: &[&PlacedSource]) -> Result<Vec<PairLink>> {
+    let mut pairs = vec![];
+    for request in sources {
+        if let MaterialRef::Request { call_id } = &request.material {
+            let mut returns = sources.iter().filter(|source|
+                matches!(&source.material, MaterialRef::Returned { call_id: found } if found == call_id));
+            let returned = returns.next().ok_or(JournalError::InvalidPair)?;
+            if returns.next().is_some() {
+                return Err(JournalError::InvalidPair);
+            }
+            pairs.push(PairLink {
+                call: call_id.clone(),
+                request: (*request).clone(),
+                returned: (**returned).clone(),
+            });
+        }
+    }
+    for returned in sources {
+        if let MaterialRef::Returned { call_id } = &returned.material
+            && !pairs
+                .iter()
+                .any(|pair| pair.call == *call_id && pair.returned == **returned)
+        {
+            // Fresh result-only authority is deliberately not implemented.
+            return Err(JournalError::InvalidPair);
+        }
+    }
+    Ok(pairs)
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -454,4 +470,22 @@ pub(super) fn exercise_material(units: Vec<SelectedUnit>, foreign: SelectedUnit)
 #[cfg(test)]
 pub(super) fn exercise_material_map_order(unit: SelectedUnit) {
     tests::exercise_material_map_order(unit);
+}
+
+#[cfg(test)]
+pub(super) fn exercise_material_guard(unit: SelectedUnit, guard: MaterialGuard) {
+    tests::exercise_material_guard(unit, guard);
+}
+
+#[cfg(test)]
+pub(super) enum MaterialGuard {
+    SystemMessage,
+    MissingRequest,
+    DuplicateReturn,
+    ReturnedAnnotation,
+}
+
+#[cfg(test)]
+pub(super) fn exercise_step_query(unit: SelectedUnit) {
+    tests::exercise_step_query(unit);
 }
