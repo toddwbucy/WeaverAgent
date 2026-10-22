@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #192
+**Landing PR:** #213
 
-**Version:** 0.23 **Date filed:** 2026-10-20 **Parent:** weaver-types-PRD
+**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -525,9 +525,39 @@ qualification. [CLASS-2, CLASS-7, CLASS-8, PERSIST-6]
 **TYPES-INPUT.** Add RefusalRecord::Input with InputRefusal {input_id, case, detail},
 where case is non_ste100 or invalid_input_shape. The JSON tagged refusal names seam
 input. Also add RefusalRecord::ProtocolRepair {source_id:SourceBlockId,case,detail},
-with seam protocol_repair and case correction_call, missing_tool_statement or
-ambiguous_tool_statement. Both use the existing trace kind refusal. A correct protocol
-refusal grants neither filing nor component halt. [CLASS-9, CLASS-10]
+with seam protocol_repair and case correction_call, empty_correction,
+missing_tool_statement or ambiguous_tool_statement. Both use the existing trace kind
+refusal. A correct protocol refusal grants neither filing nor component halt.
+[CLASS-9, CLASS-10]
+
+source_id names evidence according to the case. For correction_call, it is the
+correction generation's SourcePosition.block_id, block zero of the recorded
+message.assistant. That block exists because the pass attempted a call. For
+empty_correction, it is the current rejected original Text source. The empty
+correction has no block, and no block is invented for it.
+[CLASS-9, CLASS-10]
+
+For missing_tool_statement and ambiguous_tool_statement at initial association,
+source_id names the recovered ToolCall block. For ambiguous_tool_statement after
+repair, it names the original rejected Text whose correction cannot supply the held
+external call's one-statement association. These IDs identify refusal evidence, not
+an accepted Binding or permission to dispatch. [CLASS-9, CLASS-10, PAIR-1]
+
+Harness-to-trace fixtures cover each case and both ambiguous_tool_statement contexts.
+Changing the required source_id to another generation or block must fail those
+fixtures. [CLASS-9, CLASS-10, FLOW-3]
+
+ProtocolRepairCase::EmptyCorrection serializes as empty_correction. Spec 02's
+EMPTY-CORRECTION owns its meaning, source attribution and exact detail under the
+[operator's ruling of 2026-10-21][empty-correction-ruling]. The trace carries that
+existing refusal payload without a new event kind or a fabricated content block.
+The strict-codec fixture requires this case to preserve source_id and the exact detail
+defined there. The harness-to-trace fixture requires that same detail and requires the
+refusal envelope to keep the same open turn and set causal_parent to the empty
+correction's message.assistant sequence. Both fixtures require unknown cases to refuse.
+Removing the case or changing its detail must fail both fixtures. Changing source_id
+must fail the strict-codec fixture. Changing the turn or causal_parent must fail the
+harness-to-trace fixture. [CLASS-9, CLASS-10, FLOW-3]
 
 ToolInterrupt becomes `ToolInterrupt { by: KillCause }`, allowing only unload or
 flow_failure on this command. Add KillCause::FlowFailure with wire spelling
@@ -966,3 +996,5 @@ classifier and pair amendments.
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 
 [canonical]: ../weaver-trace/weaver-trace-Spec.md#2-canonical-form
+[empty-correction-ruling]:
+https://github.com/toddwbucy/WeaverAgent/pull/213#issuecomment-6330669954

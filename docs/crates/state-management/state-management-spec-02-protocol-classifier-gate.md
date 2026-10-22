@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #213
 
-**Version:** 0.13 **Date filed:** 2026-10-20 **Document ID:** state-management-spec-02
+**Version:** 0.14 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -516,8 +516,8 @@ event is repair_exhausted. [CLASS-9, COST-5, FALS-2]
 | CheckingGeneration | All Text accepted | Return EffectiveEmission to the caller |
 | CheckingGeneration | One or more correct defects | Hold actions, enqueue sources, NeedRestatement |
 | NeedRestatement | Request recorded | Return RestatementRequest, AwaitingCorrection |
-| AwaitingCorrection | All correction Text accepted, no attempted calls | Resolve that source, advance queue or release held generation |
-| AwaitingCorrection | Correct defect or correction attempts a call | Record defect/protocol refusal, increment failed_corrections |
+| AwaitingCorrection | At least one Text block, all correction Text accepted, no attempted calls | Resolve that source, advance queue or release held generation |
+| AwaitingCorrection | Correct defect, correction attempts a call, or empty correction under EMPTY-CORRECTION | Record defect/protocol refusal, increment failed_corrections once |
 | AwaitingCorrection | Failed corrections below cap | NeedRestatement for the unresolved source |
 | AwaitingCorrection | Cap reached | Record repair_exhausted, account conforming requests without dispatch, return RepairExhausted, no successful answer grant |
 | Any repair state | Stop or operator leave | Cancel ledger, retain dispositions, no successful answer grant |
@@ -531,6 +531,30 @@ block. That protocol refusal is not component failure. Accepted correction text 
 erased from state. Rejected text owes no filing. Original and correction remain on the
 trace, and training-pair analysis remains external. [CLASS-8, CLASS-9, CLASS-10,
 SCOPE-1]
+
+**EMPTY-CORRECTION.** The [2026-10-21 operator ruling][empty-correction-ruling]
+counts a correction with zero Text blocks and no attempted call as one failed
+correction for its current rejected source. It neither resolves that source nor
+contributes an empty replacement to EffectiveEmission. Record the complete correction
+as its ordinary message.assistant, then record RefusalRecord::ProtocolRepair with case
+empty_correction. Its detail is exactly
+`correction contains no Text block or attempted call`.
+source_id names the current rejected original Text. The refusal's
+causal_parent names the empty correction's message.assistant sequence, and its turn is
+the same open turn. Do not invent a source block inside the empty correction. Reason:
+an empty correction supplies no replacement for the unresolved statement. Counting it
+under the existing cap gives that repair a finite outcome without erasing the source.
+[CLASS-9, CLASS-10, FLOW-3]
+
+After that refusal is recorded, increment failed_corrections once and follow the same
+below-cap or cap-reached row. This is an operation refusal, never non_ste100 fabricated
+without a checker result and never component failure. It creates no statement, binding
+or pair. A correction containing a ToolCall or UnrecoveredCall follows correction_call
+instead, even if it contains no Text. A Text block whose text is empty still takes
+OUTPUT-UNIT's normal classifier path and its recorded non_ste100 outcome. This rule
+applies only to a requested correction. An original generation with no Text retains
+the existing OUTPUT-UNIT and DECISION-BARRIER behavior.
+[CLASS-8, CLASS-9, CLASS-10, FLOW-3]
 
 Every conforming request in a forbidden correction pass still takes Spec 05's start and
 terminal path, ending not_dispatched/pass_purpose. This includes a valid recall binding.
@@ -644,6 +668,7 @@ a serving declaration. [CLASS-4, CLASS-7, PROMPT-2, FLOW-7]
 | INPUT, REUSE | Gate-to-worker integration with byte/UID substitution, queued input, delayed check and held trace capacity | Parse content in gate, open a turn early, trust payload origin, reuse changed text, start the check clock on queued arrival or after input.offered records |
 | OUTPUT-UNIT | Mixed Text/ToolCall messages with sparse selected indices | Renumber indices or skip checking unselected Text |
 | DECISION-BARRIER, REPAIR | Multiple-block generation, delayed rejection, repair cap, stop/leave and fake-clock cases | Deliver success early, dispatch before acceptance, omit cap evidence or halt on correct rejection |
+| EMPTY-CORRECTION | Requested empty correction below and at cap, held refusal recording, empty original, empty Text and call-only correction fixtures | Resolve the rejected source with no text, count an attempt twice, continue before the refusal is recorded, fabricate a checker result or change the original-generation rule |
 | TOOL-STATEMENT, RECALL | Pair and read-port doubles, shell schema regression, real pure helper tests | Bind unrelated text, execute a correction call, register recall at gate or omit the internal return |
 | QUALIFICATION | Review of frozen protocol plus held-out qualification run | Accept a tuple whose thresholds were changed after its held-out results |
 
@@ -699,7 +724,7 @@ SEAM-2]
 | C02-2 | TEMPLATE-CHECK accepts canonical TemplateSpec text for template targets, bindings:[] on accepted template replies, and complete inventory bytes in load. Text targets still require nonempty bindings. |
 | C02-3 | HARNESS-CLASSIFY/CLOCK/PUMP add decision_wait, decision_bound and blocked_stage decision. Each result/receipt barrier has one absolute deadline, disarmed during decode or tool execution and never reset by partial traffic. |
 | C02-4 | FlowObservation adds repair_requested and repair_exhausted phases, failed_corrections and retry_cap only for those phases. Repair records require source_id. Other phases reject those fields. |
-| C02-5 | RefusalRecord gains ProtocolRepair {source_id,case,detail}, case correction_call or missing_tool_statement or ambiguous_tool_statement. These use kind refusal and authorize no filing or halt. |
+| C02-5 | RefusalRecord gains ProtocolRepair {source_id,case,detail}, case correction_call, empty_correction, missing_tool_statement or ambiguous_tool_statement. These use kind refusal and authorize no filing or halt. EMPTY-CORRECTION defines the added case. TYPES-INPUT defines source_id for each case. |
 
 The foundation port's logical request/reply shapes are unchanged. C02-1 through C02-5
 now have their named owning clauses in the assembled foundation. Spec 05 supplies inward
@@ -734,3 +759,5 @@ state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 [internal]: weaver-internal-Spec-amendment.md
 [spu]: weaver-spu-Spec-amendment.md
 [ste100-contract]: weaver-harness-spu-ste100-contract.md
+[empty-correction-ruling]:
+https://github.com/toddwbucy/WeaverAgent/pull/213#issuecomment-6330669954
