@@ -53,8 +53,9 @@ fixture failed during real partition activation, before the mark owner could exi
 The corrected test now asserts that actual upstream refusal for both message.user and
 state.mark. TRACE-VALIDATION requires these projections, so downstream empty-selection
 guards are defensive equivalents under current admission. No fabricated active
-partition or bypassed AcceptedInput is used. The corrected run and compiled mutations
-remain pending the root's serialized Cargo lane. The focused harness filter is
+partition or bypassed AcceptedInput is used. A second fixture attempt reached an active-writer accessor before activation.
+It now drains and reads the real untapped writer. Both failed attempts are retained.
+The corrected focused run passed all thirteen tests. The focused harness filter is
 context::marks_tests. Thirteen tests use the real recorder, classifier packet channel,
 member stream and existing accepted-input owner with synthetic replies. They exercise:
 
@@ -73,7 +74,7 @@ member stream and existing accepted-input owner with synthetic replies. They exe
 Compile-time pins reject Clone for both BegunTask and FiledTaskInput. They also reject
 conversion from a public TaskScopeRef into BegunTask, or from SeatedInput into
 FiledTaskInput. Four external trait-addition probes must each reach the intended
-E0283 ambiguity and restore the exact source. Those probes are prepared but not run.
+E0283 ambiguity and restore the exact source. All four probes reached that diagnostic, and the exact-source restored check passed.
 
 An early independent Executor reading identified closed-prompt reuse and completion
 wait retirement. Both corrections and their regressions are included. That reading
@@ -92,13 +93,36 @@ The production instruction words, language artifacts and measured limits remain 
 Journal mark registration, Open evidence, native mark constructors, plan effects,
 placement and generation confirmation remain separate work.
 
-The freshness owner at 3415405 is joined. Mark admission excludes retained freshness
+The freshness owner through 1c5e53f is joined. Mark admission excludes retained freshness
 ownership, and freshness admission excludes retained marks ownership, including
 completed results. Existing generic-author continuation and each port's two exclusions
-are preserved. The combined gates remain pending.
+are preserved. The combined gates passed as recorded below.
 
 Current input admission already makes a local AcceptedInput and freshness mutually
 exclusive. A retained mark also retains its input snapshot. The explicit freshness-side
 mark check is therefore a defensive equivalent of existing snapshot exclusion. Its
 removal alone cannot be sold as a killed behavioral mutation. The completed freshness
 check in mark admission has a distinct Busy-before-input-validation regression.
+
+## Measured author check
+
+Olympus used private target /tmp/weaver-146-begin-task-target. The full joined harness
+suite passed 1289 tests with 18 inherited ignored cases. The focused thirteen tests,
+strict all-target harness clippy, formatting and lock checks passed. The first clippy
+run found a nested-if style issue and a large exact-selector refusal return. The final
+source collapses the condition and documents the local lint allowance. These do not
+change behavior. The focused run and strict gates passed after those edits.
+
+All eleven protective mutations compiled, failed the intended assertion and passed
+after exact-byte restoration. They cover required projections, closed-prompt reuse,
+foreign catalog seed, successor overflow, atomic Decision retirement, exact input
+receipt binding, unrelated-author exclusion, nested-yield custody, cancellation,
+template rejection and retained freshness exclusion. Four compile probes separately
+confirmed the private type properties with E0283. Defensive equivalent guards are not
+counted as killed mutations.
+
+The logs, recipes, probe results and source hashes are deposited in the shared bulk
+store under weaver-testing/state-management-146-olympus-2026-10-21/begin-task. Earlier
+fixture and lint failures are included. Two independent author readings covered the
+owner and its admission joins. These checks are not a Planner grade or production
+qualification.

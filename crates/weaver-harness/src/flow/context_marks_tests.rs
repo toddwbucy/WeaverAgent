@@ -572,7 +572,10 @@ fn begin_task_missing_required_input_or_mark_is_refused_at_activation() {
         // untapped writer after its normal drain instead of its active accessor.
         let limit = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while !matches!(
-            run.context.barrier.drain_status(&mut run.context.budget).unwrap(),
+            run.context
+                .barrier
+                .drain_status(&mut run.context.budget)
+                .unwrap(),
             serving::DrainStatus::Emptied
         ) {
             assert!(std::time::Instant::now() < limit, "writer did not drain");
