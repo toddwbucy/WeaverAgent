@@ -1,9 +1,10 @@
 # STE100 manifest locator proposal
 
-Date: 2026-10-21. Scope: issue #146, item F. Draft PR: #235.
+Scope: issue #146, item F. Draft PR: #235.
 
 This is a document-only proposal for the locator gap in Spec 02 DECLARATION.
-Operator approval and merge are owed. It supplies no runtime implementation,
+The [operator approved the revised rule on 2026-10-22][ruling]. Review and merge
+remain owed. It supplies no runtime implementation,
 language artifact, qualification result or serving cutover. Owning headers use
 the post-merge state required by Working Process section 2; that header is not
 approval of this branch.
@@ -124,10 +125,13 @@ or runtime conformance follows from these document corrections.
 ASCII, prose width, local links, version-index agreement and diff whitespace checks
 pass for this revision. The coordinating author's fresh lock gate passed. Two
 independent document readings found no concrete semantic defect within the
-nine-finding correction scope. Operator approval and merge remain owed. No Cargo, GPU,
+nine-finding correction scope. The revised rule is approved, with review and merge
+still owed. No Cargo, GPU,
 artifact download or deployment test is claimed.
 
 [protocol]:
 ../crates/state-management/state-management-spec-02-protocol-classifier-gate.md
 [spu-prd]: ../crates/weaver-spu/weaver-spu-PRD.md#7-identity-process-boundaries-and-the-model-artifact
 [spu-spec]: ../crates/weaver-spu/weaver-spu-Spec.md
+
+[ruling]: https://github.com/toddwbucy/WeaverAgent/pull/235#issuecomment-6333209095
