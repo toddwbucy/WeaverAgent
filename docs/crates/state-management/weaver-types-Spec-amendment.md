@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #192
 
-**Version:** 0.22 **Date filed:** 2026-10-20 **Parent:** weaver-types-PRD
+**Version:** 0.23 **Date filed:** 2026-10-20 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -380,11 +380,14 @@ contracts. [SEAM-3, COST-2, R20-19]
 
 Add MemberObservationIdentity with Spec 09's OBSERVATION-IDENTITY shape. opened requires
 member_observation, and all other frames refuse that member. Its PID is a u32 JSON
-number, its start/tick values are explicit nullable DecimalU64, and its version must be
-state-observation/1. The harness copies it into load, never StartIdentity. The store
-retains its run-keyed historical copy in observation_run and ordinary dumps under
-R20-19. Missing optional start facts keep their reason and do not become an open
-refusal. [FLOW-3, COST-5]
+number and its start/tick values are explicit nullable DecimalU64. A current opened
+requires state-observation/2, the sampling definition in Spec 09 SNAPSHOT-SAMPLING. The
+harness copies it into load, never StartIdentity. Historical observation_run identities
+and observations query results permit /1 or /2 and retain the recorded value. The
+shared validator separates historical identity validation from the current-open version
+check. Unknown versions refuse both contexts. The store retains the run-keyed copy in
+ordinary dumps under R20-19. Missing optional start facts keep their reason and do not
+become an open refusal. [FLOW-3, COST-5, PERSIST-1]
 
 The response parser requires observation on opened, filed, refused and control_answer,
 including control_refused. Requests refuse it. The dispatcher supplies the expected
@@ -405,8 +408,10 @@ not a measured capacity election. [COST-2, SEAM-3]
 The shared cross-crate corpus also checks the observations selector/result identity,
 after/through bounds, unique ordered operation IDs, request_source nullability and exact
 same-tag query association. Remove each check and require its negative case to fail. An
-ordinary entries query must never decode an observations result. [SEAM-3, COST-2,
-R20-19]
+ordinary entries query must never decode an observations result. Current opened must
+refuse /1 while an explicit historical observations result preserves /1. Both refuse an
+unknown version. Remove each context check and require its case to fail. [SEAM-3,
+COST-2, COST-5, R20-19]
 
 The shared cross-crate corpus covers every StateOperation, every response kind, unknown
 counters and each phase rule. It includes two valid snapshot continuations with one
