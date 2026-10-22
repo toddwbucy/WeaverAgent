@@ -8,8 +8,9 @@ issue #223. Branch: `code/state-capture-cleanup-resume`, stacked on PR #226 at
 
 A timely Snapshot or Acknowledge refusal consumed its recorded completion before
 cleanup admission. If that admission yielded to Leave, the owner lost the operation
-that would enqueue Abort. It now retains `AbortPending` before the recoverable check.
-Ordinary capture advancement resumes that obligation through the same lifecycle gate.
+that would enqueue Abort. It now retains an explicit abort obligation before the
+recoverable check, while keeping the predecessor phase and bound. Ordinary capture
+advancement resumes that obligation through the same lifecycle gate.
 
 One successful enqueue changes the phase to Aborting and installs its existing absolute
 cleanup bound. Repeated advancement neither duplicates Abort nor grants more time. The
@@ -17,8 +18,29 @@ original refusal remains private until the matching recorded Aborted result. Exi
 fatal and earlier lifecycle outcomes keep precedence.
 
 Implements: state-management-foundation-Spec PERSIST-CLEANUP and persistence actor
-transitions, scoped to refusal cleanup continuation. Author grade: conforms for that
-transition. This does not implement the remaining lifecycle publication owner.
+transitions, scoped to refusal, timeout and cancellation cleanup continuation. Author
+grade: conforms for those transitions. This does not implement the remaining lifecycle
+publication owner.
+
+The Planner's review identified that encoding this obligation as a phase also changed
+cancellation at a second clock boundary. The revised owner keeps the obligation
+separate. Cancellation validates its capture identity before settling owned work. Its
+first lifecycle check retains the existing retry contract: a Wait requires the parent
+to re-issue cancellation. After that admission, enqueue and ownership installation have
+no second recoverable check. Cancellation cannot replace an already owned Release.
+
+The same retained obligation covers original timeouts and results whose actual
+Recorded boundary missed the original deadline. Regression fixtures now interrupt each
+of those two legs at cleanup admission, resume through Leave, and require one correlated
+Abort with the unchanged cleanup bound. Additional cases pin both cancellation clock
+boundaries, wrong-ID refusal before an owed Abort is enqueued, and Release ownership.
+Review: [Planner PR #227 review][planner]. The revised owner passed 1179 harness
+tests (18 inherited ignored), all-target harness clippy, lock and formatting checks.
+Six compiled protective probes failed and exact restorations passed: dropped retention,
+retention after the wait, skipped resume, a second cancellation yield, wrong-ID
+settlement before admission, and refusal visibility before Aborted. An independent
+source review found no concrete defect in the revised ownership and deadline handling.
+The baseline results below remain tied to the earlier implementation.
 
 ## Evidence
 
@@ -47,7 +69,11 @@ The first sandbox attempt could not create its Unix socket. The host-lane baseli
 then reproduced the missing Abort assertion. Only that host result is behavioral
 evidence. No deployed agent was accessed.
 
-An independent source review found no defect in this two-file change. It did not grade
-Beginning, Commit, publication, actual member room-file cleanup or a production save.
-These tests and the author grade do not replace the Planner's review or qualification.
-The PR is submitted as a draft and only the operator merges it. Issue #146 remains open.
+The initial independent source review covered the production and regression changes.
+It did not grade Beginning, Commit, publication, actual member room-file cleanup or a
+production save. These tests and the author grade do not replace the Planner's review
+or qualification. The PR was submitted as a draft; only the operator merges it.
+Issue #146 remains open.
+
+[planner]:
+https://github.com/toddwbucy/WeaverAgent/pull/227#pullrequestreview-5608883320
