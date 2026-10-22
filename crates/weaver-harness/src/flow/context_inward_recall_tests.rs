@@ -75,7 +75,7 @@ impl InwardFixture {
             refusal: Refuse::No,
         }
     }
-    fn begin(&mut self, index: usize) {
+    fn ready(&mut self) {
         for _ in 0..512 {
             if self
                 .pairs
@@ -90,6 +90,18 @@ impl InwardFixture {
             }
             self.step().unwrap();
         }
+        assert!(
+            self.pairs
+                .output
+                .input
+                .run
+                .context
+                .next_pair_execution()
+                .is_some()
+        );
+    }
+    fn begin(&mut self, index: usize) {
+        self.ready();
         assert_eq!(
             self.pairs
                 .output
