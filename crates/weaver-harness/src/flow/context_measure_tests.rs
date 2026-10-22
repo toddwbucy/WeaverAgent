@@ -1411,6 +1411,15 @@ fn measurement_take_transfers_its_owner_without_yield_after_reservation_settleme
             }
         }
         assert!(complete);
+        let refusal_sources: Vec<_> = peer
+            .run
+            .context
+            .barrier
+            .recorder()
+            .structure()
+            .by_kind(Kind::Refusal)
+            .map(|record| record.sequence)
+            .collect();
         let now = peer.run.clock.now().unwrap();
         let leave = AbsoluteBound::after(now, 10).unwrap();
         peer.run
@@ -1440,10 +1449,46 @@ fn measurement_take_transfers_its_owner_without_yield_after_reservation_settleme
         assert_eq!(completed.request().delta, request().delta);
         assert_eq!(completed.request().tool_schemas, request().tool_schemas);
         assert_eq!(completed.bound(), bound);
+        assert_eq!(completed.wait(), PumpDeadline::Decision);
+        assert_eq!(completed.request().assembly_id, 9.into());
+        assert_eq!(completed.request().revision, 3.into());
+        assert_eq!(completed.request().keep, 45);
+        assert_eq!(completed.request().turn, None);
+        assert_eq!(completed.request().position, request().position);
+        match &completed {
+            MeasureCompletion::Measured(measured) => {
+                assert_eq!(
+                    *measured.facts(),
+                    super::measure_driver::MeasureFacts {
+                        resident: 45,
+                        prefix_tokens: 12,
+                        keep: 45,
+                        input_tokens: 17,
+                        capacity: 256,
+                    }
+                );
+                assert!(refusal_sources.is_empty());
+            }
+            MeasureCompletion::Refused(refused) => {
+                assert_eq!(
+                    refused.code(),
+                    weaver_types::state_flow::PlacementCode::InvalidSpan
+                );
+                assert_eq!(refusal_sources.len(), 2);
+                assert_eq!(
+                    refused.sources(),
+                    (Some(refusal_sources[0]), refusal_sources[1])
+                );
+            }
+            MeasureCompletion::Cancelled(_) => assert!(refusal_sources.is_empty()),
+        }
         assert!(peer.run.context.pending_measure_raw().is_none());
         // The pending Leave remains effective at the next recoverable boundary.
         assert_eq!(
-            peer.run.context.live(&mut clock).unwrap_err(),
+            peer.run
+                .context
+                .take_measurement(3.into(), &mut peer.decode, &mut clock)
+                .unwrap_err(),
             RunFailure::Wait {
                 key: PumpDeadline::Leave,
                 bound: leave,
