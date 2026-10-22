@@ -9,7 +9,8 @@ use crate::flow::read::ReadFailure;
 use receipt_driver::FilingOwner;
 use weaver_trace::Subsystem;
 use weaver_types::state_flow::{
-    PairEnded, PairFailure, PairRecord, QueryResult, ReadSelector, StateFrame, TerminalPairFate,
+    PairEnded, PairFailure, PairFile, PairRecord, QueryResult, ReadSelector, SourceBlockId,
+    StateFrame, TerminalPairFate,
 };
 
 /// Intentionally no production constructor, public fields or conversion. The
@@ -96,6 +97,18 @@ pub(in crate::flow) struct BootPairsAccount {
 }
 
 impl BootPairsAccount {
+    pub(in crate::flow) fn initial(&self) -> Option<&ReadCompletion> {
+        self.work.initial.as_ref()
+    }
+    pub(in crate::flow) fn recheck(&self) -> Option<&ReadCompletion> {
+        self.work.recheck.as_ref()
+    }
+    pub(in crate::flow) fn terminals(&self) -> &[FilingCompletion] {
+        &self.work.terminals
+    }
+    pub(in crate::flow) fn cancelled_event(&self) -> Option<&AuthoredEvent> {
+        self.work.cancelled_event.as_ref()
+    }
     pub(in crate::flow) fn read_refusal(&self) -> Option<&ReadFailure> {
         [&self.work.initial, &self.work.recheck]
             .into_iter()
@@ -214,8 +227,7 @@ impl RecordingContext {
             || self.load_duty.is_none()
         {
             Some(BootPairsBeginRefusal::WrongOpen)
-        } else if self.boot_pairs.is_some()
-            || self.inspection.is_some()
+        } else if self.inspection.is_some()
             || self.open_turn.is_some()
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
@@ -542,24 +554,20 @@ impl RecordingContext {
             match (dispositions.next(), dispositions.next()) {
                 (Some(SourceDisposition::Committed(source)), None) => {
                     let common = source.common();
-                    source.source().run == self.flow.run()
-                        && source.source().sequence.0 == filing.sequence().0
-                        && source.source().block.0 == 0
+                    boot_pair_source_matches(source.source(), self.flow.run(), filing.sequence())
                         && common.session_id == self.flow.state().identity().0
                         && common.run_id == self.flow.run()
                         && source.terminal().source == *source.source()
                         && source.terminal().outcome == TerminalOutcome::Filed
                         && matches!(source.receipt(), StateFrame::Filed { block_id, .. } if block_id == source.source())
                         && matches!(source.file(), LedgerFile::Pair(file)
-                            if file.scheme_id == self.declaration.scheme.scheme_id
-                                && file.source.session == common.session_id
-                                && file.source.run == common.run_id
-                                && file.source.kind == "tool.call.completed"
-                                && file.source.channel == "tool" && file.source.origin == "loop"
-                                && file.source.subsystem == "harness" && file.source.turn.is_none()
-                                && file.source.causal_parent.is_none()
-                                && file.validate_structure().is_ok()
-                                && matches!(&file.pair, PairRecord::Ended(ended) if Some(ended) == work.expected.as_ref()))
+                        if boot_pair_content_matches(
+                            file,
+                            &common.session_id,
+                            &common.run_id,
+                            &self.declaration.scheme.scheme_id,
+                            work.expected.as_ref(),
+                        ))
                 }
                 _ => false,
             }
@@ -576,6 +584,8 @@ impl RecordingContext {
     ) -> Result<(), RunFailure> {
         self.live(io)?;
         self.boot_pairs_wait_matches(io)?;
+        // Like begin_task, cancellation revokes an untaken result even after
+        // settlement. The account keeps both reads and every committed receipt.
         self.boot_pairs.as_mut().unwrap().cancelled = true;
         Ok(())
     }
@@ -603,7 +613,9 @@ impl RecordingContext {
     }
 
     fn boot_pairs_wait_matches(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
-        let work = self.boot_pairs.as_ref().ok_or(RunFailure::BootPairsOwned)?;
+        let Some(work) = self.boot_pairs.as_ref() else {
+            return Err(self.boot_pairs_fault(io, "boot repair operation has no owner"));
+        };
         if self.deadlines.get(PumpDeadline::Enter) != Some(work.prior.enter)
             || work.bound.is_some_and(|bound| {
                 self.deadlines.get(PumpDeadline::Decision)
@@ -628,3 +640,33 @@ impl RecordingContext {
         )
     }
 }
+
+// Pure association predicates share exactly the production checks with tests
+// inspecting copies of actual receipt values. They mint no receipt or grant.
+fn boot_pair_source_matches(source: &SourceBlockId, run: &str, sequence: Sequence) -> bool {
+    source.run == run && source.sequence.0 == sequence.0 && source.block.0 == 0
+}
+
+fn boot_pair_content_matches(
+    file: &PairFile,
+    session: &str,
+    run: &str,
+    scheme: &str,
+    expected: Option<&PairEnded>,
+) -> bool {
+    file.scheme_id == scheme
+        && file.source.session == session
+        && file.source.run == run
+        && file.source.kind == "tool.call.completed"
+        && file.source.channel == "tool"
+        && file.source.origin == "loop"
+        && file.source.subsystem == "harness"
+        && file.source.turn.is_none()
+        && file.source.causal_parent.is_none()
+        && file.validate_structure().is_ok()
+        && matches!(&file.pair, PairRecord::Ended(ended) if Some(ended) == expected)
+}
+
+#[cfg(test)]
+#[path = "context_boot_pairs_validation_tests.rs"]
+pub(super) mod validation_tests;

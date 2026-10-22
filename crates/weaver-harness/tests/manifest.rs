@@ -81,7 +81,7 @@ fn crate_names(tree: &str) -> Vec<String> {
 /// HARNESS-RECALL adds only the pure internal query constructor to the floor
 /// pair and trace/diagnostic members. Every organ remains across its socket.
 #[test]
-fn internal_dependency_set_is_the_floor_and_the_trace_seam() {
+fn internal_dependency_set_is_floor_trace_diagnostic_and_pure_recall() {
     let names = crate_names(&resolved_tree("normal"));
     let mut internal: Vec<_> = names
         .iter()
