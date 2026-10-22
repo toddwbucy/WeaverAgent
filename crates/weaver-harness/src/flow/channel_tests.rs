@@ -147,7 +147,7 @@ impl Peer {
                 read_limits: read_limits.clone(),
                 observation,
                 member_observation: MemberObservationIdentity {
-                    instrument_version: "state-observation/1".into(),
+                    instrument_version: "state-observation/2".into(),
                     pid: 7,
                     start_ticks: Some(10.into()),
                     ticks_per_second: Some(100.into()),

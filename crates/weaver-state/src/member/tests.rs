@@ -4,6 +4,8 @@ pub(super) mod process;
 
 pub(super) mod timing;
 
+mod accounting;
+
 #[test]
 fn observed_reply_bytes_match_the_shared_canonical_codec() {
     let common = Common {
@@ -52,7 +54,7 @@ fn observed_reply_bytes_match_the_shared_canonical_codec() {
             OperationSample::begin(u64::MAX.into(), common.request_id, operation).unwrap();
         sample.phase_begin(PhaseName::Validate).unwrap();
         sample.phase_end(PhaseName::Validate).unwrap();
-        let (observation, payload) = complete(reply, sample).unwrap();
+        let (observation, payload) = complete(reply, sample, None).unwrap();
         let bytes = wrap(&common, op, &payload, &observation).unwrap();
         let decoded = decode_state_line(&bytes, FrameDirection::Response).unwrap();
         assert_eq!(
@@ -75,7 +77,8 @@ fn page_budget_reserves_actual_wrapper_and_worst_case_metadata() {
     let page = pages
         .start(vec![b'x'; 524_288], 524_288.into(), budget)
         .unwrap();
-    let payload = encode_payload(&Reply::Control(StateControlAnswer::ReadPage(page))).unwrap();
+    let payload =
+        encode_payload(&Reply::Control(StateControlAnswer::ReadPage(page)), None).unwrap();
     assert!(
         payload.len() + wrapper_reserve(&common, "control_answer").unwrap()
             <= STATE_ANSWER_LINE_BOUND

@@ -456,22 +456,7 @@ fn serve_channel_event(
                 answered_tools.insert(envelope.exchange.ordinal);
                 return Ok(());
             }
-            Err(Unanswered::Channel(ChannelFault::Closed)) => return Err(ExitCode::SUCCESS),
-            Err(Unanswered::Channel(fault)) => {
-                eprintln!("{}", fault_line(&fault));
-                return Err(ExitCode::FAILURE);
-            }
-            // **An execution this gate cannot contain is never answered**
-            // (`weaver-gate-Spec` section 8): the gate exits, the harness
-            // meets its death, closes the call `Killed { by: fault }`, and
-            // kills `tools/` itself.
-            Err(Unanswered::Uncontained) => {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"died": "tools/ could not be contained: the execution is unanswered"})
-                );
-                return Err(ExitCode::FAILURE);
-            }
+            Err(failure) => return Err(unanswered_exit(failure)),
         }
     } else {
         // **The quiesce and the lower answer after every admitted frame**
@@ -533,6 +518,41 @@ fn serve_channel_event(
         Err(fault) => {
             eprintln!("{}", fault_line(&fault));
             Err(ExitCode::FAILURE)
+        }
+    }
+}
+
+/// Closure observed during teardown remains clean. A deadline that prevented
+/// delivery is a different fact, even when the execution was fully contained.
+fn unanswered_exit(failure: Unanswered) -> ExitCode {
+    match failure {
+        Unanswered::Channel(ChannelFault::Closed) => ExitCode::SUCCESS,
+        Unanswered::Channel(fault) => {
+            eprintln!("{}", fault_line(&fault));
+            ExitCode::FAILURE
+        }
+        Unanswered::DeliveryBound { exchange, answer } => {
+            let answer = match answer {
+                weaver_gate::tools::UndeliveredAnswer::ToolAnswer => "tool_answer",
+                weaver_gate::tools::UndeliveredAnswer::OutOfOrder => "out_of_order",
+            };
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "fault": "bounded_nondelivery", "exchange": exchange,
+                    "answer": answer, "at": "containment_deadline",
+                })
+            );
+            ExitCode::FAILURE
+        }
+        // The harness observes gate death and closes the unanswered execution
+        // Killed { by: fault }, completing containment under its own contract.
+        Unanswered::Uncontained => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"died": "tools/ could not be contained: the execution is unanswered"})
+            );
+            ExitCode::FAILURE
         }
     }
 }
@@ -886,3 +906,6 @@ mod test_common;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod answer_failure_tests;

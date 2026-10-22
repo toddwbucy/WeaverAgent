@@ -237,7 +237,7 @@ impl StateFrame {
                         "opened does not echo the complete accepted declaration",
                     ));
                 }
-                member_observation.validate()?;
+                member_observation.validate_current_open()?;
             }
             (Self::Filed { block_id, .. }, Self::File { filing, .. })
                 if block_id == &filing.block_id => {}
@@ -434,12 +434,40 @@ impl Serialize for StateFrame {
     }
 }
 
+/// A decoded frame and the exact owned outer RawValue bytes materialized by
+/// its strict decoder. This is one copy category, not a complete operation total.
+/// None means the checked sum overflowed. No failed decode produces an answer.
+#[derive(Debug)]
+pub struct DecodedStateFrame {
+    pub frame: StateFrame,
+    pub raw_field_bytes: Option<u64>,
+}
+
+impl<'de> Deserialize<'de> for DecodedStateFrame {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let fields = RawFields::deserialize(deserializer)?;
+        let raw_field_bytes = fields.0.values().try_fold(0_u64, |sum, value| {
+            sum.checked_add(u64::try_from(value.get().len()).ok()?)
+        });
+        let frame = StateFrame::from_fields(fields)?;
+        Ok(Self {
+            frame,
+            raw_field_bytes,
+        })
+    }
+}
+
 impl<'de> Deserialize<'de> for StateFrame {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let mut fields = RawFields::deserialize(deserializer)?;
+        Self::from_fields(RawFields::deserialize(deserializer)?)
+    }
+}
+
+impl StateFrame {
+    fn from_fields<E: Error>(mut fields: RawFields) -> Result<Self, E> {
         let protocol: String = fields.take("protocol")?;
         if protocol != STATE_FLOW_PROTOCOL {
-            return Err(D::Error::custom("unknown serving protocol"));
+            return Err(E::custom("unknown serving protocol"));
         }
         let common = Common {
             session_id: fields.take("session_id")?,
@@ -462,7 +490,7 @@ impl<'de> Deserialize<'de> for StateFrame {
             "refused" => &["code", "detail", "block_id", "observation"],
             "control" => &["frame"],
             "control_answer" => &["frame", "observation"],
-            _ => return Err(D::Error::custom("unknown serving operation")),
+            _ => return Err(E::custom("unknown serving operation")),
         })?;
         let result = match op.as_str() {
             "open" => Self::Open {
@@ -510,10 +538,10 @@ impl<'de> Deserialize<'de> for StateFrame {
                 frame: fields.take("frame")?,
                 observation: fields.take("observation")?,
             },
-            _ => return Err(D::Error::custom("unknown serving operation")),
+            _ => return Err(E::custom("unknown serving operation")),
         };
         fields.finish()?;
-        result.validate_envelope().map_err(D::Error::custom)?;
+        result.validate_envelope().map_err(E::custom)?;
         Ok(result)
     }
 }
