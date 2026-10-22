@@ -195,12 +195,12 @@ impl Unit {
             Some((0, text.len() as u64)),
         );
         if let Some(reference) = &entry.step_query {
-            if source.envelope.kind != "loop.instruction"
+            if !matches!(&self.id, UnitId::Span { .. })
+                || source.envelope.kind != "loop.instruction"
                 || reference.instruction.block_id != source.block_id
                 || entry.bindings.len() != 1
                 || entry.bindings[0].ordinal != reference.instruction.binding
                 || entry.bindings[0].value.statement_span != interval
-                || !pairs.is_empty()
             {
                 return Err(MaterialFailure::Invalid(
                     "step query is not its exact instruction",
@@ -210,9 +210,20 @@ impl Unit {
                 reference: reference.clone(),
                 message: (message as u64).into(),
             });
+            // This occurrence is only the previous-step query's instruction.
+            // The checked read retains its attachments as evidence, but they
+            // do not expand prior work or add request/returned coverage here.
+            return Ok(());
         }
+        let mut incomplete = false;
         for pair in pairs {
-            self.pair(entry, interval, message, pair)?;
+            match self.pair(entry, interval, message, pair) {
+                Err(MaterialFailure::IncompleteCandidates) => incomplete = true,
+                result => result?,
+            }
+        }
+        if incomplete {
+            return Err(MaterialFailure::IncompleteCandidates);
         }
         Ok(())
     }
@@ -224,19 +235,6 @@ impl Unit {
         text_message: usize,
         pair: &ReadPair,
     ) -> Result<(), MaterialFailure> {
-        if pair.fate == PairFate::Opened {
-            return Err(MaterialFailure::IncompleteCandidates);
-        }
-        let terminal_source = pair
-            .terminal_source
-            .as_ref()
-            .ok_or(MaterialFailure::Invalid(
-                "terminal pair has no terminal source",
-            ))?;
-        let terminal_raw = terminal_source.raw_block.get();
-        if self.pairs.contains(&pair.call_id) {
-            return Ok(());
-        }
         let binding = entry
             .bindings
             .iter()
@@ -249,6 +247,19 @@ impl Unit {
             return Err(MaterialFailure::Invalid(
                 "pair statement is outside selected Text",
             ));
+        }
+        if pair.fate == PairFate::Opened {
+            return Err(MaterialFailure::IncompleteCandidates);
+        }
+        let terminal_source = pair
+            .terminal_source
+            .as_ref()
+            .ok_or(MaterialFailure::Invalid(
+                "terminal pair has no terminal source",
+            ))?;
+        let terminal_raw = terminal_source.raw_block.get();
+        if self.pairs.contains(&pair.call_id) {
+            return Ok(());
         }
         let request = MaterialRef::Request {
             call_id: pair.call_id.clone(),
@@ -456,29 +467,37 @@ fn units(read: &RecordedRead) -> Result<Vec<Unit>, MaterialFailure> {
             local_id: *local_id,
             revision: *revision,
         };
-        if local_id.0 == 0 {
+        if local_id.0 == 0 || entries.is_empty() {
             return Err(MaterialFailure::InvalidSpan);
         }
         let mut unit = Unit::new(UnitId::Span { span: span.clone() });
         unit.spans.push(span);
+        let mut incomplete = false;
         for entry in entries {
             let selected = entry
                 .selected_span
                 .as_ref()
                 .ok_or(MaterialFailure::Invalid("span lacks its selected interval"))?;
-            unit.text(
+            match unit.text(
                 entry,
                 Span {
                     start: selected.start,
                     end: selected.end,
                 },
                 &entry.pairs.iter().collect::<Vec<_>>(),
-            )?;
+            ) {
+                Err(MaterialFailure::IncompleteCandidates) => incomplete = true,
+                result => result?,
+            }
         }
         unit.validate_map()?;
+        if incomplete {
+            return Err(MaterialFailure::IncompleteCandidates);
+        }
         return Ok(vec![unit]);
     }
     let mut units = vec![];
+    let mut incomplete = false;
     for entry in entries {
         let ReadSource::Event(source) = &entry.source else {
             return Err(MaterialFailure::InvalidSpan);
@@ -513,9 +532,15 @@ fn units(read: &RecordedRead) -> Result<Vec<Unit>, MaterialFailure> {
             }
         };
         let mut unit = Unit::new(id);
-        unit.text(entry, interval, &entry.pairs.iter().collect::<Vec<_>>())?;
+        match unit.text(entry, interval, &entry.pairs.iter().collect::<Vec<_>>()) {
+            Err(MaterialFailure::IncompleteCandidates) => incomplete = true,
+            result => result?,
+        }
         unit.validate_map()?;
         units.push(unit);
+    }
+    if incomplete {
+        return Err(MaterialFailure::IncompleteCandidates);
     }
     Ok(units)
 }
@@ -533,9 +558,6 @@ fn pair_unit(
     let pair = entry.pairs.get(pair_index).ok_or(MaterialFailure::Invalid(
         "pair selection names no attachment",
     ))?;
-    if pair.fate == PairFate::Opened {
-        return Err(MaterialFailure::IncompleteCandidates);
-    }
     let statement_entries = checked_entries(statement)?;
     if !matches!(statement.selector(), ReadSelector::Statement { statement } if statement == &pair.statement)
     {
@@ -557,6 +579,13 @@ fn pair_unit(
         return Err(MaterialFailure::Invalid(
             "pair statement differs between held snapshots",
         ));
+    }
+    for attached in &held.pairs {
+        if attached.call_id == pair.call_id && !same_pair_sources(attached, pair) {
+            return Err(MaterialFailure::Invalid(
+                "pair attachment differs between held snapshots",
+            ));
+        }
     }
     let mut unit = Unit::new(UnitId::Pair {
         call_id: pair.call_id.clone(),
