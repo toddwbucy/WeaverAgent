@@ -957,3 +957,35 @@ fn whole_block_pairs_use_indexed_binding_ownership_and_interleaved_open_order() 
         "{detail:?}"
     );
 }
+
+#[test]
+fn observed_result_encodings_retain_actual_written_prefixes_on_refusal() {
+    let mut store = test_store();
+    let selector = ReadSelector::SystemPrompt {};
+    let mut copied = BufferBytes::default();
+    let bytes = query_encoded_observed(&store, &selector, &mut copied).unwrap();
+    assert_eq!(copied.value(), Ok(bytes.len() as u64));
+    store.read_limits.max_result_bytes = 32.into();
+    let mut refused_bytes = BufferBytes::default();
+    assert!(matches!(
+        query_encoded_observed(&store, &selector, &mut refused_bytes),
+        Err(ReadFailure::Refused(ReadRefusalCode::ResultTooLarge))
+    ));
+    assert_eq!(
+        refused_bytes.value(),
+        Ok(br#"{"entries":{"entries":["#.len() as u64)
+    );
+
+    let mut shape_bytes = BufferBytes::default();
+    assert_eq!(
+        shape_observed(&store.connection, 2.into(), &mut shape_bytes).unwrap(),
+        vec![]
+    );
+    assert_eq!(shape_bytes.value(), Ok(2));
+    let mut shape_refusal = BufferBytes::default();
+    assert!(matches!(
+        shape_observed(&store.connection, 1.into(), &mut shape_refusal),
+        Err(ReadFailure::Refused(ReadRefusalCode::ResultTooLarge))
+    ));
+    assert_eq!(shape_refusal.value(), Ok(1));
+}

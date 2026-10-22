@@ -3,6 +3,8 @@
 
 use std::io;
 
+use weaver_state::serving_bytes::BufferBytes;
+
 use weaver_types::state_flow::{
     DecimalU64, DiskSample, MemberObservationIdentity, ObservationUnavailable, OperationDisk,
     OperationPhase, OperationResource, PhaseName, ResourceField, ResourceUnavailable,
@@ -63,6 +65,8 @@ impl Metrics for Kernel {
 }
 
 pub(super) struct OperationSample {
+    pub(super) copied: BufferBytes,
+    pub(super) held: BufferBytes,
     operation_id: DecimalU64,
     request_id: DecimalU64,
     operation: StateOperation,
@@ -101,6 +105,19 @@ impl OperationSample {
         let mut phases = Vec::new();
         phases.try_reserve_exact(6).map_err(io::Error::other)?;
         Ok(Self {
+            copied: if matches!(
+                operation,
+                StateOperation::Open
+                    | StateOperation::File
+                    | StateOperation::FilePair
+                    | StateOperation::Read
+            ) {
+                BufferBytes::unavailable(ObservationUnavailable::Uninstrumented)
+            } else {
+                BufferBytes::default()
+            },
+            // Only the complete member owner can supply the live-buffer inventory.
+            held: BufferBytes::unavailable(ObservationUnavailable::Uninstrumented),
             operation_id,
             request_id,
             operation,
@@ -177,9 +194,11 @@ impl OperationSample {
     /// and wrapper encoding happen later, outside this operation interval.
     pub(super) fn finish(
         self,
-        copied_bytes: Option<u64>,
-        held_bytes: Option<u64>,
+        copied_bytes: impl Into<BufferBytes>,
+        held_bytes: impl Into<BufferBytes>,
     ) -> io::Result<StateOperationObservation> {
+        let copied_bytes = copied_bytes.into().value();
+        let held_bytes = held_bytes.into().value();
         let ended_ns = monotonic_ns()?;
         #[cfg(test)]
         super::tests::timing::observation_end(ended_ns);
@@ -209,16 +228,16 @@ impl OperationSample {
                 None
             }
         };
-        if copied_bytes.is_none() {
+        if let Err(reason) = copied_bytes {
             missing.push(ResourceUnavailable {
                 field: ResourceField::CopiedBytes,
-                reason: ObservationUnavailable::Uninstrumented,
+                reason,
             });
         }
-        if held_bytes.is_none() {
+        if let Err(reason) = held_bytes {
             missing.push(ResourceUnavailable {
                 field: ResourceField::HeldBytes,
-                reason: ObservationUnavailable::Uninstrumented,
+                reason,
             });
         }
         let mut phases = self
@@ -243,8 +262,8 @@ impl OperationSample {
             phases,
             resource: OperationResource {
                 cpu_ns,
-                copied_bytes: copied_bytes.map(Into::into),
-                held_bytes: held_bytes.map(Into::into),
+                copied_bytes: copied_bytes.ok().map(Into::into),
+                held_bytes: held_bytes.ok().map(Into::into),
                 unavailable: missing,
             },
             disk,

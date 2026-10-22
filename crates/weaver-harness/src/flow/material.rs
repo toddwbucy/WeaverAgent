@@ -61,6 +61,11 @@ pub(super) struct SelectedUnit {
 }
 
 impl SelectedUnit {
+    pub(super) fn origin(&self) -> &Arc<()> {
+        // All constructors retain at least one read and check a common owner.
+        self.evidence.reads[0].origin()
+    }
+
     pub(super) fn unit_id(&self) -> &UnitId {
         &self.unit.id
     }

@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use serde::de::{DeserializeOwned, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{SeedFrame, StateFrame};
+use super::{DecodedStateFrame, SeedFrame, StateFrame};
 
 pub const STATE_REQUEST_LINE_BOUND: usize = 8 * 1024 * 1024;
 pub const STATE_ANSWER_LINE_BOUND: usize = 1024 * 1024;
@@ -136,6 +136,20 @@ fn line_body(line: &[u8], direction: FrameDirection) -> Result<&str, FrameCodecE
     std::str::from_utf8(body).map_err(|error| {
         FrameCodecError::Malformed(<serde_json::Error as serde::de::Error>::custom(error))
     })
+}
+
+/// The same strict codec, retaining its actual outer raw-buffer copy evidence.
+/// Deeper Text/context decoding belongs to the caller's separate coverage audit.
+pub fn decode_state_line_observed(
+    line: &[u8],
+    direction: FrameDirection,
+) -> Result<DecodedStateFrame, FrameCodecError> {
+    let decoded: DecodedStateFrame =
+        decode_strict(line_body(line, direction)?).map_err(FrameCodecError::Malformed)?;
+    if decoded.frame.is_request() != (direction == FrameDirection::Request) {
+        return Err(FrameCodecError::WrongDirection);
+    }
+    Ok(decoded)
 }
 
 pub fn decode_state_line(

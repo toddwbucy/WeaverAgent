@@ -880,3 +880,30 @@ fn current_open_requires_v2_while_historical_identity_preserves_v1_or_v2() {
         }
     }
 }
+
+#[test]
+fn observed_decode_counts_owned_raw_spelling_and_keeps_strict_guards() {
+    let plain = concat!(
+        "{\"protocol\":\"state-flow/1\",\"session_id\":\"session\",",
+        "\"run_id\":\"run\",\"request_id\":\"2\",\"op\":\"control\",",
+        "\"frame\":{\"held\":{}}}\n"
+    );
+    // Six actual RawValue owners: quotes and raw spelling count, not keys,
+    // separators or the decoded metadata strings.
+    let expected = 14 + 9 + 5 + 3 + 9 + 11;
+    let got = decode_state_line_observed(plain.as_bytes(), FrameDirection::Request).unwrap();
+    assert_eq!(got.raw_field_bytes, Some(expected));
+    let escaped = plain.replace("session\"", "sessi\\u006fn\"");
+    let raw = decode_state_line_observed(escaped.as_bytes(), FrameDirection::Request).unwrap();
+    assert_eq!(raw.frame.common(), got.frame.common());
+    assert_eq!(raw.raw_field_bytes, Some(expected + 5));
+    for malformed in [
+        plain.replace("\"held\":{}", "\"held\":{},\"held\":{}"),
+        plain.replace("\"held\":{}", "\"held\":{\"extra\":0}"),
+        plain.replace("\"request_id\":\"2\"", "\"request_id\":\"0\""),
+    ] {
+        assert!(decode_state_line_observed(malformed.as_bytes(), FrameDirection::Request).is_err());
+        assert!(decode_state_line(malformed.as_bytes(), FrameDirection::Request).is_err());
+    }
+    assert!(decode_state_line_observed(plain.as_bytes(), FrameDirection::Response).is_err());
+}

@@ -77,12 +77,31 @@ impl ServingSqlite {
         reads::query_encoded(self, selector).map_err(ReadFault::from)
     }
 
+    /// Adds actual encoded-result buffer writes, including a refused prefix.
+    /// This category alone does not cover the query's decoded content copies.
+    pub fn query_encoded_observed(
+        &self,
+        selector: &ReadSelector,
+        copied: &mut crate::serving_bytes::BufferBytes,
+    ) -> Result<Vec<u8>, ReadFault> {
+        reads::query_encoded_observed(self, selector, copied).map_err(ReadFault::from)
+    }
+
     pub fn held(&self) -> Result<weaver_types::state_flow::DecimalU64, ReadFault> {
         reads::held(&self.connection).map_err(ReadFault::from)
     }
 
     pub fn position(&self) -> Result<Option<weaver_types::state_flow::SourcePosition>, ReadFault> {
         reads::position(&self.connection).map_err(ReadFault::from)
+    }
+
+    /// Retain the bounded shape encoding's writes even on a size refusal.
+    pub fn shape_observed(
+        &self,
+        copied: &mut crate::serving_bytes::BufferBytes,
+    ) -> Result<Vec<weaver_types::state_flow::ShapeRow>, ReadFault> {
+        reads::shape_observed(&self.connection, self.read_limits.max_result_bytes, copied)
+            .map_err(ReadFault::from)
     }
 
     pub fn shape(&self) -> Result<Vec<weaver_types::state_flow::ShapeRow>, ReadFault> {

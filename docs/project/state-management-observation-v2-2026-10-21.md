@@ -26,9 +26,10 @@ Author grades: conforms for these implemented clauses.
 Implements: weaver-types-Spec-amendment TYPES-OBSERVATION-READ, scoped to current
 open and historical identity validation. Author grade: conforms.
 
-Copied-byte and held-byte accounting remains null with an uninstrumented reason.
-Issue #221 owns its implementation. Timing instrumentation does not qualify production
-resource limits, a save-window allowance or the state management cutover.
+The separate [buffer-accounting slice][byte-accounting] supplies local byte readings
+where its inventory is complete. Issue #221 retains the remaining copy instrumentation.
+Timing instrumentation does not qualify production resource limits, a save-window
+allowance or the state management cutover.
 
 ## Evidence
 
@@ -104,3 +105,5 @@ merges, and issue #146 remains open. No deployed agent or serving activation cha
 
 [planner]: https://github.com/toddwbucy/WeaverAgent/pull/225#pullrequestreview-5608802535
 [completion-review]: https://github.com/toddwbucy/WeaverAgent/pull/225#pullrequestreview-5608907601
+
+[byte-accounting]: state-management-buffer-accounting-2026-10-21.md
