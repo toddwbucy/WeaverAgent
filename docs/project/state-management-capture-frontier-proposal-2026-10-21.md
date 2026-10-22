@@ -1,7 +1,8 @@
 # Capture frontier and recall proposal
 
 This draft proposes one meaning for the harness's capture frontier under issue #146.
-The operator has not elected it. The owning clauses are proposed against main
+The [operator elected the complete Recorded watermark on 2026-10-22][ruling].
+The owning clauses are proposed against main
 c2646e293c8c1bb4376c4b9ea1d41cbebcc080b2, with the ordinary document headers stating
 their intended state after merge. They authorize no implementation before that merge.
 The complete serving replacement remains held for the qualified coupled cutover.
@@ -128,9 +129,11 @@ and two document readings preceded that Planner return and are not validation of
 revision. Static checks of this revision cover ASCII, prose width, synchronized
 versions, local links and diff hygiene. The fresh lock gate passed, and the
 coordinating review found no remaining concrete contradiction. Renewed Planner review
-and the operator election remain owed. PR #237 remains a draft.
+and merge remain owed. The operator election is recorded. PR #237 remains a draft.
 
 [review]:
 https://github.com/toddwbucy/WeaverAgent/pull/229#pullrequestreview-5609135461
 [proposal-review]:
 https://github.com/toddwbucy/WeaverAgent/pull/237#pullrequestreview-5609450946
+
+[ruling]: https://github.com/toddwbucy/WeaverAgent/pull/237#issuecomment-6333209803
