@@ -8,7 +8,7 @@ only. The [operator approved the revised carrier on 2026-10-22][ruling], subject
 to review and merge. No implementation result or production qualification is claimed.
 The owning documents use merge-time MERGED headers under Working Process
 section 2. Their proposed delta is not implementation authority before approval and
-merge. The existing serving implementation and coupled foundation cutover remain held.
+merge. The replacement serving implementation is held for the coupled foundation cutover.
 
 ## 1. Gap and proposed election
 
@@ -56,10 +56,11 @@ Boot recall Recorded establishes BootHead before decoder Open. BootHead retains 
 canonical system Message, stored SpanRef and stored UTF-8 byte end. The Open evidence
 does not create it. A boot placement that is Recorded, fits the configured limits and
 passes HARNESS-OPEN-LIVE releases initialized journal/decoder-use authority and boot
-mark readiness. That predicate requires Entered/active ownership, a clear latch, no
-observed stop or leave, and the unchanged original Enter bound still unexpired. A
-cancelled owner never regains readiness through a wake. Pair repair and the second empty
-open-pairs read remain later enter duties.
+mark readiness. The owner must be in RecordingPhase::Entered, with an active
+coordinator and a clear first-failure latch. No stop or leave may have been observed
+for this enter. The exact original Enter bound must still be owned and unexpired at
+the common clock sample. A cancelled owner never regains readiness through a wake.
+Pair repair and the second empty open-pairs read remain later enter duties.
 
 The harness holds the exact boot source, request, reservation, port and original enter
 bound. It requires a complete send and complete answer. It checks the echoed session,
