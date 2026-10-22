@@ -70,6 +70,25 @@ pub fn decode_strict<T: DeserializeOwned>(json: &str) -> Result<T, serde_json::E
     serde_json::from_str(json)
 }
 
+/// Delegate a typed field map without accepting serde's struct-as-array form.
+pub(super) fn deserialize_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct Object<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for Object<T> {
+        type Value = T;
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+            T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    deserializer.deserialize_map(Object(std::marker::PhantomData))
+}
+
 struct UniqueJson;
 
 impl<'de> Deserialize<'de> for UniqueJson {

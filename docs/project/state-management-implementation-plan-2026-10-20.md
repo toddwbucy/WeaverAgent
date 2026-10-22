@@ -21,11 +21,11 @@ historical slice counts below are evidence for their original tested revisions.
 The merged #232 Open evidence, #235 protected artifact, #237 capture watermark,
 #241 malformed recall and #244 PlanSummary proposals now supply Spec authority.
 Approval and merge of these documents do not implement their remaining owners.
-The next drafts start from this baseline:
+The next drafts stack from this baseline, each on its preceding carrier:
 
 | Branch | Scoped implementation and remaining boundary |
 | --- | --- |
-| code/state-open-evidence-carrier | Paired Opened evidence, strict harness/diagnostic checks and opaque trace placement payload. Full boot owner, recorded placement and fit remain owed. |
+| #255 code/state-open-evidence-carrier | Paired Opened evidence, strict harness/diagnostic checks and opaque trace placement payload. Published draft b26420e5. Full boot owner, recorded placement and fit remain owed. |
 | code/state-plan-summary-carrier | Required digest and complete last SourcePosition across state, harness and image consumers. Boot/effect cache coordinator remains owed. |
 | code/state-malformed-recall-owner | Identity-bearing refusal before an inward pair, with Recorded custody and no model feedback. Complete inward boot/repair and serving selection remain owed. |
 

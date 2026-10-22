@@ -264,6 +264,7 @@ fn seed_and_empty_plan_queries_have_strict_results_and_no_writes() {
 
 fn plan_fixture(store: &ServingSqlite) -> (PlanRef, SourceBlockId) {
     let db = &store.connection;
+    let operator = event(db, "run", 9, None, "plan.event");
     let source = event(db, "run", 10, Some("1"), "message.user");
     let instruction = binding(db, source, 0, "read", "file", None);
     db.execute("INSERT INTO span(local_id,revision,kind,status,opened_content_id) VALUES(?1,?2,'task','open',?3)",params![blob(1.into()),blob(1.into()),source]).unwrap();
@@ -273,13 +274,50 @@ fn plan_fixture(store: &ServingSqlite) -> (PlanRef, SourceBlockId) {
         setup_id: "review".into(),
         sha256: Digest::new("1".repeat(64)).unwrap(),
     };
-    db.execute("INSERT INTO plan_revision(plan_id,revision,task_id,task_revision,prompt_id,prompt_revision,status,operator_source,lock_source,last_source,review_setup,group_drafts) VALUES(?1,?1,?1,?1,?2,?1,'locked',?3,?3,?3,?4,?5)",params![blob(1.into()),blob(2.into()),source,serde_json::to_string(&review).unwrap(),r#"[{"id":"group","step_indices":["0","1"]}]"#]).unwrap();
+    db.execute("INSERT INTO plan_revision(plan_id,revision,task_id,task_revision,prompt_id,prompt_revision,status,operator_source,lock_source,last_source,review_setup,group_drafts) VALUES(?1,?1,?1,?1,?2,?1,'locked',?3,?4,?4,?5,?6)",params![blob(1.into()),blob(2.into()),operator,source,serde_json::to_string(&review).unwrap(),r#"[{"id":"group","step_indices":["0","1"]}]"#]).unwrap();
     let category = Category {
         id: "work".into(),
         verbs: vec!["read".into()],
         acts: vec![PlanAct::Statement],
         review_required: false,
     };
+    // This selector fixture supplies the held operator context required by the
+    // snapshot carrier. Full image/provenance tests use the actual filing path.
+    let context = PlanInputContext {
+        document_sha256: Digest::new("2".repeat(64)).unwrap(),
+        cause: weaver_types::Cause { uid: 0 },
+        expected: None,
+        operation: PlanInputOperation::Create {
+            task: 0.into(),
+            steps: vec![],
+            categories: vec![category.clone()],
+            groups: vec![],
+            review: review.clone(),
+        },
+    };
+    let operator_envelope = SourceEnvelope {
+        session: "session".into(),
+        run: "run".into(),
+        turn: None,
+        sequence: 9.into(),
+        kind: "plan.event".into(),
+        channel: "input".into(),
+        origin: "operator".into(),
+        subsystem: "harness".into(),
+        causal_parent: None,
+        wall_ms: 0,
+        monotonic_ns: 9.into(),
+    };
+    db.execute(
+        "UPDATE content_block SET channel='input',origin='operator',envelope=?1,source_path=?2,context_path=?3,context_raw=?4 WHERE id=?5",
+        params![
+            serde_json::to_string(&operator_envelope).unwrap(),
+            r#"["message","content",{"index":"0"}]"#,
+            r#"["context"]"#,
+            serde_json::to_string(&context).unwrap(),
+            operator,
+        ],
+    ).unwrap();
     db.execute(
         "INSERT INTO plan_category VALUES(?1,?1,'work',?2,?3)",
         params![

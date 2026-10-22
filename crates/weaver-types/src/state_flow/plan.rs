@@ -378,23 +378,61 @@ pub struct PlanBreakRecord {
 }
 
 /// One complete committed revision, independent of argument placement.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlanSnapshot {
     pub plan: PlanRef,
     pub task: TaskScopeRef,
     pub status: PlanStatus,
     pub review: ReviewSetupRef,
     pub operator_source: SourceBlockId,
-    #[serde(deserialize_with = "super::required_option")]
     pub lock_source: Option<SourceBlockId>,
-    pub last_source: SourceBlockId,
+    pub document_sha256: Digest,
+    pub last_source: SourcePosition,
     pub categories: Vec<Category>,
     pub group_drafts: Vec<GroupDraft>,
     pub groups: Vec<PlanGroup>,
     pub steps: Vec<PlanStep>,
-    #[serde(deserialize_with = "super::required_option")]
     pub broken: Option<PlanBreakRecord>,
+}
+
+impl<'de> Deserialize<'de> for PlanSnapshot {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            plan: PlanRef,
+            task: TaskScopeRef,
+            status: PlanStatus,
+            review: ReviewSetupRef,
+            operator_source: SourceBlockId,
+            #[serde(deserialize_with = "super::required_option")]
+            lock_source: Option<SourceBlockId>,
+            document_sha256: Digest,
+            last_source: SourcePosition,
+            categories: Vec<Category>,
+            group_drafts: Vec<GroupDraft>,
+            groups: Vec<PlanGroup>,
+            steps: Vec<PlanStep>,
+            #[serde(deserialize_with = "super::required_option")]
+            broken: Option<PlanBreakRecord>,
+        }
+        let fields: Fields = super::codec::deserialize_object(deserializer)?;
+        Ok(Self {
+            plan: fields.plan,
+            task: fields.task,
+            status: fields.status,
+            review: fields.review,
+            operator_source: fields.operator_source,
+            lock_source: fields.lock_source,
+            document_sha256: fields.document_sha256,
+            last_source: fields.last_source,
+            categories: fields.categories,
+            group_drafts: fields.group_drafts,
+            groups: fields.groups,
+            steps: fields.steps,
+            broken: fields.broken,
+        })
+    }
 }
 
 /// One fixed plan and content frontier for forward-flag counts.
@@ -580,6 +618,132 @@ impl PlanUpdateDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn snapshot_json() -> serde_json::Value {
+        serde_json::json!({
+            "plan":{"plan_id":{"seed_id":"seed","local_id":"1"},"revision":"1"},
+            "task":{
+                "task":{"seed_id":"seed","local_id":"1","revision":"1"},
+                "prompt":{"seed_id":"seed","local_id":"2","revision":"1"}
+            },
+            "status":"authorized",
+            "review":{"setup_id":"review","sha256":"0".repeat(64)},
+            "operator_source":{"run":"original","sequence":"1","block":"0"},
+            "lock_source":null,
+            "document_sha256":"1".repeat(64),
+            "last_source":{
+                "block_id":{"run":"original","sequence":"2","block":"0"},
+                "turn":null
+            },
+            "categories":[],"group_drafts":[],"groups":[],"steps":[],"broken":null
+        })
+    }
+
+    fn query_json(snapshot: serde_json::Value, current: bool) -> serde_json::Value {
+        if current {
+            serde_json::json!({"plan_current":{
+                "current":snapshot,"next_plan_id":"2","next_step_id":"1"
+            }})
+        } else {
+            serde_json::json!({"plan":{"snapshot":snapshot}})
+        }
+    }
+
+    #[test]
+    fn plan_snapshot_carrier_is_required_for_both_selectors_and_preserves_nullable_turn() {
+        for current in [false, true] {
+            for turn in [serde_json::Value::Null, serde_json::json!("original-turn")] {
+                let mut snapshot = snapshot_json();
+                snapshot["last_source"]["turn"] = turn;
+                let wire = query_json(snapshot, current);
+                let result: super::super::QueryResult =
+                    super::super::decode_strict(&wire.to_string()).unwrap();
+                assert_eq!(serde_json::to_value(&result).unwrap(), wire);
+            }
+            for defect in 0..14 {
+                let mut snapshot = snapshot_json();
+                match defect {
+                    0 => {
+                        snapshot.as_object_mut().unwrap().remove("document_sha256");
+                    }
+                    1 => snapshot["document_sha256"] = serde_json::Value::Null,
+                    2 => snapshot["document_sha256"] = serde_json::json!("A".repeat(64)),
+                    3 => snapshot["document_sha256"] = serde_json::json!("1".repeat(63)),
+                    4 => {
+                        snapshot.as_object_mut().unwrap().remove("last_source");
+                    }
+                    5 => snapshot["last_source"] = snapshot["last_source"]["block_id"].clone(),
+                    6 => {
+                        snapshot["last_source"]
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("turn");
+                    }
+                    7 => snapshot["last_source"]["legacy_turn"] = serde_json::Value::Null,
+                    8 => {
+                        snapshot["last_source"] = serde_json::json!([
+                            snapshot["last_source"]["block_id"],
+                            snapshot["last_source"]["turn"]
+                        ])
+                    }
+                    9 => {
+                        snapshot["last_source"]["block_id"] =
+                            serde_json::json!(["original", "2", "0"])
+                    }
+                    10 => {
+                        snapshot = serde_json::Value::Array(
+                            [
+                                "plan",
+                                "task",
+                                "status",
+                                "review",
+                                "operator_source",
+                                "lock_source",
+                                "document_sha256",
+                                "last_source",
+                                "categories",
+                                "group_drafts",
+                                "groups",
+                                "steps",
+                                "broken",
+                            ]
+                            .map(|name| snapshot[name].clone())
+                            .into(),
+                        )
+                    }
+                    11 => snapshot["document_sha256"] = serde_json::json!(["1".repeat(64)]),
+                    12 => {
+                        snapshot["last_source"]
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("block_id");
+                    }
+                    13 => snapshot["last_source"]["turn"] = serde_json::json!(3),
+                    _ => unreachable!(),
+                }
+                assert!(serde_json::from_value::<PlanSnapshot>(snapshot.clone()).is_err());
+                assert!(
+                    super::super::decode_strict::<super::super::QueryResult>(
+                        &query_json(snapshot, current).to_string()
+                    )
+                    .is_err(),
+                    "current={current}, defect={defect}"
+                );
+            }
+            let wire = query_json(snapshot_json(), current).to_string();
+            for duplicate in [
+                wire.replace("\"turn\":null", "\"turn\":null,\"turn\":\"other\""),
+                wire.replace(
+                    "\"document_sha256\":",
+                    "\"document_sha256\":null,\"document_sha256\":",
+                ),
+            ] {
+                assert!(
+                    super::super::decode_strict::<super::super::QueryResult>(&duplicate).is_err()
+                );
+            }
+        }
+    }
 
     #[test]
     fn categories_require_explicit_review_and_do_not_accept_predicates() {

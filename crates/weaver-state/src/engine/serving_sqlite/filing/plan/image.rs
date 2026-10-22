@@ -98,7 +98,7 @@ fn verify_revision(db: &Connection, seed: &str, p: &PlanSnapshot) -> Result<(), 
     let input: PlanInputContext =
         decode_strict(&raw.ok_or_else(|| invalid_effect("invalid plan operator source"))?)
             .map_err(|_| invalid_effect("invalid plan operator context"))?;
-    if input.cause.uid != 0 {
+    if input.cause.uid != 0 || p.document_sha256 != input.document_sha256 {
         return Err(invalid_effect("stored plan has no root provenance"));
     }
     verify_input(db, &p.operator_source, &input)?;
@@ -229,7 +229,17 @@ fn verify_revision(db: &Connection, seed: &str, p: &PlanSnapshot) -> Result<(), 
         return Err(invalid_effect("operator and stored step counts differ"));
     }
     verify_operator_steps(db, seed, p, &input)?;
-    let last = held_id(db, &p.last_source)?;
+    let last = held_id(db, &p.last_source.block_id)?;
+    let turn: Option<String> = db.query_row(
+        "SELECT turn FROM content_block WHERE id=?1",
+        [last],
+        |row| row.get(0),
+    )?;
+    if p.last_source.turn != turn {
+        return Err(invalid_effect(
+            "plan transition turn differs from its source",
+        ));
+    }
     if last <= operator
         || p.lock_source
             .as_ref()
@@ -239,7 +249,7 @@ fn verify_revision(db: &Connection, seed: &str, p: &PlanSnapshot) -> Result<(), 
     {
         return Err(invalid_effect("plan transition order is invalid"));
     }
-    match (p.status, effect_at(db, &p.last_source)?) {
+    match (p.status, effect_at(db, &p.last_source.block_id)?) {
         (
             PlanStatus::Authorized,
             PlanEffect::Authorize {
@@ -266,7 +276,7 @@ fn verify_revision(db: &Connection, seed: &str, p: &PlanSnapshot) -> Result<(), 
                     case,
                     step_id,
                     proposed_source,
-                    source: p.last_source.clone(),
+                    source: p.last_source.block_id.clone(),
                 })
             {
                 return Err(invalid_effect("broken plan differs from its effect"));

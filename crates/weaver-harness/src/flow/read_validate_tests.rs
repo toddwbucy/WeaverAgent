@@ -159,7 +159,11 @@ fn plan() -> s::PlanSnapshot {
         },
         operator_source: block(1),
         lock_source: None,
-        last_source: block(1),
+        document_sha256: s::Digest::new("b".repeat(64)).unwrap(),
+        last_source: s::SourcePosition {
+            block_id: block(1),
+            turn: None,
+        },
         categories: vec![],
         group_drafts: vec![],
         groups: vec![],

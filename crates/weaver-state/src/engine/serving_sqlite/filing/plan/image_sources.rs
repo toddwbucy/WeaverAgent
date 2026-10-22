@@ -74,7 +74,7 @@ pub(super) fn verify_sources(db: &Connection, seed: &str) -> Result<(), FileFaul
                 review,
             } => {
                 let old = snapshot(db, seed, expected)?;
-                if old.status != PlanStatus::Superseded || old.last_source != source {
+                if old.status != PlanStatus::Superseded || old.last_source.block_id != source {
                     return Err(invalid_effect("replacement lost its retired predecessor"));
                 }
                 authorizations.remove(&expected.plan_id.local_id.0);
