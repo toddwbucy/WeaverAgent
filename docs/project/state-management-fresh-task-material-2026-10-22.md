@@ -6,6 +6,8 @@ retains exact #190 and its qualified coupled-cutover hold.
 
 ## Implements and scope
 
+Draft PR: #250.
+
 Implements: state-management-spec-08-sort-selection UNIT and SORT-PORT's source
 provenance boundary; weaver-harness-Spec HARNESS-MATERIAL and HARNESS-MARKS's
 completed-task handoff. The author grades these scoped clauses conforms on the checks
