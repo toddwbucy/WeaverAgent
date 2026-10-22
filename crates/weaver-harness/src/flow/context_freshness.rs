@@ -88,6 +88,7 @@ impl RecordingContext {
             });
         }
         if self.freshness.is_some()
+            || self.marks.is_some()
             || self.open_turn.is_some()
             || self
                 .waiting_content

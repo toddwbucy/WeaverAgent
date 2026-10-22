@@ -69,7 +69,10 @@ impl RecordingContext {
                 failure: Some(failure),
             });
         }
-        if self.template_checks.is_some() || self.template_setup_refusal.is_some() {
+        if self.marks.is_some()
+            || self.template_checks.is_some()
+            || self.template_setup_refusal.is_some()
+        {
             return Err(TemplateBeginError {
                 inventory,
                 refusal: TemplateBeginRefusal::AlreadyStarted,

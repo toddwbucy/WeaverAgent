@@ -75,7 +75,8 @@ impl RecordingContext {
                 failure: Some(failure),
             });
         }
-        if self.output.is_some()
+        if self.marks.is_some()
+            || self.output.is_some()
             || self.freshness.is_some()
             || self.filing.is_some()
             || self.pair_work.is_some()
@@ -397,6 +398,9 @@ impl RecordingContext {
 
     pub(in crate::flow) fn cancel_input(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         self.live(io)?;
+        if self.marks_blocks_external() {
+            return Err(RunFailure::MarksOwned);
+        }
         self.input
             .cancel()
             .map_err(|error| self.input_fault(io, error.to_string()))?;
@@ -437,6 +441,9 @@ impl RecordingContext {
     /// check. The original exchange stays owned until its recorded disposition.
     pub(in crate::flow) fn finish_input(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         self.live(io)?;
+        if self.marks_blocks_external() {
+            return Err(RunFailure::MarksOwned);
+        }
         self.finish_input_wait(io, None)?;
         if self.input_author.is_some()
             || self.input_turn.is_some()
@@ -459,6 +466,12 @@ impl RecordingContext {
             return Err(InputConsumeError {
                 token: Some(token),
                 failure,
+            });
+        }
+        if self.marks_blocks_external() {
+            return Err(InputConsumeError {
+                token: Some(token),
+                failure: RunFailure::MarksOwned,
             });
         }
         if turn.0.is_empty() || self.input_turn.is_some() || self.input_turns.contains(&turn.0) {
@@ -504,6 +517,9 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Option<SeatedInput>, RunFailure> {
         self.live(ports.io)?;
+        if self.marks_blocks_external() {
+            return Err(RunFailure::MarksOwned);
+        }
         let Some(mut work) = self.input_turn.take() else {
             return Err(self.input_fault(ports.io, "input turn has no retained handoff"));
         };

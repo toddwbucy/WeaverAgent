@@ -57,6 +57,8 @@ pub(super) enum RunFailure {
     MeasureOwned,
     /// A read retains its result, recall author or completed proof.
     ReadOwned,
+    /// The explicit mark operation retains input, read or filing custody.
+    MarksOwned,
     /// A filing pause owns admission until its freshness result is taken.
     FreshnessOwned,
 }
@@ -113,6 +115,7 @@ pub(crate) struct RecordingContext {
     member_capture: Option<capture_driver::MemberCapture>,
     freshness: Option<freshness_driver::FreshnessTransaction>,
     read: Option<read_driver::ReadTransaction>,
+    marks: Option<marks_driver::MarksTransaction>,
     // Pointer identity survives moves and is never recreated from trace IDs.
     read_origin: std::sync::Arc<()>,
     content_read_started: bool,
@@ -218,6 +221,7 @@ impl RecordingContext {
             member_capture: None,
             freshness: None,
             read: None,
+            marks: None,
             read_origin: std::sync::Arc::new(()),
             content_read_started: false,
             boot_read_started: false,
@@ -405,6 +409,9 @@ impl RecordingContext {
         self.live(io)?;
         // A template result belongs to its ordered transcript, never a second
         // operation consumer. Correct rejection keeps that boundary closed.
+        if self.marks.is_some() {
+            return Err(RunFailure::MarksOwned);
+        }
         if self.templates_block_content() || self.output.is_some() || self.read.is_some() {
             return Ok(None);
         }
@@ -473,6 +480,7 @@ impl RecordingContext {
             || self.repair_wait_still_owned(key)
             || self.read_wait_still_owned(key)
             || self.measure_wait_still_owned(key)
+            || (key == PumpDeadline::Decision && self.marks.is_some())
             || self.freshness_wait_still_owned(key)
             || (key == PumpDeadline::Enter
                 && self.phase == RecordingPhase::Entered
@@ -503,6 +511,7 @@ impl RecordingContext {
             || self.read.is_some()
             || self.measure.is_some()
             || self.open_turn.is_some()
+            || self.marks.is_some()
         {
             return Err(self.fail(
                 io,
@@ -678,6 +687,10 @@ impl RecordingContext {
                 return Err(failure);
             }
         };
+        if self.marks_blocks_external() {
+            self.retain_refused(event);
+            return Err(RunFailure::MarksOwned);
+        }
         if self.freshness.is_some() && !retained_retry {
             self.retain_refused(event);
             return Err(RunFailure::FreshnessOwned);
@@ -844,6 +857,9 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
         self.live(ports.io)?;
+        if self.marks_blocks_external() {
+            return Err(RunFailure::MarksOwned);
+        }
         if self.read.is_some() {
             return Err(RunFailure::ReadOwned);
         }
@@ -908,6 +924,7 @@ impl RecordingContext {
                 proof: None,
             } = &progress
             {
+                self.bind_marks_author(*sequence, ports.io)?;
                 self.bind_repair_author(*sequence, ports.io)?;
                 self.bind_pair_author(*sequence, ports.io)?;
             }
@@ -1181,6 +1198,16 @@ impl RecordingContext {
         }
         if self.barrier.failure().is_some() || self.barrier.standing_failure().is_some() {
             return Err(self.record_failed(io));
+        }
+        // A read can own the recorder and prevent ordinary flow reduction.
+        // Inspect an already observed channel failure without consuming that
+        // author's ticket, progressing transport or replacing its original bound.
+        if let Some(failure) = self.flow.standing_state().and_then(StateChannel::failure) {
+            let failure = FlowFailure {
+                point: "state_transport",
+                detail: failure.to_string(),
+            };
+            return Err(self.flow_failed(io, failure));
         }
         self.reconcile_pair_send(io)?;
         let now = io.now().map_err(|error| {
@@ -1552,6 +1579,17 @@ pub(super) use repair_driver::{
 #[cfg(test)]
 #[path = "context_repair_tests.rs"]
 mod repair_tests;
+
+#[path = "context_marks.rs"]
+mod marks_driver;
+#[allow(unused_imports)] // Composed by the loop at the coupled cutover.
+pub(in crate::flow) use marks_driver::{
+    BeginTaskError, BeginTaskRefusal, TaskCompletion, TaskProgress,
+};
+
+#[cfg(test)]
+#[path = "context_marks_tests.rs"]
+mod marks_tests;
 
 #[path = "context_material.rs"]
 mod material_driver;

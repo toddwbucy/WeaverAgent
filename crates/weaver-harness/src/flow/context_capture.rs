@@ -77,6 +77,7 @@ impl RecordingContext {
             return Err(RunFailure::MeasureOwned);
         }
         if self.phase != RecordingPhase::Entered
+            || self.marks.is_some()
             || self.output.is_some()
             || self.filing.is_some()
             || self.pair_work.is_some()

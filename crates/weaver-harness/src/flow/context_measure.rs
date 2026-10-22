@@ -299,7 +299,8 @@ impl RecordingContext {
         {
             return Err(error(request, MeasureBeginRefusal::WrongTurn, None));
         }
-        if self.measure.is_some()
+        if self.marks.is_some()
+            || self.measure.is_some()
             || self.output.is_some()
             || self.filing.is_some()
             || self.pair_work.is_some()
