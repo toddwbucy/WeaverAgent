@@ -14,9 +14,7 @@ pub(in crate::flow::context) struct TaskMaterialEvidence {
     mark: Option<String>,
 }
 
-pub(in crate::flow::context) fn task_material_evidence(
-    task: &BegunTask,
-) -> TaskMaterialEvidence {
+pub(in crate::flow::context) fn task_material_evidence(task: &BegunTask) -> TaskMaterialEvidence {
     TaskMaterialEvidence {
         input: format!("{:?}", task.input),
         scope: task.scope.clone(),

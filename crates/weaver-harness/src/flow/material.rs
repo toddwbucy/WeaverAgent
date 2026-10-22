@@ -652,7 +652,9 @@ fn task_unit(task: &BegunTask) -> Result<Unit, MaterialFailure> {
         return Err(MaterialFailure::Invalid("filed task input is not one Text"));
     };
     if message.role != Role::User || text.is_empty() {
-        return Err(MaterialFailure::Invalid("filed task input is not user Text"));
+        return Err(MaterialFailure::Invalid(
+            "filed task input is not user Text",
+        ));
     }
     let source = ContentRef::Event {
         block_id: task.input().source().clone(),

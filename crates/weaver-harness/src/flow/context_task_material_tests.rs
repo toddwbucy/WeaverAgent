@@ -113,10 +113,18 @@ fn task_material_preserves_exact_filed_user_text_and_complete_task_evidence() {
         }]
     );
     let content = s::ContentRef::Event { block_id: source };
-    assert_eq!(unit.unit_id(), &s::UnitId::Block { source: content.clone() });
+    assert_eq!(
+        unit.unit_id(),
+        &s::UnitId::Block {
+            source: content.clone()
+        }
+    );
     let material = s::MaterialRef::Text {
         source: content,
-        span: s::Span { start: 0.into(), end: (text.len() as u64).into() },
+        span: s::Span {
+            start: 0.into(),
+            end: (text.len() as u64).into(),
+        },
     };
     assert_eq!(unit.sources(), std::slice::from_ref(&material));
     assert_eq!(
@@ -174,7 +182,10 @@ fn task_material_existing_scope_keeps_new_input_without_inventing_a_mark() {
     assert_eq!(task.input().source(), &source);
     assert!(task.mark().is_none());
     assert!(held.units()[0].spans().is_empty());
-    assert_eq!(marks_driver::validation_tests::task_material_evidence(task), evidence);
+    assert_eq!(
+        marks_driver::validation_tests::task_material_evidence(task),
+        evidence
+    );
     assert!(fx.input.records(Kind::StateMark).is_empty());
 }
 
@@ -209,15 +220,24 @@ fn task_material_foreign_context_returns_exact_owner_even_with_equal_source_ids(
     let second_task = begun(&mut second);
     assert_eq!(first_task.input().source(), second_task.input().source());
     let evidence = marks_driver::validation_tests::task_material_evidence(&first_task);
-    let error = second.input.run.context.hold_task_material(
-        first_task,
-        &mut second.input.run.clock,
-    ).unwrap_err();
+    let error = second
+        .input
+        .run
+        .context
+        .hold_task_material(first_task, &mut second.input.run.clock)
+        .unwrap_err();
     assert_eq!(error.kind, MaterialFailure::ForeignContext);
-    assert!(matches!(error.failure, Some(RunFailure::Flow {
-        reason: FlowHaltReason::ProtocolFailed, ..
-    })));
-    assert_eq!(marks_driver::validation_tests::task_material_evidence(&error.task), evidence);
+    assert!(matches!(
+        error.failure,
+        Some(RunFailure::Flow {
+            reason: FlowHaltReason::ProtocolFailed,
+            ..
+        })
+    ));
+    assert_eq!(
+        marks_driver::validation_tests::task_material_evidence(&error.task),
+        evidence
+    );
     let held = hold(&mut first, *error.task);
     assert!(held.belongs_to(&first.input.run.context));
     assert!(!held.belongs_to(&second.input.run.context));
@@ -235,15 +255,39 @@ fn task_material_expired_leave_returns_owner_for_retry_without_refiling() {
     let request_count = fx.requests.len();
     let now = fx.input.run.clock.now().unwrap();
     let bound = AbsoluteBound::after(now, 10).unwrap();
-    fx.input.run.context.arm(PumpDeadline::Leave, bound, &mut fx.input.run.clock).unwrap();
+    fx.input
+        .run
+        .context
+        .arm(PumpDeadline::Leave, bound, &mut fx.input.run.clock)
+        .unwrap();
     fx.input.run.clock.advance_to(bound.deadline_ns()).unwrap();
-    let error = fx.input.run.context.hold_task_material(task, &mut fx.input.run.clock).unwrap_err();
+    let error = fx
+        .input
+        .run
+        .context
+        .hold_task_material(task, &mut fx.input.run.clock)
+        .unwrap_err();
     assert_eq!(error.kind, MaterialFailure::Unavailable);
-    assert_eq!(error.failure, Some(RunFailure::Wait { key: PumpDeadline::Leave, bound }));
-    assert_eq!(marks_driver::validation_tests::task_material_evidence(&error.task), evidence);
-    assert_eq!(fx.input.run.context.complete_wait(PumpDeadline::Leave), Some(bound));
+    assert_eq!(
+        error.failure,
+        Some(RunFailure::Wait {
+            key: PumpDeadline::Leave,
+            bound
+        })
+    );
+    assert_eq!(
+        marks_driver::validation_tests::task_material_evidence(&error.task),
+        evidence
+    );
+    assert_eq!(
+        fx.input.run.context.complete_wait(PumpDeadline::Leave),
+        Some(bound)
+    );
     let held = hold(&mut fx, *error.task);
-    assert_eq!(marks_driver::validation_tests::task_material_evidence(held.task().unwrap()), evidence);
+    assert_eq!(
+        marks_driver::validation_tests::task_material_evidence(held.task().unwrap()),
+        evidence
+    );
     assert_eq!(fx.requests.len(), request_count);
     assert_eq!(fx.input.records(Kind::MessageUser).len(), 1);
     assert_eq!(fx.input.records(Kind::StateMark).len(), 1);
@@ -258,17 +302,33 @@ fn task_material_transfer_has_no_post_consumption_recoverable_yield() {
     let evidence = marks_driver::validation_tests::task_material_evidence(&task);
     let now = fx.input.run.clock.now().unwrap();
     let bound = AbsoluteBound::after(now, 10).unwrap();
-    fx.input.run.context.arm(PumpDeadline::Leave, bound, &mut fx.input.run.clock).unwrap();
+    fx.input
+        .run
+        .context
+        .arm(PumpDeadline::Leave, bound, &mut fx.input.run.clock)
+        .unwrap();
     let mut clock = HandoffClock {
         clock: &mut fx.input.run.clock,
         before_reads: 1,
         deadline: bound.deadline_ns(),
     };
-    let held = fx.input.run.context.hold_task_material(task, &mut clock).unwrap();
-    assert_eq!(marks_driver::validation_tests::task_material_evidence(held.task().unwrap()), evidence);
-    assert_eq!(fx.input.run.context.live(&mut clock), Err(RunFailure::Wait {
-        key: PumpDeadline::Leave, bound
-    }));
+    let held = fx
+        .input
+        .run
+        .context
+        .hold_task_material(task, &mut clock)
+        .unwrap();
+    assert_eq!(
+        marks_driver::validation_tests::task_material_evidence(held.task().unwrap()),
+        evidence
+    );
+    assert_eq!(
+        fx.input.run.context.live(&mut clock),
+        Err(RunFailure::Wait {
+            key: PumpDeadline::Leave,
+            bound
+        })
+    );
     assert!(held.belongs_to(&fx.input.run.context));
 }
 
@@ -278,25 +338,76 @@ fn task_material_waits_for_real_recording_release_and_both_source_receipts() {
     fx.hold_input = true;
     fx.begin();
     fx.input.fill_trace();
-    fx.steps(16);
+    // Author admission waits on actual writer capacity. Yield under an earlier
+    // lifecycle bound so the fixture can inspect custody and drain the writer.
+    let now = fx.input.run.clock.now().unwrap();
+    let leave = AbsoluteBound::after(now, 5).unwrap();
+    fx.input
+        .run
+        .context
+        .arm(PumpDeadline::Leave, leave, &mut fx.input.run.clock)
+        .unwrap();
+    assert_eq!(
+        fx.step(),
+        Err(RunFailure::Wait {
+            key: PumpDeadline::Leave,
+            bound: leave,
+        })
+    );
     assert!(fx.input.run.context.pending_author().is_some());
-    assert!(fx.input.run.context.take_task(&mut fx.input.run.clock).unwrap().is_none());
+    assert_eq!(
+        fx.input.run.context.complete_wait(PumpDeadline::Leave),
+        Some(leave)
+    );
+    assert_eq!(
+        fx.input.run.context.deadlines.get(PumpDeadline::Decision),
+        Some(fx.bound)
+    );
+    assert!(
+        fx.input
+            .run
+            .context
+            .take_task(&mut fx.input.run.clock)
+            .unwrap()
+            .is_none()
+    );
     fx.input.drain_trace();
     fx.steps(32);
     assert!(fx.requests.iter().any(|request| matches!(request,
         s::StateFrame::File { filing, .. } if filing.source.kind == "message.user")));
-    assert!(fx.input.run.context.take_task(&mut fx.input.run.clock).unwrap().is_none());
+    assert!(
+        fx.input
+            .run
+            .context
+            .take_task(&mut fx.input.run.clock)
+            .unwrap()
+            .is_none()
+    );
     fx.hold_input = false;
     fx.hold_release = true;
     fx.steps(32);
     assert!(fx.input.records(Kind::Recall).is_empty());
-    assert!(fx.input.run.context.take_task(&mut fx.input.run.clock).unwrap().is_none());
+    assert!(
+        fx.input
+            .run
+            .context
+            .take_task(&mut fx.input.run.clock)
+            .unwrap()
+            .is_none()
+    );
     fx.hold_release = false;
     fx.hold_mark = true;
     fx.steps(32);
     assert_eq!(fx.input.records(Kind::Recall).len(), 1);
     assert_eq!(fx.input.records(Kind::StateMark).len(), 1);
-    assert!(fx.input.run.context.take_task(&mut fx.input.run.clock).unwrap().is_none());
+    assert!(
+        fx.input
+            .run
+            .context
+            .take_task(&mut fx.input.run.clock)
+            .unwrap()
+            .is_none()
+    );
     fx.hold_mark = false;
     let task = begun(&mut fx);
     let request_count = fx.requests.len();
@@ -305,7 +416,14 @@ fn task_material_waits_for_real_recording_release_and_both_source_receipts() {
     assert_eq!(fx.requests.len(), request_count);
     assert_eq!(fx.input.records(Kind::MessageUser).len(), 1);
     assert_eq!(fx.input.records(Kind::StateMark).len(), 1);
-    assert!(fx.input.run.context.take_task(&mut fx.input.run.clock).unwrap().is_none());
+    assert!(
+        fx.input
+            .run
+            .context
+            .take_task(&mut fx.input.run.clock)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -318,9 +436,18 @@ fn task_material_has_no_success_owner_after_cancellation_or_catalog_refusal() {
             fx.input.run.context.cancel_task();
         }
         let completion = fx.finish();
-        assert!(matches!((completion, refused),
-            (TaskCompletion::Refused { .. }, true) | (TaskCompletion::Cancelled(_), false)));
-        assert!(fx.input.run.context.take_task(&mut fx.input.run.clock).unwrap().is_none());
+        assert!(matches!(
+            (completion, refused),
+            (TaskCompletion::Refused { .. }, true) | (TaskCompletion::Cancelled(_), false)
+        ));
+        assert!(
+            fx.input
+                .run
+                .context
+                .take_task(&mut fx.input.run.clock)
+                .unwrap()
+                .is_none()
+        );
         assert!(fx.input.records(Kind::StateMark).is_empty());
     }
 }
