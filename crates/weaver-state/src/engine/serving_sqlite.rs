@@ -73,18 +73,14 @@ impl From<reads::ReadFailure> for ReadFault {
 impl ServingSqlite {
     /// Serialize a complete bounded query result for the member's immutable
     /// cursor. No row or page is visible until this method succeeds.
-    pub fn query_encoded(&self, selector: &ReadSelector) -> Result<Vec<u8>, ReadFault> {
-        reads::query_encoded(self, selector).map_err(ReadFault::from)
-    }
-
-    /// Adds actual encoded-result buffer writes, including a refused prefix.
-    /// This category alone does not cover the query's decoded content copies.
-    pub fn query_encoded_observed(
+    /// An optional tally counts actual writes, including a refused prefix. It
+    /// does not establish coverage of the query's decoded content copies.
+    pub fn query_encoded(
         &self,
         selector: &ReadSelector,
-        copied: &mut crate::serving_bytes::BufferBytes,
+        copied: Option<&mut crate::serving_bytes::BufferBytes>,
     ) -> Result<Vec<u8>, ReadFault> {
-        reads::query_encoded_observed(self, selector, copied).map_err(ReadFault::from)
+        reads::query_encoded(self, selector, copied).map_err(ReadFault::from)
     }
 
     pub fn held(&self) -> Result<weaver_types::state_flow::DecimalU64, ReadFault> {
@@ -96,16 +92,12 @@ impl ServingSqlite {
     }
 
     /// Retain the bounded shape encoding's writes even on a size refusal.
-    pub fn shape_observed(
+    pub fn shape(
         &self,
-        copied: &mut crate::serving_bytes::BufferBytes,
+        copied: Option<&mut crate::serving_bytes::BufferBytes>,
     ) -> Result<Vec<weaver_types::state_flow::ShapeRow>, ReadFault> {
-        reads::shape_observed(&self.connection, self.read_limits.max_result_bytes, copied)
+        reads::shape(&self.connection, self.read_limits.max_result_bytes, copied)
             .map_err(ReadFault::from)
-    }
-
-    pub fn shape(&self) -> Result<Vec<weaver_types::state_flow::ShapeRow>, ReadFault> {
-        reads::shape(&self.connection, self.read_limits.max_result_bytes).map_err(ReadFault::from)
     }
 }
 
