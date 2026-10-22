@@ -2,6 +2,8 @@
 
 ## Scope and authority
 
+Draft PR: #248.
+
 This slice advances issue #146's serving inspection migration with dormant Shape and
 Grants ports on RecordingContext. Its parent is draft #247 at 619341c. That ancestry
 carries exact #190 and its operator hold for the coupled foundation cutover. The
