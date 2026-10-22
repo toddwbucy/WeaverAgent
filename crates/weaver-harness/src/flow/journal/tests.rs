@@ -116,7 +116,7 @@ fn mark_span() -> SpanRef {
 #[test]
 fn journal_cursors_use_layout_order_and_utf8_without_token_offsets() {
     let mut j = journal();
-    assistant(&mut j, text("aéz"), 40);
+    assistant(&mut j, text("a\u{e9}z"), 40);
     assistant(&mut j, text("later"), 80);
     // IDs are identities. Deliberately reverse their numerical order in this
     // private layout fixture to make a numerical comparison fail the assertion.
@@ -143,7 +143,7 @@ fn journal_cursors_use_layout_order_and_utf8_without_token_offsets() {
         );
     }
     let kept = layout::prefix(&j.layout, &cursor(90, 1, Some(3))).unwrap();
-    assert_eq!(kept[0].message, text("aé"));
+    assert_eq!(kept[0].message, text("a\u{e9}"));
     assert_eq!(kept[0].id.0, 90);
 }
 
@@ -347,14 +347,14 @@ fn journal_conservative_n_and_successive_cuts_never_reuse_removed_boundaries() {
 #[test]
 fn journal_projection_clips_absolute_coverage_but_preserves_source_identity_and_repeats() {
     let mut j = journal();
-    assistant(&mut j, text("aéz"), 30);
+    assistant(&mut j, text("a\u{e9}z"), 30);
     let placed = mapped(1, 7, 0, 4, 100);
     j.annotate(ConfirmedSources {
         sources: vec![placed.clone()],
     })
     .unwrap();
     // A repeated location in another canonical occurrence remains separate.
-    assistant(&mut j, text("aéz"), 60);
+    assistant(&mut j, text("a\u{e9}z"), 60);
     let mut repeated = placed.clone();
     repeated.message_id = 2.into();
     j.annotate(ConfirmedSources {
@@ -434,7 +434,7 @@ fn journal_revisions_invalidate_projections_and_foreign_owners_cannot_substitute
 #[test]
 fn journal_bad_annotations_cuts_and_mark_overflow_are_atomic() {
     let mut j = journal();
-    assistant(&mut j, text("aéz"), 30);
+    assistant(&mut j, text("a\u{e9}z"), 30);
     let revision = j.revision;
     assert_eq!(
         j.annotate(ConfirmedSources {
@@ -455,7 +455,7 @@ fn journal_bad_annotations_cuts_and_mark_overflow_are_atomic() {
         ),
         Err(JournalError::InvalidFacts)
     );
-    assert_eq!(j.layout[0].message, text("aéz"));
+    assert_eq!(j.layout[0].message, text("a\u{e9}z"));
     j.next_mark = u64::MAX;
     assert_eq!(
         j.mark(ConfirmedMark {
@@ -576,6 +576,91 @@ pub(super) fn exercise_material(units: Vec<SelectedUnit>, foreign: SelectedUnit)
     assert_eq!(j.pairs.len(), 1);
     assert_eq!(unit.source_map(), original_maps);
     assert_eq!(unit.messages(), original);
+}
+
+// Real read-backed material enters here from context_material_tests. Corrupted
+// inspection copies below exercise only the pure map check, never mint a unit.
+pub(super) fn exercise_material_map_order(unit: SelectedUnit) {
+    let unit = Arc::new(unit);
+    let maps = unit.source_map().to_vec();
+    let sources = unit.sources().to_vec();
+    let messages = unit.messages().to_vec();
+    let raw = unit.reads()[0].raw_bytes().to_vec();
+    let recall = unit.reads()[0].recall_sequence();
+    assert_eq!(sources.len(), 5);
+    layout::validate_coverage(&maps, &sources).unwrap();
+    let mut repeated_location = maps.clone();
+    repeated_location.push(maps[0].clone());
+    layout::validate_coverage(&repeated_location, &sources).unwrap();
+    for fault in 0..4 {
+        let mut declared = sources.clone();
+        match fault {
+            0 => {
+                declared.remove(2);
+            }
+            1 => declared.swap(1, 3),
+            2 => declared.push(sources[0].clone()),
+            3 => declared.push(MaterialRef::Text {
+                source: source(999),
+                span: span(0, 1),
+            }),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            layout::validate_coverage(&maps, &declared),
+            Err(JournalError::InvalidMap),
+            "coverage fault {fault}"
+        );
+    }
+
+    let mut j = journal();
+    j.origin = unit.origin().clone();
+    let pending = j
+        .reserve(j.project(None).unwrap(), std::slice::from_ref(&unit))
+        .unwrap();
+    assert_eq!(pending.new_pairs.len(), 2);
+    // The counterexample is real: message walking relocates the later recall
+    // request before earlier pair returns. That order is not MESSAGE-MAP's.
+    assert_ne!(layout::coverage(&pending.new_messages), sources);
+    assert_eq!(layout::coverage(&pending.new_messages).len(), sources.len());
+    assert_eq!(
+        pending
+            .new_messages
+            .iter()
+            .map(|m| m.sources.len())
+            .sum::<usize>(),
+        maps.len()
+    );
+    for mapping in &maps {
+        let placed = &pending.new_messages[mapping.message.0 as usize];
+        assert!(placed.sources.contains(&PlacedSource {
+            material: mapping.material.clone(),
+            message_id: placed.id,
+            block: mapping.block,
+            start: mapping.start,
+            end: mapping.end,
+        }));
+    }
+    j.complete(
+        &pending,
+        ConfirmedAppend {
+            assembly: pending.assembly,
+            assistant: text(""),
+            resident: 100,
+            capacity: 1000,
+        },
+    )
+    .unwrap();
+    assert_eq!(j.pairs.len(), 2);
+    assert_eq!(unit.source_map(), maps);
+    assert_eq!(unit.sources(), sources);
+    for (placed, original) in j.layout.iter().zip(&messages) {
+        assert_eq!(&placed.message, original);
+        let retained = placed.material.as_ref().unwrap();
+        assert!(Arc::ptr_eq(retained, &unit));
+        assert_eq!(retained.reads()[0].raw_bytes(), raw);
+        assert_eq!(retained.reads()[0].recall_sequence(), recall);
+    }
 }
 
 #[test]

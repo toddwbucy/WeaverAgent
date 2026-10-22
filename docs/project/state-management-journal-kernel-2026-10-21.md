@@ -26,6 +26,9 @@ The implemented core provides the following operations for those later owners:
   RecordedRead evidence through shared immutable ownership. Equal source sequences from
   a different context fail the origin check. Repeated units get distinct occurrence
   and Message IDs; their source locations are preserved separately.
+  Declared coverage follows the ordered distinct materials in the unit's source map.
+  A later recall request may map back into earlier Text, so Message traversal order
+  cannot substitute for that source-map order.
 - Apply a supplied confirmed completion atomically, preserving the exact canonical
   assistant Message, including empty content, empty Text and UnrecoveredCall. Rejection
   and pair classifications have no path that edits that content.
@@ -110,6 +113,39 @@ StepQuery preservation/drop remains source-reviewed, not separately mutation-pin
 Logs, recipes, restoration hashes and final source hashes are deposited under
 weaver-testing/state-management-146-olympus-2026-10-21/journal/ on the shared bulk
 store. These are author checks, not a Planner grade or production qualification.
+
+## Review correction
+
+[Planner review 5609494086](https://github.com/toddwbucy/WeaverAgent/pull/236#pullrequestreview-5609494086)
+identified a valid material ordering that the reservation incorrectly rejected. One
+statement with External0 then Recall1 has source-map order Text, Request0, Returned0,
+Request1, Returned1. Grouping placed sources by Message moves Request1 into the earlier
+Text Message. Two recall pairs likewise place both requests before either return.
+MESSAGE-MAP defines ordered distinct coverage from source_map, not that Message walk.
+
+Reservation now checks the source map directly without sorting either list or changing
+canonical locations. The pure check rejects reordered, missing, extra and duplicate
+declared coverage; repeated mapped locations remain legal. Two actual paged-read,
+Released, recall Recorded and HeldMaterial fixtures reach reserve and completion for
+the mixed and two-recall cases. They verify exact source locations, pair retention,
+unchanged map order and retained read evidence. Negative inspection copies exercise
+the same pure check without constructing forged SelectedUnit authority.
+
+Six UTF-8 fixture literals use equivalent Rust Unicode escapes. This is a source-only
+editorial correction; decoded fixture bytes and cursor offsets are unchanged.
+
+The correction was checked on Olympus with private target
+/tmp/weaver-146-journal-target. The two focused real-material tests passed. The
+full harness suite passed 1242 tests with 18 inherited ignored cases. Strict
+all-target harness clippy, formatting and lock passed. Four compiled protective
+mutations failed and exact restorations passed: both old message-walk cases,
+removal of coverage validation, and weakening ordered coverage to set equality.
+The logs, recipes and source hashes are in the journal/review evidence deposit.
+
+Two independent source readings found no remaining concrete defect in this
+correction. The preceding gate counts describe the earlier source. The larger
+review batch and production ownership boundaries remain separate work. This is
+an author check, not a new Planner grade.
 
 ## Remaining authority and integration
 
