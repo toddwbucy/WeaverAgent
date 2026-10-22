@@ -378,7 +378,7 @@ fn repeated_interrupts_do_not_restart_the_containment_deadline() {
             "an expired deadline must end observation"
         );
         interrupt(&harness, KillCause::Unload);
-        supervisor.wait(Duration::ZERO);
+        supervisor.wait(Duration::ZERO, Some(deadline));
         if !slice.is_zero() {
             waits += 1;
             assert!(waits <= 12, "repeated controls cannot renew the deadline");
@@ -413,7 +413,7 @@ fn invalid_control_during_containment_keeps_cleanup_running() {
     let mut observations = 0;
     let contained = instrument.tools.wait_empty_until_with(deadline, |slice| {
         observations += 1;
-        supervisor.wait(slice);
+        supervisor.wait(slice, Some(deadline));
         if observations == 2 {
             std::fs::write(instrument.path.join("cgroup.events"), "populated 0\n").unwrap();
         }
@@ -429,7 +429,7 @@ fn invalid_control_during_containment_keeps_cleanup_running() {
     ));
 }
 
-fn fill_answer_socket(channel: &Channel) -> usize {
+pub(super) fn fill_answer_socket(channel: &Channel) -> usize {
     let envelope = OrganEnvelope {
         exchange: exchange(),
         position: Position::Continue,
@@ -514,7 +514,10 @@ fn a_backpressured_answer_expires_at_its_original_containment_deadline() {
     );
     assert!(matches!(
         result,
-        Err(Unanswered::Channel(ChannelFault::Closed))
+        Err(Unanswered::DeliveryBound {
+            exchange: failed,
+            answer: UndeliveredAnswer::ToolAnswer,
+        }) if failed == exchange()
     ));
     assert!(Instant::now() >= deadline);
     for _ in 0..filled {
@@ -548,7 +551,7 @@ fn an_ordinary_result_is_not_rewritten_while_waiting_to_send() {
     );
 }
 
-fn assert_no_peer_answer(peer: &Channel) {
+pub(super) fn assert_no_peer_answer(peer: &Channel) {
     use nix::poll::{PollFd, PollFlags, poll};
     let mut fds = [PollFd::new(peer.as_fd(), PollFlags::POLLIN)];
     assert_eq!(
