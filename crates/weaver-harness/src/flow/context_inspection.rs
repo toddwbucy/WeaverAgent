@@ -106,7 +106,9 @@ pub(super) struct InspectionTransaction {
 
 #[cfg(test)]
 impl InspectionTransaction {
-    pub(super) fn request_id_for_test(&self) -> Option<DecimalU64> { self.request_id }
+    pub(super) fn request_id_for_test(&self) -> Option<DecimalU64> {
+        self.request_id
+    }
 }
 
 impl RecordingContext {
@@ -176,15 +178,18 @@ impl RecordingContext {
                     end = end.min(bound.deadline_ns());
                 }
             }
-            let bound = AbsoluteBound::from_absolute(start, end)
-                .map_err(|error| error.to_string())?;
+            let bound =
+                AbsoluteBound::from_absolute(start, end).map_err(|error| error.to_string())?;
             self.deadlines
                 .arm(PumpDeadline::StateControl, bound)
                 .map_err(|error| error.to_string())?;
             Ok::<_, String>(bound)
         })();
         let bound = prepared.map_err(|detail| {
-            error(InspectionBeginRefusal::WrongPhase, Some(self.inspection_fault(io, detail)))
+            error(
+                InspectionBeginRefusal::WrongPhase,
+                Some(self.inspection_fault(io, detail)),
+            )
         })?;
         self.inspection = Some(InspectionTransaction {
             kind,
@@ -263,24 +268,34 @@ impl RecordingContext {
                     let index = match runs.iter().position(|run| run.run == row.run) {
                         Some(index) => index,
                         None => {
-                            runs.push(RunShape { run: row.run.clone(), kinds: Vec::new() });
+                            runs.push(RunShape {
+                                run: row.run.clone(),
+                                kinds: Vec::new(),
+                            });
                             runs.len() - 1
                         }
                     };
                     runs[index].kinds.push((row.kind.clone(), row.count.0));
                 }
-                InspectionCompletion::Shape { shape: SessionShape { runs }, evidence }
+                InspectionCompletion::Shape {
+                    shape: SessionShape { runs },
+                    evidence,
+                }
             }
             StateControlAnswer::Grants { surface } => InspectionCompletion::Grants {
                 surface: surface.clone(),
                 evidence,
             },
-            StateControlAnswer::ControlRefused { code: ControlRefusalCode::Read(code), detail } => {
-                InspectionCompletion::Refused {
-                    failure: ReadFailure::Refused { code: *code, detail: detail.clone() },
-                    evidence,
-                }
-            }
+            StateControlAnswer::ControlRefused {
+                code: ControlRefusalCode::Read(code),
+                detail,
+            } => InspectionCompletion::Refused {
+                failure: ReadFailure::Refused {
+                    code: *code,
+                    detail: detail.clone(),
+                },
+                evidence,
+            },
             _ => unreachable!("settlement checked inspection response vocabulary"),
         };
         Ok(Some(completion))
@@ -296,7 +311,9 @@ impl RecordingContext {
         };
         let expected = (!owner.recorded).then_some(owner.bound);
         if self.deadlines.get(PumpDeadline::StateControl) != expected {
-            return Err(self.inspection_fault(io, "inspection's original wait was removed or replaced"));
+            return Err(
+                self.inspection_fault(io, "inspection's original wait was removed or replaced")
+            );
         }
         Ok(())
     }
@@ -310,16 +327,19 @@ impl RecordingContext {
         }
         let operation = ControlOperation::try_from((owner.kind.control(), owner.turn.clone()))
             .expect("inspection uses a small control");
-        let result = self.flow.begin_control(
-            &mut FlowRecording {
-                barrier: &mut self.barrier,
-                inbox: &mut self.inbox,
-                budget: &mut self.budget,
-                author: &self.author,
-            },
-            io,
-            operation,
-        ).map_err(|failure| self.flow_failed(io, failure))?;
+        let result = self
+            .flow
+            .begin_control(
+                &mut FlowRecording {
+                    barrier: &mut self.barrier,
+                    inbox: &mut self.inbox,
+                    budget: &mut self.budget,
+                    author: &self.author,
+                },
+                io,
+                operation,
+            )
+            .map_err(|failure| self.flow_failed(io, failure))?;
         let OperationStart::Started { request_id } = result else {
             return Ok(false);
         };
@@ -335,20 +355,31 @@ impl RecordingContext {
         &mut self,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
-        let Some(owner) = &self.inspection else { return Ok(()); };
-        if owner.recorded { return Ok(()); }
+        let Some(owner) = &self.inspection else {
+            return Ok(());
+        };
+        if owner.recorded {
+            return Ok(());
+        }
         let Some((request, turn, request_id, recorded_ns)) = self.flow.control_recorded_boundary()
-        else { return Ok(()); };
-        if request != &owner.kind.control() || turn != &owner.turn
+        else {
+            return Ok(());
+        };
+        if request != &owner.kind.control()
+            || turn != &owner.turn
             || Some(request_id) != owner.request_id
             || self.deadlines.get(PumpDeadline::StateControl) != Some(owner.bound)
         {
-            return Err(self.inspection_fault(io, "Recorded inspection differs from its exact owner"));
+            return Err(
+                self.inspection_fault(io, "Recorded inspection differs from its exact owner")
+            );
         }
         if owner.bound.expired(recorded_ns) {
             // A capped control cannot replace its earlier enclosing lifecycle
             // wait. Preserve the same nearest-deadline priority as live().
-            let (key, bound) = self.deadlines.expired(recorded_ns)
+            let (key, bound) = self
+                .deadlines
+                .expired(recorded_ns)
                 .min_by_key(|(_, bound)| bound.deadline_ns())
                 .expect("the original inspection wait is armed and expired");
             return Err(self.expired(io, key, bound));
@@ -363,30 +394,76 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.retire_recorded_inspection_wait(io)?;
-        let Some(owner) = &self.inspection else { return Ok(()); };
-        if owner.completion.is_some() { return Ok(()); }
-        let Some(completion) = self.flow.operation_completion() else { return Ok(()); };
-        let OperationCompletion::State { request, turn, completion, .. } = completion else {
+        let Some(owner) = &self.inspection else {
+            return Ok(());
+        };
+        if owner.completion.is_some() {
+            return Ok(());
+        }
+        let Some(completion) = self.flow.operation_completion() else {
+            return Ok(());
+        };
+        let OperationCompletion::State {
+            request,
+            turn,
+            completion,
+            ..
+        } = completion
+        else {
             return Err(self.inspection_fault(io, "inspection received a foreign completion"));
         };
-        let valid = matches!((&owner.kind, &completion.answer),
-            (InspectionKind::Shape, StateFrame::ControlAnswer { frame: StateControlAnswer::Shape(_), .. })
-            | (InspectionKind::Grants, StateFrame::ControlAnswer { frame: StateControlAnswer::Grants { .. }, .. })
-            | (_, StateFrame::ControlAnswer { frame: StateControlAnswer::ControlRefused { code: ControlRefusalCode::Read(_), .. }, .. }));
-        if !owner.recorded || !valid || completion.discard_capture_result
-            || request != &owner.kind.control() || turn != &owner.turn
+        let valid = matches!(
+            (&owner.kind, &completion.answer),
+            (
+                InspectionKind::Shape,
+                StateFrame::ControlAnswer {
+                    frame: StateControlAnswer::Shape(_),
+                    ..
+                }
+            ) | (
+                InspectionKind::Grants,
+                StateFrame::ControlAnswer {
+                    frame: StateControlAnswer::Grants { .. },
+                    ..
+                }
+            ) | (
+                _,
+                StateFrame::ControlAnswer {
+                    frame: StateControlAnswer::ControlRefused {
+                        code: ControlRefusalCode::Read(_),
+                        ..
+                    },
+                    ..
+                }
+            )
+        );
+        if !owner.recorded
+            || !valid
+            || completion.discard_capture_result
+            || request != &owner.kind.control()
+            || turn != &owner.turn
             || Some(completion.answer.common().request_id) != owner.request_id
         {
             return Err(self.inspection_fault(io, "inspection completion differs from its request"));
         }
-        let completion = self.flow.take_operation_completion(&mut FlowRecording {
-            barrier: &mut self.barrier,
-            inbox: &mut self.inbox,
-            budget: &mut self.budget,
-            author: &self.author,
-        }).map_err(|failure| self.flow_failed(io, failure))?;
-        let Some(OperationCompletion::State { request, turn, completion, recorded_ns }) = completion
-        else { return Ok(()); };
+        let completion = self
+            .flow
+            .take_operation_completion(&mut FlowRecording {
+                barrier: &mut self.barrier,
+                inbox: &mut self.inbox,
+                budget: &mut self.budget,
+                author: &self.author,
+            })
+            .map_err(|failure| self.flow_failed(io, failure))?;
+        let Some(OperationCompletion::State {
+            request,
+            turn,
+            completion,
+            recorded_ns,
+        }) = completion
+        else {
+            return Ok(());
+        };
         let owner = self.inspection.as_mut().unwrap();
         owner.completion = Some(InspectionEvidence {
             request,
@@ -399,6 +476,11 @@ impl RecordingContext {
     }
 
     fn inspection_fault(&mut self, io: &mut impl PumpIo, detail: impl Into<String>) -> RunFailure {
-        self.fail(io, FlowHaltReason::ProtocolFailed, HaltPoint::StateReply, detail)
+        self.fail(
+            io,
+            FlowHaltReason::ProtocolFailed,
+            HaltPoint::StateReply,
+            detail,
+        )
     }
 }

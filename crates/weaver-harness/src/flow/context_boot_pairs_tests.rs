@@ -1122,9 +1122,7 @@ fn inspection_rejects_boot_owner_initial_between_legs_and_complete_until_take() 
                     && fx.run().context.filing.is_none()
                     && fx.queries() == 1
             })),
-            3 => assert!((0..512).any(|_| {
-                fx.step().unwrap() == BootPairsProgress::Complete
-            })),
+            3 => assert!((0..512).any(|_| { fx.step().unwrap() == BootPairsProgress::Complete })),
             _ => unreachable!(),
         }
         let requests = fx.requests.len();
@@ -1134,7 +1132,8 @@ fn inspection_rejects_boot_owner_initial_between_legs_and_complete_until_take() 
         assert!(run.context.read.is_none() && run.context.filing.is_none());
         assert!(run.context.flow.state().outstanding().is_empty());
         let decision = run.context.deadlines.get(PumpDeadline::Decision);
-        let error = run.context
+        let error = run
+            .context
             .begin_inspection(InspectionKind::Grants, turn.clone(), &mut run.clock)
             .unwrap_err();
         assert_eq!(error.kind, InspectionKind::Grants);
@@ -1145,9 +1144,17 @@ fn inspection_rejects_boot_owner_initial_between_legs_and_complete_until_take() 
         assert!(run.context.flow.state().outstanding().is_empty());
         assert_eq!(run.context.deadlines.get(PumpDeadline::Enter), enter);
         assert_eq!(run.context.deadlines.get(PumpDeadline::Decision), decision);
-        assert!(run.context.deadlines.get(PumpDeadline::StateControl).is_none());
+        assert!(
+            run.context
+                .deadlines
+                .get(PumpDeadline::StateControl)
+                .is_none()
+        );
         let mut byte = [0];
-        assert_eq!(run.state.read(&mut byte).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(
+            run.state.read(&mut byte).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         assert_eq!(fx.requests.len(), requests);
 
         let BootPairsCompletion::Repaired(proof) = fx.complete() else {
@@ -1161,16 +1168,40 @@ fn inspection_rejects_boot_owner_initial_between_legs_and_complete_until_take() 
         assert_eq!(fx.queries(), 2);
         assert_eq!(fx.records(Kind::Recall).len(), 3);
         let member = &mut fx.boot.member;
-        member.run.context.begin_inspection(InspectionKind::Grants, None, &mut member.run.clock).unwrap();
+        member
+            .run
+            .context
+            .begin_inspection(InspectionKind::Grants, None, &mut member.run.clock)
+            .unwrap();
         let request = member.sent();
-        let answer = member.answer(&request, s::StateControlAnswer::Grants { surface: vec!["observed".into()] });
+        let answer = member.answer(
+            &request,
+            s::StateControlAnswer::Grants {
+                surface: vec!["observed".into()],
+            },
+        );
         member.receive(&answer).unwrap();
-        assert!((0..128).any(|_| member.run.context.advance_inspection(&mut ports(&mut member.run.clock)).unwrap() == InspectionProgress::Complete));
-        let Some(InspectionCompletion::Grants { surface, evidence }) = member.run.context.take_inspection(&mut member.run.clock).unwrap() else {
+        assert!((0..128).any(|_| {
+            member
+                .run
+                .context
+                .advance_inspection(&mut ports(&mut member.run.clock))
+                .unwrap()
+                == InspectionProgress::Complete
+        }));
+        let Some(InspectionCompletion::Grants { surface, evidence }) = member
+            .run
+            .context
+            .take_inspection(&mut member.run.clock)
+            .unwrap()
+        else {
             panic!("inspection did not start after boot proof transfer")
         };
         assert_eq!(surface, vec!["observed"]);
-        assert_eq!(s::encode_state_line(evidence.answer(), s::FrameDirection::Response).unwrap(), s::encode_state_line(&answer, s::FrameDirection::Response).unwrap());
+        assert_eq!(
+            s::encode_state_line(evidence.answer(), s::FrameDirection::Response).unwrap(),
+            s::encode_state_line(&answer, s::FrameDirection::Response).unwrap()
+        );
         assert_eq!(member.run.context.deadlines.get(PumpDeadline::Enter), enter);
     }
 }
@@ -1181,41 +1212,94 @@ fn inspection_returns_exact_boot_prerequisite_while_pending_or_complete() {
         let mut fx = RepairFixture::new(vec![old_pair("old-run")]);
         let enter = fx.run().context.deadlines.get(PumpDeadline::Enter);
         let member = &mut fx.boot.member;
-        member.run.context.begin_inspection(InspectionKind::Shape, None, &mut member.run.clock).unwrap();
+        member
+            .run
+            .context
+            .begin_inspection(InspectionKind::Shape, None, &mut member.run.clock)
+            .unwrap();
         let request = member.sent();
         let answer = member.answer(&request, s::StateControlAnswer::Shape(vec![]));
         if completed {
             member.receive(&answer).unwrap();
-            assert!((0..128).any(|_| member.run.context.advance_inspection(&mut ports(&mut member.run.clock)).unwrap() == InspectionProgress::Complete));
+            assert!((0..128).any(|_| {
+                member
+                    .run
+                    .context
+                    .advance_inspection(&mut ports(&mut member.run.clock))
+                    .unwrap()
+                    == InspectionProgress::Complete
+            }));
         }
         let prior = fx.prior.take().unwrap();
         let run = fx.run();
-        let outstanding: Vec<_> = run.context.flow.state().outstanding().iter().map(|item| item.common.request_id).collect();
+        let outstanding: Vec<_> = run
+            .context
+            .flow
+            .state()
+            .outstanding()
+            .iter()
+            .map(|item| item.common.request_id)
+            .collect();
         let control = run.context.deadlines.get(PumpDeadline::StateControl);
-        let error = run.context.begin_boot_pairs(prior, &mut run.clock).unwrap_err();
+        let error = run
+            .context
+            .begin_boot_pairs(prior, &mut run.clock)
+            .unwrap_err();
         assert_eq!(error.refusal, BootPairsBeginRefusal::Busy);
         assert!(error.failure.is_none());
         assert!(!run.context.boot_pairs_started);
         assert!(run.context.boot_pairs.is_none());
         assert!(run.context.inspection.is_some());
-        assert_eq!(run.context.flow.state().outstanding().iter().map(|item| item.common.request_id).collect::<Vec<_>>(), outstanding);
+        assert_eq!(
+            run.context
+                .flow
+                .state()
+                .outstanding()
+                .iter()
+                .map(|item| item.common.request_id)
+                .collect::<Vec<_>>(),
+            outstanding
+        );
         assert_eq!(run.context.deadlines.get(PumpDeadline::Enter), enter);
-        assert_eq!(run.context.deadlines.get(PumpDeadline::StateControl), control);
+        assert_eq!(
+            run.context.deadlines.get(PumpDeadline::StateControl),
+            control
+        );
         let mut byte = [0];
-        assert_eq!(run.state.read(&mut byte).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(
+            run.state.read(&mut byte).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         let member = &mut fx.boot.member;
         if !completed {
             member.receive(&answer).unwrap();
-            assert!((0..128).any(|_| member.run.context.advance_inspection(&mut ports(&mut member.run.clock)).unwrap() == InspectionProgress::Complete));
+            assert!((0..128).any(|_| {
+                member
+                    .run
+                    .context
+                    .advance_inspection(&mut ports(&mut member.run.clock))
+                    .unwrap()
+                    == InspectionProgress::Complete
+            }));
         }
-        let Some(InspectionCompletion::Shape { shape, evidence }) = member.run.context.take_inspection(&mut member.run.clock).unwrap() else {
+        let Some(InspectionCompletion::Shape { shape, evidence }) = member
+            .run
+            .context
+            .take_inspection(&mut member.run.clock)
+            .unwrap()
+        else {
             panic!("boot admission stole the recorded inspection")
         };
         assert!(shape.runs.is_empty());
-        assert_eq!(s::encode_state_line(evidence.answer(), s::FrameDirection::Response).unwrap(), s::encode_state_line(&answer, s::FrameDirection::Response).unwrap());
+        assert_eq!(
+            s::encode_state_line(evidence.answer(), s::FrameDirection::Response).unwrap(),
+            s::encode_state_line(&answer, s::FrameDirection::Response).unwrap()
+        );
         let run = fx.run();
         // Retry only the sole prerequisite returned by the refused admission.
-        run.context.begin_boot_pairs(error.prior, &mut run.clock).unwrap();
+        run.context
+            .begin_boot_pairs(error.prior, &mut run.clock)
+            .unwrap();
         let BootPairsCompletion::Repaired(proof) = fx.complete() else {
             panic!("returned prerequisite lost its original context")
         };

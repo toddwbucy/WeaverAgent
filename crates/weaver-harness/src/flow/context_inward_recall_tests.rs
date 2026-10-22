@@ -262,9 +262,11 @@ impl InwardFixture {
                 && run.context.flow.operation_completion().is_none()
                 && run.context.flow.state().outstanding().is_empty()
                 && run.context.flow.ledger().next_file().is_none()
-                && self.pairs.requests.iter().zip(&self.pairs.answered).any(|(request, answered)| {
-                    *answered && matches!(request, s::StateFrame::File { .. })
-                })
+                && self.pairs.requests.iter().zip(&self.pairs.answered).any(
+                    |(request, answered)| {
+                        *answered && matches!(request, s::StateFrame::File { .. })
+                    },
+                )
             {
                 return;
             }
@@ -274,7 +276,10 @@ impl InwardFixture {
     fn settle_inspection(&mut self) {
         for _ in 0..128 {
             let run = &mut self.pairs.output.input.run;
-            let progress = run.context.advance_inspection(&mut ports(&mut run.clock)).unwrap();
+            let progress = run
+                .context
+                .advance_inspection(&mut ports(&mut run.clock))
+                .unwrap();
             self.member();
             if progress == InspectionProgress::Complete {
                 return;
@@ -1233,9 +1238,18 @@ fn inspection_rejects_inward_batch_initial_between_legs_and_complete_until_take(
             _ => unreachable!(),
         }
         let request_count = fx.pairs.requests.len();
-        let turn = Some(weaver_trace::TurnRef(format!("blocked-inward-inspection-{point}")));
+        let turn = Some(weaver_trace::TurnRef(format!(
+            "blocked-inward-inspection-{point}"
+        )));
         let run = &mut fx.pairs.output.input.run;
-        let outstanding: Vec<_> = run.context.flow.state().outstanding().iter().map(|item| item.common.request_id).collect();
+        let outstanding: Vec<_> = run
+            .context
+            .flow
+            .state()
+            .outstanding()
+            .iter()
+            .map(|item| item.common.request_id)
+            .collect();
         let decision = run.context.deadlines.get(PumpDeadline::Decision);
         let control = run.context.deadlines.get(PumpDeadline::StateControl);
         assert!(run.context.pair_work.is_some());
@@ -1243,17 +1257,35 @@ fn inspection_rejects_inward_batch_initial_between_legs_and_complete_until_take(
             assert!(run.context.read.is_none() && run.context.filing.is_none());
             assert!(outstanding.is_empty());
         }
-        let error = run.context.begin_inspection(InspectionKind::Grants, turn.clone(), &mut run.clock).unwrap_err();
+        let error = run
+            .context
+            .begin_inspection(InspectionKind::Grants, turn.clone(), &mut run.clock)
+            .unwrap_err();
         assert_eq!(error.kind, InspectionKind::Grants);
         assert_eq!(error.turn, turn);
         assert_eq!(error.refusal, InspectionBeginRefusal::Busy);
         assert!(error.failure.is_none());
         assert!(run.context.inspection.is_none());
-        assert_eq!(run.context.flow.state().outstanding().iter().map(|item| item.common.request_id).collect::<Vec<_>>(), outstanding);
+        assert_eq!(
+            run.context
+                .flow
+                .state()
+                .outstanding()
+                .iter()
+                .map(|item| item.common.request_id)
+                .collect::<Vec<_>>(),
+            outstanding
+        );
         assert_eq!(run.context.deadlines.get(PumpDeadline::Decision), decision);
-        assert_eq!(run.context.deadlines.get(PumpDeadline::StateControl), control);
+        assert_eq!(
+            run.context.deadlines.get(PumpDeadline::StateControl),
+            control
+        );
         let mut byte = [0];
-        assert_eq!(run.state.read(&mut byte).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(
+            run.state.read(&mut byte).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         assert_eq!(fx.pairs.requests.len(), request_count);
         fx.held = HoldRead::None;
         if point == 0 {
@@ -1261,22 +1293,49 @@ fn inspection_rejects_inward_batch_initial_between_legs_and_complete_until_take(
         }
         fx.complete(0);
         let run = &mut fx.pairs.output.input.run;
-        let pair = run.context.completed_pair(&fx.calls[0], &mut run.clock).unwrap().unwrap();
+        let pair = run
+            .context
+            .completed_pair(&fx.calls[0], &mut run.clock)
+            .unwrap()
+            .unwrap();
         assert_eq!(&pair.ended().call_id, &fx.calls[0]);
-        assert_eq!(pair.ended().outcome, Some(ToolOutcome::Result { content: String::from_utf8(fx.raw.clone()).unwrap() }));
-        let effective = run.context.take_executed_pairs(&mut run.clock).unwrap().unwrap();
-        assert_eq!(effective.requests().iter().map(|request| request.call_id.clone()).collect::<Vec<_>>(), fx.calls);
+        assert_eq!(
+            pair.ended().outcome,
+            Some(ToolOutcome::Result {
+                content: String::from_utf8(fx.raw.clone()).unwrap()
+            })
+        );
+        let effective = run
+            .context
+            .take_executed_pairs(&mut run.clock)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            effective
+                .requests()
+                .iter()
+                .map(|request| request.call_id.clone())
+                .collect::<Vec<_>>(),
+            fx.calls
+        );
         assert!(run.context.pair_work.is_none());
-        run.context.begin_inspection(InspectionKind::Grants, None, &mut run.clock).unwrap();
+        run.context
+            .begin_inspection(InspectionKind::Grants, None, &mut run.clock)
+            .unwrap();
         fx.settle_inspection();
         let run = &mut fx.pairs.output.input.run;
-        let Some(InspectionCompletion::Grants { surface, evidence }) = run.context.take_inspection(&mut run.clock).unwrap() else {
+        let Some(InspectionCompletion::Grants { surface, evidence }) =
+            run.context.take_inspection(&mut run.clock).unwrap()
+        else {
             panic!("inspection did not start after inward batch transfer")
         };
         assert_eq!(surface, vec!["observed"]);
         assert_eq!(evidence.request(), &s::StateControl::Grants {});
         assert_eq!(fx.pairs.output.input.records(Kind::Recall).len(), 1);
-        assert_eq!(fx.pairs.output.input.records(Kind::ToolCallCompleted).len(), 1);
+        assert_eq!(
+            fx.pairs.output.input.records(Kind::ToolCallCompleted).len(),
+            1
+        );
     }
 }
 
@@ -1286,7 +1345,11 @@ fn inspection_returns_exact_inward_emission_while_pending_or_complete() {
         let mut pairs = PairFixture::new();
         let original = pairs.generation(vec![text("Recall file.")]);
         let effective = super::super::repair::effective_fixture(original);
-        let calls: Vec<_> = effective.requests().iter().map(|request| request.call_id.clone()).collect();
+        let calls: Vec<_> = effective
+            .requests()
+            .iter()
+            .map(|request| request.call_id.clone())
+            .collect();
         let expected_requests = effective.requests().to_vec();
         let mut fx = InwardFixture {
             pairs,
@@ -1299,32 +1362,61 @@ fn inspection_returns_exact_inward_emission_while_pending_or_complete() {
         fx.drain_statement();
         let run = &mut fx.pairs.output.input.run;
         let decision = run.context.deadlines.get(PumpDeadline::Decision);
-        run.context.begin_inspection(InspectionKind::Shape, None, &mut run.clock).unwrap();
+        run.context
+            .begin_inspection(InspectionKind::Shape, None, &mut run.clock)
+            .unwrap();
         let inspection_id = run.context.flow.state().outstanding()[0].common.request_id;
         if completed {
             fx.settle_inspection();
         }
         let count = fx.pairs.requests.len();
         let run = &mut fx.pairs.output.input.run;
-        let outstanding: Vec<_> = run.context.flow.state().outstanding().iter().map(|item| item.common.request_id).collect();
+        let outstanding: Vec<_> = run
+            .context
+            .flow
+            .state()
+            .outstanding()
+            .iter()
+            .map(|item| item.common.request_id)
+            .collect();
         let control = run.context.deadlines.get(PumpDeadline::StateControl);
-        let error = run.context.begin_pair_execution(effective, &mut run.clock).unwrap_err();
+        let error = run
+            .context
+            .begin_pair_execution(effective, &mut run.clock)
+            .unwrap_err();
         assert_eq!(error.refusal, PairBeginRefusal::Busy);
         assert!(error.failure.is_none());
         assert_eq!(error.effective.requests(), expected_requests);
         assert!(run.context.pair_work.is_none());
         assert!(run.context.inspection.is_some());
         assert_eq!(run.context.deadlines.get(PumpDeadline::Decision), decision);
-        assert_eq!(run.context.deadlines.get(PumpDeadline::StateControl), control);
-        assert_eq!(run.context.flow.state().outstanding().iter().map(|item| item.common.request_id).collect::<Vec<_>>(), outstanding);
+        assert_eq!(
+            run.context.deadlines.get(PumpDeadline::StateControl),
+            control
+        );
+        assert_eq!(
+            run.context
+                .flow
+                .state()
+                .outstanding()
+                .iter()
+                .map(|item| item.common.request_id)
+                .collect::<Vec<_>>(),
+            outstanding
+        );
         let mut byte = [0];
-        assert_eq!(run.state.read(&mut byte).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(
+            run.state.read(&mut byte).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         assert_eq!(fx.pairs.requests.len(), count);
         if !completed {
             fx.settle_inspection();
         }
         let run = &mut fx.pairs.output.input.run;
-        let Some(InspectionCompletion::Shape { shape, evidence }) = run.context.take_inspection(&mut run.clock).unwrap() else {
+        let Some(InspectionCompletion::Shape { shape, evidence }) =
+            run.context.take_inspection(&mut run.clock).unwrap()
+        else {
             panic!("pair admission stole the recorded inspection")
         };
         assert!(shape.runs.is_empty());
@@ -1332,15 +1424,36 @@ fn inspection_returns_exact_inward_emission_while_pending_or_complete() {
         assert_eq!(evidence.answer().common().request_id, inspection_id);
         // The refused call returns the same checked emission, with no new
         // generation or repair proof constructed for this retry.
-        run.context.begin_pair_execution(error.effective, &mut run.clock).unwrap();
+        run.context
+            .begin_pair_execution(error.effective, &mut run.clock)
+            .unwrap();
         fx.begin(0);
         fx.complete(0);
         let run = &mut fx.pairs.output.input.run;
-        let pair = run.context.completed_pair(&fx.calls[0], &mut run.clock).unwrap().unwrap();
-        assert_eq!(pair.ended().outcome, Some(ToolOutcome::Result { content: String::from_utf8(fx.raw.clone()).unwrap() }));
-        let effective = run.context.take_executed_pairs(&mut run.clock).unwrap().unwrap();
+        let pair = run
+            .context
+            .completed_pair(&fx.calls[0], &mut run.clock)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pair.ended().outcome,
+            Some(ToolOutcome::Result {
+                content: String::from_utf8(fx.raw.clone()).unwrap()
+            })
+        );
+        let effective = run
+            .context
+            .take_executed_pairs(&mut run.clock)
+            .unwrap()
+            .unwrap();
         assert_eq!(effective.requests(), expected_requests);
-        assert_eq!(fx.controls().iter().filter(|control| matches!(control, s::StateControl::Shape {})).count(), 1);
+        assert_eq!(
+            fx.controls()
+                .iter()
+                .filter(|control| matches!(control, s::StateControl::Shape {}))
+                .count(),
+            1
+        );
         assert_eq!(fx.pairs.output.input.records(Kind::Recall).len(), 1);
     }
 }

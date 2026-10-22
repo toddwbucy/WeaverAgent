@@ -425,7 +425,11 @@ impl RecordingContext {
         if self.marks.is_some() {
             return Err(RunFailure::MarksOwned);
         }
-        if self.templates_block_content() || self.output.is_some() || self.read.is_some() || self.inspection.is_some() {
+        if self.templates_block_content()
+            || self.output.is_some()
+            || self.read.is_some()
+            || self.inspection.is_some()
+        {
             return Ok(None);
         }
         let result = self.flow.take_operation_completion(&mut FlowRecording {

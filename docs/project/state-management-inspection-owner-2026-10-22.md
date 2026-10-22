@@ -3,14 +3,16 @@
 ## Scope and authority
 
 This slice advances issue #146's serving inspection migration with dormant Shape and
-Grants ports on RecordingContext. Its parent is #243 at
-3cb2430067b56a435803f36613f4916c531e94e1. The legacy engine and lifecycle callers remain
-unchanged. Runtime activation still requires the coupled foundation cutover.
+Grants ports on RecordingContext. Its parent is draft #247 at 619341c. That
+ancestry carries exact #190 and its operator hold for the coupled foundation
+cutover. The legacy engine and lifecycle callers remain unchanged.
 
 Implements: weaver-harness-Spec-amendment HARNESS-READ-CALLERS, HARNESS-READ,
 HARNESS-PUMP and HARNESS-RECORD-LIFETIME, limited to the typed small-control owner and
 its recording, deadline and admission boundaries. HARNESS-HALT applies to the existing
-first-failure path. Author validation and grades are pending the checks below.
+first-failure path. The author grades these scoped clauses conforms on the
+checks below. This is an author check, not a Planner grade or production
+qualification.
 
 The owner admits only Shape or Grants. It retains the exact control, optional turn,
 allocated request identity and original two-second StateControl bound. Existing Enter
@@ -43,13 +45,12 @@ its answer. A final transfer has no fallible clock read after removing the owner
 
 ## Tests and protective changes
 
-Nineteen new tests use the existing real Unix-stream member fixture and serving trace
-writer. They cover ordered populated shape with u64::MAX, exact grants, empty success
+Twenty-three new tests use the existing real Unix-stream member fixture and
+serving trace writer. They cover ordered populated shape with u64::MAX, exact grants, empty success
 versus typed refusal, the original typed response, backpressure before measurement
 Recorded, cancellation before send and while recording is blocked, one request without
 cursor cleanup, original control expiry, Enter/Leave caps, timely Recorded consumer
-delay,
-interrupted final release, late-proof lifecycle priority, admission conflicts,
+delay, interrupted final release, late-proof lifecycle priority, admission conflicts,
 completed-owner replacement, malformed responses, EOF, post-enqueue lifecycle
 interruption, final take and release custody.
 
@@ -58,11 +59,29 @@ its ordinary proof checks. It does not assign a fabricated Recorded proof, compl
 request identity or result. The existing manual coordinator proof test now preserves its
 actual recording timestamp to match the ordinary State completion invariant.
 
-Focused tests, the full harness suite, all-target lint, formatting, lock checks and
-compiled protective mutations remain pending. No test total or conformance result is
-claimed for this source yet. The mutation recipes will pin counts/order, refusal
-mapping, cancellation, exact retained response, original deadlines, recorded-before-use,
-owner replacement, competing admission and final transfer.
+Four joined-owner tests also cover boot and inward work at initial admission,
+between read/filing legs and after completion before take. Reciprocal admission
+returns the original PriorBootOpen or EffectiveEmission without losing its identity.
+The caller can retry those exact inputs after the inspection owner is taken.
+
+Validation on 2026-10-22 used the private Cargo target
+`/tmp/weaver-146-inspection-target` and locked dependency resolution:
+
+- Focused filter: 27 passed, comprising 23 new and four inherited tests.
+- Full harness suite: 1379 passed, with 18 inherited ignored cases.
+- Strict all-target harness clippy, formatting and lock checks passed.
+- All 21 compiled protective mutations failed their intended tests. Every exact
+  source restoration passed the corresponding baseline test.
+
+The mutations pin counts/order, refusal mapping, cancellation, exact retained
+response, original deadlines, recorded-before-use, owner replacement, competing
+admission, final transfer and reciprocal boot/inward ownership fences. Independent
+author readings checked the implementation and the parent join. The code-review
+skill was unavailable in this session, so no skill invocation is claimed.
+
+Logs, source hashes, recipes and the runner are deposited under `inspection/` in
+`/bulk-store/weaver-testing/state-management-146-olympus-2026-10-21/`.
+The deposit records failed protective runs separately from their restored passes.
 
 ## Remaining integration
 
