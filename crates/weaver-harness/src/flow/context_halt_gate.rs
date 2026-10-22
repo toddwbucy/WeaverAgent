@@ -1,8 +1,8 @@
 //! One frozen execution's interrupt and terminal custody. Gate death remains
 //! cleanup-required until an owner with process/cgroup custody proves cleanup.
 
+use super::pairs::GateObservation;
 use super::*;
-use crate::flow::pairs::GateObservation;
 use crate::flow::pump_transport::{
     Failure, OrganPort, OrganSend, PortIdentity, ReceivedOrgan, TrackedStage,
 };

@@ -595,7 +595,13 @@ fn halt_gate_keeps_successful_interrupt_when_its_post_send_clock_fails() {
     );
     assert_interrupt(&peer);
     assert_eq!(advance(&mut fx, &mut port), Progress::AbortRequired);
-    assert!(packet(&peer).is_none());
+    // The successful interrupt crossed before the observation clock failed.
+    // That transport failure shuts down the socket, so no repeat ends at EOF.
+    let mut bytes = [0_u8; 8192];
+    assert_eq!(
+        recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT).unwrap(),
+        0
+    );
 }
 
 #[test]

@@ -451,7 +451,11 @@ impl PairLedger {
             if entry.completed.is_some() {
                 return None;
             }
-            Some((&entry.started.call_id, entry.execution.as_ref()?, entry.sent))
+            Some((
+                &entry.started.call_id,
+                entry.execution.as_ref()?,
+                entry.sent,
+            ))
         })
     }
 
@@ -465,7 +469,11 @@ impl PairLedger {
         if !self.frozen || !ticket.belongs_to(gate) || !ticket.sent() {
             return Err(PairError::WrongPhase);
         }
-        let call = self.halt_execution().ok_or(PairError::WrongPhase)?.0.clone();
+        let call = self
+            .halt_execution()
+            .ok_or(PairError::WrongPhase)?
+            .0
+            .clone();
         self.entry_mut(&call)?.sent = true;
         Ok(())
     }
