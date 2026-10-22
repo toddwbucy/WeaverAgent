@@ -222,6 +222,7 @@ impl Journal {
             if start == new_messages.len() {
                 return Err(JournalError::InvalidMap);
             }
+            layout::validate_coverage(unit.source_map(), unit.sources())?;
             for mapping in unit.source_map() {
                 let index =
                     usize::try_from(mapping.message.0).map_err(|_| JournalError::InvalidMap)?;
@@ -245,9 +246,6 @@ impl Journal {
                     .get_mut(start.checked_add(index).ok_or(JournalError::Exhausted)?)
                     .ok_or(JournalError::InvalidMap)?;
                 target.step_queries.push(query.reference.clone());
-            }
-            if layout::coverage(&new_messages[start..]) != unit.sources() {
-                return Err(JournalError::InvalidMap);
             }
             let sources: Vec<_> = new_messages[start..]
                 .iter()
@@ -451,4 +449,9 @@ mod tests;
 #[cfg(test)]
 pub(super) fn exercise_material(units: Vec<SelectedUnit>, foreign: SelectedUnit) {
     tests::exercise_material(units, foreign);
+}
+
+#[cfg(test)]
+pub(super) fn exercise_material_map_order(unit: SelectedUnit) {
+    tests::exercise_material_map_order(unit);
 }
