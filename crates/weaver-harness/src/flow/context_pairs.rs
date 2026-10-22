@@ -58,6 +58,7 @@ pub(super) struct PairLeg {
 }
 
 pub(super) struct PairTransaction {
+    pub(super) inward: Option<super::inward_recall::InwardWork>,
     pub(super) bound: Option<AbsoluteBound>,
     pub(super) leg: Option<PairLeg>,
     // A failed receipt check must not drop the exact evidence it rejected.
@@ -70,6 +71,7 @@ pub(super) struct PairTransaction {
 impl PairTransaction {
     pub(super) fn new(bound: AbsoluteBound) -> Self {
         Self {
+            inward: None,
             bound: Some(bound),
             leg: None,
             refused_receipt: None,
@@ -177,6 +179,7 @@ impl RecordingContext {
         {
             Some(PairBeginRefusal::WrongPhase)
         } else if self.marks.is_some()
+            || self.boot_pairs.is_some()
             || (self.repair_blocks_external() && self.repair_owns_pairs())
             || self.freshness.is_some()
             || self.pair_work.is_some()
@@ -191,6 +194,7 @@ impl RecordingContext {
             || self.input_author.is_some()
             || self.member_capture.is_some()
             || self.read.is_some()
+            || self.inspection.is_some()
             || self.measure_blocks_external()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
@@ -336,6 +340,13 @@ impl RecordingContext {
             return Ok(PairProgress::Pending);
         }
         self.pair_wait_matches(ports.io)?;
+        if self
+            .pair_work
+            .as_ref()
+            .is_some_and(|work| work.inward.is_some())
+        {
+            return Ok(PairProgress::Pending);
+        }
         if self
             .pair_work
             .as_ref()

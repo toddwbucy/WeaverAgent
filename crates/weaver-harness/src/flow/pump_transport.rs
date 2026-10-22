@@ -130,6 +130,7 @@ struct TrackedSend {
 #[derive(Debug)]
 pub(super) struct OrganSend {
     identity: PortIdentity,
+    exchange: weaver_types::ExchangeId,
     tracked: Arc<TrackedSend>,
 }
 
@@ -154,6 +155,10 @@ impl OrganSend {
 
     pub(super) fn belongs_to(&self, port: &OrganPort) -> bool {
         self.identity.matches(port)
+    }
+
+    pub(super) fn matches_exchange(&self, exchange: &weaver_types::ExchangeId) -> bool {
+        self.exchange == *exchange
     }
 
     pub(super) fn port_identity(&self) -> PortIdentity {
@@ -386,6 +391,7 @@ impl OrganPort {
         &mut self,
         input: OrganEnvelope,
     ) -> Result<TrackedStage, StageFailure<OrganEnvelope>> {
+        let exchange = input.exchange.clone();
         match self.stage(input)? {
             Stage::Queued => {
                 let tracked = Arc::new(TrackedSend {
@@ -395,6 +401,7 @@ impl OrganPort {
                 self.outgoing.as_mut().expect("queued packet").tracked = Some(Arc::clone(&tracked));
                 Ok(TrackedStage::Queued(OrganSend {
                     identity: self.identity.clone(),
+                    exchange,
                     tracked,
                 }))
             }

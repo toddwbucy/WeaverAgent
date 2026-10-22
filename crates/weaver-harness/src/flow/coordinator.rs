@@ -195,6 +195,7 @@ pub(super) enum OperationCompletion {
         request: StateControl,
         turn: Option<TurnRef>,
         completion: StateCompletion,
+        recorded_ns: u64,
     },
     Check(RecordedCheck),
 }
@@ -435,6 +436,8 @@ pub(super) struct FlowCoordinator<P> {
     state_recorded_ns: Option<u64>,
     classifier_release: Option<ClassifierRelease>,
     refused_author: Option<RefusedAuthor>,
+    #[cfg(test)]
+    control_busy_for_test: VecDeque<ControlOperation>,
 }
 
 impl<P: Ste100Port> FlowCoordinator<P> {
@@ -500,6 +503,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             state_recorded_ns: None,
             classifier_release: None,
             refused_author: None,
+            #[cfg(test)]
+            control_busy_for_test: VecDeque::new(),
         })
     }
 
@@ -566,6 +571,12 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             .as_mut()
             .expect("standing classifier")
             .interrupt_terminal_probes_for_test(count);
+    }
+
+    /// Defensive boundary injection, not a competing operation or a receipt.
+    #[cfg(test)]
+    pub(super) fn defer_control_once_for_test(&mut self, expected: ControlOperation) {
+        self.control_busy_for_test.push_back(expected);
     }
 
     /// Wake the common pump for a sample only when reduction can author it.
@@ -1300,6 +1311,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             state_recorded_ns: None,
             classifier_release: None,
             refused_author: None,
+            #[cfg(test)]
+            control_busy_for_test: VecDeque::new(),
         })
     }
 
@@ -1573,6 +1586,47 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 .then_some(self.state_recorded_ns)
                 .flatten()
         })
+    }
+
+    /// The original ordinary control's Recorded boundary remains available while
+    /// its final nonblocking channel probe is pending. This grants no answer.
+    pub(super) fn control_recorded_boundary(
+        &self,
+    ) -> Option<(&StateControl, &Option<TurnRef>, DecimalU64, u64)> {
+        if let Some(OperationCompletion::State {
+            request,
+            turn,
+            completion,
+            recorded_ns,
+        }) = &self.operation_completion
+        {
+            return Some((
+                request,
+                turn,
+                completion.answer.common().request_id,
+                *recorded_ns,
+            ));
+        }
+        if !matches!(self.pending_record, Some(PendingRecord::StateRelease)) {
+            return None;
+        }
+        let (request, turn) = self.state_operation.as_ref()?;
+        let request_id = self
+            .state()
+            .held_measurement()?
+            .observation
+            .request_id
+            .0
+            .into();
+        Some((request, turn, request_id, self.state_recorded_ns?))
+    }
+
+    #[cfg(test)]
+    pub(super) fn interrupt_next_state_release_for_test(&mut self) {
+        self.state
+            .as_mut()
+            .expect("state exists")
+            .interrupt_next_release_for_test();
     }
 
     /// The context has frozen ordinary admission at a turn boundary. Existing
@@ -1980,6 +2034,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             || !self.state().outstanding().is_empty()
             || self.state().held_measurement().is_some()
         {
+            return Ok(OperationStart::Busy(request));
+        }
+        #[cfg(test)]
+        if let Some(expected) = self.control_busy_for_test.pop_front() {
+            assert_eq!(request, expected, "deferred control must match its owner");
             return Ok(OperationStart::Busy(request));
         }
         let now = io.now().map_err(|e| self.fail(cx, "clock", e))?;
@@ -3290,6 +3349,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 request,
                 turn,
                 completion,
+                recorded_ns: recorded_ns.ok_or_else(|| {
+                    self.fail(cx, "state_reply", "control lost its recording time")
+                })?,
             });
             return Ok(Advance::Progress);
         }

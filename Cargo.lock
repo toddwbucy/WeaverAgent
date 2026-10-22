@@ -1991,6 +1991,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "weaver-diagnostic",
+ "weaver-internal",
  "weaver-trace",
  "weaver-traits",
  "weaver-types",

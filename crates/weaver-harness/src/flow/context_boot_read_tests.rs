@@ -984,3 +984,6 @@ fn boot_recall_state_eof_keeps_the_pending_author_and_withholds_boot_head() {
     assert_eq!(boot.member.requests.len(), 2);
     assert!(boot.member.records(Kind::Recall).is_empty());
 }
+
+#[path = "context_boot_pairs_tests.rs"]
+mod pair_repair_tests;

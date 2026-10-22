@@ -89,6 +89,7 @@ impl RecordingContext {
         }
         if self.freshness.is_some()
             || self.marks.is_some()
+            || self.boot_pairs.is_some()
             || self.open_turn.is_some()
             || self
                 .waiting_content
@@ -111,6 +112,7 @@ impl RecordingContext {
             || self.repair_certificate.is_some()
             || self.member_capture.is_some()
             || self.read.is_some()
+            || self.inspection.is_some()
             || self.measure.is_some()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()
