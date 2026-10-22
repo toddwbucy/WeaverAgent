@@ -315,6 +315,63 @@ fn diagnostic_rejects_mismatched_legacy_and_shared_payloads_before_writing() {
 }
 
 #[test]
+fn diagnostic_turn_started_rejects_a_licensed_other_payload_before_the_writer() {
+    let mismatch = |result| {
+        assert!(matches!(
+            result,
+            Err(RecordFailure::Diagnostic(
+                weaver_diagnostic::Failure::SubmitRefused {
+                    refusal: weaver_diagnostic::SubmitRefusal::PayloadKindMismatch
+                }
+            ))
+        ));
+    };
+    let mut old = legacy(Kind::Fault, Some(t::Payload::Fault(raw())));
+    let mut new = shared(s::Kind::Fault, Some(s::Payload::Fault(raw())));
+    new.envelope.channel = s::Channel::Internal;
+    assert!(convert(old.clone()).is_ok());
+    assert!(convert_shared(new.clone()).is_ok());
+    old.envelope.kind = Kind::TurnStarted;
+    new.envelope.kind = s::Kind::TurnStarted;
+
+    // Test conversion itself: the diagnostic writer's separate pairing check
+    // must not mask an overbroad shared trace predicate.
+    mismatch(convert(old.clone()).map(|_| ()));
+    mismatch(convert_shared(new.clone()).map(|_| ()));
+    for shared_door in [false, true] {
+        let mut fixture = Diagnostic::new();
+        let refused = if shared_door {
+            fixture.record.submit_shared_diagnostic(new.clone())
+        } else {
+            fixture.record.submit(old.clone())
+        };
+        mismatch(refused.map(|_| ()));
+        assert!(fixture.record.failed());
+        assert!(fixture.bytes().is_empty());
+
+        // A mechanism probe keeps the failed-run latch. Correcting only the
+        // payload admits the same bracket without a sequence gap.
+        let accepted = if shared_door {
+            let mut event = new.clone();
+            event.payload = None;
+            fixture.record.submit_shared_diagnostic(event)
+        } else {
+            let mut event = old.clone();
+            event.payload = None;
+            fixture.record.submit(event)
+        };
+        assert_eq!(accepted.unwrap(), Sequence(0));
+        assert!(fixture.record.failed());
+        let bytes = fixture.bytes();
+        assert_eq!(bytes.lines().count(), 1);
+        let written: serde_json::Value = serde_json::from_str(&bytes).unwrap();
+        assert_eq!(written["kind"], "turn.started");
+        assert_eq!(written["sequence"], "0");
+        assert!(written.get("payload").is_none());
+    }
+}
+
+#[test]
 fn diagnostic_shared_payload_required_refuses_before_the_writer() {
     let cases = compatible();
     let mut checked = 0;

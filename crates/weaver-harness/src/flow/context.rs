@@ -61,6 +61,10 @@ pub(super) enum RunFailure {
     MarksOwned,
     /// A filing pause owns admission until its freshness result is taken.
     FreshnessOwned,
+    /// A small inspection retains its control or recorded result.
+    InspectionOwned,
+    /// Dormant boot repair retains its reads, terminal authors and receipts.
+    BootPairsOwned,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -115,12 +119,15 @@ pub(crate) struct RecordingContext {
     member_capture: Option<capture_driver::MemberCapture>,
     freshness: Option<freshness_driver::FreshnessTransaction>,
     read: Option<read_driver::ReadTransaction>,
+    inspection: Option<inspection_driver::InspectionTransaction>,
     marks: Option<marks_driver::MarksTransaction>,
     // Pointer identity survives moves and is never recreated from trace IDs.
     read_origin: std::sync::Arc<()>,
     content_read_started: bool,
     boot_read_started: bool,
     boot_head: Option<read_driver::BootHead>,
+    boot_pairs_started: bool,
+    boot_pairs: Option<boot_pair_driver::BootPairsTransaction>,
     measure: Option<measure_driver::MeasureTransaction>,
     filing: Option<receipt_driver::FilingTransaction>,
     output: Option<output_driver::OutputTransaction>,
@@ -222,11 +229,14 @@ impl RecordingContext {
             member_capture: None,
             freshness: None,
             read: None,
+            inspection: None,
             marks: None,
             read_origin: std::sync::Arc::new(()),
             content_read_started: false,
             boot_read_started: false,
             boot_head: None,
+            boot_pairs_started: false,
+            boot_pairs: None,
             measure: None,
             filing: None,
             output: None,
@@ -411,10 +421,17 @@ impl RecordingContext {
         self.live(io)?;
         // A template result belongs to its ordered transcript, never a second
         // operation consumer. Correct rejection keeps that boundary closed.
+        if self.boot_pairs.is_some() {
+            return Err(RunFailure::BootPairsOwned);
+        }
         if self.marks.is_some() {
             return Err(RunFailure::MarksOwned);
         }
-        if self.templates_block_content() || self.output.is_some() || self.read.is_some() {
+        if self.templates_block_content()
+            || self.output.is_some()
+            || self.read.is_some()
+            || self.inspection.is_some()
+        {
             return Ok(None);
         }
         let result = self.flow.take_operation_completion(&mut FlowRecording {
@@ -481,9 +498,11 @@ impl RecordingContext {
             || self.pair_wait_still_owned(key)
             || self.repair_wait_still_owned(key)
             || self.read_wait_still_owned(key)
+            || self.inspection_wait_still_owned(key)
             || self.measure_wait_still_owned(key)
             || (key == PumpDeadline::Decision && self.marks.is_some())
             || self.freshness_wait_still_owned(key)
+            || self.boot_pairs_wait_owned(key)
             || (key == PumpDeadline::Enter
                 && self.phase == RecordingPhase::Entered
                 && self
@@ -511,9 +530,11 @@ impl RecordingContext {
             || self.member_capture.is_some()
             || self.freshness.is_some()
             || self.read.is_some()
+            || self.inspection.is_some()
             || self.measure.is_some()
             || self.open_turn.is_some()
             || self.marks.is_some()
+            || self.boot_pairs.is_some()
         {
             return Err(self.fail(
                 io,
@@ -689,6 +710,10 @@ impl RecordingContext {
                 return Err(failure);
             }
         };
+        if self.boot_pairs_blocks_external() {
+            self.retain_refused(event);
+            return Err(RunFailure::BootPairsOwned);
+        }
         if self.marks_blocks_external() {
             self.retain_refused(event);
             return Err(RunFailure::MarksOwned);
@@ -696,6 +721,10 @@ impl RecordingContext {
         if self.freshness.is_some() && !retained_retry {
             self.retain_refused(event);
             return Err(RunFailure::FreshnessOwned);
+        }
+        if self.inspection.is_some() {
+            self.retain_refused(event);
+            return Err(RunFailure::InspectionOwned);
         }
         if self.read.is_some() {
             self.retain_refused(event);
@@ -859,8 +888,14 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
         self.live(ports.io)?;
+        if self.boot_pairs_blocks_external() {
+            return Err(RunFailure::BootPairsOwned);
+        }
         if self.marks_blocks_external() {
             return Err(RunFailure::MarksOwned);
+        }
+        if self.inspection.is_some() {
+            return Err(RunFailure::InspectionOwned);
         }
         if self.read.is_some() {
             return Err(RunFailure::ReadOwned);
@@ -1171,6 +1206,7 @@ impl RecordingContext {
         self.settle_recorded_input(io)?;
         self.settle_recorded_capture(io)?;
         self.settle_recorded_read(io)?;
+        self.settle_recorded_inspection(io)?;
         self.live(io)?;
         Ok(advance)
     }
@@ -1211,6 +1247,8 @@ impl RecordingContext {
             };
             return Err(self.flow_failed(io, failure));
         }
+        self.settle_boot_pairs_receipt_wait();
+        self.retire_recorded_inspection_wait(io)?;
         self.reconcile_pair_send(io)?;
         let now = io.now().map_err(|error| {
             self.fail(
@@ -1600,6 +1638,14 @@ mod marks_tests;
 #[path = "context_material.rs"]
 mod material_driver;
 
+#[path = "context_boot_pairs.rs"]
+mod boot_pair_driver;
+#[allow(unused_imports)] // Dormant until the checked prior-Open owner exists.
+pub(super) use boot_pair_driver::{
+    BootPairsBeginError, BootPairsBeginRefusal, BootPairsCompletion, BootPairsProgress,
+    BootPairsRefusal, PriorBootOpen, RepairedBootPairs,
+};
+
 #[path = "context_read.rs"]
 mod read_driver;
 #[allow(unused_imports)] // Composed by dependent boot, recall and placement primitives.
@@ -1636,3 +1682,11 @@ mod measure_tests;
 mod halt_driver;
 #[allow(unused_imports)] // Failed lifecycle composition remains dormant until cutover.
 pub(super) use halt_driver::{HaltReport, HaltReportRefusal, HaltTraceProgress};
+
+#[path = "context_inspection.rs"]
+mod inspection_driver;
+#[allow(unused_imports)] // Dormant ports composed only at the coupled cutover.
+pub(super) use inspection_driver::{
+    InspectionBeginError, InspectionBeginRefusal, InspectionCompletion, InspectionEvidence,
+    InspectionKind, InspectionProgress,
+};
