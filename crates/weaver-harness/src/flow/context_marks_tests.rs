@@ -726,7 +726,17 @@ fn begin_task_rejects_foreign_or_crossed_mark_catalogs() {
             }],
         };
         fx.begin();
-        assert!((0..256).find_map(|_| fx.step().err()).is_some());
+        let failure = (0..256)
+            .find_map(|_| fx.step().err())
+            .expect("catalog fault");
+        assert!(matches!(
+            failure,
+            RunFailure::Flow {
+                reason: FlowHaltReason::ProtocolFailed,
+                ref detail,
+                ..
+            } if detail == "malformed begin_task mark catalog"
+        ));
         assert!(fx.input.records(Kind::StateMark).is_empty());
     }
 }
@@ -808,7 +818,17 @@ fn begin_task_catalog_cannot_reuse_the_closed_prompt_as_an_open_step() {
         ],
     };
     fx.begin();
-    assert!((0..256).find_map(|_| fx.step().err()).is_some());
+    let failure = (0..256)
+        .find_map(|_| fx.step().err())
+        .expect("catalog fault");
+    assert!(matches!(
+        failure,
+        RunFailure::Flow {
+            reason: FlowHaltReason::ProtocolFailed,
+            ref detail,
+            ..
+        } if detail == "malformed begin_task mark catalog"
+    ));
     assert!(fx.input.records(Kind::StateMark).is_empty());
 }
 

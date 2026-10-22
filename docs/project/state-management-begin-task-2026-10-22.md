@@ -204,7 +204,19 @@ three distinct mutation anchors for run, sequence and block. M17 remains equival
 under the existing input reservation/open-turn exclusions. No forged public grant is
 used to make a redundant guard appear mutation-sensitive.
 
-The new focused gates, full harness gate and fifteen protective recipes are pending.
-The prior 1289-test and eleven-mutation results above remain the evidence for the
-earlier source. The new recipes separately identify actual owner transitions and
-private validator defenses. These additions claim no production qualification.
+At joined source abdf624, the full harness suite passed 1319 tests with 18 inherited
+ignored cases. The 23 begin-task tests, one catalog inspection test, strict all-target
+harness clippy, formatting and lock checks passed with the same private target.
+All fifteen protective mutations compiled, failed their named assertion and passed
+after exact-byte restoration. They distinguish real owner transitions from private
+validator defenses as described above.
+
+CodeRabbit review 5609987832 identified two older catalog tests that accepted any
+RunFailure. Both now require ProtocolFailed with the exact malformed-catalog detail.
+All 23 begin-task tests, strict clippy and formatting passed after that assertion-only
+change. The full-suite count belongs to abdf624 before this final assertion tightening.
+The earlier 1289-test and eleven-mutation results remain historical evidence, not the
+new head's count. These additions claim no production qualification.
+
+Follow-up logs, recipes and exact source hashes are deposited in the same shared bulk
+store under begin-task/review-batch. This is an author check, not a Planner grade.
