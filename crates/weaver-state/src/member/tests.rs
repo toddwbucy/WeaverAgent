@@ -52,7 +52,7 @@ fn observed_reply_bytes_match_the_shared_canonical_codec() {
             OperationSample::begin(u64::MAX.into(), common.request_id, operation).unwrap();
         sample.phase_begin(PhaseName::Validate).unwrap();
         sample.phase_end(PhaseName::Validate).unwrap();
-        let (observation, payload) = complete(reply, sample).unwrap();
+        let (observation, payload) = complete(reply, sample, None).unwrap();
         let bytes = wrap(&common, op, &payload, &observation).unwrap();
         let decoded = decode_state_line(&bytes, FrameDirection::Response).unwrap();
         assert_eq!(

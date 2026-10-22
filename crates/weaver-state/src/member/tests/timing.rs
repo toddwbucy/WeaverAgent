@@ -56,6 +56,40 @@ pub(crate) fn verify(observation: &StateOperationObservation) {
         .find(|phase| phase.name == PhaseName::Validate)
         .unwrap();
     assert!(peek <= validate.began_ns);
+    verify_payload_encoding(observation);
+}
+
+fn verify_payload_encoding(observation: &StateOperationObservation) {
+    let encode = observation
+        .phases
+        .iter()
+        .find(|phase| phase.name == PhaseName::Encode)
+        .expect("answer payload has an encode phase");
+    EVENTS.with(|events| {
+        let events = events.borrow();
+        let last = |name| {
+            events
+                .iter()
+                .rev()
+                .find(|(event, _)| *event == name)
+                .expect("actual payload encoder marker")
+                .1
+        };
+        let began = last("encode");
+        let encoded = last("payload_encoded");
+        assert!(
+            encode.began_ns <= began,
+            "payload encoding began before its phase"
+        );
+        assert!(
+            began <= encoded && encoded <= encode.ended_ns,
+            "payload encoding is outside its phase"
+        );
+        assert!(
+            encoded <= observation.ended_ns,
+            "observation ended before the payload was encoded"
+        );
+    });
 }
 
 #[test]
@@ -74,6 +108,7 @@ fn an_ordinary_operation_retains_the_clock_from_before_the_hint_parser() {
     let (observation, _) = complete(
         Reply::Control(StateControlAnswer::Held { count: 1.into() }),
         sample,
+        None,
     )
     .unwrap();
     verify(&observation);
@@ -200,14 +235,24 @@ impl Fixture {
         let bytes = encode_state_line(&request, FrameDirection::Request).unwrap();
         let (mut sample, request) = sampled_request(&bytes, request.common().request_id.0).unwrap();
         self.session.check_request(&request).unwrap();
-        let (reply, _) = self
+        let common = request.common().clone();
+        let (reply, initial_read) = self
             .session
             .dispatch(request, &self.room, &mut sample)
             .unwrap();
         let Reply::Control(answer) = reply else {
             panic!("control reply")
         };
-        let (observation, encoded) = complete(Reply::Control(answer.clone()), sample).unwrap();
+        let (observation, encoded) = complete(
+            Reply::Control(answer.clone()),
+            sample,
+            Some(CompletionBounds {
+                common: &common,
+                pages: &mut self.session.pages,
+                initial_read,
+            }),
+        )
+        .unwrap();
         verify(&observation);
         (answer, observation, encoded)
     }
@@ -319,6 +364,84 @@ fn snapshot_preflight_refusal_never_samples_resources() {
                     reason: ObservationUnavailable::NotSampled,
                 })
         );
+    }
+}
+
+#[test]
+fn oversized_control_completion_keeps_fallback_encoding_inside_the_observation() {
+    for initial_read in [false, true] {
+        for encoding_fails in [false, true] {
+            let common = fixtures::common(2);
+            let mut pages = Pages::default();
+            let mut page = pages.start(vec![b'x'; 32], 32.into(), 8).unwrap();
+            if !initial_read {
+                pages.publish_page();
+                page = pages.next(page.snapshot_id, 6.into(), 8).unwrap();
+            }
+            let snapshot_id = page.snapshot_id;
+            let offset = page.offset;
+            let reserve = wrapper_reserve(&common, "control_answer").unwrap();
+            page.octets = "A".repeat(if encoding_fails {
+                STATE_ANSWER_LINE_BOUND + 1
+            } else {
+                STATE_ANSWER_LINE_BOUND - reserve + 1
+            });
+            let request = StateFrame::Control {
+                common: common.clone(),
+                frame: if initial_read {
+                    StateControl::Read {
+                        selector: ReadSelector::SystemPrompt {},
+                    }
+                } else {
+                    StateControl::Next {
+                        snapshot_id,
+                        offset,
+                    }
+                },
+            };
+            let bytes = encode_state_line(&request, FrameDirection::Request).unwrap();
+            enable();
+            let (sample, _) = sampled_request(&bytes, 2).unwrap();
+            let (observation, encoded) = complete(
+                Reply::Control(StateControlAnswer::ReadPage(page)),
+                sample,
+                Some(CompletionBounds {
+                    common: &common,
+                    pages: &mut pages,
+                    initial_read,
+                }),
+            )
+            .unwrap();
+            verify(&observation);
+            assert_eq!(SAMPLE_COUNT.get(), 0);
+            assert_eq!(
+                EVENTS.with(|events| events
+                    .borrow()
+                    .iter()
+                    .filter(|(event, _)| *event == "encode")
+                    .count()),
+                2,
+                "oversized answer and its refusal both use the actual encoder"
+            );
+            let wire = wrap(&common, "control_answer", &encoded, &observation).unwrap();
+            let answer = decode_state_line(&wire, FrameDirection::Response).unwrap();
+            assert!(matches!(
+                answer,
+                StateFrame::ControlAnswer {
+                    frame: StateControlAnswer::ControlRefused {
+                        code: ControlRefusalCode::Read(ReadRefusalCode::AnswerTooLarge),
+                        ..
+                    },
+                    ..
+                }
+            ));
+            assert_eq!(pages.busy(), !initial_read);
+            if !initial_read {
+                assert_eq!(pages.held_bytes(), 32);
+                assert_eq!(pages.next(snapshot_id, offset, 8).unwrap().offset, offset);
+            }
+            disable();
+        }
     }
 }
 
