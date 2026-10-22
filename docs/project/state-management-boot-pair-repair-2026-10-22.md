@@ -2,7 +2,7 @@
 
 Date: 2026-10-22
 Branch: code/state-boot-pair-repair
-PR: pending assignment
+PR: #247
 Epic: #146
 
 ## Authority and dormant scope
