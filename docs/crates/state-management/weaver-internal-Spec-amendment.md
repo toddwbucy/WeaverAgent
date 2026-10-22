@@ -2,9 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
-
-**Version:** 0.4 **Date filed:** 2026-10-20 **Parent:** weaver-internal-PRD
+**Version:** 0.5 **Date filed:** 2026-10-20 **Parent:** weaver-internal-PRD
 
 ## 0. Scope and owning clauses
 
@@ -51,16 +49,19 @@ tests/manifest.rs's exact allowed set. No dependency on weaver-state or weaver-s
 added. The existing floor and trace/diagnostic dependencies keep their duties. The only
 new library use in this act is recall::query. [READ-3, SEAM-2, SEAM-3]
 
-The pair coordinator recognizes Spec 02 RECALL only after the accepted binding has
-exactly one noun and no governing condition. It calls query on that noun, then submits
-ReadSelector::History with that exact subject, verb null and condition null through the
-sole state owner. The request and return use Spec 05's inward pair accounting and the
-ordinary bounded read/release contract. EmptySubject becomes ToolOutcome::Refused with
-reason empty_subject. A state read refusal uses ToolOutcome::Refused with reason equal
-to the compact JSON object {code,detail} from the typed read refusal, in that field
-order. Both are completed inward pairs under PAIR-END, with execution and reason null on
-the outer PairEnded. Neither produces an empty successful history. [READ-1, READ-3,
-PAIR-1, SEAM-3]
+The harness recognizes the recall key in a checked binding before constructing a query.
+If that binding has several nouns or a governing condition, it completes Spec 02
+RECALL-REFUSAL with the reserved identity and invokes neither this library nor state.
+Zero nouns in an Accepted reply is a malformed classifier result. Only a conforming
+binding with exactly one noun and no governing condition enters the pair coordinator. It
+calls query on that noun, then submits ReadSelector::History with that exact subject,
+verb null and condition null through the sole state owner. The request and return use
+Spec 05's inward pair accounting and the ordinary bounded read/release contract.
+EmptySubject becomes ToolOutcome::Refused with reason empty_subject. A state read
+refusal uses ToolOutcome::Refused with reason equal to the compact JSON object
+{code,detail} from the typed read refusal, in that field order. Both are completed
+inward pairs under PAIR-END, with execution and reason null on the outer PairEnded.
+Neither produces an empty successful history. [READ-1, READ-3, PAIR-1, SEAM-3]
 
 The harness owns the subject bytes for the whole use of the borrowed query. It owns
 scheduling, trace authoring, store I/O and result placement. The helper owns none of
@@ -78,6 +79,7 @@ serving contract remains applicable.
 | INTERNAL-QUERY bytes and borrowing | Unit tests for empty, whitespace, mixed case and multibyte input, plus a lifetime compile pin | Trim or normalize a noun, return a different slice or permit a query to outlive its input |
 | INTERNAL-QUERY purity | Existing empty-dependency/one-library manifest test and review of src/recall.rs | Add a normal dependency, target, I/O operation, clock or hidden state |
 | HARNESS-RECALL scope | Updated exact dependency-set test and gate schema regression | Link the store/SPU, add recall to the gate's tool registry or introduce a new process |
+| Invalid operation shape | Association/repair owner with query and state spies | Invoke query, invent a subject or open a pair for RECALL-REFUSAL |
 | Query and pair outcome | Pair/read spies for exact selector, typed refusal, successful read/release and later placement | Skip the receipt, change the noun, map refusal to empty success or omit the inward terminal |
 
 These are implementation instruments. The helper's unit pass cannot prove retrieval

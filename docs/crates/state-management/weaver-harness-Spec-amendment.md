@@ -2,9 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #192
-
-**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -319,13 +317,38 @@ at load. No label-score answer satisfies this trait. The production adapter uses
 02's CHANNEL and PORT, preserving this near side. [CLASS-2, CLASS-7, CLASS-8, R10]
 
 Validate bindings for a Text block without normalizing its bytes: target and scheme,
-nonempty ordered statements, valid UTF-8 spans, nouns within statements, condition
-nullability, and verb dictionary membership. Author each complete Ste100Reply as
-ste100.result before using it, including template replies during enter. The load event
-precedes those replies and records their input inventory, not future results. The model
-result target exists even when the partition did not select that source. Correct
+nonempty ordered statements, valid UTF-8 spans, one or more nouns within each statement,
+condition nullability, and verb dictionary membership. Author each complete Ste100Reply
+as ste100.result before using it, including template replies during enter. The load
+event precedes those replies and records their input inventory, not future results. The
+model result target exists even when the partition did not select that source. Correct
 rejection then authorizes repair but no filing. Invalid result shape is a component
 failure. [CLASS-2, CLASS-9, STORE-3, SORT-4]
+
+**HARNESS-RECALL-REFUSAL.** The model association and repair owners implement
+Spec 02 RECALL-REFUSAL before constructing an inward pair or query. The accepted
+association account alone supplies the reserved CallId, original Text index, exact
+StatementRef and shape facts to TYPES-RECALL-REFUSAL. An Accepted Text reply with zero
+nouns fails HARNESS-CLASSIFY before that account exists. No guessed subject or unchecked
+caller vector may construct the operation refusal. [READ-3, CLASS-2, CLASS-8, CLASS-9]
+
+Author the existing refusal kind through HARNESS-AWAIT-AUTHOR, with internal/runtime,
+subsystem harness, the same open turn and causal_parent equal to the referenced
+statement's message.assistant sequence. This payload is unselected and creates no
+filing. The original accepted Text still follows its ordinary selected-copy path. Retain
+the exact refusal and its event before the first fallible admission, and preserve
+Recorded sequence and continuation state before another recoverable wait. Return the
+private disposition once, after Recorded, under the original Decision bound. [FLOW-2,
+FLOW-3, CLASS-8, STORE-3]
+
+The repair account keeps Recorded refusals inspectable alongside valid requests without
+releasing a refused CallId as a request candidate. In a correction, complete the one
+correction_call disposition, every malformed recall refusal and every required valid
+pair terminal before charging the one failed correction. Preserve the original call
+identity and any corrected statement source independently. Cancellation and phase
+permissions follow RECALL-REFUSAL and HARNESS-RECORD-LIFETIME. No new terminal reserve,
+placement grant, final-answer policy or classifier meaning is introduced. [CLASS-9,
+CLASS-10, FLOW-4, FLOW-5, OUT-1]
 
 **TEMPLATE-CHECK.** At enter, enumerate all harness text templates that can reach state,
 including wind-down and restatement. Put the inventory identity, scheme and checker
@@ -855,7 +878,8 @@ the one-exchange assumption. Neither number is elected here. [CLASS-6, FALS-5, C
 | HARNESS-RECORD-LIFETIME | Caller disposition plus pre-Run load, boot refusal, ignored-result and post-release unload fixtures | Reset the context, poll a retired port, seat an unrecorded prompt or continue after ignored failure |
 | HARNESS-BACKLOG | Delayed receipts with small test limits, compound copies and terminal trace delay | Release charge before Recorded, accept a partial copy, exceed a running limit, lose the failed copy or halt solely on the age alarm |
 | HARNESS-AUTHOR | Exhaustive kind/source fixture table | Take origin from payload or accept missing UID |
-| HARNESS-CLASSIFY | Scripted double, all table rows and target mismatches | Treat Pending as rejection or a label score as bindings |
+| HARNESS-CLASSIFY | Scripted double, all table rows, zero-noun Accepted and target mismatches | Treat Pending as rejection, accept an empty noun vector or a label score as bindings |
+| HARNESS-RECALL-REFUSAL | Actual recorder pressure and lifecycle waits, mixed original/correction identities and cap fixtures | Admit a second event, lose an owed receipt, return before Recorded, dispatch a refused ID or charge several attempts for one correction |
 | TEMPLATE-CHECK | Inventory and substitution certificate fixtures | Serve with missing certificate or unlisted template |
 | HARNESS-INPUT | Existing {text,role} accepted/refused frames and later-turn assembly | Place one rejected block or open a refused turn |
 | HARNESS-LEDGER | Every table row, real commit with lost receipt | Accept send success or resend uncertain commit |

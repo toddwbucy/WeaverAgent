@@ -2,9 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #192
-
-**Version:** 0.19 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
+**Version:** 0.20 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
 
 ## 0. What this document is
 
@@ -705,6 +703,14 @@ adjacent ToolCall that was not projected. Refuse an unknown or already terminal 
 and roll back the entire new source row. Never treat a file_pair refusal as an ordinary
 conformance outcome. [PAIR-1, PAIR-4, CLASS-8]
 
+For a recall opening, require exactly one noun on the held binding, no governing
+condition and subject bytes equal to that noun. Membership among several nouns is not
+sufficient. Refuse invalid_pair with full rollback on mismatch, and apply the same
+checks when validating saved pairs for adoption. The harness owns recall-key recognition
+and the distinct RECALL-REFUSAL operation before pair creation. These store checks
+enforce the existing valid recall shape, without a new pair variant, classifier call or
+catalog change. [READ-3, PAIR-4, PERSIST-4, CLASS-2]
+
 ## 2. Read service and the old readers, destinations sections 3 and 4
 
 This replacement applies at the [foundation cutover][cutover]. Until then, the previous
@@ -1326,7 +1332,7 @@ weaver-state dependency of any kind. [FLOW-4, FLOW-5, SEAM-2, SCOPE-1]
 | STATE-MARK-MEMBERS | Literal recursive query with nested prefixes, ignored events and closure outcomes | Exclude the shared opening/closing anchor, include bookkeeping or reorder by trace run |
 | STATE-MARK-PAIRS | Fixed-frontier fixtures with partial, open and later pairs | Omit the opening cutoff or accept a return beyond the frontier |
 | STATE-MARK-READ | Tagged marks/preview results and dump/reload fixtures | Write on preview, accept an open span as closed, omit allocation exhaustion or alter membership on load |
-| STATE-PAIR-FILE | Pair lifecycle transactions and failure injection | Accept a second terminal, leave an orphan source row or emit receipt before commit |
+| STATE-PAIR-FILE | Pair lifecycle transactions, compound/conditional recall openings, matching adoption fixtures and failure injection | Accept a second terminal, weaken the exact one-noun/unconditional shape, leave an orphan source row or emit receipt before commit |
 | STATE-PAIR-READ | History/open-pair queries with complete raw returns | Lose an attachment, parse a pair as Text or omit terminals from position |
 | STATE-READ | Prepared-query fixtures across two runs and compound nouns | Query old event table, reorder sessions, mutate on read, or hide seed |
 | STATE-SUBJECTS | Literal SQL with compound nouns, two runs, bookkeeping and an unmatched binding's pair | Remove source-kind restriction, order by run, return only matched bindings or lose the pair |

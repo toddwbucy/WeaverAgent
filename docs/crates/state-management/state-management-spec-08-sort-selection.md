@@ -2,9 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
-
-**Version:** 0.14 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-08`
+**Version:** 0.15 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-08`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. Scope and applicability
@@ -331,9 +329,13 @@ identity_sort(source:SourcePosition,acts:Vec<SortAct>) returns the same complete
 acts and its outbound decision record. Its private input adapter accepts only checked
 statement and request identities from Spec 02. Unknown, duplicated or foreign-source
 identities refuse invalid_candidate. This first implementation performs no ranking,
-authorization or dispatch. More criteria require an explicit Spec addition. Reason: a
-sort selects acts, while execution remains with the caller and the relevant permission
-boundary. [OUT-1, OUT-2, SORT-1, SORT-4]
+authorization or dispatch. Spec 02 RECALL-REFUSAL dispositions remain in the private
+repair account, outside the conforming request list. Their CallIds cannot construct a
+SortAct::Recall, although their accepted effective statements remain statement
+candidates. Sort never converts a refused ID into a pair or chooses a final-answer
+policy. More criteria require an explicit Spec addition. Reason: a sort selects acts,
+while execution remains with the caller and the relevant permission boundary. [OUT-1,
+OUT-2, SORT-1, SORT-4]
 
 **SELECTION-STATES.** One selection owns its immutable prefix and candidate snapshot
 until its result or refusal. The port does not hold an open store cursor while
