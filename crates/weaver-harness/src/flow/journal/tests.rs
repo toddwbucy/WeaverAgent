@@ -116,7 +116,7 @@ fn mark_span() -> SpanRef {
 #[test]
 fn journal_cursors_use_layout_order_and_utf8_without_token_offsets() {
     let mut j = journal();
-    assistant(&mut j, text("aéz"), 40);
+    assistant(&mut j, text("a\u{e9}z"), 40);
     assistant(&mut j, text("later"), 80);
     // IDs are identities. Deliberately reverse their numerical order in this
     // private layout fixture to make a numerical comparison fail the assertion.
@@ -143,7 +143,7 @@ fn journal_cursors_use_layout_order_and_utf8_without_token_offsets() {
         );
     }
     let kept = layout::prefix(&j.layout, &cursor(90, 1, Some(3))).unwrap();
-    assert_eq!(kept[0].message, text("aé"));
+    assert_eq!(kept[0].message, text("a\u{e9}"));
     assert_eq!(kept[0].id.0, 90);
 }
 
@@ -347,14 +347,14 @@ fn journal_conservative_n_and_successive_cuts_never_reuse_removed_boundaries() {
 #[test]
 fn journal_projection_clips_absolute_coverage_but_preserves_source_identity_and_repeats() {
     let mut j = journal();
-    assistant(&mut j, text("aéz"), 30);
+    assistant(&mut j, text("a\u{e9}z"), 30);
     let placed = mapped(1, 7, 0, 4, 100);
     j.annotate(ConfirmedSources {
         sources: vec![placed.clone()],
     })
     .unwrap();
     // A repeated location in another canonical occurrence remains separate.
-    assistant(&mut j, text("aéz"), 60);
+    assistant(&mut j, text("a\u{e9}z"), 60);
     let mut repeated = placed.clone();
     repeated.message_id = 2.into();
     j.annotate(ConfirmedSources {
@@ -434,7 +434,7 @@ fn journal_revisions_invalidate_projections_and_foreign_owners_cannot_substitute
 #[test]
 fn journal_bad_annotations_cuts_and_mark_overflow_are_atomic() {
     let mut j = journal();
-    assistant(&mut j, text("aéz"), 30);
+    assistant(&mut j, text("a\u{e9}z"), 30);
     let revision = j.revision;
     assert_eq!(
         j.annotate(ConfirmedSources {
@@ -455,7 +455,7 @@ fn journal_bad_annotations_cuts_and_mark_overflow_are_atomic() {
         ),
         Err(JournalError::InvalidFacts)
     );
-    assert_eq!(j.layout[0].message, text("aéz"));
+    assert_eq!(j.layout[0].message, text("a\u{e9}z"));
     j.next_mark = u64::MAX;
     assert_eq!(
         j.mark(ConfirmedMark {
@@ -578,6 +578,91 @@ pub(super) fn exercise_material(units: Vec<SelectedUnit>, foreign: SelectedUnit)
     assert_eq!(unit.messages(), original);
 }
 
+// Real read-backed material enters here from context_material_tests. Corrupted
+// inspection copies below exercise only the pure map check, never mint a unit.
+pub(super) fn exercise_material_map_order(unit: SelectedUnit) {
+    let unit = Arc::new(unit);
+    let maps = unit.source_map().to_vec();
+    let sources = unit.sources().to_vec();
+    let messages = unit.messages().to_vec();
+    let raw = unit.reads()[0].raw_bytes().to_vec();
+    let recall = unit.reads()[0].recall_sequence();
+    assert_eq!(sources.len(), 5);
+    layout::validate_coverage(&maps, &sources).unwrap();
+    let mut repeated_location = maps.clone();
+    repeated_location.push(maps[0].clone());
+    layout::validate_coverage(&repeated_location, &sources).unwrap();
+    for fault in 0..4 {
+        let mut declared = sources.clone();
+        match fault {
+            0 => {
+                declared.remove(2);
+            }
+            1 => declared.swap(1, 3),
+            2 => declared.push(sources[0].clone()),
+            3 => declared.push(MaterialRef::Text {
+                source: source(999),
+                span: span(0, 1),
+            }),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            layout::validate_coverage(&maps, &declared),
+            Err(JournalError::InvalidMap),
+            "coverage fault {fault}"
+        );
+    }
+
+    let mut j = journal();
+    j.origin = unit.origin().clone();
+    let pending = j
+        .reserve(j.project(None).unwrap(), std::slice::from_ref(&unit))
+        .unwrap();
+    assert_eq!(pending.new_pairs.len(), 2);
+    // The counterexample is real: message walking relocates the later recall
+    // request before earlier pair returns. That order is not MESSAGE-MAP's.
+    assert_ne!(layout::coverage(&pending.new_messages), sources);
+    assert_eq!(layout::coverage(&pending.new_messages).len(), sources.len());
+    assert_eq!(
+        pending
+            .new_messages
+            .iter()
+            .map(|m| m.sources.len())
+            .sum::<usize>(),
+        maps.len()
+    );
+    for mapping in &maps {
+        let placed = &pending.new_messages[mapping.message.0 as usize];
+        assert!(placed.sources.contains(&PlacedSource {
+            material: mapping.material.clone(),
+            message_id: placed.id,
+            block: mapping.block,
+            start: mapping.start,
+            end: mapping.end,
+        }));
+    }
+    j.complete(
+        &pending,
+        ConfirmedAppend {
+            assembly: pending.assembly,
+            assistant: text(""),
+            resident: 100,
+            capacity: 1000,
+        },
+    )
+    .unwrap();
+    assert_eq!(j.pairs.len(), 2);
+    assert_eq!(unit.source_map(), maps);
+    assert_eq!(unit.sources(), sources);
+    for (placed, original) in j.layout.iter().zip(&messages) {
+        assert_eq!(&placed.message, original);
+        let retained = placed.material.as_ref().unwrap();
+        assert!(Arc::ptr_eq(retained, &unit));
+        assert_eq!(retained.reads()[0].raw_bytes(), raw);
+        assert_eq!(retained.reads()[0].recall_sequence(), recall);
+    }
+}
+
 #[test]
 fn journal_mark_identity_is_exact_and_repeated_reminders_do_not_replace_it() {
     let mut j = journal();
@@ -690,4 +775,346 @@ fn journal_coverage_does_not_merge_partial_sources_or_equal_bytes() {
             span: span(1, 3)
         }
     ));
+}
+
+#[test]
+fn journal_equal_facts_do_not_authorize_another_journals_projection() {
+    let first = journal();
+    let mut second = journal();
+    assert!(!Arc::ptr_eq(&first.identity, &second.identity));
+    assert_eq!(format!("{first:?}"), format!("{second:?}"));
+    let before = format!("{second:?}");
+    assert_eq!(
+        second
+            .reserve(first.project(None).unwrap(), &[])
+            .unwrap_err(),
+        JournalError::Stale
+    );
+    assert_eq!(format!("{second:?}"), before);
+    let pending = second.reserve(second.project(None).unwrap(), &[]).unwrap();
+    second.cancel(&pending).unwrap();
+}
+
+#[test]
+fn journal_cut_rejects_wrong_confirmed_n_without_changing_any_state() {
+    let mut j = journal();
+    assistant(&mut j, text("first"), 30);
+    assistant(&mut j, text("second"), 70);
+    assistant(&mut j, text("third"), 100);
+    j.annotate(ConfirmedSources {
+        sources: vec![mapped(2, 2, 0, 6, 50)],
+    })
+    .unwrap();
+    j.mark(ConfirmedMark {
+        span: mark_span(),
+        end: cursor(3, 1, None),
+    })
+    .unwrap();
+    let prefix = j.project(Some(&cursor(2, 1, Some(3)))).unwrap();
+    assert_eq!(prefix.n, 30);
+    let before = format!("{j:?}");
+    assert_eq!(
+        j.cut(
+            &prefix,
+            ConfirmedCut {
+                before: 100,
+                after: 31
+            }
+        ),
+        Err(JournalError::InvalidFacts)
+    );
+    assert_eq!(format!("{j:?}"), before);
+    j.cut(
+        &prefix,
+        ConfirmedCut {
+            before: 100,
+            after: 30,
+        },
+    )
+    .unwrap();
+    assert_eq!(j.resident, 30);
+    assert_eq!(j.layout.len(), 2);
+    assert_eq!(j.layout[1].message, text("sec"));
+    assert_eq!(j.boundaries.len(), 1);
+    assert!(j.marks.is_empty());
+}
+
+#[test]
+fn journal_assistant_tool_result_cannot_consume_the_pending_completion() {
+    let mut j = journal();
+    let pending = j.reserve(j.project(None).unwrap(), &[]).unwrap();
+    let before = format!("{j:?}");
+    assert_eq!(
+        j.complete(
+            &pending,
+            ConfirmedAppend {
+                assembly: pending.assembly,
+                assistant: Message {
+                    role: Role::Assistant,
+                    content: vec![ContentBlock::ToolResult(ToolResultBlock {
+                        content: "done".into()
+                    })],
+                },
+                resident: 30,
+                capacity: 1000,
+            }
+        ),
+        Err(JournalError::InvalidFacts)
+    );
+    assert_eq!(format!("{j:?}"), before);
+    j.complete(
+        &pending,
+        ConfirmedAppend {
+            assembly: pending.assembly,
+            assistant: text("accepted"),
+            resident: 30,
+            capacity: 1000,
+        },
+    )
+    .unwrap();
+    assert!(j.pending.is_none());
+    assert_eq!(j.layout[0].message, text("accepted"));
+}
+
+#[test]
+fn journal_cut_cannot_change_a_matching_active_reservation() {
+    let mut j = journal();
+    assistant(&mut j, text("first"), 30);
+    assistant(&mut j, text("second"), 70);
+    let prefix = j.project(Some(&cursor(1, 1, None))).unwrap();
+    let pending = j.reserve(j.project(None).unwrap(), &[]).unwrap();
+    assert_eq!(j.check_projection(&prefix), Ok(()));
+    assert_eq!(prefix.n, 30);
+    let before = format!("{j:?}");
+    assert_eq!(
+        j.cut(
+            &prefix,
+            ConfirmedCut {
+                before: 70,
+                after: 30
+            }
+        ),
+        Err(JournalError::Busy)
+    );
+    assert_eq!(format!("{j:?}"), before);
+    j.cancel(&pending).unwrap();
+    j.cut(
+        &prefix,
+        ConfirmedCut {
+            before: 70,
+            after: 30,
+        },
+    )
+    .unwrap();
+    assert_eq!(j.resident, 30);
+    assert_eq!(j.layout.len(), 1);
+}
+
+#[test]
+fn journal_n_uses_the_latest_of_multiple_eligible_completed_boundaries() {
+    let mut j = journal();
+    assistant(&mut j, text("first"), 30);
+    assistant(&mut j, text("second"), 70);
+    assistant(&mut j, text("third"), 100);
+    let prefix = j.project(Some(&cursor(3, 1, Some(3)))).unwrap();
+    assert_eq!(prefix.n, 70);
+    assert_eq!(prefix.rebuild.len(), 1);
+    assert_eq!(prefix.rebuild[0].id.0, 3);
+    assert_eq!(prefix.rebuild[0].message, text("thi"));
+    assert_eq!(j.layout[2].message, text("third"));
+}
+
+#[test]
+fn journal_annotation_requires_equal_local_and_absolute_utf8_byte_lengths() {
+    let mut j = journal();
+    assistant(&mut j, text("a\u{e9}z"), 30);
+    let valid = mapped(1, 1, 0, 1, 50);
+    let correct = mapped(1, 2, 0, 3, 100);
+    let mut unequal = correct.clone();
+    let MaterialRef::Text { span, .. } = &mut unequal.material else {
+        unreachable!()
+    };
+    span.end = 104.into();
+    let before = format!("{j:?}");
+    assert_eq!(
+        j.annotate(ConfirmedSources {
+            sources: vec![valid.clone(), unequal]
+        }),
+        Err(JournalError::InvalidMap)
+    );
+    assert_eq!(format!("{j:?}"), before);
+    j.annotate(ConfirmedSources {
+        sources: vec![valid.clone(), correct.clone()],
+    })
+    .unwrap();
+    assert_eq!(j.layout[0].sources, vec![valid, correct]);
+}
+
+#[test]
+fn journal_equivalent_whole_text_ends_reuse_the_same_physical_boundary() {
+    let mut j = journal();
+    assistant(&mut j, text("a\u{e9}z"), 30);
+    for end in [cursor(1, 1, None), cursor(1, 1, Some(4))] {
+        let prefix = j.project(Some(&end)).unwrap();
+        assert_eq!(prefix.n, 30);
+        assert!(prefix.rebuild.is_empty());
+        assert_eq!(prefix.kept[0].message, text("a\u{e9}z"));
+    }
+}
+
+// Inputs come from actual paged-read/recorder material fixtures. Only the pure
+// checks receive changed inspection copies. No copy becomes a SelectedUnit.
+pub(super) fn exercise_material_guard(unit: SelectedUnit, guard: MaterialGuard) {
+    let unit = Arc::new(unit);
+    let mut j = journal();
+    j.origin = unit.origin().clone();
+    let pending = j
+        .reserve(j.project(None).unwrap(), std::slice::from_ref(&unit))
+        .unwrap();
+    let sources: Vec<_> = pending
+        .new_messages
+        .iter()
+        .flat_map(|m| m.sources.iter().cloned())
+        .collect();
+    let references: Vec<_> = sources.iter().collect();
+    assert_eq!(unit_pair_links(&references).unwrap().len(), 2);
+    match guard {
+        MaterialGuard::SystemMessage => {
+            for message in unit.messages() {
+                validate_delta_message(message).unwrap();
+            }
+            let mut inspected = unit.messages()[0].clone();
+            inspected.role = Role::System;
+            assert_eq!(
+                validate_delta_message(&inspected),
+                Err(JournalError::InvalidMap)
+            );
+        }
+        MaterialGuard::MissingRequest => {
+            let call = pending.new_pairs[0].call.clone();
+            let inspected: Vec<_> = sources.iter().filter(|source|
+                !matches!(&source.material, MaterialRef::Request { call_id } if *call_id == call)
+            ).collect();
+            assert_eq!(
+                unit_pair_links(&inspected).unwrap_err(),
+                JournalError::InvalidPair
+            );
+        }
+        MaterialGuard::DuplicateReturn => {
+            let mut inspected = references;
+            inspected.push(&pending.new_pairs[0].returned);
+            assert_eq!(
+                unit_pair_links(&inspected).unwrap_err(),
+                JournalError::InvalidPair
+            );
+        }
+        MaterialGuard::ReturnedAnnotation => {
+            j.complete(
+                &pending,
+                ConfirmedAppend {
+                    assembly: pending.assembly,
+                    assistant: text(""),
+                    resident: 100,
+                    capacity: 1000,
+                },
+            )
+            .unwrap();
+            let returned = j.pairs[0].returned.clone();
+            let message = j
+                .layout
+                .iter()
+                .find(|m| m.id == returned.message_id)
+                .unwrap();
+            assert!(matches!(
+                message.message.content[returned.block.0 as usize],
+                ContentBlock::ToolResult(_)
+            ));
+            layout::validate_source(message, &returned).unwrap();
+            assert!(message.sources.contains(&returned));
+            let before = format!("{j:?}");
+            assert_eq!(
+                j.annotate(ConfirmedSources {
+                    sources: vec![returned]
+                }),
+                Err(JournalError::InvalidPair)
+            );
+            assert_eq!(format!("{j:?}"), before);
+        }
+    }
+}
+
+pub(super) fn exercise_step_query(unit: SelectedUnit) {
+    let unit = Arc::new(unit);
+    assert_eq!(unit.messages().len(), 1);
+    assert_eq!(
+        unit.messages()[0].content,
+        vec![ContentBlock::Text {
+            text: "Write file.".into()
+        }]
+    );
+    let query = unit.step_queries()[0].reference.clone();
+    let messages = unit.messages().to_vec();
+    let maps = unit.source_map().to_vec();
+    let raw = unit.reads()[0].raw_bytes().to_vec();
+    let sequence = unit.reads()[0].recall_sequence();
+    let mut j = journal();
+    j.origin = unit.origin().clone();
+    let pending = j
+        .reserve(j.project(None).unwrap(), std::slice::from_ref(&unit))
+        .unwrap();
+    let id = pending.new_messages[0].id.0;
+    j.complete(
+        &pending,
+        ConfirmedAppend {
+            assembly: pending.assembly,
+            assistant: text(""),
+            resident: 100,
+            capacity: 1000,
+        },
+    )
+    .unwrap();
+    for end in [cursor(id, 1, None), cursor(id, 1, Some(11))] {
+        let prefix = j.project(Some(&end)).unwrap();
+        assert_eq!(prefix.kept[0].step_queries, vec![query.clone()]);
+        assert_eq!(prefix.kept[0].message, messages[0]);
+    }
+    let prefix = j.project(Some(&cursor(id, 1, Some(5)))).unwrap();
+    assert!(prefix.kept[0].step_queries.is_empty());
+    let mut shortened = messages[0].clone();
+    shortened.content = vec![ContentBlock::Text {
+        text: "Write".into(),
+    }];
+    assert_eq!(prefix.kept[0].message, shortened);
+    let MaterialRef::Text {
+        span: original_span,
+        ..
+    } = &maps[0].material
+    else {
+        unreachable!()
+    };
+    let mut clipped = maps[0].material.clone();
+    let MaterialRef::Text { span, .. } = &mut clipped else {
+        unreachable!()
+    };
+    span.end = (original_span.start.0 + 5).into();
+    assert_eq!(prefix.coverage, vec![clipped.clone()]);
+    assert_eq!(prefix.kept[0].sources[0].material, clipped);
+    assert_eq!(prefix.kept[0].sources[0].end, Some(5.into()));
+    assert_eq!(prefix.n, 10);
+    j.cut(
+        &prefix,
+        ConfirmedCut {
+            before: 100,
+            after: 10,
+        },
+    )
+    .unwrap();
+    assert!(j.layout[0].step_queries.is_empty());
+    assert_eq!(j.layout[0].message, shortened);
+    assert!(Arc::ptr_eq(j.layout[0].material.as_ref().unwrap(), &unit));
+    assert_eq!(unit.messages(), messages);
+    assert_eq!(unit.source_map(), maps);
+    assert_eq!(unit.step_queries()[0].reference, query);
+    assert_eq!(unit.reads()[0].raw_bytes(), raw);
+    assert_eq!(unit.reads()[0].recall_sequence(), sequence);
 }

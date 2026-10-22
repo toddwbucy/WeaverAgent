@@ -26,6 +26,9 @@ The implemented core provides the following operations for those later owners:
   RecordedRead evidence through shared immutable ownership. Equal source sequences from
   a different context fail the origin check. Repeated units get distinct occurrence
   and Message IDs; their source locations are preserved separately.
+  Declared coverage follows the ordered distinct materials in the unit's source map.
+  A later recall request may map back into earlier Text, so Message traversal order
+  cannot substitute for that source-map order.
 - Apply a supplied confirmed completion atomically, preserving the exact canonical
   assistant Message, including empty content, empty Text and UnrecoveredCall. Rejection
   and pair classifications have no path that edits that content.
@@ -105,11 +108,93 @@ exact source restoration passed. Nine added trait implementations (Default, Clon
 and From<u64> on Journal, PrefixProjection and PendingAppend) each failed with
 E0283 at the ambiguity pins; the restored normal test compilation passed.
 Two independent source readings found no concrete defect within this private scope.
-StepQuery preservation/drop remains source-reviewed, not separately mutation-pinned.
+At that initial snapshot, StepQuery preservation/drop was source-reviewed, not
+separately mutation-pinned.
 
 Logs, recipes, restoration hashes and final source hashes are deposited under
 weaver-testing/state-management-146-olympus-2026-10-21/journal/ on the shared bulk
 store. These are author checks, not a Planner grade or production qualification.
+
+## Review correction
+
+[Planner review 5609494086](https://github.com/toddwbucy/WeaverAgent/pull/236#pullrequestreview-5609494086)
+identified a valid material ordering that the reservation incorrectly rejected. One
+statement with External0 then Recall1 has source-map order Text, Request0, Returned0,
+Request1, Returned1. Grouping placed sources by Message moves Request1 into the earlier
+Text Message. Two recall pairs likewise place both requests before either return.
+MESSAGE-MAP defines ordered distinct coverage from source_map, not that Message walk.
+
+Reservation now checks the source map directly without sorting either list or changing
+canonical locations. The pure check rejects reordered, missing, extra and duplicate
+declared coverage; repeated mapped locations remain legal. Two actual paged-read,
+Released, recall Recorded and HeldMaterial fixtures reach reserve and completion for
+the mixed and two-recall cases. They verify exact source locations, pair retention,
+unchanged map order and retained read evidence. Negative inspection copies exercise
+the same pure check without constructing forged SelectedUnit authority.
+
+Six UTF-8 fixture literals use equivalent Rust Unicode escapes. This is a source-only
+editorial correction; decoded fixture bytes and cursor offsets are unchanged.
+
+The correction was checked on Olympus with private target
+/tmp/weaver-146-journal-target. The two focused real-material tests passed. The
+full harness suite passed 1242 tests with 18 inherited ignored cases. Strict
+all-target harness clippy, formatting and lock passed. Four compiled protective
+mutations failed and exact restorations passed: both old message-walk cases,
+removal of coverage validation, and weakening ordered coverage to set equality.
+The logs, recipes and source hashes are in the journal/review evidence deposit.
+
+Two independent source readings found no remaining concrete defect in this
+correction. The preceding gate counts describe the earlier source. The larger
+review batch and production ownership boundaries remain separate work. This is
+an author check, not a new Planner grade.
+
+## Review test-gap followup
+
+Planner review 5609494086 row 10 also identified eleven surviving guards beyond the
+source-map correction above. This followup adds twelve focused tests. Eight tests
+exercise reachable private arithmetic invariants. Three test pure defensive checks
+whose invalid producer states cannot currently be built as SelectedUnit. One more
+pins the existing equivalence of whole-Text and full-byte-length cursors.
+
+The eight direct cases cover journal identity with otherwise equal facts, shortened
+StepQuery occurrences, an incorrect cut-after count, Returned annotation at a valid
+result location, a ToolResult inside an Assistant-role completion, cut during an
+unchanged active reservation, the latest of multiple eligible physical boundaries,
+and unequal local/absolute Text byte lengths with valid UTF-8 endpoints. Refused
+operations retain the full prior journal state and pending custody where applicable.
+The shortened instruction retains its exact immutable read, source map and query
+proof while its projected and confirmed-cut occurrence loses the complete query
+annotation. These remain test-only journal initialization and confirmation facts.
+
+The three defensive tests start with real paged-read, Released, recall Recorded and
+HeldMaterial evidence. They pass changed inspection copies to two narrow pure checks:
+a System-role Message, a Returned source without its Request, and a duplicate
+Returned source within one unit. Reservation invokes those same checks. The copies
+never become SelectedUnit or placement authority. Current material producers exclude
+all three invalid states. These tests pin defenses, not three demonstrated runtime
+bugs. Existing whole-pair and repeated-occurrence fixtures remain positive coverage.
+
+Row 3 now compares the requested end with the layout end by canonical position.
+The existing full-byte-length equivalence is unchanged. Row 4's origin comment now
+attributes paired-read owner checks to RecordingContext instead of claiming that the
+material constructor performs them. No performance rewrite or authority extension is
+part of either clarification.
+
+Olympus checked this followup with private target /tmp/weaver-146-journal-target.
+The journal filter passed 27 tests, including all twelve additions. The full harness
+suite passed 1254 tests with 18 inherited ignored cases. Strict all-target harness
+clippy, formatting and lock checks passed. All eleven protective mutations compiled,
+failed their named assertion and passed after exact-byte restoration. The deposit
+separates three pure defensive probes from eight reachable arithmetic probes.
+
+Logs, recipes and source hashes are under journal/gaps in the shared issue #146 evidence
+deposit. Earlier counts above apply to their named sources. Two independent author
+readings checked the test setup and extracted checks. No Planner grade or production
+qualification follows from this author evidence.
+
+Review rows 2 and 9 still belong to the future mark-evidence constructor and public
+refusal mapping. Rows 5 through 7 remain efficiency and simplification followups.
+The production ownership and coupled-cutover boundaries below remain unchanged.
 
 ## Remaining authority and integration
 

@@ -36,7 +36,7 @@ enum Arm {
 pub enum RecordFailure {
     Serving(weaver_trace::Failure),
     Diagnostic(weaver_diagnostic::Failure),
-    /// The event's kind or subsystem has no diagnostic counterpart. The
+    /// The event's kind, payload or subsystem has no diagnostic counterpart. The
     /// diagnostic record holds twenty kinds, per `weaver-diagnostic-Spec`
     /// section 3, and an authoring that reaches this arm with a kind outside
     /// them is a defect in the caller: the run brackets are the replay's
@@ -68,14 +68,33 @@ impl From<weaver_diagnostic::Recorder> for Record {
 impl Record {
     /// One event submitted through whichever mechanism the run holds. The
     /// event arrives in the serving vocabulary because the authorship path
-    /// composes one form, and the diagnostic arm converts at this one site:
-    /// the envelope member for member, the kind by its shared spelling, and
-    /// the payload as the rendered bytes it would have carried, spliced,
-    /// which the mirror's field-for-field claim licenses.
+    /// composes one form. The diagnostic arm checks the legacy kind/payload
+    /// pairing before copying its envelope and splicing its exact payload.
     pub fn submit(&mut self, event: Event) -> Result<Sequence, RecordFailure> {
         let submitted = match &mut self.arm {
             Arm::Serving(recorder) => recorder.submit(event).map_err(RecordFailure::Serving),
             Arm::Diagnostic(recorder) => convert(event).and_then(|converted| {
+                recorder
+                    .submit(converted)
+                    .map(|sequence| Sequence(sequence.0))
+                    .map_err(RecordFailure::Diagnostic)
+            }),
+        };
+        self.latch(submitted)
+    }
+
+    /// Shared authoring in the replacement trace vocabulary, admitted only
+    /// to a diagnostic binding. DIAGNOSTIC-CONVERT keeps its legacy schema:
+    /// new kinds and payloads refuse before the diagnostic writer is called.
+    /// This door neither selects the replacement serving recorder nor sends
+    /// a serving event through the legacy recorder or around its barrier.
+    pub fn submit_shared_diagnostic(
+        &mut self,
+        event: weaver_trace::serving::Event,
+    ) -> Result<Sequence, RecordFailure> {
+        let submitted = match &mut self.arm {
+            Arm::Serving(_) => Err(RecordFailure::OutsideDiagnosticVocabulary),
+            Arm::Diagnostic(recorder) => convert_shared(event).and_then(|converted| {
                 recorder
                     .submit(converted)
                     .map(|sequence| Sequence(sequence.0))
@@ -218,11 +237,13 @@ impl Record {
     }
 }
 
-/// The serving-vocabulary event rendered into the diagnostic one, member
-/// for member. The sixteen shared kinds map by spelling, per
-/// `weaver-diagnostic-Spec` section 3.2, and the payload crosses as the
-/// bytes it would have carried, spliced whole.
+/// The legacy event rendered into the diagnostic one. The sixteen shared
+/// kinds map by spelling and explicitly licensed payload variant. The
+/// diagnostic writer later binds its own session, run and sequence.
 fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
+    if !legacy_payload_licensed(event.envelope.kind, event.payload.as_ref()) {
+        return Err(RecordFailure::OutsideDiagnosticVocabulary);
+    }
     let kind = match event.envelope.kind {
         Kind::TurnStarted => weaver_diagnostic::Kind::TurnStarted,
         Kind::TurnClosed => weaver_diagnostic::Kind::TurnClosed,
@@ -281,9 +302,7 @@ fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
             session: weaver_diagnostic::SessionRef(event.envelope.session.0),
             run: weaver_diagnostic::RunRef(event.envelope.run.0),
             turn: event.envelope.turn.map(|t| weaver_diagnostic::TurnRef(t.0)),
-            // The recorder assigns the run-scoped sequence, as the sibling
-            // does.
-            sequence: weaver_diagnostic::Sequence(0),
+            sequence: weaver_diagnostic::Sequence(event.envelope.sequence.0),
             kind,
             subsystem,
             causal_parent: event
@@ -292,6 +311,156 @@ fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
                 .map(|s| weaver_diagnostic::Sequence(s.0)),
             wall_ms: event.envelope.wall_ms,
             monotonic_ns: weaver_diagnostic::MonotonicNs(event.envelope.monotonic_ns.0),
+        },
+        payload,
+    })
+}
+
+fn legacy_payload_licensed(kind: Kind, payload: Option<&weaver_trace::Payload>) -> bool {
+    use weaver_trace::Payload as P;
+    matches!(
+        (kind, payload),
+        (Kind::TurnStarted, None)
+            | (Kind::TurnClosed, Some(P::TurnClosed(_)))
+            | (
+                Kind::MessageSystem
+                    | Kind::MessageUser
+                    | Kind::MessageAssistant
+                    | Kind::MessageToolResult,
+                Some(P::Message(_))
+            )
+            | (Kind::ModelRequest, Some(P::ModelRequest(_)))
+            | (Kind::ModelOutput, Some(P::ModelOutput(_)))
+            | (Kind::ModelMeasurement, Some(P::ModelMeasurement(_)))
+            | (Kind::ModelField, Some(P::ModelField(_)))
+            | (Kind::Flush, Some(P::Flush(_)))
+            | (Kind::Refusal, Some(P::Refusal(_)))
+            | (Kind::Fault, Some(P::Fault(_)))
+            | (Kind::Recall, Some(P::Recall(_)))
+            | (Kind::Elision, Some(P::Elision(_)))
+            | (Kind::ModelUnrecoveredCall, Some(P::UnrecoveredCall(_)))
+    )
+}
+
+/// DIAGNOSTIC-CONVERT's envelope mapping discards only channel and origin.
+/// Keep this destructure exhaustive so a new envelope field needs a judgment.
+/// Payloads cross through typed legacy counterparts, never a schema-erasing
+/// JSON conversion. The shared legacy checker then verifies their pairing.
+fn convert_shared(
+    event: weaver_trace::serving::Event,
+) -> Result<weaver_diagnostic::Event, RecordFailure> {
+    use weaver_trace::serving::{Kind as K, Payload as P};
+    let weaver_trace::serving::Envelope {
+        session,
+        run,
+        turn,
+        sequence,
+        kind,
+        channel: _,
+        origin: _,
+        subsystem,
+        causal_parent,
+        wall_ms,
+        monotonic_ns,
+    } = event.envelope;
+    let kind = match kind {
+        K::TurnStarted => Kind::TurnStarted,
+        K::TurnClosed => Kind::TurnClosed,
+        K::MessageSystem => Kind::MessageSystem,
+        K::MessageUser => Kind::MessageUser,
+        K::MessageAssistant => Kind::MessageAssistant,
+        K::MessageToolResult => Kind::MessageToolResult,
+        K::ModelRequest => Kind::ModelRequest,
+        K::ModelOutput => Kind::ModelOutput,
+        K::ModelMeasurement => Kind::ModelMeasurement,
+        K::ModelField => Kind::ModelField,
+        K::Flush => Kind::Flush,
+        K::Refusal => Kind::Refusal,
+        K::Fault => Kind::Fault,
+        K::Elision => Kind::Elision,
+        K::ModelUnrecoveredCall => Kind::ModelUnrecoveredCall,
+        // These kinds never belonged to the diagnostic vocabulary. All
+        // unloads refuse, including either or both TRACE-HALT extensions.
+        K::Load
+        | K::Unload
+        | K::SessionClosed
+        | K::MessageRestored
+        | K::Score
+        | K::SavePoint
+        | K::ToolCallStarted
+        | K::ToolCallCompleted
+        | K::ClassifyRequest
+        | K::ClassifyOutput
+        // Serving recall has no legacy RecallAccount payload variant.
+        | K::Recall
+        | K::ToolReturnRejected
+        | K::LoopInstruction
+        | K::SortDecision
+        | K::StateSortMeasurement
+        | K::StepOutcome
+        | K::PlanEvent
+        | K::PlanBreak
+        | K::StatePlanMeasurement
+        | K::StateMark
+        | K::StateMarkPosition
+        | K::StatePlacement
+        | K::InputOffered
+        | K::StateFlow
+        | K::StateStoreMeasurement
+        | K::Ste100Result => return Err(RecordFailure::OutsideDiagnosticVocabulary),
+    };
+    let payload = match event.payload {
+        None => None,
+        Some(payload) => Some(match payload {
+            P::Message(value) => weaver_trace::Payload::Message(value),
+            P::TurnClosed(value) => weaver_trace::Payload::TurnClosed(value),
+            P::Fault(value) => weaver_trace::Payload::Fault(value),
+            P::ModelRequest(value) => weaver_trace::Payload::ModelRequest(value),
+            P::ModelOutput(value) => weaver_trace::Payload::ModelOutput(value),
+            P::ModelField(value) => weaver_trace::Payload::ModelField(value),
+            P::Flush(value) => weaver_trace::Payload::Flush(value),
+            P::Elision(value) => weaver_trace::Payload::Elision(value),
+            P::Refusal(value) => weaver_trace::Payload::Refusal(value),
+            P::ModelMeasurement(value) => weaver_trace::Payload::ModelMeasurement(value),
+            P::UnrecoveredCall(value) => weaver_trace::Payload::UnrecoveredCall(value),
+            P::Unload(_)
+            | P::Elections(_)
+            | P::ClassifyRequest(_)
+            | P::ClassifyOutput(_)
+            | P::Score(_)
+            | P::PairStarted(_)
+            | P::PairEnded(_)
+            | P::RejectedReturn(_)
+            | P::LoopInstruction(_)
+            | P::SortDecision(_)
+            | P::SortMeasurement(_)
+            | P::StepOutcome(_)
+            | P::PlanInput(_)
+            | P::PlanEffect(_)
+            | P::PlanBreak(_)
+            | P::PlanMeasurement(_)
+            | P::StateMark(_)
+            | P::MarkPosition(_)
+            | P::Placement(_)
+            | P::InputOffered(_)
+            | P::FlowObservation(_)
+            | P::StateStoreMeasurement(_)
+            | P::Ste100Result(_)
+            | P::SavePointRecord(_)
+            | P::RecallRecord(_) => return Err(RecordFailure::OutsideDiagnosticVocabulary),
+        }),
+    };
+    convert(Event {
+        envelope: weaver_trace::Envelope {
+            session,
+            run,
+            turn,
+            sequence,
+            kind,
+            subsystem,
+            causal_parent,
+            wall_ms,
+            monotonic_ns,
         },
         payload,
     })

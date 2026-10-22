@@ -445,7 +445,11 @@ pub struct DecodedStateFrame {
 
 impl<'de> Deserialize<'de> for DecodedStateFrame {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (frame, raw_field_bytes) = StateFrame::deserialize_counted(deserializer)?;
+        let fields = RawFields::deserialize(deserializer)?;
+        let raw_field_bytes = fields.0.values().try_fold(0_u64, |sum, value| {
+            sum.checked_add(u64::try_from(value.get().len()).ok()?)
+        });
+        let frame = StateFrame::from_fields(fields)?;
         Ok(Self {
             frame,
             raw_field_bytes,
@@ -455,21 +459,15 @@ impl<'de> Deserialize<'de> for DecodedStateFrame {
 
 impl<'de> Deserialize<'de> for StateFrame {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::deserialize_counted(deserializer).map(|(frame, _)| frame)
+        Self::from_fields(RawFields::deserialize(deserializer)?)
     }
 }
 
 impl StateFrame {
-    fn deserialize_counted<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<(Self, Option<u64>), D::Error> {
-        let mut fields = RawFields::deserialize(deserializer)?;
-        let raw_field_bytes = fields.0.values().try_fold(0_u64, |sum, value| {
-            sum.checked_add(u64::try_from(value.get().len()).ok()?)
-        });
+    fn from_fields<E: Error>(mut fields: RawFields) -> Result<Self, E> {
         let protocol: String = fields.take("protocol")?;
         if protocol != STATE_FLOW_PROTOCOL {
-            return Err(D::Error::custom("unknown serving protocol"));
+            return Err(E::custom("unknown serving protocol"));
         }
         let common = Common {
             session_id: fields.take("session_id")?,
@@ -492,7 +490,7 @@ impl StateFrame {
             "refused" => &["code", "detail", "block_id", "observation"],
             "control" => &["frame"],
             "control_answer" => &["frame", "observation"],
-            _ => return Err(D::Error::custom("unknown serving operation")),
+            _ => return Err(E::custom("unknown serving operation")),
         })?;
         let result = match op.as_str() {
             "open" => Self::Open {
@@ -540,11 +538,11 @@ impl StateFrame {
                 frame: fields.take("frame")?,
                 observation: fields.take("observation")?,
             },
-            _ => return Err(D::Error::custom("unknown serving operation")),
+            _ => return Err(E::custom("unknown serving operation")),
         };
         fields.finish()?;
-        result.validate_envelope().map_err(D::Error::custom)?;
-        Ok((result, raw_field_bytes))
+        result.validate_envelope().map_err(E::custom)?;
+        Ok(result)
     }
 }
 

@@ -188,3 +188,5 @@ fn an_unrecovered_call_reaches_the_diagnostic_record() {
     assert!(landed.is_ok(), "{landed:?}");
     assert!(!record.failed(), "nothing latched");
 }
+
+mod conversion;

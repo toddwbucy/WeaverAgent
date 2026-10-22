@@ -526,6 +526,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.pending_record.is_some()
     }
 
+    /// A filing pause must also carry observations queued before a trace ticket.
+    pub(super) fn has_pending_observations(&self) -> bool {
+        self.pending_record.is_some() || !self.notices.is_empty()
+    }
+
     /// Trace admission is the logical recording boundary even when a final
     /// terminal probe must yield. This exposes timing, never usable acceptance.
     pub(super) fn pending_classifier_recorded(
