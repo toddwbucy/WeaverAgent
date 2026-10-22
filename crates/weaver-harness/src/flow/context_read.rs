@@ -249,7 +249,10 @@ impl RecordingContext {
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()
+            || self.barrier.pending_author().is_some()
             || self.flow.has_pending_record()
+            || self.flow.has_filing_consumer()
+            || self.flow.has_output_consumer()
             || self.flow.pending_control().is_some()
             || self.flow.pending_check().is_some()
             || self.flow.operation_completion().is_some()
@@ -530,6 +533,20 @@ impl RecordingContext {
         }
         self.live(io)?;
         Ok(true)
+    }
+
+    /// A consumed answer keeps the next reduction across a lifecycle yield.
+    /// Finish it before the coordinator can claim another recorder ticket;
+    /// successful release must install its recall ownership first.
+    pub(super) fn resume_accepted_read(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        if self
+            .read
+            .as_ref()
+            .is_some_and(|read| read.accepted.is_some())
+        {
+            self.finish_accepted_read(io)?;
+        }
+        Ok(())
     }
 
     /// A state answer is consumed only after the coordinator's exact

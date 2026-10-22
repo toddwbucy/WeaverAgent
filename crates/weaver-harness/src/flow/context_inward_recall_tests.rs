@@ -1477,6 +1477,19 @@ fn inward_empty_subject_defensive_boundary_completes_without_any_read_control() 
     // Checked noun spans cannot produce an empty value. Inject only the helper
     // input at the already ready private ledger boundary, after real receipts.
     // This is not a valid-emission fixture or evidence for malformed recall.
+    assert!(
+        fx.pairs
+            .output
+            .input
+            .run
+            .context
+            .pair_work
+            .as_ref()
+            .unwrap()
+            .inward
+            .is_none(),
+        "empty-subject injection must precede begin cloning the subject"
+    );
     fx.pairs
         .output
         .input
@@ -1539,7 +1552,20 @@ fn inward_first_control_busy_retains_admitted_owner_and_original_window() {
     // Admission already checks all synchronous busy predicates. Exercise the
     // coordinator's defensive returned-Busy boundary without inventing a peer,
     // request identity, author ticket or completion.
-    run.context.flow.defer_control_for_test(1);
+    run.context.flow.defer_control_once_for_test(
+        (
+            s::StateControl::Read {
+                selector: s::ReadSelector::History {
+                    noun: "file".into(),
+                    verb: None,
+                    condition: None,
+                },
+            },
+            Some(weaver_trace::TurnRef("output-turn".into())),
+        )
+            .try_into()
+            .unwrap(),
+    );
     assert_eq!(
         run.context
             .advance_inward_recall(&mut ports(&mut run.clock))
@@ -1742,6 +1768,41 @@ fn inward_held_owner_excludes_pair_advance_until_withdrawal_is_observed() {
         Some(s::PairFailure::NotDispatched {
             cause: s::NonDispatchCause::Stop,
         })
+    );
+}
+
+#[test]
+fn inward_nonbar_ledger_owner_retains_the_unexecuted_call_without_a_result() {
+    let mut fx = InwardFixture::new(vec![text("Recall file.")]);
+    fx.begin(0);
+    let run = &mut fx.pairs.output.input.run;
+    let before = run.context.outstanding_pairs();
+    // Isolate the private readiness boundary. A real context halt checks live
+    // first, so this is a defensive ledger probe, not a resumable halted run.
+    run.context.pairs.freeze();
+    assert!(run.context.pairs.next_ready().is_none());
+    assert_eq!(
+        run.context
+            .advance_inward_recall(&mut ports(&mut run.clock))
+            .unwrap(),
+        InwardProgress::Terminal
+    );
+    assert!(run.context.pair_work.as_ref().unwrap().inward.is_none());
+    assert_eq!(run.context.outstanding_pairs(), before);
+    assert!(matches!(
+        run.context.completed_pair(&fx.calls[0], &mut run.clock),
+        Err(PairReadError::UnknownCall)
+    ));
+    assert!(run.context.flow.pending_control().is_none());
+    assert!(run.context.read.is_none());
+    assert!(fx.controls().is_empty());
+    assert!(fx.pairs.output.input.records(Kind::Recall).is_empty());
+    assert!(
+        fx.pairs
+            .output
+            .input
+            .records(Kind::ToolCallCompleted)
+            .is_empty()
     );
 }
 
