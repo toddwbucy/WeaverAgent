@@ -1,8 +1,10 @@
 # State management implementation map
 
-Date: 2026-10-20. Status: implementation tracking, not a Spec amendment.
+Date: 2026-10-21. Status: implementation tracking, not a Spec amendment.
 
-The authority is the merged [state management set][set] from PR #182. All code PRs
+The authority is the merged [state management set][set] from PR #182, amended by
+#189, #192 and #213. [Issue #146][completion-tracker] is the current completion
+checklist and qualification boundary. All code PRs
 start as drafts. Gates and Planner verification precede third-party review.
 The operator merges them.
 The crate remains weaver-state. The loop remains in worker/dev_loop and calls
@@ -11,7 +13,8 @@ primitives. The SPU owns classification.
 ## Consolidated review stack
 
 The foundation, trace and additive harness roots reached main on 2026-10-21.
-The remaining descendants are consolidated in #215 for review against main.
+The operator merged #215 at a42d1f02, #189 at 4edf1513, #192 at aec3dcc2 and
+#213 at c2646e29. The next implementation stack starts from that consolidated main.
 Runtime activation and deployment remain held for the coupled cutover. This table
 is the current landing map and takes precedence over the
 historical branch descriptions below. Original slice results do not validate a
@@ -22,16 +25,16 @@ combined head.
 | #184 | Shared floor, store/member via #212, admin #193 through #196, and SPU #191 with #197. Merged to main at b18e7d34. |
 | #185 | Trace copy and recorder, including #187. Merged to main at ba17720d. |
 | #198 | Harness #199 through #210, model repair #214 and subsequent review fixes. Merged to main at 50a00944. |
-| #215 | Consolidation root for typed tool causes, external pair execution, paged reads, paired decode measurements and outbound identity sort. The operator authorized main consolidation. The full checks at 2ef9657 are historical. Current continuation, shared-author and held-gate corrections pass 1,167 harness tests and 13 protective mutations. Fresh review remains owed. |
+| #215 | Merged to main at a42d1f02 after review. Carries typed tool causes, external pair execution, paged reads, paired decode measurements and outbound identity sort, including the continuation, shared-author and held-gate corrections. The recorded test counts describe their tested revisions. |
 | #216, #217, #219, #220 | Merged down into #215, preserving the original commits and merge ancestry. Their earlier slice evidence does not grade the consolidated root. |
 | #218 | Closed as already incorporated. Its exact head 8b387eff entered #219 through merge 32a57b57 and is now an ancestor of #215. No separate content merge is owed. |
 | #190 | Independent pure recall query primitive, held until the foundation cutover by the [operator's ruling][recall-hold]. It does not land ahead of that cutover. |
-| #189, #192, #213 | Separate Spec proposals. Approval and merge remain owed, so they are not implementation authority. |
+| #189, #192, #213 | Approved and merged Spec authority. Their recall/boot provenance, observation/2 and empty-correction implementations remain separate code work. |
 
 The operator merged #220 into #219 at 391c1a0, #219 into #217 at 8dded99,
 #217 into #216 at bb63859, and #216 into #215 at fe4d193b. Merge 32a57b57
-preserves #217 at bdfa3a76 and #218 at 8b387eff as its two parents. Keep that
-ancestry when integrating main into #215. Closed child branches are no longer
+preserves #217 at bdfa3a76 and #218 at 8b387eff as its two parents. The #215 merge
+preserves that ancestry on main. Closed child branches are no longer
 landing targets.
 
 The consolidated fixes address the multi-call finding in the
@@ -57,20 +60,21 @@ checks passed 1,157 harness tests with 18 ignored instruments, the other crate a
 device gates, and 22 protective mutations with exact restoration. Those results and
 their source manifest do not validate the current review corrections.
 
-The new round retains accepted read progress, records measurement-author successors
+The final #215 round retains accepted read progress and measurement-author successors
 before yielding, and checks the clock before consuming a measurement reservation.
 Shared author admission retains a valid original across an initial lifecycle wait
 and repeats its checks before submission. The pump no longer reports an already held
 gate reply as new progress. Current author validation passes 1,167 harness tests
 with 18 ignored instruments and all 13 compiled protective mutations, plus lint,
 formatting, lock and diff checks. The current source manifest and evidence are in
-/tmp/weaver-pr215-review-round2. Fresh review remains owed. The class sweep confirms
+/tmp/weaver-pr215-review-round2. Review completed before the operator's merge.
+The class sweep confirms
 template and outbound continuations already retain their state. The inherited capture
 refusal cleanup gap is filed separately as [#223][capture-followup], and gate findings
 1 and 2 are tracked in [#222][gate-followup]. The six slice records now separate their
-historical inputs from current #215-to-main landing guidance.
+historical inputs from the consolidated #215 landing.
 
-The operator authorized consolidating #215 onto main. Runtime activation and
+The operator merged #215 onto main. Runtime activation and
 deployment remain held until the coordinated foundation cutover. The paired wire
 and typed interrupt must deploy with their complete consumers. The old serving
 path remains active until the qualified cutover. Only the operator merges. The
@@ -80,6 +84,24 @@ The contained seed fixture that launches the real member under root-owned host
 containment remains an open instrument carried by #184. The reviewed scripted seed
 fixtures do not replace it. Production language artifacts and measured limits also
 remain unqualified. The foundation landing does not remove these cutover obligations.
+
+## Continuation after consolidation
+
+The operator authorized completing #146 through stacked draft PRs on 2026-10-21.
+Claude reviews each draft. Only the operator merges or authorizes deployment.
+The first independent acts implement the newly merged empty-correction rule,
+observation/2 sampling and current/history validation, and recall trace records.
+The recall consumer then constructs recorded read/boot provenance and checked
+material for journal and placement owners. #190 retains its explicit cutover hold.
+
+The remaining implementation includes inward pairs and boot repair, complete
+journal/marks/place ownership, plan/forward-flag ports, serve-side selection,
+lifecycle/author migration and failed-run teardown. Production grammar, model
+artifacts, prompt review, measured limits and root-host qualification remain owed.
+OPEN-FACTS, malformed-recall refusal and the protected artifact locator still need
+their owning Spec gaps resolved. #221, #222 and #223 retain their tracked fixes.
+The issue checklist records each new PR and its evidence without converting a
+primitive pass into an integrated cutover claim.
 
 ## Dependency and merge order
 
@@ -149,7 +171,9 @@ clause remains binding.
 ## Slice evidence before consolidation
 
 The following counts, grades and branch descriptions record each original slice.
-They do not certify the current #215 integration or replace its pending review.
+Draft and pending-approval wording below describes those historical checkpoints.
+The landing table and #146 supply current status. These counts do not certify a
+later combined revision or replace its review.
 
 F2 is [merged PR #183][catalog], merge commit 7a8651d8. Its full crate
 suite, formatting, lint and lock checks passed. Seven deliberate mutations failed
@@ -598,6 +622,7 @@ tests prove mechanics and refusal paths. They do not certify production language
 quality, decoder capacity, throughput or absence of paging waits.
 
 [set]: ../crates/state-management/README.md
+[completion-tracker]: https://github.com/toddwbucy/WeaverAgent/issues/146
 [measure-owner]: https://github.com/toddwbucy/WeaverAgent/pull/219
 [outbound-sort]: https://github.com/toddwbucy/WeaverAgent/pull/220
 [outbound-record]: state-management-outbound-sort-2026-10-21.md

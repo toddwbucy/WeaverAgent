@@ -151,6 +151,7 @@ impl RepairRefused {
 enum AuthorPurpose {
     Instruction,
     ProtocolRefusal,
+    EmptyCorrectionRefusal,
     Association,
     TemplateFault,
     InstructionRefusal,
@@ -569,6 +570,25 @@ impl RecordingContext {
                 self.stage_repair_refusal(refusal, AuthorPurpose::ProtocolRefusal, ports.io)?;
                 Ok(RepairProgress::Progress)
             }
+            RepairIntent::EmptyCorrectionRefusal { source, correction } => {
+                self.ensure_repair_wait(ports.io)?;
+                let refusal = RefusalRecord::ProtocolRepair {
+                    source_id: source,
+                    case: ProtocolRepairCase::EmptyCorrection,
+                    detail: ProtocolRepairCase::EMPTY_CORRECTION_DETAIL.into(),
+                };
+                let payload = serde_json::value::to_raw_value(&refusal)
+                    .map_err(|error| self.repair_fault(ports.io, error.to_string()))?;
+                self.stage_repair_author(
+                    AuthorPurpose::EmptyCorrectionRefusal,
+                    Kind::Refusal,
+                    AuthoredSource::Runtime,
+                    Some(Sequence(correction.block_id.sequence.0)),
+                    Payload::Refusal(payload),
+                    None,
+                );
+                Ok(RepairProgress::Progress)
+            }
             RepairIntent::CorrectionAccounting => {
                 let correction = self
                     .repair
@@ -629,7 +649,7 @@ impl RecordingContext {
                 self.finish_repair_wait();
                 Ok(RepairProgress::Exhausted)
             }
-            RepairIntent::EmptyCorrectionGap { .. } | RepairIntent::InvalidRecallGap { .. } => {
+            RepairIntent::InvalidRecallGap { .. } => {
                 self.finish_repair_wait();
                 Ok(RepairProgress::SpecGap)
             }
@@ -936,6 +956,12 @@ impl RecordingContext {
                 .unwrap()
                 .ledger
                 .recorded_protocol_refusal(source),
+            AuthorPurpose::EmptyCorrectionRefusal => self
+                .repair
+                .as_mut()
+                .unwrap()
+                .ledger
+                .recorded_empty_correction_refusal(source),
             AuthorPurpose::Association => {
                 let work = self.repair.as_mut().unwrap();
                 work.association_next += 1;

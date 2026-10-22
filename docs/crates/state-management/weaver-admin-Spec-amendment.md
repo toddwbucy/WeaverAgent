@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #235
 
-**Version:** 0.14 **Date filed:** 2026-10-20 **Parent:** weaver-admin-PRD
+**Version:** 0.15 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -36,6 +36,14 @@ state_management.ste100. Record the executable digest separately from the model-
 and scheme digests. No worker opens these root paths again. Reason: the checker must
 receive the same instance that inventory checked, while binary custody stays with admin.
 [CLASS-2, FLOW-3, PERSIST-3]
+
+The instruction's model binding names Spec 02's exact manifest file by an absolute
+pathname under MANIFEST-LOCATOR. A relative value is ConfigInvalid naming the binding
+field. Inventory preserves that declared value and its expected digest. Admin does not
+discover or load model files on behalf of the agent uid. The SPU owns their
+acquisition and readability judgment during bootstrap. This locator is not another
+admin root key and does not change scheme or executable custody. [CLASS-2, CLASS-7,
+FLOW-3]
 
 Keep channel.rs::send_with_sink's complete-envelope check against MAX_ENVELOPE_BYTES
 before sendmsg, including escaping and every sibling field. Its ChannelFault::Truncated
