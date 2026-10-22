@@ -1,11 +1,16 @@
 # Failed gate execution owner
 
 Date: 2026-10-22.
+Branch: code/state-halt-gate-owner.
+Parent PR: #250.
+Epic: #146.
 
 ## Scope and authority
 
 This slice advances issue #146 E after the first-fault reporting owner. The
-starting parent is 66e6a48. It retains #190's operator hold for the foundation
+original parent was the first-fault reporting owner. Validation joins the fresh
+task-material stack through #250 and the #245/#247 review follow-ups.
+It retains #190's operator hold for the foundation
 cutover. No legacy serving path or deployed agent is activated or replaced.
 
 Implements: weaver-harness-Spec-amendment HARNESS-HALT and HARNESS-HALT-BOUND,
@@ -80,15 +85,27 @@ containment, actual gate behavior and device residency remain separate gates.
 Compile pins require HaltGate to have no Clone, Default or conversion from a
 bare ExchangeId. They do not claim absence of every possible Rust trait.
 
-Fifteen unique behavioral mutation recipes and three E0283 type probes are
-prepared outside the repository. Their compiled failure and exact-restoration
-results remain pending. The capture-admission defense has no fabricated capture
-fixture. Its prerequisite is part of the still-owed publication owner.
+Olympus validation used /tmp/weaver-146-halt-gate-target and the pinned toolchain.
+All fourteen focused tests passed. The joined harness passed 1,429 tests with
+18 inherited ignored cases. Strict all-target harness lint, formatting and the
+lock gate passed. All fifteen protective mutations compiled, failed their
+intended tests and passed after exact-byte restoration. All three type probes
+produced the intended E0283 ambiguity in the ownership pin, and baseline and
+restored cargo check passed.
 
-Source formatting and static diff checks were performed. Focused compilation,
-the full joined harness suite, strict clippy, lock, formatting gates and compiled
-protective changes remain root's serial work. No pass count or mutation result
-is claimed here before those gates run.
+The initial compile found a private module import path error, corrected to the
+sibling pairs module. An initial fixture expected another parsed packet after
+a post-send clock failure had shut down the socket. The test now verifies the
+actual retained interrupt first, then the resulting EOF and sticky abort. No
+production failure policy changed for that correction. These initial logs remain
+in the evidence, beside the final joined passes.
+
+Independent source reading covered the owner and the corrected EOF fixture.
+Evidence, recipes, type diagnostics and source hashes are deposited under
+weaver-testing/state-management-146-olympus-2026-10-21/halt-gate. These are author
+checks, not a Planner grade or complete production teardown qualification.
+The capture-admission defense has no fabricated capture fixture. Its prerequisite
+is part of the still-owed publication owner.
 
 ## Remaining executable work
 
@@ -100,10 +117,13 @@ lifecycle::Run. The same limitation applies at the halt deadline. AbortRequired
 requires that cleanup owner to stop waits and close/reap, rather than making
 this bounded primitive a complete failed exit.
 
-Terminal tool.call.completed/message.tool_result authoring, capture cancellation
-and refused save_point, stopped turn and caller response, Lower, SPU residency
-Release, failed state/classifier shutdown, component_failure unload and final
-trace drain remain separate work. No status from this owner is a proof that
+The trace-only mapped PairEnded attempt under Spec 05 PAIR-END and
+TRACE-CAPACITY remains owed when the received terminal requires it. That attempt
+will use the reserved tool.call.completed entry. It cannot file state or grant
+a new model-facing ToolResult. Capture cancellation and refused save_point,
+stopped turn and caller response, Lower, SPU residency Release, failed
+state/classifier shutdown, component_failure unload and final trace drain remain
+separate work. No status from this owner is a proof that
 those phases happened. The Run-to-context resource association and lifecycle
 dispatch remain held for the coupled cutover.
 
