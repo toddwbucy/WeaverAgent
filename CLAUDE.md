@@ -191,6 +191,7 @@ process/gates/lock.sh                                    # first: 0 in step, 1 d
 cargo build --workspace --locked
 cargo test -p weaver-harness --locked                    # one crate
 cargo test -p weaver-harness --locked <name_fragment>    # one test by substring
+cargo test -p weaver-state --no-default-features --locked # no-engine startup gate
 cargo clippy -p <crate> --all-targets --locked -- -D warnings
 cargo clippy -p weaver-spu --all-targets --features cuda,gguf --locked -- -D warnings
 cargo fmt --all -- --check

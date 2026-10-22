@@ -10,7 +10,7 @@ pub mod sqlite;
 pub mod serving_sqlite;
 
 // Test-only hook kept here (#118): a case every engine's suite runs against its own store.
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 fn raw_objects_survive_the_engine_and_answers(store: &mut dyn crate::store::Store) {
     use crate::store::{
         Distillate, render_identity_answer, render_recall_answer, render_replay_answer,
@@ -71,7 +71,7 @@ fn raw_objects_survive_the_engine_and_answers(store: &mut dyn crate::store::Stor
 /// message, an assistant message and a measurement, from the olympus baseline
 /// of 2026-09-27 on the shared bulk store.
 // Test-only hook kept here (#118): the recorded lines the shared case below reads.
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 const RECORDED: &str = include_str!("recorded-karl.ndjson");
 
 /// **A recorded line of each typed kind projects through the tee, lands, and
@@ -86,7 +86,7 @@ const RECORDED: &str = include_str!("recorded-karl.ndjson");
 /// served with no perplexity. Each engine's caller then reads its own tables
 /// for the rows that prove the landing was typed.
 // Test-only hook kept here (#118): a case every engine's suite runs against its own store.
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 fn recorded_lines_land_typed_and_serve_what_the_record_reads(store: &mut dyn crate::store::Store) {
     use crate::store::parse_distillate;
     use std::collections::BTreeMap;
@@ -177,7 +177,7 @@ fn recorded_lines_land_typed_and_serve_what_the_record_reads(store: &mut dyn cra
 /// engine's `TEXT` forced. Each engine's caller then reads its own `field`
 /// table for the verbatim row.
 // Test-only hook kept here (#118): a case every engine's suite runs against its own store.
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 fn a_nul_in_a_message_lands_verbatim_and_serves_whole(store: &mut dyn crate::store::Store) {
     use crate::store::Distillate;
     let content = r#"[{"type":"text","text":"before\u0000after"}]"#;
