@@ -144,24 +144,28 @@ pub fn decode_state_line_observed(
     line: &[u8],
     direction: FrameDirection,
 ) -> Result<DecodedStateFrame, FrameCodecError> {
-    let decoded: DecodedStateFrame =
-        decode_strict(line_body(line, direction)?).map_err(FrameCodecError::Malformed)?;
-    if decoded.frame.is_request() != (direction == FrameDirection::Request) {
-        return Err(FrameCodecError::WrongDirection);
-    }
-    Ok(decoded)
+    decode_state_line_as(line, direction, |decoded: &DecodedStateFrame| {
+        &decoded.frame
+    })
 }
 
 pub fn decode_state_line(
     line: &[u8],
     direction: FrameDirection,
 ) -> Result<StateFrame, FrameCodecError> {
-    let frame: StateFrame =
-        decode_strict(line_body(line, direction)?).map_err(FrameCodecError::Malformed)?;
-    if frame.is_request() != (direction == FrameDirection::Request) {
+    decode_state_line_as(line, direction, |frame| frame)
+}
+
+fn decode_state_line_as<T: DeserializeOwned>(
+    line: &[u8],
+    direction: FrameDirection,
+    frame: fn(&T) -> &StateFrame,
+) -> Result<T, FrameCodecError> {
+    let decoded = decode_strict(line_body(line, direction)?).map_err(FrameCodecError::Malformed)?;
+    if frame(&decoded).is_request() != (direction == FrameDirection::Request) {
         return Err(FrameCodecError::WrongDirection);
     }
-    Ok(frame)
+    Ok(decoded)
 }
 
 pub fn decode_seed_line(

@@ -220,13 +220,13 @@ fn conversation_uses_commit_order_and_u64_limit_without_signed_wrap() {
 fn complete_result_limit_is_exact_and_never_omits_an_entry() {
     let mut store = test_store();
     let selector = ReadSelector::SystemPrompt {};
-    let expected = query_encoded(&store, &selector).unwrap();
+    let expected = query_encoded(&store, &selector, None).unwrap();
     store.read_limits.max_result_bytes = (expected.len() as u64).into();
-    assert_eq!(query_encoded(&store, &selector).unwrap(), expected);
+    assert_eq!(query_encoded(&store, &selector, None).unwrap(), expected);
     store.read_limits.max_result_bytes = (expected.len() as u64 - 1).into();
     refused(query(&store, &selector), ReadRefusalCode::ResultTooLarge);
     store.read_limits.max_result_bytes = 1_000_000.into();
-    assert_eq!(query_encoded(&store, &selector).unwrap(), expected);
+    assert_eq!(query_encoded(&store, &selector, None).unwrap(), expected);
     assert_eq!(held(&store.connection).unwrap().0, 1);
     assert!(position(&store.connection).unwrap().is_none());
 }
@@ -789,7 +789,7 @@ fn observation_reads_pin_frontier_validate_columns_and_stay_out_of_content() {
         after: 1.into(),
         through: None,
     };
-    let held = query_encoded(&store, &selector).unwrap();
+    let held = query_encoded(&store, &selector, None).unwrap();
     // This synthetic read corpus pins unsigned ordering up to u64::MAX. Its
     // intentional gap cannot be adopted as a complete recorded member run.
     assert!(matches!(
@@ -802,7 +802,7 @@ fn observation_reads_pin_frontier_validate_columns_and_stay_out_of_content() {
     );
     assert_eq!(super::held(db).unwrap().0, 1);
     assert!(position(db).unwrap().is_none());
-    assert!(shape(db, 1_000_000.into()).unwrap().is_empty());
+    assert!(shape(db, 1_000_000.into(), None).unwrap().is_empty());
     refused(
         query(
             &store,
@@ -963,12 +963,12 @@ fn observed_result_encodings_retain_actual_written_prefixes_on_refusal() {
     let mut store = test_store();
     let selector = ReadSelector::SystemPrompt {};
     let mut copied = BufferBytes::default();
-    let bytes = query_encoded_observed(&store, &selector, &mut copied).unwrap();
+    let bytes = query_encoded(&store, &selector, Some(&mut copied)).unwrap();
     assert_eq!(copied.value(), Ok(bytes.len() as u64));
     store.read_limits.max_result_bytes = 32.into();
     let mut refused_bytes = BufferBytes::default();
     assert!(matches!(
-        query_encoded_observed(&store, &selector, &mut refused_bytes),
+        query_encoded(&store, &selector, Some(&mut refused_bytes)),
         Err(ReadFailure::Refused(ReadRefusalCode::ResultTooLarge))
     ));
     assert_eq!(
@@ -978,13 +978,13 @@ fn observed_result_encodings_retain_actual_written_prefixes_on_refusal() {
 
     let mut shape_bytes = BufferBytes::default();
     assert_eq!(
-        shape_observed(&store.connection, 2.into(), &mut shape_bytes).unwrap(),
+        shape(&store.connection, 2.into(), Some(&mut shape_bytes)).unwrap(),
         vec![]
     );
     assert_eq!(shape_bytes.value(), Ok(2));
     let mut shape_refusal = BufferBytes::default();
     assert!(matches!(
-        shape_observed(&store.connection, 1.into(), &mut shape_refusal),
+        shape(&store.connection, 1.into(), Some(&mut shape_refusal)),
         Err(ReadFailure::Refused(ReadRefusalCode::ResultTooLarge))
     ));
     assert_eq!(shape_refusal.value(), Ok(1));
