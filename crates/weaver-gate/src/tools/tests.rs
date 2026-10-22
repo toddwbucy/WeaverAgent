@@ -109,9 +109,25 @@ pub(super) fn exchange() -> ExchangeId {
 
 std::thread_local! {
     static WAIT_ENTERED: std::cell::RefCell<Option<std::sync::mpsc::SyncSender<()>>> = const { std::cell::RefCell::new(None) };
+    static WAIT_DELAY_UNTIL: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// Delay precisely inside the next production poll boundary on this thread.
+/// This models descheduling after a caller's deadline check, without signals.
+pub(super) fn delay_next_wait_until(until: std::time::Instant) {
+    WAIT_DELAY_UNTIL.with(|slot| assert!(slot.replace(Some(until)).is_none()));
+}
+
+pub(super) fn assert_wait_delay_consumed() {
+    WAIT_DELAY_UNTIL.with(|slot| assert!(slot.get().is_none(), "the production wait was reached"));
 }
 
 pub(super) fn wait_entered() {
+    WAIT_DELAY_UNTIL.with(|slot| {
+        if let Some(until) = slot.take() {
+            std::thread::sleep(until.saturating_duration_since(std::time::Instant::now()));
+        }
+    });
     WAIT_ENTERED.with(|slot| {
         if let Some(sender) = slot.borrow_mut().take() {
             sender.send(()).unwrap();
