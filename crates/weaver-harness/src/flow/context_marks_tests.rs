@@ -559,7 +559,8 @@ fn begin_task_missing_required_input_or_mark_is_refused_at_activation() {
         run.opened();
         let load = run.load_event();
         run.author(load).unwrap();
-        let ActivationFailure::Partition(error) = run.context.activate(&mut run.clock).unwrap_err() else {
+        let ActivationFailure::Partition(error) = run.context.activate(&mut run.clock).unwrap_err()
+        else {
             panic!("missing required selection must refuse partition activation");
         };
         assert_eq!(error.code, serving::PartitionErrorCode::InvalidProjection);
@@ -567,7 +568,34 @@ fn begin_task_missing_required_input_or_mark_is_refused_at_activation() {
         assert!(!run.context.barrier.is_active());
         assert!(run.context.input.snapshot().is_none());
         assert!(run.context.marks.is_none());
-        assert!(run.context.barrier.recorder().structure().by_kind(Kind::StateMark).next().is_none());
+        // Activation refused before an active tap exists. Inspect the real
+        // untapped writer after its normal drain instead of its active accessor.
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !matches!(
+            run.context.barrier.drain_status(&mut run.context.budget).unwrap(),
+            serving::DrainStatus::Emptied
+        ) {
+            assert!(std::time::Instant::now() < limit, "writer did not drain");
+            std::thread::yield_now();
+        }
+        run._reader.set_nonblocking(true).unwrap();
+        let mut trace = Vec::new();
+        let mut bytes = [0; 4096];
+        loop {
+            match run._reader.read(&mut bytes) {
+                Ok(0) => break,
+                Ok(count) => trace.extend_from_slice(&bytes[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("untapped trace read: {error}"),
+            }
+        }
+        let records: Vec<serde_json::Value> = std::str::from_utf8(&trace)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(records.iter().any(|record| record["kind"] == "load"));
+        assert!(records.iter().all(|record| record["kind"] != "state.mark"));
     }
 }
 
@@ -800,11 +828,25 @@ fn begin_task_active_and_completed_owner_excludes_freshness() {
         assert!(error.required_ids.is_empty());
         assert!(fx.input.run.context.freshness.is_none());
         assert!(fx.input.run.context.marks.is_some());
-        assert_eq!(fx.input.run.context.deadlines.get(PumpDeadline::Decision), decision);
-        assert!(fx.input.run.context.deadlines.get(PumpDeadline::Cut).is_none());
+        assert_eq!(
+            fx.input.run.context.deadlines.get(PumpDeadline::Decision),
+            decision
+        );
+        assert!(
+            fx.input
+                .run
+                .context
+                .deadlines
+                .get(PumpDeadline::Cut)
+                .is_none()
+        );
     }
     assert!(matches!(
-        fx.input.run.context.take_task(&mut fx.input.run.clock).unwrap(),
+        fx.input
+            .run
+            .context
+            .take_task(&mut fx.input.run.clock)
+            .unwrap(),
         Some(TaskCompletion::Begun(_))
     ));
     assert!(fx.input.run.context.failure().is_none());
@@ -816,10 +858,18 @@ fn begin_task_refuses_active_and_completed_freshness_before_consuming_input() {
         let mut source = TaskFixture::new();
         let token = source.token();
         let mut busy = TaskFixture::new();
-        busy.input.run.context.prepare_cut(vec![], &mut busy.input.run.clock).unwrap();
+        busy.input
+            .run
+            .context
+            .prepare_cut(vec![], &mut busy.input.run.clock)
+            .unwrap();
         if complete {
             assert_eq!(
-                busy.input.run.context.advance_prepare_cut(&mut ports(&mut busy.input.run.clock)).unwrap(),
+                busy.input
+                    .run
+                    .context
+                    .advance_prepare_cut(&mut ports(&mut busy.input.run.clock))
+                    .unwrap(),
                 FreshnessProgress::Complete
             );
         }
@@ -827,30 +877,50 @@ fn begin_task_refuses_active_and_completed_freshness_before_consuming_input() {
         // A real token from another context reaches only admission. A local
         // AcceptedInput cannot coexist with freshness under the public guards.
         // Busy must return custody before validating or consuming this token.
-        let error = busy.input.run.context.begin_task(
-            token,
-            TurnRef("task-turn".into()),
-            &busy.certificate,
-            &mut busy.input.run.clock,
-        ).unwrap_err();
+        let error = busy
+            .input
+            .run
+            .context
+            .begin_task(
+                token,
+                TurnRef("task-turn".into()),
+                &busy.certificate,
+                &mut busy.input.run.clock,
+            )
+            .unwrap_err();
         assert_eq!(error.refusal, marks_driver::BeginTaskRefusal::Busy);
         assert!(error.failure.is_none());
         assert!(busy.input.run.context.marks.is_none());
         assert!(busy.input.run.context.freshness.is_some());
         assert_eq!(busy.input.run.context.deadlines.get(PumpDeadline::Cut), cut);
         assert!(busy.input.run.context.failure().is_none());
-        source.input.run.context.begin_task(
-            error.input,
-            TurnRef("task-turn".into()),
-            &source.certificate,
-            &mut source.input.run.clock,
-        ).unwrap();
+        source
+            .input
+            .run
+            .context
+            .begin_task(
+                error.input,
+                TurnRef("task-turn".into()),
+                &source.certificate,
+                &mut source.input.run.clock,
+            )
+            .unwrap();
         assert!(matches!(source.finish(), TaskCompletion::Begun(_)));
         assert_eq!(
-            busy.input.run.context.advance_prepare_cut(&mut ports(&mut busy.input.run.clock)).unwrap(),
+            busy.input
+                .run
+                .context
+                .advance_prepare_cut(&mut ports(&mut busy.input.run.clock))
+                .unwrap(),
             FreshnessProgress::Complete
         );
-        let Some(FreshnessCompletion::Prepared(prepared)) = busy.input.run.context.take_prepared_cut(&mut busy.input.run.clock).unwrap() else {
+        let Some(FreshnessCompletion::Prepared(prepared)) = busy
+            .input
+            .run
+            .context
+            .take_prepared_cut(&mut busy.input.run.clock)
+            .unwrap()
+        else {
             panic!("admission refusal lost the freshness result");
         };
         assert!(prepared.belongs_to(&busy.input.run.context));
