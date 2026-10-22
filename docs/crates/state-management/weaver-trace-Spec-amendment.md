@@ -2,6 +2,8 @@
 
 **Status:** MERGED.
 
+**Landing PR:** #241
+
 **Version:** 0.23 **Date filed:** 2026-10-20 **Parent:** weaver-trace-PRD
 
 ## 0. What this document is

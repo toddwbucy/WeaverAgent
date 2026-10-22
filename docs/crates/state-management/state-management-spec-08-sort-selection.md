@@ -2,6 +2,8 @@
 
 **Status:** MERGED.
 
+**Landing PR:** #241
+
 **Version:** 0.15 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-08`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 

@@ -2,6 +2,8 @@
 
 **Status:** MERGED.
 
+**Landing PR:** #241
+
 **Version:** 0.18 **Date filed:** 2026-10-20
 
 ## 0. What this document is
