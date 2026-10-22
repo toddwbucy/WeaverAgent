@@ -373,16 +373,20 @@ PERSIST-1]
 | Instrument | Measurement definition |
 | --- | --- |
 | state-observation/1 | [Spec 09 section 2 at 7a8651d8](https://github.com/toddwbucy/WeaverAgent/blob/7a8651d8/docs/crates/state-management/state-management-spec-09-qualification-costs.md#2-producer-records-and-store-carriage) |
-| state-observation/2 | STORE-OBSERVATION and SNAPSHOT-SAMPLING in this Spec |
+| state-observation/2 | STORE-OBSERVATION and SNAPSHOT-SAMPLING in this Spec. held_bytes samples the ended_ns observation boundary after payload encoding, including the retained answer payload buffer |
 
 copied_bytes counts bytes in buffers owned by the serving adapter:
 decoded Text/raw/context copies, encoded result/page buffers, and captured image
 buffers, each materialization once. It excludes SQLite's and the allocator's internal
-copies. held_bytes is the sum of live read-snapshot buffers, capture buffers and
-in-flight request/answer buffers at the end sample. It excludes the SQLite heap,
-allocator capacity and kernel queues. The instrument version pins these definitions.
-Neither quantity claims total RAM or device memory. A path with an uninstrumented copy
-or holding category reports null, not a partial total. [COST-1, COST-2, STORE-1]
+copies. For state-observation/2, held_bytes is the sum of live read-snapshot buffers,
+capture buffers and in-flight request/answer buffers at the ended_ns observation
+boundary, after the operation answer payload is encoded and before observation metadata
+and the final wrapper are encoded. It includes the retained encoded answer payload
+buffer, including for snapshot. This is separate from snapshot's earlier CPU/disk after
+sample. It excludes the SQLite heap, allocator capacity and kernel queues. The
+instrument version pins these definitions. Neither quantity claims total RAM or device
+memory. A path with an uninstrumented copy or holding category reports null, not a
+partial total. [COST-1, COST-2, STORE-1]
 
 disk is {enabled, before, after, unavailable_reason}. enabled is bool or null, sampled
 only at snapshot from the member's readable delay-accounting setting. before and after
