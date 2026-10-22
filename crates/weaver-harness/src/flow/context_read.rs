@@ -466,6 +466,20 @@ impl RecordingContext {
         Ok(true)
     }
 
+    /// A consumed answer keeps the next reduction across a lifecycle yield.
+    /// Finish it before the coordinator can claim another recorder ticket;
+    /// successful release must install its recall ownership first.
+    pub(super) fn resume_accepted_read(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        if self
+            .read
+            .as_ref()
+            .is_some_and(|read| read.accepted.is_some())
+        {
+            self.finish_accepted_read(io)?;
+        }
+        Ok(())
+    }
+
     /// A state answer is consumed only after the coordinator's exact
     /// operation-measurement proof, never on socket read or send success.
     pub(super) fn settle_recorded_read(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
