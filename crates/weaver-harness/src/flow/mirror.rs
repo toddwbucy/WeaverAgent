@@ -443,6 +443,14 @@ pub(super) fn source(value: &shared::SourceBlockId) -> trace::SourceBlockId {
     }
 }
 
+pub(super) fn span_ref(value: &shared::SpanRef) -> trace::SpanRef {
+    trace::SpanRef {
+        seed_id: value.seed_id.clone(),
+        local_id: number(value.local_id),
+        revision: number(value.revision),
+    }
+}
+
 fn span(value: shared::Span) -> trace::Span {
     let shared::Span { start, end } = value;
     trace::Span {

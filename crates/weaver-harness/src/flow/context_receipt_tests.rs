@@ -12,6 +12,9 @@ use std::io::{Read, Write};
 use weaver_traits::{ContentBlock, Message, Role};
 use weaver_types::state_flow as s;
 
+#[path = "context_freshness_tests.rs"]
+mod freshness;
+
 fn ports<I: PumpIo>(io: &mut I) -> PumpPorts<'_, I> {
     PumpPorts {
         lifecycle: LifecyclePorts::default(),

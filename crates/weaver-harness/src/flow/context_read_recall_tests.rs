@@ -1,6 +1,9 @@
 use super::*;
 use std::time::{Duration, Instant};
 
+#[path = "context_read_channel_tests.rs"]
+mod channel_tests;
+
 // A read proof is consumed by its next owner, never duplicated for two consumers.
 const _: fn() = || {
     trait ReadProofMustNotClone<Marker> {
