@@ -373,8 +373,15 @@ pub enum InputRefusalCase {
 #[serde(rename_all = "snake_case")]
 pub enum ProtocolRepairCase {
     CorrectionCall,
+    EmptyCorrection,
     MissingToolStatement,
     AmbiguousToolStatement,
+}
+
+impl ProtocolRepairCase {
+    /// The exact EMPTY-CORRECTION refusal text, shared by author and wire fixtures.
+    pub const EMPTY_CORRECTION_DETAIL: &'static str =
+        "correction contains no Text block or attempted call";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

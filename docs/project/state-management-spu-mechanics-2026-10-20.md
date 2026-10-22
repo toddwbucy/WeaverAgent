@@ -50,12 +50,12 @@ rule correspondence and symbolic template inclusion proof. C1c must supply O02-2
 concrete encoder, tokenizer, span-head and alignment adapter, followed by measured
 qualification. The existing ModernBERT sequence scorer cannot supply word spans.
 
-Before filesystem admission can be implemented, Spec 02 must say whether
-ModelBinding.artifact names the ste100-model/1 manifest file or a directory, and
-name the manifest lookup rule. The present text defines the contents and relative
-file references but not this locator. This slice chooses neither form. Supplying
-already acquired immutable bytes to the admission helper does not assert path
-custody, symlink confinement or file-descriptor pinning.
+Spec 02's MANIFEST-LOCATOR defines the exact manifest-file locator and its pinned
+parent for relative file acquisition. The [locator record][locator] records the
+election and owed instruments. This source slice still accepts already acquired
+immutable bytes; it implements no path custody, symlink confinement or
+file-descriptor pinning. Protected filesystem admission remains a separate
+implementation act under that rule.
 
 The third binary, descriptor-count and dumpable entry checks, compiled adapter
 selection, internal sentence-worker assembly and real driver remain with that duty.
@@ -97,3 +97,4 @@ dispatcher state is introduced.
 
 [protocol]:
 ../crates/state-management/state-management-spec-02-protocol-classifier-gate.md
+[locator]: state-management-ste100-manifest-locator-2026-10-21.md

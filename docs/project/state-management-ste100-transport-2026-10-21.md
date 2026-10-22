@@ -95,9 +95,10 @@ deployment throughput.
 This act supplies no serving cutover, worker fork/exec integration, production SPU
 backend, model selection, grammar qualification or system prompt. H1b2 still owns the
 run-wide pump and lifecycle. C1's remaining production duty and O02-1/O02-2
-qualification remain open. The manifest locator and SPU open-label gaps are separate
-review questions.
-No code in this act chooses their representations.
+qualification remain open. PR #235 records the exact manifest locator and acquisition
+custody [approved by the operator on 2026-10-22][locator-ruling]. The SPU open-label gap
+is separate. This transport implementation supplies no artifact acquisition or
+qualification evidence.
 
 The cross-end read also found that PR #191's SPU fragment helper reports a live empty
 datagram as EOF. This near side distinguishes malformed empty traffic from peer close.
@@ -105,3 +106,4 @@ The corresponding C1a correction is published in PR #191 at 19e6afb9, with fresh
 host and Olympus gates. It remains part of the dependency chain before cutover.
 
 [pr]: https://github.com/toddwbucy/WeaverAgent/pull/200
+[locator-ruling]: https://github.com/toddwbucy/WeaverAgent/pull/235#issuecomment-6333209095
