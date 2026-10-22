@@ -12,7 +12,7 @@ conforms to.
 **Document ID:** `weaver-harness-PRD`
 **Parent:** `weaver-agent-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #181
+**Landing PR:** #245
 
 ---
 
@@ -326,16 +326,24 @@ own contract, per apex 5.1, and this crate gains a seam rather than a dependency
 
 ## 4. The seams
 
-The harness is party to eight seams by this section's own enumeration, and every one
-of them is governed by a named contract, per apex 5.1. **The enumeration counted six
-until this act, and the gap it disclosed was two seams rather than the one it
-named.** It named the classify seam and owed itself the act that would carry it, and
-this is that act. What it did not name is the seam the decoder cut of 2026-08-02
-landed: this section carried one seam to `weaver-spu`, called it the decode seam, and
-resolved it through `weaver-harness-spu-contract`, which is the residency seam's
-contract, so the token seam was named in the table and absent from the count. Both
-are `weaver-spu`'s and both are carried below. Six cross a process line and are Unix
-sockets that authenticate their peer, by credential where the channel has a name and
+This replacement applies at the state-management foundation cutover. Until then,
+this section's previous serving contract remains applicable under
+[FOUNDATION-TRANSITION](../state-management/state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover).
+The dependency declaration below records the compiled foundation primitive; it does
+not activate it or satisfy the qualification required for the coupled cutover.
+
+The base enumeration below covers nine seams: the previous eight plus the pure
+recall library call. The merged
+[STE100 charter amendment](../state-management/charter-amendments.md#4-ste100-and-recall-duties-in-the-owning-charters)
+adds a separate required socket under
+[weaver-harness-spu-ste100-contract](../state-management/weaver-harness-spu-ste100-contract.md#0-scope-and-applicability).
+Together they describe ten seams at cutover, seven sockets and three library links.
+The existing label-scoring seam and its optional-by-presence rule remain unchanged;
+the separate STE100 duty is required for a serving state-management agent.
+
+Every seam is governed by a named contract, per apex 5.1. Six of the base
+enumeration's nine cross a process line and are Unix sockets that authenticate their
+peer, by credential where the channel has a name and
 by possession where it has none. The coordination seam is a named socket this crate
 binds and authenticates by credential, root or refused, per
 `weaver-admin-harness-contract` section 2 as of the inversion of 2026-08-05. Four are
@@ -358,8 +366,11 @@ The seventh and eighth seams are the ones to `weaver-trace` and to
 `weaver-diagnostic`, the two record mechanisms this crate authors through. Neither
 crosses a process line, so both are library boundaries tagged `link` rather than
 `socket`, and neither authenticates anything because there is no second process to
-identify. They are seams under contracts all the same, which is why the count here
-is eight and the table below is six.
+identify. The ninth is the pure recall-query library call to `weaver-internal`, under
+[weaver-harness-internal-contract](../contracts/weaver-harness-internal-contract.md).
+It also crosses no process line and is tagged `link`. This base enumeration has nine
+seams and its socket table below has six; the additional STE100 socket remains
+specified by its separate amendment and contract above.
 
 **The egress ruling of 2026-08-07 adds no seam here, and the socket count above it is a
 claim worth checking rather than an omission.** Apex section 3 step 7 has the harness
@@ -373,10 +384,11 @@ closes its enumeration at five and says in its section 7 that the clause is draw
 again on the day that exchange arrives, so this seam's traffic is chartered ahead of
 the document that must admit it.
 
-Every request carrying work across these seams carries the turn context and returns
+Every request carrying work across the socket seams carries the turn context and returns
 it, per apex 5.2. Lifecycle directives on the coordination seam carry no turn context
 because they belong to no turn, per 5.2 as scoped by the re-authoring of
-2026-08-01.
+2026-08-01. The pure recall constructor takes only the subject; the harness retains
+the call's identity and accounts for its pair under HARNESS-RECALL.
 
 **The three rows to `weaver-spu` carry this document's own words for those seams, and
 two of the three are named for the infixes their contracts carry.** The residency row
@@ -387,7 +399,8 @@ name stands unchanged where the two later names take one. `weaver-spu-PRD` secti
 is the authority on that crate's seams and names the same three residency, token and
 label, in that order.
 
-The six sockets:
+The six sockets in the base enumeration (the additional STE100 socket is specified
+by its separate contract above):
 
 | Seam | Peer | The harness's role |
 |---|---|---|
@@ -406,17 +419,17 @@ other event, no run blocks on anything downstream of the emission, and the
 operator's tooling keys on the fault fields and comes back by running a verb, per
 `weaver-admin-operator-contract` section 6.
 
-The harness links `weaver-traits` and `weaver-types` as floor vocabulary, and links
-`weaver-trace` and `weaver-diagnostic` as members of its own domain under
-contracts. **It links no other internal crate**, the second record mechanism having
-joined that list 2026-08-27 with the act that wrote its contract. The four are one
-dependency surface and two classifications, which is what the blocks below project:
-two `floor-link` records and two `seam` records tagged `link`. Calling all four
-floor vocabulary would use the word `weaver-agent-PRD` section 5.1 reserves for
-what every domain draws from and no domain contains. That is the whole
-dependency surface, and it is checkable against this list.
+The harness's normal dependency set is exactly five internal crates: `weaver-traits`
+and `weaver-types` as floor vocabulary, `weaver-trace` and `weaver-diagnostic` as
+recording members under their contracts, and `weaver-internal` for the pure recall
+query constructor authorized by
+[HARNESS-RECALL](../state-management/weaver-internal-Spec-amendment.md#2-harness-use-destination-harness-sections-1-and-6).
+The blocks below project two `floor-link` records and three `seam` records tagged
+`link`. The helper is behavior under a library contract, not floor vocabulary. No
+store or SPU dependency is added. `weaver-harness-Spec` section 1 and the exact-set
+manifest test read the same five crates.
 
-**A second member stands beside the trace and is not a link.** `weaver-state`
+**The state member is reached over a socket.** `weaver-state`
 is a member of this domain reached over a socket, per apex section 9's
 re-entry door and its charter's seam section, so it adds a `seam` record and
 no dependency: nothing of it is linked, and the dependency-surface claim
@@ -431,8 +444,8 @@ via: weaver-harness-state-contract
 tag: socket
 ```
 
-**A third member joins the trace and is linked the same way, its contract landed
-2026-08-27.** `weaver-diagnostic` is the mechanism this crate authors a
+**The diagnostic member is linked on the same ground as trace.**
+`weaver-diagnostic` is the mechanism this crate authors a
 diagnostic-trace through, per `weaver-agent-PRD` section 6 as ruled
 2026-08-24, standing to a diagnostic binding as `weaver-trace` stands to a
 serving one. It is linked rather than dialed on the trace's own ground: apex
@@ -440,24 +453,30 @@ section 5.1 forbids a behavior reached by path dependency **across a process
 line**, not a crate calling a crate inside one binary, and this call crosses no
 process line. The harness does ask this crate to record, which is what makes
 the record a `seam` rather than a `floor-link`, per Document Format section 4,
-whose own example is this pair's sibling. **Its `seam` record tagged `link` is
-declared below as of 2026-08-27**, the act that wrote
-`weaver-harness-diagnostic-contract` and the member's Spec landing the `via` this
-record needs and the surface `weaver-harness-Spec` section 9 held open.
-**The graph and the manifest parted here on purpose and have since rejoined.** The
-edge is declared by this document and the dependency by a manifest, so the graph went
-to four with the act that wrote the contract and the manifest went to four with the
-act that built the member. Both have landed. The member is built, the workspace
-carries it, and this crate's manifest declares it, so the dependency-surface claim
-above reads four crates the corpus links and four the tree compiles, with no split
-left to disclose. `weaver-harness-Spec` section 1 reads the same four from the side
-that reads against the manifest.
+whose own example is this pair's sibling. Its contract and `seam` record tagged
+`link` landed on 2026-08-27.
 
 ```graph
 edge: seam
 from: weaver-harness
 to: weaver-diagnostic
 via: weaver-harness-diagnostic-contract
+tag: link
+```
+
+**The internal helper is a pure library call.** The merged INTERNAL-RECALL,
+INTERNAL-QUERY and HARNESS-RECALL clauses elect only the subject constructor in this
+act. [Its contract](../contracts/weaver-harness-internal-contract.md) projects those
+existing clauses: the harness retains the subject and owns scheduling, trace,
+store I/O and placement; the helper performs none of those effects. The call adds
+no process, socket, tool registry entry or retrieval policy. Loop orchestration
+remains in `worker/dev_loop`, and classification remains in the SPU.
+
+```graph
+edge: seam
+from: weaver-harness
+to: weaver-internal
+via: weaver-harness-internal-contract
 tag: link
 ```
 
