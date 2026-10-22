@@ -107,8 +107,7 @@ No implementation or runtime gate result is claimed by this draft. Static docume
 checks pass for ASCII, prose width, synchronized versions, local links and diff hygiene.
 The coordinating author's lock gate passed. Two independent document readings found no
 concrete semantic defect within this proposal's scope. The operator election and
-Planner review remain owed. Landing PR numbers must be set after this draft receives
-its assigned number.
+Planner review remain owed on draft PR #237.
 
 [review]:
 https://github.com/toddwbucy/WeaverAgent/pull/229#pullrequestreview-5609135461
