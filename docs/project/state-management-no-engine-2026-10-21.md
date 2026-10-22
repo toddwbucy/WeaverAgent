@@ -20,15 +20,14 @@ SQLite construction order. There is no replacement engine or fallback store.
 Implements: weaver-state-Spec section 1, scoped to the optional engine feature;
 section 2, scoped to the existing run-lock first act; section 3, scoped to
 constructing the declared engine behind Store. Author assessment: conforms for
-these scoped clauses. The missing-engine startup refusal is a Spec gap pending the
-operator's choice on issue #211. The alternative is to require SQLite when building
-the binary. The current proposal uses the existing unavailable-store fault vocabulary
-and adds no control response or serving capability; that vocabulary alone does not
-supply authority for the new startup disposition.
+these scoped clauses. The [operator's ruling of 2026-10-22][ruling] elects the
+startup refusal in issue #211. The owning Spec now states the run-lock-first
+ordering, every-mode refusal before usage validation, absent-lock notice and
+room/image/door exclusion. The prior run-lock failure still takes precedence.
 
-[Planner review 5609164787][planner] confirms sections 1 and 3 and reserves the
-startup election to the operator. This record does not claim that election was made.
-The code and test proposal remains in draft until the choice and owning Spec agree.
+[Planner review 5609164787][planner] reserved this startup election to the
+operator. That decision is now recorded. The PR remains subject to renewed review
+and operator merge. No production code changed in the ruling followup.
 
 ## Instruments and validation
 
@@ -78,7 +77,7 @@ Evidence, tested source hashes and mutation/restoration records are deposited at
 `weaver-testing/state-management-146-olympus-2026-10-21/no-engine/` on the shared
 bulk store. /tmp/weaver-146-evidence/no-engine is local staging.
 
-## Review followups and conditional gate
+## Review followups and regular gate
 
 The present/absent descriptor fixture answers Planner rows 1 and 4. The current
 no-default-feature suite passed 30 tests, with strict all-target clippy, formatting
@@ -89,26 +88,27 @@ ten process cases. The earlier matrix and two mutations above describe the prior
 fixture. This followup changes tests and documentation only. Its evidence is in
 the shared no-engine/review deposit.
 
-If the operator elects startup refusal, add the following regular gate alongside the
-existing per-crate test commands, after lock.sh, using a private target directory:
+The operator elected startup refusal, so CLAUDE.md now includes the tested regular
+gate, under its existing lock-first and private-target rules:
 
 ```sh
 cargo test -p weaver-state --no-default-features --locked
 ```
 
-This exact command already ran in the prior author and Planner checks. Making it a
-regular gate answers row 3 only after the proposal is approved; no CLAUDE.md or gate
-policy is changed by this test followup. The conditional owning-Spec text is prepared
-outside the repository at /tmp/weaver-146-no-engine-conditional-spec.md.
+This command passed in the author and Planner checks and again with the corrected
+fd9 fixture. It answers row 3's configuration/gate requirement. The prior
+conditional scratch wording is superseded by the owning Spec on this branch.
 
 Row 5's unreachable no-engine constructor refusal and row 8's shared process-test
 helpers remain batch cleanup. Removing the fallback constructor arm would require a
 wider feature-boundary edit and is not needed to pin startup ordering. Row 6's
-missing-engine refusal before usage validation remains part of the pending election,
-not an additional ruling inferred from the test. No production behavior changes in
+missing-engine refusal before usage validation is included in the approved
+startup disposition. No production behavior changes in
 this followup.
 
 These changes qualify neither an engine-less serving agent nor the state management
 cutover. Issue #146 remains open and only the operator merges.
 
 [planner]: https://github.com/toddwbucy/WeaverAgent/pull/230#pullrequestreview-5609164787
+
+[ruling]: https://github.com/toddwbucy/WeaverAgent/pull/230#issuecomment-6333210363
