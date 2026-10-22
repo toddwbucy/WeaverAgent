@@ -200,6 +200,7 @@ impl RecordingContext {
         }
         if (self.marks.is_some() && !matches!(purpose, ReadPurpose::Marks))
             || self.read.is_some()
+            || self.inspection.is_some()
             || self.measure_blocks_external()
             || self.member_capture.is_some()
             || self.freshness.is_some()
@@ -488,6 +489,7 @@ impl RecordingContext {
             request,
             turn,
             completion,
+            ..
         } = completion
         else {
             return Err(self.read_fault(io, "read owner received a foreign completion"));

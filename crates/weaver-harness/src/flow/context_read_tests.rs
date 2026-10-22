@@ -12,6 +12,9 @@ use std::net::Shutdown;
 use weaver_trace::{Subsystem, TurnRef};
 use weaver_types::state_flow as s;
 
+#[path = "context_inspection_tests.rs"]
+mod inspection_tests;
+
 const CONTROL_NS: u64 = 2_000_000_000;
 const EMPTY: &[u8] = br#"{"entries":{"entries":[]}}"#;
 

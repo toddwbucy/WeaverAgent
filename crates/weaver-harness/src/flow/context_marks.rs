@@ -182,6 +182,7 @@ impl RecordingContext {
             || self.pair_work.is_some()
             || self.repair.is_some()
             || self.read.is_some()
+            || self.inspection.is_some()
             || self.member_capture.is_some()
             || self.measure.is_some()
             || self.input_turn.is_some()
