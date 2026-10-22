@@ -95,6 +95,7 @@ impl RecordingContext {
             });
         };
         if !self.repair_allows_output()
+            || self.freshness.is_some()
             || self.output.is_some()
             || self.flow.has_output_consumer()
             || self.filing.is_some()

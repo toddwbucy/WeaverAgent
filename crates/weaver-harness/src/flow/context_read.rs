@@ -191,6 +191,7 @@ impl RecordingContext {
         if self.read.is_some()
             || self.measure_blocks_external()
             || self.member_capture.is_some()
+            || self.freshness.is_some()
             || self.output.is_some()
             || self.filing.is_some()
             || self.pair_work.is_some()
