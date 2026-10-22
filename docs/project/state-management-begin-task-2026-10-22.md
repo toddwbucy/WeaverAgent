@@ -2,7 +2,7 @@
 
 Date: 2026-10-22
 Branch: code/state-begin-task
-PR: pending assignment
+PR: #242
 Epic: #146
 
 ## Current scope
