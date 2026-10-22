@@ -9104,7 +9104,7 @@ fn containment_an_undelivered_unwind_sweep_is_its_own_fault() {
 /// It owns no placement budget. The foundation boot owner supplies that check.
 #[test]
 fn opening_requires_the_complete_paired_answer_and_not_a_measurement() {
-    let opened = r#"{"kind":"opened","body":{"prefix_tokens":20,"capacity":4096,"generation_limit":128,"terminal_tokens":1}}"#;
+    let opened = r#"{"kind":"opened","body":{"session":"paired-open","prefix_tokens":1,"capacity":4096,"generation_limit":128,"terminal_tokens":1,"request":{"rendered":"x","template":"t"},"measurement":{"model":"m","weights_hash":"h","prefix_token_ids":[7],"blocks":[{"label":"identity-prefix","start":0,"end":1}]}}}"#;
     let cases = [
         (opened, Ok(())),
         (r#"{"kind":"opened"}"#, Err(LifecycleRefusal::NoResidency)),
@@ -9142,6 +9142,41 @@ fn opening_requires_the_complete_paired_answer_and_not_a_measurement() {
         assert_eq!(
             open_session(&decode, SessionId("paired-open".into()), vec![], false),
             expected
+        );
+        task.join().unwrap();
+    }
+}
+
+#[test]
+fn diagnostic_open_uses_the_same_evidence_corpus_and_rejects_wrong_echo() {
+    let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "../../../weaver-types/tests/fixtures/decode-open-evidence.json"
+    ))
+    .unwrap();
+    for case in cases {
+        use nix::sys::socket::{MsgFlags, recv, send};
+        use std::os::fd::AsRawFd;
+        let body = case["wire"].as_str().unwrap().to_owned();
+        let (decode, peer) = DecodeChannel::pair().unwrap();
+        let task = std::thread::spawn(move || {
+            let mut buffer = [0u8; 4096];
+            let count = recv(peer.as_fd().as_raw_fd(), &mut buffer, MsgFlags::empty()).unwrap();
+            assert!(
+                matches!(serde_json::from_slice::<TokenDirective>(&buffer[..count]).unwrap(),
+                TokenDirective::Open { session, .. } if session.0 == "s")
+            );
+            send(peer.as_fd().as_raw_fd(), body.as_bytes(), MsgFlags::empty()).unwrap();
+        });
+        let expected = if case["evidence_valid"].as_bool().unwrap() {
+            Ok(())
+        } else {
+            Err(LifecycleRefusal::NoResidency)
+        };
+        assert_eq!(
+            open_session(&decode, SessionId("s".into()), vec![], false),
+            expected,
+            "{}",
+            case["name"]
         );
         task.join().unwrap();
     }

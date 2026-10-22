@@ -48,6 +48,8 @@ mod placement;
 use placement::{OpenedSession, PlacementFailure, PreparedDelta};
 
 #[cfg(test)]
+mod open_evidence_tests;
+#[cfg(test)]
 mod placement_tests;
 
 /// The headroom the worker's composition root supplies. A deployment fact
@@ -454,9 +456,9 @@ fn serve_decode(
 
         match directive {
             TokenDirective::Open {
+                session,
                 messages,
                 column_ask,
-                ..
             } => {
                 // **The entry selected at admit, held rather than looked up
                 // again.** This was a second lookup by architecture with a
@@ -488,49 +490,16 @@ fn serve_decode(
                     }
                     continue;
                 }
-                // The declaration cites its family's renderer, so the prefix is
-                // that family's own rendering rather than a template string
-                // this root walks. The preamble a family opens a prefix with
-                // lands here and in no delta.
-                let renderer = (declaration.renderer)();
-                let prefix_text = match renderer
-                    .render_identity(&messages)
-                    .map_err(TokenRefusal::from)
-                {
-                    Ok(text) => text,
-                    Err(refusal) => {
-                        if send_refusal(decode, &refusal).is_err() {
-                            return Err(());
-                        }
-                        continue;
-                    }
-                };
-                let outcome = resident
-                    .open_session(&effective.knobs, effective.session.context_capacity)
-                    .and_then(|mut session| {
-                        let prefix = resident.tokenize(&prefix_text)?;
-                        session.open(&prefix)?;
-                        // The family declares its stop conditions and the
-                        // artifact's vocabulary is where they are checked, so
-                        // the set is built once here rather than assumed from
-                        // the artifact's end-of-sequence.
-                        let stop = resident.stop_set(renderer)?;
-                        // **The one ask's answer runs for the residency**:
-                        // the judged ask arms the tap's hold and the
-                        // session's take together, and nothing disarms
-                        // them because no directive un-asks.
-                        if column_ask {
-                            session.ask_columns();
-                        }
-                        Ok(OpenedSession::from_open(
-                            session,
-                            resident,
-                            effective.session,
-                            stop,
-                        ))
-                    });
+                let outcome = OpenedSession::open(
+                    resident,
+                    &effective.knobs,
+                    effective.session,
+                    &messages,
+                    column_ask,
+                    session,
+                );
                 match outcome {
-                    Ok(standing) => {
+                    Ok((standing, evidence)) => {
                         // A declared stop the artifact cannot promote is named
                         // on the operator's channel rather than dropped: it is
                         // a condition this residency will never recognise, and
@@ -544,30 +513,18 @@ fn serve_decode(
                                 })
                             );
                         }
-                        let facts = match standing.open_facts() {
-                            Ok(facts) => facts,
-                            Err(fault) => {
-                                eprintln!("{}", decode_fault_line(&fault));
-                                return Err(());
-                            }
-                        };
                         opened = Some(standing);
                         position = DecodePosition::AtRest;
-                        if send_answer(
-                            decode,
-                            &TokenAnswer::Opened {
-                                prefix_tokens: facts.prefix_tokens,
-                                capacity: facts.capacity,
-                                generation_limit: facts.generation_limit,
-                                terminal_tokens: facts.terminal_tokens,
-                            },
-                        )
-                        .is_err()
-                        {
+                        if send_answer(decode, &TokenAnswer::Opened(evidence)).is_err() {
                             return Err(());
                         }
                     }
-                    Err(fault) => {
+                    Err(PlacementFailure::Render(refusal)) => {
+                        if send_refusal(decode, &refusal).is_err() {
+                            return Err(());
+                        }
+                    }
+                    Err(PlacementFailure::Decode(fault)) => {
                         eprintln!("{}", decode_fault_line(&fault));
                         return Err(());
                     }

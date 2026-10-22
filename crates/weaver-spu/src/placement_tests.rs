@@ -436,6 +436,19 @@ mod device {
             observer.session.close();
             (measured, prepared, facts)
         };
+        let identity = vec![text(Role::System, "Answer briefly.")];
+        let prefix = (resident.declaration.renderer)()
+            .render_identity(&identity)
+            .unwrap();
+        let prefix_tokens: Vec<u32> = resident
+            .tokenize(&prefix)
+            .unwrap()
+            .iter()
+            .map(|token| token.0)
+            .collect();
+        let template = resident.declaration.template;
+        let model = resident.artifact.display().to_string();
+        let weights_hash = resident.weights_hash.0.clone();
         let (client, server) = decode_pair();
         let client = std::thread::spawn(move || {
             let channel = decode_from_owned(client);
@@ -460,17 +473,30 @@ mod device {
             );
             send(TokenDirective::Open {
                 session: SessionId("placement paired seam".into()),
-                messages: vec![text(Role::System, "Answer briefly.")],
+                messages: identity,
                 column_ask: false,
             });
+            let TokenAnswer::Opened(opened) = receive() else {
+                panic!("Open did not complete")
+            };
+            assert_eq!(opened.session, SessionId("placement paired seam".into()));
+            assert_eq!(opened.prefix_tokens, facts.prefix_tokens);
+            assert_eq!(opened.capacity, facts.capacity);
+            assert_eq!(opened.generation_limit, facts.generation_limit);
+            assert_eq!(opened.terminal_tokens, 1);
+            let request: serde_json::Value = serde_json::from_str(opened.request.get()).unwrap();
+            let measurement: serde_json::Value =
+                serde_json::from_str(opened.measurement.get()).unwrap();
             assert_eq!(
-                receive(),
-                TokenAnswer::Opened {
-                    prefix_tokens: facts.prefix_tokens,
-                    capacity: facts.capacity,
-                    generation_limit: facts.generation_limit,
-                    terminal_tokens: 1,
-                }
+                request,
+                serde_json::json!({"rendered":prefix,"template":template})
+            );
+            assert_eq!(
+                measurement,
+                serde_json::json!({
+                    "model":model, "weights_hash":weights_hash, "prefix_token_ids":prefix_tokens,
+                    "blocks":[{"label":"identity-prefix","start":0,"end":prefix.len()}]
+                })
             );
             send(proposal(0, vec![malformed()], schemas.clone()));
             assert_eq!(
@@ -703,10 +729,10 @@ mod device {
                 serde_json::from_slice(&client.recv_octets().unwrap()).unwrap();
             assert!(matches!(
                 opened,
-                TokenAnswer::Opened {
+                TokenAnswer::Opened(weaver_types::Opened {
                     terminal_tokens: 1,
                     ..
-                }
+                })
             ));
             let mut refusals = 0;
             loop {
@@ -792,6 +818,7 @@ mod device {
         standing.session.close();
         drop(standing);
         paired_decode_agrees(resident, parameters);
+        paired_decode_agrees(resident, frozen);
         active_measure_refuses(resident, parameters, false);
         active_measure_refuses(resident, parameters, true);
     }

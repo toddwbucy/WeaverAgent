@@ -883,6 +883,55 @@ fn generation_with(unrecovered: Vec<weaver_types::UnrecoveredCall>) -> weaver_ty
     }
 }
 
+#[test]
+fn decode_raw_answers_preserve_body_first_spelling_and_unit_answers() {
+    use weaver_types::{FaultCase, FaultReport, TokenAnswer};
+    let raw = |s: &str| serde_json::value::RawValue::from_string(s.to_owned()).unwrap();
+    let mut generation = generation_with(vec![]);
+    generation.request = raw(r#"{ "rendered" : "\u00e9\n" }"#);
+    generation.measurement = raw(r#"{ "tokens" : [7, 3] }"#);
+    for answer in [
+        TokenAnswer::Generated(generation.clone()),
+        TokenAnswer::ReFed(generation),
+        TokenAnswer::Fault(FaultReport {
+            case: FaultCase::DeviceFaultDuringGeneration,
+            account: raw(r#"{ "detail" : "\u00e9" }"#),
+        }),
+    ] {
+        let emitted = serde_json::to_string(&answer).unwrap();
+        let (kind, body) = emitted
+            .strip_prefix("{\"kind\":")
+            .unwrap()
+            .strip_suffix('}')
+            .unwrap()
+            .split_once(",\"body\":")
+            .unwrap();
+        let reordered = format!("{{\"body\":{body},\"kind\":{kind}}}");
+        let parsed: TokenAnswer = serde_json::from_str(&reordered).unwrap();
+        assert_eq!(parsed, answer);
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), emitted);
+    }
+    assert_eq!(
+        serde_json::to_string(&TokenAnswer::AtRest).unwrap(),
+        r#"{"kind":"at_rest"}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<TokenAnswer>(r#"{"kind":"at_rest"}"#).unwrap(),
+        TokenAnswer::AtRest
+    );
+    for malformed in [
+        r#"{"kind":"at_rest","extra":null}"#,
+        r#"{"kind":"at_rest","kind":"at_rest"}"#,
+        r#"{"body":null,"body":null,"kind":"at_rest"}"#,
+        r#"["at_rest",null]"#,
+    ] {
+        assert!(
+            serde_json::from_str::<TokenAnswer>(malformed).is_err(),
+            "{malformed}"
+        );
+    }
+}
+
 /// **The report is absent where empty and round-trips where present**, per
 /// `weaver-types-Spec` sections 4.4 and 5.
 ///

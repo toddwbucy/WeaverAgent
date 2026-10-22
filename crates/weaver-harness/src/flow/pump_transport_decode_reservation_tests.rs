@@ -89,7 +89,7 @@ fn drain_send(port: &mut DecodePort, peer: &OwnedFd) -> Vec<Vec<u8>> {
 }
 
 fn measured() -> Vec<u8> {
-    b" \n{\"kind\":\"delta_measured\", \"body\":{\"resident\":90,\"prefix_tokens\":20,\"keep\":90,\"input_tokens\":7,\"capacity\":4096,\"opaque\":\"a\\u0062\"}}\t".to_vec()
+    b" \n{\"kind\":\"delta_measured\", \"body\":{\"resident\":90,\"prefix_tokens\":20,\"keep\":90,\"input_token\\u0073\":7,\"capacity\":4096}}\t".to_vec()
 }
 
 fn reply(port: &mut DecodePort, peer: &OwnedFd, bytes: &[u8]) {
@@ -368,12 +368,15 @@ fn preexisting_unreserved_work_is_never_adopted_by_a_reservation() {
         DecodeStage::Busy(_)
     ));
     drain_send(&mut port, &peer);
-    let opened = serde_json::to_vec(&TokenAnswer::Opened {
+    let opened = serde_json::to_vec(&TokenAnswer::Opened(weaver_types::Opened {
+        session: weaver_types::SessionId("session".into()),
         prefix_tokens: 20,
         capacity: 4096,
         generation_limit: 10,
         terminal_tokens: 1,
-    })
+        request: serde_json::value::to_raw_value(&serde_json::json!({})).unwrap(),
+        measurement: serde_json::value::to_raw_value(&serde_json::json!({})).unwrap(),
+    }))
     .unwrap();
     reply(&mut port, &peer, &opened);
     assert!(matches!(
@@ -382,7 +385,7 @@ fn preexisting_unreserved_work_is_never_adopted_by_a_reservation() {
     ));
     assert!(matches!(
         port.take_completion().unwrap(),
-        Some(DecodeReply::Answer(TokenAnswer::Opened { .. }))
+        Some(DecodeReply::Answer(TokenAnswer::Opened(_)))
     ));
     let large = serde_json::to_vec(&TokenAnswer::Fault(FaultReport {
         case: FaultCase::ResidencyDegraded,

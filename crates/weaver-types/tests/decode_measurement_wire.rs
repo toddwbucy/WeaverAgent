@@ -32,12 +32,19 @@ fn measure() -> TokenDirective {
 }
 
 fn opened() -> TokenAnswer {
-    TokenAnswer::Opened {
+    TokenAnswer::Opened(weaver_types::Opened {
+        session: weaver_types::SessionId("s".into()),
         prefix_tokens: 13,
         capacity: u64::MAX,
         generation_limit: 42,
         terminal_tokens: 1,
-    }
+        request: serde_json::value::RawValue::from_string(r#"{"opaque_request":true}"#.into())
+            .unwrap(),
+        measurement: serde_json::value::RawValue::from_string(
+            r#"{"opaque_measurement":true}"#.into(),
+        )
+        .unwrap(),
+    })
 }
 
 fn measured() -> TokenAnswer {
@@ -93,11 +100,96 @@ fn opened_has_exact_required_numeric_body() {
     assert_eq!(
         bytes,
         concat!(
-            r#"{"kind":"opened","body":{"prefix_tokens":13,"#,
-            r#""capacity":18446744073709551615,"generation_limit":42,"terminal_tokens":1}}"#,
+            r#"{"kind":"opened","body":{"session":"s","prefix_tokens":13,"#,
+            r#""capacity":18446744073709551615,"generation_limit":42,"terminal_tokens":1,"#,
+            r#""request":{"opaque_request":true},"measurement":{"opaque_measurement":true}}}"#,
         )
     );
     assert_eq!(serde_json::from_str::<TokenAnswer>(&bytes).unwrap(), value);
+}
+
+#[test]
+fn shared_open_corpus_keeps_nested_boxes_opaque_and_checks_the_closed_outer_wire() {
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        body: Box<serde_json::value::RawValue>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Boxes {
+        request: Box<serde_json::value::RawValue>,
+        measurement: Box<serde_json::value::RawValue>,
+    }
+    let cases: Vec<Value> =
+        serde_json::from_str(include_str!("fixtures/decode-open-evidence.json")).unwrap();
+    for case in cases {
+        let bytes = case["wire"].as_str().unwrap();
+        let answer = serde_json::from_str::<TokenAnswer>(bytes);
+        assert_eq!(
+            answer.is_ok(),
+            case["outer_valid"].as_bool().unwrap(),
+            "{}",
+            case["name"]
+        );
+        if let Ok(TokenAnswer::Opened(opened)) = answer {
+            let original: Envelope = serde_json::from_str(bytes).unwrap();
+            let original: Boxes = serde_json::from_str(original.body.get()).unwrap();
+            assert_eq!(
+                opened.request.get(),
+                original.request.get(),
+                "{}",
+                case["name"]
+            );
+            assert_eq!(
+                opened.measurement.get(),
+                original.measurement.get(),
+                "{}",
+                case["name"]
+            );
+            let emitted = serde_json::to_string(&TokenAnswer::Opened(opened.clone())).unwrap();
+            assert!(emitted.contains(opened.request.get()));
+            assert!(emitted.contains(opened.measurement.get()));
+            assert_eq!(
+                serde_json::from_str::<TokenAnswer>(&emitted).unwrap(),
+                TokenAnswer::Opened(opened)
+            );
+        }
+    }
+}
+
+#[test]
+fn opened_equality_checks_every_fact_and_each_raw_box_byte() {
+    let TokenAnswer::Opened(original) = opened() else {
+        unreachable!()
+    };
+    let mut changed = original.clone();
+    changed.session.0.push('x');
+    assert_ne!(changed, original);
+    for field in [
+        "prefix_tokens",
+        "capacity",
+        "generation_limit",
+        "terminal_tokens",
+    ] {
+        let mut changed = original.clone();
+        let value = match field {
+            "prefix_tokens" => &mut changed.prefix_tokens,
+            "capacity" => &mut changed.capacity,
+            "generation_limit" => &mut changed.generation_limit,
+            _ => &mut changed.terminal_tokens,
+        };
+        *value = value.wrapping_add(1);
+        assert_ne!(changed, original, "{field}");
+    }
+    for request in [true, false] {
+        let mut changed = original.clone();
+        let raw = if request {
+            &mut changed.request
+        } else {
+            &mut changed.measurement
+        };
+        *raw = serde_json::value::RawValue::from_string(raw.get().replacen('{', "{ ", 1)).unwrap();
+        assert_ne!(changed, original, "raw whitespace is evidence");
+    }
 }
 
 #[test]
@@ -165,6 +257,11 @@ fn every_answer_fact_is_required_and_null_is_not_a_default() {
                 serde_json::from_str::<TokenAnswer>(&missing.to_string()).is_err(),
                 "absent {field} must refuse: {missing}"
             );
+            // The floor carries opaque boxes. Their null/object/content check
+            // belongs to HARNESS-OPEN, not this shared vocabulary.
+            if matches!(field.as_str(), "request" | "measurement") {
+                continue;
+            }
             let mut null = canonical.clone();
             null["body"][field] = Value::Null;
             assert!(
@@ -210,7 +307,10 @@ fn legacy_or_retagged_decode_shapes_are_not_aliases() {
 fn all_measurement_counts_keep_the_u64_number_domain() {
     for answer in [opened(), measured()] {
         let canonical = serde_json::to_value(&answer).unwrap();
-        for field in canonical["body"].as_object().unwrap().keys() {
+        for (field, value) in canonical["body"].as_object().unwrap() {
+            if !value.is_number() {
+                continue;
+            }
             for valid in [0, 1, u64::MAX] {
                 let mut candidate = canonical.clone();
                 candidate["body"][field] = json!(valid);

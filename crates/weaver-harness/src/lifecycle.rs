@@ -3335,16 +3335,19 @@ fn open_session(
 ) -> Result<(), LifecycleRefusal> {
     decode
         .send_directive(&TokenDirective::Open {
-            session,
+            session: session.clone(),
             messages: identity,
             column_ask,
         })
         .map_err(|_| LifecycleRefusal::NoResidency)?;
     match decode.recv_reply() {
-        // The complete replacement body must decode even on the retiring
-        // boot path. The foundation boot/place owner caches and checks these
-        // facts against its declared budgets at the coordinated cutover.
-        Ok(crate::channel::DecodeReply::Answer(TokenAnswer::Opened { .. })) => Ok(()),
+        // Diagnostic and retiring serving callers consume the paired wire too.
+        // They validate its exact echo and evidence without authoring a new
+        // diagnostic event or manufacturing foundation boot/place readiness.
+        Ok(crate::channel::DecodeReply::Answer(TokenAnswer::Opened(opened))) => {
+            crate::open_evidence::validate(&opened, &session)
+                .map_err(|_| LifecycleRefusal::NoResidency)
+        }
         // The emission, matched by name: a fault at open is the residency
         // unfit to serve, not the load's shape refused, and the wildcard
         // below would misname it. No recorder stands this early, so the

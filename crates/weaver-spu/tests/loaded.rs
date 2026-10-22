@@ -32,18 +32,32 @@ use weaver_types::{ArtifactRef, DecoderInstruction, DeviceOrdinal, ModelBinding,
 const MODEL: &str = "/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf";
 
 fn assert_opened(answer: weaver_types::TokenAnswer) {
-    let weaver_types::TokenAnswer::Opened {
+    let weaver_types::TokenAnswer::Opened(weaver_types::Opened {
         prefix_tokens,
         capacity,
         generation_limit,
         terminal_tokens,
-    } = answer
+        request,
+        measurement,
+        ..
+    }) = answer
     else {
         panic!("the session must open with complete token facts: {answer:?}")
     };
     assert!(prefix_tokens > 0 && prefix_tokens <= capacity);
     assert!(generation_limit > 0);
     assert_eq!(terminal_tokens, 1);
+    let request: serde_json::Value = serde_json::from_str(request.get()).unwrap();
+    let measurement: serde_json::Value = serde_json::from_str(measurement.get()).unwrap();
+    assert_eq!(
+        measurement["prefix_token_ids"].as_array().unwrap().len() as u64,
+        prefix_tokens
+    );
+    assert_eq!(measurement["blocks"][0]["label"], "identity-prefix");
+    assert_eq!(
+        measurement["blocks"][0]["end"].as_u64().unwrap(),
+        request["rendered"].as_str().unwrap().len() as u64
+    );
 }
 
 /// A fixture whose family declares no residual tap, for the readout refusal.

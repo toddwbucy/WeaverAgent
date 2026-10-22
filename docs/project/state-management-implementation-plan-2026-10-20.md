@@ -1,9 +1,9 @@
 # State management implementation map
 
-Date: 2026-10-21. Status: implementation tracking, not a Spec amendment.
+Date: 2026-10-22. Status: implementation tracking, not a Spec amendment.
 
 The authority is the merged [state management set][set] from PR #182, amended by
-#189, #192 and #213. [Issue #146][completion-tracker] is the current completion
+#189, #192, #213, #232, #235, #237, #241 and #244. [Issue #146][completion-tracker] is the current completion
 checklist and qualification boundary. All code PRs
 start as drafts. Gates and Planner verification precede third-party review.
 The operator merges them.
@@ -11,6 +11,26 @@ The crate remains weaver-state. The loop remains in worker/dev_loop and calls
 primitives. The SPU owns classification.
 
 ## Consolidated review stack
+
+The current baseline is main at 45f8483393ce25af4ade3f0fa7bd96c1e8ed78f1,
+following the operator's #190 and #244 merges on 2026-10-22. The #225 foundation
+continuation and its joined children are also merged. Issue #146 holds the complete
+landing ledger and current unfinished integration and qualification duties. The
+historical slice counts below are evidence for their original tested revisions.
+
+The merged #232 Open evidence, #235 protected artifact, #237 capture watermark,
+#241 malformed recall and #244 PlanSummary proposals now supply Spec authority.
+Approval and merge of these documents do not implement their remaining owners.
+The next drafts start from this baseline:
+
+| Branch | Scoped implementation and remaining boundary |
+| --- | --- |
+| code/state-open-evidence-carrier | Paired Opened evidence, strict harness/diagnostic checks and opaque trace placement payload. Full boot owner, recorded placement and fit remain owed. |
+| code/state-plan-summary-carrier | Required digest and complete last SourcePosition across state, harness and image consumers. Boot/effect cache coordinator remains owed. |
+| code/state-malformed-recall-owner | Identity-bearing refusal before an inward pair, with Recorded custody and no model feedback. Complete inward boot/repair and serving selection remain owed. |
+
+These are implementation branches under author validation, not merged authority or
+production qualification. Their scoped records carry the exact gate results.
 
 The foundation, trace and additive harness roots reached main on 2026-10-21.
 The operator merged #215 at a42d1f02, #189 at 4edf1513, #192 at aec3dcc2 and
@@ -28,7 +48,7 @@ combined head.
 | #215 | Merged to main at a42d1f02 after review. Carries typed tool causes, external pair execution, paged reads, paired decode measurements and outbound identity sort, including the continuation, shared-author and held-gate corrections. The recorded test counts describe their tested revisions. |
 | #216, #217, #219, #220 | Merged down into #215, preserving the original commits and merge ancestry. Their earlier slice evidence does not grade the consolidated root. |
 | #218 | Closed as already incorporated. Its exact head 8b387eff entered #219 through merge 32a57b57 and is now an ancestor of #215. No separate content merge is owed. |
-| #190 | Independent pure recall query primitive, held until the foundation cutover by the [operator's ruling][recall-hold]. It does not land ahead of that cutover. |
+| #190 | The operator merged the consolidated recall/inward stack to main at 0baf44d6 on 2026-10-22. That landing supersedes its earlier [off-main hold][recall-hold]. It does not authorize serving activation or deployment. |
 | #189, #192, #213 | Approved and merged Spec authority. Their recall/boot provenance, observation/2 and empty-correction implementations remain separate code work. |
 
 The operator merged #220 into #219 at 391c1a0, #219 into #217 at 8dded99,
@@ -92,14 +112,15 @@ Claude reviews each draft. Only the operator merges or authorizes deployment.
 The first independent acts implement the newly merged empty-correction rule,
 observation/2 sampling and current/history validation, and recall trace records.
 The recall consumer then constructs recorded read/boot provenance and checked
-material for journal and placement owners. #190 retains its explicit cutover hold.
+material for journal and placement owners. #190 has since landed as recorded above.
+The complete replacement still retains the coupled serving cutover hold.
 
 The remaining implementation includes inward pairs and boot repair, complete
 journal/marks/place ownership, plan/forward-flag ports, serve-side selection,
 lifecycle/author migration and failed-run teardown. Production grammar, model
 artifacts, prompt review, measured limits and root-host qualification remain owed.
-OPEN-FACTS, malformed-recall refusal and the protected artifact locator still need
-their owning Spec gaps resolved. #221, #222 and #223 retain their tracked fixes.
+The Open-evidence, malformed-recall and protected artifact locator Spec gaps have
+merged resolutions. Their complete runtime owners and qualification remain owed. #221, #222 and #223 retain their tracked fixes.
 The issue checklist records each new PR and its evidence without converting a
 primitive pass into an integrated cutover claim.
 

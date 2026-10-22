@@ -108,6 +108,7 @@ mod failure;
 mod flow;
 mod lifecycle;
 mod lifecycle_table;
+mod open_evidence;
 mod record;
 mod replay;
 mod spawn;
