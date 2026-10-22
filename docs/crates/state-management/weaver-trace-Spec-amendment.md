@@ -4,7 +4,7 @@
 
 **Landing PR:** #244
 
-**Version:** 0.23 **Date filed:** 2026-10-20 **Parent:** weaver-trace-PRD
+**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
 
 ## 0. What this document is
 
@@ -361,6 +361,60 @@ record is channel internal, origin loop. It holds no selectable Text or context 
 Assembly zero is the single boot placement, causally linked to the boot recall. [FLOW-3,
 PLACE-5, MARK-6, COST-4]
 
+open_evidence is a required final field. It is null for cut and append, and for boot it
+is the serialize-only trace-owned OpenEvidenceRecord
+{request:Box<RawValue>,measurement:Box<RawValue>}. Splice both SPU-OPEN boxes without
+normalization. The trace owns this closed outer wrapper and requires both boxes
+to be JSON objects. It does not parse their members, token IDs, model identity or
+partition. HARNESS-OPEN checks those contents, including duplicate/unknown keys,
+token count and the whole-render interval, before authoring. This preserves the
+base trace Spec's custody: the organ owns the contents of its opaque boxes.
+[FLOW-3, PLACE-5, SEAM-2]
+
+Boot requires prefix_tokens no greater than capacity, terminal_tokens one,
+assembly zero, no turn, cut null, and a causal_parent naming the earlier boot recall.
+Trace validates the event envelope, boot/nonboot wrapper presence and local outer
+placement fields. The harness proves the held Open, wire session echo, source port
+and causal-source correspondence. The event envelope already supplies the trace
+session; OpenEvidenceRecord has no additional session member. Serialize-only
+authoring does not give the trace a decoder for the SPU's measurement vocabulary.
+[FLOW-3, PLACE-5, SEAM-2, PROMPT-1]
+
+The serving recorder has entry-count capacity, not a per-record byte ceiling.
+DECODE_MESSAGE_BOUND limits the complete incoming Opened JSON message to 8 MiB;
+it does not bound the larger state.placement line with its trace envelope. Qualify
+the actual final encoded line, including all JSON escaping and its LF, and the
+simultaneously retained evidence/line memory under Spec 09's tuple. Record limits
+of external trace readers separately. No new recorder byte limit is elected by
+this carrier. Encoding or sink errors keep their existing trace
+failure disposition. Current infallible allocations may terminate the process; no
+new allocation-failure recovery is elected. A failed submission grants no Recorded;
+a later sink
+failure does not erase an already assigned Recorded sequence. No truncation or
+successful completion may be invented.
+[FLOW-3, FLOW-4, COST-4, COST-5]
+
+STATE_REQUEST_LINE_BOUND applies to state request frames and includes their LF.
+It is not a limit on this trace record: state.placement has no legal projection,
+so the active tee returns Unselected and emits no state filing for its evidence.
+The trace's canonical envelope parsing and sink write still process the whole
+record. Qualification therefore cannot infer trace-record capacity from the
+member's 8 MiB request bound. [TAP-3, SEAM-3, COST-4]
+
+The nested request/measurement are Open evidence, not model.request/model.measurement
+events. Those generation kinds remain turn-bound. Boot placement can account for a
+valid seated prefix whose configured fit failed, or whose enter was cancelled, without
+claiming readiness. Its payload grants no projection, including a wildcard. Diagnostic
+conversion refuses the serving placement instead of dropping the new field or creating
+a diagnostic event. Serving readers must accept this required shape at the paired
+cutover, including null open_evidence on nonboot placements. [FLOW-3, TAP-3, SCOPE-1]
+
+HARNESS-OPEN's owed teardown account uses normal submission capacity with the tee
+stopped when required. It gains no submit_terminal license and cannot spend any of
+TRACE-CAPACITY's seven reserved entries. Missing ordinary capacity preserves the held
+event only within the existing bound. No additional queue reserve is elected here.
+[FLOW-3, FLOW-4, FLOW-5, COST-4]
+
 Payload::MarkPosition mirrors Spec 06's MARK-POSITION, including the distinct
 MarkOccurrenceId, ArgumentCursor and boot/placed/native source variants. The harness
 authors state.mark.position only after its licensing receipt or complete append. The
@@ -424,6 +478,7 @@ feed. The result is forbidden by the partition validator. [SORT-4, FLOW-3, STORE
 | --- | --- | --- |
 | TRACE-WAKE | Saturate the real writer behind a held sink, release one slot, poll wake descriptor | Remove writer notification or reserve after sequence assignment |
 | TRACE-LOAD | Canonical load, failed-partition, failed-template and diagnostic fixtures | Author before load, omit inventory identity or starting hash, or claim a certificate before its results |
+| TRACE-PLACEMENT | Shared Open evidence corpus, actual event admission, byte-preserving serialization, boot/nonboot and fit/cancelled boot cases | Accept absent/wrong-phase evidence, malformed boxes, count/range/session mismatch, a boot turn or missing causal parent, normalize boxes or permit a projection/diagnostic conversion |
 | TRACE-RESULT | Rebuild bindings from source plus result records and compare committed rows | Remove one noun or condition from the trace payload |
 | TRACE-SORT | Exact decision/measurement captures with optional and mandatory overflow | Hide a dropped unit, admit measurement content, truncate a return or mutate an earlier event |
 
@@ -663,9 +718,10 @@ No numeric queue size is changed. The new kind set must be accepted by serving t
 consumers before deployment. The A/B representation is in this unit's persistence
 amendments. The load keeps its existing organ binary identities and declared elections
 as well as the new fields. Actual model identity and effective parameters remain in
-model.measurement and model.request. Tool metadata and any later selected event kind
-must enter the registry through its owning amendment before it can be configured. These
-are dependencies, not permission for an implementer to guess payload shapes.
+generation model.measurement/model.request and boot placement's Open evidence. Tool
+metadata and any later selected event kind must enter the registry through its owning
+amendment before it can be configured. These are dependencies, not permission for an
+implementer to guess payload shapes.
 
 [cutover]:
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
