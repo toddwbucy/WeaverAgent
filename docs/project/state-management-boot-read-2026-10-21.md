@@ -1,11 +1,14 @@
 # State management Recorded boot-read owner
 
 Executor implementation record for epic #146.
-Branch: `code/state-boot-read-owner`, based on material commit `284f73f`.
-The serialized harness suite passed 1230 tests with 18 inherited ignored cases.
+Branch: `code/state-boot-read-owner`, stacked on PR #236. Its merge ancestry
+retains the boot implementation and all preceding review corrections.
+Before joining the journal/review corrections, the harness suite passed 1230 tests
+with 18 inherited ignored cases.
 The focused boot rerun, all-target clippy and formatting checks passed. Compiled
-mutation checks and type-pin probes passed. Joined-stack validation and Planner
-review remain owed.
+mutation checks and type-pin probes passed. The final joined harness suite passed
+1252 tests with 18 inherited ignored cases, plus strict clippy, fmt and lock.
+Planner review remains owed.
 These are author checks of this slice, not production qualification.
 This record claims no serving activation, production qualification or epic closure.
 
@@ -155,6 +158,14 @@ all-target clippy and formatting passed again. Recipes
 live outside the repository. Each behavioral probe must compile, fail its
 targeted assertion, restore exact source and pass the restored baseline; trait
 probes separately require the expected compile-time ambiguity and restoration.
+
+Final joined validation includes journal #236, material correction 2487953,
+accounting correction 8ce7a37 and the preceding gate/no-engine/measurement reviews.
+The joined harness passed 1252 tests with 18 inherited ignored cases, strict
+all-target clippy, formatting and lock. A test-file merge preserved both the journal
+regression and the material followup corpus. No primitive mutation is counted twice
+merely because its source appears in this merge. Evidence and source hashes are in
+weaver-testing/state-management-146-olympus-2026-10-21/boot-read on the shared store.
 
 The future Open owner must check this context-owned head and its original Enter,
 then use its real recall sequence as the causal source. This slice introduces no
