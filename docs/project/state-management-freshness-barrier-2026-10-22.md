@@ -210,8 +210,14 @@ can insert another whole copy between that drain and the check. The explicit
 inbox guard remains a defense for future reducer changes. No fabricated queued
 state is used to claim an independent protective failure.
 
-The three new tests, their three mutations and renewed gates are pending. The
-earlier results above belong to the independently validated blocking correction.
+On the joined diagnostic-correction source, all 1295 harness tests passed with
+18 inherited ignored cases. The freshness-focused filter, strict all-target
+harness clippy, formatting and lock passed. All three new mutations compiled
+and failed their named assertions, then passed after exact restoration. Root
+independently reviewed the fixtures and equivalent dispositions. The run used
+/tmp/weaver-146-freshness-target. Logs, recipes and exact hashes are retained in
+freshness/review-batch in the shared evidence deposit. The earlier results above
+belong to the separately validated blocking correction.
 These dispositions change no deadline, cancellation or trace semantics.
 
 ## Remaining integration and assessment
