@@ -8,8 +8,9 @@ use crate::flow::ledger::{LedgerFile, SourceDisposition, TerminalOutcome};
 use crate::flow::read::ReadFailure;
 use receipt_driver::FilingOwner;
 use weaver_trace::Subsystem;
-use weaver_types::state_flow::{PairEnded, PairFailure, PairRecord, QueryResult, ReadSelector,
-    StateFrame, TerminalPairFate};
+use weaver_types::state_flow::{
+    PairEnded, PairFailure, PairRecord, QueryResult, ReadSelector, StateFrame, TerminalPairFate,
+};
 
 /// Intentionally no production constructor, public fields or conversion. The
 /// future checked Open owner must retain its actual proof when licensing this.
@@ -96,19 +97,22 @@ pub(in crate::flow) struct BootPairsAccount {
 
 impl BootPairsAccount {
     pub(in crate::flow) fn read_refusal(&self) -> Option<&ReadFailure> {
-        [&self.work.initial, &self.work.recheck].into_iter().find_map(|read| {
-            match read.as_ref() {
+        [&self.work.initial, &self.work.recheck]
+            .into_iter()
+            .find_map(|read| match read.as_ref() {
                 Some(ReadCompletion::Refused(refusal)) => Some(refusal),
                 _ => None,
-            }
-        })
+            })
     }
 }
 
 #[derive(Debug)]
 pub(in crate::flow) enum BootPairsCompletion {
     Repaired(RepairedBootPairs),
-    Refused { refusal: BootPairsRefusal, account: BootPairsAccount },
+    Refused {
+        refusal: BootPairsRefusal,
+        account: BootPairsAccount,
+    },
     Cancelled(BootPairsAccount),
 }
 
@@ -152,19 +156,23 @@ impl RecordingContext {
     }
 
     pub(super) fn boot_pairs_read_allowed(&self) -> bool {
-        self.boot_pairs.as_ref().is_some_and(|work| work.driving
-            && matches!(work.stage, Stage::Initial | Stage::Recheck))
+        self.boot_pairs.as_ref().is_some_and(|work| {
+            work.driving && matches!(work.stage, Stage::Initial | Stage::Recheck)
+        })
     }
 
     pub(super) fn boot_pairs_filing_allowed(&self) -> bool {
-        self.boot_pairs.as_ref().is_some_and(|work| work.driving
-            && work.stage == Stage::Terminals && work.expected.is_some() && work.bound.is_some())
+        self.boot_pairs.as_ref().is_some_and(|work| {
+            work.driving
+                && work.stage == Stage::Terminals
+                && work.expected.is_some()
+                && work.bound.is_some()
+        })
     }
 
     pub(super) fn boot_pairs_wait_owned(&self, key: PumpDeadline) -> bool {
         self.boot_pairs.as_ref().is_some_and(|work| {
-            key == PumpDeadline::Enter
-                || (key == PumpDeadline::Decision && work.bound.is_some())
+            key == PumpDeadline::Enter || (key == PumpDeadline::Decision && work.bound.is_some())
         })
     }
 
@@ -173,8 +181,7 @@ impl RecordingContext {
     pub(super) fn settle_boot_pairs_receipt_wait(&mut self) {
         let Some(work) = &self.boot_pairs else { return };
         let Some(bound) = work.bound else { return };
-        if !work.receipt_settled
-            && self.owned_filing_recorded_before(FilingOwner::BootPairs, bound)
+        if !work.receipt_settled && self.owned_filing_recorded_before(FilingOwner::BootPairs, bound)
         {
             self.deadlines.disarm(PumpDeadline::Decision);
             self.boot_pairs.as_mut().unwrap().receipt_settled = true;
@@ -188,53 +195,95 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), BootPairsBeginError> {
         let failure = self.live(io).err();
-        let refusal = if failure.is_some() || self.phase != RecordingPhase::Entered
-            || self.flow.phase() != CoordinatorPhase::Active || !self.barrier.is_active()
+        let refusal = if failure.is_some()
+            || self.phase != RecordingPhase::Entered
+            || self.flow.phase() != CoordinatorPhase::Active
+            || !self.barrier.is_active()
         {
             Some(BootPairsBeginRefusal::WrongPhase)
         } else if self.boot_pairs_started {
             Some(BootPairsBeginRefusal::AlreadyStarted)
         } else if !std::sync::Arc::ptr_eq(&prior.origin, &self.read_origin)
-            || self.boot_head.as_ref().is_none_or(|head| !head.belongs_to(self)
-                || head.recall_sequence() != prior.head || head.enter_bound() != prior.enter)
+            || self.boot_head.as_ref().is_none_or(|head| {
+                !head.belongs_to(self)
+                    || head.recall_sequence() != prior.head
+                    || head.enter_bound() != prior.enter
+            })
             || self.deadlines.get(PumpDeadline::Enter) != Some(prior.enter)
-            || self.open_start.is_none() || self.load_duty.is_none()
+            || self.open_start.is_none()
+            || self.load_duty.is_none()
         {
             Some(BootPairsBeginRefusal::WrongOpen)
-        } else if self.boot_pairs.is_some() || self.open_turn.is_some()
-            || self.input.snapshot().is_some() || self.input_turn.is_some()
-            || self.input_author.is_some() || self.output.is_some() || self.pair_work.is_some()
-            || self.repair.is_some() || self.filing.is_some() || self.read.is_some()
-            || self.marks.is_some() || self.freshness.is_some() || self.measure.is_some()
-            || self.member_capture.is_some() || self.templates_block_content()
-            || self.waiting_content.is_some() || self.completed_author.is_some()
-            || self.template_blocked_author.is_some() || self.barrier.pending().is_some()
-            || self.barrier.pending_author().is_some() || self.flow.has_pending_record()
-            || self.flow.has_filing_consumer() || self.flow.has_output_consumer()
-            || self.flow.pending_control().is_some() || self.flow.pending_check().is_some()
+        } else if self.boot_pairs.is_some()
+            || self.open_turn.is_some()
+            || self.input.snapshot().is_some()
+            || self.input_turn.is_some()
+            || self.input_author.is_some()
+            || self.output.is_some()
+            || self.pair_work.is_some()
+            || self.repair.is_some()
+            || self.filing.is_some()
+            || self.read.is_some()
+            || self.marks.is_some()
+            || self.freshness.is_some()
+            || self.measure.is_some()
+            || self.member_capture.is_some()
+            || self.templates_block_content()
+            || self.waiting_content.is_some()
+            || self.completed_author.is_some()
+            || self.template_blocked_author.is_some()
+            || self.barrier.pending().is_some()
+            || self.barrier.pending_author().is_some()
+            || self.flow.has_pending_record()
+            || self.flow.has_filing_consumer()
+            || self.flow.has_output_consumer()
+            || self.flow.pending_control().is_some()
+            || self.flow.pending_check().is_some()
             || self.flow.operation_completion().is_some()
             || !self.flow.state().outstanding().is_empty()
             || self.flow.state().held_measurement().is_some()
-            || [PumpDeadline::Decision, PumpDeadline::Cut, PumpDeadline::Gate,
-                PumpDeadline::StateControl].into_iter().any(|key| self.deadlines.get(key).is_some())
+            || [
+                PumpDeadline::Decision,
+                PumpDeadline::Cut,
+                PumpDeadline::Gate,
+                PumpDeadline::StateControl,
+            ]
+            .into_iter()
+            .any(|key| self.deadlines.get(key).is_some())
         {
             Some(BootPairsBeginRefusal::Busy)
-        } else { None };
+        } else {
+            None
+        };
         if let Some(refusal) = refusal {
-            return Err(BootPairsBeginError { prior, refusal, failure });
+            return Err(BootPairsBeginError {
+                prior,
+                refusal,
+                failure,
+            });
         }
         self.boot_pairs_started = true;
         self.boot_pairs = Some(BootPairsTransaction {
-            prior, start: self.open_start.as_ref().unwrap().clone(), driving: false,
-            stage: Stage::Initial, initial: None, recheck: None, terminals: vec![],
-            expected: None, bound: None, receipt_settled: false, cancelled: false,
-            cancelled_event: None, refusal: None,
+            prior,
+            start: self.open_start.as_ref().unwrap().clone(),
+            driving: false,
+            stage: Stage::Initial,
+            initial: None,
+            recheck: None,
+            terminals: vec![],
+            expected: None,
+            bound: None,
+            receipt_settled: false,
+            cancelled: false,
+            cancelled_event: None,
+            refusal: None,
         });
         Ok(())
     }
 
     pub(in crate::flow) fn advance_boot_pairs<I: PumpIo>(
-        &mut self, ports: &mut PumpPorts<'_, I>,
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
     ) -> Result<BootPairsProgress, RunFailure> {
         self.live(ports.io)?;
         self.boot_pairs_wait_matches(ports.io)?;
@@ -245,20 +294,26 @@ impl RecordingContext {
     }
 
     fn advance_boot_pairs_owned<I: PumpIo>(
-        &mut self, ports: &mut PumpPorts<'_, I>,
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
     ) -> Result<BootPairsProgress, RunFailure> {
         match self.boot_pairs.as_ref().unwrap().stage {
             Stage::Initial | Stage::Recheck => self.advance_boot_pairs_read(ports)?,
             Stage::Terminals => self.advance_boot_pairs_terminal(ports)?,
             Stage::Complete => {}
         }
-        Ok(if self.boot_pairs.as_ref().unwrap().stage == Stage::Complete {
-            BootPairsProgress::Complete
-        } else { BootPairsProgress::Pending })
+        Ok(
+            if self.boot_pairs.as_ref().unwrap().stage == Stage::Complete {
+                BootPairsProgress::Complete
+            } else {
+                BootPairsProgress::Pending
+            },
+        )
     }
 
     fn advance_boot_pairs_read<I: PumpIo>(
-        &mut self, ports: &mut PumpPorts<'_, I>,
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
         if self.read.is_none() {
             if self.boot_pairs.as_ref().unwrap().cancelled {
@@ -268,7 +323,9 @@ impl RecordingContext {
             match self.begin_boot_pairs_read(ports.io) {
                 Ok(()) => {}
                 Err(error) => {
-                    if let Some(failure) = error.failure { return Err(failure); }
+                    if let Some(failure) = error.failure {
+                        return Err(failure);
+                    }
                     if error.refusal == ReadBeginRefusal::Busy {
                         self.reduce_flow(ports.io)?;
                         return Ok(());
@@ -281,16 +338,26 @@ impl RecordingContext {
             self.cancel_read(ports.io)?;
         }
         self.advance_read(ports)?;
-        let Some(read) = self.take_read(ports.io)? else { return Ok(()) };
+        let Some(read) = self.take_read(ports.io)? else {
+            return Ok(());
+        };
         // No live hook after take: retain the exact consumed proof first.
         let work = self.boot_pairs.as_mut().unwrap();
         let initial = work.stage == Stage::Initial;
-        if initial { work.initial = Some(read); } else { work.recheck = Some(read); }
+        if initial {
+            work.initial = Some(read);
+        } else {
+            work.recheck = Some(read);
+        }
         if work.cancelled {
             work.stage = Stage::Complete;
             return Ok(());
         }
-        let read = if initial { &work.initial } else { &work.recheck };
+        let read = if initial {
+            &work.initial
+        } else {
+            &work.recheck
+        };
         let read = match read.as_ref().unwrap() {
             ReadCompletion::Recorded(read) => read,
             ReadCompletion::Refused(_) => {
@@ -311,9 +378,15 @@ impl RecordingContext {
             return Err(self.boot_pairs_fault(ports.io, "boot pair read changed variant"));
         };
         if initial {
-            work.stage = if pairs.is_empty() { Stage::Recheck } else { Stage::Terminals };
+            work.stage = if pairs.is_empty() {
+                Stage::Recheck
+            } else {
+                Stage::Terminals
+            };
         } else {
-            if !pairs.is_empty() { work.refusal = Some(BootPairsRefusal::NonemptyRecheck); }
+            if !pairs.is_empty() {
+                work.refusal = Some(BootPairsRefusal::NonemptyRecheck);
+            }
             work.stage = Stage::Complete;
         }
         if self.boot_pairs.as_ref().unwrap().stage == Stage::Terminals {
@@ -325,7 +398,8 @@ impl RecordingContext {
     }
 
     fn advance_boot_pairs_terminal<I: PumpIo>(
-        &mut self, ports: &mut PumpPorts<'_, I>,
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
         if self.boot_pairs.as_ref().unwrap().cancelled
             && let Some(event) = self.withdraw_unstarted_boot_pair()
@@ -348,19 +422,33 @@ impl RecordingContext {
             self.prepare_boot_pair_terminal(ports.io)?;
             let ended = self.boot_pairs.as_ref().unwrap().expected.as_ref().unwrap();
             let event = AuthoredEvent {
-                kind: Kind::ToolCallCompleted, subsystem: Subsystem::Harness, turn: None,
-                source: AuthoredSource::Loop, causal_parent: None,
-                payload: Some(Payload::PairEnded(Box::new(super::super::mirror::pair_ended(ended)))),
+                kind: Kind::ToolCallCompleted,
+                subsystem: Subsystem::Harness,
+                turn: None,
+                source: AuthoredSource::Loop,
+                causal_parent: None,
+                payload: Some(Payload::PairEnded(Box::new(
+                    super::super::mirror::pair_ended(ended),
+                ))),
             };
-            match self.begin_owned_filing(event, PumpDeadline::Decision, FilingOwner::BootPairs, ports.io) {
+            match self.begin_owned_filing(
+                event,
+                PumpDeadline::Decision,
+                FilingOwner::BootPairs,
+                ports.io,
+            ) {
                 Ok(()) => return Ok(()),
                 Err(error) => {
-                    if let Some(failure) = error.failure { return Err(failure); }
+                    if let Some(failure) = error.failure {
+                        return Err(failure);
+                    }
                     if error.refusal == FilingBeginRefusal::Busy {
                         self.reduce_flow(ports.io)?;
                         return Ok(());
                     }
-                    return Err(self.boot_pairs_fault(ports.io, "boot pair terminal lost admission"));
+                    return Err(
+                        self.boot_pairs_fault(ports.io, "boot pair terminal lost admission")
+                    );
                 }
             }
         }
@@ -376,10 +464,17 @@ impl RecordingContext {
         work.bound = None;
         work.receipt_settled = false;
         self.deadlines.disarm(PumpDeadline::Decision);
-        let ReadCompletion::Recorded(read) = work.initial.as_ref().unwrap() else { unreachable!() };
-        let QueryResult::OpenPairs { pairs } = read.result() else { unreachable!() };
-        if work.cancelled { work.stage = Stage::Complete; }
-        else if work.terminals.len() == pairs.len() { work.stage = Stage::Recheck; }
+        let ReadCompletion::Recorded(read) = work.initial.as_ref().unwrap() else {
+            unreachable!()
+        };
+        let QueryResult::OpenPairs { pairs } = read.result() else {
+            unreachable!()
+        };
+        if work.cancelled {
+            work.stage = Stage::Complete;
+        } else if work.terminals.len() == pairs.len() {
+            work.stage = Stage::Recheck;
+        }
         // A later terminal owns a distinct receipt barrier. Install it in the
         // same non-yielding transfer that consumed the previous exact receipt.
         if self.boot_pairs.as_ref().unwrap().stage == Stage::Terminals {
@@ -390,17 +485,35 @@ impl RecordingContext {
 
     fn prepare_boot_pair_terminal(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         let work = self.boot_pairs.as_ref().unwrap();
-        if work.expected.is_some() { return Ok(()); }
-        let ReadCompletion::Recorded(read) = work.initial.as_ref().unwrap() else { unreachable!() };
-        let QueryResult::OpenPairs { pairs } = read.result() else { unreachable!() };
+        if work.expected.is_some() {
+            return Ok(());
+        }
+        let ReadCompletion::Recorded(read) = work.initial.as_ref().unwrap() else {
+            unreachable!()
+        };
+        let QueryResult::OpenPairs { pairs } = read.result() else {
+            unreachable!()
+        };
         let pair = &pairs[work.terminals.len()];
         if pair.call_id.run == self.flow.run() {
             return Err(self.boot_pairs_fault(io, "boot abandonment requires a prior-run call"));
         }
-        let ended = PairEnded { call_id: pair.call_id.clone(), execution: None,
-            fate: TerminalPairFate::Failed, reason: Some(PairFailure::AbandonedAtLoad {}),
-            outcome: None, loaded_from: Some(work.start.clone()) };
-        let duration = self.load_duty.as_ref().unwrap().instruction.decision_wait.elapsed_ns.0;
+        let ended = PairEnded {
+            call_id: pair.call_id.clone(),
+            execution: None,
+            fate: TerminalPairFate::Failed,
+            reason: Some(PairFailure::AbandonedAtLoad {}),
+            outcome: None,
+            loaded_from: Some(work.start.clone()),
+        };
+        let duration = self
+            .load_duty
+            .as_ref()
+            .unwrap()
+            .instruction
+            .decision_wait
+            .elapsed_ns
+            .0;
         let Some(mut end) = self.last_ns.checked_add(duration) else {
             return Err(self.boot_pairs_fault(io, "boot pair receipt wait overflow"));
         };
@@ -410,7 +523,8 @@ impl RecordingContext {
         }
         let bound = AbsoluteBound::from_absolute(self.last_ns, end)
             .map_err(|error| self.boot_pairs_fault(io, error.to_string()))?;
-        self.deadlines.arm(PumpDeadline::Decision, bound)
+        self.deadlines
+            .arm(PumpDeadline::Decision, bound)
             .map_err(|error| self.boot_pairs_fault(io, error.to_string()))?;
         let work = self.boot_pairs.as_mut().unwrap();
         work.expected = Some(ended);
@@ -420,38 +534,45 @@ impl RecordingContext {
     }
 
     fn check_boot_pair_receipt(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
-        let work = self.boot_pairs.as_ref().unwrap();
-        let filing = work.terminals.last().unwrap();
-        let mut dispositions = filing.receipts().dispositions();
-        let valid = match (dispositions.next(), dispositions.next()) {
-            (Some(SourceDisposition::Committed(source)), None) => {
-                let common = source.common();
-                source.source().run == self.flow.run()
-                    && source.source().sequence.0 == filing.sequence().0
-                    && source.source().block.0 == 0
-                    && common.session_id == self.flow.state().identity().0
-                    && common.run_id == self.flow.run()
-                    && source.terminal().source == *source.source()
-                    && source.terminal().outcome == TerminalOutcome::Filed
-                    && matches!(source.receipt(), StateFrame::Filed { block_id, .. } if block_id == source.source())
-                    && matches!(source.file(), LedgerFile::Pair(file)
-                        if file.scheme_id == self.declaration.scheme.scheme_id
-                            && file.source.session == common.session_id
-                            && file.source.run == common.run_id
-                            && file.source.kind == "tool.call.completed"
-                            && file.source.channel == "tool" && file.source.origin == "loop"
-                            && file.source.subsystem == "harness" && file.source.turn.is_none()
-                            && file.source.causal_parent.is_none()
-                            && file.validate_structure().is_ok()
-                            && matches!(&file.pair, PairRecord::Ended(ended) if Some(ended) == work.expected.as_ref()))
+        let valid = {
+            let work = self.boot_pairs.as_ref().unwrap();
+            let filing = work.terminals.last().unwrap();
+            let mut dispositions = filing.receipts().dispositions();
+            match (dispositions.next(), dispositions.next()) {
+                (Some(SourceDisposition::Committed(source)), None) => {
+                    let common = source.common();
+                    source.source().run == self.flow.run()
+                        && source.source().sequence.0 == filing.sequence().0
+                        && source.source().block.0 == 0
+                        && common.session_id == self.flow.state().identity().0
+                        && common.run_id == self.flow.run()
+                        && source.terminal().source == *source.source()
+                        && source.terminal().outcome == TerminalOutcome::Filed
+                        && matches!(source.receipt(), StateFrame::Filed { block_id, .. } if block_id == source.source())
+                        && matches!(source.file(), LedgerFile::Pair(file)
+                            if file.scheme_id == self.declaration.scheme.scheme_id
+                                && file.source.session == common.session_id
+                                && file.source.run == common.run_id
+                                && file.source.kind == "tool.call.completed"
+                                && file.source.channel == "tool" && file.source.origin == "loop"
+                                && file.source.subsystem == "harness" && file.source.turn.is_none()
+                                && file.source.causal_parent.is_none()
+                                && file.validate_structure().is_ok()
+                                && matches!(&file.pair, PairRecord::Ended(ended) if Some(ended) == work.expected.as_ref()))
+                }
+                _ => false,
             }
-            _ => false,
         };
-        if !valid { return Err(self.boot_pairs_fault(io, "boot repair lost its exact terminal receipt")); }
+        if !valid {
+            return Err(self.boot_pairs_fault(io, "boot repair lost its exact terminal receipt"));
+        }
         Ok(())
     }
 
-    pub(in crate::flow) fn cancel_boot_pairs(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+    pub(in crate::flow) fn cancel_boot_pairs(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
         self.live(io)?;
         self.boot_pairs_wait_matches(io)?;
         self.boot_pairs.as_mut().unwrap().cancelled = true;
@@ -459,16 +580,22 @@ impl RecordingContext {
     }
 
     pub(in crate::flow) fn take_boot_pairs(
-        &mut self, io: &mut impl PumpIo,
+        &mut self,
+        io: &mut impl PumpIo,
     ) -> Result<Option<BootPairsCompletion>, RunFailure> {
         self.live(io)?;
         self.boot_pairs_wait_matches(io)?;
-        if self.boot_pairs.as_ref().unwrap().stage != Stage::Complete { return Ok(None); }
+        if self.boot_pairs.as_ref().unwrap().stage != Stage::Complete {
+            return Ok(None);
+        }
         let work = Box::new(self.boot_pairs.take().unwrap());
         Ok(Some(if work.cancelled {
             BootPairsCompletion::Cancelled(BootPairsAccount { work })
         } else if let Some(refusal) = work.refusal {
-            BootPairsCompletion::Refused { refusal, account: BootPairsAccount { work } }
+            BootPairsCompletion::Refused {
+                refusal,
+                account: BootPairsAccount { work },
+            }
         } else {
             BootPairsCompletion::Repaired(RepairedBootPairs { account: work })
         }))
@@ -477,8 +604,14 @@ impl RecordingContext {
     fn boot_pairs_wait_matches(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         let work = self.boot_pairs.as_ref().ok_or(RunFailure::BootPairsOwned)?;
         if self.deadlines.get(PumpDeadline::Enter) != Some(work.prior.enter)
-            || work.bound.is_some_and(|bound| self.deadlines.get(PumpDeadline::Decision)
-                != if work.receipt_settled { None } else { Some(bound) })
+            || work.bound.is_some_and(|bound| {
+                self.deadlines.get(PumpDeadline::Decision)
+                    != if work.receipt_settled {
+                        None
+                    } else {
+                        Some(bound)
+                    }
+            })
         {
             return Err(self.boot_pairs_fault(io, "boot repair lost its inherited wait"));
         }
@@ -486,6 +619,11 @@ impl RecordingContext {
     }
 
     fn boot_pairs_fault(&mut self, io: &mut impl PumpIo, detail: impl Into<String>) -> RunFailure {
-        self.fail(io, FlowHaltReason::ProtocolFailed, HaltPoint::Barrier, detail)
+        self.fail(
+            io,
+            FlowHaltReason::ProtocolFailed,
+            HaltPoint::Barrier,
+            detail,
+        )
     }
 }
