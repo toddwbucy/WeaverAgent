@@ -300,6 +300,7 @@ impl RecordingContext {
             return Err(error(request, MeasureBeginRefusal::WrongTurn, None));
         }
         if self.marks.is_some()
+            || self.boot_pairs.is_some()
             || self.measure.is_some()
             || self.output.is_some()
             || self.filing.is_some()

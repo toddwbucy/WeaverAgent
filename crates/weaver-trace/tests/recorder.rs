@@ -280,6 +280,36 @@ fn sequence_is_gapless_over_admitted_events() {
     );
 }
 
+#[test]
+fn turn_started_payload_refuses_before_fan_out_and_sequence_allocation() {
+    let (mut r, path) = recorder();
+    let payload = Payload::Fault(raw_payload(r#"{"detail":"a licensed fault payload"}"#).unwrap());
+    let refused = r.submit(event(Kind::TurnStarted, Some("t-1"), Some(payload)));
+    assert!(matches!(
+        refused,
+        Err(Failure::RefusedOnSubmit {
+            reason: SubmitRefusal::PayloadMalformed
+        })
+    ));
+    assert_eq!(r.structure().len(), 0);
+    r.drain().unwrap();
+    assert!(std::fs::read(&path).unwrap().is_empty());
+
+    assert_eq!(
+        r.submit(event(Kind::TurnStarted, Some("t-1"), None))
+            .unwrap(),
+        Sequence(0)
+    );
+    assert_eq!(r.structure().len(), 1);
+    r.drain().unwrap();
+    let bytes = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(bytes.lines().count(), 1);
+    let written: serde_json::Value = serde_json::from_str(&bytes).unwrap();
+    assert_eq!(written["kind"], "turn.started");
+    assert_eq!(written["sequence"], "0");
+    assert!(written.get("payload").is_none());
+}
+
 /// A payload-free kind emits no payload member at all, and the envelope
 /// flattens: the line is one flat object keyed on kind at the top level.
 ///

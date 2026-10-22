@@ -683,6 +683,90 @@ fn foreign_receipt_custody_is_refused_without_consuming_the_original_generation(
 }
 
 #[test]
+fn freshness_busy_returns_pair_custody_before_foreign_generation_checks() {
+    let mut source = PairFixture::new();
+    let original = source.generation(vec![text("Read owner."), call("opaque")]);
+    let calls: Vec<_> = original
+        .requests()
+        .iter()
+        .map(|request| request.opening().call_id.clone())
+        .collect();
+    let position = original.generation().source().clone();
+    let message = original.generation().original().message.clone();
+    let mut target = super::input_tests::InputFixture::new();
+    target
+        .run
+        .context
+        .prepare_cut(vec![], &mut target.run.clock)
+        .unwrap();
+    assert_eq!(
+        target
+            .run
+            .context
+            .advance_prepare_cut(&mut ports(&mut target.run.clock))
+            .unwrap(),
+        FreshnessProgress::Complete
+    );
+    assert!(
+        target
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::Cut)
+            .is_none()
+    );
+    assert!(target.run.context.open_turn.is_none());
+    let refused = target
+        .run
+        .context
+        .begin_not_dispatched(original, s::NonDispatchCause::Stop, &mut target.run.clock)
+        .unwrap_err();
+    // This pins the owned pause's refusal priority. Without that guard the
+    // foreign request still cannot execute because its turn is not open here.
+    assert_eq!(refused.refusal, PairBeginRefusal::Busy);
+    assert!(refused.failure.is_none());
+    assert_eq!(refused.original.generation().source(), &position);
+    assert_eq!(refused.original.generation().original().message, message);
+    assert_eq!(
+        refused
+            .original
+            .requests()
+            .iter()
+            .map(|request| request.opening().call_id.clone())
+            .collect::<Vec<_>>(),
+        calls
+    );
+    assert!(target.run.context.pair_work.is_none());
+    assert!(target.records(Kind::ToolCallStarted).is_empty());
+    assert!(target.records(Kind::ToolCallCompleted).is_empty());
+    let Some(FreshnessCompletion::Prepared(prepared)) = target
+        .run
+        .context
+        .take_prepared_cut(&mut target.run.clock)
+        .unwrap()
+    else {
+        panic!("refused pair admission lost the completed pause");
+    };
+    assert!(prepared.belongs_to(&target.run.context));
+    assert!(target.run.context.failure().is_none());
+    source.begin(refused.original, s::NonDispatchCause::Stop);
+    source.complete();
+    for call in calls {
+        assert!(
+            source
+                .output
+                .input
+                .run
+                .context
+                .completed_pair(&call, &mut source.output.input.run.clock)
+                .unwrap()
+                .is_some()
+        );
+    }
+    assert!(source.output.input.run.context.failure().is_none());
+}
+
+#[test]
 fn ordinary_filing_and_input_apis_cannot_steal_the_pair_owned_filing() {
     let mut fx = PairFixture::new();
     let original = fx.generation(vec![text("Read owner."), call("opaque")]);
@@ -1455,3 +1539,6 @@ fn generic_cancellation_cannot_drop_or_duplicate_a_repaired_pair_filing() {
 
 #[path = "context_pair_execution_tests.rs"]
 mod execution;
+
+#[path = "context_inward_recall_tests.rs"]
+mod inward;

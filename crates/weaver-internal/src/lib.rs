@@ -16,8 +16,9 @@
 //! no state between calls. The manifest half of the pure bar is the empty
 //! normal dependency set, read by `tests/manifest.rs`.
 //!
-//! Until the charter's calling-surface cell settles, a member's surface is
-//! the interim minimum of Spec section 2: one public pure function per
-//! member on this library surface.
+//! Calculator retains Spec section 2's interim pure-function surface. The
+//! INTERNAL-QUERY amendment gives recall its pure constructor, borrowed query
+//! accessor and empty-subject refusal. Neither member initiates an effect.
 
 pub mod calculator;
+pub mod recall;

@@ -124,6 +124,8 @@ pub(super) struct ReadTransaction {
 enum ReadPurpose {
     Ordinary,
     Marks,
+    BootPairs,
+    Inward(weaver_types::state_flow::CallId),
     Boot {
         start: StartIdentity,
         enter: AbsoluteBound,
@@ -150,8 +152,7 @@ impl RecordingContext {
     /// A busy caller retains its selector and receives no request identity or
     /// new wait. Fresh-history filing barriers remain an explicit caller duty.
     /// This external entry excludes an owned pair, including gaps between its
-    /// legs. Spec 05's future inward execution needs an explicit pair-owned read
-    /// entry; it must not borrow this unrelated consumer's admission path.
+    /// legs. Inward execution uses its exact private pair-owned purpose.
     #[allow(clippy::result_large_err)] // Return owned inputs without allocating on refusal.
     pub(in crate::flow) fn begin_read(
         &mut self,
@@ -169,6 +170,22 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), ReadBeginError> {
         self.begin_read_with_purpose(ReadSelector::Marks {}, Some(turn), ReadPurpose::Marks, io)
+    }
+
+    #[allow(clippy::result_large_err)] // Return the exact selector with admission refusal.
+    pub(super) fn begin_inward_read(
+        &mut self,
+        call: weaver_types::state_flow::CallId,
+        selector: ReadSelector,
+        turn: TurnRef,
+        io: &mut impl PumpIo,
+    ) -> Result<(), ReadBeginError> {
+        self.begin_read_with_purpose(selector, Some(turn), ReadPurpose::Inward(call), io)
+    }
+
+    #[allow(clippy::result_large_err)] // Keep the exact selector on a refused admission.
+    pub(super) fn begin_boot_pairs_read(&mut self, io: &mut impl PumpIo) -> Result<(), ReadBeginError> {
+        self.begin_read_with_purpose(ReadSelector::OpenPairs {}, None, ReadPurpose::BootPairs, io)
     }
 
     #[allow(clippy::result_large_err)]
@@ -198,7 +215,21 @@ impl RecordingContext {
                 failure: None,
             });
         }
-        if (self.marks.is_some() && !matches!(purpose, ReadPurpose::Marks))
+        let inward = match &purpose {
+            ReadPurpose::Inward(call) if self.inward_read_allowed(call) => Some(call.clone()),
+            ReadPurpose::Inward(_) => {
+                return Err(ReadBeginError {
+                    selector,
+                    turn,
+                    refusal: ReadBeginRefusal::Busy,
+                    failure: None,
+                });
+            }
+            _ => None,
+        };
+        if (self.boot_pairs.is_some() && !matches!(purpose, ReadPurpose::BootPairs))
+            || (matches!(purpose, ReadPurpose::BootPairs) && !self.boot_pairs_read_allowed())
+            || (self.marks.is_some() && !matches!(purpose, ReadPurpose::Marks))
             || self.read.is_some()
             || self.inspection.is_some()
             || self.measure_blocks_external()
@@ -206,7 +237,7 @@ impl RecordingContext {
             || self.freshness.is_some()
             || self.output.is_some()
             || self.filing.is_some()
-            || self.pair_work.is_some()
+            || (self.pair_work.is_some() && inward.is_none())
             || self.templates_block_content()
             || self.input.snapshot().is_some()
             || self.input_author.is_some()
@@ -281,8 +312,21 @@ impl RecordingContext {
             complete: false,
             rejected: None,
         });
+        if let Some(call) = &inward
+            && let Err(failure) = self.admit_inward_read(call, io)
+        {
+            return Err(ReadBeginError {
+                selector,
+                turn,
+                refusal: ReadBeginRefusal::WrongPhase,
+                failure: Some(failure),
+            });
+        }
         match self.queue_read_leg(io) {
             Ok(true) => Ok(()),
+            // Admission already transferred the exact pair into its read owner.
+            // Retain that deadline and retry the first control without rollback.
+            Ok(false) if inward.is_some() || self.boot_pairs_read_allowed() => Ok(()),
             Ok(false) => {
                 self.read = None;
                 self.deadlines.disarm(PumpDeadline::StateControl);
@@ -309,8 +353,14 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<ReadProgress, RunFailure> {
         self.live(ports.io)?;
+        if self.boot_pairs_blocks_external() {
+            return Err(RunFailure::BootPairsOwned);
+        }
         if self.marks_blocks_external() {
             return Err(RunFailure::MarksOwned);
+        }
+        if self.inward_blocks_external() {
+            return Err(RunFailure::PairOwned);
         }
         self.read_wait_matches(ports.io)?;
         if self.read_blocks_reduction() {
@@ -337,8 +387,14 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<ReadCompletion>, RunFailure> {
         self.live(io)?;
+        if self.boot_pairs_blocks_external() {
+            return Err(RunFailure::BootPairsOwned);
+        }
         if self.marks_blocks_external() {
             return Err(RunFailure::MarksOwned);
+        }
+        if self.inward_blocks_external() {
+            return Err(RunFailure::PairOwned);
         }
         if self
             .read
@@ -382,8 +438,14 @@ impl RecordingContext {
     /// a caller defect and uses the same protocol-failure path as other owners.
     pub(in crate::flow) fn cancel_read(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         self.live(io)?;
+        if self.boot_pairs_blocks_external() {
+            return Err(RunFailure::BootPairsOwned);
+        }
         if self.marks_blocks_external() {
             return Err(RunFailure::MarksOwned);
+        }
+        if self.inward_blocks_external() {
+            return Err(RunFailure::PairOwned);
         }
         self.read_wait_matches(io)?;
         self.read.as_mut().expect("checked read owner").cancelled = true;
@@ -568,7 +630,7 @@ impl RecordingContext {
             } else {
                 let completed = read.released.as_ref().unwrap().as_ref().unwrap();
                 let record = match &mut read.purpose {
-                    ReadPurpose::Ordinary | ReadPurpose::Marks => {
+                    ReadPurpose::Ordinary | ReadPurpose::Marks | ReadPurpose::BootPairs | ReadPurpose::Inward(_) => {
                         completed.recall().map_err(|error| error.to_string())
                     }
                     ReadPurpose::Boot {

@@ -6,9 +6,9 @@ license.workspace = true
 publish.workspace = true
 description = "The hub: loop 0, the channels and their custody, trace authorship, and loop 1's seat"
 
-# The internal set is the two floor links, the trace seam, and weaver-diagnostic, all
-# four tagged `link`, per weaver-harness-Spec section 1, which counts four and is the
-# authority this file reads against. weaver-types is taken WITHOUT its `config` feature:
+# The internal set is the floor pair, trace/diagnostic members, and the pure
+# weaver-internal recall constructor elected by HARNESS-RECALL. No organ is linked.
+# weaver-types is taken WITHOUT its `config` feature:
 # this crate reads no field from the agent config's file, and the model binding and gate
 # instruction arrive over the coordination seam already validated. serde_json encodes
 # the loop 0 envelopes, whose JSON election is weaver-types-Spec section 4.3's. nix is
@@ -24,6 +24,7 @@ weaver-trace = { path = "../weaver-trace" }
 # settled election: one call site serves both writers and the binding's
 # kind selects the arm.
 weaver-diagnostic = { path = "../weaver-diagnostic" }
+weaver-internal = { path = "../weaver-internal" }
 serde_json.workspace = true
 # TEMPLATES binds the compiled inventory to its exact canonical bytes at load.
 sha2 = "0.10"

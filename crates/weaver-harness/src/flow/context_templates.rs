@@ -70,6 +70,7 @@ impl RecordingContext {
             });
         }
         if self.marks.is_some()
+            || self.boot_pairs.is_some()
             || self.template_checks.is_some()
             || self.template_setup_refusal.is_some()
         {
