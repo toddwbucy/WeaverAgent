@@ -1,0 +1,218 @@
+# State management private journal kernel
+
+Date: 2026-10-21. Executor implementation record for issue #146, journal work.
+Branch: `code/state-journal-kernel`, stacked on #234 at `1c5257b`.
+This is a completed private arithmetic slice; production ownership remains owed.
+
+## Implements and boundary
+
+Implements: state-management-spec-06-marks-renderer-engine POSITION, MESSAGE-MAP,
+COVERAGE-JOURNAL, PREFIX-PREPARE and N; state-management-spec-08-sort-selection
+COVERAGE. These are scoped arithmetic and ownership clauses. Author grade: conforms for
+the private kernel operations below, with live ports and grants outside this slice.
+
+The new private journal has no production initializer. Its confirmation inputs have
+private fields and no production constructors. Tests alone establish a fixture journal
+and supply already-confirmed append, cut, mark and source facts. No integer, wire
+record, decoded Message or SelectedUnit can construct a usable production journal.
+This act does not claim a boot owner, a PreparedPrefix, a PlacementGrant, a place port,
+a mark registration port or a generation completion owner.
+
+The implemented core provides the following operations for those later owners:
+
+- Reserve checked assembly and Message IDs. A cancelled reservation burns its IDs and
+  installs no layout, source or physical boundary. A second reservation returns Busy.
+- Build canonical occurrences from immutable SelectedUnit values, retaining the actual
+  RecordedRead evidence through shared immutable ownership. Equal source sequences from
+  a different context fail the origin check. Repeated units get distinct occurrence
+  and Message IDs; their source locations are preserved separately.
+  Declared coverage follows the ordered distinct materials in the unit's source map.
+  A later recall request may map back into earlier Text, so Message traversal order
+  cannot substitute for that source-map order.
+- Apply a supplied confirmed completion atomically, preserving the exact canonical
+  assistant Message, including empty content, empty Text and UnrecoveredCall. Rejection
+  and pair classifications have no path that edits that content.
+- Validate and order cursors by current layout, block and decoded UTF-8 endpoint.
+  Message IDs are identities, not position numbers. The system head is separate.
+- Project a canonical prefix and its exact source coverage. Repeated locations remain
+  in the retained messages; the coverage list is ordered and distinct. Text coverage
+  uses source identity and interval containment, not equal bytes or merged partial
+  intervals. Request and returned coverage use separate exact CallIds.
+- Derive N from a still-resident completed whole-generation boundary at or before the
+  cursor, falling back to the admitted prefix count. No byte offset, rendered text,
+  measured proposal or intermediate stream event creates a token position.
+- Apply supplied confirmed suffix-cut facts, retain the canonical rebuild with its
+  original IDs and proofs, remove later physical boundaries and invalidate later marks.
+  Successive cuts cannot reuse a removed boundary. A later append installs the logical
+  rebuild once, then the new units and canonical answer.
+- Advance the revision on completion, cut, annotation and mark registration. Every old
+  projection becomes stale, including one from another journal with equal counters.
+
+The core checks arithmetic, shape, origin and identity before changing state. Invalid
+confirmation, source mapping, cursor and counter exhaustion leave the active structure
+unchanged. IDs already exposed by a reservation stay consumed on cancellation.
+
+## Cursor, coverage and physical boundaries
+
+A byte cursor addresses only Text and must be a UTF-8 boundary. A cursor at Text length
+orders identically to keeping that whole block. block_end zero addresses only a real
+empty Message and requires null byte_end. An empty assistant answer still has its own
+Message ID and completed physical boundary. Whole calls, returns and unrecovered calls
+have no byte cursor.
+
+A partial retained Text projects its local source interval back to the matching
+absolute ContentRef interval. Prefix preparation does not mutate the original source
+map or the immutable read. An instruction's StepQuery occurrence remains attached to
+its whole unchanged Message; a shortened Message cannot claim the complete instruction.
+
+Each whole pair placement retains the request and returned locations for that exact
+occurrence. A cut cannot keep part of a request interval, split a whole block, or keep
+only one side of that placed pair. Earlier coverage with an equal CallId cannot excuse
+splitting a later reminder of that pair. Result-only placement is not implemented.
+
+The only physical boundaries in this kernel come from the private confirmation input
+at the end of a complete assistant Message. The core does not itself establish that
+input's decode authority. Rebuild remains logical content in RAM after a cut, even
+though its former tokens have been removed. Its original Message IDs are reused when
+recomputed. Prefix and resident comparisons reject inconsistent counts instead of
+inventing a token position. Flush and suffix Elide share this arithmetic; neither wire
+operation is issued here.
+
+## Evidence prepared
+
+The core tests exercise UTF-8 interior endpoints, invalid cursors, reversed numerical
+Message IDs, distinct empty answers, whole-block cursor refusal, cancellation and ID
+exhaustion, invalid confirmation rollback, successive cuts and recomputation, source
+identity and repeated coverage, revision invalidation, exact repeated mark identities,
+and indivisible request Text.
+
+A real state-stream fixture completes paging and release, records recall, constructs
+HeldMaterial, and passes its SelectedUnits into the journal tests. It checks exact read
+bytes and recall sequence remain retained, foreign-context proof rejection, distinct
+reminder occurrences and per-occurrence pair-cut safety. It makes no claim of an actual
+decode or a live boot journal.
+
+Compile-time ambiguity pins reject Default, Clone and From<u64> for Journal,
+PrefixProjection and PendingAppend. Private construction and the absence of a wire
+conversion are also source-reviewed; they are not a claim that every possible trait
+conversion has been mechanically proved absent.
+
+Serial Olympus checks used /tmp/weaver-146-journal-target and --locked after the
+lock gate. The complete harness suite passed 1231 tests with 18 inherited ignored.
+All-target strict clippy, formatting and diff checks passed. Initial formatting and
+one test-only clone lint were corrected; the 13 focused journal tests passed on the
+final source after that cleanup.
+
+All 17 compiled protective mutations failed their intended focused tests. Each
+exact source restoration passed. Nine added trait implementations (Default, Clone
+and From<u64> on Journal, PrefixProjection and PendingAppend) each failed with
+E0283 at the ambiguity pins; the restored normal test compilation passed.
+Two independent source readings found no concrete defect within this private scope.
+At that initial snapshot, StepQuery preservation/drop was source-reviewed, not
+separately mutation-pinned.
+
+Logs, recipes, restoration hashes and final source hashes are deposited under
+weaver-testing/state-management-146-olympus-2026-10-21/journal/ on the shared bulk
+store. These are author checks, not a Planner grade or production qualification.
+
+## Review correction
+
+[Planner review 5609494086](https://github.com/toddwbucy/WeaverAgent/pull/236#pullrequestreview-5609494086)
+identified a valid material ordering that the reservation incorrectly rejected. One
+statement with External0 then Recall1 has source-map order Text, Request0, Returned0,
+Request1, Returned1. Grouping placed sources by Message moves Request1 into the earlier
+Text Message. Two recall pairs likewise place both requests before either return.
+MESSAGE-MAP defines ordered distinct coverage from source_map, not that Message walk.
+
+Reservation now checks the source map directly without sorting either list or changing
+canonical locations. The pure check rejects reordered, missing, extra and duplicate
+declared coverage; repeated mapped locations remain legal. Two actual paged-read,
+Released, recall Recorded and HeldMaterial fixtures reach reserve and completion for
+the mixed and two-recall cases. They verify exact source locations, pair retention,
+unchanged map order and retained read evidence. Negative inspection copies exercise
+the same pure check without constructing forged SelectedUnit authority.
+
+Six UTF-8 fixture literals use equivalent Rust Unicode escapes. This is a source-only
+editorial correction; decoded fixture bytes and cursor offsets are unchanged.
+
+The correction was checked on Olympus with private target
+/tmp/weaver-146-journal-target. The two focused real-material tests passed. The
+full harness suite passed 1242 tests with 18 inherited ignored cases. Strict
+all-target harness clippy, formatting and lock passed. Four compiled protective
+mutations failed and exact restorations passed: both old message-walk cases,
+removal of coverage validation, and weakening ordered coverage to set equality.
+The logs, recipes and source hashes are in the journal/review evidence deposit.
+
+Two independent source readings found no remaining concrete defect in this
+correction. The preceding gate counts describe the earlier source. The larger
+review batch and production ownership boundaries remain separate work. This is
+an author check, not a new Planner grade.
+
+## Review test-gap followup
+
+Planner review 5609494086 row 10 also identified eleven surviving guards beyond the
+source-map correction above. This followup adds twelve focused tests. Eight tests
+exercise reachable private arithmetic invariants. Three test pure defensive checks
+whose invalid producer states cannot currently be built as SelectedUnit. One more
+pins the existing equivalence of whole-Text and full-byte-length cursors.
+
+The eight direct cases cover journal identity with otherwise equal facts, shortened
+StepQuery occurrences, an incorrect cut-after count, Returned annotation at a valid
+result location, a ToolResult inside an Assistant-role completion, cut during an
+unchanged active reservation, the latest of multiple eligible physical boundaries,
+and unequal local/absolute Text byte lengths with valid UTF-8 endpoints. Refused
+operations retain the full prior journal state and pending custody where applicable.
+The shortened instruction retains its exact immutable read, source map and query
+proof while its projected and confirmed-cut occurrence loses the complete query
+annotation. These remain test-only journal initialization and confirmation facts.
+
+The three defensive tests start with real paged-read, Released, recall Recorded and
+HeldMaterial evidence. They pass changed inspection copies to two narrow pure checks:
+a System-role Message, a Returned source without its Request, and a duplicate
+Returned source within one unit. Reservation invokes those same checks. The copies
+never become SelectedUnit or placement authority. Current material producers exclude
+all three invalid states. These tests pin defenses, not three demonstrated runtime
+bugs. Existing whole-pair and repeated-occurrence fixtures remain positive coverage.
+
+Row 3 now compares the requested end with the layout end by canonical position.
+The existing full-byte-length equivalence is unchanged. Row 4's origin comment now
+attributes paired-read owner checks to RecordingContext instead of claiming that the
+material constructor performs them. No performance rewrite or authority extension is
+part of either clarification.
+
+Olympus checked this followup with private target /tmp/weaver-146-journal-target.
+The journal filter passed 27 tests, including all twelve additions. The full harness
+suite passed 1254 tests with 18 inherited ignored cases. Strict all-target harness
+clippy, formatting and lock checks passed. All eleven protective mutations compiled,
+failed their named assertion and passed after exact-byte restoration. The deposit
+separates three pure defensive probes from eight reachable arithmetic probes.
+
+Logs, recipes and source hashes are under journal/gaps in the shared issue #146 evidence
+deposit. Earlier counts above apply to their named sources. Two independent author
+readings checked the test setup and extracted checks. No Planner grade or production
+qualification follows from this author evidence.
+
+Review rows 2 and 9 still belong to the future mark-evidence constructor and public
+refusal mapping. Rows 5 through 7 remain efficiency and simplification followups.
+The production ownership and coupled-cutover boundaries below remain unchanged.
+
+## Remaining authority and integration
+
+Production initialization still requires the exact boot-held system content, the
+admitted Open exchange and its prefix facts. The OPEN-FACTS measurement carrier remains
+a separate owning-Spec proposal. This kernel does not infer boot authority from counts.
+
+The real append owner must retain the proposal, schemas, original reservation and
+bound; verify matching Generated identity, complete canonical answer, measured token
+array shape and input/output/terminator arithmetic; and only then construct the private
+confirmation. Raw Generation is not a shortcut into this kernel.
+
+The source/mark owner still owes recorder and filing proofs for emission source maps,
+PairStarted request annotations, native scopes and mark.position. Boot and native mark
+registration are not inferred from the private arithmetic tests. Fresh result units
+still need kept request and statement coverage plus their private terminal/tool-result
+proofs. The full cut coordinator, staged carry ownership, trace-before-use sequencing,
+placement grants, selection ports and serving/lifecycle composition remain under #146.
+
+No serving path, classifier ownership, worker loop or deployed agent changes in this
+slice. Runtime activation remains held for the qualified coupled foundation cutover.

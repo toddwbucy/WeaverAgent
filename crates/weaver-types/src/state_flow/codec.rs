@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use serde::de::{DeserializeOwned, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{SeedFrame, StateFrame};
+use super::{DecodedStateFrame, SeedFrame, StateFrame};
 
 pub const STATE_REQUEST_LINE_BOUND: usize = 8 * 1024 * 1024;
 pub const STATE_ANSWER_LINE_BOUND: usize = 1024 * 1024;
@@ -138,16 +138,34 @@ fn line_body(line: &[u8], direction: FrameDirection) -> Result<&str, FrameCodecE
     })
 }
 
+/// The same strict codec, retaining its actual outer raw-buffer copy evidence.
+/// Deeper Text/context decoding belongs to the caller's separate coverage audit.
+pub fn decode_state_line_observed(
+    line: &[u8],
+    direction: FrameDirection,
+) -> Result<DecodedStateFrame, FrameCodecError> {
+    decode_state_line_as(line, direction, |decoded: &DecodedStateFrame| {
+        &decoded.frame
+    })
+}
+
 pub fn decode_state_line(
     line: &[u8],
     direction: FrameDirection,
 ) -> Result<StateFrame, FrameCodecError> {
-    let frame: StateFrame =
-        decode_strict(line_body(line, direction)?).map_err(FrameCodecError::Malformed)?;
-    if frame.is_request() != (direction == FrameDirection::Request) {
+    decode_state_line_as(line, direction, |frame| frame)
+}
+
+fn decode_state_line_as<T: DeserializeOwned>(
+    line: &[u8],
+    direction: FrameDirection,
+    frame: fn(&T) -> &StateFrame,
+) -> Result<T, FrameCodecError> {
+    let decoded = decode_strict(line_body(line, direction)?).map_err(FrameCodecError::Malformed)?;
+    if frame(&decoded).is_request() != (direction == FrameDirection::Request) {
         return Err(FrameCodecError::WrongDirection);
     }
-    Ok(frame)
+    Ok(decoded)
 }
 
 pub fn decode_seed_line(

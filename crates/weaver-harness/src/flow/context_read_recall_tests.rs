@@ -1,6 +1,9 @@
 use super::*;
 use std::time::{Duration, Instant};
 
+#[path = "context_read_channel_tests.rs"]
+mod channel_tests;
+
 // A read proof is consumed by its next owner, never duplicated for two consumers.
 const _: fn() = || {
     trait ReadProofMustNotClone<Marker> {
@@ -58,7 +61,7 @@ fn recall_payload(member: &Member) -> serde_json::Value {
     assert!(record["payload"].get("boot").is_none());
     record["payload"]["read"].clone()
 }
-fn drain_admitted(member: &mut Member) {
+pub(super) fn drain_admitted(member: &mut Member) {
     // Drain exact bytes already admitted to the real blocked writer. Returning
     // only after they arrive gives the retry a deterministic capacity opening.
     let expected: Vec<u8> = member
@@ -388,6 +391,143 @@ fn recall_retains_before_author_and_after_recorded_across_recoverable_leave() {
         assert_eq!(member.requests.len(), 2);
         member.no_result();
         member.no_request();
+    }
+}
+
+#[test]
+fn malformed_read_identities_retain_the_received_answer_before_release() {
+    let cases: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/recall-sources.json")).unwrap();
+    for defect in 0..4 {
+        let name = match defect {
+            0 => "history_filtered_pair_union",
+            1 => "marks_sources_only",
+            _ => "plan_current_populated",
+        };
+        let case = cases.iter().find(|case| case["case"] == name).unwrap();
+        let selector: s::ReadSelector = serde_json::from_value(case["selector"].clone()).unwrap();
+        let mut result: s::QueryResult = serde_json::from_value(case["result"].clone()).unwrap();
+        crate::flow::read_validate::validate(&selector, &result).unwrap();
+        match &mut result {
+            s::QueryResult::Entries { entries } => {
+                entries.truncate(1);
+                entries[0].pairs.clear();
+                entries[0].selected_span = None;
+                // T11: only the entry source is malformed. There is no
+                // selector/span seed to reject this fixture incidentally.
+                entries[0].source = s::ReadSource::Seed(s::SeedSource {
+                    seed_id: "not-a-seed".into(),
+                    ordinal: 0.into(),
+                });
+            }
+            s::QueryResult::Marks {
+                current_task: Some(task),
+                ..
+            } => {
+                // Marks has no selector span echo or forbidden entry metadata
+                // that could reject this answer without the revision check.
+                task.task.revision = 2.into();
+            }
+            s::QueryResult::PlanCurrent {
+                current: Some(snapshot),
+                ..
+            } => {
+                if defect == 2 {
+                    snapshot.plan.plan_id.local_id = 0.into();
+                } else {
+                    snapshot.steps[0].step_id.local_id = 0.into();
+                }
+            }
+            _ => panic!("fixture shape"),
+        }
+        let mut member = Member::new();
+        member
+            .run
+            .context
+            .begin_read(selector, None, &mut member.run.clock)
+            .unwrap();
+        let request = member.next_request();
+        let raw = serde_json::to_vec(&result).unwrap();
+        let answer = member.answer(&request, page(7, 0, raw.len(), &raw));
+        match member.receive(&answer) {
+            Ok(()) => member.assert_component_failure(),
+            Err(failure) => member.assert_protocol_failure(failure),
+        }
+        let OperationCompletion::State { completion, .. } = member
+            .run
+            .context
+            .read
+            .as_ref()
+            .unwrap()
+            .rejected_for_test()
+            .unwrap()
+        else {
+            panic!("retained state answer")
+        };
+        assert_eq!(
+            serde_json::to_value(&completion.answer).unwrap(),
+            serde_json::to_value(&answer).unwrap()
+        );
+        assert!(member.records(Kind::Recall).is_empty());
+        assert_eq!(
+            member.requests.len(),
+            1,
+            "malformed content must not issue Release"
+        );
+    }
+}
+
+struct FailedReadClock;
+impl PumpIo for FailedReadClock {
+    fn now(&mut self) -> std::io::Result<u64> {
+        Err(std::io::Error::other("read fixture clock failed"))
+    }
+    fn wait(&mut self, _: &[WaitInterest<'_>], _: Option<u64>) -> std::io::Result<WaitOutcome> {
+        panic!("local failure path");
+    }
+}
+
+#[test]
+fn failed_read_closes_only_an_unreleased_exchange() {
+    for after_release in [false, true] {
+        let mut member = Member::new();
+        if after_release {
+            released(&mut member);
+        } else {
+            let request = member.begin();
+            member.respond(&request, page(7, 0, EMPTY.len(), EMPTY));
+            let _release = member.next_request();
+        }
+        let failure = member
+            .run
+            .context
+            .advance_read(&mut ports(&mut FailedReadClock))
+            .unwrap_err();
+        assert!(matches!(
+            failure,
+            RunFailure::Flow {
+                reason: FlowHaltReason::TraceFailed,
+                ..
+            }
+        ));
+        assert!(member.run.context.read.is_some());
+        assert!(
+            member
+                .run
+                .context
+                .halt()
+                .unwrap()
+                .secondary()
+                .iter()
+                .all(|secondary| secondary.reason != FlowHaltReason::CarryFailed)
+        );
+        member.run.state.set_nonblocking(true).unwrap();
+        let result = member.run.state.read(&mut [0]);
+        if after_release {
+            assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        } else {
+            assert_eq!(result.unwrap(), 0);
+        }
     }
 }
 

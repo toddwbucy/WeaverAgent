@@ -69,7 +69,10 @@ impl RecordingContext {
                 failure: Some(failure),
             });
         }
-        if self.template_checks.is_some() || self.template_setup_refusal.is_some() {
+        if self.marks.is_some()
+            || self.template_checks.is_some()
+            || self.template_setup_refusal.is_some()
+        {
             return Err(TemplateBeginError {
                 inventory,
                 refusal: TemplateBeginRefusal::AlreadyStarted,
@@ -91,6 +94,7 @@ impl RecordingContext {
             });
         }
         if self.output.is_some()
+            || self.freshness.is_some()
             || self.filing.is_some()
             || self.pair_work.is_some()
             || self.input.snapshot().is_some()
@@ -291,6 +295,24 @@ impl RecordingContext {
                 .template_checks
                 .as_ref()
                 .is_some_and(|owner| !owner.complete)
+    }
+
+    /// Positive evidence for the next enter owner, even after the caller has
+    /// taken its template certificate. Absence is never certification.
+    pub(super) fn completed_template_enter(&self) -> Result<AbsoluteBound, RunFailure> {
+        self.template_enter_live()?;
+        let owner = self
+            .template_checks
+            .as_ref()
+            .expect("checked template owner");
+        if !owner.complete
+            || owner.rejected
+            || self.template_setup_refusal.is_some()
+            || self.template_blocked_author.is_some()
+        {
+            return Err(RunFailure::TemplateBlocked);
+        }
+        Ok(owner.enter)
     }
 
     fn template_enter_live(&self) -> Result<(), RunFailure> {

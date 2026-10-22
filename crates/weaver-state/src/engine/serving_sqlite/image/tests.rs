@@ -263,7 +263,7 @@ fn adopted_seed_reads_prompt_without_filing_and_roundtrips_verified_image() {
     .unwrap();
     assert_eq!(
         restored
-            .query_encoded(&ReadSelector::SystemPrompt {})
+            .query_encoded(&ReadSelector::SystemPrompt {}, None)
             .unwrap(),
         bytes.as_bytes()
     );
@@ -599,12 +599,15 @@ fn pair_image_roundtrip_keeps_whole_result_and_rejects_index_divergence() {
     )
     .unwrap();
     let encoded = restored
-        .query_encoded(&ReadSelector::Statement {
-            statement: StatementRef {
-                block_id: send.block_id,
-                binding: 0.into(),
+        .query_encoded(
+            &ReadSelector::Statement {
+                statement: StatementRef {
+                    block_id: send.block_id,
+                    binding: 0.into(),
+                },
             },
-        })
+            None,
+        )
         .unwrap();
     assert!(
         String::from_utf8(encoded)

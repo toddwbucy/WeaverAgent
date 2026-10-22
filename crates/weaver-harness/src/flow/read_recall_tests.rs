@@ -633,7 +633,7 @@ fn recall_empty_content_and_observation_metadata_are_successful_empty_accounts()
 }
 
 #[test]
-fn recall_rejects_noncanonical_seed_and_selector_identity_after_release() {
+fn read_validation_rejects_noncanonical_seed_before_release_and_conversion_checks_selectors() {
     let mut prompt = entry(5, 0);
     prompt.source = s::ReadSource::Seed(s::SeedSource {
         seed_id: "seed".into(),
@@ -646,8 +646,26 @@ fn recall_rejects_noncanonical_seed_and_selector_identity_after_release() {
         start: 0.into(),
         end: 10.into(),
     });
-    let completed = checked(s::ReadSelector::SystemPrompt {}, entries(vec![prompt]));
-    assert!(completed.recall().is_err());
+    let raw = serde_json::to_vec(&entries(vec![prompt])).unwrap();
+    let mut read = PageRead::new(s::ReadSelector::SystemPrompt {}, 1_000_000.into()).unwrap();
+    let request = read.next_control().unwrap();
+    read.bind_request(1.into(), &request).unwrap();
+    assert!(
+        read.accept(
+            1.into(),
+            &request,
+            &s::StateControlAnswer::ReadPage(s::ReadPage {
+                snapshot_id: 19.into(),
+                offset: 0.into(),
+                total_bytes: (raw.len() as u64).into(),
+                octets: encode(&raw),
+                done: true,
+            })
+        )
+        .is_err()
+    );
+    assert!(read.next_control().is_none());
+    assert!(read.take().is_none());
     for invalid in 0..3 {
         let mut reference = plan_ref();
         match invalid {

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 
 use serde_json::value::RawValue;
-use weaver_state::{ReadFault, engine::serving_sqlite::ServingSqlite};
+use weaver_state::{ReadFault, engine::serving_sqlite::ServingSqlite, serving_bytes::BufferBytes};
 use weaver_types::state_flow::*;
 
 mod capture;
@@ -68,6 +68,8 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
                 detail: error.detail,
                 block_id: None,
             };
+            drop((schema_id, scheme_id, start, read_limits));
+            sample.held = held_request_bytes(&line, channel, &common, None, None);
             let (observation, payload) = complete(payload, sample, None)?;
             // A rejected open has no adopted run in which to retain metadata.
             channel.send(wrap(&common, "refused", &payload, &observation)?)?;
@@ -82,11 +84,17 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
         read_limits: read_limits.clone(),
         member_observation: identity.clone(),
     };
+    sample.held = held_request_bytes(&line, channel, &common, None, None);
+    // This independent identity is retained for the metadata transaction below.
+    sample.held.add(identity.instrument_version.len());
+    // read_limits moves into Session configuration after Open and is excluded
+    // consistently here and on later operations; its encoded echo still counts.
     let (observation, payload) = complete(payload, sample, None)?;
     store
         .begin_observations(&identity, &observation)
         .map_err(|e| invalid(e.to_string()))?;
     channel.send(wrap(&common, "opened", &payload, &observation)?)?;
+    drop((line, payload, identity, observation));
     let mut session = Session {
         store,
         common,
@@ -110,6 +118,13 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
             _ => None,
         };
         let (payload, initial_read) = session.dispatch(request, room, &mut sample)?;
+        sample.held = held_request_bytes(
+            &line,
+            channel,
+            &common,
+            source.as_ref(),
+            Some(&session.capture),
+        );
         let op = payload.op();
         let close = matches!(payload, Reply::Refused { .. });
         let (observation, encoded) = complete(
@@ -143,6 +158,30 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Live operation owners, excluding fixed channel/store configuration and SQLite.
+/// The request has been consumed by dispatch; only its line/common/source survive.
+/// Pages and the final answer are added by complete after any refusal cleanup.
+fn held_request_bytes(
+    line: &[u8],
+    channel: &Channel,
+    common: &Common,
+    source: Option<&SourceBlockId>,
+    capture: Option<&Capture>,
+) -> BufferBytes {
+    let mut held = BufferBytes::default();
+    held.add(line.len());
+    held.add(channel.buffered_bytes());
+    held.add(common.session_id.len());
+    held.add(common.run_id.len());
+    if let Some(source) = source {
+        held.add(source.run.len());
+    }
+    if let Some(capture) = capture {
+        held.merge(capture.held_bytes());
+    }
+    held
 }
 
 struct Session {
@@ -234,6 +273,9 @@ impl Session {
             StateFrame::Control { common, frame } => {
                 let initial_read = matches!(frame, StateControl::Read { .. }) && !self.pages.busy();
                 let answer = self.control(&common, &frame, room, sample)?;
+                if let StateControlAnswer::ReadPage(page) = &answer {
+                    sample.copied.add(page.octets.len());
+                }
                 Ok((Reply::Control(answer), initial_read))
             }
             _ => Err(invalid("unexpected serving response or open")),
@@ -270,7 +312,9 @@ impl Session {
                 }
                 let page_budget = page_budget(common)?;
                 sample.phase_begin(PhaseName::Query)?;
-                let result = self.store.query_encoded(selector);
+                // Read still lacks decoded-content copy coverage. Skip its
+                // preparatory encoding subtotal; copied remains unavailable.
+                let result = self.store.query_encoded(selector, None);
                 sample.phase_end(PhaseName::Query)?;
                 match result {
                     Ok(bytes) => Ok(
@@ -311,7 +355,7 @@ impl Session {
             StateControl::Shape {} | StateControl::Held {} | StateControl::Position {} => {
                 sample.phase_begin(PhaseName::Query)?;
                 let result = match control {
-                    StateControl::Shape {} => self.store.shape().map(StateControlAnswer::Shape),
+                    StateControl::Shape {} => self.store.shape(None).map(StateControlAnswer::Shape),
                     StateControl::Held {} => self
                         .store
                         .held()
@@ -369,8 +413,13 @@ fn sampled_request(line: &[u8], operation_id: u64) -> io::Result<(OperationSampl
     let mut sample =
         OperationSample::begin_at(operation_id.into(), request_id, operation, received_ns)?;
     sample.phase_begin(PhaseName::Validate)?;
-    let request =
-        decode_state_line(line, FrameDirection::Request).map_err(|e| invalid(e.to_string()))?;
+    let decoded = decode_state_line_observed(line, FrameDirection::Request)
+        .map_err(|e| invalid(e.to_string()))?;
+    sample.copied.merge(match decoded.raw_field_bytes {
+        Some(bytes) => BufferBytes::measured(bytes),
+        None => BufferBytes::unavailable(ObservationUnavailable::Overflow),
+    });
+    let request = decoded.frame;
     if request.request_operation() != Some(operation) {
         return Err(invalid("operation peek mismatch"));
     }
@@ -384,7 +433,7 @@ fn sampled_request(line: &[u8], operation_id: u64) -> io::Result<(OperationSampl
 fn peek_operation(line: &[u8]) -> io::Result<(DecimalU64, StateOperation)> {
     #[cfg(test)]
     tests::timing::before_peek();
-    let fields: BTreeMap<String, Box<RawValue>> =
+    let fields: BTreeMap<String, &RawValue> =
         serde_json::from_slice(line).map_err(|e| invalid(e.to_string()))?;
     let request = fields
         .get("request_id")
@@ -399,7 +448,7 @@ fn peek_operation(line: &[u8]) -> io::Result<(DecimalU64, StateOperation)> {
         "file" => StateOperation::File,
         "file_pair" => StateOperation::FilePair,
         "control" => {
-            let fields: BTreeMap<String, Box<RawValue>> = serde_json::from_str(
+            let fields: BTreeMap<String, &RawValue> = serde_json::from_str(
                 fields
                     .get("frame")
                     .ok_or_else(|| invalid("missing control"))?
@@ -443,7 +492,7 @@ fn complete(
     bounds: Option<CompletionBounds<'_>>,
 ) -> io::Result<(StateOperationObservation, Vec<u8>)> {
     sample.phase_begin(PhaseName::Encode)?;
-    let mut encoded = encode_payload(&payload);
+    let mut encoded = encode_payload(&payload, Some(&mut sample.copied));
     if let Some(bounds) = bounds {
         let reserve = wrapper_reserve(bounds.common, payload.op())?;
         if payload.op() == "control_answer"
@@ -456,17 +505,22 @@ fn complete(
                 code: ControlRefusalCode::Read(ReadRefusalCode::AnswerTooLarge),
                 detail: "complete control answer exceeds ANSWER_BOUND".into(),
             });
-            encoded = encode_payload(&payload);
+            encoded = encode_payload(&payload, Some(&mut sample.copied));
         }
+        sample.held.add(bounds.pages.held_bytes());
     }
     let encoded = encoded?;
     sample.phase_end(PhaseName::Encode)?;
-    // The encoded answer remains owned here at the ended_ns boundary.
-    // Complete copy/holding accounting is still unavailable, not zero.
-    let observation = sample.finish(None, None)?;
+    // Its consumed typed predecessor is no longer needed. The encoded payload
+    // remains owned through ended_ns; wrapper/metadata and send happen later.
+    drop(payload);
+    sample.held.add(encoded.len());
+    let observation = sample.finish()?;
     Ok((observation, encoded))
 }
 
+// Sizing materializations are wrapper metadata, not operation result/page
+// payload copies. Keep them outside the observation/2 payload-byte tally.
 fn page_budget(common: &Common) -> io::Result<usize> {
     let shape = StateControlAnswer::ReadPage(ReadPage {
         snapshot_id: u64::MAX.into(),
@@ -475,15 +529,16 @@ fn page_budget(common: &Common) -> io::Result<usize> {
         octets: String::new(),
         done: false,
     });
-    let fixed = encode_payload(&Reply::Control(shape))?.len();
+    let fixed = encode_payload(&Reply::Control(shape), None)?.len();
     Ok(STATE_ANSWER_LINE_BOUND
         .saturating_sub(wrapper_reserve(common, "control_answer")?.saturating_add(fixed)))
 }
 
-struct Bounded {
+struct Bounded<'a> {
     bytes: Vec<u8>,
+    copied: Option<&'a mut BufferBytes>,
 }
-impl Write for Bounded {
+impl Write for Bounded<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if bytes.len() > STATE_ANSWER_LINE_BOUND.saturating_sub(self.bytes.len()) {
             return Err(invalid("answer exceeds bound"));
@@ -492,6 +547,9 @@ impl Write for Bounded {
             .try_reserve(bytes.len())
             .map_err(io::Error::other)?;
         self.bytes.extend_from_slice(bytes);
+        if let Some(copied) = &mut self.copied {
+            copied.add(bytes.len());
+        }
         Ok(bytes.len())
     }
     fn flush(&mut self) -> io::Result<()> {
@@ -543,44 +601,52 @@ macro_rules! fields {
     }};
 }
 
-fn encode_payload(payload: &Reply) -> io::Result<Vec<u8>> {
+fn encode_payload(payload: &Reply, copied: Option<&mut BufferBytes>) -> io::Result<Vec<u8>> {
     #[cfg(test)]
     tests::timing::mark("encode");
-    let mut writer = Bounded { bytes: Vec::new() };
-    match payload {
-        Reply::Opened {
-            schema_id,
-            scheme_id,
-            start,
-            read_limits,
-            member_observation,
-        } => {
-            fields!(writer,"schema_id"=>schema_id,"scheme_id"=>scheme_id,"start"=>start,"read_limits"=>read_limits,"member_observation"=>member_observation)
+    let mut writer = Bounded {
+        bytes: Vec::new(),
+        copied,
+    };
+    let result = (|| -> io::Result<()> {
+        match payload {
+            Reply::Opened {
+                schema_id,
+                scheme_id,
+                start,
+                read_limits,
+                member_observation,
+            } => {
+                fields!(writer,"schema_id"=>schema_id,"scheme_id"=>scheme_id,"start"=>start,"read_limits"=>read_limits,"member_observation"=>member_observation)
+            }
+            Reply::Filed { block_id } => fields!(writer,"block_id"=>block_id),
+            Reply::Refused {
+                code,
+                detail,
+                block_id,
+            } => fields!(writer,"code"=>code,"detail"=>detail,"block_id"=>block_id),
+            Reply::Control(frame) => fields!(writer,"frame"=>frame),
         }
-        Reply::Filed { block_id } => fields!(writer,"block_id"=>block_id),
-        Reply::Refused {
-            code,
-            detail,
-            block_id,
-        } => fields!(writer,"code"=>code,"detail"=>detail,"block_id"=>block_id),
-        Reply::Control(frame) => fields!(writer,"frame"=>frame),
-    }
+        Ok(())
+    })();
+    result?;
     #[cfg(test)]
     tests::timing::mark("payload_encoded");
     Ok(writer.bytes)
 }
 fn header(common: &Common, op: &str) -> io::Result<Vec<u8>> {
-    let mut writer = Bounded { bytes: Vec::new() };
+    let mut writer = Bounded {
+        bytes: Vec::new(),
+        copied: None,
+    };
     fields!(writer,"protocol"=>STATE_FLOW_PROTOCOL,"session_id"=>&common.session_id,"run_id"=>&common.run_id,"request_id"=>&common.request_id,"op"=>op);
     Ok(writer.bytes)
 }
 fn wrapper_reserve(common: &Common, op: &str) -> io::Result<usize> {
     // Header's final brace is exchanged for a comma, then the payload's interior,
     // observation key/value and final object plus LF. This is an upper bound.
-    Ok(header(common, op)?.len()
-        + StateOperationObservation::MAX_ENCODED_LEN
-        + b",\"observation\":\n".len()
-        + 2)
+    let bytes = header(common, op)?;
+    Ok(bytes.len() + StateOperationObservation::MAX_ENCODED_LEN + b",\"observation\":\n".len() + 2)
 }
 fn wrap(
     common: &Common,
@@ -590,6 +656,7 @@ fn wrap(
 ) -> io::Result<Vec<u8>> {
     let mut writer = Bounded {
         bytes: header(common, op)?,
+        copied: None,
     };
     writer.bytes.pop();
     writer.write_all(b",")?;
