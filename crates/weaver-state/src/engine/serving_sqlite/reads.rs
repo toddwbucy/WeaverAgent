@@ -48,7 +48,7 @@ macro_rules! json_cell {
 use {json_cell, value};
 
 pub(super) fn query(store: &ServingSqlite, selector: &ReadSelector) -> Result<QueryResult> {
-    let bytes = query_encoded(store, selector)?;
+    let bytes = query_encoded(store, selector, None)?;
     decode_strict(
         std::str::from_utf8(&bytes)
             .map_err(|_| ReadFailure::ComponentCorruption("invalid encoded result UTF-8"))?,
@@ -56,17 +56,14 @@ pub(super) fn query(store: &ServingSqlite, selector: &ReadSelector) -> Result<Qu
     .map_err(|_| ReadFailure::ComponentCorruption("invalid encoded query result"))
 }
 
-pub(super) fn query_encoded(store: &ServingSqlite, selector: &ReadSelector) -> Result<Vec<u8>> {
-    query_encoded_observed(store, selector, &mut BufferBytes::default())
-}
-
-pub(super) fn query_encoded_observed(
+pub(super) fn query_encoded(
     store: &ServingSqlite,
     selector: &ReadSelector,
-    copied: &mut BufferBytes,
+    copied: Option<&mut BufferBytes>,
 ) -> Result<Vec<u8>> {
     selector.validate_shape()?;
     let mut out = Output::new(store.read_limits.max_result_bytes)?;
+    out.copied = copied;
     let result = (|| -> Result<()> {
         let tx = store.connection.unchecked_transaction()?;
         match selector {
@@ -136,7 +133,6 @@ pub(super) fn query_encoded_observed(
         tx.commit()?;
         Ok(())
     })();
-    copied.add(out.bytes.len());
     result.map(|()| out.bytes)
 }
 
@@ -245,16 +241,13 @@ pub(super) fn position(connection: &Connection) -> Result<Option<SourcePosition>
 pub(super) fn held(connection: &Connection) -> Result<DecimalU64> {
     nonnegative(connection.query_row("SELECT COUNT(*) FROM content_block", [], |row| row.get(0))?)
 }
-pub(super) fn shape(connection: &Connection, max_bytes: DecimalU64) -> Result<Vec<ShapeRow>> {
-    shape_observed(connection, max_bytes, &mut BufferBytes::default())
-}
-
-pub(super) fn shape_observed(
+pub(super) fn shape(
     connection: &Connection,
     max_bytes: DecimalU64,
-    copied: &mut BufferBytes,
+    copied: Option<&mut BufferBytes>,
 ) -> Result<Vec<ShapeRow>> {
     let mut out = Output::new(max_bytes)?;
+    out.copied = copied;
     let result = (|| -> Result<()> {
         out.raw("[")?;
         let mut statement=connection.prepare("SELECT run,kind,COUNT(*) AS count FROM content_block WHERE source_kind='event' GROUP BY run,kind ORDER BY MIN(id)")?;
@@ -274,7 +267,6 @@ pub(super) fn shape_observed(
         out.raw("]")?;
         Ok(())
     })();
-    copied.add(out.bytes.len());
     result?;
     serde_json::from_slice(&out.bytes)
         .map_err(|_| ReadFailure::ComponentCorruption("invalid shape result"))
@@ -430,18 +422,20 @@ pub(super) fn verify_image_observations(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-struct Output {
+struct Output<'a> {
     bytes: Vec<u8>,
     bound: usize,
     failure: Option<ReadRefusalCode>,
+    copied: Option<&'a mut BufferBytes>,
 }
-impl Output {
+impl Output<'_> {
     fn new(bound: DecimalU64) -> Result<Self> {
         let bound = usize::try_from(bound.0).map_err(|_| ReadRefusalCode::ResultTooLarge)?;
         Ok(Self {
             bytes: Vec::new(),
             bound,
             failure: None,
+            copied: None,
         })
     }
     fn remaining(&self) -> usize {
@@ -475,7 +469,7 @@ impl Output {
         })
     }
 }
-impl Write for Output {
+impl Write for Output<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if bytes.len() > self.remaining() {
             self.failure = Some(ReadRefusalCode::ResultTooLarge);
@@ -496,6 +490,9 @@ impl Write for Output {
             }
         }
         self.bytes.extend_from_slice(bytes);
+        if let Some(copied) = &mut self.copied {
+            copied.add(bytes.len());
+        }
         Ok(bytes.len())
     }
     fn flush(&mut self) -> io::Result<()> {
