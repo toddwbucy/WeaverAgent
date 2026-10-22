@@ -111,6 +111,9 @@ impl OperationSample {
                     | StateOperation::File
                     | StateOperation::FilePair
                     | StateOperation::Read
+                    // Shape's encoded result is decoded into owned row strings.
+                    // That copy category is not fully instrumented yet.
+                    | StateOperation::Shape
             ) {
                 BufferBytes::unavailable(ObservationUnavailable::Uninstrumented)
             } else {

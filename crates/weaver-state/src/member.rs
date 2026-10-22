@@ -87,7 +87,8 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
     sample.held = held_request_bytes(&line, channel, &common, None, None);
     // This independent identity is retained for the metadata transaction below.
     sample.held.add(identity.instrument_version.len());
-    sample.held.add(read_limits.measurement_ref.len());
+    // read_limits moves into Session configuration after Open and is excluded
+    // consistently here and on later operations; its encoded echo still counts.
     let (observation, payload) = complete(payload, sample, None)?;
     store
         .begin_observations(&identity, &observation)
@@ -309,7 +310,7 @@ impl Session {
                 if self.pages.busy() {
                     return Ok(read_refusal(ReadRefusalCode::ReadBusy));
                 }
-                let page_budget = page_budget_observed(common, &mut sample.copied)?;
+                let page_budget = page_budget(common)?;
                 sample.phase_begin(PhaseName::Query)?;
                 let result = self
                     .store
@@ -333,7 +334,7 @@ impl Session {
                 snapshot_id,
                 offset,
             } => {
-                let page_budget = page_budget_observed(common, &mut sample.copied)?;
+                let page_budget = page_budget(common)?;
                 Ok(match self.pages.next(*snapshot_id, *offset, page_budget) {
                     Ok(page) => StateControlAnswer::ReadPage(page),
                     Err(code) => read_refusal(code),
@@ -496,7 +497,7 @@ fn complete(
     sample.phase_begin(PhaseName::Encode)?;
     let mut encoded = encode_payload_observed(&payload, &mut sample.copied);
     if let Some(bounds) = bounds {
-        let reserve = wrapper_reserve_observed(bounds.common, payload.op(), &mut sample.copied)?;
+        let reserve = wrapper_reserve(bounds.common, payload.op())?;
         if payload.op() == "control_answer"
             && encoded.as_ref().map_or(true, |bytes| {
                 bytes.len().saturating_add(reserve) > STATE_ANSWER_LINE_BOUND
@@ -523,12 +524,9 @@ fn complete(
     Ok((observation, encoded))
 }
 
-#[cfg(test)]
+// Sizing materializations are wrapper metadata, not operation result/page
+// payload copies. Keep them outside the observation/2 payload-byte tally.
 fn page_budget(common: &Common) -> io::Result<usize> {
-    page_budget_observed(common, &mut BufferBytes::default())
-}
-
-fn page_budget_observed(common: &Common, copied: &mut BufferBytes) -> io::Result<usize> {
     let shape = StateControlAnswer::ReadPage(ReadPage {
         snapshot_id: u64::MAX.into(),
         offset: u64::MAX.into(),
@@ -536,10 +534,9 @@ fn page_budget_observed(common: &Common, copied: &mut BufferBytes) -> io::Result
         octets: String::new(),
         done: false,
     });
-    let fixed = encode_payload_observed(&Reply::Control(shape), copied)?.len();
-    Ok(STATE_ANSWER_LINE_BOUND.saturating_sub(
-        wrapper_reserve_observed(common, "control_answer", copied)?.saturating_add(fixed),
-    ))
+    let fixed = encode_payload(&Reply::Control(shape))?.len();
+    Ok(STATE_ANSWER_LINE_BOUND
+        .saturating_sub(wrapper_reserve(common, "control_answer")?.saturating_add(fixed)))
 }
 
 struct Bounded {
@@ -605,7 +602,6 @@ macro_rules! fields {
     }};
 }
 
-#[cfg(test)]
 fn encode_payload(payload: &Reply) -> io::Result<Vec<u8>> {
     encode_payload_observed(payload, &mut BufferBytes::default())
 }
@@ -646,20 +642,10 @@ fn header(common: &Common, op: &str) -> io::Result<Vec<u8>> {
     fields!(writer,"protocol"=>STATE_FLOW_PROTOCOL,"session_id"=>&common.session_id,"run_id"=>&common.run_id,"request_id"=>&common.request_id,"op"=>op);
     Ok(writer.bytes)
 }
-#[cfg(test)]
 fn wrapper_reserve(common: &Common, op: &str) -> io::Result<usize> {
-    wrapper_reserve_observed(common, op, &mut BufferBytes::default())
-}
-
-fn wrapper_reserve_observed(
-    common: &Common,
-    op: &str,
-    copied: &mut BufferBytes,
-) -> io::Result<usize> {
     // Header's final brace is exchanged for a comma, then the payload's interior,
     // observation key/value and final object plus LF. This is an upper bound.
     let bytes = header(common, op)?;
-    copied.add(bytes.len());
     Ok(bytes.len() + StateOperationObservation::MAX_ENCODED_LEN + b",\"observation\":\n".len() + 2)
 }
 fn wrap(
