@@ -24,6 +24,7 @@ pub struct FileFault {
 }
 
 impl FileFault {
+    #[cfg(feature = "sqlite")]
     pub(crate) fn new(code: StateRefusalCode, detail: impl Into<String>) -> Self {
         Self {
             code,
