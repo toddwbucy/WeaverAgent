@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #213
+**Landing PR:** #235
 
-**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -121,6 +121,14 @@ representation defined above. The TOML form is kebab-case, the wire form snake_c
 There is one decision_wait, under ste100, not another flow key. [CLASS-2, CLASS-6,
 CLASS-8, CLASS-9]
 
+Within Ste100Instruction, model_binding.artifact must be an absolute pathname for
+Spec 02's exact manifest file under MANIFEST-LOCATOR. Keep ModelBinding and
+ArtifactRef's shared shape and existing syntax judgment, with this duty's added
+absolute-path requirement. Filesystem resolution and named-file digest checks belong
+to SPU admission. Neither the declaration codec nor the wire rewrites this locator
+to a directory. Decoder and legacy ClassifyInstruction bindings are unchanged.
+[CLASS-2, CLASS-7, SEAM-2]
+
 ToolPolicies is a closed map with sh as its only possible key. ToolPolicy has
 clock_ms:u64 and measurement_ref:String. Require a nonempty reference and a clock in
 1..=SHELL_MAX_CLOCK_MS. Move that existing 60000 ms ceiling into the shared tool
@@ -214,6 +222,18 @@ Optional rule_id and path are omitted. Stage/code combinations are closed:
 | template | template_rejected, template_failed, scheme_mismatch |
 | open | open_failed, scheme_mismatch |
 | serving | invalid_span |
+
+Spec 02 DECLARATION maps checker admission scheme_mismatch to template/scheme_mismatch
+and the other admission codes, including unsupported_artifact, to
+template/template_failed. Preserve the checker code and exact detail in detail when the
+complete encoded lifecycle refusal fits MAX_ENVELOPE_BYTES, under DECLARATION's bounded
+mapping. This includes a failed reference already present in checker detail. The
+optional path is not parsed from that prose. Include it only when independently
+attributable under its owning contract. Qualification checks the complete encoded
+admission-failure envelope, including its wrapper and JSON escaping, at the bound and
+one byte over. Existing over-bound channel failure and after-load cleanup remain
+unchanged. No truncation, new lifecycle code or restart of the original load deadline is
+added. [CLASS-8, FLOW-3, PERSIST-6, SEAM-2]
 
 Admin syntax failures, including invalid bounds, remain ConfigInvalid with field
 attribution. There is no semantic invalid_bound code. EnterBinding::Serving keeps its
