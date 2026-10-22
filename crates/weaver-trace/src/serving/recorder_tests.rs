@@ -177,6 +177,56 @@ fn canonical_record_is_shared_by_working_structure_tap_and_sink() {
 }
 
 #[test]
+fn recall_admission_preserves_sequence_and_records_without_a_state_copy() {
+    use super::super::payloads::RecallRecord;
+    use super::super::recall_tests::{boot, event as recall_event, read};
+
+    let (mut recorder, reader) = recorder();
+    let mut bad_read = read();
+    let RecallRecord::Read { snapshot_id, .. } = &mut bad_read else {
+        unreachable!()
+    };
+    *snapshot_id = 0.into();
+    let mut bad_boot = boot();
+    let RecallRecord::Boot { end_mark, .. } = &mut bad_boot else {
+        unreachable!()
+    };
+    end_mark.end = 2.into();
+    for invalid in [bad_read, bad_boot] {
+        assert!(matches!(
+            recorder.submit(recall_event(invalid)),
+            Err(Failure::RefusedOnSubmit {
+                reason: crate::SubmitRefusal::PayloadMalformed
+            })
+        ));
+        assert_eq!(recorder.structure().len(), 1);
+        assert!(!recorder.tap_stopped());
+    }
+    for (index, record) in [read(), boot()].into_iter().enumerate() {
+        let mut source = recall_event(record);
+        let submitted = recorded(recorder.submit(source.clone()));
+        source.envelope.sequence = Sequence(index as u64 + 1);
+        assert_eq!(submitted.sequence, source.envelope.sequence);
+        assert_eq!(submitted.tap, TapOutcome::Unselected);
+        let expected = serde_json::to_string(&source).unwrap() + "\n";
+        assert_eq!(
+            recorder.structure().iter().last().unwrap().line.as_ref(),
+            expected
+        );
+    }
+    assert_eq!(recorder.structure().by_kind(Kind::Recall).count(), 2);
+    let expected: String = recorder
+        .structure()
+        .iter()
+        .map(|record| record.line.as_ref())
+        .collect();
+    drained(&mut recorder);
+    assert_eq!(recorder.boundary().committed, Some(Sequence(2)));
+    drop(recorder);
+    assert_eq!(bytes(reader), expected);
+}
+
+#[test]
 fn tap_failure_records_the_complete_source_then_stops_without_losing_fault() {
     let (mut recorder, reader) = recorder();
     let mut bad = message("Read file.");

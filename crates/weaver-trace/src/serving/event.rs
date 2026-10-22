@@ -35,8 +35,7 @@ pub struct Envelope {
 }
 
 /// Untagged by design. The envelope kind is the discriminant. Serving recall
-/// has no constructor until its sources and boot shape are specified. This is
-/// an incomplete owning contract, not permission to substitute a legacy payload.
+/// keeps its read and boot wrappers separate from the legacy RecallAccount.
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum Payload {
@@ -75,6 +74,7 @@ pub enum Payload {
     StateStoreMeasurement(Box<StateStoreMeasurement>),
     Ste100Result(Box<Ste100ResultRecord>),
     SavePointRecord(Box<SavePointRecord>),
+    RecallRecord(Box<RecallRecord>),
 }
 
 pub(super) fn malformed() -> Failure {
@@ -305,6 +305,9 @@ fn payload_licensed(envelope: &Envelope, payload: &Payload) -> bool {
                 | SavePointRecord::Refused { cause, .. } => cause,
             };
             !matches!(cause, PersistenceCause::Seed | PersistenceCause::Rebind)
+        }
+        (K::Recall, P::RecallRecord(record)) => {
+            envelope.subsystem == Subsystem::Harness && record.valid()
         }
         _ => false,
     }

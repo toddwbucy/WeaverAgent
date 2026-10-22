@@ -725,6 +725,20 @@ pub(crate) fn payload_fixtures() -> Vec<(
     };
     vec![
         (
+            K::Recall,
+            C::Internal,
+            O::Runtime,
+            false,
+            P::RecallRecord(Box::new(super::super::recall_tests::read())),
+        ),
+        (
+            K::Recall,
+            C::Internal,
+            O::Runtime,
+            false,
+            P::RecallRecord(Box::new(super::super::recall_tests::boot())),
+        ),
+        (
             K::Load,
             C::Internal,
             O::Runtime,
