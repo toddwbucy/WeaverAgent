@@ -2,6 +2,8 @@
 
 **Status:** MERGED.
 
+**Landing PR:** #237
+
 **Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is

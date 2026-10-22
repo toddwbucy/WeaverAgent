@@ -2,6 +2,8 @@
 
 **Status:** MERGED.
 
+**Landing PR:** #237
+
 **Version:** 0.9 **Date filed:** 2026-10-20
 
 ## 0. Scope and parties
