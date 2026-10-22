@@ -2,7 +2,7 @@
 
 Date: 2026-10-22
 Branch: code/state-boot-pair-repair
-PR: pending assignment
+PR: #247
 Epic: #146
 
 ## Authority and dormant scope
@@ -85,9 +85,9 @@ refusal/cancellation evidence for the lifecycle adapter. It does not claim to im
 post-activation failed-enter rollback. The existing begin_enter_rollback method handles
 the separate refused-partition path and is not reused as a substitute for that work.
 
-## Instruments and pending validation
+## Instruments and measured validation
 
-Sixteen tests use the actual load/template/boot-read owners, state sockets, recorder,
+Seventeen tests use the actual load/template/boot-read owners, state sockets, recorder,
 ordinary tap, file_pair and receipt machinery with scripted classifier/member answers.
 The prior decoder Open remains the explicit test-only assumption. Cases include:
 
@@ -108,13 +108,27 @@ The prior decoder Open remains the explicit test-only assumption. Cases include:
 Compile-time ambiguity pins require PriorBootOpen and RepairedBootPairs to remain
 non-Clone and non-Default. Additional pins forbid StartIdentity-to-prerequisite and
 pair-vector-to-result conversions. The production prerequisite has no constructor.
-Nineteen behavioral recipes and six compile-time mutation probes are prepared outside
-the repository. No mutation has run yet and no compiled failure is claimed.
+Olympus used private target /tmp/weaver-146-boot-pairs-target and the pinned toolchain.
+The final joined harness suite passed 1356 tests with 18 inherited ignored cases.
+All 17 focused boot tests, strict all-target harness clippy, formatting and lock passed.
+All nineteen protective mutations compiled, failed their intended test and passed after
+exact-byte restoration. All six ownership probes reached the intended E0283 ambiguity,
+and the restored baseline check passed.
 
-Compilation, focused/full tests, lint, formatting, lock and protective mutation gates
-remain pending the root's serialized lane. No independent review has completed for
-this slice. This is an Executor implementation record, not a Planner grade, language
-qualification, hardware qualification or permission to activate the serving path.
+The first compile found an iterator borrow retained across a mutable fault call. A
+local validation scope fixes its lifetime, and an unused test import was removed.
+The first lifecycle receipt-transfer mutation survived the original bounded checkpoint
+fixture. A new fixture starts from the actual Recorded receipt, counts the single
+transfer's clock samples and crosses Leave at each one. That mutation now fails with
+the exact missing-owner assertion and passes restored. Initial failures and the survivor
+remain in the evidence. Seven earlier protective cases and twelve corrected/final cases
+make the nineteen total. The final full suite includes the added transfer test.
+
+Two independent author readings covered the owner and its joined read/marks/receipt
+boundaries without a remaining concrete finding. Logs, recipes, type probes and source
+hashes are deposited on the shared bulk store under
+weaver-testing/state-management-146-olympus-2026-10-21/boot-pairs. These are author
+checks, not a Planner grade, language/hardware qualification or serving activation.
 
 ## Remaining integration
 
@@ -127,4 +141,6 @@ not SQL commit semantics, adoption behavior or save-point publication exclusion.
 
 No new boot protocol election was found. Coupled serving cutover, lifecycle composition,
 production classifier/prompt/corpus qualification and measured limits remain open.
-The operator alone merges, and this slice remains a draft.
+This branch descends from #245, preserves exact #190 ancestry and inherits its
+qualified coupled-cutover hold. The operator alone merges. This PR is submitted as
+a draft and must not activate the incomplete replacement.

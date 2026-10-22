@@ -912,22 +912,36 @@ fn recorded_terminal_handoff() -> (RepairFixture, AbsoluteBound) {
     let mut fx = RepairFixture::new(vec![old_pair("old-run")]);
     fx.begin();
     fx.until_held(Hold::Terminal(1));
-    let bound = fx.run().context.deadlines.get(PumpDeadline::Decision).unwrap();
+    let bound = fx
+        .run()
+        .context
+        .deadlines
+        .get(PumpDeadline::Decision)
+        .unwrap();
     let index = fx.answered.iter().position(|answered| !answered).unwrap();
     fx.answer(index).unwrap();
     for _ in 0..64 {
         let run = fx.run();
         run.context.reduce_flow(&mut run.clock).unwrap();
-        if run.context.owned_filing_recorded_before(receipt_driver::FilingOwner::BootPairs, bound) {
+        if run
+            .context
+            .owned_filing_recorded_before(receipt_driver::FilingOwner::BootPairs, bound)
+        {
             break;
         }
     }
-    assert!(fx.run().context.owned_filing_recorded_before(receipt_driver::FilingOwner::BootPairs, bound));
+    assert!(
+        fx.run()
+            .context
+            .owned_filing_recorded_before(receipt_driver::FilingOwner::BootPairs, bound)
+    );
     assert!(fx.run().context.filing.is_some());
     let now = fx.boot.member.now();
     let leave = AbsoluteBound::after(now, 5).unwrap();
     let run = fx.run();
-    run.context.arm(PumpDeadline::Leave, leave, &mut run.clock).unwrap();
+    run.context
+        .arm(PumpDeadline::Leave, leave, &mut run.clock)
+        .unwrap();
     (fx, leave)
 }
 
@@ -938,9 +952,16 @@ fn boot_pairs_recorded_terminal_transfer_never_yields_without_its_receipt_owner(
     let (mut baseline, leave) = recorded_terminal_handoff();
     let run = baseline.run();
     let mut clock = CrossingClock {
-        clock: &mut run.clock, remaining: usize::MAX, deadline: leave.deadline_ns(),
+        clock: &mut run.clock,
+        remaining: usize::MAX,
+        deadline: leave.deadline_ns(),
     };
-    assert_eq!(run.context.advance_boot_pairs(&mut ports(&mut clock)).unwrap(), BootPairsProgress::Pending);
+    assert_eq!(
+        run.context
+            .advance_boot_pairs(&mut ports(&mut clock))
+            .unwrap(),
+        BootPairsProgress::Pending
+    );
     let samples = usize::MAX - clock.remaining;
     assert!(samples > 0);
     assert!(run.context.filing.is_none());
@@ -950,13 +971,23 @@ fn boot_pairs_recorded_terminal_transfer_never_yields_without_its_receipt_owner(
         let (mut fx, leave) = recorded_terminal_handoff();
         let run = fx.run();
         let mut clock = CrossingClock {
-            clock: &mut run.clock, remaining, deadline: leave.deadline_ns(),
+            clock: &mut run.clock,
+            remaining,
+            deadline: leave.deadline_ns(),
         };
         match run.context.advance_boot_pairs(&mut ports(&mut clock)) {
             Err(error) => {
-                assert_eq!(error, RunFailure::Wait { key: PumpDeadline::Leave, bound: leave });
-                assert!(run.context.filing.is_some(),
-                    "sample {remaining}/{samples} yielded after consuming the exact terminal receipt");
+                assert_eq!(
+                    error,
+                    RunFailure::Wait {
+                        key: PumpDeadline::Leave,
+                        bound: leave
+                    }
+                );
+                assert!(
+                    run.context.filing.is_some(),
+                    "sample {remaining}/{samples} yielded after consuming the exact terminal receipt"
+                );
                 retained = true;
             }
             Ok(progress) => {
@@ -967,14 +998,19 @@ fn boot_pairs_recorded_terminal_transfer_never_yields_without_its_receipt_owner(
         }
         assert_eq!(run.context.complete_wait(PumpDeadline::Leave), Some(leave));
         fx.held = Hold::None;
-        let BootPairsCompletion::Repaired(proof) = fx.complete() else { panic!("repair"); };
+        let BootPairsCompletion::Repaired(proof) = fx.complete() else {
+            panic!("repair");
+        };
         assert_eq!(proof.terminals().len(), 1);
         assert!(proof.terminals()[0].receipts().is_complete());
         assert_eq!(fx.records(Kind::ToolCallCompleted).len(), 1);
         assert_eq!(fx.records(Kind::Recall).len(), 3);
         assert_eq!(fx.queries(), 2);
     }
-    assert!(retained && transferred, "both sides of the actual transfer must run");
+    assert!(
+        retained && transferred,
+        "both sides of the actual transfer must run"
+    );
 }
 
 #[test]
