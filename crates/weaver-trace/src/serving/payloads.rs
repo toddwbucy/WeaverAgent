@@ -7,6 +7,11 @@
 //! fn reads<T: for<'a> serde::Deserialize<'a>>() {}
 //! reads::<weaver_trace::serving::payloads::PlanEffect>();
 //! ```
+//!
+//! ```compile_fail,E0277
+//! fn reads<T: for<'a> serde::Deserialize<'a>>() {}
+//! reads::<weaver_trace::serving::payloads::RecallRecord>();
+//! ```
 
 use serde::{Serialize, Serializer};
 use serde_json::value::RawValue;
@@ -18,6 +23,7 @@ mod observation;
 mod pair;
 mod persistence;
 mod plan;
+mod recall;
 mod records;
 mod selection;
 
@@ -28,6 +34,7 @@ pub use observation::*;
 pub use pair::*;
 pub use persistence::*;
 pub use plan::*;
+pub use recall::*;
 pub use records::*;
 pub use selection::*;
 

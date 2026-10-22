@@ -52,18 +52,18 @@ fn inventory() -> CompiledInventory {
     CompiledInventory::new(templates()).unwrap()
 }
 
-struct TemplateFixture {
-    input: InputFixture,
+pub(super) struct TemplateFixture {
+    pub(super) input: InputFixture,
 }
 
 impl TemplateFixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             input: InputFixture::with_template_inventory(&inventory()),
         }
     }
 
-    fn begin(&mut self) {
+    pub(super) fn begin(&mut self) {
         self.input
             .run
             .context
@@ -71,7 +71,7 @@ impl TemplateFixture {
             .unwrap();
     }
 
-    fn advance(&mut self) -> Result<TemplateProgress, RunFailure> {
+    pub(super) fn advance(&mut self) -> Result<TemplateProgress, RunFailure> {
         self.input
             .run
             .context
@@ -128,7 +128,7 @@ impl TemplateFixture {
         panic!("template transcript did not record {count} acceptances");
     }
 
-    fn accept(&mut self, index: usize) -> s::Ste100Reply {
+    pub(super) fn accept(&mut self, index: usize) -> s::Ste100Reply {
         let request = self.request(index);
         let reply = accepted(&request);
         self.input.reply(&reply);

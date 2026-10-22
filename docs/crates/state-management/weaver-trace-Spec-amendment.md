@@ -4,7 +4,7 @@
 
 **Landing PR:** #244
 
-**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
+**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
 
 ## 0. What this document is
 
@@ -64,6 +64,16 @@ both the trace and declaration parser. [TAP-1, TAP-3]
 | recall | Payload::RecallRecord with TRACE-RECALL's serving read or boot variant | Forbidden, including boot recall | Forbidden |
 | message.system, message.restored, save_point | Existing payloads | Forbidden | Existing rule |
 | All other kinds | Existing payloads | No selectable surface in this amendment | Existing rule |
+
+The existing refusal kind also carries the harness-authored raw encoding of
+TYPES-RECALL-REFUSAL. It has no selectable projection. For that variant the harness
+licenses internal/runtime, subsystem harness, the same open turn and the sequence of the
+message.assistant containing the referenced checked statement as causal_parent under
+Spec 02 RECALL-REFUSAL. The parent is not the ste100.result sequence. Trace keeps its
+existing refusal payload representation and envelope checks. The harness validates the
+floor carrier and its checked source proof before submission. Trace gains no floor
+dependency, new kind or pair mirror, and does not infer bindings from the refusal
+payload. [FLOW-3, TAP-1, TAP-5, READ-3]
 
 `input_id` is a run-local decimal-string counter assigned by the harness at serialized
 check intake, before input.offered authoring, under Spec 02's INPUT. The gate deadline
@@ -276,7 +286,7 @@ serving contract remains applicable.
 | Claim | Instrument and test | Protective change that must fail the test |
 | --- | --- | --- |
 | TRACE-ENVELOPE | Perturbation in tests/recorder.rs, canonical fixture with escaped content and omitted options | Infer origin from content or change sequence to a JSON number |
-| TRACE-REGISTRY | Exhaustive enum match and tests/kinds.rs, plus table-driven turn/payload tests | Omit a new kind or admit a forbidden projection |
+| TRACE-REGISTRY | Exhaustive enum match and tests/kinds.rs, plus table-driven turn/payload tests and harness-authored recall refusal bytes | Omit a new kind, alter the typed refusal bytes or admit a forbidden projection |
 | TRACE-PLAN | Canonical operator/effect, failed/closed outcome and break fixtures, checked against the floor-to-trace conversion | Swap the two plan payloads, license close as plan.event, omit null context, change an identity or accept a wrong turn/channel/origin |
 | Plan observation | Canonical fixtures for flags success/refusal, successor readiness and both capacity paths | Replace unavailable with zero, drop an identity, add an unknown variant or admit the measurement to residue |
 | TRACE-VALIDATION | Load matrix covering every required call/task tuple and forbidden kind | Permit partial pair or mark coverage, select a boot read or allow a payload predicate |

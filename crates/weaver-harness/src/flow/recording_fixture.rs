@@ -76,7 +76,7 @@ pub(super) fn load_record() -> LoadRecord {
             },
         },
         state_start: StartIdentity {
-            seed_id: "seed".into(),
+            seed_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
             artifact_id: "seed-artifact".into(),
             dump_sha256: "a".repeat(64),
             config_sha256: "b".repeat(64),
@@ -86,7 +86,7 @@ pub(super) fn load_record() -> LoadRecord {
         clock_source: ClockSource::ClockMonotonic,
         origin_ns: 9_007_199_254_740_993.into(),
         state_member_observation: MemberObservationIdentity {
-            instrument_version: "state-observation/1".into(),
+            instrument_version: "state-observation/2".into(),
             pid: 123,
             start_ticks: Some(100.into()),
             ticks_per_second: Some(100.into()),

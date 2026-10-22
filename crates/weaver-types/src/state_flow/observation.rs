@@ -273,8 +273,24 @@ pub struct MemberObservationIdentity {
 }
 
 impl MemberObservationIdentity {
-    pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.instrument_version != "state-observation/1" || self.pid == 0 {
+    /// Current serving admission uses the /2 sampling definition. Historical
+    /// records are checked separately and keep the instrument that produced them.
+    pub fn validate_current_open(&self) -> Result<(), ValidationError> {
+        self.validate_historical()?;
+        if self.instrument_version != "state-observation/2" {
+            return Err(ValidationError(
+                "current opened requires state-observation/2",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_historical(&self) -> Result<(), ValidationError> {
+        if !matches!(
+            self.instrument_version.as_str(),
+            "state-observation/1" | "state-observation/2"
+        ) || self.pid == 0
+        {
             return Err(ValidationError("invalid member observation identity"));
         }
         match (

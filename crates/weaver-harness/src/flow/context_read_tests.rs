@@ -15,6 +15,18 @@ use weaver_types::state_flow as s;
 const CONTROL_NS: u64 = 2_000_000_000;
 const EMPTY: &[u8] = br#"{"entries":{"entries":[]}}"#;
 
+#[path = "context_material_tests.rs"]
+mod material_tests;
+
+#[path = "context_read_recall_tests.rs"]
+mod recall_tests;
+
+#[path = "context_read_resume_tests.rs"]
+mod resume_tests;
+
+#[path = "context_boot_read_tests.rs"]
+mod boot_tests;
+
 fn ports<I: PumpIo>(io: &mut I) -> PumpPorts<'_, I> {
     PumpPorts {
         lifecycle: LifecyclePorts::default(),
@@ -235,13 +247,15 @@ impl Member {
         }
     }
 
-    fn finish(
-        &mut self,
-    ) -> Result<super::super::read::CompletedRead, super::super::read::ReadFailure> {
+    fn finish(&mut self) -> Result<RecordedRead, super::super::read::ReadFailure> {
         for _ in 0..128 {
             self.advance().unwrap();
             if let Some(result) = self.run.context.take_read(&mut self.run.clock).unwrap() {
-                return result;
+                return match result {
+                    ReadCompletion::Recorded(read) => Ok(read),
+                    ReadCompletion::Refused(refusal) => Err(refusal),
+                    ReadCompletion::Cancelled(_) => panic!("unexpected cancelled read"),
+                };
             }
         }
         panic!("read did not finish");
@@ -1045,7 +1059,7 @@ fn pages_may_split_utf8_without_changing_raw_block_spelling() {
     let raw = format!(r#"{{"type":"text","text":"Read\u0020caf{}."}}"#, '\u{e9}');
     let entry = s::ReadEntry {
         source: s::ReadSource::Seed(s::SeedSource {
-            seed_id: "seed".into(),
+            seed_id: "0123456789abcdef0123456789abcdef".into(),
             ordinal: 0.into(),
         }),
         raw_block: serde_json::value::RawValue::from_string(raw.clone()).unwrap(),
@@ -1062,7 +1076,7 @@ fn pages_may_split_utf8_without_changing_raw_block_spelling() {
         }],
         selected_span: Some(s::SelectedSpan {
             span_ref: s::SpanRef {
-                seed_id: "seed".into(),
+                seed_id: "0123456789abcdef0123456789abcdef".into(),
                 local_id: 0.into(),
                 revision: 1.into(),
             },

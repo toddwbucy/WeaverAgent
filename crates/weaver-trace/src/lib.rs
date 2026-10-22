@@ -163,4 +163,5 @@ pub use structure::{Record, WorkingStructure};
 pub use tee::{ElectedKind, Election, Tee, distill, opener};
 pub use writer::{
     Boundary, Drained, HIGH_WATER_MARK, Pressure, QUEUE_DEPTH, Recorder, UNLOAD_RESERVE,
+    payload_pairing_licensed,
 };

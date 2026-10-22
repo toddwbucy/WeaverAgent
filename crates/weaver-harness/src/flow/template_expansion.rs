@@ -61,6 +61,15 @@ impl RestatementTemplate {
     }
 }
 
+/// The compiled mark consumer elects a literal-only begin-task family. Its
+/// source and allocated identities remain in typed context, never substitutions.
+pub(in crate::flow) fn expand_begin_task(
+    certificate: &TemplateCertificate,
+    identity: ExpansionIdentity<'_>,
+) -> Result<TemplateExpansion, ExpansionRefusal> {
+    expand(certificate, identity, "mark.begin_task", "state.mark", None)
+}
+
 /// Closed outbound criterion; no runtime string can become a substitution.
 pub(in crate::flow) fn expand_outbound(
     certificate: &TemplateCertificate,

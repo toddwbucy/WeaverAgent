@@ -3,6 +3,8 @@
 
 use std::io;
 
+use weaver_state::serving_bytes::BufferBytes;
+
 use weaver_types::state_flow::{
     DecimalU64, DiskSample, MemberObservationIdentity, ObservationUnavailable, OperationDisk,
     OperationPhase, OperationResource, PhaseName, ResourceField, ResourceUnavailable,
@@ -24,7 +26,7 @@ pub(super) fn sample_member_identity() -> MemberObservationIdentity {
         Err(reason) => (None, None, Some(reason)),
     };
     MemberObservationIdentity {
-        instrument_version: "state-observation/1".into(),
+        instrument_version: "state-observation/2".into(),
         pid: std::process::id(),
         start_ticks,
         ticks_per_second,
@@ -32,10 +34,10 @@ pub(super) fn sample_member_identity() -> MemberObservationIdentity {
     }
 }
 
-struct SnapshotFacts {
-    cpu: OptionalSample<u64>,
-    enabled: OptionalSample<bool>,
-    disk: OptionalSample<DiskSample>,
+pub(super) struct SnapshotFacts {
+    pub(super) cpu: OptionalSample<u64>,
+    pub(super) enabled: OptionalSample<bool>,
+    pub(super) disk: OptionalSample<DiskSample>,
 }
 
 trait Metrics {
@@ -46,6 +48,10 @@ struct Kernel;
 
 impl Metrics for Kernel {
     fn snapshot(&mut self) -> SnapshotFacts {
+        #[cfg(test)]
+        if let Some(facts) = super::tests::timing::sample_resources() {
+            return facts;
+        }
         SnapshotFacts {
             cpu: weaver_state::serving_clock::thread_cpu_ns().map_err(unavailable),
             enabled: read("/proc/sys/kernel/task_delayacct").and_then(|text| match text.trim() {
@@ -59,79 +65,98 @@ impl Metrics for Kernel {
 }
 
 pub(super) struct OperationSample {
+    pub(super) copied: BufferBytes,
+    pub(super) held: BufferBytes,
     operation_id: DecimalU64,
     request_id: DecimalU64,
     operation: StateOperation,
     began_ns: DecimalU64,
     phases: Vec<(PhaseName, DecimalU64, Option<DecimalU64>)>,
-    before: Option<SnapshotFacts>,
+    resources: ResourceSamples,
+}
+
+enum ResourceSamples {
+    NotSampled,
+    Capturing(SnapshotFacts),
+    Captured(OptionalSample<u64>, OperationDisk),
 }
 
 impl OperationSample {
+    #[cfg(test)]
     pub(super) fn begin(
         operation_id: DecimalU64,
         request_id: DecimalU64,
         operation: StateOperation,
     ) -> io::Result<Self> {
-        Self::begin_with(operation_id, request_id, operation, &mut Kernel)
+        Self::begin_at(operation_id, request_id, operation, monotonic_ns()?)
     }
 
-    fn begin_with(
-        operation_id: DecimalU64,
-        request_id: DecimalU64,
-        operation: StateOperation,
-        metrics: &mut impl Metrics,
-    ) -> io::Result<Self> {
-        Self::begin_with_start(operation_id, request_id, operation, None, metrics)
-    }
-
-    /// Keep the timestamp sampled before the ordinary request's preparsing.
-    /// Snapshot resource counters must precede its own start timestamp instead.
+    /// Preserve the timestamp taken before any operation hint parsing. Kernel
+    /// counters are sampled only if a validated snapshot passes preflight.
     pub(super) fn begin_at(
         operation_id: DecimalU64,
         request_id: DecimalU64,
         operation: StateOperation,
         began_ns: DecimalU64,
     ) -> io::Result<Self> {
-        if operation == StateOperation::Snapshot {
-            return Err(invalid(
-                "snapshot needs counters before its start timestamp",
-            ));
-        }
-        Self::begin_with_start(
-            operation_id,
-            request_id,
-            operation,
-            Some(began_ns),
-            &mut Kernel,
-        )
-    }
-
-    fn begin_with_start(
-        operation_id: DecimalU64,
-        request_id: DecimalU64,
-        operation: StateOperation,
-        received_ns: Option<DecimalU64>,
-        metrics: &mut impl Metrics,
-    ) -> io::Result<Self> {
         if operation_id.0 == 0 || request_id.0 == 0 {
             return Err(invalid("zero operation or request ID"));
         }
-        let before = (operation == StateOperation::Snapshot).then(|| metrics.snapshot());
-        let began_ns = match received_ns {
-            Some(received_ns) => received_ns,
-            None => monotonic_ns()?,
-        };
         let mut phases = Vec::new();
         phases.try_reserve_exact(6).map_err(io::Error::other)?;
         Ok(Self {
+            copied: if matches!(
+                operation,
+                StateOperation::Open
+                    | StateOperation::File
+                    | StateOperation::FilePair
+                    | StateOperation::Read
+                    // Shape's encoded result is decoded into owned row strings.
+                    // That copy category is not fully instrumented yet.
+                    | StateOperation::Shape
+            ) {
+                BufferBytes::unavailable(ObservationUnavailable::Uninstrumented)
+            } else {
+                BufferBytes::default()
+            },
+            // Only the complete member owner can supply the live-buffer inventory.
+            held: BufferBytes::unavailable(ObservationUnavailable::Uninstrumented),
             operation_id,
             request_id,
             operation,
             began_ns,
             phases,
-            before,
+            resources: ResourceSamples::NotSampled,
         })
+    }
+
+    pub(super) fn capture_begin(&mut self) -> io::Result<()> {
+        self.capture_begin_with(&mut Kernel)
+    }
+
+    fn capture_begin_with(&mut self, metrics: &mut impl Metrics) -> io::Result<()> {
+        if self.operation != StateOperation::Snapshot
+            || !matches!(self.resources, ResourceSamples::NotSampled)
+        {
+            return Err(invalid("resource samples require one snapshot capture"));
+        }
+        self.resources = ResourceSamples::Capturing(metrics.snapshot());
+        Ok(())
+    }
+
+    pub(super) fn capture_end(&mut self) -> io::Result<()> {
+        self.capture_end_with(&mut Kernel)
+    }
+
+    fn capture_end_with(&mut self, metrics: &mut impl Metrics) -> io::Result<()> {
+        let ResourceSamples::Capturing(before) =
+            std::mem::replace(&mut self.resources, ResourceSamples::NotSampled)
+        else {
+            return Err(invalid("snapshot capture has no before sample"));
+        };
+        let (cpu, disk) = snapshot_delta(before, metrics.snapshot());
+        self.resources = ResourceSamples::Captured(cpu, disk);
+        Ok(())
     }
 
     pub(super) fn phase_begin(&mut self, name: PhaseName) -> io::Result<()> {
@@ -170,24 +195,18 @@ impl OperationSample {
 
     /// Call after the operation payload has been encoded. Metadata insertion
     /// and wrapper encoding happen later, outside this operation interval.
-    pub(super) fn finish(
-        self,
-        copied_bytes: Option<u64>,
-        held_bytes: Option<u64>,
-    ) -> io::Result<StateOperationObservation> {
-        self.finish_with(copied_bytes, held_bytes, &mut Kernel)
-    }
-
-    fn finish_with(
-        self,
-        copied_bytes: Option<u64>,
-        held_bytes: Option<u64>,
-        metrics: &mut impl Metrics,
-    ) -> io::Result<StateOperationObservation> {
+    pub(super) fn finish(self) -> io::Result<StateOperationObservation> {
+        let copied_bytes = self.copied.value();
+        let held_bytes = self.held.value();
         let ended_ns = monotonic_ns()?;
-        let (cpu, disk) = match self.before {
-            Some(before) => snapshot_delta(before, metrics.snapshot()),
-            None => (
+        #[cfg(test)]
+        super::tests::timing::observation_end(ended_ns);
+        let (cpu, disk) = match self.resources {
+            ResourceSamples::Captured(cpu, disk) => (cpu, disk),
+            ResourceSamples::Capturing(_) => {
+                return Err(invalid("snapshot capture has no after sample"));
+            }
+            ResourceSamples::NotSampled => (
                 Err(ObservationUnavailable::NotSampled),
                 OperationDisk {
                     enabled: None,
@@ -208,16 +227,16 @@ impl OperationSample {
                 None
             }
         };
-        if copied_bytes.is_none() {
+        if let Err(reason) = copied_bytes {
             missing.push(ResourceUnavailable {
                 field: ResourceField::CopiedBytes,
-                reason: ObservationUnavailable::Uninstrumented,
+                reason,
             });
         }
-        if held_bytes.is_none() {
+        if let Err(reason) = held_bytes {
             missing.push(ResourceUnavailable {
                 field: ResourceField::HeldBytes,
-                reason: ObservationUnavailable::Uninstrumented,
+                reason,
             });
         }
         let mut phases = self
@@ -242,8 +261,8 @@ impl OperationSample {
             phases,
             resource: OperationResource {
                 cpu_ns,
-                copied_bytes: copied_bytes.map(Into::into),
-                held_bytes: held_bytes.map(Into::into),
+                copied_bytes: copied_bytes.ok().map(Into::into),
+                held_bytes: held_bytes.ok().map(Into::into),
                 unavailable: missing,
             },
             disk,

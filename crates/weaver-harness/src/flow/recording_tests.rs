@@ -848,7 +848,7 @@ fn state_socket_completion_waits_for_real_recorded_measurement_and_releases_once
         observation: serde_json::from_value(serde_json::to_value(&mirror.observation).unwrap())
             .unwrap(),
         member_observation: s::MemberObservationIdentity {
-            instrument_version: "state-observation/1".into(),
+            instrument_version: "state-observation/2".into(),
             pid: 7,
             start_ticks: Some(10.into()),
             ticks_per_second: Some(100.into()),

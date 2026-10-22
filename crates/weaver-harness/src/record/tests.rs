@@ -20,14 +20,25 @@ fn full_device() -> OwnedFd {
 }
 
 fn scratch_sink(tag: &str) -> OwnedFd {
+    scratch_file(tag).into()
+}
+
+fn scratch_file(tag: &str) -> std::fs::File {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let path = std::env::temp_dir().join(format!(
-        "weaver-record-{tag}-{}-{:?}.ndjson",
+        "weaver-record-{tag}-{}-{}.ndjson",
         std::process::id(),
-        std::thread::current().id()
+        NEXT.fetch_add(1, Ordering::Relaxed)
     ));
-    let file = std::fs::File::create(&path).expect("sink");
-    let _ = std::fs::remove_file(&path);
-    OwnedFd::from(file)
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .expect("sink");
+    std::fs::remove_file(&path).expect("unlink scratch sink");
+    file
 }
 
 fn fault(author: &Author, record: &mut Record) -> Result<Sequence, RecordFailure> {
@@ -188,3 +199,5 @@ fn an_unrecovered_call_reaches_the_diagnostic_record() {
     assert!(landed.is_ok(), "{landed:?}");
     assert!(!record.failed(), "nothing latched");
 }
+
+mod conversion;

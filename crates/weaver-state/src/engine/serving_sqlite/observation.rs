@@ -19,7 +19,7 @@ impl ServingSqlite {
         identity: &MemberObservationIdentity,
         observation: &StateOperationObservation,
     ) -> Result<(), ReadFault> {
-        identity.validate().map_err(fault)?;
+        identity.validate_current_open().map_err(fault)?;
         observation.validate_shape().map_err(fault)?;
         if observation.operation != StateOperation::Open
             || observation.operation_id.0 != 1

@@ -17,6 +17,12 @@ std::thread_local! {
     static POPULATED_OBSERVER: RefCell<Option<SyncSender<()>>> = const { RefCell::new(None) };
 }
 
+pub(super) fn hold_next_containment(entered: SyncSender<()>, released: Receiver<()>) {
+    CONTAINMENT_GATE.with(|slot| {
+        assert!(slot.borrow_mut().replace((entered, released)).is_none());
+    });
+}
+
 /// The test waits after the actual kill, before any empty observation or
 /// terminal answer. Controls queued here were present before containment
 /// completed, so they cannot be dismissed as a later idle interrupt.
@@ -319,14 +325,12 @@ fn containment_drains_all_queued_controls_and_only_upgrades_unload() {
         for by in [KillCause::Unload, KillCause::FlowFailure, KillCause::Unload] {
             interrupt(&harness, by);
         }
-        let supervisor =
-            ContainmentSupervisor::new(Supervision::new(&gate, &exchange), Ok(initial));
-        assert_eq!(
-            supervisor
-                .finish(Instant::now() + Duration::from_secs(1))
-                .unwrap(),
-            expected
+        let supervisor = ContainmentSupervisor::new(
+            Supervision::new(&gate, &exchange),
+            Ok(initial),
+            Instant::now() + Duration::from_secs(1),
         );
+        assert_eq!(supervisor.finish().unwrap(), expected);
     }
 }
 
@@ -363,12 +367,13 @@ fn repeated_interrupts_do_not_restart_the_containment_deadline() {
     let instrument = EventsInstrument::populated();
     let (gate, harness) = pair();
     let exchange = exchange();
+    let start = Instant::now();
+    let deadline = start + Duration::from_millis(45);
     let mut supervisor = ContainmentSupervisor::new(
         Supervision::new(&gate, &exchange),
         Ok(Some(KillCause::Unload)),
+        deadline,
     );
-    let start = Instant::now();
-    let deadline = start + Duration::from_millis(45);
     let mut observations = 0;
     let mut waits = 0;
     let contained = instrument.tools.wait_empty_until_with(deadline, |slice| {
@@ -391,10 +396,7 @@ fn repeated_interrupts_do_not_restart_the_containment_deadline() {
     );
     assert!(Instant::now() >= deadline);
     assert!(start.elapsed() < Duration::from_millis(500));
-    assert_eq!(
-        supervisor.finish(deadline).unwrap(),
-        Some(KillCause::Unload)
-    );
+    assert_eq!(supervisor.finish().unwrap(), Some(KillCause::Unload));
 }
 
 /// A control protocol fault is retained while populated observation still
@@ -404,12 +406,13 @@ fn invalid_control_during_containment_keeps_cleanup_running() {
     let instrument = EventsInstrument::populated();
     let (gate, harness) = pair();
     let exchange = exchange();
+    let deadline = Instant::now() + Duration::from_secs(1);
     let mut supervisor = ContainmentSupervisor::new(
         Supervision::new(&gate, &exchange),
         Ok(Some(KillCause::Unload)),
+        deadline,
     );
     interrupt(&harness, KillCause::Fault);
-    let deadline = Instant::now() + Duration::from_secs(1);
     let mut observations = 0;
     let contained = instrument.tools.wait_empty_until_with(deadline, |slice| {
         observations += 1;
@@ -424,12 +427,12 @@ fn invalid_control_during_containment_keeps_cleanup_running() {
         "protocol failure does not bypass cleanup"
     );
     assert!(matches!(
-        supervisor.finish(deadline),
+        supervisor.finish(),
         Err(ShellEnd::Channel(ChannelFault::Undecodable))
     ));
 }
 
-fn fill_answer_socket(channel: &Channel) -> usize {
+pub(super) fn fill_answer_socket(channel: &Channel) -> usize {
     let envelope = OrganEnvelope {
         exchange: exchange(),
         position: Position::Continue,
@@ -514,7 +517,10 @@ fn a_backpressured_answer_expires_at_its_original_containment_deadline() {
     );
     assert!(matches!(
         result,
-        Err(Unanswered::Channel(ChannelFault::Closed))
+        Err(Unanswered::DeliveryBound {
+            exchange: failed,
+            answer: UndeliveredAnswer::ToolAnswer,
+        }) if failed == exchange()
     ));
     assert!(Instant::now() >= deadline);
     for _ in 0..filled {
@@ -548,7 +554,7 @@ fn an_ordinary_result_is_not_rewritten_while_waiting_to_send() {
     );
 }
 
-fn assert_no_peer_answer(peer: &Channel) {
+pub(super) fn assert_no_peer_answer(peer: &Channel) {
     use nix::poll::{PollFd, PollFlags, poll};
     let mut fds = [PollFd::new(peer.as_fd(), PollFlags::POLLIN)];
     assert_eq!(

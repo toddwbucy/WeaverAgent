@@ -4,7 +4,7 @@
 
 **Landing PR:** #244
 
-**Version:** 0.19 **Date filed:** 2026-10-21
+**Version:** 0.20 **Date filed:** 2026-10-21
 
 ## 0. What this document is
 
@@ -83,6 +83,13 @@ operating exchange. The store owns the schema and confirms its supported filing 
 when the channel opens. The harness may not supply table definitions. [STORE-2 through
 STORE-5, SEAM-1]
 
+For a recall opening, the store may assume the harness proved recall-key recognition,
+but must check the referenced held binding has exactly one noun, no condition and
+subject equality. Apply the same check at image adoption. The harness accounts an
+invalid operation shape under Spec 02 RECALL-REFUSAL before any pair or read request.
+That trace-only refusal is not a filing, state refusal or empty read result. [READ-3,
+PAIR-1, PAIR-4, SEAM-2]
+
 The harness supplies mark effects only under the authority of its boundary or plan
 coordinator, after the associated statement passes classification. The store may assume
 that classification and operator/review grants belong to the harness, but must refuse
@@ -113,11 +120,11 @@ identity, once on success or a valid later refusal. A failed channel drops the r
 instead. The read's existing deadline includes release, and neither party can extend it
 by paging or cleanup. [SEAM-3, CLASS-8, COST-2]
 
-Reading held statements does not refile them. An inward recall call does have its own
-new send and return pair under READ-3 and PAIR-1. Its complete return may contain the
-held query result, but those nested statements retain their old identities and acquire
-no new statement bindings from that return. The recall provenance event and placed
-tool-result copy are not admission carriers. [STORE-2, STORE-8, READ-3, PAIR-3]
+Reading held statements does not refile them. A conforming inward recall call has its
+own new send and return pair under READ-3 and PAIR-1. Its complete return may contain
+the held query result, but those nested statements retain their old identities and
+acquire no new statement bindings from that return. The recall provenance event and
+placed tool-result copy are not admission carriers. [STORE-2, STORE-8, READ-3, PAIR-3]
 
 The harness sends each filing at most once on the standing channel. The store either
 commits its block, index entries, and associated metadata together and answers accepted,

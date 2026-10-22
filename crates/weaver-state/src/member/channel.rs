@@ -21,6 +21,10 @@ impl Channel {
         })
     }
 
+    pub(super) fn buffered_bytes(&self) -> usize {
+        self.buffered.len()
+    }
+
     pub(super) fn receive(&mut self) -> io::Result<Option<Vec<u8>>> {
         loop {
             if let Some(end) = self.buffered.iter().position(|b| *b == b'\n') {
@@ -141,6 +145,58 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn partial_snapshot_answer_retains_its_finished_observation_without_resampling() {
+        use crate::member::{Reply, complete, observation::OperationSample, tests::timing, wrap};
+        use weaver_types::state_flow::*;
+        timing::enable();
+        let mut sample =
+            OperationSample::begin(2.into(), 2.into(), StateOperation::Snapshot).unwrap();
+        sample.phase_begin(PhaseName::Validate).unwrap();
+        sample.phase_end(PhaseName::Validate).unwrap();
+        sample.capture_begin().unwrap();
+        sample.capture_end().unwrap();
+        let (observation, payload) = complete(
+            Reply::Control(StateControlAnswer::ControlRefused {
+                code: ControlRefusalCode::Capture(CaptureRefusalCode::SnapshotFailed),
+                detail: "synthetic serialization refusal".into(),
+            }),
+            sample,
+            None,
+        )
+        .unwrap();
+        let expected = wrap(
+            &Common {
+                session_id: "session".into(),
+                run_id: "run".into(),
+                request_id: 2.into(),
+            },
+            "control_answer",
+            &payload,
+            &observation,
+        )
+        .unwrap();
+        let mut answer = PendingAnswer {
+            bytes: expected.clone(),
+            offset: 0,
+        };
+        let mut writer = Fragmented {
+            bytes: Vec::new(),
+            block: false,
+        };
+        let mut pending = 0;
+        while !answer.advance(&mut writer).unwrap() {
+            pending += 1;
+            assert_eq!(timing::resource_sample_count(), 2);
+        }
+        assert!(pending > 1);
+        assert_eq!(writer.bytes, expected);
+        let decoded = decode_state_line(&writer.bytes, FrameDirection::Response).unwrap();
+        assert_eq!(decoded.observation(), Some(&observation));
+        assert_eq!(timing::resource_sample_count(), 2);
+        timing::disable();
     }
 
     #[test]

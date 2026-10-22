@@ -486,7 +486,7 @@ pub fn parse_distillate(frame: &str) -> Option<Distillate> {
 /// not the restored one, so the restored rows reach custody by the tee's
 /// whole-distill rule alone.
 // Test-only hook kept here (#118): the sqlite suite reaches it as `crate::store`.
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 pub(crate) fn branch_record() -> Vec<Distillate> {
     let election = weaver_trace::Election {
         all_kinds: false,
@@ -536,7 +536,7 @@ pub(crate) fn branch_record() -> Vec<Distillate> {
 /// turn, in landing order. A bounded recall, the seat's after a flush,
 /// answers the newest turns alone and none of the turnless rows.
 // Test-only hook kept here (#118): the sqlite suite reaches it as `crate::store`.
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 pub(crate) fn assert_branch_recall(whole: &[RecalledEvent], bounded: &[RecalledEvent]) {
     let kinds: Vec<&str> = whole.iter().map(|e| e.kind.as_str()).collect();
     assert_eq!(

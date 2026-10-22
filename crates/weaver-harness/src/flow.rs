@@ -14,7 +14,10 @@ mod coordinator;
 mod halt_snapshot;
 mod input;
 mod intake;
+mod journal;
 mod ledger;
+mod marks;
+mod material;
 mod mirror;
 mod observation;
 mod pump;
@@ -269,9 +272,10 @@ mod repair_port_visibility {
 #[allow(clippy::type_complexity)]
 mod read_port_visibility {
     use super::clock::testing::FakePumpIo;
-    use super::context::{ReadBeginError, ReadProgress, RecordingContext, RunFailure};
+    use super::context::{
+        ReadBeginError, ReadCompletion, ReadProgress, RecordingContext, RunFailure,
+    };
     use super::pump::PumpPorts;
-    use super::read::{CompletedRead, ReadFailure};
     use weaver_trace::TurnRef;
     use weaver_types::state_flow::ReadSelector;
 
@@ -288,8 +292,9 @@ mod read_port_visibility {
     const _: fn(
         &mut RecordingContext,
         &mut FakePumpIo,
-    ) -> Result<Option<Result<CompletedRead, ReadFailure>>, RunFailure> =
-        RecordingContext::take_read;
+    ) -> Result<Option<ReadCompletion>, RunFailure> = RecordingContext::take_read;
+    const _: fn(&mut RecordingContext, &mut FakePumpIo) -> Result<(), RunFailure> =
+        RecordingContext::cancel_read;
 }
 
 #[cfg(test)]

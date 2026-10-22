@@ -166,7 +166,7 @@ fn observation(
 
 fn member() -> MemberObservationIdentity {
     MemberObservationIdentity {
-        instrument_version: "state-observation/1".into(),
+        instrument_version: "state-observation/2".into(),
         pid: 1,
         start_ticks: None,
         ticks_per_second: None,
@@ -841,4 +841,69 @@ fn encoder_refuses_multiline_raw_values_and_zero_exchange_ids() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn current_open_requires_v2_while_historical_identity_preserves_v1_or_v2() {
+    for (version, current, historical) in [
+        ("state-observation/1", false, true),
+        ("state-observation/2", true, true),
+        ("state-observation/3", false, false),
+        ("", false, false),
+    ] {
+        let mut answer = opened();
+        let StateFrame::Opened {
+            member_observation, ..
+        } = &mut answer
+        else {
+            unreachable!()
+        };
+        member_observation.instrument_version = version.into();
+        let identity = member_observation.clone();
+        let encoded = encode_state_line(&answer, FrameDirection::Response).unwrap();
+        let decoded = decode_state_line(&encoded, FrameDirection::Response).unwrap();
+        assert_eq!(
+            decoded.validate_response_to(&open(), 1.into()).is_ok(),
+            current,
+            "{version}"
+        );
+        assert_eq!(
+            identity.validate_historical().is_ok(),
+            historical,
+            "{version}"
+        );
+        if historical {
+            let stored = serde_json::to_vec(&identity).unwrap();
+            let restored: MemberObservationIdentity = serde_json::from_slice(&stored).unwrap();
+            restored.validate_historical().unwrap();
+            assert_eq!(restored, identity, "history must never be relabeled");
+        }
+    }
+}
+
+#[test]
+fn observed_decode_counts_owned_raw_spelling_and_keeps_strict_guards() {
+    let plain = concat!(
+        "{\"protocol\":\"state-flow/1\",\"session_id\":\"session\",",
+        "\"run_id\":\"run\",\"request_id\":\"2\",\"op\":\"control\",",
+        "\"frame\":{\"held\":{}}}\n"
+    );
+    // Six actual RawValue owners: quotes and raw spelling count, not keys,
+    // separators or the decoded metadata strings.
+    let expected = 14 + 9 + 5 + 3 + 9 + 11;
+    let got = decode_state_line_observed(plain.as_bytes(), FrameDirection::Request).unwrap();
+    assert_eq!(got.raw_field_bytes, Some(expected));
+    let escaped = plain.replace("session\"", "sessi\\u006fn\"");
+    let raw = decode_state_line_observed(escaped.as_bytes(), FrameDirection::Request).unwrap();
+    assert_eq!(raw.frame.common(), got.frame.common());
+    assert_eq!(raw.raw_field_bytes, Some(expected + 5));
+    for malformed in [
+        plain.replace("\"held\":{}", "\"held\":{},\"held\":{}"),
+        plain.replace("\"held\":{}", "\"held\":{\"extra\":0}"),
+        plain.replace("\"request_id\":\"2\"", "\"request_id\":\"0\""),
+    ] {
+        assert!(decode_state_line_observed(malformed.as_bytes(), FrameDirection::Request).is_err());
+        assert!(decode_state_line(malformed.as_bytes(), FrameDirection::Request).is_err());
+    }
+    assert!(decode_state_line_observed(plain.as_bytes(), FrameDirection::Response).is_err());
 }

@@ -4,7 +4,7 @@
 
 **Landing PR:** #244
 
-**Version:** 0.27 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.29 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -579,6 +579,26 @@ Removing the case or changing its detail must fail both fixtures. Changing sourc
 must fail the strict-codec fixture. Changing the turn or causal_parent must fail the
 harness-to-trace fixture. [CLASS-9, CLASS-10, FLOW-3]
 
+**TYPES-RECALL-REFUSAL.** Add RecallRequestRefusal and
+RefusalRecord::RecallRequest. Its tagged wire object has seam recall_request and exactly
+the following remaining fields, in this order: call_id:CallId,
+call_block:DecimalU64, statement:StatementRef, noun_count:DecimalU64,
+has_condition:bool and detail:String. Reuse the existing identity types. The sole
+meaning is Spec 02 RECALL-REFUSAL, with detail exactly
+`recall requires exactly one noun and no governing condition`.
+Require positive noun_count and either noun_count different from one or has_condition
+true. There is no subject, optional field or additional case tag. TYPES-CODEC rejects
+missing, extra or duplicate fields and invalid decimal identities. [READ-3, CLASS-9,
+CLASS-10, PAIR-1]
+
+The harness derives this value from its checked association account. call_block is the
+original Text content index, and statement names the accepted Binding. CallId and
+StatementRef are separately validated identities, not aliases whose sequence must be
+made equal by the codec. Any zero-noun binding in an Accepted reply remains a malformed
+classifier result and cannot construct this refusal. Another binding's noun cannot
+satisfy this requirement. The floor carrier grants no pair, store read
+or model-facing result. [CLASS-2, CLASS-8, STORE-5, PAIR-1]
+
 ToolInterrupt becomes `ToolInterrupt { by: KillCause }`, allowing only unload or
 flow_failure on this command. Add KillCause::FlowFailure with wire spelling
 flow_failure. It means the live gate contained the call because the serving flow failed.
@@ -598,6 +618,7 @@ both absent. The floor defines no second unload payload or operator_leave spelli
 | TYPES-LIMITS | Exact-bound and one-byte-over socket fixtures | Permit over-bound allocation or silently truncate |
 | TYPES-CLASSIFIER | Compile pin plus valid, rejected, failed, and wrong-target corpus | Reuse the state request counter or erase target |
 | TYPES-INPUT | Round trips consumed by harness and gate | Conflate live-gate flow_failure with gate-death fault, encode it as unload, or lose input attribution |
+| TYPES-RECALL-REFUSAL | Exact tagged bytes, identity round trips and strict invalid-shape corpus | Lose call_block or corrected StatementRef, accept zero nouns or valid recall shape, change detail, accept unknown/duplicate fields or invent a subject |
 
 The fixture dictionary is exactly scheme_id fixture-read/1 with verbs [read] and a
 recorded SHA-256 of its fixture artifact. It is accepted only by the test constructor.
@@ -806,9 +827,10 @@ config_sha256} and SavePointCommit {capture_id} on the existing lifecycle channe
 Existing SavePointTaken/Left retain their role as outcomes. Replace SavePointReport with
 {start:StartIdentity, capture_id:DecimalU64, event_run:RunId,
 event_sequence:DecimalU64}. The event fields name the confirmed save_point record. The
-captured source frontier appears once, at start.position. These fields replace the old
-one-file name, save_point, run, sequence, turn, event_run and position fields, not
-aliases for them. Only a Published capture produces this report. Diagnostic takes no
+captured content SourcePosition appears once, at start.position. It is not the harness's
+frozen trace boundary. These fields replace the old one-file name, save_point, run,
+sequence, turn, event_run and position fields, not aliases for them. Only a Published
+capture produces this report. Diagnostic takes no
 save point and uses Left.no_state without a report. SavePointNotTaken remains for
 explicit operation refusal. Its missing snapshot/finished use remains under R20-6.
 Prepared is an admin request to confirm a frozen healthy capture. Commit is the worker's

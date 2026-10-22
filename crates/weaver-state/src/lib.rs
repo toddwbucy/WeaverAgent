@@ -12,6 +12,7 @@
 
 pub mod engine;
 pub mod save_point;
+pub mod serving_bytes;
 pub mod serving_clock;
 mod serving_store;
 mod store;

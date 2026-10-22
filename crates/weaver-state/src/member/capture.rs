@@ -6,7 +6,7 @@ use super::{
     room::{Room, WriteFault},
 };
 use std::io;
-use weaver_state::engine::serving_sqlite::ServingSqlite;
+use weaver_state::{engine::serving_sqlite::ServingSqlite, serving_bytes::BufferBytes};
 use weaver_types::state_flow::*;
 
 #[derive(Default)]
@@ -31,6 +31,23 @@ pub(super) enum Capture {
 }
 
 impl Capture {
+    /// The image Vec lives only inside snapshot. A held disk file is not RAM;
+    /// only these actual capture-owned strings remain at observation finish.
+    pub(super) fn held_bytes(&self) -> BufferBytes {
+        let mut held = BufferBytes::default();
+        match self {
+            Self::Held { name, .. } => held.add(name.len()),
+            Self::Finished {
+                name, _admin_hash, ..
+            } => {
+                held.add(name.len());
+                held.add(_admin_hash.as_str().len());
+            }
+            Self::None | Self::Refused { .. } => {}
+        }
+        held
+    }
+
     pub(super) fn held(&self) -> bool {
         matches!(self, Self::Held { .. } | Self::Finished { .. })
     }
@@ -78,18 +95,31 @@ impl Capture {
                 "zero capture ID",
             ));
         }
+        sample.capture_begin()?;
         sample.phase_begin(PhaseName::Capture)?;
+        #[cfg(test)]
+        super::tests::timing::mark("serialize");
         let image = store.image();
+        if let Ok(image) = &image {
+            // bounded_image makes one Rust Vec after SQLite serialization. Its
+            // borrowed room write adds no copy, even if that write later refuses.
+            sample.copied.add(image.len());
+        }
+        #[cfg(test)]
+        let image = super::tests::timing::image_result(image);
         sample.phase_end(PhaseName::Capture)?;
         let image = match image {
             Ok(image) => image,
             Err(error) => {
+                sample.capture_end()?;
                 *self = Self::Refused { request, id };
                 return Ok(refused(error.code, &error.detail));
             }
         };
         let position = store.position().map_err(|e| invalid(e.to_string()))?;
         sample.phase_begin(PhaseName::Filesystem)?;
+        #[cfg(test)]
+        super::tests::timing::mark("write");
         let written = room.write_part(id, &image);
         let name = match written {
             Ok(name) => name,
@@ -97,6 +127,9 @@ impl Capture {
             Err(WriteFault::Refused(error)) => {
                 room.clear_remnants()?;
                 sample.phase_end(PhaseName::Filesystem)?;
+                #[cfg(test)]
+                super::tests::timing::mark("cleanup_done");
+                sample.capture_end()?;
                 *self = Self::Refused { request, id };
                 return Ok(refused(
                     CaptureRefusalCode::SnapshotFailed,
@@ -105,6 +138,7 @@ impl Capture {
             }
         };
         sample.phase_end(PhaseName::Filesystem)?;
+        sample.capture_end()?;
         let size_bytes = (image.len() as u64).into();
         *self = Self::Held {
             request,

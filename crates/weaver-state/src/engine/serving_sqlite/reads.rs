@@ -4,6 +4,7 @@
 //! decodes only that already bounded result. Neither port exposes a partial result.
 
 use super::ServingSqlite;
+use crate::serving_bytes::BufferBytes;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::io::{self, Write};
 use weaver_types::state_flow::*;
@@ -47,7 +48,7 @@ macro_rules! json_cell {
 use {json_cell, value};
 
 pub(super) fn query(store: &ServingSqlite, selector: &ReadSelector) -> Result<QueryResult> {
-    let bytes = query_encoded(store, selector)?;
+    let bytes = query_encoded(store, selector, None)?;
     decode_strict(
         std::str::from_utf8(&bytes)
             .map_err(|_| ReadFailure::ComponentCorruption("invalid encoded result UTF-8"))?,
@@ -55,76 +56,84 @@ pub(super) fn query(store: &ServingSqlite, selector: &ReadSelector) -> Result<Qu
     .map_err(|_| ReadFailure::ComponentCorruption("invalid encoded query result"))
 }
 
-pub(super) fn query_encoded(store: &ServingSqlite, selector: &ReadSelector) -> Result<Vec<u8>> {
+pub(super) fn query_encoded(
+    store: &ServingSqlite,
+    selector: &ReadSelector,
+    copied: Option<&mut BufferBytes>,
+) -> Result<Vec<u8>> {
     selector.validate_shape()?;
-    let tx = store.connection.unchecked_transaction()?;
     let mut out = Output::new(store.read_limits.max_result_bytes)?;
-    match selector {
-        ReadSelector::History {
-            noun,
-            verb,
-            condition,
-        } => content::history(&tx, &mut out, noun, verb.as_deref(), condition.as_deref())?,
-        ReadSelector::Condition { condition } => content::condition(&tx, &mut out, condition)?,
-        ReadSelector::Subjects { nouns } => content::subjects(&tx, &mut out, nouns)?,
-        ReadSelector::Statement { statement } => content::statement(&tx, &mut out, statement)?,
-        ReadSelector::Conversation { last_turns } => {
-            content::conversation(&tx, &mut out, *last_turns)?
+    out.copied = copied;
+    let result = (|| -> Result<()> {
+        let tx = store.connection.unchecked_transaction()?;
+        match selector {
+            ReadSelector::History {
+                noun,
+                verb,
+                condition,
+            } => content::history(&tx, &mut out, noun, verb.as_deref(), condition.as_deref())?,
+            ReadSelector::Condition { condition } => content::condition(&tx, &mut out, condition)?,
+            ReadSelector::Subjects { nouns } => content::subjects(&tx, &mut out, nouns)?,
+            ReadSelector::Statement { statement } => content::statement(&tx, &mut out, statement)?,
+            ReadSelector::Conversation { last_turns } => {
+                content::conversation(&tx, &mut out, *last_turns)?
+            }
+            ReadSelector::OpenPairs {} => content::open_pairs(&tx, &mut out)?,
+            ReadSelector::Span {
+                seed_id,
+                local_id,
+                revision,
+            } => marks::span(
+                &tx,
+                &store.context.seed_id,
+                &mut out,
+                &SpanRef {
+                    seed_id: seed_id.clone(),
+                    local_id: *local_id,
+                    revision: *revision,
+                },
+            )?,
+            ReadSelector::SystemPrompt {} => marks::span(
+                &tx,
+                &store.context.seed_id,
+                &mut out,
+                &SpanRef {
+                    seed_id: store.context.seed_id.clone(),
+                    local_id: 0.into(),
+                    revision: 1.into(),
+                },
+            )?,
+            ReadSelector::Marks {} => marks::marks(&tx, &store.context.seed_id, &mut out)?,
+            ReadSelector::SpanPreview { span, through } => {
+                marks::preview(&tx, &store.context.seed_id, &mut out, span, through)?
+            }
+            ReadSelector::PlanCurrent {} => plans::current(&tx, &store.context.seed_id, &mut out)?,
+            ReadSelector::Plan { plan } => {
+                plans::historical(&tx, &store.context.seed_id, &mut out, plan)?
+            }
+            ReadSelector::StepSuccessor {
+                plan,
+                previous_step,
+            } => plans::successor(
+                &tx,
+                &store.context.seed_id,
+                &mut out,
+                plan,
+                previous_step.as_ref(),
+            )?,
+            ReadSelector::PlanFlags { plan, after } => {
+                plans::flags(&tx, &store.context.seed_id, &mut out, plan, after)?
+            }
+            ReadSelector::Observations {
+                run,
+                after,
+                through,
+            } => observations(&tx, &mut out, run, *after, *through)?,
         }
-        ReadSelector::OpenPairs {} => content::open_pairs(&tx, &mut out)?,
-        ReadSelector::Span {
-            seed_id,
-            local_id,
-            revision,
-        } => marks::span(
-            &tx,
-            &store.context.seed_id,
-            &mut out,
-            &SpanRef {
-                seed_id: seed_id.clone(),
-                local_id: *local_id,
-                revision: *revision,
-            },
-        )?,
-        ReadSelector::SystemPrompt {} => marks::span(
-            &tx,
-            &store.context.seed_id,
-            &mut out,
-            &SpanRef {
-                seed_id: store.context.seed_id.clone(),
-                local_id: 0.into(),
-                revision: 1.into(),
-            },
-        )?,
-        ReadSelector::Marks {} => marks::marks(&tx, &store.context.seed_id, &mut out)?,
-        ReadSelector::SpanPreview { span, through } => {
-            marks::preview(&tx, &store.context.seed_id, &mut out, span, through)?
-        }
-        ReadSelector::PlanCurrent {} => plans::current(&tx, &store.context.seed_id, &mut out)?,
-        ReadSelector::Plan { plan } => {
-            plans::historical(&tx, &store.context.seed_id, &mut out, plan)?
-        }
-        ReadSelector::StepSuccessor {
-            plan,
-            previous_step,
-        } => plans::successor(
-            &tx,
-            &store.context.seed_id,
-            &mut out,
-            plan,
-            previous_step.as_ref(),
-        )?,
-        ReadSelector::PlanFlags { plan, after } => {
-            plans::flags(&tx, &store.context.seed_id, &mut out, plan, after)?
-        }
-        ReadSelector::Observations {
-            run,
-            after,
-            through,
-        } => observations(&tx, &mut out, run, *after, *through)?,
-    }
-    tx.commit()?;
-    Ok(out.bytes)
+        tx.commit()?;
+        Ok(())
+    })();
+    result.map(|()| out.bytes)
 }
 
 /// SQL keys never leave these helpers. Stored malformed counters are corruption.
@@ -232,24 +241,33 @@ pub(super) fn position(connection: &Connection) -> Result<Option<SourcePosition>
 pub(super) fn held(connection: &Connection) -> Result<DecimalU64> {
     nonnegative(connection.query_row("SELECT COUNT(*) FROM content_block", [], |row| row.get(0))?)
 }
-pub(super) fn shape(connection: &Connection, max_bytes: DecimalU64) -> Result<Vec<ShapeRow>> {
+pub(super) fn shape(
+    connection: &Connection,
+    max_bytes: DecimalU64,
+    copied: Option<&mut BufferBytes>,
+) -> Result<Vec<ShapeRow>> {
     let mut out = Output::new(max_bytes)?;
-    out.raw("[")?;
-    let mut statement=connection.prepare("SELECT run,kind,COUNT(*) AS count FROM content_block WHERE source_kind='event' GROUP BY run,kind ORDER BY MIN(id)")?;
-    let mut rows = statement.query([])?;
-    let mut first = true;
-    while let Some(row) = rows.next()? {
-        out.comma(&mut first)?;
-        value!(
-            out,
-            ShapeRow {
-                run: text_cell(row, "run", &out)?.into(),
-                kind: text_cell(row, "kind", &out)?.into(),
-                count: nonnegative(row.get("count")?)?
-            }
-        )?;
-    }
-    out.raw("]")?;
+    out.copied = copied;
+    let result = (|| -> Result<()> {
+        out.raw("[")?;
+        let mut statement=connection.prepare("SELECT run,kind,COUNT(*) AS count FROM content_block WHERE source_kind='event' GROUP BY run,kind ORDER BY MIN(id)")?;
+        let mut rows = statement.query([])?;
+        let mut first = true;
+        while let Some(row) = rows.next()? {
+            out.comma(&mut first)?;
+            value!(
+                out,
+                ShapeRow {
+                    run: text_cell(row, "run", &out)?.into(),
+                    kind: text_cell(row, "kind", &out)?.into(),
+                    count: nonnegative(row.get("count")?)?
+                }
+            )?;
+        }
+        out.raw("]")?;
+        Ok(())
+    })();
+    result?;
     serde_json::from_slice(&out.bytes)
         .map_err(|_| ReadFailure::ComponentCorruption("invalid shape result"))
 }
@@ -268,7 +286,7 @@ fn observations(
     let member: MemberObservationIdentity =
         json_cell!(out, row, "member_observation", MemberObservationIdentity);
     member
-        .validate()
+        .validate_historical()
         .map_err(|_| ReadFailure::ComponentCorruption("invalid member observation"))?;
     let mut max_statement = connection
         .prepare("SELECT MAX(operation_id) AS largest FROM operation_observation WHERE run=?1")?;
@@ -365,7 +383,7 @@ pub(super) fn verify_image_observations(connection: &Connection) -> Result<()> {
         let member: MemberObservationIdentity =
             json_cell!(&out, row, "member_observation", MemberObservationIdentity);
         member
-            .validate()
+            .validate_historical()
             .map_err(|_| ReadFailure::ComponentCorruption("invalid member observation"))?;
         let mut records = connection.prepare(
             "SELECT operation_id,request_id,operation,source_run,source_sequence,
@@ -404,18 +422,20 @@ pub(super) fn verify_image_observations(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-struct Output {
+struct Output<'a> {
     bytes: Vec<u8>,
     bound: usize,
     failure: Option<ReadRefusalCode>,
+    copied: Option<&'a mut BufferBytes>,
 }
-impl Output {
+impl Output<'_> {
     fn new(bound: DecimalU64) -> Result<Self> {
         let bound = usize::try_from(bound.0).map_err(|_| ReadRefusalCode::ResultTooLarge)?;
         Ok(Self {
             bytes: Vec::new(),
             bound,
             failure: None,
+            copied: None,
         })
     }
     fn remaining(&self) -> usize {
@@ -449,7 +469,7 @@ impl Output {
         })
     }
 }
-impl Write for Output {
+impl Write for Output<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if bytes.len() > self.remaining() {
             self.failure = Some(ReadRefusalCode::ResultTooLarge);
@@ -470,6 +490,9 @@ impl Write for Output {
             }
         }
         self.bytes.extend_from_slice(bytes);
+        if let Some(copied) = &mut self.copied {
+            copied.add(bytes.len());
+        }
         Ok(bytes.len())
     }
     fn flush(&mut self) -> io::Result<()> {
