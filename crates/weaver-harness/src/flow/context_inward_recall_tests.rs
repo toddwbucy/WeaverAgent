@@ -290,6 +290,20 @@ fn inward_waits_for_both_request_receipts_and_keeps_exact_read_and_terminal() {
         for _ in 0..24 {
             pending.step().unwrap();
         }
+        // Inspect the real ledger while the context also retains its filing
+        // leg. This pins the ledger's local readiness contract independently
+        // of the outer driver's competing admission guard.
+        assert!(
+            pending
+                .pairs
+                .output
+                .input
+                .run
+                .context
+                .pairs
+                .next_ready()
+                .is_none()
+        );
         assert_eq!(
             pending
                 .pairs
