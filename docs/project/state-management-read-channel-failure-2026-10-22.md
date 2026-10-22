@@ -10,7 +10,7 @@ activated.
 
 Implements: weaver-harness-Spec-amendment HARNESS-RECALL, HARNESS-RECORD-LIFETIME,
 HARNESS-PUMP and HARNESS-HALT's failure attribution table, limited to this boundary.
-Author grades remain pending compilation, affected gates and protective mutations.
+Author grade: conforms for the retained-channel failure inspection boundary.
 This record does not claim Planner verification or production qualification.
 
 The implementation adds one passive check to RecordingContext::live. After the existing
@@ -50,8 +50,10 @@ recall ownership tests continue to prohibit generic reduction or a competing aut
 
 ## Validation and protective changes
 
-Validation is pending. Root owns the serialized lock, Cargo and formatting gates,
-using --locked and a private target. No runtime result is asserted by this record yet.
+Olympus used private target /tmp/weaver-146-read-channel-target and --locked. The full
+joined harness suite passed 1308 tests with 18 inherited ignored cases, including all
+seven new cases. Strict all-target harness clippy, formatting and lock checks passed.
+The tested join includes begin-task through da2b445 and the journal followup c29caca.
 
 The mutation plan removes the passive check and runs two distinct expectations. The
 actual pump and boot EOF tests are expected to pass unchanged, establishing that their
@@ -60,10 +62,16 @@ fail. Moving the check after deadline expiry must lose the pre-observed channel 
 Moving it ahead of a known recorder failure must violate existing precedence. Changing
 the channel failure mapping to a bound reason must fail the real pump regression.
 
-All behavioral mutations must compile, fail their named assertion when applicable and
-pass after exact source restoration. The positive baseline probes are recorded as
-passes, not counted as protective failures. Review row 7's broader claim is not treated
-as reproduced unless those results establish it.
+All four protective mutations compiled, failed their named assertions and passed after
+exact-byte restoration. Both positive baseline probes compiled and passed with the new
+guard removed, then passed again after restoration. Those two passes establish that
+normal common-pump and boot EOF mapping pre-existed this change. They are not counted
+as protective failures or presented as two runtime bugs fixed by the new guard.
+
+Logs, separate mutation and baseline-probe recipes/results, and source hashes are in the
+shared issue #146 evidence deposit under read-channel. The author and an independent
+Executor inspected the failure priority and continuation boundary. No Planner grade or
+production qualification is claimed.
 
 Capture-frontier semantics, read phase representation, neutral fixture relocation and
 number/SourcePosition cleanup remain separate review dispositions. This change adds no

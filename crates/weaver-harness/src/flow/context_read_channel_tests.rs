@@ -57,14 +57,21 @@ fn assert_failed(
     assert_eq!(first.point, HaltPoint::StateReply);
     let author = member.run.context.pending_author().unwrap();
     assert_eq!(author.ticket, held.ticket);
-    assert_eq!(serde_json::to_string(&author.event.payload).unwrap(), held.payload);
+    assert_eq!(
+        serde_json::to_string(&author.event.payload).unwrap(),
+        held.payload
+    );
     assert_eq!(member.bound(), held.bound);
     assert_eq!(member.requests.len(), 2);
     assert!(member.records(Kind::Recall).is_empty());
     assert!(member.run.context.flow.operation_completion().is_none());
     assert!(member.run.context.flow.ledger().facts().next().is_none());
     assert_eq!(
-        member.run.context.take_read(&mut member.run.clock).unwrap_err(),
+        member
+            .run
+            .context
+            .take_read(&mut member.run.clock)
+            .unwrap_err(),
         failure
     );
 }
@@ -92,15 +99,21 @@ fn recall_local_advance_observes_real_parser_failure_without_reducing_flow() {
         // Deliberately stop between the real channel latch and its production
         // coordinator mapping. This is a passive-status fixture, not a claim
         // that transport_one normally drops this error.
-        let channel = member.run.context.flow
+        let channel = member
+            .run
+            .context
+            .flow
             .probe_state_without_failure_mapping_for_test(&mut member.run.clock)
             .unwrap_err();
         assert_eq!(channel.point, ChannelPoint::Reply);
-        assert_eq!(channel.kind, if malformed {
-            ChannelFailureKind::Protocol
-        } else {
-            ChannelFailureKind::Carry
-        });
+        assert_eq!(
+            channel.kind,
+            if malformed {
+                ChannelFailureKind::Protocol
+            } else {
+                ChannelFailureKind::Carry
+            }
+        );
         assert!(member.run.context.flow.failure().is_none());
         let failure = member.advance().unwrap_err();
         assert!(member.now() < held.bound.deadline_ns());
@@ -113,10 +126,17 @@ fn recall_observed_state_failure_keeps_its_cause_after_the_read_bound_passes() {
     let mut member = Member::new();
     let held = pending(&mut member);
     break_state(&mut member, false);
-    member.run.context.flow
+    member
+        .run
+        .context
+        .flow
         .probe_state_without_failure_mapping_for_test(&mut member.run.clock)
         .unwrap_err();
-    member.run.clock.advance_to(held.bound.deadline_ns()).unwrap();
+    member
+        .run
+        .clock
+        .advance_to(held.bound.deadline_ns())
+        .unwrap();
     let failure = member.advance().unwrap_err();
     assert_failed(&mut member, &held, failure, FlowHaltReason::CarryFailed);
 }
@@ -133,12 +153,18 @@ fn recall_later_channel_failure_cannot_replace_the_first_context_latch() {
     );
     let evidence = member.run.context.halt().unwrap().first().clone();
     break_state(&mut member, false);
-    member.run.context.flow
+    member
+        .run
+        .context
+        .flow
         .probe_state_without_failure_mapping_for_test(&mut member.run.clock)
         .unwrap_err();
     assert_eq!(member.advance().unwrap_err(), first);
     assert_eq!(member.run.context.halt().unwrap().first(), &evidence);
-    assert_eq!(member.run.context.pending_author().unwrap().ticket, held.ticket);
+    assert_eq!(
+        member.run.context.pending_author().unwrap().ticket,
+        held.ticket
+    );
     assert_eq!(member.bound(), held.bound);
 }
 
@@ -153,21 +179,36 @@ fn recall_known_recorder_failure_keeps_priority_over_an_unmapped_state_failure()
         if context.barrier.drain_status(&mut context.budget).is_err() {
             break;
         }
-        assert!(Instant::now() < watch, "writer did not observe its closed sink");
+        assert!(
+            Instant::now() < watch,
+            "writer did not observe its closed sink"
+        );
         std::thread::yield_now();
     }
     break_state(&mut member, false);
-    member.run.context.flow
+    member
+        .run
+        .context
+        .flow
         .probe_state_without_failure_mapping_for_test(&mut member.run.clock)
         .unwrap_err();
     let failure = member.advance().unwrap_err();
-    assert!(matches!(failure, RunFailure::Flow {
-        reason: FlowHaltReason::TraceFailed,
-        point: HaltPoint::Author,
-        ..
-    }));
-    assert_eq!(member.run.context.halt().unwrap().first().reason, FlowHaltReason::TraceFailed);
-    assert_eq!(member.run.context.pending_author().unwrap().ticket, held.ticket);
+    assert!(matches!(
+        failure,
+        RunFailure::Flow {
+            reason: FlowHaltReason::TraceFailed,
+            point: HaltPoint::Author,
+            ..
+        }
+    ));
+    assert_eq!(
+        member.run.context.halt().unwrap().first().reason,
+        FlowHaltReason::TraceFailed
+    );
+    assert_eq!(
+        member.run.context.pending_author().unwrap().ticket,
+        held.ticket
+    );
     assert_eq!(member.bound(), held.bound);
 }
 
@@ -177,25 +218,49 @@ fn recall_healthy_channel_preserves_lifecycle_wait_and_original_control_expiry()
     let held = pending(&mut member);
     let now = member.now();
     let leave = AbsoluteBound::after(now, 10).unwrap();
-    member.run.context.arm(PumpDeadline::Leave, leave, &mut member.run.clock).unwrap();
+    member
+        .run
+        .context
+        .arm(PumpDeadline::Leave, leave, &mut member.run.clock)
+        .unwrap();
     member.run.clock.advance_to(leave.deadline_ns()).unwrap();
     for _ in 0..2 {
-        assert_eq!(member.advance().unwrap_err(), RunFailure::Wait {
-            key: PumpDeadline::Leave,
-            bound: leave,
-        });
+        assert_eq!(
+            member.advance().unwrap_err(),
+            RunFailure::Wait {
+                key: PumpDeadline::Leave,
+                bound: leave,
+            }
+        );
         assert!(member.run.context.halt().is_none());
-        assert_eq!(member.run.context.pending_author().unwrap().ticket, held.ticket);
+        assert_eq!(
+            member.run.context.pending_author().unwrap().ticket,
+            held.ticket
+        );
         assert_eq!(member.bound(), held.bound);
     }
-    member.run.context.complete_wait(PumpDeadline::Leave).unwrap();
-    member.run.clock.advance_to(held.bound.deadline_ns()).unwrap();
-    assert!(matches!(member.advance(), Err(RunFailure::Flow {
-        reason: FlowHaltReason::ControlBound,
-        point: HaltPoint::Barrier,
-        ..
-    })));
+    member
+        .run
+        .context
+        .complete_wait(PumpDeadline::Leave)
+        .unwrap();
+    member
+        .run
+        .clock
+        .advance_to(held.bound.deadline_ns())
+        .unwrap();
+    assert!(matches!(
+        member.advance(),
+        Err(RunFailure::Flow {
+            reason: FlowHaltReason::ControlBound,
+            point: HaltPoint::Barrier,
+            ..
+        })
+    ));
     assert!(member.run.context.flow.state().failure().is_none());
-    assert_eq!(member.run.context.pending_author().unwrap().ticket, held.ticket);
+    assert_eq!(
+        member.run.context.pending_author().unwrap().ticket,
+        held.ticket
+    );
     assert_eq!(member.bound(), held.bound);
 }
