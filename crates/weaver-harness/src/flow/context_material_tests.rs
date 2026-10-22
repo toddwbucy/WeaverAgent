@@ -1055,6 +1055,68 @@ fn journal_retains_real_read_provenance_and_keeps_repeated_pairs_separate() {
     crate::flow::journal::exercise_material(held.into_units(), foreign.remove(0));
 }
 
+fn journal_mixed_request_unit(first_recall: bool) -> SelectedUnit {
+    let mut member = Member::new();
+    let mut entry = filtered();
+    let recall = |call| {
+        pair(
+            call,
+            1,
+            s::PairRequest::Recall {
+                subject: "file".into(),
+            },
+        )
+    };
+    let first = if first_recall {
+        recall(0)
+    } else {
+        external(0, 1)
+    };
+    let second = recall(1);
+    let expected = vec![
+        s::MaterialRef::Text {
+            source: s::ContentRef::Event { block_id: block(5) },
+            span: span(13, 24),
+        },
+        s::MaterialRef::Request {
+            call_id: first.call_id.clone(),
+        },
+        s::MaterialRef::Returned {
+            call_id: first.call_id.clone(),
+        },
+        s::MaterialRef::Request {
+            call_id: second.call_id.clone(),
+        },
+        s::MaterialRef::Returned {
+            call_id: second.call_id.clone(),
+        },
+    ];
+    entry.pairs = vec![first, second];
+    let proof = read(&mut member, history(), entries(vec![entry]));
+    let mut units = hold(&mut member, proof).into_units();
+    assert_eq!(units.len(), 1);
+    let unit = units.remove(0);
+    assert_eq!(unit.sources(), expected);
+    assert_eq!(
+        unit.source_map()
+            .iter()
+            .map(|mapping| mapping.material.clone())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    unit
+}
+
+#[test]
+fn journal_reserves_external_then_recall_in_source_map_order() {
+    crate::flow::journal::exercise_material_map_order(journal_mixed_request_unit(false));
+}
+
+#[test]
+fn journal_reserves_two_recalls_in_source_map_order() {
+    crate::flow::journal::exercise_material_map_order(journal_mixed_request_unit(true));
+}
+
 fn step_query_entry() -> s::ReadEntry {
     let mut entry = selected(filtered(), &span_ref(), span(13, 24));
     let mut source = event(5, "loop.instruction");
