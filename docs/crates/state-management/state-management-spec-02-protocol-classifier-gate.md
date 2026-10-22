@@ -1,9 +1,8 @@
 # State management Spec 02 - STE100 protocol, classifier and input check
 
-**Status:** DRAFT amendment for review. The merged clauses remain in force until
-this amendment is approved and merged.
+**Status:** MERGED.
 
-**Landing PR:** #182 for the merged base, #213 for this proposed amendment
+**Landing PR:** #213
 
 **Version:** 0.14 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
 **Parent:** state-management-primitives-PRD
@@ -723,7 +722,7 @@ SEAM-2]
 | C02-2 | TEMPLATE-CHECK accepts canonical TemplateSpec text for template targets, bindings:[] on accepted template replies, and complete inventory bytes in load. Text targets still require nonempty bindings. |
 | C02-3 | HARNESS-CLASSIFY/CLOCK/PUMP add decision_wait, decision_bound and blocked_stage decision. Each result/receipt barrier has one absolute deadline, disarmed during decode or tool execution and never reset by partial traffic. |
 | C02-4 | FlowObservation adds repair_requested and repair_exhausted phases, failed_corrections and retry_cap only for those phases. Repair records require source_id. Other phases reject those fields. |
-| C02-5 | RefusalRecord gains ProtocolRepair {source_id,case,detail}, case correction_call, empty_correction, missing_tool_statement or ambiguous_tool_statement. These use kind refusal and authorize no filing or halt. EMPTY-CORRECTION defines the added case and its source attribution. |
+| C02-5 | RefusalRecord gains ProtocolRepair {source_id,case,detail}, case correction_call, empty_correction, missing_tool_statement or ambiguous_tool_statement. These use kind refusal and authorize no filing or halt. EMPTY-CORRECTION defines the added case. TYPES-INPUT defines source_id for each case. |
 
 The foundation port's logical request/reply shapes are unchanged. C02-1 through C02-5
 now have their named owning clauses in the assembled foundation. Spec 05 supplies inward

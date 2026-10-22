@@ -1,9 +1,8 @@
 # weaver-types Spec: dependable-flow amendment
 
-**Status:** DRAFT amendment for review. The merged clauses remain in force until
-this amendment is approved and merged.
+**Status:** MERGED.
 
-**Landing PR:** #182 for the merged base, #213 for this proposed amendment
+**Landing PR:** #213
 
 **Version:** 0.23 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
@@ -525,6 +524,23 @@ with seam protocol_repair and case correction_call, empty_correction,
 missing_tool_statement or ambiguous_tool_statement. Both use the existing trace kind
 refusal. A correct protocol refusal grants neither filing nor component halt.
 [CLASS-9, CLASS-10]
+
+source_id names evidence according to the case. For correction_call, it is the
+correction generation's SourcePosition.block_id, block zero of the recorded
+message.assistant. That block exists because the pass attempted a call. For
+empty_correction, it is the current rejected original Text source. The empty
+correction has no block, and no block is invented for it.
+[CLASS-9, CLASS-10]
+
+For missing_tool_statement and ambiguous_tool_statement at initial association,
+source_id names the recovered ToolCall block. For ambiguous_tool_statement after
+repair, it names the original rejected Text whose correction cannot supply the held
+external call's one-statement association. These IDs identify refusal evidence, not
+an accepted Binding or permission to dispatch. [CLASS-9, CLASS-10, PAIR-1]
+
+Harness-to-trace fixtures cover each case and both ambiguous_tool_statement contexts.
+Changing the required source_id to another generation or block must fail those
+fixtures. [CLASS-9, CLASS-10, FLOW-3]
 
 ProtocolRepairCase::EmptyCorrection serializes as empty_correction. Spec 02's
 EMPTY-CORRECTION owns its meaning and source attribution. The trace carries that

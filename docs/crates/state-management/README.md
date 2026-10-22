@@ -32,7 +32,7 @@ work remains at the deferred seams already named by the PRD and these Specs.
 | --- | --- |
 | [State Management Primitives - PRD](state-management-primitives-prd-v0_6.md) | 0.6 |
 | [State management foundation - Spec](state-management-foundation-Spec.md) | 0.18 |
-| [State management Spec 02 - STE100 protocol, classifier and input check](state-management-spec-02-protocol-classifier-gate.md) | 0.14 proposed in #213 |
+| [State management Spec 02 - STE100 protocol, classifier and input check](state-management-spec-02-protocol-classifier-gate.md) | 0.14 |
 | [State management Spec 05 - Tool-call pairs](state-management-spec-05-tool-pairs.md) | 0.8 |
 | [State Management Spec 06 - Marks, Place, and the Decode Boundary](state-management-spec-06-marks-renderer-engine.md) | 0.11 |
 | [State Management Spec 07 - Locked Plan and Forward Flags](state-management-spec-07-plan-forward-flags.md) | 0.12 |
@@ -59,7 +59,7 @@ contract. Existing code continues to use the previous contracts until the named 
 | [weaver-spu Spec: placement measurement and STE100 duty amendment](weaver-spu-Spec-amendment.md) | 0.5 |
 | [weaver-state Spec: flow, schema, read, and persistence amendment](weaver-state-Spec-amendment.md) | 0.18 |
 | [weaver-trace Spec: dependable-flow amendment](weaver-trace-Spec-amendment.md) | 0.21 |
-| [weaver-types Spec: dependable-flow amendment](weaver-types-Spec-amendment.md) | 0.23 proposed in #213 |
+| [weaver-types Spec: dependable-flow amendment](weaver-types-Spec-amendment.md) | 0.23 |
 
 The frozen [graphable paper v0.14][paper] is supporting theory. The PRD and later
 operator rulings take precedence over its alternatives. Local audits, review records,
