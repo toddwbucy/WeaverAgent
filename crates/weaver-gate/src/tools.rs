@@ -378,9 +378,7 @@ fn run_in_home(
     // execution not contained.
     let reaped = if contained {
         let _ = nix::sys::signal::kill(group, nix::sys::signal::Signal::SIGKILL);
-        reap_within(&mut child, deadline, |slice| {
-            supervision.wait(slice, Some(deadline))
-        })
+        reap_supervised(&mut child, deadline, &mut supervision)
     } else {
         None
     };
@@ -451,6 +449,19 @@ fn reap_within(
         }
         progress(remaining.min(std::time::Duration::from_millis(10)));
     }
+}
+
+/// Keep the actual leader-reap path and its channel progress under one bound.
+/// The helper is also the test boundary: fixtures exercise this exact forwarding
+/// call instead of copying the closure and leaving production unprotected.
+fn reap_supervised(
+    child: &mut std::process::Child,
+    deadline: std::time::Instant,
+    supervision: &mut ContainmentSupervisor<'_>,
+) -> Option<std::io::Result<std::process::ExitStatus>> {
+    reap_within(child, deadline, |slice| {
+        supervision.wait(slice, Some(deadline))
+    })
 }
 
 /// One bounded channel operation per slice. A misplaced frame retains one
