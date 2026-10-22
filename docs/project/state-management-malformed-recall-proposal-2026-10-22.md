@@ -124,6 +124,6 @@ Date filed values, 49 local link targets, added prose without semicolons and dif
 whitespace. A second author reading found no concrete semantic contradiction in the
 proposed rule. This is not a Planner grade or operator approval.
 
-No Cargo command, source mutation, runtime test or qualification run is claimed. The
-lock gate, the Planner's verification and the operator's election remain pending before
-this proposal can authorize implementation.
+The lock gate passed. Draft PR #241 retains this proposal and the required evidence
+list. No Cargo test, runtime source change or qualification run is claimed. Planner
+verification, operator election and merge remain required before implementation.
