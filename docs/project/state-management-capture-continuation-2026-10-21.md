@@ -24,23 +24,53 @@ publication owner.
 
 The Planner's review identified that encoding this obligation as a phase also changed
 cancellation at a second clock boundary. The revised owner keeps the obligation
-separate. Cancellation validates its capture identity before settling owned work. Its
-first lifecycle check retains the existing retry contract: a Wait requires the parent
-to re-issue cancellation. After that admission, enqueue and ownership installation have
-no second recoverable check. Cancellation cannot replace an already owned Release.
+separate. Cancellation validates its capture identity before settling owned work. A new
+cancellation checks lifecycle admission once and a Wait requires the parent to re-issue
+it. Enqueue and ownership installation have no second recoverable check. If settlement
+itself admits an already owed Abort, cancellation keeps that accepted continuation
+without another admission check. Cancellation cannot replace an outstanding Release.
 
 The same retained obligation covers original timeouts and results whose actual
 Recorded boundary missed the original deadline. Regression fixtures now interrupt each
 of those two legs at cleanup admission, resume through Leave, and require one correlated
 Abort with the unchanged cleanup bound. Additional cases pin both cancellation clock
 boundaries, wrong-ID refusal before an owed Abort is enqueued, and Release ownership.
-Review: [Planner PR #227 review][planner]. The revised owner passed 1179 harness
+Review: [Planner PR #227 review][planner]. The preceding revision passed 1179 harness
 tests (18 inherited ignored), all-target harness clippy, lock and formatting checks.
 Six compiled protective probes failed and exact restorations passed: dropped retention,
 retention after the wait, skipped resume, a second cancellation yield, wrong-ID
 settlement before admission, and refusal visibility before Aborted. An independent
 source review found no concrete defect in the revised ownership and deadline handling.
 The baseline results below remain tied to the earlier implementation.
+
+## Recorded cleanup and delayed cancellation
+
+The [next review][delayed-cancel] found that the first correction checked cancellation
+admission before settling existing Recorded cleanup. A timely Aborted or CaptureReleased
+could then halt with ControlBound when the parent resumed after the small-control
+deadline. Cancellation now settles that proof immediately after its identity check and
+before checking the remaining deadlines. Consumer scheduling cannot invalidate timely
+Recorded completion. An unfinished cleanup still owns and enforces its original bound.
+
+Settlement can itself enqueue an owed Abort after an original refusal or late result.
+The transition into Aborting proves that this settlement already passed admission.
+Cancellation returns Pending for that owned continuation without sampling a second live
+boundary. The original phase remains intact while a recoverable Wait prevents enqueue.
+The identity check remains first, so a wrong-ID call cannot advance owed cleanup.
+
+Three new real recorder/socket regressions cover timely Aborted, cancellation-driven
+CaptureReleased and ordinary Release completion with a delayed cancellation consumer,
+newly consumed and already pending refusal cleanup across repeated Leave waits, and
+deadline failure for cleanup that has no Recorded result. They check exact retained
+answers, one cleanup request, no renewed bound and no false halt after timely
+completion.
+The updated harness suite passed 1182 tests with 18 inherited ignored cases. Strict
+all-target clippy, formatting, lock and diff checks passed. Three compiled mutations
+failed: restore admission before settlement, recheck after settlement enqueues Abort,
+and bypass admission for an already Aborting owner. Each exact restoration passed.
+Independent source review found no concrete defect. The new logs and source hashes
+are deposited under capture/review2 in the shared evidence directory. The 1179-test
+result and six probes above remain evidence for the preceding revision.
 
 ## Evidence
 
@@ -77,3 +107,5 @@ Issue #146 remains open.
 
 [planner]:
 https://github.com/toddwbucy/WeaverAgent/pull/227#pullrequestreview-5608883320
+[delayed-cancel]:
+https://github.com/toddwbucy/WeaverAgent/pull/227#discussion_r4344359913
