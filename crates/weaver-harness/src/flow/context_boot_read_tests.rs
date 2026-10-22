@@ -944,3 +944,33 @@ fn boot_original_enter_expiry_retains_the_read_and_never_seats_a_head() {
     assert!(fx.member.run.context.read.is_some());
     assert!(fx.member.records(Kind::Recall).is_empty());
 }
+
+#[test]
+fn boot_recall_state_eof_keeps_the_pending_author_and_withholds_boot_head() {
+    let mut boot = BootFixture::new(true);
+    let request = boot.begin();
+    let entry = boot.entry();
+    boot.released(&request, entry);
+    boot.member.fill_trace();
+    assert_eq!(boot.member.advance().unwrap(), ReadProgress::Pending);
+    let bound = boot.member.bound();
+    let ticket = boot.member.run.context.pending_author().unwrap().ticket;
+    boot.member.run.state.shutdown(Shutdown::Both).unwrap();
+    let now = boot.member.now() + 1;
+    let failure = boot.member.pump_at(now, PollFlags::POLLIN).unwrap_err();
+    assert!(matches!(failure, RunFailure::Flow {
+        reason: FlowHaltReason::CarryFailed,
+        point: HaltPoint::StateReply,
+        ..
+    }));
+    assert!(boot.member.now() < bound.deadline_ns());
+    assert!(boot.member.run.context.boot_head.is_none());
+    assert_eq!(
+        boot.member.run.context.finish_boot_read(&mut boot.member.run.clock).unwrap_err(),
+        failure
+    );
+    assert_eq!(boot.member.run.context.pending_author().unwrap().ticket, ticket);
+    assert_eq!(boot.member.bound(), bound);
+    assert_eq!(boot.member.requests.len(), 2);
+    assert!(boot.member.records(Kind::Recall).is_empty());
+}

@@ -1201,6 +1201,20 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     pub(super) fn standing_state(&self) -> Option<&StateChannel> {
         self.state.as_ref()
     }
+
+    /// Isolate the passive channel-latch boundary using the real stream parser.
+    /// Production transport_one maps the error immediately instead of retaining
+    /// this deliberately unmapped intermediate state.
+    #[cfg(test)]
+    pub(super) fn probe_state_without_failure_mapping_for_test(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<(), super::channel::ChannelFailure> {
+        self.state
+            .as_mut()
+            .expect("test has a standing state channel")
+            .progress(&mut || io.now())
+    }
     pub(super) fn standing_classifier(&self) -> Option<&Classifier<P>> {
         self.classifier.as_ref()
     }
