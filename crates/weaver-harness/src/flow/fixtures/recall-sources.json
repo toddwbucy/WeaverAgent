@@ -1,0 +1,3410 @@
+[
+  {
+    "case": "history_filtered_pair_union",
+    "selector": {
+      "history": {
+        "noun": "file",
+        "verb": "read",
+        "condition": null
+      }
+    },
+    "result": {
+      "entries": {
+        "entries": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                },
+                "envelope": {
+                  "session": "session",
+                  "run": "run",
+                  "turn": "turn",
+                  "sequence": "5",
+                  "kind": "message.assistant",
+                  "channel": "output",
+                  "origin": "model",
+                  "subsystem": "harness",
+                  "wall_ms": 0,
+                  "monotonic_ns": "10"
+                },
+                "source_path": [
+                  "content",
+                  {
+                    "index": "2"
+                  }
+                ],
+                "partition_rule_id": "text"
+              }
+            },
+            "raw_block": {
+              "type": "text",
+              "text": "Read file."
+            },
+            "text": "Read file.",
+            "bindings": [
+              {
+                "ordinal": "2",
+                "value": {
+                  "statement_span": {
+                    "start": "0",
+                    "end": "10"
+                  },
+                  "verb": "read",
+                  "verb_span": {
+                    "start": "0",
+                    "end": "4"
+                  },
+                  "condition": null,
+                  "condition_span": null,
+                  "nouns": [
+                    {
+                      "value": "file",
+                      "span": {
+                        "start": "5",
+                        "end": "9"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "selected_span": null,
+            "step_query": null,
+            "pairs": [
+              {
+                "call_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "call": "0"
+                },
+                "statement": {
+                  "block_id": {
+                    "run": "run",
+                    "sequence": "5",
+                    "block": "2"
+                  },
+                  "binding": "2"
+                },
+                "lane": "external",
+                "request": {
+                  "external": {
+                    "name": "sh",
+                    "arguments": "cat file"
+                  }
+                },
+                "fate": "failed",
+                "reason": {
+                  "not_dispatched": {
+                    "cause": "stop"
+                  }
+                },
+                "opening_source": {
+                  "source": {
+                    "block_id": {
+                      "run": "run",
+                      "sequence": "6",
+                      "block": "0"
+                    },
+                    "envelope": {
+                      "session": "session",
+                      "run": "run",
+                      "turn": "turn",
+                      "sequence": "6",
+                      "kind": "tool.call.started",
+                      "channel": "output",
+                      "origin": "model",
+                      "subsystem": "harness",
+                      "wall_ms": 0,
+                      "monotonic_ns": "10"
+                    },
+                    "source_path": [],
+                    "partition_rule_id": "text"
+                  },
+                  "raw_block": {
+                    "call_id": {
+                      "run": "run",
+                      "sequence": "5",
+                      "call": "0"
+                    },
+                    "call_block": "3",
+                    "statement": {
+                      "block_id": {
+                        "run": "run",
+                        "sequence": "5",
+                        "block": "2"
+                      },
+                      "binding": "2"
+                    },
+                    "lane": "external",
+                    "request": {
+                      "external": {
+                        "name": "sh",
+                        "arguments": "cat file"
+                      }
+                    },
+                    "retry_of": null
+                  }
+                },
+                "terminal_source": {
+                  "source": {
+                    "block_id": {
+                      "run": "run",
+                      "sequence": "7",
+                      "block": "0"
+                    },
+                    "envelope": {
+                      "session": "session",
+                      "run": "run",
+                      "turn": "turn",
+                      "sequence": "7",
+                      "kind": "tool.call.completed",
+                      "channel": "output",
+                      "origin": "model",
+                      "subsystem": "harness",
+                      "wall_ms": 0,
+                      "monotonic_ns": "10"
+                    },
+                    "source_path": [],
+                    "partition_rule_id": "text"
+                  },
+                  "raw_block": {
+                    "call_id": {
+                      "run": "run",
+                      "sequence": "5",
+                      "call": "0"
+                    },
+                    "execution": null,
+                    "fate": "failed",
+                    "reason": {
+                      "not_dispatched": {
+                        "cause": "stop"
+                      }
+                    },
+                    "outcome": null,
+                    "loaded_from": null
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                },
+                "envelope": {
+                  "session": "session",
+                  "run": "run",
+                  "turn": "turn",
+                  "sequence": "5",
+                  "kind": "message.assistant",
+                  "channel": "output",
+                  "origin": "model",
+                  "subsystem": "harness",
+                  "wall_ms": 0,
+                  "monotonic_ns": "10"
+                },
+                "source_path": [
+                  "content",
+                  {
+                    "index": "2"
+                  }
+                ],
+                "partition_rule_id": "text"
+              }
+            },
+            "raw_block": {
+              "type": "text",
+              "text": "Read file."
+            },
+            "text": "Read file.",
+            "bindings": [
+              {
+                "ordinal": "7",
+                "value": {
+                  "statement_span": {
+                    "start": "0",
+                    "end": "10"
+                  },
+                  "verb": "read",
+                  "verb_span": {
+                    "start": "0",
+                    "end": "4"
+                  },
+                  "condition": null,
+                  "condition_span": null,
+                  "nouns": [
+                    {
+                      "value": "file",
+                      "span": {
+                        "start": "5",
+                        "end": "9"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "selected_span": null,
+            "step_query": null,
+            "pairs": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "9",
+                  "block": "2"
+                },
+                "envelope": {
+                  "session": "session",
+                  "run": "run",
+                  "turn": "turn",
+                  "sequence": "9",
+                  "kind": "message.assistant",
+                  "channel": "output",
+                  "origin": "model",
+                  "subsystem": "harness",
+                  "wall_ms": 0,
+                  "monotonic_ns": "10"
+                },
+                "source_path": [
+                  "content",
+                  {
+                    "index": "2"
+                  }
+                ],
+                "partition_rule_id": "text"
+              }
+            },
+            "raw_block": {
+              "type": "text",
+              "text": "Read file."
+            },
+            "text": "Read file.",
+            "bindings": [
+              {
+                "ordinal": "1",
+                "value": {
+                  "statement_span": {
+                    "start": "0",
+                    "end": "10"
+                  },
+                  "verb": "read",
+                  "verb_span": {
+                    "start": "0",
+                    "end": "4"
+                  },
+                  "condition": null,
+                  "condition_span": null,
+                  "nouns": [
+                    {
+                      "value": "file",
+                      "span": {
+                        "start": "5",
+                        "end": "9"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "selected_span": null,
+            "step_query": null,
+            "pairs": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                },
+                "envelope": {
+                  "session": "session",
+                  "run": "run",
+                  "turn": "turn",
+                  "sequence": "5",
+                  "kind": "message.assistant",
+                  "channel": "output",
+                  "origin": "model",
+                  "subsystem": "harness",
+                  "wall_ms": 0,
+                  "monotonic_ns": "10"
+                },
+                "source_path": [
+                  "content",
+                  {
+                    "index": "2"
+                  }
+                ],
+                "partition_rule_id": "text"
+              }
+            },
+            "raw_block": {
+              "type": "text",
+              "text": "Read file."
+            },
+            "text": "Read file.",
+            "bindings": [
+              {
+                "ordinal": "2",
+                "value": {
+                  "statement_span": {
+                    "start": "0",
+                    "end": "10"
+                  },
+                  "verb": "read",
+                  "verb_span": {
+                    "start": "0",
+                    "end": "4"
+                  },
+                  "condition": null,
+                  "condition_span": null,
+                  "nouns": [
+                    {
+                      "value": "file",
+                      "span": {
+                        "start": "5",
+                        "end": "9"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "selected_span": null,
+            "step_query": null,
+            "pairs": []
+          }
+        ]
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "history": {
+            "noun": "file",
+            "verb": "read",
+            "condition": null
+          }
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "2",
+              "7"
+            ]
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "6",
+                  "block": "0"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "7",
+                  "block": "0"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "9",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "1"
+            ]
+          }
+        ],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "history_empty",
+    "selector": {
+      "history": {
+        "noun": "file",
+        "verb": "read",
+        "condition": null
+      }
+    },
+    "result": {
+      "entries": {
+        "entries": []
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "history": {
+            "noun": "file",
+            "verb": "read",
+            "condition": null
+          }
+        },
+        "snapshot_id": "19",
+        "sources": [],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "subjects_whole_block",
+    "selector": {
+      "subjects": {
+        "nouns": [
+          "file"
+        ]
+      }
+    },
+    "result": {
+      "entries": {
+        "entries": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                },
+                "envelope": {
+                  "session": "session",
+                  "run": "run",
+                  "turn": "turn",
+                  "sequence": "5",
+                  "kind": "message.assistant",
+                  "channel": "output",
+                  "origin": "model",
+                  "subsystem": "harness",
+                  "wall_ms": 0,
+                  "monotonic_ns": "10"
+                },
+                "source_path": [
+                  "content",
+                  {
+                    "index": "2"
+                  }
+                ],
+                "partition_rule_id": "text"
+              }
+            },
+            "raw_block": {
+              "type": "text",
+              "text": "Read file."
+            },
+            "text": "Read file.",
+            "bindings": [
+              {
+                "ordinal": "0",
+                "value": {
+                  "statement_span": {
+                    "start": "0",
+                    "end": "10"
+                  },
+                  "verb": "read",
+                  "verb_span": {
+                    "start": "0",
+                    "end": "4"
+                  },
+                  "condition": null,
+                  "condition_span": null,
+                  "nouns": [
+                    {
+                      "value": "file",
+                      "span": {
+                        "start": "5",
+                        "end": "9"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "selected_span": null,
+            "step_query": null,
+            "pairs": []
+          }
+        ]
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "subjects": {
+            "nouns": [
+              "file"
+            ]
+          }
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "0"
+            ]
+          }
+        ],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "conversation_whole_block",
+    "selector": {
+      "conversation": {
+        "last_turns": "2"
+      }
+    },
+    "result": {
+      "entries": {
+        "entries": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                },
+                "envelope": {
+                  "session": "session",
+                  "run": "run",
+                  "turn": "turn",
+                  "sequence": "5",
+                  "kind": "message.assistant",
+                  "channel": "output",
+                  "origin": "model",
+                  "subsystem": "harness",
+                  "wall_ms": 0,
+                  "monotonic_ns": "10"
+                },
+                "source_path": [
+                  "content",
+                  {
+                    "index": "2"
+                  }
+                ],
+                "partition_rule_id": "text"
+              }
+            },
+            "raw_block": {
+              "type": "text",
+              "text": "Read file."
+            },
+            "text": "Read file.",
+            "bindings": [
+              {
+                "ordinal": "0",
+                "value": {
+                  "statement_span": {
+                    "start": "0",
+                    "end": "10"
+                  },
+                  "verb": "read",
+                  "verb_span": {
+                    "start": "0",
+                    "end": "4"
+                  },
+                  "condition": null,
+                  "condition_span": null,
+                  "nouns": [
+                    {
+                      "value": "file",
+                      "span": {
+                        "start": "5",
+                        "end": "9"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "selected_span": null,
+            "step_query": null,
+            "pairs": []
+          }
+        ]
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "conversation": {
+            "last_turns": "2"
+          }
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "0"
+            ]
+          }
+        ],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "statement_original_ordinal",
+    "selector": {
+      "statement": {
+        "statement": {
+          "block_id": {
+            "run": "run",
+            "sequence": "5",
+            "block": "2"
+          },
+          "binding": "7"
+        }
+      }
+    },
+    "result": {
+      "entries": {
+        "entries": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                },
+                "envelope": {
+                  "session": "session",
+                  "run": "run",
+                  "turn": "turn",
+                  "sequence": "5",
+                  "kind": "message.assistant",
+                  "channel": "output",
+                  "origin": "model",
+                  "subsystem": "harness",
+                  "wall_ms": 0,
+                  "monotonic_ns": "10"
+                },
+                "source_path": [
+                  "content",
+                  {
+                    "index": "2"
+                  }
+                ],
+                "partition_rule_id": "text"
+              }
+            },
+            "raw_block": {
+              "type": "text",
+              "text": "Read file."
+            },
+            "text": "Read file.",
+            "bindings": [
+              {
+                "ordinal": "7",
+                "value": {
+                  "statement_span": {
+                    "start": "0",
+                    "end": "10"
+                  },
+                  "verb": "read",
+                  "verb_span": {
+                    "start": "0",
+                    "end": "4"
+                  },
+                  "condition": null,
+                  "condition_span": null,
+                  "nouns": [
+                    {
+                      "value": "file",
+                      "span": {
+                        "start": "5",
+                        "end": "9"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "selected_span": null,
+            "step_query": null,
+            "pairs": []
+          }
+        ]
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "statement": {
+            "statement": {
+              "block_id": {
+                "run": "run",
+                "sequence": "5",
+                "block": "2"
+              },
+              "binding": "7"
+            }
+          }
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "7"
+            ]
+          }
+        ],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "condition_original_ordinal",
+    "selector": {
+      "condition": {
+        "condition": "ready"
+      }
+    },
+    "result": {
+      "entries": {
+        "entries": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                },
+                "envelope": {
+                  "session": "session",
+                  "run": "run",
+                  "turn": "turn",
+                  "sequence": "5",
+                  "kind": "message.assistant",
+                  "channel": "output",
+                  "origin": "model",
+                  "subsystem": "harness",
+                  "wall_ms": 0,
+                  "monotonic_ns": "10"
+                },
+                "source_path": [
+                  "content",
+                  {
+                    "index": "2"
+                  }
+                ],
+                "partition_rule_id": "text"
+              }
+            },
+            "raw_block": {
+              "type": "text",
+              "text": "Read file if ready."
+            },
+            "text": "Read file if ready.",
+            "bindings": [
+              {
+                "ordinal": "4",
+                "value": {
+                  "statement_span": {
+                    "start": "0",
+                    "end": "19"
+                  },
+                  "verb": "read",
+                  "verb_span": {
+                    "start": "0",
+                    "end": "4"
+                  },
+                  "condition": "ready",
+                  "condition_span": {
+                    "start": "13",
+                    "end": "18"
+                  },
+                  "nouns": [
+                    {
+                      "value": "file",
+                      "span": {
+                        "start": "5",
+                        "end": "9"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "selected_span": null,
+            "step_query": null,
+            "pairs": []
+          }
+        ]
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "condition": {
+            "condition": "ready"
+          }
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "4"
+            ]
+          }
+        ],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "open_pairs_original_blocks",
+    "selector": {
+      "open_pairs": {}
+    },
+    "result": {
+      "open_pairs": {
+        "pairs": [
+          {
+            "call_id": {
+              "run": "run",
+              "sequence": "5",
+              "call": "0"
+            },
+            "statement": {
+              "block_id": {
+                "run": "run",
+                "sequence": "5",
+                "block": "2"
+              },
+              "binding": "2"
+            },
+            "lane": "external",
+            "request": {
+              "external": {
+                "name": "sh",
+                "arguments": "cat file"
+              }
+            },
+            "fate": "opened",
+            "reason": null,
+            "opening_source": {
+              "source": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "6",
+                  "block": "0"
+                },
+                "envelope": {
+                  "session": "session",
+                  "run": "run",
+                  "turn": "turn",
+                  "sequence": "6",
+                  "kind": "tool.call.started",
+                  "channel": "output",
+                  "origin": "model",
+                  "subsystem": "harness",
+                  "wall_ms": 0,
+                  "monotonic_ns": "10"
+                },
+                "source_path": [],
+                "partition_rule_id": "text"
+              },
+              "raw_block": {
+                "call_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "call": "0"
+                },
+                "call_block": "3",
+                "statement": {
+                  "block_id": {
+                    "run": "run",
+                    "sequence": "5",
+                    "block": "2"
+                  },
+                  "binding": "2"
+                },
+                "lane": "external",
+                "request": {
+                  "external": {
+                    "name": "sh",
+                    "arguments": "cat file"
+                  }
+                },
+                "retry_of": null
+              }
+            },
+            "terminal_source": null
+          }
+        ]
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "open_pairs": {}
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "2"
+            ]
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "6",
+                  "block": "0"
+                }
+              }
+            },
+            "binding_ordinals": []
+          }
+        ],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "span_repeated_occurrences",
+    "selector": {
+      "span": {
+        "seed_id": "0123456789abcdef0123456789abcdef",
+        "local_id": "4",
+        "revision": "1"
+      }
+    },
+    "result": {
+      "entries": {
+        "entries": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                },
+                "envelope": {
+                  "session": "session",
+                  "run": "run",
+                  "turn": "turn",
+                  "sequence": "5",
+                  "kind": "message.assistant",
+                  "channel": "output",
+                  "origin": "model",
+                  "subsystem": "harness",
+                  "wall_ms": 0,
+                  "monotonic_ns": "10"
+                },
+                "source_path": [
+                  "content",
+                  {
+                    "index": "2"
+                  }
+                ],
+                "partition_rule_id": "text"
+              }
+            },
+            "raw_block": {
+              "type": "text",
+              "text": "Read file."
+            },
+            "text": "Read file.",
+            "bindings": [
+              {
+                "ordinal": "2",
+                "value": {
+                  "statement_span": {
+                    "start": "0",
+                    "end": "10"
+                  },
+                  "verb": "read",
+                  "verb_span": {
+                    "start": "0",
+                    "end": "4"
+                  },
+                  "condition": null,
+                  "condition_span": null,
+                  "nouns": [
+                    {
+                      "value": "file",
+                      "span": {
+                        "start": "5",
+                        "end": "9"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "selected_span": {
+              "span_ref": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "4",
+                "revision": "1"
+              },
+              "start": "0",
+              "end": "10"
+            },
+            "step_query": null,
+            "pairs": [
+              {
+                "call_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "call": "0"
+                },
+                "statement": {
+                  "block_id": {
+                    "run": "run",
+                    "sequence": "5",
+                    "block": "2"
+                  },
+                  "binding": "2"
+                },
+                "lane": "external",
+                "request": {
+                  "external": {
+                    "name": "sh",
+                    "arguments": "cat file"
+                  }
+                },
+                "fate": "failed",
+                "reason": {
+                  "not_dispatched": {
+                    "cause": "stop"
+                  }
+                },
+                "opening_source": {
+                  "source": {
+                    "block_id": {
+                      "run": "run",
+                      "sequence": "6",
+                      "block": "0"
+                    },
+                    "envelope": {
+                      "session": "session",
+                      "run": "run",
+                      "turn": "turn",
+                      "sequence": "6",
+                      "kind": "tool.call.started",
+                      "channel": "output",
+                      "origin": "model",
+                      "subsystem": "harness",
+                      "wall_ms": 0,
+                      "monotonic_ns": "10"
+                    },
+                    "source_path": [],
+                    "partition_rule_id": "text"
+                  },
+                  "raw_block": {
+                    "call_id": {
+                      "run": "run",
+                      "sequence": "5",
+                      "call": "0"
+                    },
+                    "call_block": "3",
+                    "statement": {
+                      "block_id": {
+                        "run": "run",
+                        "sequence": "5",
+                        "block": "2"
+                      },
+                      "binding": "2"
+                    },
+                    "lane": "external",
+                    "request": {
+                      "external": {
+                        "name": "sh",
+                        "arguments": "cat file"
+                      }
+                    },
+                    "retry_of": null
+                  }
+                },
+                "terminal_source": {
+                  "source": {
+                    "block_id": {
+                      "run": "run",
+                      "sequence": "7",
+                      "block": "0"
+                    },
+                    "envelope": {
+                      "session": "session",
+                      "run": "run",
+                      "turn": "turn",
+                      "sequence": "7",
+                      "kind": "tool.call.completed",
+                      "channel": "output",
+                      "origin": "model",
+                      "subsystem": "harness",
+                      "wall_ms": 0,
+                      "monotonic_ns": "10"
+                    },
+                    "source_path": [],
+                    "partition_rule_id": "text"
+                  },
+                  "raw_block": {
+                    "call_id": {
+                      "run": "run",
+                      "sequence": "5",
+                      "call": "0"
+                    },
+                    "execution": null,
+                    "fate": "failed",
+                    "reason": {
+                      "not_dispatched": {
+                        "cause": "stop"
+                      }
+                    },
+                    "outcome": null,
+                    "loaded_from": null
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                },
+                "envelope": {
+                  "session": "session",
+                  "run": "run",
+                  "turn": "turn",
+                  "sequence": "5",
+                  "kind": "message.assistant",
+                  "channel": "output",
+                  "origin": "model",
+                  "subsystem": "harness",
+                  "wall_ms": 0,
+                  "monotonic_ns": "10"
+                },
+                "source_path": [
+                  "content",
+                  {
+                    "index": "2"
+                  }
+                ],
+                "partition_rule_id": "text"
+              }
+            },
+            "raw_block": {
+              "type": "text",
+              "text": "Read file."
+            },
+            "text": "Read file.",
+            "bindings": [
+              {
+                "ordinal": "2",
+                "value": {
+                  "statement_span": {
+                    "start": "0",
+                    "end": "10"
+                  },
+                  "verb": "read",
+                  "verb_span": {
+                    "start": "0",
+                    "end": "4"
+                  },
+                  "condition": null,
+                  "condition_span": null,
+                  "nouns": [
+                    {
+                      "value": "file",
+                      "span": {
+                        "start": "5",
+                        "end": "9"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "selected_span": {
+              "span_ref": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "4",
+                "revision": "1"
+              },
+              "start": "0",
+              "end": "10"
+            },
+            "step_query": null,
+            "pairs": []
+          }
+        ]
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "span": {
+            "seed_id": "0123456789abcdef0123456789abcdef",
+            "local_id": "4",
+            "revision": "1"
+          }
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "2"
+            ]
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "6",
+                  "block": "0"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "7",
+                  "block": "0"
+                }
+              }
+            },
+            "binding_ordinals": []
+          }
+        ],
+        "spans": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                }
+              }
+            },
+            "selected_span": {
+              "span_ref": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "4",
+                "revision": "1"
+              },
+              "start": "0",
+              "end": "10"
+            }
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                }
+              }
+            },
+            "selected_span": {
+              "span_ref": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "4",
+                "revision": "1"
+              },
+              "start": "0",
+              "end": "10"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": "span_preview_repeated_occurrences",
+    "selector": {
+      "span_preview": {
+        "span": {
+          "seed_id": "0123456789abcdef0123456789abcdef",
+          "local_id": "4",
+          "revision": "1"
+        },
+        "through": {
+          "block_id": {
+            "run": "run",
+            "sequence": "99",
+            "block": "2"
+          },
+          "turn": "uncited-turn"
+        }
+      }
+    },
+    "result": {
+      "span_preview": {
+        "span": {
+          "seed_id": "0123456789abcdef0123456789abcdef",
+          "local_id": "4",
+          "revision": "1"
+        },
+        "through": {
+          "block_id": {
+            "run": "run",
+            "sequence": "99",
+            "block": "2"
+          },
+          "turn": "uncited-turn"
+        },
+        "entries": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                },
+                "envelope": {
+                  "session": "session",
+                  "run": "run",
+                  "turn": "turn",
+                  "sequence": "5",
+                  "kind": "message.assistant",
+                  "channel": "output",
+                  "origin": "model",
+                  "subsystem": "harness",
+                  "wall_ms": 0,
+                  "monotonic_ns": "10"
+                },
+                "source_path": [
+                  "content",
+                  {
+                    "index": "2"
+                  }
+                ],
+                "partition_rule_id": "text"
+              }
+            },
+            "raw_block": {
+              "type": "text",
+              "text": "Read file."
+            },
+            "text": "Read file.",
+            "bindings": [
+              {
+                "ordinal": "2",
+                "value": {
+                  "statement_span": {
+                    "start": "0",
+                    "end": "10"
+                  },
+                  "verb": "read",
+                  "verb_span": {
+                    "start": "0",
+                    "end": "4"
+                  },
+                  "condition": null,
+                  "condition_span": null,
+                  "nouns": [
+                    {
+                      "value": "file",
+                      "span": {
+                        "start": "5",
+                        "end": "9"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "selected_span": {
+              "span_ref": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "4",
+                "revision": "1"
+              },
+              "start": "0",
+              "end": "10"
+            },
+            "step_query": null,
+            "pairs": [
+              {
+                "call_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "call": "0"
+                },
+                "statement": {
+                  "block_id": {
+                    "run": "run",
+                    "sequence": "5",
+                    "block": "2"
+                  },
+                  "binding": "2"
+                },
+                "lane": "external",
+                "request": {
+                  "external": {
+                    "name": "sh",
+                    "arguments": "cat file"
+                  }
+                },
+                "fate": "failed",
+                "reason": {
+                  "not_dispatched": {
+                    "cause": "stop"
+                  }
+                },
+                "opening_source": {
+                  "source": {
+                    "block_id": {
+                      "run": "run",
+                      "sequence": "6",
+                      "block": "0"
+                    },
+                    "envelope": {
+                      "session": "session",
+                      "run": "run",
+                      "turn": "turn",
+                      "sequence": "6",
+                      "kind": "tool.call.started",
+                      "channel": "output",
+                      "origin": "model",
+                      "subsystem": "harness",
+                      "wall_ms": 0,
+                      "monotonic_ns": "10"
+                    },
+                    "source_path": [],
+                    "partition_rule_id": "text"
+                  },
+                  "raw_block": {
+                    "call_id": {
+                      "run": "run",
+                      "sequence": "5",
+                      "call": "0"
+                    },
+                    "call_block": "3",
+                    "statement": {
+                      "block_id": {
+                        "run": "run",
+                        "sequence": "5",
+                        "block": "2"
+                      },
+                      "binding": "2"
+                    },
+                    "lane": "external",
+                    "request": {
+                      "external": {
+                        "name": "sh",
+                        "arguments": "cat file"
+                      }
+                    },
+                    "retry_of": null
+                  }
+                },
+                "terminal_source": {
+                  "source": {
+                    "block_id": {
+                      "run": "run",
+                      "sequence": "7",
+                      "block": "0"
+                    },
+                    "envelope": {
+                      "session": "session",
+                      "run": "run",
+                      "turn": "turn",
+                      "sequence": "7",
+                      "kind": "tool.call.completed",
+                      "channel": "output",
+                      "origin": "model",
+                      "subsystem": "harness",
+                      "wall_ms": 0,
+                      "monotonic_ns": "10"
+                    },
+                    "source_path": [],
+                    "partition_rule_id": "text"
+                  },
+                  "raw_block": {
+                    "call_id": {
+                      "run": "run",
+                      "sequence": "5",
+                      "call": "0"
+                    },
+                    "execution": null,
+                    "fate": "failed",
+                    "reason": {
+                      "not_dispatched": {
+                        "cause": "stop"
+                      }
+                    },
+                    "outcome": null,
+                    "loaded_from": null
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                },
+                "envelope": {
+                  "session": "session",
+                  "run": "run",
+                  "turn": "turn",
+                  "sequence": "5",
+                  "kind": "message.assistant",
+                  "channel": "output",
+                  "origin": "model",
+                  "subsystem": "harness",
+                  "wall_ms": 0,
+                  "monotonic_ns": "10"
+                },
+                "source_path": [
+                  "content",
+                  {
+                    "index": "2"
+                  }
+                ],
+                "partition_rule_id": "text"
+              }
+            },
+            "raw_block": {
+              "type": "text",
+              "text": "Read file."
+            },
+            "text": "Read file.",
+            "bindings": [
+              {
+                "ordinal": "2",
+                "value": {
+                  "statement_span": {
+                    "start": "0",
+                    "end": "10"
+                  },
+                  "verb": "read",
+                  "verb_span": {
+                    "start": "0",
+                    "end": "4"
+                  },
+                  "condition": null,
+                  "condition_span": null,
+                  "nouns": [
+                    {
+                      "value": "file",
+                      "span": {
+                        "start": "5",
+                        "end": "9"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "selected_span": {
+              "span_ref": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "4",
+                "revision": "1"
+              },
+              "start": "0",
+              "end": "10"
+            },
+            "step_query": null,
+            "pairs": []
+          }
+        ]
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "span_preview": {
+            "span": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "4",
+              "revision": "1"
+            },
+            "through": {
+              "block_id": {
+                "run": "run",
+                "sequence": "99",
+                "block": "2"
+              },
+              "turn": "uncited-turn"
+            }
+          }
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "2"
+            ]
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "6",
+                  "block": "0"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "7",
+                  "block": "0"
+                }
+              }
+            },
+            "binding_ordinals": []
+          }
+        ],
+        "spans": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                }
+              }
+            },
+            "selected_span": {
+              "span_ref": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "4",
+                "revision": "1"
+              },
+              "start": "0",
+              "end": "10"
+            }
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                }
+              }
+            },
+            "selected_span": {
+              "span_ref": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "4",
+                "revision": "1"
+              },
+              "start": "0",
+              "end": "10"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": "system_prompt_nonboot",
+    "selector": {
+      "system_prompt": {}
+    },
+    "result": {
+      "entries": {
+        "entries": [
+          {
+            "source": {
+              "seed": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "ordinal": "0"
+              }
+            },
+            "raw_block": {
+              "type": "text",
+              "text": "Read file."
+            },
+            "text": "Read file.",
+            "bindings": [
+              {
+                "ordinal": "0",
+                "value": {
+                  "statement_span": {
+                    "start": "0",
+                    "end": "10"
+                  },
+                  "verb": "read",
+                  "verb_span": {
+                    "start": "0",
+                    "end": "4"
+                  },
+                  "condition": null,
+                  "condition_span": null,
+                  "nouns": [
+                    {
+                      "value": "file",
+                      "span": {
+                        "start": "5",
+                        "end": "9"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "selected_span": {
+              "span_ref": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "0",
+                "revision": "1"
+              },
+              "start": "0",
+              "end": "10"
+            },
+            "step_query": null,
+            "pairs": []
+          }
+        ]
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "system_prompt": {}
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "seed": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "ordinal": "0"
+              }
+            },
+            "binding_ordinals": [
+              "0"
+            ]
+          }
+        ],
+        "spans": [
+          {
+            "source": {
+              "seed": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "ordinal": "0"
+              }
+            },
+            "selected_span": {
+              "span_ref": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "0",
+                "revision": "1"
+              },
+              "start": "0",
+              "end": "10"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case": "marks_sources_only",
+    "selector": {
+      "marks": {}
+    },
+    "result": {
+      "marks": {
+        "next_span_id": "100",
+        "current_task": {
+          "task": {
+            "seed_id": "0123456789abcdef0123456789abcdef",
+            "local_id": "1",
+            "revision": "1"
+          },
+          "prompt": {
+            "seed_id": "0123456789abcdef0123456789abcdef",
+            "local_id": "2",
+            "revision": "1"
+          }
+        },
+        "open_scopes": [
+          {
+            "span": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "1",
+              "revision": "1"
+            },
+            "parent": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "0",
+              "revision": "1"
+            },
+            "kind": "task",
+            "status": "retired",
+            "opened_source": null,
+            "ended_source": null,
+            "replacement": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "99",
+              "revision": "1"
+            }
+          },
+          {
+            "span": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "2",
+              "revision": "1"
+            },
+            "parent": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "0",
+              "revision": "1"
+            },
+            "kind": "task",
+            "status": "retired",
+            "opened_source": {
+              "run": "run",
+              "sequence": "8",
+              "block": "2"
+            },
+            "ended_source": {
+              "run": "run",
+              "sequence": "9",
+              "block": "2"
+            },
+            "replacement": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "99",
+              "revision": "1"
+            }
+          },
+          {
+            "span": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "3",
+              "revision": "1"
+            },
+            "parent": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "0",
+              "revision": "1"
+            },
+            "kind": "task",
+            "status": "retired",
+            "opened_source": {
+              "run": "run",
+              "sequence": "9",
+              "block": "2"
+            },
+            "ended_source": {
+              "run": "run",
+              "sequence": "10",
+              "block": "2"
+            },
+            "replacement": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "99",
+              "revision": "1"
+            }
+          }
+        ]
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "marks": {}
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "8",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "9",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "10",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          }
+        ],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "plan_complete_traversal",
+    "selector": {
+      "plan": {
+        "plan": {
+          "plan_id": {
+            "seed_id": "0123456789abcdef0123456789abcdef",
+            "local_id": "3"
+          },
+          "revision": "2"
+        }
+      }
+    },
+    "result": {
+      "plan": {
+        "snapshot": {
+          "plan": {
+            "plan_id": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "3"
+            },
+            "revision": "2"
+          },
+          "task": {
+            "task": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "1",
+              "revision": "1"
+            },
+            "prompt": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "2",
+              "revision": "1"
+            }
+          },
+          "status": "broken",
+          "review": {
+            "setup_id": "review",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          "operator_source": {
+            "run": "run",
+            "sequence": "10",
+            "block": "2"
+          },
+          "lock_source": {
+            "run": "run",
+            "sequence": "11",
+            "block": "2"
+          },
+          "last_source": {
+            "run": "run",
+            "sequence": "12",
+            "block": "2"
+          },
+          "categories": [],
+          "group_drafts": [],
+          "groups": [],
+          "steps": [
+            {
+              "step_id": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "2"
+              },
+              "ordinal": "0",
+              "instruction": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "13",
+                  "block": "2"
+                },
+                "binding": "7"
+              },
+              "category": "work",
+              "group": null,
+              "status": "closed",
+              "span": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "30",
+                "revision": "1"
+              },
+              "outcome_span": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "31",
+                "revision": "1"
+              },
+              "review_call": {
+                "run": "uncited",
+                "sequence": "100",
+                "call": "0"
+              },
+              "work": {
+                "plan": {
+                  "plan_id": {
+                    "seed_id": "0123456789abcdef0123456789abcdef",
+                    "local_id": "3"
+                  },
+                  "revision": "2"
+                },
+                "step_id": {
+                  "seed_id": "0123456789abcdef0123456789abcdef",
+                  "local_id": "2"
+                },
+                "span": {
+                  "seed_id": "0123456789abcdef0123456789abcdef",
+                  "local_id": "32",
+                  "revision": "1"
+                },
+                "through": {
+                  "block_id": {
+                    "run": "run",
+                    "sequence": "14",
+                    "block": "2"
+                  },
+                  "turn": "uncited-turn"
+                },
+                "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "closure_source": {
+                "run": "run",
+                "sequence": "15",
+                "block": "2"
+              }
+            },
+            {
+              "step_id": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "3"
+              },
+              "ordinal": "1",
+              "instruction": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "16",
+                  "block": "2"
+                },
+                "binding": "2"
+              },
+              "category": "work",
+              "group": null,
+              "status": "closed",
+              "span": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "30",
+                "revision": "1"
+              },
+              "outcome_span": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "31",
+                "revision": "1"
+              },
+              "review_call": {
+                "run": "uncited",
+                "sequence": "100",
+                "call": "0"
+              },
+              "work": {
+                "plan": {
+                  "plan_id": {
+                    "seed_id": "0123456789abcdef0123456789abcdef",
+                    "local_id": "3"
+                  },
+                  "revision": "2"
+                },
+                "step_id": {
+                  "seed_id": "0123456789abcdef0123456789abcdef",
+                  "local_id": "3"
+                },
+                "span": {
+                  "seed_id": "0123456789abcdef0123456789abcdef",
+                  "local_id": "32",
+                  "revision": "1"
+                },
+                "through": {
+                  "block_id": {
+                    "run": "run",
+                    "sequence": "17",
+                    "block": "2"
+                  },
+                  "turn": "uncited-turn"
+                },
+                "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "closure_source": {
+                "run": "run",
+                "sequence": "18",
+                "block": "2"
+              }
+            }
+          ],
+          "broken": {
+            "case": "work_changed",
+            "step_id": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "3"
+            },
+            "proposed_source": {
+              "run": "run",
+              "sequence": "19",
+              "block": "2"
+            },
+            "source": {
+              "run": "run",
+              "sequence": "20",
+              "block": "2"
+            }
+          }
+        }
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "plan": {
+            "plan": {
+              "plan_id": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "3"
+              },
+              "revision": "2"
+            }
+          }
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "10",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "11",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "12",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "13",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "7"
+            ]
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "14",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "15",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "16",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "2"
+            ]
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "17",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "18",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "19",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "20",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          }
+        ],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "plan_current_populated",
+    "selector": {
+      "plan_current": {}
+    },
+    "result": {
+      "plan_current": {
+        "current": {
+          "plan": {
+            "plan_id": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "3"
+            },
+            "revision": "2"
+          },
+          "task": {
+            "task": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "1",
+              "revision": "1"
+            },
+            "prompt": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "2",
+              "revision": "1"
+            }
+          },
+          "status": "broken",
+          "review": {
+            "setup_id": "review",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          "operator_source": {
+            "run": "run",
+            "sequence": "10",
+            "block": "2"
+          },
+          "lock_source": {
+            "run": "run",
+            "sequence": "11",
+            "block": "2"
+          },
+          "last_source": {
+            "run": "run",
+            "sequence": "12",
+            "block": "2"
+          },
+          "categories": [],
+          "group_drafts": [],
+          "groups": [],
+          "steps": [
+            {
+              "step_id": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "2"
+              },
+              "ordinal": "0",
+              "instruction": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "13",
+                  "block": "2"
+                },
+                "binding": "7"
+              },
+              "category": "work",
+              "group": null,
+              "status": "closed",
+              "span": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "30",
+                "revision": "1"
+              },
+              "outcome_span": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "31",
+                "revision": "1"
+              },
+              "review_call": {
+                "run": "uncited",
+                "sequence": "100",
+                "call": "0"
+              },
+              "work": {
+                "plan": {
+                  "plan_id": {
+                    "seed_id": "0123456789abcdef0123456789abcdef",
+                    "local_id": "3"
+                  },
+                  "revision": "2"
+                },
+                "step_id": {
+                  "seed_id": "0123456789abcdef0123456789abcdef",
+                  "local_id": "2"
+                },
+                "span": {
+                  "seed_id": "0123456789abcdef0123456789abcdef",
+                  "local_id": "32",
+                  "revision": "1"
+                },
+                "through": {
+                  "block_id": {
+                    "run": "run",
+                    "sequence": "14",
+                    "block": "2"
+                  },
+                  "turn": "uncited-turn"
+                },
+                "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "closure_source": {
+                "run": "run",
+                "sequence": "15",
+                "block": "2"
+              }
+            },
+            {
+              "step_id": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "3"
+              },
+              "ordinal": "1",
+              "instruction": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "16",
+                  "block": "2"
+                },
+                "binding": "2"
+              },
+              "category": "work",
+              "group": null,
+              "status": "closed",
+              "span": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "30",
+                "revision": "1"
+              },
+              "outcome_span": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "31",
+                "revision": "1"
+              },
+              "review_call": {
+                "run": "uncited",
+                "sequence": "100",
+                "call": "0"
+              },
+              "work": {
+                "plan": {
+                  "plan_id": {
+                    "seed_id": "0123456789abcdef0123456789abcdef",
+                    "local_id": "3"
+                  },
+                  "revision": "2"
+                },
+                "step_id": {
+                  "seed_id": "0123456789abcdef0123456789abcdef",
+                  "local_id": "3"
+                },
+                "span": {
+                  "seed_id": "0123456789abcdef0123456789abcdef",
+                  "local_id": "32",
+                  "revision": "1"
+                },
+                "through": {
+                  "block_id": {
+                    "run": "run",
+                    "sequence": "17",
+                    "block": "2"
+                  },
+                  "turn": "uncited-turn"
+                },
+                "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "closure_source": {
+                "run": "run",
+                "sequence": "18",
+                "block": "2"
+              }
+            }
+          ],
+          "broken": {
+            "case": "work_changed",
+            "step_id": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "3"
+            },
+            "proposed_source": {
+              "run": "run",
+              "sequence": "19",
+              "block": "2"
+            },
+            "source": {
+              "run": "run",
+              "sequence": "20",
+              "block": "2"
+            }
+          }
+        },
+        "next_plan_id": "4",
+        "next_step_id": "4"
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "plan_current": {}
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "10",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "11",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "12",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "13",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "7"
+            ]
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "14",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "15",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "16",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "2"
+            ]
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "17",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "18",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "19",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "20",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          }
+        ],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "plan_current_null",
+    "selector": {
+      "plan_current": {}
+    },
+    "result": {
+      "plan_current": {
+        "current": null,
+        "next_plan_id": "1",
+        "next_step_id": "1"
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "plan_current": {}
+        },
+        "snapshot_id": "19",
+        "sources": [],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "step_successor_exact_instruction",
+    "selector": {
+      "step_successor": {
+        "plan": {
+          "plan_id": {
+            "seed_id": "0123456789abcdef0123456789abcdef",
+            "local_id": "3"
+          },
+          "revision": "2"
+        },
+        "previous_step": {
+          "seed_id": "0123456789abcdef0123456789abcdef",
+          "local_id": "2"
+        }
+      }
+    },
+    "result": {
+      "step_successor": {
+        "reference": {
+          "plan": {
+            "plan_id": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "3"
+            },
+            "revision": "2"
+          },
+          "previous_step": {
+            "seed_id": "0123456789abcdef0123456789abcdef",
+            "local_id": "2"
+          },
+          "step_id": {
+            "seed_id": "0123456789abcdef0123456789abcdef",
+            "local_id": "3"
+          },
+          "instruction": {
+            "block_id": {
+              "run": "run",
+              "sequence": "5",
+              "block": "2"
+            },
+            "binding": "2"
+          }
+        },
+        "instruction": {
+          "source": {
+            "event": {
+              "block_id": {
+                "run": "run",
+                "sequence": "5",
+                "block": "2"
+              },
+              "envelope": {
+                "session": "session",
+                "run": "run",
+                "turn": "turn",
+                "sequence": "5",
+                "kind": "message.assistant",
+                "channel": "output",
+                "origin": "model",
+                "subsystem": "harness",
+                "wall_ms": 0,
+                "monotonic_ns": "10"
+              },
+              "source_path": [
+                "content",
+                {
+                  "index": "2"
+                }
+              ],
+              "partition_rule_id": "text"
+            }
+          },
+          "raw_block": {
+            "type": "text",
+            "text": "Read file."
+          },
+          "text": "Read file.",
+          "bindings": [
+            {
+              "ordinal": "2",
+              "value": {
+                "statement_span": {
+                  "start": "0",
+                  "end": "10"
+                },
+                "verb": "read",
+                "verb_span": {
+                  "start": "0",
+                  "end": "4"
+                },
+                "condition": null,
+                "condition_span": null,
+                "nouns": [
+                  {
+                    "value": "file",
+                    "span": {
+                      "start": "5",
+                      "end": "9"
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "selected_span": null,
+          "step_query": {
+            "plan": {
+              "plan_id": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "3"
+              },
+              "revision": "2"
+            },
+            "previous_step": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "2"
+            },
+            "step_id": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "3"
+            },
+            "instruction": {
+              "block_id": {
+                "run": "run",
+                "sequence": "5",
+                "block": "2"
+              },
+              "binding": "2"
+            }
+          },
+          "pairs": [
+            {
+              "call_id": {
+                "run": "run",
+                "sequence": "5",
+                "call": "0"
+              },
+              "statement": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                },
+                "binding": "2"
+              },
+              "lane": "external",
+              "request": {
+                "external": {
+                  "name": "sh",
+                  "arguments": "cat file"
+                }
+              },
+              "fate": "failed",
+              "reason": {
+                "not_dispatched": {
+                  "cause": "stop"
+                }
+              },
+              "opening_source": {
+                "source": {
+                  "block_id": {
+                    "run": "run",
+                    "sequence": "6",
+                    "block": "0"
+                  },
+                  "envelope": {
+                    "session": "session",
+                    "run": "run",
+                    "turn": "turn",
+                    "sequence": "6",
+                    "kind": "tool.call.started",
+                    "channel": "output",
+                    "origin": "model",
+                    "subsystem": "harness",
+                    "wall_ms": 0,
+                    "monotonic_ns": "10"
+                  },
+                  "source_path": [],
+                  "partition_rule_id": "text"
+                },
+                "raw_block": {
+                  "call_id": {
+                    "run": "run",
+                    "sequence": "5",
+                    "call": "0"
+                  },
+                  "call_block": "3",
+                  "statement": {
+                    "block_id": {
+                      "run": "run",
+                      "sequence": "5",
+                      "block": "2"
+                    },
+                    "binding": "2"
+                  },
+                  "lane": "external",
+                  "request": {
+                    "external": {
+                      "name": "sh",
+                      "arguments": "cat file"
+                    }
+                  },
+                  "retry_of": null
+                }
+              },
+              "terminal_source": {
+                "source": {
+                  "block_id": {
+                    "run": "run",
+                    "sequence": "7",
+                    "block": "0"
+                  },
+                  "envelope": {
+                    "session": "session",
+                    "run": "run",
+                    "turn": "turn",
+                    "sequence": "7",
+                    "kind": "tool.call.completed",
+                    "channel": "output",
+                    "origin": "model",
+                    "subsystem": "harness",
+                    "wall_ms": 0,
+                    "monotonic_ns": "10"
+                  },
+                  "source_path": [],
+                  "partition_rule_id": "text"
+                },
+                "raw_block": {
+                  "call_id": {
+                    "run": "run",
+                    "sequence": "5",
+                    "call": "0"
+                  },
+                  "execution": null,
+                  "fate": "failed",
+                  "reason": {
+                    "not_dispatched": {
+                      "cause": "stop"
+                    }
+                  },
+                  "outcome": null,
+                  "loaded_from": null
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "step_successor": {
+            "plan": {
+              "plan_id": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "3"
+              },
+              "revision": "2"
+            },
+            "previous_step": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "2"
+            }
+          }
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "5",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": [
+              "2"
+            ]
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "6",
+                  "block": "0"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "7",
+                  "block": "0"
+                }
+              }
+            },
+            "binding_ordinals": []
+          }
+        ],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "plan_flags_8",
+    "selector": {
+      "plan_flags": {
+        "plan": {
+          "plan_id": {
+            "seed_id": "0123456789abcdef0123456789abcdef",
+            "local_id": "3"
+          },
+          "revision": "2"
+        },
+        "after": {
+          "run": "run",
+          "sequence": "8",
+          "block": "2"
+        }
+      }
+    },
+    "result": {
+      "plan_flags": {
+        "snapshot": {
+          "plan": {
+            "plan_id": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "3"
+            },
+            "revision": "2"
+          },
+          "after": {
+            "run": "run",
+            "sequence": "8",
+            "block": "2"
+          },
+          "through": {
+            "block_id": {
+              "run": "run",
+              "sequence": "8",
+              "block": "2"
+            },
+            "turn": "uncited-turn"
+          },
+          "total_flags": "2",
+          "matched_flags": "1",
+          "unmatched_flags": "1"
+        }
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "plan_flags": {
+            "plan": {
+              "plan_id": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "3"
+              },
+              "revision": "2"
+            },
+            "after": {
+              "run": "run",
+              "sequence": "8",
+              "block": "2"
+            }
+          }
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "8",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          }
+        ],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "plan_flags_9",
+    "selector": {
+      "plan_flags": {
+        "plan": {
+          "plan_id": {
+            "seed_id": "0123456789abcdef0123456789abcdef",
+            "local_id": "3"
+          },
+          "revision": "2"
+        },
+        "after": {
+          "run": "run",
+          "sequence": "8",
+          "block": "2"
+        }
+      }
+    },
+    "result": {
+      "plan_flags": {
+        "snapshot": {
+          "plan": {
+            "plan_id": {
+              "seed_id": "0123456789abcdef0123456789abcdef",
+              "local_id": "3"
+            },
+            "revision": "2"
+          },
+          "after": {
+            "run": "run",
+            "sequence": "8",
+            "block": "2"
+          },
+          "through": {
+            "block_id": {
+              "run": "run",
+              "sequence": "9",
+              "block": "2"
+            },
+            "turn": "uncited-turn"
+          },
+          "total_flags": "2",
+          "matched_flags": "1",
+          "unmatched_flags": "1"
+        }
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "plan_flags": {
+            "plan": {
+              "plan_id": {
+                "seed_id": "0123456789abcdef0123456789abcdef",
+                "local_id": "3"
+              },
+              "revision": "2"
+            },
+            "after": {
+              "run": "run",
+              "sequence": "8",
+              "block": "2"
+            }
+          }
+        },
+        "snapshot_id": "19",
+        "sources": [
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "8",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          },
+          {
+            "source": {
+              "event": {
+                "block_id": {
+                  "run": "run",
+                  "sequence": "9",
+                  "block": "2"
+                }
+              }
+            },
+            "binding_ordinals": []
+          }
+        ],
+        "spans": []
+      }
+    }
+  },
+  {
+    "case": "observations_not_content",
+    "selector": {
+      "observations": {
+        "run": "run",
+        "after": "0",
+        "through": "1"
+      }
+    },
+    "result": {
+      "observations": {
+        "run": "run",
+        "after": "0",
+        "through": "1",
+        "member_observation": {
+          "instrument_version": "state-observation/1",
+          "pid": 10,
+          "start_ticks": "1",
+          "ticks_per_second": "100",
+          "unavailable_reason": null
+        },
+        "records": [
+          {
+            "request_source": {
+              "run": "run",
+              "sequence": "90",
+              "block": "2"
+            },
+            "observation": {
+              "operation_id": "1",
+              "parent_id": null,
+              "request_id": "12",
+              "operation": "file",
+              "began_ns": "20",
+              "ended_ns": "22",
+              "phases": [
+                {
+                  "name": "validate",
+                  "began_ns": "20",
+                  "ended_ns": "21"
+                },
+                {
+                  "name": "encode",
+                  "began_ns": "21",
+                  "ended_ns": "22"
+                }
+              ],
+              "resource": {
+                "cpu_ns": null,
+                "copied_bytes": null,
+                "held_bytes": null,
+                "unavailable": [
+                  {
+                    "field": "cpu_ns",
+                    "reason": "not_sampled"
+                  },
+                  {
+                    "field": "copied_bytes",
+                    "reason": "not_sampled"
+                  },
+                  {
+                    "field": "held_bytes",
+                    "reason": "not_sampled"
+                  }
+                ]
+              },
+              "disk": {
+                "enabled": null,
+                "before": null,
+                "after": null,
+                "unavailable_reason": "not_sampled"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "recall": {
+      "read": {
+        "selector": {
+          "observations": {
+            "run": "run",
+            "after": "0",
+            "through": "1"
+          }
+        },
+        "snapshot_id": "19",
+        "sources": [],
+        "spans": []
+      }
+    }
+  }
+]

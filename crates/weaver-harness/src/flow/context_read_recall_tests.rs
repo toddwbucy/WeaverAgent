@@ -1,0 +1,434 @@
+use super::*;
+use std::time::{Duration, Instant};
+
+// A read proof is consumed by its next owner, never duplicated for two consumers.
+const _: fn() = || {
+    trait ReadProofMustNotClone<Marker> {
+        fn check() {}
+    }
+    impl<T: ?Sized> ReadProofMustNotClone<()> for T {}
+    impl<T: Clone> ReadProofMustNotClone<u8> for T {}
+    let _ = <RecordedRead as ReadProofMustNotClone<_>>::check;
+    let _ = <CancelledRead as ReadProofMustNotClone<_>>::check;
+};
+
+fn released(member: &mut Member) {
+    let read = member.begin();
+    member.respond(&read, page(7, 0, EMPTY.len(), EMPTY));
+    let release = member.next_request();
+    member.respond(
+        &release,
+        s::StateControlAnswer::Released {
+            snapshot_id: 7.into(),
+        },
+    );
+    member.record_completion_only();
+    member
+        .run
+        .context
+        .settle_recorded_read(&mut member.run.clock)
+        .unwrap();
+    assert!(member.run.context.read_blocks_reduction());
+    assert!(member.run.context.flow.operation_completion().is_none());
+    assert!(member.records(Kind::Recall).is_empty());
+    member.no_result();
+}
+fn take(member: &mut Member) -> ReadCompletion {
+    assert_eq!(member.advance().unwrap(), ReadProgress::Complete);
+    member
+        .run
+        .context
+        .take_read(&mut member.run.clock)
+        .unwrap()
+        .unwrap()
+}
+fn recall_payload(member: &Member) -> serde_json::Value {
+    let records = member.records(Kind::Recall);
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record["channel"], "internal");
+    assert_eq!(record["origin"], "runtime");
+    assert_eq!(record["subsystem"], "harness");
+    assert!(record.get("turn").is_none_or(serde_json::Value::is_null));
+    assert!(
+        record
+            .get("causal_parent")
+            .is_none_or(serde_json::Value::is_null)
+    );
+    assert!(record["payload"].get("boot").is_none());
+    record["payload"]["read"].clone()
+}
+fn drain_admitted(member: &mut Member) {
+    // Drain exact bytes already admitted to the real blocked writer. Returning
+    // only after they arrive gives the retry a deterministic capacity opening.
+    let expected: Vec<u8> = member
+        .run
+        .context
+        .barrier
+        .recorder()
+        .structure()
+        .iter()
+        .flat_map(|record| record.line.as_bytes().iter().copied())
+        .collect();
+    let mut reader = member.run._reader.try_clone().unwrap();
+    reader
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let drain = std::thread::spawn(move || {
+        let mut received = vec![0; expected.len()];
+        reader.read_exact(&mut received).unwrap();
+        assert_eq!(received, expected);
+    });
+    drain.join().unwrap();
+    let watch = Instant::now() + Duration::from_secs(5);
+    while member.run.context.barrier.recorder().pressure().queued != 0 {
+        assert!(
+            Instant::now() < watch,
+            "real trace writer did not finish draining"
+        );
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn released_read_retains_exact_provenance_and_original_bound_until_recorded() {
+    let mut member = Member::new();
+    released(&mut member);
+    let bound = member.bound();
+    let measurements = member.records(Kind::StateStoreMeasurement).len();
+    // This owner already holds the released result, before a barrier ticket
+    // exists. Generic reduction must not claim work in that admission gap.
+    assert!(member.run.context.pending_author().is_none());
+    assert_eq!(
+        member
+            .run
+            .context
+            .reduce_flow(&mut member.run.clock)
+            .unwrap(),
+        Advance::Pending
+    );
+    assert!(member.records(Kind::Recall).is_empty());
+    assert_eq!(
+        member.run.context.complete_wait(PumpDeadline::StateControl),
+        None
+    );
+    let ReadCompletion::Recorded(read) = take(&mut member) else {
+        panic!("read was not recorded");
+    };
+    let records = member.records(Kind::Recall);
+    assert_eq!(records[0]["sequence"], read.recall_sequence().0.to_string());
+    assert_eq!(read.raw_bytes(), EMPTY);
+    assert_eq!(read.snapshot_id(), 7.into());
+    assert_eq!(
+        recall_payload(&member),
+        serde_json::json!({
+            "selector":{"history":{"noun":"record","verb":null,"condition":null}},
+            "snapshot_id":"7", "sources":[], "spans":[],
+        })
+    );
+    assert_eq!(
+        member.records(Kind::StateStoreMeasurement).len(),
+        measurements
+    );
+    assert_eq!(member.requests.len(), 2);
+    assert!(bound.deadline_ns() > member.now());
+    assert!(
+        member
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::StateControl)
+            .is_none()
+    );
+    assert!(member.run.context.flow.ledger().facts().next().is_none());
+    member.no_result();
+    member.no_request();
+}
+
+#[test]
+fn recall_pressure_retains_one_ticket_and_cancelled_read_drains_without_consumption() {
+    let mut member = Member::new();
+    released(&mut member);
+    let bound = member.bound();
+    member.fill_trace();
+    assert_eq!(member.advance().unwrap(), ReadProgress::Pending);
+    let ticket = member.run.context.pending_author().unwrap().ticket;
+    let exact =
+        serde_json::to_string(&member.run.context.pending_author().unwrap().event.payload).unwrap();
+    for _ in 0..3 {
+        assert_eq!(member.advance().unwrap(), ReadProgress::Pending);
+        member.no_result();
+        assert_eq!(member.bound(), bound);
+        assert_eq!(member.run.context.pending_author().unwrap().ticket, ticket);
+        assert_eq!(
+            serde_json::to_string(&member.run.context.pending_author().unwrap().event.payload)
+                .unwrap(),
+            exact
+        );
+    }
+    // Generic authors and coordinator observations cannot take this ticket.
+    let foreign = super::super::tests::event(Kind::SessionClosed, None);
+    assert_eq!(
+        member
+            .run
+            .context
+            .author_and_wait(&mut ports(&mut member.run.clock), foreign)
+            .unwrap_err(),
+        RunFailure::ReadOwned
+    );
+    assert_eq!(
+        member
+            .run
+            .context
+            .resume_author_and_wait(&mut ports(&mut member.run.clock))
+            .unwrap_err(),
+        RunFailure::ReadOwned
+    );
+    assert_eq!(
+        member
+            .run
+            .context
+            .reduce_flow(&mut member.run.clock)
+            .unwrap(),
+        Advance::Pending
+    );
+    assert_eq!(member.run.context.pending_author().unwrap().ticket, ticket);
+    member
+        .run
+        .context
+        .cancel_read(&mut member.run.clock)
+        .unwrap();
+    member
+        .run
+        .context
+        .cancel_read(&mut member.run.clock)
+        .unwrap();
+    assert_eq!(member.advance().unwrap(), ReadProgress::Pending);
+    assert!(member.records(Kind::Recall).is_empty());
+    assert_eq!(member.requests.len(), 2);
+    member.no_request();
+    drain_admitted(&mut member);
+    let ReadCompletion::Cancelled(cancelled) = take(&mut member) else {
+        panic!("revoked read escaped as consumable content");
+    };
+    let sequence = cancelled
+        .recall_sequence()
+        .expect("successful cancelled read still records");
+    assert!(cancelled.refusal().is_none());
+    assert_eq!(
+        member.records(Kind::Recall)[0]["sequence"],
+        sequence.0.to_string()
+    );
+    assert_eq!(recall_payload(&member)["sources"], serde_json::json!([]));
+    assert!(member.run.context.pending_author().is_none());
+    assert_eq!(member.requests.len(), 2);
+    member.no_result();
+    member.no_request();
+    let line = member
+        .run
+        .context
+        .barrier
+        .recorder()
+        .structure()
+        .by_kind(Kind::Recall)
+        .next()
+        .unwrap()
+        .line
+        .as_bytes()
+        .to_vec();
+    let mut received = vec![0; line.len()];
+    member.run._reader.read_exact(&mut received).unwrap();
+    assert_eq!(received, line);
+}
+
+#[test]
+fn read_cancellation_keeps_paging_release_and_refusal_dispositions_distinct() {
+    for refuse in [false, true] {
+        let mut member = Member::new();
+        let initial = member.begin();
+        member
+            .run
+            .context
+            .cancel_read(&mut member.run.clock)
+            .unwrap();
+        member.respond(&initial, page(7, 0, EMPTY.len(), &EMPTY[..8]));
+        let next = member.next_request();
+        if refuse {
+            member.respond(&next, refused(s::ReadRefusalCode::ResultUnavailable));
+        } else {
+            member.respond(&next, page(7, 8, EMPTY.len(), &EMPTY[8..]));
+        }
+        let release = member.next_request();
+        member.respond(
+            &release,
+            s::StateControlAnswer::Released {
+                snapshot_id: 7.into(),
+            },
+        );
+        let completion = loop {
+            member.advance().unwrap();
+            if let Some(completion) = member.run.context.take_read(&mut member.run.clock).unwrap() {
+                break completion;
+            }
+        };
+        let ReadCompletion::Cancelled(cancelled) = completion else {
+            panic!("cancelled paging read granted consumption");
+        };
+        if refuse {
+            assert!(
+                matches!(cancelled.refusal(), Some(crate::flow::read::ReadFailure::Refused {
+                code: s::ReadRefusalCode::ResultUnavailable, detail,
+            }) if detail == "scripted read refusal")
+            );
+            assert!(cancelled.recall_sequence().is_none());
+            assert!(member.records(Kind::Recall).is_empty());
+        } else {
+            assert!(cancelled.refusal().is_none());
+            assert!(cancelled.recall_sequence().is_some());
+            assert_eq!(member.records(Kind::Recall).len(), 1);
+        }
+        assert_eq!(member.requests.len(), 3);
+        assert!(
+            member
+                .run
+                .context
+                .deadlines
+                .get(PumpDeadline::StateControl)
+                .is_none()
+        );
+        member.no_result();
+        member.no_request();
+    }
+}
+
+struct RecallClock {
+    before: u64,
+    expired: u64,
+    remaining: usize,
+}
+impl PumpIo for RecallClock {
+    fn now(&mut self) -> std::io::Result<u64> {
+        if self.remaining == 0 {
+            Ok(self.expired)
+        } else {
+            self.remaining -= 1;
+            Ok(self.before)
+        }
+    }
+    fn wait(&mut self, _: &[WaitInterest<'_>], _: Option<u64>) -> std::io::Result<WaitOutcome> {
+        panic!("recall owner performs only bounded local progress");
+    }
+}
+
+#[test]
+fn recall_retains_before_author_and_after_recorded_across_recoverable_leave() {
+    // Advance checks live, its recall driver checks live, and preparation reads
+    // the clock. The fourth read binds the actual Recorded boundary; the fifth
+    // is the trailing lifecycle check after its continuation has been saved.
+    for remaining in [1, 4] {
+        let mut member = Member::new();
+        released(&mut member);
+        let bound = member.bound();
+        let now = member.now();
+        let leave = AbsoluteBound::after(now, 10).unwrap();
+        member
+            .run
+            .context
+            .arm(PumpDeadline::Leave, leave, &mut member.run.clock)
+            .unwrap();
+        let mut clock = RecallClock {
+            before: now,
+            expired: leave.deadline_ns(),
+            remaining,
+        };
+        assert_eq!(
+            member
+                .run
+                .context
+                .advance_read(&mut ports(&mut clock))
+                .unwrap_err(),
+            RunFailure::Wait {
+                key: PumpDeadline::Leave,
+                bound: leave
+            }
+        );
+        assert!(member.run.context.halt().is_none());
+        assert_eq!(
+            member.records(Kind::Recall).len(),
+            usize::from(remaining == 4)
+        );
+        if remaining == 1 {
+            assert_eq!(member.bound(), bound);
+        }
+        assert_eq!(
+            member
+                .run
+                .context
+                .advance_read(&mut ports(&mut clock))
+                .unwrap_err(),
+            RunFailure::Wait {
+                key: PumpDeadline::Leave,
+                bound: leave
+            }
+        );
+        member
+            .run
+            .context
+            .complete_wait(PumpDeadline::Leave)
+            .unwrap();
+        member.run.clock.advance_to(leave.deadline_ns()).unwrap();
+        let ReadCompletion::Recorded(read) = take(&mut member) else {
+            panic!("read lost proof");
+        };
+        assert_eq!(member.records(Kind::Recall).len(), 1);
+        assert_eq!(
+            member.records(Kind::Recall)[0]["sequence"],
+            read.recall_sequence().0.to_string()
+        );
+        assert_eq!(member.requests.len(), 2);
+        member.no_result();
+        member.no_request();
+    }
+}
+
+#[test]
+fn recall_recorded_boundary_cannot_extend_the_original_read_deadline() {
+    let mut member = Member::new();
+    released(&mut member);
+    let bound = member.bound();
+    let now = member.now();
+    let mut clock = RecallClock {
+        before: now,
+        expired: bound.deadline_ns(),
+        remaining: 3,
+    };
+    assert!(matches!(
+        member.run.context.advance_read(&mut ports(&mut clock)),
+        Err(RunFailure::Flow {
+            reason: FlowHaltReason::ControlBound,
+            ..
+        })
+    ));
+    assert_eq!(member.records(Kind::Recall).len(), 1);
+    assert!(member.run.context.take_read(&mut clock).is_err());
+    assert_eq!(member.requests.len(), 2);
+}
+
+#[test]
+fn cancelled_recorded_read_cannot_reacquire_consumption_or_repeat_recall() {
+    let mut member = Member::new();
+    released(&mut member);
+    assert_eq!(member.advance().unwrap(), ReadProgress::Complete);
+    member
+        .run
+        .context
+        .cancel_read(&mut member.run.clock)
+        .unwrap();
+    let ReadCompletion::Cancelled(cancelled) = take(&mut member) else {
+        panic!("late cancellation did not revoke consumption");
+    };
+    assert!(cancelled.recall_sequence().is_some());
+    assert!(cancelled.refusal().is_none());
+    assert_eq!(member.records(Kind::Recall).len(), 1);
+    member.no_result();
+}
