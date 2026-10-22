@@ -2,9 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #192
-
-**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -495,6 +493,43 @@ wind_down_bound is absent. The earlier of leave and filing-pause deadlines wins.
 snapshot or long read starts while a gate/cut barrier is armed. A save completes or
 fails before another model turn starts. [MARK-4, PERSIST-1, PERSIST-4, CLASS-8]
 
+**HARNESS-CAPTURE.** The capture frontier is a harness-local trace boundary, distinct
+from the member's captured SourcePosition. The recording context retains the greatest
+sequence whose serving author operation has returned Recorded in its current run.
+Every such completion advances this watermark through the same recording owner,
+including ordinary authors, untapped recall, classification/state measurements and flow
+observations. Partition selection, RecordPurpose and the reducer that receives the
+completion do not change this rule. CapacityPending has no sequence and advances
+nothing. Preserve the admitted sequence before any later fallible clock or lifecycle
+check. The watermark proves trace admission, not filing or sink survival. [FLOW-2,
+FLOW-3, FLOW-6, PERSIST-4]
+
+At the between-turn boundary, freeze new content admission and settle any pending
+content author before choosing the frontier. prepare_save freezes the current run and
+that Recorded watermark once, after SavePointBeginning has been carried. The caller
+cannot supply a smaller sequence or substitute a loaded run's position. The successful
+Recorded load supplies an initial watermark even when this run has filed no content.
+All blocks of an event at the frozen sequence lie within the boundary. Admission stays
+frozen until capture completes or its required cleanup proves that it can be released.
+[FLOW-2, PERSIST-1, PERSIST-4, STORE-5]
+
+Drain every selected source through that boundary to filed or correctly_rejected,
+including queued copies and blocked carry. A selected source from the current run
+beyond it is protocol_failed at barrier. A maximum sequence alone never discharges a
+source obligation. An untapped observation needed to finish filing, capture or cleanup
+may be Recorded after the freeze. It advances the live watermark but never changes the
+frozen frontier, admits content or resets a deadline. A later capture chooses the then
+current watermark. Existing author serialization, phase and failure restrictions still
+apply. [FLOW-3, FLOW-4, TAP-3, SEAM-2, CLASS-8]
+
+The member's image position remains its last committed statement or pair source, or
+null for a seed without operating content. Neither recall nor an operation observation
+creates that position. The capture watermark is not a new wire field, image position,
+operation ID, store counter or claim that untapped trace records are in the dump.
+STATE-OBSERVE independently determines which operation metadata precedes capture and
+therefore belongs to the image. No party rewrites the image to include the snapshot's
+own observation. [PERSIST-3, PERSIST-4, STORE-5, COST-2]
+
 **HARNESS-SAVE-TIME.** At the serving SavePoint handler, require TYPES-SAVE-TIME's
 window and compare its duration with loaded persistence.save_wait. Its began_ns cannot
 be later than the receiving pump's raw clock reading. Retain the absolute values while
@@ -962,6 +997,12 @@ and construct no filing. Metadata reads retain their existing restriction agains
 HeldMaterial, SelectedUnit and cut-grant construction. [FLOW-3, TAP-3, STORE-8,
 MARK-3, PERSIST-6]
 
+A successful Read or Boot recall advances HARNESS-CAPTURE's live Recorded watermark
+exactly as another serving trace completion does. It does not advance the member's
+SourcePosition or any already-frozen capture frontier. A refusal that authors no recall
+has no recall sequence to contribute, while its separately Recorded operation
+measurement follows the same watermark rule. [FLOW-3, PERSIST-4, TAP-3, STORE-5]
+
 | Read state | Observation | Provenance obligation |
 | --- | --- | --- |
 | Awaiting full result | Valid page, more pages remain | Hold bytes, author no recall, keep the original deadline |
@@ -1147,6 +1188,7 @@ claim that a between-turn pause has zero elapsed cost is made. [COST-2, COST-4]
 
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
+| HARNESS-CAPTURE | Same-content captures after ordinary authors, Read/Boot recall and coordinator observations, pending-ticket and post-freeze fixtures | Skip one author path, advance before Recorded, move the frozen boundary, admit later content or substitute the trace watermark for image position |
 | HARNESS-READ | Real member pagination and query-result trace checks | Place partial bytes, restart deadline per page, or file a recall |
 | HARNESS-RECALL | Every selector/result pair, null and populated plan snapshots, repeated prefixes, whole pairs, filtered ordinals, empty/refused reads, held or failed release and pending recorder fixtures | Walk metadata in another order, renumber bindings, deduplicate spans, invent a source for the seed, record a partial/refused read or before Released, expose before Recorded or author twice after a wake |
 | HARNESS-RECALL, plan_flags | Equal and distinct after/through.block_id fixtures | Emit duplicate sources for equal identities, reorder distinct sources or add a binding ordinal or span |

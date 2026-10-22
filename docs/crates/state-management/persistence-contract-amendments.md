@@ -2,9 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
-
-**Version:** 0.8 **Date filed:** 2026-10-20
+**Version:** 0.9 **Date filed:** 2026-10-20
 
 ## 0. Scope and parties
 
@@ -65,11 +63,22 @@ failed-enter rollback. A successful enter certifies these duties, not semantic t
 future model fidelity. [PERSIST-3, PERSIST-6, PROMPT-1, FLOW-3, PAIR-1]
 
 **PERSIST-CAPTURE.** A save uses the loaded declaration and occurs at a between-turn
-boundary. The harness freezes a source frontier and accounts for every item owed through
-it before capture. Correctly rejected material owes no store write. A socket send is not
-acceptance, and an uncertain commit cannot pass the barrier. The member supplies a
-complete immutable image of that held frontier. Admin may prepare a publication only
-from the matching capture result. [PERSIST-1, PERSIST-4, SEAM-2, MARK-4]
+boundary. The harness freezes HARNESS-CAPTURE's current-run Recorded trace boundary and
+accounts for every selected source owed through it before capture. Ordinary authors,
+recall and coordinator observations advance the same live watermark. Untapped
+observations after the freeze do not move its boundary. Correctly rejected material
+owes no store write. A socket send is not acceptance, and an uncertain commit cannot
+pass the barrier. The member supplies a complete immutable image after that barrier.
+Admin may prepare a publication only from the matching capture result. [PERSIST-1,
+PERSIST-4, FLOW-3, SEAM-2, MARK-4]
+
+The harness-local watermark is not sent as a member control field or substituted for
+the image's SourcePosition. That position names the member's last committed content
+source. The member's operation metadata keeps STATE-OBSERVE's cutoff before capture,
+including no recursive insertion of the snapshot's own observation into its image.
+Admin preserves the returned position and verifies the existing image/declaration
+binding. It does not infer a stored source from the harness's trace watermark.
+[PERSIST-3, PERSIST-4, STORE-5, COST-2]
 
 The on-demand save and a leave's capture have distinct timing scopes. The former may
 wait for the current turn under its supplied absolute window. The latter starts only
@@ -202,7 +211,7 @@ old state is the newly requested result. [FLOW-4, SEAM-2, CLASS-8]
 | PERSIST-IDENTITY | Mismatched image/declaration/binding and changed-draft fixtures | Load a mismatched start or substitute the draft |
 | PERSIST-OPERATOR-ACTS | Seed/rebind/restore authorization and chain tests | Seed a loaded agent, change the prompt by rebind or promote an unconfirmed image |
 | PERSIST-ENTER | Failed duty and pair-repair boot matrix | Open input before the seated head and empty-pair recheck |
-| PERSIST-CAPTURE | Delayed receipt and rejected-statement barrier fixtures | Capture an owed source or mistake correct rejection for loss |
+| PERSIST-CAPTURE | Delayed receipt, rejected-statement and untapped-record capture fixtures | Capture an owed source, mistake correct rejection for loss, move a frozen boundary or replace image position with a trace watermark |
 | PERSIST-CONFIRM | Each preparation/confirmation phase interrupted | Infer confirmation from an image or report publication before it happened |
 | PERSIST-END | Broken-flow teardown and later recovery | Attempt a halt dump, invent successful leave or publish a leftover capture |
 | PERSIST-ADOPT | Catalog/scheme/frontier/prompt failure fixtures | Partly adopt or claim declaration verification in the member |

@@ -2,9 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #192
-
-**Version:** 0.19 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
+**Version:** 0.20 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
 
 ## 0. What this document is
 
@@ -963,9 +961,11 @@ PERSIST-6]
 
 Conversation and span text queries select statement rows. Pair returns are attached
 whole through ReadPair. Shape, held and position continue to include both content types,
-so a pair terminal can be the save frontier. Paging bounds the complete encoded tagged
-result with all attachments. It never drops an over-large pair. [STORE-5, READ-5,
-PAIR-4]
+so a pair terminal can be the image's captured SourcePosition. This content position is
+distinct from HARNESS-CAPTURE's local Recorded trace watermark. Untapped recall and
+trace observations create no content row or SourcePosition. Paging bounds the complete
+encoded tagged result with all attachments. It never drops an over-large pair.
+[STORE-5, READ-5, PAIR-4, PERSIST-4]
 
 **STATE-OBSERVATION-READ.** Only the observations selector reads these tables. It
 carries {run:String,after:DecimalU64,through:Option<DecimalU64>}. run must be a valid

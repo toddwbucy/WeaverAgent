@@ -2,9 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
-
-**Version:** 0.18 **Date filed:** 2026-10-20 **Document ID:**
+**Version:** 0.19 **Date filed:** 2026-10-20 **Document ID:**
 `state-management-foundation-Spec` **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -228,7 +226,7 @@ PERSIST-6]
 | Ready channel | Read or small control | No action | Send one typed control with the next request ID | Return complete result or explicit refusal, Ready |
 | Ready with cursor | next/release or filing | No action | Preserve query identity and full-result deadline | Serve immutable page/release, or commit new filing without changing held pages |
 | Serving | Save or leave directive | Pin observed loaded facts | Queue save to boundary, preserve existing leave drain/wind-down rules | Finish ordinary accepted writes |
-| Barrier | Between-turn capture begins | Await image | Stop next turn, settle every owed source through frozen frontier | No source beyond the frontier may enter capture |
+| Barrier | Between-turn capture begins | Await image | Stop next turn, freeze HARNESS-CAPTURE's current-run Recorded trace boundary and settle every owed source through it | No selected source beyond the frontier may enter capture |
 | Capturing through AwaitCommit | PERSIST-SAVE continuations | Copy/hash and prepare bound declaration | Relay exact matching legs, record confirmation before Commit | Hold immutable image, no ordinary writes or reads |
 | After Commit | Publication succeeds | Publish/index, send Published | Record published, release capture, answer original directive | Release image, Ready or graceful close |
 | Before Commit | Explicit capture refusal | Preserve previous selection | Record refusal, clean up only when the held exchange permits | Holdings unchanged, release part/cursor as required |
@@ -405,6 +403,15 @@ successful rebind is a separate administrative act. [PERSIST-1, PERSIST-4, R2, R
 | Missing snapshot/finish result at its bound | No publication, await cleanup outcome before permitting retry | Keep barrier, send correlated abort before another ask, discard late result, await aborted | Delete held part or finished file, answer aborted, Ready |
 | Cleanup fails or aborted misses its bound | Failed run, no retryable save outcome | Latch component failure, no further state ask | No successful cleanup inferred |
 | Failure after Commit | Mark broken, stop publication, retain artifacts and report their locations | Halt, no further capture | No new save |
+
+The frozen capture frontier is HARNESS-CAPTURE's current-run Recorded trace boundary.
+It includes untapped serving trace completions already Recorded at freeze, but grants
+no filing by itself. Later observations required to settle owed work do not move that
+frozen boundary. The member's captured SourcePosition separately names its last
+committed content source. STATE-OBSERVE's metadata cutoff is separate from both. A
+recall or measurement may advance the live trace watermark without changing the
+image's content position. No new wire field or image rewrite follows from this
+distinction. [FLOW-3, PERSIST-3, PERSIST-4, STORE-5, COST-2]
 
 The ladder above summarizes duties. The actor tables below determine transitions. The
 member's complete state table is STATE-PERSIST-STATES. The harness owns the one
