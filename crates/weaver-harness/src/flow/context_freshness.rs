@@ -26,6 +26,7 @@ pub(in crate::flow) enum FreshnessProgress {
 
 /// The exact selected dispositions were recorded in this context. No public
 /// constructor or conversion from a sequence can manufacture this evidence.
+/// An empty required set is allowed and makes no claim about unrequested work.
 #[derive(Debug)]
 pub(in crate::flow) struct PreparedFreshness {
     origin: std::sync::Arc<()>,
@@ -62,7 +63,8 @@ pub(super) struct FreshnessTransaction {
 
 impl RecordingContext {
     /// Start the filing pause before a mandatory fresh read. Existing generic
-    /// author input remains owned; explicit transactions must finish first.
+    /// Non-turn author input remains owned. A retained turn start and explicit
+    /// transactions must finish first.
     pub(in crate::flow) fn prepare_cut(
         &mut self,
         required_ids: Vec<SourceBlockId>,
@@ -89,6 +91,14 @@ impl RecordingContext {
             || self.marks.is_some()
             || self.boot_pairs.is_some()
             || self.open_turn.is_some()
+            || self
+                .waiting_content
+                .as_ref()
+                .is_some_and(|event| event.kind == Kind::TurnStarted)
+            || self
+                .author_turn
+                .as_ref()
+                .is_some_and(|(kind, _)| *kind == Kind::TurnStarted)
             || self.input.snapshot().is_some()
             || self.input_author.is_some()
             || self.input_turn.is_some()
