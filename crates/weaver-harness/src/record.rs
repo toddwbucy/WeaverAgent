@@ -31,7 +31,8 @@ enum Arm {
 /// Why a submission failed, in the arm's own vocabulary. The two writers'
 /// failure sets are each their own, per the shared-shape-unshared-types
 /// election, so this carries whichever arm answered rather than translating
-/// one closed set into the other.
+/// one closed set into the other. The converter also uses the diagnostic
+/// submission-refusal vocabulary for a malformed compatible event before writing.
 #[derive(Debug)]
 pub enum RecordFailure {
     Serving(weaver_trace::Failure),
@@ -43,6 +44,9 @@ pub enum RecordFailure {
     /// own, tools do not execute, and nothing classifies under a replay. An
     /// elision does map since 2026-09-26, the replay reproducing a source's.
     OutsideDiagnosticVocabulary,
+    /// A diagnostic-only entry was called on the run's fixed serving arm.
+    /// Neither writer was called and the run's record mechanism did not change.
+    DiagnosticDoorOnServingRecord,
 }
 
 /// A serving run's record, through `weaver-trace`.
@@ -93,7 +97,7 @@ impl Record {
         event: weaver_trace::serving::Event,
     ) -> Result<Sequence, RecordFailure> {
         let submitted = match &mut self.arm {
-            Arm::Serving(_) => Err(RecordFailure::OutsideDiagnosticVocabulary),
+            Arm::Serving(_) => Err(RecordFailure::DiagnosticDoorOnServingRecord),
             Arm::Diagnostic(recorder) => convert_shared(event).and_then(|converted| {
                 recorder
                     .submit(converted)
@@ -165,7 +169,7 @@ impl Record {
         event: weaver_diagnostic::Event,
     ) -> Result<weaver_diagnostic::Sequence, RecordFailure> {
         let submitted = match &mut self.arm {
-            Arm::Serving(_) => Err(RecordFailure::OutsideDiagnosticVocabulary),
+            Arm::Serving(_) => Err(RecordFailure::DiagnosticDoorOnServingRecord),
             Arm::Diagnostic(recorder) => recorder.submit(event).map_err(RecordFailure::Diagnostic),
         };
         self.latch(submitted)
@@ -239,11 +243,10 @@ impl Record {
 
 /// The legacy event rendered into the diagnostic one. The sixteen shared
 /// kinds map by spelling and explicitly licensed payload variant. The
-/// diagnostic writer later binds its own session, run and sequence.
+/// converter preserves the supplied session, run and sequence. On submission the
+/// diagnostic writer replaces those three with its own identity and next sequence,
+/// which are the values carried by the emitted record.
 fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
-    if !legacy_payload_licensed(event.envelope.kind, event.payload.as_ref()) {
-        return Err(RecordFailure::OutsideDiagnosticVocabulary);
-    }
     let kind = match event.envelope.kind {
         Kind::TurnStarted => weaver_diagnostic::Kind::TurnStarted,
         Kind::TurnClosed => weaver_diagnostic::Kind::TurnClosed,
@@ -281,6 +284,15 @@ fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
             return Err(RecordFailure::OutsideDiagnosticVocabulary);
         }
     };
+    if !weaver_trace::payload_pairing_licensed(event.envelope.kind, event.payload.as_ref()) {
+        let refusal = match event.payload {
+            None => weaver_diagnostic::SubmitRefusal::RequiredFieldAbsent {
+                field: weaver_diagnostic::FieldName("payload".into()),
+            },
+            Some(_) => weaver_diagnostic::SubmitRefusal::PayloadKindMismatch,
+        };
+        return Err(diagnostic_refusal(refusal));
+    }
     let subsystem = match event.envelope.subsystem {
         Subsystem::Harness => weaver_diagnostic::Subsystem::Harness,
         Subsystem::Spu => weaver_diagnostic::Subsystem::Spu,
@@ -290,10 +302,18 @@ fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
     let payload = match event.payload {
         None => None,
         Some(payload) => {
-            let rendered = serde_json::to_string(&payload)
-                .map_err(|_| RecordFailure::OutsideDiagnosticVocabulary)?;
-            let raw = serde_json::value::RawValue::from_string(rendered)
-                .map_err(|_| RecordFailure::OutsideDiagnosticVocabulary)?;
+            use weaver_trace::Payload as P;
+            let raw = match payload {
+                P::Message(raw)
+                | P::Fault(raw)
+                | P::ModelRequest(raw)
+                | P::ModelMeasurement(raw)
+                | P::Refusal(raw)
+                | P::UnrecoveredCall(raw) => raw,
+                structured => serde_json::value::to_raw_value(&structured).map_err(|_| {
+                    diagnostic_refusal(weaver_diagnostic::SubmitRefusal::PayloadMalformed)
+                })?,
+            };
             Some(weaver_diagnostic::Payload::Spliced(raw))
         }
     };
@@ -316,30 +336,8 @@ fn convert(event: Event) -> Result<weaver_diagnostic::Event, RecordFailure> {
     })
 }
 
-fn legacy_payload_licensed(kind: Kind, payload: Option<&weaver_trace::Payload>) -> bool {
-    use weaver_trace::Payload as P;
-    matches!(
-        (kind, payload),
-        (Kind::TurnStarted, None)
-            | (Kind::TurnClosed, Some(P::TurnClosed(_)))
-            | (
-                Kind::MessageSystem
-                    | Kind::MessageUser
-                    | Kind::MessageAssistant
-                    | Kind::MessageToolResult,
-                Some(P::Message(_))
-            )
-            | (Kind::ModelRequest, Some(P::ModelRequest(_)))
-            | (Kind::ModelOutput, Some(P::ModelOutput(_)))
-            | (Kind::ModelMeasurement, Some(P::ModelMeasurement(_)))
-            | (Kind::ModelField, Some(P::ModelField(_)))
-            | (Kind::Flush, Some(P::Flush(_)))
-            | (Kind::Refusal, Some(P::Refusal(_)))
-            | (Kind::Fault, Some(P::Fault(_)))
-            | (Kind::Recall, Some(P::Recall(_)))
-            | (Kind::Elision, Some(P::Elision(_)))
-            | (Kind::ModelUnrecoveredCall, Some(P::UnrecoveredCall(_)))
-    )
+fn diagnostic_refusal(refusal: weaver_diagnostic::SubmitRefusal) -> RecordFailure {
+    RecordFailure::Diagnostic(weaver_diagnostic::Failure::SubmitRefused { refusal })
 }
 
 /// DIAGNOSTIC-CONVERT's envelope mapping discards only channel and origin.
