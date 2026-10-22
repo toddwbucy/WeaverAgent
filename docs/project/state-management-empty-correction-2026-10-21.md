@@ -13,15 +13,20 @@ current turn. Its detail is exactly:
 
 `correction contains no Text block or attempted call`
 
-Only the actual recorded refusal advances the existing failed-correction count. Below
-the cap, the same rejected source receives its next restatement request. At the cap,
-the existing exhaustion path retains the correction account. Backpressure retains the
-same author ticket and Decision bound. No empty replacement or invented checker result
-is produced. Empty original output, empty Text and attempted calls retain their
-existing distinct paths.
+Without cancellation, only the actual recorded refusal advances the existing
+failed-correction count. Below the cap, the same rejected source receives its next
+restatement request. At the cap, the existing exhaustion path retains the correction
+account. Backpressure retains the same author ticket and the Decision bound inherited
+from the correction's output check. No empty replacement or invented checker result is
+produced. Empty original output, empty Text and attempted calls retain their existing
+distinct paths.
 
-Stop and Unload finish an already pending refusal and return retained cancellation
-custody through the existing path. They grant no retry, successful emission or pair.
+Stop and Unload finish a refusal already staged by the repair owner, including one
+whose author has not started, as well as one waiting on a recording ticket. They then
+return retained cancellation custody through the existing path. The recorded refusal
+does not resume counting after cancellation; the correction remains pending evidence.
+These paths grant no retry, successful emission or pair. An unstarted restatement
+Instruction is suppressed because cancellation must not issue a new decode grant.
 
 Implements: state-management-spec-02-protocol-classifier-gate EMPTY-CORRECTION and
 REPAIR, scoped to this transition. Author grade: conforms.
@@ -52,11 +57,20 @@ case/detail preservation in both crates, source/turn/parent attribution, source 
 serialization, early/missing/duplicate counting, record ordering, call priority and
 empty-Text classification. Every exact source restoration passed its focused tests.
 
-Local evidence: `/tmp/weaver-146-evidence/empty/`, including the mutation logs and
-SHA-256 restoration records. The source manifest beside those logs identifies every
-tested Rust file. Harness gates used isolated Unix sockets, with no deployed agent.
+Durable evidence deposit:
+`weaver-testing/state-management-146-olympus-2026-10-21/empty/` on the bulk store.
+Its Olympus path begins `/bulk-store/`. It contains mutation logs, SHA-256 restoration
+records and the source manifest identifying the tested Rust files. The deposit's
+parent `SHA256.json` verifies the copied files. `/tmp/weaver-146-evidence/empty/`
+is staging only. Harness gates used isolated Unix sockets, with no deployed agent.
 
-An independent source review found no blocking defect in this transition. These
-results are an author check. The Planner's grade and production qualification
-remain separate. The PR stays draft and only the operator merges it. Issue #146 stays
-open, and its checklist is not ticked for an unmerged draft.
+The [Planner review][planner] grades both scoped Implements sections conforms at
+fbe313d5316324be0216f0db12f3f7184fa438a9. Its gates reproduce the counts above,
+and eight independent protective mutations fail as intended. No finding is fix-bucket.
+That grade is distinct from the author and independent Executor checks. Cancellation
+count semantics, the shared refusal helper and refusal-wait policy retain the review's
+batch dispositions; the wording and evidence corrections here change no behavior.
+Production qualification remains separate. Third-party review follows Planner
+verification. Only the operator merges. Issue #146 remains open.
+
+[planner]: https://github.com/toddwbucy/WeaverAgent/pull/224#pullrequestreview-5608764905
