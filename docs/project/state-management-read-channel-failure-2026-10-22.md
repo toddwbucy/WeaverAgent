@@ -1,5 +1,7 @@
 # State failure while recall owns recording
 
+Date: 2026-10-22. PR: #243.
+
 ## Scope and authority
 
 This slice answers #229 Planner review 5609135461 row 7 under issue #146. A pending
@@ -23,7 +25,9 @@ inspection.
 
 ## What the reported failure means in the current owner
 
-The inspected parent is boot/read head ad53706bf786cb2f633e2880a3e24dc2e37dbb27.
+The initial inspection used boot/read head ad53706bf786cb2f633e2880a3e24dc2e37dbb27.
+The published slice is stacked on begin-task #242 at da2b445. The validation below
+names that joined source rather than treating the initial inspection as its parent.
 The common pump already includes the standing state fd during pending recall and
 maps errors from the real StateChannel parser through the coordinator immediately.
 The new check covers a channel failure already observed but not yet mapped by that
@@ -76,3 +80,39 @@ production qualification is claimed.
 Capture-frontier semantics, read phase representation, neutral fixture relocation and
 number/SourcePosition cleanup remain separate review dispositions. This change adds no
 socket reader, retry loop, author reserve, state request or fresh wait interval.
+
+## Planner review followup
+
+Review 5609925177 found no blocking defect and distinguished the defensive path
+from normal pump failure mapping. Its batch rows have these dispositions:
+
+- Rows 1 and 8: both unmapped-latch orders are now exercised. The test-only probe
+  deliberately bypasses production mapping. When both otherwise unsequenced
+  latches are visible, the existing recorder-first inspection remains. The real
+  mapped state-first path still wins over a later recorder failure, as covered
+  by the inherited production chronology test. No new chronology is invented.
+- Row 2: the coordinator's internal failure point is halt because context failure
+  freezes it through latch. The retained first account still names StateReply,
+  its exact reason and channel detail. The internal point is not a replacement
+  for that account and does not authorize progress.
+- Rows 3 and 4: moving all passive port inspection into the coordinator is a
+  possible later cleanup. Production transport already maps both ports' errors.
+  This slice retains its deliberately isolated state defense and does not claim
+  an unmapped classifier check or a reproduced classifier deadline defect.
+- Row 5: the FlowFailure point is redundant in the state-specific branch, but
+  its detail is used. flow_failed passes failure.detail to fail, which retains
+  it in RunFailure and the first halt account. The earlier tests did not assert
+  its exact bytes. The local-parser test now checks channel.to_string exactly,
+  with a new protective recipe replacing that detail by a constant.
+- Rows 6 and 7: two isolated parser-latch tests directly pin the passive guard.
+  The other new tests exercise ordinary pump behavior, existing first-cause
+  handling, recorder priority or healthy deadlines. The four earlier protective
+  mutations concern different properties, not four reproduced runtime bugs.
+- Row 9: await_real_drain requires Emptied and unwraps drain_status. This fixture
+  instead waits for the writer's real failure. Reusing that success-only helper
+  would panic on the expected outcome. The bounded failure wait remains local.
+- Row 10: the inspection source and actual stacked parent are distinguished
+  above, and this record now names its assigned PR.
+
+The new detail pin and second unmapped-latch order await focused gates and the
+protective recipe run. No result is inferred from the previous suite.

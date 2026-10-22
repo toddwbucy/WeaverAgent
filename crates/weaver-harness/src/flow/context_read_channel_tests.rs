@@ -116,6 +116,8 @@ fn recall_local_advance_observes_real_parser_failure_without_reducing_flow() {
         );
         assert!(member.run.context.flow.failure().is_none());
         let failure = member.advance().unwrap_err();
+        assert!(matches!(&failure, RunFailure::Flow { detail, .. }
+            if detail == &channel.to_string()));
         assert!(member.now() < held.bound.deadline_ns());
         assert_failed(&mut member, &held, failure, expected_reason(malformed));
     }
@@ -170,46 +172,62 @@ fn recall_later_channel_failure_cannot_replace_the_first_context_latch() {
 
 #[test]
 fn recall_known_recorder_failure_keeps_priority_over_an_unmapped_state_failure() {
-    let mut member = Member::new();
-    let held = pending(&mut member);
-    member.run._reader.shutdown(Shutdown::Both).unwrap();
-    let watch = Instant::now() + Duration::from_secs(5);
-    loop {
-        let context = &mut member.run.context;
-        if context.barrier.drain_status(&mut context.budget).is_err() {
-            break;
+    // No production path leaves the channel latch unmapped. With both
+    // synthetic latches visible, preserve the established inspection priority,
+    // independently of which test-only parser probe ran first.
+    for state_first in [false, true] {
+        let mut member = Member::new();
+        let held = pending(&mut member);
+        if state_first {
+            break_state(&mut member, false);
+            member
+                .run
+                .context
+                .flow
+                .probe_state_without_failure_mapping_for_test(&mut member.run.clock)
+                .unwrap_err();
         }
-        assert!(
-            Instant::now() < watch,
-            "writer did not observe its closed sink"
+        member.run._reader.shutdown(Shutdown::Both).unwrap();
+        let watch = Instant::now() + Duration::from_secs(5);
+        loop {
+            let context = &mut member.run.context;
+            if context.barrier.drain_status(&mut context.budget).is_err() {
+                break;
+            }
+            assert!(
+                Instant::now() < watch,
+                "writer did not observe its closed sink"
+            );
+            std::thread::yield_now();
+        }
+        if !state_first {
+            break_state(&mut member, false);
+            member
+                .run
+                .context
+                .flow
+                .probe_state_without_failure_mapping_for_test(&mut member.run.clock)
+                .unwrap_err();
+        }
+        let failure = member.advance().unwrap_err();
+        assert!(matches!(
+            failure,
+            RunFailure::Flow {
+                reason: FlowHaltReason::TraceFailed,
+                point: HaltPoint::Author,
+                ..
+            }
+        ));
+        assert_eq!(
+            member.run.context.halt().unwrap().first().reason,
+            FlowHaltReason::TraceFailed
         );
-        std::thread::yield_now();
+        assert_eq!(
+            member.run.context.pending_author().unwrap().ticket,
+            held.ticket
+        );
+        assert_eq!(member.bound(), held.bound);
     }
-    break_state(&mut member, false);
-    member
-        .run
-        .context
-        .flow
-        .probe_state_without_failure_mapping_for_test(&mut member.run.clock)
-        .unwrap_err();
-    let failure = member.advance().unwrap_err();
-    assert!(matches!(
-        failure,
-        RunFailure::Flow {
-            reason: FlowHaltReason::TraceFailed,
-            point: HaltPoint::Author,
-            ..
-        }
-    ));
-    assert_eq!(
-        member.run.context.halt().unwrap().first().reason,
-        FlowHaltReason::TraceFailed
-    );
-    assert_eq!(
-        member.run.context.pending_author().unwrap().ticket,
-        held.ticket
-    );
-    assert_eq!(member.bound(), held.bound);
 }
 
 #[test]
