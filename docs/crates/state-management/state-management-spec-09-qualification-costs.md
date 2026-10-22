@@ -336,8 +336,9 @@ immediately before image serialization. Read the after counters when capture wor
 after its attempted room-file write and any recoverable cleanup, before constructing and
 encoding the answer payload. The capture phase still covers serialization and filesystem
 covers the room write and its cleanup. Neither is renamed or expanded to stand for the
-resource bracket. This follows the operator's ruling of 2026-10-20: include parsing in
-wall time and bracket capture separately. [COST-1, COST-2, COST-4, STORE-1]
+resource bracket. The [operator's ruling of 2026-10-21][snapshot-timing-ruling] confirms
+including parsing in wall time and bracketing capture separately.
+[COST-1, COST-2, COST-4, STORE-1]
 
 A snapshot refused before capture starts reads no resource counters. cpu_ns is null
 with not_sampled, and disk uses the same not_sampled form as an ordinary operation. If
@@ -742,3 +743,5 @@ through DEFER-5, PREFETCH-1 through PREFETCH-3]
 
 [transition]:
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
+
+[snapshot-timing-ruling]: https://github.com/toddwbucy/WeaverAgent/pull/192#issuecomment-6330669302
