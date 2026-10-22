@@ -53,12 +53,12 @@ contract. Existing code continues to use the previous contracts until the named 
 | [weaver-admin Spec: flow, seed, publication, and boot amendment](weaver-admin-Spec-amendment.md) | 0.14 |
 | [weaver-diagnostic Spec: isolated legacy conversion amendment](weaver-diagnostic-Spec-amendment.md) | 0.8 |
 | [weaver-gate Spec: input refusal and fault interrupt amendment](weaver-gate-Spec-amendment.md) | 0.7 |
-| [weaver-harness Spec: dependable-flow amendment](weaver-harness-Spec-amendment.md) | 0.22 |
+| [weaver-harness Spec: dependable-flow amendment](weaver-harness-Spec-amendment.md) | 0.23 |
 | [weaver-harness / weaver-spu - STE100 contract](weaver-harness-spu-ste100-contract.md) | 0.4 |
 | [weaver-internal Spec: pure recall query amendment](weaver-internal-Spec-amendment.md) | 0.4 |
 | [weaver-spu Spec: placement measurement and STE100 duty amendment](weaver-spu-Spec-amendment.md) | 0.5 |
 | [weaver-state Spec: flow, schema, read, and persistence amendment](weaver-state-Spec-amendment.md) | 0.19 |
-| [weaver-trace Spec: dependable-flow amendment](weaver-trace-Spec-amendment.md) | 0.21 |
+| [weaver-trace Spec: dependable-flow amendment](weaver-trace-Spec-amendment.md) | 0.22 |
 | [weaver-types Spec: dependable-flow amendment](weaver-types-Spec-amendment.md) | 0.23 |
 
 The frozen [graphable paper v0.14][paper] is supporting theory. The PRD and later
