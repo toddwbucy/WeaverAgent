@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #192
+**Landing PR:** #237
 
-**Version:** 0.19 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
+**Version:** 0.20 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
 
 ## 0. What this document is
 
@@ -963,9 +963,11 @@ PERSIST-6]
 
 Conversation and span text queries select statement rows. Pair returns are attached
 whole through ReadPair. Shape, held and position continue to include both content types,
-so a pair terminal can be the save frontier. Paging bounds the complete encoded tagged
-result with all attachments. It never drops an over-large pair. [STORE-5, READ-5,
-PAIR-4]
+so a pair terminal can be the image's captured SourcePosition. This content position is
+distinct from HARNESS-CAPTURE's local Recorded trace watermark. Untapped recall and
+trace observations create no content row or SourcePosition. Paging bounds the complete
+encoded tagged result with all attachments. It never drops an over-large pair.
+[STORE-5, READ-5, PAIR-4, PERSIST-4]
 
 **STATE-OBSERVATION-READ.** Only the observations selector reads these tables. It
 carries {run:String,after:DecimalU64,through:Option<DecimalU64>}. run must be a valid
@@ -1146,14 +1148,15 @@ separate. [FLOW-3, SEAM-2, SCOPE-1, R20-19]
 
 A dump includes metadata committed before capture began. The snapshot operation's own
 observation, its acknowledgement and release are later RAM records and are absent from
-that captured image. A later capture may include them. This is an explicit frontier, not
-a recursive rewrite of a hashed image. CaptureHeld permits only this internal
-bookkeeping for allowed continuations, never content filing. Observation metadata does
-not advance SourcePosition. On reload, old run rows remain historical and the new open
-uses a new run identity with operation_id one. New runs use state-observation/2.
-Adoption validates historical /1 and /2 identities without rewriting them, and explicit
-observations reads return each run's original identity. This does not admit a current
-opened response using /1. [PERSIST-1, PERSIST-3, PERSIST-4, COST-2, COST-5, R20-19]
+that captured image. A later capture may include them. This is an explicit metadata
+cutoff, not a recursive rewrite of a hashed image. CaptureHeld permits only this
+internal bookkeeping for allowed continuations, never content filing. Observation
+metadata does not advance SourcePosition. On reload, old run rows remain historical and
+the new open uses a new run identity with operation_id one. New runs use
+state-observation/2. Adoption validates historical /1 and /2 identities without
+rewriting them, and explicit observations reads return each run's original identity.
+This does not admit a current opened response using /1. [PERSIST-1, PERSIST-3,
+PERSIST-4, COST-2, COST-5, R20-19]
 
 STATE-PAGES reserves space for the observation and wrapper as frame accounting.
 ReadPage.octets holds only its typed QueryResult. Other queries never receive stored
@@ -1179,7 +1182,7 @@ queries and counts exclude it. Inject metadata-commit failure after a content co
 require channel closure without resend. Remove the separate-table rule,
 commit-before-answer guard, run key, fixed read frontier or single-insert guard in
 separate mutations. Each must fail its fixture. Snapshot/reload must preserve exactly
-its captured metadata frontier. This pass proves accounting, not zero disk wait.
+its captured metadata cutoff. This pass proves accounting, not zero disk wait.
 [FLOW-4, SEAM-2, SEAM-3, COST-5, FALS-3, R20-19]
 
 The actual snapshot fixture records ordered hooks at the operation timestamp, hint
@@ -1316,7 +1319,7 @@ weaver-state dependency of any kind. [FLOW-4, FLOW-5, SEAM-2, SCOPE-1]
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
 | STATE-CONNECTION | Seed and adopted-image connection fixtures read settings and build facts before use, with rejected fact variants | Remove the initializer, accept TEMP_STORE=0 or unknown build facts, or expose an adopted connection before rechecking |
-| STATE-OBSERVATION-SCHEMA/READ/OBSERVE | Exact metadata JSON, real response writes, explicit query, capture-frontier, ordered snapshot-sampling and historical-version fixtures | Mix metadata with content, reobserve an insert, omit a required row, include the read itself, send success after metadata failure, reorder sampling or relabel old evidence |
+| STATE-OBSERVATION-SCHEMA/READ/OBSERVE | Exact metadata JSON, real response writes, explicit query, capture metadata-cutoff, ordered snapshot-sampling and historical-version fixtures | Mix metadata with content, reobserve an insert, omit a required row, include the read itself, send success after metadata failure, reorder sampling or relabel old evidence |
 | STATE-SCHEMA | Execute literal DDL, inspect catalog, EXPLAIN noun and verb queries | Remove index, source CHECK, or FK |
 | STATE-FILE | STATE-FILING-INSTRUMENTS and shared malformed corpus | Emit receipt before commit or accept partial noun rows |
 | STATE-PLAN-SCHEMA, STATE-PLAN-READ | Literal DDL, ordered reads and reload fixtures | Allow two unfinished plans/active steps, renumber IDs or omit historical references |

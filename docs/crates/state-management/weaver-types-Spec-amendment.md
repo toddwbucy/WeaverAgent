@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #232
+**Landing PR:** #237
 
-**Version:** 0.26 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.27 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -800,9 +800,10 @@ config_sha256} and SavePointCommit {capture_id} on the existing lifecycle channe
 Existing SavePointTaken/Left retain their role as outcomes. Replace SavePointReport with
 {start:StartIdentity, capture_id:DecimalU64, event_run:RunId,
 event_sequence:DecimalU64}. The event fields name the confirmed save_point record. The
-captured source frontier appears once, at start.position. These fields replace the old
-one-file name, save_point, run, sequence, turn, event_run and position fields, not
-aliases for them. Only a Published capture produces this report. Diagnostic takes no
+captured content SourcePosition appears once, at start.position. It is not the harness's
+frozen trace boundary. These fields replace the old one-file name, save_point, run,
+sequence, turn, event_run and position fields, not aliases for them. Only a Published
+capture produces this report. Diagnostic takes no
 save point and uses Left.no_state without a report. SavePointNotTaken remains for
 explicit operation refusal. Its missing snapshot/finished use remains under R20-6.
 Prepared is an admin request to confirm a frozen healthy capture. Commit is the worker's
