@@ -95,6 +95,7 @@ impl RecordingContext {
             });
         };
         if self.marks.is_some()
+            || self.boot_pairs.is_some()
             || !self.repair_allows_output()
             || self.freshness.is_some()
             || self.output.is_some()

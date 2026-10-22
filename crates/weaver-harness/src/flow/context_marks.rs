@@ -176,6 +176,7 @@ impl RecordingContext {
             return Err(error(input, BeginTaskRefusal::MissingWait, None));
         };
         if self.marks.is_some()
+            || self.boot_pairs.is_some()
             || self.freshness.is_some()
             || self.output.is_some()
             || self.filing.is_some()

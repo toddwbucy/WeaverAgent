@@ -76,6 +76,7 @@ impl RecordingContext {
             });
         }
         if self.marks.is_some()
+            || self.boot_pairs.is_some()
             || self.output.is_some()
             || self.freshness.is_some()
             || self.filing.is_some()
@@ -398,6 +399,9 @@ impl RecordingContext {
 
     pub(in crate::flow) fn cancel_input(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         self.live(io)?;
+        if self.boot_pairs_blocks_external() {
+            return Err(RunFailure::BootPairsOwned);
+        }
         if self.marks_blocks_external() {
             return Err(RunFailure::MarksOwned);
         }
@@ -441,6 +445,9 @@ impl RecordingContext {
     /// check. The original exchange stays owned until its recorded disposition.
     pub(in crate::flow) fn finish_input(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         self.live(io)?;
+        if self.boot_pairs_blocks_external() {
+            return Err(RunFailure::BootPairsOwned);
+        }
         if self.marks_blocks_external() {
             return Err(RunFailure::MarksOwned);
         }
@@ -466,6 +473,12 @@ impl RecordingContext {
             return Err(InputConsumeError {
                 token: Some(token),
                 failure,
+            });
+        }
+        if self.boot_pairs_blocks_external() {
+            return Err(InputConsumeError {
+                token: Some(token),
+                failure: RunFailure::BootPairsOwned,
             });
         }
         if self.marks_blocks_external() {
@@ -517,6 +530,9 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Option<SeatedInput>, RunFailure> {
         self.live(ports.io)?;
+        if self.boot_pairs_blocks_external() {
+            return Err(RunFailure::BootPairsOwned);
+        }
         if self.marks_blocks_external() {
             return Err(RunFailure::MarksOwned);
         }

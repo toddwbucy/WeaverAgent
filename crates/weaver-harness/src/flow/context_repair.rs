@@ -226,6 +226,7 @@ impl RecordingContext {
         {
             Some(RepairBeginRefusal::WrongPhase)
         } else if self.marks.is_some()
+            || self.boot_pairs.is_some()
             || self.repair.is_some()
             || self.freshness.is_some()
             || self.repair_certificate.is_some()

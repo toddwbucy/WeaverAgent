@@ -65,6 +65,7 @@ pub(super) enum FilingOwner {
     Pair,
     Outbound,
     Marks,
+    BootPairs,
 }
 
 pub(super) struct FilingTransaction {
@@ -88,7 +89,7 @@ impl RecordingContext {
         key: PumpDeadline,
         io: &mut impl PumpIo,
     ) -> Result<(), FilingBeginError> {
-        if self.marks.is_some() || self.repair_blocks_external() {
+        if self.boot_pairs.is_some() || self.marks.is_some() || self.repair_blocks_external() {
             return Err(FilingBeginError {
                 event,
                 refusal: FilingBeginRefusal::Busy,
@@ -155,7 +156,9 @@ impl RecordingContext {
                 failure: None,
             });
         }
-        if self.output.is_some()
+        if (self.boot_pairs.is_some() && owner != FilingOwner::BootPairs)
+            || (owner == FilingOwner::BootPairs && !self.boot_pairs_filing_allowed())
+            || self.output.is_some()
             || self.freshness.is_some()
             || self.filing.is_some()
             || self.flow.has_filing_consumer()
@@ -210,6 +213,26 @@ impl RecordingContext {
         // custody slot, including when older filings delay this author.
         self.waiting_content = Some(event);
         Ok(())
+    }
+
+    pub(super) fn owned_filing_recorded_before(&self, owner: FilingOwner, bound: AbsoluteBound) -> bool {
+        self.filing.as_ref().is_some_and(|filing| filing.owner == owner
+            && filing.bound == bound && filing.author_done && !filing.cancelled)
+            && self.flow.filing_receipts().is_some_and(ReceiptSet::is_complete)
+            && self.flow.filing_recorded_ns().is_some_and(|at| !bound.expired(at))
+    }
+
+    pub(super) fn withdraw_unstarted_boot_pair(&mut self) -> Option<AuthoredEvent> {
+        let owner = self.filing.as_ref()?;
+        if owner.owner != FilingOwner::BootPairs || owner.sequence.is_some()
+            || self.barrier.pending_author().is_some() || self.waiting_content.is_none()
+        {
+            return None;
+        }
+        let event = self.waiting_content.take();
+        self.flow.cancel_filing_receipts();
+        self.filing = None;
+        event
     }
 
     pub(super) fn filing_wait_still_owned(&self, key: PumpDeadline) -> bool {
