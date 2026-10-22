@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #189
+**Landing PR:** #192
 
-**Version:** 0.23 **Date filed:** 2026-10-20 **Parent:** weaver-harness-PRD
+**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -928,10 +928,11 @@ For an observations read, recall retains the exact typed selector and snapshot_i
 sources and spans empty. These are operation identities, not content provenance. No
 observation is placed by the read adapter. [SEAM-3, FLOW-3, R20-19]
 
-For a successful plan_flags read, recall.sources cites after then through.block_id as
-TRACE-RECALL-SOURCES defines, with no binding ordinals, and recall.spans is empty. Its
-selector and snapshot_id retain their ordinary typed meanings. The counts appear only
-in the later plan observation.
+For a successful plan_flags read, visit after then through.block_id and deduplicate
+exact ContentRefs in first-encounter order for recall.sources, as TRACE-RECALL-SOURCES
+defines. If after equals through.block_id, retain exactly one source. Every source has
+empty binding_ordinals, and recall.spans is empty. The selector and snapshot_id retain
+their ordinary typed meanings. The counts appear only in the later plan observation.
 Release the snapshot once and never retain a read cursor just to produce a measurement.
 [PLAN-3, SEAM-3, FLOW-3, COST-4]
 
@@ -1148,6 +1149,7 @@ claim that a between-turn pause has zero elapsed cost is made. [COST-2, COST-4]
 | --- | --- | --- |
 | HARNESS-READ | Real member pagination and query-result trace checks | Place partial bytes, restart deadline per page, or file a recall |
 | HARNESS-RECALL | Every selector/result pair, null and populated plan snapshots, repeated prefixes, whole pairs, filtered ordinals, empty/refused reads, held or failed release and pending recorder fixtures | Walk metadata in another order, renumber bindings, deduplicate spans, invent a source for the seed, record a partial/refused read or before Released, expose before Recorded or author twice after a wake |
+| HARNESS-RECALL, plan_flags | Equal and distinct after/through.block_id fixtures | Emit duplicate sources for equal identities, reorder distinct sources or add a binding ordinal or span |
 | HARNESS-MATERIAL | Filtered binding, whole-pair, current-result and stored-span fixtures plus private-constructor pins | Renumber a binding, omit an attached return, duplicate the live request or mint a live grant from a stored record |
 | HARNESS-SELECTION-INPUT | Explicit criterion and complete unit fixtures | Invent a default strategy or accept an incomplete unit |
 | HARNESS-MARKS | One input/task fixture, stop/leave rows, concurrent plan-operation and template-defect cases | Start generation before mark receipt, reuse an uncertain ID, skip input coverage or turn a correct defect into a halt |
