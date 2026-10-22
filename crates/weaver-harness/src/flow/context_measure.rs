@@ -300,6 +300,7 @@ impl RecordingContext {
             return Err(error(request, MeasureBeginRefusal::WrongTurn, None));
         }
         if self.marks.is_some()
+            || self.boot_pairs.is_some()
             || self.measure.is_some()
             || self.output.is_some()
             || self.filing.is_some()
@@ -311,6 +312,7 @@ impl RecordingContext {
             || self.member_capture.is_some()
             || self.freshness.is_some()
             || self.read.is_some()
+            || self.inspection.is_some()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()
             || self.waiting_content.is_some()
@@ -738,6 +740,12 @@ impl RecordingContext {
         {
             owner.failed_wire = bytes;
         }
+    }
+
+    pub(super) fn has_owed_measure_refusal(&self) -> bool {
+        self.measure
+            .as_ref()
+            .is_some_and(|owner| owner.failed_refusal.is_some() || owner.failed_refusal_queued)
     }
 
     /// Only owed trace reporting progresses after this measurement's protocol

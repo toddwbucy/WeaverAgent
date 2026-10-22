@@ -12,6 +12,9 @@ use std::net::Shutdown;
 use weaver_trace::{Subsystem, TurnRef};
 use weaver_types::state_flow as s;
 
+#[path = "context_inspection_tests.rs"]
+mod inspection_tests;
+
 const CONTROL_NS: u64 = 2_000_000_000;
 const EMPTY: &[u8] = br#"{"entries":{"entries":[]}}"#;
 
@@ -1504,3 +1507,6 @@ fn validation_crossing_the_deadline_cannot_publish_a_page_or_released_result() {
         assert_eq!(member.requests.len(), if at_release { 2 } else { 1 });
     }
 }
+
+#[path = "context_halt_tests.rs"]
+mod halt_tests;

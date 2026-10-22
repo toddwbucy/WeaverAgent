@@ -1846,3 +1846,84 @@ fn invalid_expected_positions_return_the_proposal_without_any_decode_write() {
         );
     }
 }
+
+#[test]
+fn halt_report_preserves_measurement_refusal_owner_and_records_it_after_the_fault() {
+    let mut peer = Peer::new();
+    peer.begin(request(), PumpDeadline::Decision);
+    peer.sent();
+    peer.fill_trace();
+    let raw = serde_json::to_vec(&TokenRefusal::NotOpen).unwrap();
+    send_bytes(peer.peer.as_fd(), &raw);
+    let failure = peer.advance(PollFlags::POLLIN).unwrap_err();
+    peer.run
+        .context
+        .freeze_halt_account(crate::flow::halt_snapshot::ExternalFacts {
+            outstanding_pairs: peer.run.context.outstanding_pairs(),
+            capture: None,
+            wait: peer.run.context.halt_wait().cloned(),
+            input_id: None,
+        })
+        .unwrap();
+    peer.run.context.begin_halt_report().unwrap();
+    let HaltTraceProgress::FaultRecorded(fault) = peer
+        .run
+        .context
+        .advance_halt_trace(&mut peer.run.clock)
+        .unwrap()
+    else {
+        panic!("reserved halt fault");
+    };
+    assert!(peer.records(Kind::Refusal).is_empty());
+    assert_eq!(
+        peer.run
+            .context
+            .advance_halt_trace(&mut peer.run.clock)
+            .unwrap(),
+        HaltTraceProgress::Pending
+    );
+    assert_eq!(peer.run.context.pending_measure_raw(), Some(raw.as_slice()));
+    peer.drain_trace();
+    let mut refusal = None;
+    for _ in 0..64 {
+        if let HaltTraceProgress::TraceRecorded(sequence) = peer
+            .run
+            .context
+            .advance_halt_trace(&mut peer.run.clock)
+            .unwrap()
+        {
+            refusal = Some(sequence);
+            break;
+        }
+    }
+    assert!(refusal.unwrap().0 > fault.0);
+    assert!(!peer.run.context.has_owed_measure_refusal());
+    assert_eq!(
+        peer.run
+            .context
+            .failed_measure_refusal_progress(&mut peer.run.clock)
+            .unwrap(),
+        refusal
+    );
+    assert_eq!(peer.records(Kind::Refusal).len(), 1);
+    assert!(
+        peer.records(Kind::Refusal)[0]
+            .to_string()
+            .contains("not_open")
+    );
+    assert_eq!(
+        peer.run
+            .context
+            .advance_halt_trace(&mut peer.run.clock)
+            .unwrap(),
+        HaltTraceProgress::Idle
+    );
+    assert_eq!(peer.run.context.pending_measure_raw(), Some(raw.as_slice()));
+    assert_eq!(
+        peer.run
+            .context
+            .take_measurement(3.into(), &mut peer.decode, &mut peer.run.clock)
+            .unwrap_err(),
+        failure
+    );
+}
