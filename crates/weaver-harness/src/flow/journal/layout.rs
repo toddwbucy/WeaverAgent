@@ -1,6 +1,7 @@
 //! Canonical cursor and source arithmetic. No token positions are inferred here.
 
 use super::*;
+use crate::flow::material::SourceMapEntry;
 use std::cmp::Ordering;
 use weaver_traits::ContentBlock;
 use weaver_types::state_flow::{Span, StepQueryRef};
@@ -209,6 +210,24 @@ pub(super) fn prefix(
     }
     message.sources = sources;
     Ok(kept)
+}
+
+/// MESSAGE-MAP orders distinct materials by the unit's map, not by the Message
+/// walk: a later recall request can map back into an earlier Text Message.
+pub(super) fn validate_coverage(
+    source_map: &[SourceMapEntry],
+    sources: &[MaterialRef],
+) -> Result<()> {
+    let mut distinct = vec![];
+    for mapping in source_map {
+        if !distinct.contains(&mapping.material) {
+            distinct.push(mapping.material.clone());
+        }
+    }
+    if distinct != sources {
+        return Err(JournalError::InvalidMap);
+    }
+    Ok(())
 }
 
 pub(super) fn coverage(messages: &[RetainedMessage]) -> Vec<MaterialRef> {
