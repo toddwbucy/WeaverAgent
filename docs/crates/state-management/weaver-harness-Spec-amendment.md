@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #192
+**Landing PR:** pending assignment
 
-**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -317,6 +317,13 @@ test-only fixture-read/1 dictionary comes from TYPES-CLASSIFIER. Production sche
 dictionary and artifact digest come from FlowConfig.scheme, checked against the adapter
 at load. No label-score answer satisfies this trait. The production adapter uses Spec
 02's CHANNEL and PORT, preserving this near side. [CLASS-2, CLASS-7, CLASS-8, R10]
+
+The production bootstrap carries the declared model binding unchanged. Spec 02's
+MANIFEST-LOCATOR makes its artifact the exact manifest file; the SPU acquires it
+and its referenced files. The worker does no directory discovery or model-file
+preopening and passes no extra artifact descriptor across exec. Admission refusal
+keeps the existing after-load rollback and original load deadline. [CLASS-2,
+CLASS-8, PERSIST-6, SEAM-2]
 
 Validate bindings for a Text block without normalizing its bytes: target and scheme,
 nonempty ordered statements, valid UTF-8 spans, nouns within statements, condition

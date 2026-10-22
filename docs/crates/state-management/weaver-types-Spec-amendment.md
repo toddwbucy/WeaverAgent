@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #213
+**Landing PR:** pending assignment
 
-**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -120,6 +120,13 @@ ModelBinding judgment. max_wire_bytes must fit usize. Digest is the validated SH
 representation defined above. The TOML form is kebab-case, the wire form snake_case.
 There is one decision_wait, under ste100, not another flow key. [CLASS-2, CLASS-6,
 CLASS-8, CLASS-9]
+
+Within Ste100Instruction, model_binding.artifact denotes Spec 02's exact manifest
+file under MANIFEST-LOCATOR. Keep ModelBinding and ArtifactRef's shared shape and
+existing syntax judgment; filesystem resolution and named-file digest checks belong
+to SPU admission. Neither the declaration codec nor the wire rewrites this locator
+to a directory. Decoder and legacy ClassifyInstruction bindings are unchanged.
+[CLASS-2, CLASS-7, SEAM-2]
 
 ToolPolicies is a closed map with sh as its only possible key. ToolPolicy has
 clock_ms:u64 and measurement_ref:String. Require a nonempty reference and a clock in

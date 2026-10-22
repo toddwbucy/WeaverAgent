@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** pending assignment
 
-**Version:** 0.4 **Date filed:** 2026-10-20 **Document ID:**
+**Version:** 0.5 **Date filed:** 2026-10-21 **Document ID:**
 weaver-harness-spu-ste100-contract **Parent:** weaver-agent-PRD, invariant 5.3
 **Editorial:** Per the Working Rules.
 
@@ -35,6 +35,13 @@ assume that readiness confirms the exact admitted identities and declared instan
 count. It must refuse a missing or mismatched admission result and may submit no content
 request before readiness. Admission failure prevents serving load completion through the
 existing rollback. [CLASS-2, CLASS-4, CLASS-8, PERSIST-6]
+
+For this duty the supplied binding identifies one exact model manifest under Spec
+02's MANIFEST-LOCATOR. The harness passes it unchanged. The checker owns acquisition
+of that manifest and its declared inputs, preserves their checked identities through
+its last use, and refuses an input outside that declared set. Ready covers the
+manifest and every named input; a substituted or unchecked input cannot satisfy that
+proof. This changes no legacy decoder or label binding. [CLASS-2, CLASS-7, SEAM-2]
 
 The checker may assume that the harness supplies the inventory's exact bytes. It must
 validate its artifact, grammar, vocabulary and compatibility before claiming readiness.
@@ -138,6 +145,7 @@ act. [CLASS-4, CLASS-9, SEAM-1, STORE-3]
 | Claim | Owning instrument and required evidence | Protective change that must fail |
 | --- | --- | --- |
 | Admission identity | TYPES-STE100-ADMISSION and SPU-STE100 readiness corpus | Accept a mismatched scheme, model, count or initial limit |
+| Manifest custody | Spec 02 MANIFEST-LOCATOR acquisition fixtures | Substitute a manifest, admit an undeclared input or use different content after checking |
 | Whole result and correlation | CHANNEL/PORT tests plus the harness ledger fixture | Accept a partial answer, wrong target, extra reply or legacy label score |
 | Meaning of a pass | MODEL/BINDING corpus and TEMPLATES inclusion proof | Treat samples as template proof or a capacity fault as bad language |
 | Defect versus failure | INPUT/REPAIR and terminal fault matrix | Halt on correct rejection, continue after broken checking or report closure as success |

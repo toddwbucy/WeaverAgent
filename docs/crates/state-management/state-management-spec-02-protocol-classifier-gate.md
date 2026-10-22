@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #213
+**Landing PR:** pending assignment
 
-**Version:** 0.14 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
+**Version:** 0.15 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -127,6 +127,51 @@ supplied by O02-2. The label array is exactly MODEL's seven labels in that order
 Duplicate/unknown fields refuse. checker_artifact_sha256 on ready and seed certificates
 is this manifest digest. artifact_sha256 on ready is the scheme digest. The checker
 executable's separate digest remains in the load tuple. [CLASS-2, CLASS-7, FLOW-3]
+
+**MANIFEST-LOCATOR.** For Ste100Instruction only, ModelBinding.artifact names the
+exact ste100-model/1 manifest file. It does not name a directory, a weight container
+or a model catalog entry. There is no conventional manifest basename, directory scan
+or filename fallback. The SPU resolves this pathname as the agent uid during
+bootstrap admission. Admin and the harness carry the declared binding unchanged;
+neither discovers the model files or sends extra artifact descriptors across exec.
+Legacy decoder and label-classifier bindings keep their existing resolution rules.
+[CLASS-2, CLASS-7, SEAM-2, October 18 R10]
+
+Pin the manifest's parent directory before opening its final path component relative
+to that directory. The final component must be a regular file, not a symbolic link.
+Read and retain its exact bytes; parsing and model_artifact_sha256 verification use
+those same bytes, including whitespace. The pinned parent is the artifact root for
+every ArtifactFile.name. Resolve those names beneath that root, with DECLARATION's
+component checks and no symbolic-link escape. A relative link whose complete
+resolution stays beneath the root is permitted. An absolute link target, parent
+escape or magic-link
+escape refuses; no alternate root is tried. Every referenced object must resolve to
+a readable regular file. [CLASS-2, CLASS-7, SEAM-1]
+
+Acquire referenced files relative to that retained root and verify every declared
+digest before Ready. The compiled adapter must consume the same acquired bytes that
+were hashed, through retained owned bytes or the retained file/mapping used for the
+read. It cannot reopen a pathname for configuration, tokenization, alignment, the
+span head or weights after checking a different instance. Keep each required owner
+until the adapter's last read, including deferred reads after Ready. Repeated names
+may share one acquired instance, but every declared digest must agree with it.
+Unreferenced files do not contribute to this duty's manifest SHA-256 and are not
+implicit adapter inputs. [CLASS-2, CLASS-7, FLOW-3]
+
+The model artifact retains SPU PRD section 7's provisioned custody: it is owned
+outside the agent uid, readable into the agent and not alterable by it. Pinning a
+descriptor prevents pathname replacement from substituting a different instance;
+it does not make externally writable file contents immutable. Provisioning must
+preserve the admitted bytes for any retained mapping or deferred file read. This
+does not apply admin's root-file ownership rule to model files or relocate them
+into admin's config root. [CLASS-2, CLASS-7, SEAM-1]
+
+A missing, unreadable, nonregular, escaping or digest-mismatched model artifact
+refuses bootstrap with unsupported_artifact and identifies the failed path or
+reference in detail. It grants no Ready and follows CHANNEL's existing failed-enter
+rollback under the original load budget. This locator adds no wire field, digest
+algorithm, grammar format, model adapter, language qualification or serving cutover.
+[CLASS-7, CLASS-8, PERSIST-6]
 
 The scheme-load pass certifies byte identity, the fixed vocabulary and compatible
 checker ABI under the recorded qualification. It does not certify safety, truth, or
@@ -659,6 +704,7 @@ a serving declaration. [CLASS-4, CLASS-7, PROMPT-2, FLOW-7]
 | --- | --- | --- |
 | PROTOCOL-OWNER, PORT | Manifest, fd-count and fork/exec integration tests, loop-thread review | Link an organ into harness, give the duty a store/gate fd, or replace the legacy label consumer |
 | SCHEME, CUSTODY, DECLARATION | Strict-codec and root-custody fixtures, load digest and immutable dictionary tests | Change artifact after inventory, accept an unknown key, or invent a runtime verb |
+| MANIFEST-LOCATOR | Agent-uid acquisition fixtures with pinned directories/files, path replacement, link confinement, nonregular files and exact-byte digest checks | Guess a manifest basename, escape the pinned root, reopen a checked path or load unhashed sidecars |
 | PARSER, CAPACITY | Normative boundary and long-name corpus with a deliberately undersized adapter | Call capacity a language defect or file an accepted prefix |
 | MODEL, BINDING | Model-adapter shape tests plus exact-span held-out corpus | Return sequence scores, accept NaN, select a condition's verb or case-fold a noun |
 | CHANNEL | Real SEQPACKET tests at exact datagram and whole-message bounds | Skip total/offset check, accept MSG_TRUNC, or use an incomplete reply |
