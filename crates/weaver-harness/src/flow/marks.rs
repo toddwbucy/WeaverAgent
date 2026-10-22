@@ -91,3 +91,54 @@ pub(super) fn catalog(result: &QueryResult, seed: &str) -> Result<TaskCatalog, C
         prompt: span(prompt.into()),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_revision_defense_rejects_an_inspection_value() {
+        // The actual read validator rejects these revisions before a
+        // RecordedRead exists. Exercise this downstream defense directly on
+        // plain query data rather than manufacturing a recorded owner.
+        let seed = "a".repeat(32);
+        let span = |id| SpanRef {
+            seed_id: seed.clone(),
+            local_id: id,
+            revision: 1.into(),
+        };
+        let mut current = TaskScopeRef {
+            task: span(1.into()),
+            prompt: span(2.into()),
+        };
+        for change_task in [false, true] {
+            let result = QueryResult::Marks {
+                next_span_id: 3.into(),
+                current_task: Some(current.clone()),
+                open_scopes: vec![],
+            };
+            assert!(matches!(
+                catalog(&result, &seed),
+                Ok(TaskCatalog::Proposed(_))
+            ));
+            if change_task {
+                current.task.revision = 2.into();
+            } else {
+                current.prompt.revision = 2.into();
+            }
+            let result = QueryResult::Marks {
+                next_span_id: 3.into(),
+                current_task: Some(current.clone()),
+                open_scopes: vec![],
+            };
+            assert!(matches!(
+                catalog(&result, &seed),
+                Err(CatalogError::Invalid)
+            ));
+            current = TaskScopeRef {
+                task: span(1.into()),
+                prompt: span(2.into()),
+            };
+        }
+    }
+}
