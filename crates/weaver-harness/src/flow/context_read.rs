@@ -327,8 +327,8 @@ impl RecordingContext {
         }
         match self.queue_read_leg(io) {
             Ok(true) => Ok(()),
-            // Admission already transferred the exact pair into its read owner.
-            // Retain that deadline and retry the first control without rollback.
+            // Admission already transferred the inward pair or boot repair into
+            // this read owner. Retain its deadline and retry without rollback.
             Ok(false) if inward.is_some() || self.boot_pairs_read_allowed() => Ok(()),
             Ok(false) => {
                 self.read = None;

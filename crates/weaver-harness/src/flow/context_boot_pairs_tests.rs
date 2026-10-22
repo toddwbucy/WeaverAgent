@@ -1310,3 +1310,6 @@ fn inspection_returns_exact_boot_prerequisite_while_pending_or_complete() {
         assert_eq!(fx.run().context.deadlines.get(PumpDeadline::Enter), enter);
     }
 }
+
+#[path = "context_boot_pairs_review_tests.rs"]
+mod review_tests;

@@ -48,10 +48,10 @@ and reason null. FlowFailed, malformed result, broken seam and applicable expiry
 component failures, never empty-history success or fabricated operation refusal.
 
 Only the existing terminal filing door constructs CompletedPair and ToolResult after its
-exact recorded filing receipt. Consumed read evidence is retained in the pair before
-arming the terminal Decision wait. The success path has no intervening clock sample or
-recoverable yield. The existing serialized pair owner starts the next call's distinct
-request window after this terminal commits. No gate ExchangeId is invented.
+exact recorded filing receipt. On the read path, consumed evidence is retained in the
+pair before arming the terminal Decision wait. The success path has no intervening clock
+sample or recoverable yield. The existing serialized pair owner starts the next call's
+distinct request window after this terminal commits. No gate ExchangeId is invented.
 
 A stop or leave accepted before execution keeps the existing not_dispatched account.
 After an inward read starts, its explicit internal state prevents a null gate execution
@@ -64,6 +64,10 @@ The pure helper's EmptySubject mapping is implemented defensively. Checked nonem
 spans prevent that path through the current valid-emission port. Its representation is
 not evidence of a newly reachable bad-shape execution path. Existing association
 continues to refuse invalid recall shape before this owner receives a ready request.
+An empty constructor input retains the remaining request-receipt Decision window while
+its refusal terminal files. It does not acquire a read deadline or a fresh terminal
+window, matching the never-executed bar path. This is separate from the unmerged #241
+malformed-recall proposal and implements none of that proposal.
 
 ## Freshness boundary
 
@@ -135,6 +139,70 @@ context-order failure. No new fabricated receipt or grant was introduced to kill
 Logs from the initial failures, final gates, every mutation attempt and exact source
 hashes are retained under inward-recall in the shared issue #146 evidence deposit. These
 are scoped author checks, not Planner grading or production qualification.
+
+## Review follow-up
+
+Planner review 5610306631 at ec3b3409 found zero fix-bucket findings and five test gaps.
+The earlier gate and mutation totals above describe that prior source, not this
+follow-up. Five additional tests are now validated. On 2026-10-22, private target
+`/tmp/weaver-146-inward-target` with locked dependencies passed 19 focused tests,
+1344 full harness tests with 18 inherited ignored cases, and twelve internal tests.
+Both affected strict all-target lint gates, formatting and lock passed. All eight
+compiled protective mutations failed their intended tests and each exact restored
+baseline passed. Independent author review found no concrete defect in this bounded
+follow-up. No unavailable code-review skill invocation or Planner grade is claimed.
+
+The added instruments cover:
+
+- The exact empty_subject completed refusal, with no read control, recall event or new
+  wait. This is a defensive input probe after real receipts. A test-only helper clears
+  the derived ready subject while preserving the immutable opening evidence. That
+  deliberate inconsistency cannot come from checked noun spans and is not represented
+  as a valid model emission or a production empty-noun path.
+- A one-shot, per-instance Busy return from the actual begin_control boundary after
+  admission. It creates no operation, identity or recording proof. The retained read
+  survives and retries under its original StateControl window. Current synchronous
+  admission checks all the coordinator's Busy predicates, so this is a defensive
+  returned-result probe, not a claim that a competing producer can interleave there.
+- Pre-admission Busy caused by a real lower coordinator template check using canonical
+  TemplateSpec JSON. The inward retry reduces its actual classifier result to a recorded
+  completion while retaining the pair's request window. Its caller takes that proof
+  before the inward read admits. This is a defensive coordinator-capacity probe. The
+  public template owner excludes pair_work, so this ordering is not claimed as public
+  composition. Removing either the retry arm or its reduction must fail this test.
+- advance_pairs while an inward owner still holds a newly barred request. It cannot
+  author the terminal before inward withdrawal. The ordinary bar account then files
+  its actual not_dispatched terminal. Terminal progress includes this withdrawal and
+  grants no result by itself.
+- Independent readiness assertions before and after actual read admission. Before
+  admission the ledger remains ready but the context excludes another execution.
+  After admission a direct ledger assertion pins internal_started without relying on
+  the outer context guard. Each redundant predicate has its own mutation.
+
+Small cleanup borrows the History selector for comparison, names the dependency test's
+actual five-crate set, documents the synchronous driving scope and consolidates repeated
+owner unwrap chains. Stage::Terminal remains an explicit retained fatal-handoff state.
+A healthy path clears it atomically, and a failed path cannot resume ordinary work.
+The existing public read-exclusion tests continue to cover the driving permission.
+
+Payload custody was inspected without a broad representation change. RecordedRead
+retains exact raw bytes and parsed provenance. PairEnded, its completed copy and the
+ToolResult own separate account and delivery representations. Those repeated payload
+allocations remain a batch efficiency item. Removing them needs a measured custody
+change across the shared pair grant path, including external pairs. It must not discard
+raw evidence or add a result constructor. No unmeasured saving is claimed here.
+
+The lane, readiness, selector and origin checks remain local defensive assertions.
+Current private producers already satisfy the remaining survivor preconditions. No
+fabricated grant or foreign read was introduced to make those redundant checks fail.
+The review's WrongPhase claim remains disproved by pair-owned release exclusion and the
+initial live check. Turnless Recall with null causal parent remains the merged
+HARNESS-RECALL rule. Changing that attribution would require a separate Spec decision.
+
+Final recipes, runner, source hashes and per-row dispositions are deposited under
+`inward/review-batch/` in the shared issue #146 evidence root. The original surviving
+probes and their reachable-equivalence explanations remain in the earlier evidence.
+The #190 foundation-cutover hold remains.
 
 ## Remaining work
 

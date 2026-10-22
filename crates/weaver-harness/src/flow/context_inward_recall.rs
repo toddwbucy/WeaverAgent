@@ -15,6 +15,8 @@ pub(in crate::flow) enum InwardRefusal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::flow) enum InwardProgress {
     Pending,
+    /// The inward attempt has relinquished its owner. This also covers a
+    /// request withdrawn before execution. Only completed_pair grants a result.
     Terminal,
 }
 
@@ -38,12 +40,11 @@ impl InwardEvidence {
         };
         match completion {
             ReadCompletion::Recorded(read) => {
-                if read.selector()
-                    != &(ReadSelector::History {
-                        noun: subject.to_owned(),
-                        verb: None,
-                        condition: None,
-                    })
+                if !matches!(read.selector(), ReadSelector::History {
+                    noun,
+                    verb: None,
+                    condition: None,
+                } if noun == subject)
                 {
                     return None;
                 }
@@ -71,6 +72,8 @@ impl InwardEvidence {
 enum Stage {
     Starting,
     Reading,
+    // A fatal wait-arm failure keeps the already installed terminal evidence.
+    // Healthy work clears the owner in the same non-yielding handoff.
     Terminal,
 }
 
@@ -78,6 +81,9 @@ pub(super) struct InwardWork {
     call: CallId,
     subject: String,
     stage: Stage,
+    // Synchronous private calls may use the common read methods. These calls
+    // expose no mutable context to an external controller. Every return
+    // restores the flag.
     driving: bool,
     // An invalid consumed completion remains owned on the fatal path.
     refused: Option<InwardEvidence>,
@@ -230,6 +236,13 @@ impl RecordingContext {
         self.finish_inward_recall(call, InwardEvidence::Read(Box::new(completion)), ports.io)
     }
 
+    fn inward_work_mut(&mut self) -> &mut InwardWork {
+        self.pair_work
+            .as_mut()
+            .and_then(|work| work.inward.as_mut())
+            .expect("admitted inward owner")
+    }
+
     fn finish_inward_recall(
         &mut self,
         call: CallId,
@@ -242,32 +255,14 @@ impl RecordingContext {
             && let ReadCompletion::Recorded(read) = completion.as_ref()
             && !read.belongs_to(self)
         {
-            self.pair_work
-                .as_mut()
-                .unwrap()
-                .inward
-                .as_mut()
-                .unwrap()
-                .refused = Some(evidence);
+            self.inward_work_mut().refused = Some(evidence);
             return Err(self.pair_fault(io, "inward read belongs to another context"));
         }
         if let Err((evidence, error)) = self.pairs.finish_inward(&call, evidence) {
-            self.pair_work
-                .as_mut()
-                .unwrap()
-                .inward
-                .as_mut()
-                .unwrap()
-                .refused = Some(evidence);
+            self.inward_work_mut().refused = Some(evidence);
             return Err(self.pair_fault(io, format!("inward terminal: {error}")));
         }
-        self.pair_work
-            .as_mut()
-            .unwrap()
-            .inward
-            .as_mut()
-            .unwrap()
-            .stage = Stage::Terminal;
+        self.inward_work_mut().stage = Stage::Terminal;
         self.arm_pair_terminal_wait(io)?;
         self.pair_work.as_mut().unwrap().inward = None;
         Ok(InwardProgress::Terminal)

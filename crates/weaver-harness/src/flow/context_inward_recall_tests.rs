@@ -1457,3 +1457,298 @@ fn inspection_returns_exact_inward_emission_while_pending_or_complete() {
         assert_eq!(fx.pairs.output.input.records(Kind::Recall).len(), 1);
     }
 }
+
+#[test]
+fn inward_empty_subject_defensive_boundary_completes_without_any_read_control() {
+    let mut fx = InwardFixture::new(vec![text("Recall file.")]);
+    fx.ready();
+    // Checked noun spans cannot produce an empty value. Inject only the helper
+    // input at the already ready private ledger boundary, after real receipts.
+    // This is not a valid-emission fixture or evidence for malformed recall.
+    fx.pairs
+        .output
+        .input
+        .run
+        .context
+        .pairs
+        .empty_ready_inward_subject_for_test(&fx.calls[0]);
+    fx.begin(0);
+    let run = &mut fx.pairs.output.input.run;
+    let window = run.context.deadlines.get(PumpDeadline::Decision).unwrap();
+    assert_eq!(
+        run.context
+            .advance_inward_recall(&mut ports(&mut run.clock))
+            .unwrap(),
+        InwardProgress::Terminal
+    );
+    assert!(run.context.read.is_none());
+    assert!(run.context.flow.pending_control().is_none());
+    assert_eq!(
+        run.context.deadlines.get(PumpDeadline::Decision),
+        Some(window)
+    );
+    assert!(
+        run.context
+            .deadlines
+            .get(PumpDeadline::StateControl)
+            .is_none()
+    );
+    fx.complete(0);
+    assert!(fx.controls().is_empty());
+    assert!(fx.pairs.output.input.records(Kind::Recall).is_empty());
+    let run = &mut fx.pairs.output.input.run;
+    let pair = run
+        .context
+        .completed_pair(&fx.calls[0], &mut run.clock)
+        .unwrap()
+        .unwrap();
+    assert_eq!(pair.ended().call_id, fx.calls[0]);
+    assert_eq!(pair.ended().fate, s::TerminalPairFate::Completed);
+    assert!(pair.ended().execution.is_none());
+    assert!(pair.ended().reason.is_none());
+    assert_eq!(
+        pair.ended().outcome,
+        Some(ToolOutcome::Refused {
+            reason: "empty_subject".into(),
+        })
+    );
+    assert!(pair.recalled().is_none());
+    assert_eq!(
+        fx.pairs.output.input.records(Kind::ToolCallCompleted).len(),
+        1
+    );
+}
+
+#[test]
+fn inward_first_control_busy_retains_admitted_owner_and_original_window() {
+    let mut fx = InwardFixture::new(vec![text("Recall file.")]);
+    fx.begin(0);
+    let run = &mut fx.pairs.output.input.run;
+    // Admission already checks all synchronous busy predicates. Exercise the
+    // coordinator's defensive returned-Busy boundary without inventing a peer,
+    // request identity, author ticket or completion.
+    run.context.flow.defer_control_for_test(1);
+    assert_eq!(
+        run.context
+            .advance_inward_recall(&mut ports(&mut run.clock))
+            .unwrap(),
+        InwardProgress::Pending
+    );
+    let window = run
+        .context
+        .deadlines
+        .get(PumpDeadline::StateControl)
+        .unwrap();
+    assert!(run.context.read.is_some());
+    assert!(run.context.flow.pending_control().is_none());
+    assert!(run.context.flow.state().outstanding().is_empty());
+    assert!(run.context.deadlines.get(PumpDeadline::Decision).is_none());
+    assert_eq!(
+        run.context.outstanding_pairs()[0].state,
+        crate::flow::report::PairState::ExecutingInternal
+    );
+    run.clock.advance_to(window.began_ns() + 17).unwrap();
+    fx.held = HoldRead::Read;
+    fx.until_control(HoldRead::Read);
+    let run = &mut fx.pairs.output.input.run;
+    assert_eq!(
+        run.context.deadlines.get(PumpDeadline::StateControl),
+        Some(window)
+    );
+    assert!(run.context.read.is_some());
+    fx.held = HoldRead::None;
+    fx.complete(0);
+    assert_eq!(
+        fx.controls()
+            .iter()
+            .filter(|control| matches!(control, s::StateControl::Read { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(fx.pairs.output.input.records(Kind::Recall).len(), 1);
+    assert_eq!(
+        fx.pairs.output.input.records(Kind::ToolCallCompleted).len(),
+        1
+    );
+}
+
+#[test]
+fn inward_busy_before_admission_reduces_real_pending_check_and_retries() {
+    use crate::flow::coordinator::{CheckOperation, OperationStart};
+    let mut fx = InwardFixture::new(vec![text("Recall file.")]);
+    fx.begin(0);
+    let run = &mut fx.pairs.output.input.run;
+    let context = &mut run.context;
+    let window = context.deadlines.get(PumpDeadline::Decision).unwrap();
+    let template = s::TemplateSpec {
+        template_id: "inward-busy-probe".into(),
+        kind: "loop.instruction".into(),
+        parts: vec![s::TemplatePart::Literal("Read file.".into())],
+    };
+    let operation = CheckOperation::Template {
+        template_id: template.template_id.clone(),
+        text: serde_json::to_string(&template).unwrap(),
+    };
+    // This is a lower coordinator capacity probe. The public template owner
+    // excludes pair_work and cannot introduce this competing check here.
+    let started = context
+        .flow
+        .begin_check(
+            &mut FlowRecording {
+                barrier: &mut context.barrier,
+                inbox: &mut context.inbox,
+                budget: &mut context.budget,
+                author: &context.author,
+            },
+            operation.clone(),
+        )
+        .unwrap();
+    assert!(matches!(started, OperationStart::Started { .. }));
+    let request = fx
+        .pairs
+        .output
+        .receive_check()
+        .expect("queued template check");
+    request.validate().unwrap();
+    assert_eq!(
+        request.target,
+        s::Ste100Target::Template {
+            template_id: template.template_id.clone(),
+        }
+    );
+    assert_eq!(request.text, serde_json::to_string(&template).unwrap());
+    let reply = s::Ste100Reply {
+        request_id: request.request_id,
+        target: request.target,
+        scheme_id: request.scheme_id,
+        result: s::Ste100Result::Accepted { bindings: vec![] },
+    };
+    fx.pairs.output.input.reply(&reply);
+    fx.pairs.output.input.classifier_transport();
+    // The real classifier reply now requires coordinator reduction and its
+    // recorder proof. Only the inward Busy path below performs that reduction.
+    for _ in 0..64 {
+        let run = &mut fx.pairs.output.input.run;
+        assert_eq!(
+            run.context
+                .advance_inward_recall(&mut ports(&mut run.clock))
+                .unwrap(),
+            InwardProgress::Pending
+        );
+        assert!(run.context.read.is_none());
+        assert_eq!(
+            run.context.deadlines.get(PumpDeadline::Decision),
+            Some(window)
+        );
+        assert!(
+            run.context
+                .deadlines
+                .get(PumpDeadline::StateControl)
+                .is_none()
+        );
+        assert!(run.context.pairs.next_ready().is_some());
+        if run.context.flow.operation_completion().is_some() {
+            break;
+        }
+    }
+    assert!(fx.controls().is_empty());
+    assert!(fx.pairs.output.input.records(Kind::Recall).is_empty());
+    let context = &mut fx.pairs.output.input.run.context;
+    let Some(OperationCompletion::Check(recorded)) = context
+        .flow
+        .take_operation_completion(&mut FlowRecording {
+            barrier: &mut context.barrier,
+            inbox: &mut context.inbox,
+            budget: &mut context.budget,
+            author: &context.author,
+        })
+        .unwrap()
+    else {
+        panic!("pending template check did not record through the Busy retry");
+    };
+    assert_eq!(recorded.operation(), &operation);
+    assert_eq!(recorded.reply(), &reply);
+    // Its original caller takes the completed check. The retained inward owner
+    // can then admit its own read, without a second begin or a new pair window.
+    fx.complete(0);
+    assert_eq!(
+        fx.controls()
+            .iter()
+            .filter(|control| matches!(control, s::StateControl::Read { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(fx.pairs.output.input.records(Kind::Recall).len(), 1);
+    assert!(fx.pairs.output.input.run.context.failure().is_none());
+}
+
+#[test]
+fn inward_held_owner_excludes_pair_advance_until_withdrawal_is_observed() {
+    let mut fx = InwardFixture::new(vec![text("Recall file.")]);
+    fx.begin(0);
+    let run = &mut fx.pairs.output.input.run;
+    run.context
+        .bar_pending_pairs(s::NonDispatchCause::Stop, &mut run.clock)
+        .unwrap();
+    let window = run.context.deadlines.get(PumpDeadline::Decision);
+    assert_eq!(
+        run.context
+            .advance_pairs(&mut ports(&mut run.clock))
+            .unwrap(),
+        PairProgress::Pending
+    );
+    assert!(run.context.pair_work.as_ref().unwrap().leg.is_none());
+    assert!(run.context.pair_work.as_ref().unwrap().inward.is_some());
+    assert!(run.context.pending_author().is_none());
+    assert_eq!(run.context.deadlines.get(PumpDeadline::Decision), window);
+    // Terminal means this attempt withdrew its owner, not that it manufactured
+    // a completed pair. The ordinary bar account still owes its actual receipt.
+    assert_eq!(
+        run.context
+            .advance_inward_recall(&mut ports(&mut run.clock))
+            .unwrap(),
+        InwardProgress::Terminal
+    );
+    assert!(run.context.pair_work.as_ref().unwrap().inward.is_none());
+    assert!(
+        run.context
+            .completed_pair(&fx.calls[0], &mut run.clock)
+            .unwrap()
+            .is_none()
+    );
+    fx.complete(0);
+    assert!(fx.controls().is_empty());
+    let run = &mut fx.pairs.output.input.run;
+    let pair = run
+        .context
+        .completed_pair(&fx.calls[0], &mut run.clock)
+        .unwrap()
+        .unwrap();
+    assert_eq!(pair.ended().fate, s::TerminalPairFate::Failed);
+    assert_eq!(
+        pair.ended().reason,
+        Some(s::PairFailure::NotDispatched {
+            cause: s::NonDispatchCause::Stop,
+        })
+    );
+}
+
+#[test]
+fn inward_context_and_ledger_each_exclude_a_second_execution() {
+    let mut fx = InwardFixture::new(vec![text("Recall file.")]);
+    fx.begin(0);
+    let context = &fx.pairs.output.input.run.context;
+    // Before read admission the ledger is ready, but the retained controller
+    // alone must prevent another caller taking this same execution.
+    assert_eq!(context.pairs.next_ready().unwrap().call_id, fx.calls[0]);
+    assert!(context.next_pair_execution().is_none());
+    fx.held = HoldRead::Read;
+    fx.until_control(HoldRead::Read);
+    // After admission inspect the ledger directly. The context guard cannot
+    // mask removal of internal_started from the ledger's own readiness rule.
+    let context = &fx.pairs.output.input.run.context;
+    assert!(context.pairs.next_ready().is_none());
+    assert!(context.next_pair_execution().is_none());
+    fx.held = HoldRead::None;
+    fx.complete(0);
+}
