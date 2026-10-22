@@ -1054,3 +1054,414 @@ fn journal_retains_real_read_provenance_and_keeps_repeated_pairs_separate() {
     let mut foreign = hold(&mut other, proof).into_units();
     crate::flow::journal::exercise_material(held.into_units(), foreign.remove(0));
 }
+
+fn step_query_entry() -> s::ReadEntry {
+    let mut entry = selected(filtered(), &span_ref(), span(13, 24));
+    let mut source = event(5, "loop.instruction");
+    source.block_id.block = 0.into();
+    source.envelope.channel = "internal".into();
+    source.envelope.origin = "loop".into();
+    source.envelope.turn = None;
+    source.source_path = vec![
+        s::SourcePathPart::Key("message".into()),
+        s::SourcePathPart::Key("content".into()),
+        s::SourcePathPart::Index { index: 0.into() },
+    ];
+    entry.step_query = Some(s::StepQueryRef {
+        plan: s::PlanRef {
+            plan_id: s::PlanId {
+                seed_id: span_ref().seed_id,
+                local_id: 1.into(),
+            },
+            revision: 2.into(),
+        },
+        previous_step: None,
+        step_id: s::StepId {
+            seed_id: span_ref().seed_id,
+            local_id: 3.into(),
+        },
+        instruction: s::StatementRef {
+            block_id: source.block_id.clone(),
+            binding: 1.into(),
+        },
+    });
+    entry.source = s::ReadSource::Event(Box::new(source));
+    entry
+}
+
+fn step_review(entry: &s::ReadEntry) -> s::ReadPair {
+    let reference = entry.step_query.as_ref().unwrap();
+    let mut pair = pair(
+        0,
+        reference.instruction.binding.0,
+        s::PairRequest::Review {
+            setup: s::ReviewSetupRef {
+                setup_id: "review".into(),
+                sha256: s::Digest::new("a".repeat(64)).unwrap(),
+            },
+            work: Box::new(s::WorkRef {
+                plan: reference.plan.clone(),
+                step_id: reference.step_id.clone(),
+                span: span_ref(),
+                through: s::SourcePosition {
+                    block_id: reference.instruction.block_id.clone(),
+                    turn: None,
+                },
+                content_sha256: s::Digest::new("b".repeat(64)).unwrap(),
+            }),
+            command: "review --held-step".into(),
+        },
+    );
+    pair.statement = reference.instruction.clone();
+    let mut started: s::PairStarted =
+        s::decode_strict(pair.opening_source.raw_block.get()).unwrap();
+    started.statement = pair.statement.clone();
+    started.call_block = 0.into();
+    pair.opening_source.raw_block = to_raw_value(&started).unwrap();
+    pair.opening_source.source.envelope.channel = "internal".into();
+    pair.opening_source.source.envelope.origin = "loop".into();
+    pair.opening_source.source.envelope.turn = None;
+    let terminal = pair.terminal_source.as_mut().unwrap();
+    let mut ended: s::PairEnded = s::decode_strict(terminal.raw_block.get()).unwrap();
+    ended.execution = Some(weaver_types::ExchangeId {
+        opener: weaver_types::Opener::Harness,
+        ordinal: 0,
+    });
+    ended.fate = s::TerminalPairFate::Completed;
+    ended.reason = None;
+    ended.outcome = Some(weaver_types::ToolOutcome::Result {
+        content: "review completed".into(),
+    });
+    terminal.raw_block = to_raw_value(&ended).unwrap();
+    terminal.source.envelope.channel = "internal".into();
+    terminal.source.envelope.origin = "runtime".into();
+    terminal.source.envelope.turn = None;
+    pair.fate = s::PairFate::Completed;
+    pair.reason = None;
+    pair
+}
+
+#[test]
+fn material_step_query_retains_review_evidence_but_expands_only_the_instruction() {
+    for ordinary in [false, true] {
+        let mut member = Member::new();
+        let mut entry = step_query_entry();
+        let reference = entry.step_query.clone().unwrap();
+        let attachment = step_review(&entry);
+        entry.pairs.push(attachment.clone());
+        if ordinary {
+            entry.step_query = None;
+        }
+        let proof = read(
+            &mut member,
+            span_selector(&span_ref()),
+            entries(vec![entry]),
+        );
+        let raw = proof.raw_bytes().to_vec();
+        let held = hold(&mut member, proof);
+        let unit = &held.units()[0];
+        assert_eq!(text(unit, 0), "Write file.");
+        assert_eq!(unit.messages()[0].role, Role::User);
+        assert_eq!(unit.reads()[0].raw_bytes(), raw);
+        let s::QueryResult::Entries { entries } = unit.reads()[0].result() else {
+            panic!("retained the exact entry result");
+        };
+        assert_eq!(entries[0].pairs.len(), 1);
+        assert_eq!(
+            entries[0].pairs[0]
+                .terminal_source
+                .as_ref()
+                .unwrap()
+                .raw_block
+                .get(),
+            attachment.terminal_source.as_ref().unwrap().raw_block.get()
+        );
+        if ordinary {
+            assert_eq!(unit.messages().len(), 3);
+            assert_eq!(unit.sources().len(), 3);
+            assert!(unit.step_queries().is_empty());
+            assert!(matches!(
+                unit.messages()[1].content[0],
+                ContentBlock::ToolCall(_)
+            ));
+            assert!(matches!(
+                unit.messages()[2].content[0],
+                ContentBlock::ToolResult(_)
+            ));
+        } else {
+            assert_eq!(unit.messages().len(), 1);
+            assert_eq!(unit.sources().len(), 1);
+            assert_eq!(unit.source_map().len(), 1);
+            assert!(matches!(unit.sources()[0], s::MaterialRef::Text { .. }));
+            assert_eq!(unit.step_queries().len(), 1);
+            assert_eq!(unit.step_queries()[0].reference, reference);
+            assert_eq!(unit.step_queries()[0].message, 0.into());
+        }
+        assert!(member.run.context.halt().is_none());
+    }
+}
+
+#[test]
+fn material_step_query_rejects_a_second_binding_before_selecting_its_instruction() {
+    let mut member = Member::new();
+    let mut entry = step_query_entry();
+    let mut extra = entry.bindings[0].clone();
+    extra.ordinal = 2.into();
+    entry.bindings.push(extra);
+    let proof = read(
+        &mut member,
+        span_selector(&span_ref()),
+        entries(vec![entry]),
+    );
+    let raw = proof.raw_bytes().to_vec();
+    let error = member
+        .run
+        .context
+        .hold_material(proof, &mut member.run.clock)
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        MaterialFailure::Invalid("step query is not its exact instruction")
+    );
+    assert!(error.failure.is_some());
+    assert_eq!(error.reads[0].raw_bytes(), raw);
+}
+
+#[test]
+fn material_checks_later_entries_before_refusing_an_open_pair() {
+    for open_first in [true, false] {
+        let mut member = Member::new();
+        let mut open = filtered();
+        let mut attachment = external(0, 1);
+        attachment.fate = s::PairFate::Opened;
+        attachment.reason = None;
+        attachment.terminal_source = None;
+        open.pairs.push(attachment);
+        let mut invalid = filtered();
+        invalid.source = s::ReadSource::Event(Box::new(event(99, "unknown.content")));
+        let values = if open_first {
+            vec![open, invalid]
+        } else {
+            vec![invalid, open]
+        };
+        let proof = read(&mut member, history(), entries(values));
+        let raw = proof.raw_bytes().to_vec();
+        let error = member
+            .run
+            .context
+            .hold_material(proof, &mut member.run.clock)
+            .unwrap_err();
+        assert_eq!(
+            error.kind,
+            MaterialFailure::Invalid("unknown material source kind")
+        );
+        assert!(error.failure.is_some());
+        assert_eq!(error.reads[0].raw_bytes(), raw);
+    }
+}
+
+#[test]
+fn material_pair_compares_matching_attachments_across_both_recorded_snapshots() {
+    for changed in ["opening", "terminal", "payload"] {
+        let mut member = Member::new();
+        let mut entry = filtered();
+        entry.pairs.push(external(0, 1));
+        let proof = read(&mut member, history(), entries(vec![entry.clone()]));
+        let pair = &mut entry.pairs[0];
+        match changed {
+            "opening" => pair.opening_source.source.envelope.wall_ms += 1,
+            "terminal" => {
+                let source = &mut pair.terminal_source.as_mut().unwrap().source;
+                source.block_id.sequence = 99.into();
+                source.envelope.sequence = 99.into();
+            }
+            "payload" => {
+                let terminal = pair.terminal_source.as_mut().unwrap();
+                let mut ended: s::PairEnded = s::decode_strict(terminal.raw_block.get()).unwrap();
+                ended.reason = Some(s::PairFailure::NotDispatched {
+                    cause: s::NonDispatchCause::Unload,
+                });
+                pair.reason = ended.reason.clone();
+                terminal.raw_block = to_raw_value(&ended).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let selector = s::ReadSelector::Statement {
+            statement: pair.statement.clone(),
+        };
+        let statement = read(&mut member, selector, entries(vec![entry]));
+        let original = [proof.raw_bytes().to_vec(), statement.raw_bytes().to_vec()];
+        let error = member
+            .run
+            .context
+            .hold_pair(proof, 0, 0, statement, &mut member.run.clock)
+            .unwrap_err();
+        assert_eq!(
+            error.kind,
+            MaterialFailure::Invalid("pair attachment differs between held snapshots")
+        );
+        assert!(error.failure.is_some());
+        assert_eq!(error.reads.len(), 2);
+        assert_eq!(error.reads[0].raw_bytes(), original[0]);
+        assert_eq!(error.reads[1].raw_bytes(), original[1]);
+    }
+}
+
+#[test]
+fn material_recall_request_offsets_follow_the_statement_inside_block_and_span_units() {
+    for as_span in [false, true] {
+        let mut member = Member::new();
+        let mut entry = entry();
+        entry.text = "Read record. Read file.".into();
+        entry.raw_block =
+            to_raw_value(&serde_json::json!({"type":"text","text":entry.text})).unwrap();
+        entry.bindings[1] = binding(1, span(13, 23), "read", span(13, 17), "file", span(18, 22));
+        let attachment = pair(
+            0,
+            1,
+            s::PairRequest::Recall {
+                subject: "file".into(),
+            },
+        );
+        let request = s::MaterialRef::Request {
+            call_id: attachment.call_id.clone(),
+        };
+        entry.pairs.push(attachment);
+        let selector = if as_span {
+            entry = selected(entry, &span_ref(), span(0, 23));
+            span_selector(&span_ref())
+        } else {
+            s::ReadSelector::Subjects {
+                nouns: vec!["file".into()],
+            }
+        };
+        let proof = read(&mut member, selector, entries(vec![entry]));
+        let held = hold(&mut member, proof);
+        let unit = &held.units()[0];
+        assert_eq!(unit.messages().len(), 2);
+        assert_eq!(text(unit, 0), "Read record. Read file.");
+        let map = unit
+            .source_map()
+            .iter()
+            .find(|map| map.material == request)
+            .unwrap();
+        assert_eq!(map.message, 0.into());
+        assert_eq!(map.block, 0.into());
+        assert_eq!(map.start, Some(13.into()));
+        assert_eq!(map.end, Some(23.into()));
+    }
+}
+
+#[test]
+fn material_empty_span_and_event_backed_system_span_refuse_without_halting() {
+    for empty in [true, false] {
+        let mut member = Member::new();
+        let mut span_ref = span_ref();
+        let entries_out = if empty {
+            vec![]
+        } else {
+            span_ref.local_id = 0.into();
+            vec![selected(filtered(), &span_ref, span(13, 24))]
+        };
+        let proof = read(&mut member, span_selector(&span_ref), entries(entries_out));
+        let raw = proof.raw_bytes().to_vec();
+        let error = member
+            .run
+            .context
+            .hold_material(proof, &mut member.run.clock)
+            .unwrap_err();
+        assert_eq!(error.kind, MaterialFailure::InvalidSpan);
+        assert!(error.failure.is_none());
+        assert!(member.run.context.halt().is_none());
+        assert_eq!(error.reads[0].raw_bytes(), raw);
+    }
+}
+
+#[test]
+fn material_open_pair_does_not_hide_a_conflicting_statement_snapshot() {
+    let mut member = Member::new();
+    let mut entry = filtered();
+    let mut attachment = external(0, 1);
+    attachment.fate = s::PairFate::Opened;
+    attachment.reason = None;
+    attachment.terminal_source = None;
+    let selector = s::ReadSelector::Statement {
+        statement: attachment.statement.clone(),
+    };
+    entry.pairs.push(attachment);
+    let proof = read(&mut member, history(), entries(vec![entry.clone()]));
+    entry.text = "Read record. Write file!".into();
+    entry.raw_block = to_raw_value(&serde_json::json!({"type":"text","text":entry.text})).unwrap();
+    let statement = read(&mut member, selector, entries(vec![entry]));
+    let original = [proof.raw_bytes().to_vec(), statement.raw_bytes().to_vec()];
+    let error = member
+        .run
+        .context
+        .hold_pair(proof, 0, 0, statement, &mut member.run.clock)
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        MaterialFailure::Invalid("pair statement differs between held snapshots")
+    );
+    assert!(error.failure.is_some());
+    assert_eq!(error.reads[0].raw_bytes(), original[0]);
+    assert_eq!(error.reads[1].raw_bytes(), original[1]);
+}
+
+#[test]
+fn material_raw_text_and_pair_interval_disagreements_cannot_become_recorded_reads() {
+    for raw_text in [true, false] {
+        let mut member = Member::new();
+        let mut entry = selected(filtered(), &span_ref(), span(13, 24));
+        entry.pairs.push(external(0, 1));
+        if raw_text {
+            // The material pair comparison's text guard is redundant with
+            // exact raw equality after this actual read-boundary validation.
+            entry.text = "Read record. Write file!".into();
+        } else {
+            // A selected pair cannot reach material with its retained binding
+            // outside the selected Text interval: the read owner rejects it.
+            entry.selected_span.as_mut().unwrap().start = 14.into();
+        }
+        let bytes = serde_json::to_vec(&entries(vec![entry])).unwrap();
+        member
+            .run
+            .context
+            .begin_read(span_selector(&span_ref()), None, &mut member.run.clock)
+            .unwrap();
+        let request = member.next_request();
+        member.respond_protocol_failure(&request, page(7, 0, bytes.len(), &bytes));
+        assert!(member.records(Kind::Recall).is_empty());
+    }
+}
+
+#[test]
+fn material_statement_step_query_is_refused_before_a_pair_proof_can_be_formed() {
+    let mut member = Member::new();
+    let mut statement_entry = step_query_entry();
+    statement_entry.selected_span = None;
+    let attachment = step_review(&statement_entry);
+    let selector = s::ReadSelector::Statement {
+        statement: attachment.statement.clone(),
+    };
+    statement_entry.pairs.push(attachment);
+    let mut original = statement_entry.clone();
+    original.step_query = None;
+    let proof = read(&mut member, history(), entries(vec![original]));
+    let raw = proof.raw_bytes().to_vec();
+    let recalls = member.records(Kind::Recall).len();
+    // Statement uses require_unfiltered_text after require_statement. That
+    // existing boundary refuses span metadata before another RecordedRead
+    // can be offered to hold_pair. Do not manufacture a second proof.
+    member
+        .run
+        .context
+        .begin_read(selector, None, &mut member.run.clock)
+        .unwrap();
+    let request = member.next_request();
+    let bytes = serde_json::to_vec(&entries(vec![statement_entry])).unwrap();
+    member.respond_protocol_failure(&request, page(7, 0, bytes.len(), &bytes));
+    assert_eq!(member.records(Kind::Recall).len(), recalls);
+    assert_eq!(proof.raw_bytes(), raw);
+    assert!(proof.belongs_to(&member.run.context));
+}

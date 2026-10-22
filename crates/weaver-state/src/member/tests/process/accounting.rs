@@ -14,14 +14,6 @@ fn payload_len(wire: &[u8], names: &[&str]) -> u64 {
         - 1) as u64
 }
 
-fn header_len(request: &StateFrame) -> u64 {
-    let common = request.common();
-    format!(
-        "{{\"protocol\":\"state-flow/1\",\"session_id\":\"{}\",\"run_id\":\"{}\",\"request_id\":\"{}\",\"op\":\"control_answer\"}}",
-        common.session_id, common.run_id, common.request_id.0
-    ).len() as u64
-}
-
 fn raw_copies(request_bytes: &[u8]) -> u64 {
     let fields: BTreeMap<String, &RawValue> = serde_json::from_slice(request_bytes).unwrap();
     fields.values().map(|raw| raw.get().len() as u64).sum()
@@ -30,7 +22,6 @@ fn raw_copies(request_bytes: &[u8]) -> u64 {
 pub(super) fn check_open(request: &StateFrame, answer: &StateFrame, wire: &[u8]) {
     let request_bytes = encode_state_line(request, FrameDirection::Request).unwrap();
     let StateFrame::Opened {
-        read_limits,
         member_observation,
         observation,
         ..
@@ -55,7 +46,6 @@ pub(super) fn check_open(request: &StateFrame, answer: &StateFrame, wire: &[u8])
                 + payload
                 + request.common().session_id.len() as u64
                 + request.common().run_id.len() as u64
-                + read_limits.measurement_ref.len() as u64
                 + member_observation.instrument_version.len() as u64)
                 .into()
         )
@@ -127,13 +117,7 @@ impl Answer {
         if let Some(extra) = extra_copy {
             assert_eq!(
                 self.observation.resource.copied_bytes,
-                Some(
-                    (raw_copies(&self.request_bytes)
-                        + header_len(&self.request)
-                        + self.payload_bytes
-                        + extra)
-                        .into()
-                ),
+                Some((raw_copies(&self.request_bytes) + self.payload_bytes + extra).into()),
                 "wrong copies for {:?}",
                 self.request.request_operation()
             );
@@ -322,8 +306,7 @@ fn capture_preflight_and_failed_write_do_not_invent_held_image_or_lose_copies() 
         refused.observation.resource.held_bytes,
         Some((refused.request_bytes.len() as u64 + 26 + refused.payload_bytes).into())
     );
-    let ordinary =
-        raw_copies(&refused.request_bytes) + header_len(&refused.request) + refused.payload_bytes;
+    let ordinary = raw_copies(&refused.request_bytes) + refused.payload_bytes;
     assert!(refused.observation.resource.copied_bytes.unwrap().0 >= ordinary + image_before);
     assert!(
         std::fs::read_dir(fixture.root.join("room"))
@@ -344,13 +327,18 @@ fn capture_preflight_and_failed_write_do_not_invent_held_image_or_lose_copies() 
 }
 
 #[test]
-fn metadata_controls_have_complete_copy_totals_and_filing_keeps_explicit_missing_coverage() {
+fn metadata_controls_keep_partial_shape_and_filing_copy_totals_unavailable() {
     let (mut fixture, mut peer, seed) = launch("accounting");
+    // Missing coverage is a property of this path, not a claim that an empty
+    // answer measured zero copies. Check it again after actual content exists.
+    let empty_shape = exchange(&mut peer, 2, 2, StateControl::Shape {});
+    assert!(matches!(&empty_shape.frame, StateControlAnswer::Shape(rows) if rows.is_empty()));
+    empty_shape.check(0, 0, None);
     let mut filing = fixtures::statement(&seed, 1, "Read caf\u{e9}.");
     filing.raw_block =
         RawValue::from_string(r#"{ "type":"text", "text":"Read caf\u00e9." }"#.into()).unwrap();
     let file = StateFrame::File {
-        common: fixtures::common(2),
+        common: fixtures::common(3),
         filing,
     };
     let bytes = encode_state_line(&file, FrameDirection::Request).unwrap();
@@ -358,7 +346,7 @@ fn metadata_controls_have_complete_copy_totals_and_filing_keeps_explicit_missing
     let mut wire = Vec::new();
     assert!(peer.read_until(b'\n', &mut wire).unwrap() > 0);
     let answer = decode_state_line(&wire, FrameDirection::Response).unwrap();
-    answer.validate_response_to(&file, 2.into()).unwrap();
+    answer.validate_response_to(&file, 3.into()).unwrap();
     let StateFrame::Filed {
         observation,
         block_id,
@@ -388,15 +376,14 @@ fn metadata_controls_have_complete_copy_totals_and_filing_keeps_explicit_missing
         )
     );
 
-    let shape = exchange(&mut peer, 3, 3, StateControl::Shape {});
+    let shape = exchange(&mut peer, 4, 4, StateControl::Shape {});
     assert!(matches!(&shape.frame, StateControlAnswer::Shape(rows) if rows.len() == 1));
-    let shape_buffer = br#"[{"run":"fixture-run","kind":"message.assistant","count":"1"}]"#;
-    shape.check(0, 0, Some(shape_buffer.len() as u64));
-    let held = exchange(&mut peer, 4, 4, StateControl::Held {});
+    shape.check(0, 0, None);
+    let held = exchange(&mut peer, 5, 5, StateControl::Held {});
     held.check(0, 0, Some(0));
-    let position = exchange(&mut peer, 5, 5, StateControl::Position {});
+    let position = exchange(&mut peer, 6, 6, StateControl::Position {});
     position.check(0, 0, Some(0));
-    let grants = exchange(&mut peer, 6, 6, StateControl::Grants {});
+    let grants = exchange(&mut peer, 7, 7, StateControl::Grants {});
     grants.check(0, 0, Some(0));
     finish(&mut fixture, &mut peer);
 }
