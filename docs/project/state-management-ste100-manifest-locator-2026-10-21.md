@@ -1,6 +1,6 @@
 # STE100 manifest locator proposal
 
-Date: 2026-10-21. Scope: issue #146, item F. Draft PR: pending assignment.
+Date: 2026-10-21. Scope: issue #146, item F. Draft PR: #235.
 
 This is a document-only proposal for the locator gap in Spec 02 DECLARATION.
 Operator approval and merge are owed. It supplies no runtime implementation,
