@@ -924,6 +924,112 @@ fn freshness_complete_owner_blocks_new_intake_until_its_result_is_taken() {
 }
 
 #[test]
+fn freshness_completed_owner_cannot_be_replaced_before_its_result_is_taken() {
+    let mut fx = fixture(100);
+    let bound = begin(&mut fx, vec![]);
+    assert_eq!(advance(&mut fx).unwrap(), FreshnessProgress::Complete);
+    assert!(
+        fx.input
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::Cut)
+            .is_none()
+    );
+    let next_ids = sources(Sequence(987), 2);
+    let error = fx
+        .input
+        .run
+        .context
+        .prepare_cut(next_ids.clone(), &mut fx.input.run.clock)
+        .unwrap_err();
+    assert_eq!(error.refusal, FreshnessBeginRefusal::Busy);
+    assert_eq!(error.required_ids, next_ids);
+    assert!(error.failure.is_none());
+    assert!(
+        fx.input
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::Cut)
+            .is_none()
+    );
+    let Some(FreshnessCompletion::Prepared(prepared)) = fx
+        .input
+        .run
+        .context
+        .take_prepared_cut(&mut fx.input.run.clock)
+        .unwrap()
+    else {
+        panic!("the first completed result was not retained");
+    };
+    assert!(prepared.required_ids().is_empty());
+    assert_eq!(prepared.bound(), bound);
+    assert!(prepared.belongs_to(&fx.input.run.context));
+    assert!(fx.input.run.context.freshness.is_none());
+    assert!(fx.input.run.context.failure().is_none());
+}
+
+#[test]
+fn freshness_completed_owner_rejects_a_cut_rearmed_through_the_wait_api() {
+    for operation in 0..3 {
+        let mut fx = fixture(100);
+        let original = begin(&mut fx, vec![]);
+        assert_eq!(advance(&mut fx).unwrap(), FreshnessProgress::Complete);
+        assert!(
+            fx.input
+                .run
+                .context
+                .deadlines
+                .get(PumpDeadline::Cut)
+                .is_none()
+        );
+        let competing = AbsoluteBound::after(fx.input.run.clock.now().unwrap(), 100).unwrap();
+        assert_ne!(original, competing);
+        // Completed freshness still owns its result. The exposed wait API can
+        // arm the now-vacant key, but no caller may treat that new wait as this
+        // result's original bound. Reach the misuse without replacing fields.
+        fx.input
+            .run
+            .context
+            .arm(PumpDeadline::Cut, competing, &mut fx.input.run.clock)
+            .unwrap();
+        let failure = match operation {
+            0 => advance(&mut fx).unwrap_err(),
+            1 => fx
+                .input
+                .run
+                .context
+                .cancel_prepare_cut(&mut fx.input.run.clock)
+                .unwrap_err(),
+            _ => fx
+                .input
+                .run
+                .context
+                .take_prepared_cut(&mut fx.input.run.clock)
+                .unwrap_err(),
+        };
+        assert!(matches!(
+            failure,
+            RunFailure::Flow {
+                reason: FlowHaltReason::ProtocolFailed,
+                ..
+            }
+        ));
+        assert!(fx.input.run.context.freshness.is_some());
+        assert_eq!(fx.input.run.context.failure(), Some(&failure));
+        assert_eq!(
+            fx.input
+                .run
+                .context
+                .take_prepared_cut(&mut fx.input.run.clock)
+                .unwrap_err(),
+            failure
+        );
+    }
+}
+
+#[test]
 fn freshness_refuses_an_existing_explicit_owner_without_consuming_either_input() {
     let mut fx = ReceiptFixture::new(100);
     fx.begin(event(&["Read filing."]));

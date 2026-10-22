@@ -26,6 +26,7 @@ pub(in crate::flow) enum FreshnessProgress {
 
 /// The exact selected dispositions were recorded in this context. No public
 /// constructor or conversion from a sequence can manufacture this evidence.
+/// An empty required set is allowed and makes no claim about unrequested work.
 #[derive(Debug)]
 pub(in crate::flow) struct PreparedFreshness {
     origin: std::sync::Arc<()>,
