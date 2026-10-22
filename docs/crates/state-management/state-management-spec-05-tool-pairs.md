@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #241
 
-**Version:** 0.8 **Date filed:** 2026-10-20 **Document ID:** state-management-spec-05
+**Version:** 0.10 **Date filed:** 2026-10-20 **Document ID:** state-management-spec-05
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -43,10 +43,18 @@ pending. [PAIR-1, PAIR-2, STORE-5]
 
 Inward recall uses the same CallId domain after the recovered external-call count.
 Enumerate recall bindings by original Text index then binding ordinal. Its call_block is
-that Text index. Spec 02 forbids a recall binding from also serving as an external
-ToolCall statement. Both kinds are handled in source-content order, with binding order
-breaking an inward tie. No call ID is added to the gate payload. The harness binds the
-active CallId to its outgoing ExchangeId before sending. [READ-3, PAIR-3]
+that Text index. Reserve an ordinal for every accepted recall binding, including one
+whose operation shape requires Spec 02 RECALL-REFUSAL. Such a refusal never renumbers a
+later request. An invalid classifier result supplies no accepted recall binding or
+CallId. Spec 02 forbids a recall binding from also serving as an external ToolCall
+statement. Conforming external and inward requests are handled in source-content order,
+with binding order breaking an inward tie. That order governs their pair records and
+dispatch, not a merged trace order with RECALL-REFUSAL. The repair owner records
+malformed-recall refusals before releasing EffectiveEmission, so a later refused ordinal
+can have its refusal recorded before an earlier conforming request's pair opens. The
+reserved identities and the conforming request order remain unchanged. No call ID is
+added to the gate payload. The harness binds the active CallId to its outgoing
+ExchangeId before sending. [READ-3, PAIR-3]
 
 **PAIR-OPEN.** Add flow/pairs.rs in the harness. For every conforming recovered request,
 including requests that a plan break, stop or round bound prevents executing, author
@@ -57,6 +65,12 @@ PairStarted receipt before dispatch. A correctly rejected statement goes through
 repair first and grants no execution. Missing statement association is a recorded
 protocol refusal with no pair, never a guessed send. Reason: a later repair must not
 replace the identity of an already executed request. [PAIR-1, CLASS-3, CLASS-9, SEAM-2]
+
+An accepted recall binding with invalid operation shape takes RECALL-REFUSAL before
+pair creation. Its typed refusal retains the reserved request identity without a
+PairStarted, PairEnded or fabricated subject. The accepted selected statement remains
+an ordinary filing. Only conforming recall requests enter the pair ledger. [READ-3,
+PAIR-1, CLASS-10]
 
 PairStarted is {call_id,call_block,statement,lane,request,retry_of}. PairLane is
 external, recall or review. PairRequest is externally tagged
@@ -121,7 +135,7 @@ request. [PAIR-1, PAIR-3, STORE-2, October 18 R4]
 | Harness Refused because no tool grant | failed, not_granted | Whole harness refusal, no gate exchange, model grant preserved |
 | No dispatch due to pass purpose, repair exhaustion, plan break, round limit, stop, leave or absent gate | failed, not_dispatched with cause | No fabricated gate return, visible model notice where the turn continues |
 | Inward recall read result | completed, null | ToolOutcome::Result containing the complete encoded read result, recall event and grant |
-| Inward recall operation refusal | completed, null | ToolOutcome::Refused naming the typed read refusal, no empty-history success |
+| Valid opened inward recall operation refusal | completed, null | ToolOutcome::Refused naming EmptySubject or the typed read refusal, no empty-history success |
 | Open pair found on load | failed, abandoned_at_load | No outcome or model turn, current trace event names loaded_from |
 
 PairFailure is externally tagged timeout:{}, cancelled:{}, unload:{}, flow_failure:{},
@@ -290,9 +304,9 @@ pair_event, tool_pair and the pair_statement/pair_open indexes. They belong to t
 initial state-content/1 catalog before its first cutover. No smaller draft catalog is
 accepted and no runtime ALTER converts old agents. Statement and seed writes set
 content_type statement. Pair writes set pair and statement_text NULL. Every admitted
-item shares content_block's global commit order, so position, shape and save-frontier
-reads include pair events. Counter blobs use the foundation's 8-byte big-endian
-encoding. [STORE-3, STORE-5, PAIR-1, PERSIST-4]
+item shares content_block's global commit order, so position, shape and captured
+content position reads include pair events. Counter blobs use the foundation's 8-byte
+big-endian encoding. [STORE-3, STORE-5, PAIR-1, PERSIST-4]
 
 On started, resolve StatementRef to exactly one committed statement_binding, check its
 source, lane and binding shape, insert content_block and pair_event at its ID, then an
@@ -304,6 +318,14 @@ its kind must agree with record_type. Zero updated rows, duplicate source, absen
 statement or a second terminal refuses the transaction. No SQL update runs merely
 because the harness sent bytes. terminal_event points to the actual admitted terminal
 block, never a model claim or inferred timeout. [PAIR-1, PAIR-3, SEAM-2]
+
+A recall opening requires exactly one held noun, a null governing condition and exact
+subject equality with that noun. Nonempty membership in a compound noun list is
+insufficient. These are mechanical checks on the stored binding, not reclassification.
+An invalid opening refuses invalid_pair and rolls back the whole transaction. Apply
+the same shape and identity checks during saved-image adoption. This makes explicit
+the existing RECALL and binding-shape obligation, without admitting invalid-operation
+requests into the pair schema. [READ-3, PAIR-4, PERSIST-4, CLASS-2]
 
 The terminal transaction uses the following guarded update after inserting its content
 and pair_event rows. The member requires exactly one changed row, otherwise it rolls
@@ -431,12 +453,13 @@ and outcome evidence, not elapsed-time guesses. [PAIR-1, PAIR-3]
 | --- | --- | --- |
 | PAIR-IDENTITY, PAIR-OPEN | Real harness generation with same-emission identical calls and mixed block types | Collapse equal calls, count UnrecoveredCall as recovered, or dispatch before either receipt |
 | PAIR-PROJECTION | Valid/invalid partition matrix with real tee copies | Select model-facing message.tool_result, omit a required tuple or inspect fate inside tee |
+| PAIR-OPEN, RECALL-REFUSAL | Mixed accepted recall bindings and correction passes through the real association owner | Open an invalid-shape request, invent a subject or change a later CallId |
 | PAIR-END | Every row of the outcome table through real codecs and store transactions | Treat a clock kill as completed, classify a fate or hide a partial attachment |
 | PAIR-MATCH | Scripted organ exchanges and real lower drain | Discard a late close without trace, accept a wrong ordinal or reopen a terminal |
 | PAIR-STATES | Row-by-row coordinator fixture, including stop/leave before receipts | Skip unopened-list closures or advance a terminal before commit |
 | TOOL-CLOCK | Gate integration with short fixture clock, descendants and load validation | Start a second kill clock, answer before containment or accept a clock above the gate maximum |
 | RETRY | Fresh and repeated requests with changed arguments, foreign run and open predecessor | Reuse CallId or accept invalid lineage |
-| PAIR-FILE, PAIR-SCHEMA | Real rusqlite transactions and failure injection before commit | Leave half a pair row, accept a duplicate terminal or receipt before commit |
+| PAIR-FILE, PAIR-SCHEMA | Real rusqlite transactions, forged compound/conditional recall openings and saved-image adoption | Leave half a pair row, accept a duplicate terminal, accept subject membership without exact recall shape or receipt before commit |
 | PAIR-READ | Noun/condition read with complete joined outcomes and byte-limit cases | Return a partial block, skip over-large rows or detach the request reference |
 | BOOT-REPAIR | Dump with several open pairs, failure at each repair receipt, reload | Serve before the empty recheck, mutate during adoption or invent a return |
 | PAIR-LEAVE | S3/S4/S5/S10, round bound and mid-list gate-death integration | Drop remaining requests, save ahead of closure or publish after broken carry |
@@ -471,7 +494,7 @@ PAIR-4, October 18 A1, R4]
 | weaver-state-Spec sections 3, 4 and 5 | Add the complete PAIR-SCHEMA, file_pair transaction and pair read joins to the serving catalog and its adoption validator. Diagnostic schema stays separate. |
 | weaver-trace-PRD section 3.1 and Spec sections 3 and 11 | Extend started/completed payloads and admit one new kind tool.return_rejected. Pair terminal is turnless only during boot repair. Registry projection and load coverage are PAIR-PROJECTION. Model-facing result records remain unselectable. |
 | weaver-harness-Spec section 4 and harness-diagnostic contract vocabulary | Converter rejects serving pair payloads/new rejected-return kind as outside diagnostic vocabulary. Legacy diagnostic records retain their old shapes. |
-| weaver-admin-Spec sections 3.0 and 6 | Enter confirmation waits for BOOT-REPAIR. Healthy save waits for the pair frontier. Broken flow still follows foundation no-save/failed-run cells. No new lifecycle command or timeout clock. |
+| weaver-admin-Spec sections 3.0 and 6 | Enter confirmation waits for BOOT-REPAIR. Healthy save waits for pair source dispositions through the frozen trace boundary. Broken flow still follows foundation no-save/failed-run cells. No new lifecycle command or timeout clock. |
 | weaver-internal-Spec sections 2 and 4 | Use Spec 02's pure recall-query constructor. Harness executes and accounts the read as an inward pair. No socket or model-facing tool schema belongs to the helper. |
 
 This revises the harness-gate supplies clause that unopened remaining calls have no

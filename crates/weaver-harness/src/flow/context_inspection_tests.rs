@@ -224,13 +224,13 @@ fn inspection_trace_backpressure_retains_one_answer_and_original_bound_until_rec
                 .unwrap()
                 .is_none()
         );
-        assert!(
+        assert_eq!(
             member
                 .run
                 .context
                 .take_operation_completion(&mut member.run.clock)
-                .unwrap()
-                .is_none()
+                .unwrap_err(),
+            RunFailure::InspectionOwned
         );
     }
     assert_eq!(member.records(Kind::StateStoreMeasurement).len(), before);
@@ -525,13 +525,13 @@ fn inspection_excludes_read_input_author_and_freshness_until_final_take() {
         member.run.context.refused_author().unwrap().kind,
         Kind::TurnStarted
     );
-    assert!(
+    assert_eq!(
         member
             .run
             .context
             .take_operation_completion(&mut member.run.clock)
-            .unwrap()
-            .is_none()
+            .unwrap_err(),
+        RunFailure::InspectionOwned
     );
     assert!(matches!(
         finish(&mut member),
@@ -704,6 +704,7 @@ fn inspection_admission_retains_allocated_identity_before_post_enqueue_leave() {
         .context
         .begin_inspection(InspectionKind::Grants, None, &mut clock)
         .unwrap_err();
+    assert!(error.retained);
     assert_eq!(
         error.failure,
         Some(RunFailure::Wait {
@@ -733,6 +734,9 @@ fn inspection_admission_retains_allocated_identity_before_post_enqueue_leave() {
     assert_eq!(member.bound().deadline_ns(), outer.deadline_ns());
     member.no_request();
 }
+
+#[path = "context_inspection_review_tests.rs"]
+mod review_tests;
 
 #[test]
 fn inspection_take_does_not_yield_after_transferring_the_recorded_answer() {

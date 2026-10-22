@@ -101,6 +101,30 @@ fn halt_report_requires_failed_context_and_real_frozen_account_once() {
 }
 
 #[test]
+fn halt_report_fault_keeps_the_actual_recorded_open_turn() {
+    let mut member = Member::new();
+    let mut started = super::super::tests::event(Kind::TurnStarted, None);
+    started.turn = Some(TurnRef("halted-turn".into()));
+    let sequence = member.run.author(started).unwrap();
+    let first = bound_failure(&mut member);
+    begin_report(&mut member);
+    assert!(matches!(
+        advance(&mut member),
+        HaltTraceProgress::FaultRecorded(_)
+    ));
+    let starts = member.records(Kind::TurnStarted);
+    let faults = member.records(Kind::Fault);
+    assert_eq!(starts.len(), 1);
+    assert_eq!(starts[0]["sequence"], sequence.0.to_string());
+    assert_eq!(starts[0]["turn"], "halted-turn");
+    assert_eq!(faults.len(), 1);
+    assert_eq!(faults[0]["turn"], starts[0]["turn"]);
+    assert_eq!(faults[0]["run"], starts[0]["run"]);
+    assert_eq!(member.run.context.failure(), Some(&first));
+    assert!(member.records(Kind::TurnClosed).is_empty());
+}
+
+#[test]
 fn halt_report_real_state_failures_record_exact_account_and_never_resume_or_requery() {
     for malformed in [false, true] {
         let mut member = Member::new();
@@ -409,7 +433,24 @@ fn halt_report_used_fault_permit_fails_once_with_sound_writer_and_retains_origin
     assert!(evidence.fault_sequence().is_none());
     assert!(evidence.event().is_some());
     assert!(evidence.unavailable().is_some());
+    assert!(!evidence.trace_unavailable());
     assert!(member.run.context.barrier.standing_failure().is_none());
+    let halt = member.run.context.halt().unwrap();
+    assert_eq!(halt.secondary().len(), 1);
+    let retained = &halt.secondary()[0];
+    assert_eq!(retained.reason, FlowHaltReason::TraceFailed);
+    assert_eq!(retained.point, HaltPoint::Teardown);
+    assert_eq!(retained.detail, evidence.unavailable().unwrap());
+    assert_eq!(
+        retained.observed_ns,
+        Some(member.run.context.last_ns.into())
+    );
+    let frozen: serde_json::Value =
+        serde_json::from_str(halt.fault_account().unwrap().get()).unwrap();
+    let unload: serde_json::Value =
+        serde_json::from_str(halt.unload_account().unwrap().get()).unwrap();
+    assert!(frozen["secondary"].as_array().unwrap().is_empty());
+    assert_eq!(unload["secondary"][0]["detail"], retained.detail);
     let secondary = member.run.context.halt().unwrap().secondary().len();
     for _ in 0..4 {
         assert_eq!(advance(&mut member), HaltTraceProgress::Idle);
@@ -459,8 +500,8 @@ fn halt_report_real_failed_sink_uses_stream_write_case_and_never_retries_reporti
     let fault: weaver_types::FaultReport = serde_json::from_str(payload.get()).unwrap();
     assert_eq!(fault.case, weaver_types::FaultCase::StreamWriteFailed);
     assert!(report.fault_sequence().is_none());
+    assert!(report.trace_unavailable());
     let pending = member.run.context.pending_author().unwrap().ticket;
-    assert_eq!(advance(&mut member), HaltTraceProgress::Unavailable);
     let secondary = member.run.context.halt().unwrap().secondary().len();
     for _ in 0..4 {
         assert_eq!(advance(&mut member), HaltTraceProgress::Unavailable);
@@ -470,6 +511,51 @@ fn halt_report_real_failed_sink_uses_stream_write_case_and_never_retries_reporti
         secondary
     );
     assert_eq!(member.run.context.pending_author().unwrap().ticket, pending);
+    assert_eq!(member.run.context.failure(), Some(&first));
+}
+
+#[test]
+fn halt_report_failed_sink_without_pending_work_stays_unavailable() {
+    let mut member = Member::new();
+    member.fill_trace();
+    assert!(member.run.context.pending_author().is_none());
+    member.run._reader.shutdown(Shutdown::Both).unwrap();
+    let watch = Instant::now() + Duration::from_secs(5);
+    loop {
+        let context = &mut member.run.context;
+        if context.barrier.drain_status(&mut context.budget).is_err() {
+            break;
+        }
+        assert!(
+            Instant::now() < watch,
+            "writer did not detect the closed sink"
+        );
+        std::thread::yield_now();
+    }
+    let first = member
+        .run
+        .context
+        .reduce_flow(&mut member.run.clock)
+        .unwrap_err();
+    begin_report(&mut member);
+    assert_eq!(advance(&mut member), HaltTraceProgress::Unavailable);
+    assert!(
+        member
+            .run
+            .context
+            .halt_report()
+            .unwrap()
+            .trace_unavailable()
+    );
+    let secondary = member.run.context.halt().unwrap().secondary().len();
+    for _ in 0..4 {
+        assert_eq!(advance(&mut member), HaltTraceProgress::Unavailable);
+    }
+    assert_eq!(
+        member.run.context.halt().unwrap().secondary().len(),
+        secondary
+    );
+    assert!(member.run.context.pending_author().is_none());
     assert_eq!(member.run.context.failure(), Some(&first));
 }
 

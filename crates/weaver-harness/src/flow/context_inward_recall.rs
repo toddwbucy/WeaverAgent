@@ -15,8 +15,9 @@ pub(in crate::flow) enum InwardRefusal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::flow) enum InwardProgress {
     Pending,
-    /// The inward attempt has relinquished its owner. This also covers a
-    /// request withdrawn before execution. Only completed_pair grants a result.
+    /// This attempt has relinquished its owner. The ledger may have completed
+    /// the call, barred it, or retained it under another owner. This alone
+    /// proves neither withdrawal nor completion; completed_pair grants a result.
     Terminal,
 }
 
@@ -121,16 +122,11 @@ impl RecordingContext {
     }
 
     pub(super) fn inward_blocks_external(&self) -> bool {
-        self.pair_work
-            .as_ref()
-            .and_then(|work| work.inward.as_ref())
-            .is_some_and(|work| !work.driving)
+        self.inward_work().is_some_and(|work| !work.driving)
     }
 
     pub(super) fn inward_read_allowed(&self, call: &CallId) -> bool {
-        self.pair_work
-            .as_ref()
-            .and_then(|work| work.inward.as_ref())
+        self.inward_work()
             .is_some_and(|work| work.driving && work.stage == Stage::Starting && &work.call == call)
     }
 
@@ -148,7 +144,9 @@ impl RecordingContext {
         self.deadlines.disarm(PumpDeadline::Decision);
         let work = self.pair_work.as_mut().unwrap();
         work.bound = None;
-        work.inward.as_mut().unwrap().stage = Stage::Reading;
+        self.inward_work_mut()
+            .expect("installed inward owner")
+            .stage = Stage::Reading;
         Ok(())
     }
 
@@ -158,20 +156,12 @@ impl RecordingContext {
     ) -> Result<InwardProgress, RunFailure> {
         self.live(ports.io)?;
         self.pair_wait_matches(ports.io)?;
-        let Some(work) = self
-            .pair_work
-            .as_mut()
-            .and_then(|work| work.inward.as_mut())
-        else {
+        let Some(work) = self.inward_work_mut() else {
             return Err(RunFailure::PairOwned);
         };
         work.driving = true;
         let result = self.drive_inward_recall(ports);
-        if let Some(work) = self
-            .pair_work
-            .as_mut()
-            .and_then(|work| work.inward.as_mut())
-        {
+        if let Some(work) = self.inward_work_mut() {
             work.driving = false;
         }
         result
@@ -181,10 +171,11 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<InwardProgress, RunFailure> {
-        let work = self.pair_work.as_ref().unwrap().inward.as_ref().unwrap();
+        let work = self.inward_work().expect("installed inward owner");
         let call = work.call.clone();
         if work.stage == Stage::Starting {
-            // A caller may bar this still-unexecuted request after begin.
+            // A bar or another ledger owner can remove readiness after begin.
+            // Retain the ledger entry; relinquishing this attempt grants nothing.
             if self.pairs.next_ready().map(|ready| &ready.call_id) != Some(&call) {
                 self.pair_work.as_mut().unwrap().inward = None;
                 return Ok(InwardProgress::Terminal);
@@ -236,11 +227,16 @@ impl RecordingContext {
         self.finish_inward_recall(call, InwardEvidence::Read(Box::new(completion)), ports.io)
     }
 
-    fn inward_work_mut(&mut self) -> &mut InwardWork {
+    fn inward_work(&self) -> Option<&InwardWork> {
+        self.pair_work
+            .as_ref()
+            .and_then(|work| work.inward.as_ref())
+    }
+
+    fn inward_work_mut(&mut self) -> Option<&mut InwardWork> {
         self.pair_work
             .as_mut()
             .and_then(|work| work.inward.as_mut())
-            .expect("admitted inward owner")
     }
 
     fn finish_inward_recall(
@@ -255,14 +251,20 @@ impl RecordingContext {
             && let ReadCompletion::Recorded(read) = completion.as_ref()
             && !read.belongs_to(self)
         {
-            self.inward_work_mut().refused = Some(evidence);
+            self.inward_work_mut()
+                .expect("installed inward owner")
+                .refused = Some(evidence);
             return Err(self.pair_fault(io, "inward read belongs to another context"));
         }
         if let Err((evidence, error)) = self.pairs.finish_inward(&call, evidence) {
-            self.inward_work_mut().refused = Some(evidence);
+            self.inward_work_mut()
+                .expect("installed inward owner")
+                .refused = Some(evidence);
             return Err(self.pair_fault(io, format!("inward terminal: {error}")));
         }
-        self.inward_work_mut().stage = Stage::Terminal;
+        self.inward_work_mut()
+            .expect("installed inward owner")
+            .stage = Stage::Terminal;
         self.arm_pair_terminal_wait(io)?;
         self.pair_work.as_mut().unwrap().inward = None;
         Ok(InwardProgress::Terminal)

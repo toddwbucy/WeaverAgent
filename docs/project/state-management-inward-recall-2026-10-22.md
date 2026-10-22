@@ -66,8 +66,8 @@ not evidence of a newly reachable bad-shape execution path. Existing association
 continues to refuse invalid recall shape before this owner receives a ready request.
 An empty constructor input retains the remaining request-receipt Decision window while
 its refusal terminal files. It does not acquire a read deadline or a fresh terminal
-window, matching the never-executed bar path. This is separate from the unmerged #241
-malformed-recall proposal and implements none of that proposal.
+window, matching the never-executed bar path. The merged #241 malformed-recall
+rule remains a separate runtime implementation obligation.
 
 ## Freshness boundary
 
@@ -81,7 +81,7 @@ primitive separately.
 
 ## Instruments and author gates
 
-Twelve tests drive real checked output, pair filing receipts, the member stream and the
+Tests drive real checked output, pair filing receipts, the member stream and the
 recorder with synthetic classifier/member replies. They exercise:
 
 - Separate withheld statement and opening receipts before any inward state traffic.
@@ -97,60 +97,22 @@ recorder with synthetic classifier/member replies. They exercise:
 - A full real trace writer retaining one recall ticket, payload and read deadline before
   drain allows the one terminal account and committed result.
 
-Sixteen mutation recipes cover request readiness, deadline retirement, retained
-admission continuation, internal pair state, stop mapping, raw result bytes, typed
-refusal fields, exclusive advance/take/cancel, the consumed-read handoff and subject
-normalization. Fifteen compiled and failed their named assertions, then passed after
-exact restoration. Removing the statement-receipt term alone survived the context
-fixture and is retained separately. The existing lower-level ledger test then pinned
-that local defense: its mutation compiled and failed, and exact restoration passed.
-Existing non-Clone CompletedPair/FiledReceipt pins and single-grant-door manifest
-instruments continue to apply without another constructor.
+The original gate logs, protective mutations and restoration hashes remain in the
+shared issue #146 evidence deposit under inward-recall and inward/review-batch.
+They record their tested revisions. Earlier totals are superseded by the current
+review-round validation below. Synthetic peers establish ownership behavior, not
+production language or SQL qualification.
 
-Two bounded independent Executor readings found no production defect in the draft.
-Review corrected a test-only late-refusal code and requested the exact-subject and real
-recorder-pressure instruments now included. These readings are not Planner grades. The
-final joined production source includes #243 ec4121f, #240 b5b5893 and #239 21bfd08. Its
-full harness suite passed 1327 tests with 18 inherited ignored cases. The inward-focused
-filter passed 14 tests, including the twelve new owner cases. The internal crate passed
-12 tests. Strict all-target harness and internal clippy, formatting and lock passed with
-/tmp/weaver-146-inward-target.
-
-The initial nested-Leave fixture expected recovery after a read admitted under that
-earlier cap. Its correction requires the unchanged cap to expire even if the Leave key
-is later retired. The initial full parallel run also hit the inherited real-writer
-EAGAIN fixture failure. That test passed alone, then the full old source passed serially
-with 1320 tests. The final joined suite used four test threads and passed all 1327
-without skipping that test. Initial lint findings led to boxed ReadCompletion custody
-and existing owned-error annotations.
-
-The first opening-receipt mutation survived because the context's pending filing leg
-also excludes execution. The regression now inspects the real ledger's local readiness
-while that leg is held. Removing the ledger opening check then failed. That assertion
-was added after the final full-suite run and passed its focused restoration and strict
-lint checks. The statement-check survivor is equivalent through current context
-producers. Source-ledger ordering prevents filing ahead of the earlier statement, and
-advance_pairs collects that statement before installing the opening receipt. Corrected
-requests keep their exact generation lease, and completed predecessors retain their
-statement evidence. The existing lower-level ledger fixture admits receipts in another
-order and independently pins the defensive predicate. It is not presented as a reachable
-context-order failure. No new fabricated receipt or grant was introduced to kill it.
-
-Logs from the initial failures, final gates, every mutation attempt and exact source
-hashes are retained under inward-recall in the shared issue #146 evidence deposit. These
-are scoped author checks, not Planner grading or production qualification.
+The statement-receipt predicate is defensive at the context boundary: source-ledger
+ordering and advance_pairs collect the statement before the opening receipt. The
+lower ledger fixture admits another order and independently pins that predicate.
+No fabricated receipt or grant was introduced to claim a reachable context failure.
 
 ## Review follow-up
 
-Planner review 5610306631 at ec3b3409 found zero fix-bucket findings and five test gaps.
-The earlier gate and mutation totals above describe that prior source, not this
-follow-up. Five additional tests are now validated. On 2026-10-22, private target
-`/tmp/weaver-146-inward-target` with locked dependencies passed 19 focused tests,
-1344 full harness tests with 18 inherited ignored cases, and twelve internal tests.
-Both affected strict all-target lint gates, formatting and lock passed. All eight
-compiled protective mutations failed their intended tests and each exact restored
-baseline passed. Independent author review found no concrete defect in this bounded
-follow-up. No unavailable code-review skill invocation or Planner grade is claimed.
+Planner reviews 5610306631 and 5610974513 found no fix-bucket findings. The first
+review's five test gaps were corrected and regraded; this round addresses the
+remaining eight rows while preserving their defensive-fixture limits.
 
 The added instruments cover:
 
@@ -159,7 +121,8 @@ The added instruments cover:
   the derived ready subject while preserving the immutable opening evidence. That
   deliberate inconsistency cannot come from checked noun spans and is not represented
   as a valid model emission or a production empty-noun path.
-- A one-shot, per-instance Busy return from the actual begin_control boundary after
+- A one-shot, per-instance Busy return for an exact expected control and turn from
+  the actual begin_control boundary after
   admission. It creates no operation, identity or recording proof. The retained read
   survives and retries under its original StateControl window. Current synchronous
   admission checks all the coordinator's Busy predicates, so this is a defensive
@@ -180,8 +143,8 @@ The added instruments cover:
   the outer context guard. Each redundant predicate has its own mutation.
 
 Small cleanup borrows the History selector for comparison, names the dependency test's
-actual five-crate set, documents the synchronous driving scope and consolidates repeated
-owner unwrap chains. Stage::Terminal remains an explicit retained fatal-handoff state.
+actual five-crate set, documents the synchronous driving scope and consolidates optional
+owner access. Installed-owner assertions apply before read admission as well. Stage::Terminal remains an explicit retained fatal-handoff state.
 A healthy path clears it atomically, and a failed path cannot resume ordinary work.
 The existing public read-exclusion tests continue to cover the driving permission.
 
@@ -203,6 +166,43 @@ Final recipes, runner, source hashes and per-row dispositions are deposited unde
 `inward/review-batch/` in the shared issue #146 evidence root. The original surviving
 probes and their reachable-equivalence explanations remain in the earlier evidence.
 The #190 foundation-cutover hold remains.
+
+Review 5610974513 dispositions:
+
+- Rows 1 and 2: the empty helper keeps the request window by design, as documented
+  above. Terminal means this attempt relinquished its owner; it proves neither a
+  withdrawal nor a completed result. A bar or another ledger owner may retain the
+  exact entry. Only completed_pair grants a result.
+- Row 3: a separate non-bar frozen-ledger probe checks that the inward attempt
+  relinquishes custody without changing the outstanding entry or fabricating a
+  terminal/read/result. It isolates the private readiness boundary; normal context
+  halt checks live first, so it is not a resumable halted-run scenario.
+- Row 4: superseded inline gate totals are removed; the original evidence stays in
+  its dated deposit, while this round names its own source and result below.
+- Row 5: the named code-review skill remains unavailable in the installed skill
+  catalog and searched skill roots. The available requesting-code-review and
+  verification-before-completion workflows were applied with independent source
+  review and fresh gates; this does not claim the missing invocation.
+- Row 6: optional shared owner access replaces repeated chains; installed owner is
+  the assertion, including the defensive empty-subject path before read admission.
+- Row 7: the Busy injection is one-shot and requires the exact expected control and
+  turn. An unrelated caller cannot silently consume the hook.
+- Row 8: the empty-subject fixture asserts no inward owner exists before mutation,
+  pinning that the mutation precedes begin copying its subject.
+
+Current-round validation passed 20 focused tests, 1,349 full harness tests with
+18 inherited ignored cases, and twelve internal tests. Both strict all-target
+lint gates, formatting and lock passed. Removing the non-bar readiness handoff
+compiled and failed its regression; exact source restoration passed. Independent
+source review found two fixture mistakes, corrected before this final run. The
+first sandbox run failed at socket creation (EPERM); the first host run exposed
+an incorrect expected turn, and a subsequent compile found a missing type import.
+Those logs remain beside the final passing host run.
+
+The private target is /tmp/weaver-146-inward-target. Logs, the mutation and source
+hashes are under /tmp/weaver-146-evidence/review-round2-245/. The merged parent
+contains main 1acf0bdf and exact #190 ancestry. This remains an author check, not
+production qualification or the Planner's second grade.
 
 ## Remaining work
 

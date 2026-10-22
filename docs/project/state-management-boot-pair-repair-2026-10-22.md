@@ -21,9 +21,10 @@ in production. The tests explicitly assume that one prerequisite through a named
 cfg(test) constructor. They still obtain load, template and boot-read evidence through
 the existing real owner paths. No test here proves decoder Open or its fit checks.
 
-Draft #232's Open evidence carrier is not implementation authority or a dependency
-of the normal repair protocol. It remains separate from this already merged repair
-behavior. The existing serving path is unchanged, and no worker/dev_loop call is added.
+Merged #232 specifies the Open evidence carrier. Its checked Open implementation
+remains separate from this repair primitive and still owes the production constructor
+for PriorBootOpen. The existing serving path is unchanged, and no worker/dev_loop call
+is added.
 
 ## Read and receipt ownership
 
@@ -59,8 +60,10 @@ does not initiate another repair pass or append new pairs to this batch.
 
 Both read owners and all terminal receipts remain in the private repaired proof.
 Cancellation and refusal retain their account without a success-proof accessor.
-Borrowed account views expose both read outcomes, committed terminals and the exact
-withdrawn unstarted event. They cannot mint repaired evidence.
+Borrowed account views expose both read outcomes, committed terminals, the exact
+withdrawn unstarted event and any typed repair refusal. They cannot mint repaired
+evidence. Cancellation after refusal preserves both Read or NonemptyRecheck and its
+underlying read evidence.
 Competing reads, authors, explicit operations and lifecycle release cannot take over
 its active or completed ownership slot. Taking its result does not retire Enter.
 
@@ -84,10 +87,13 @@ final success, withdraws a staged unstarted terminal, or finishes an already adm
 read/filing under its existing bounds. It starts no later terminal or recheck.
 As with begin_task, cancelling a completed but untaken result revokes its grant.
 Already recorded reads and committed terminals remain in the cancelled account.
+The once-only boot_pairs_started latch remains set after cancellation or taking the
+result, so this Open cannot restart repair or recover its revoked Enter prerequisite.
+If a later design resets that latch, admission must first restore an explicit Busy
+guard against overwriting an existing repair owner.
 Calling advance, cancel or take without a repair owner is a protocol caller defect.
 An old loaded call has no serving turn or executing gate exchange, so this owner
-invents no
-stop/not_dispatched outcome, ToolCancel, tool clock or save point.
+invents no stop/not_dispatched outcome, ToolCancel, tool clock or save point.
 
 A failed flow retains the owner and cannot file another terminal. The read owner keeps
 its existing failed-channel cleanup responsibility. This primitive returns local
@@ -98,8 +104,8 @@ the separate refused-partition path and is not reused as a substitute for that w
 ## Instruments and measured validation
 
 The original seventeen tests use the actual load/template/boot-read owners, state
-sockets, recorder,
-ordinary tap, file_pair and receipt machinery with scripted classifier/member answers.
+sockets, recorder, ordinary tap, file_pair and receipt machinery with scripted
+classifier/member answers.
 The prior decoder Open remains the explicit test-only assumption. Cases include:
 
 - Multiple old-run pairs with returned order different from lexical CallId order.
@@ -124,11 +130,20 @@ snapshot, and cancellation after both successful and refused completion. Account
 views are checked against actual reads, committed receipts and withdrawn events.
 No-owner operation use is pinned as a caller defect.
 
-Three unchanged receipt association predicates are tested with inspection copies
-from a real committed terminal. The wrong turn, changed pair and changed source
-sequence never replace a sealed receipt or simulate a reachable member echo. The
-changed pair's raw payload is changed together so its structural check still passes.
-These fixtures pin defensive checks without weakening read or filing validation.
+Two extracted association helpers retain the production receipt checks and are
+tested with inspection copies from a real committed terminal. Expected scheme,
+session and run come independently from the active context and its declaration.
+The cases vary source run, sequence and block, file scheme, envelope session, run,
+kind, channel, origin, subsystem, turn and causal parent, exact pair and copied
+payload structure. The changed source run updates its block identity too, and the
+changed pair updates its raw payload, so each keeps valid structure while testing
+the separate identity or pair comparison. No inspection copy replaces a sealed
+receipt or simulates a reachable member echo.
+
+The late-receipt fixture waits for its own source-matched Filed terminal candidate
+before crossing the deadline during its final observation. It replays no step count
+from a separate fixture. The completed-cancellation fixture covers successful repair,
+typed read refusal and a nonempty recheck, retaining the typed reason in the account.
 
 The post-admission Busy case reuses #245's per-instance coordinator hook. Normal
 synchronous admission already checks the real Busy predicates. The hook allocates
@@ -144,8 +159,21 @@ harness lint, formatting and the lock gate. All twelve additional protective
 mutations compiled, failed their intended test and passed after exact-byte
 restoration. The private target remained /tmp/weaver-146-boot-pairs-target.
 Review evidence is retained under boot-pairs/review-batch, including recipes
-and source hashes. These results validate this follow-up, while the earlier
-type probes below remain evidence from the original implementation.
+and source hashes. Those results describe the f771911 follow-up.
+
+The current review correction joins #245 at 4a0fbbe, preserving main 1acf0bdf
+and #190 by ancestry. All 27 focused boot tests and 1,376 full harness tests
+passed, with 18 inherited ignored cases. Strict all-target harness lint, formatting
+and lock passed. Sixteen protective mutations compiled and failed their named
+regressions; every exact restored baseline passed. The 480 recorded source hashes
+match the restored tested tree. Independent source review found no remaining
+concrete defect. The Busy fixture now queues exactly two expected OpenPairs
+controls instead of an unbounded any-control counter.
+
+Current logs, recipes, restored checks and source hashes are retained at
+/tmp/weaver-146-evidence/review-round2-247/ and have not been deposited in shared
+storage. These are author checks; a new Planner/third-party grade remains separate.
+Earlier type probes below describe the original implementation.
 
 Compile-time ambiguity pins require PriorBootOpen and RepairedBootPairs to remain
 non-Clone and non-Default. Additional pins forbid StartIdentity-to-prerequisite and

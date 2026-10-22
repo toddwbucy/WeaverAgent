@@ -46,8 +46,15 @@ impl HaltReport {
     pub(in crate::flow) fn aborted(&self) -> Option<&str> {
         self.aborted.as_deref()
     }
+    /// Latest stopped-tap ordinary admission, which may predate this report.
+    /// The reserved fault sequence is separate. This is not a capture frontier.
     pub(in crate::flow) fn last_trace_sequence(&self) -> Option<Sequence> {
         self.last_trace_sequence
+    }
+    /// This reporting road cannot continue. A rejected ordinary obligation also
+    /// stops it, so this value alone does not prove an operating-system sink loss.
+    pub(in crate::flow) fn trace_unavailable(&self) -> bool {
+        self.trace_unavailable
     }
 }
 
@@ -72,7 +79,7 @@ impl RecordingContext {
             attempted: false,
             event: None,
             fault_sequence: None,
-            last_trace_sequence: None,
+            last_trace_sequence: self.barrier.last_trace_only_sequence(),
             unavailable: None,
             aborted: None,
             trace_unavailable: false,
@@ -108,25 +115,23 @@ impl RecordingContext {
             // This owner also resumes any earlier pending event. Do not steal
             // its queued refusal or assign its sequence from another road.
             match self.failed_measure_refusal_progress(io) {
-                Ok(Some(sequence)) => {
-                    self.halt_report.as_mut().unwrap().last_trace_sequence = Some(sequence);
-                    HaltTraceProgress::TraceRecorded(sequence)
-                }
+                Ok(Some(sequence)) => HaltTraceProgress::TraceRecorded(sequence),
                 Ok(None) => HaltTraceProgress::Pending,
                 Err(_) => {
                     // The measurement owner already appended its exact failure.
-                    self.halt_report.as_mut().unwrap().trace_unavailable = true;
+                    // A clock or author refusal is not evidence of a dead sink.
+                    self.halt_report.as_mut().unwrap().trace_unavailable =
+                        self.barrier.standing_failure().is_some();
                     HaltTraceProgress::Unavailable
                 }
             }
         } else if self.barrier.pending().is_some() {
             match self.barrier.resume_trace_only() {
-                Ok(Some(sequence)) => {
-                    self.halt_report.as_mut().unwrap().last_trace_sequence = Some(sequence);
-                    HaltTraceProgress::TraceRecorded(sequence)
-                }
+                Ok(Some(sequence)) => HaltTraceProgress::TraceRecorded(sequence),
                 Ok(None) => HaltTraceProgress::Pending,
                 Err(error) => {
+                    // Retain the invalid obligation without trying it again.
+                    // A protocol refusal here does not establish sink death.
                     self.halt_report.as_mut().unwrap().trace_unavailable = true;
                     self.halt_report_secondary(
                         Some(self.last_ns),
@@ -138,6 +143,10 @@ impl RecordingContext {
         } else {
             HaltTraceProgress::Idle
         };
+        // The measurement owner can drain an older ticket without completing
+        // its own refusal. Preserve that actual admission as separate evidence.
+        self.halt_report.as_mut().unwrap().last_trace_sequence =
+            self.barrier.last_trace_only_sequence();
         // Preserve every consumed result before this possible clock failure.
         if !self.halt_report_clock(io) {
             return Ok(HaltTraceProgress::AbortRequired);
@@ -149,57 +158,50 @@ impl RecordingContext {
         // Rendering, preparation or submission failure cannot start a second
         // attempt, including an uncertain admission whose sequence is absent.
         self.halt_report.as_mut().unwrap().attempted = true;
-        let prepared = (|| {
-            let halt = self.flow.halt().expect("failed owner retains its halt");
-            let account = halt
-                .fault_account()
-                .map_err(|error| format!("halt account: {error}"))?;
-            let case = if halt.first().reason == FlowHaltReason::TraceFailed {
-                weaver_types::FaultCase::StreamWriteFailed
-            } else {
-                weaver_types::FaultCase::StateFlowFailed
-            };
-            let report = weaver_types::FaultReport { case, account };
-            let payload = serde_json::value::to_raw_value(&report)
-                .map_err(|error| format!("halt fault encoding: {error}"))?;
-            let event = AuthoredEvent {
-                kind: Kind::Fault,
-                subsystem: weaver_trace::Subsystem::Harness,
-                turn: self.open_turn.clone(),
-                source: super::super::author::AuthoredSource::Runtime,
-                causal_parent: None,
-                payload: Some(Payload::Fault(payload)),
-            };
-            self.halt_report.as_mut().unwrap().event = Some(event);
-            let wall = wall_ms()?;
-            // Keep the immutable original on both outcomes. A copied event is
-            // not a cloned completion proof and preserves exact RawValue bytes.
-            self.barrier
-                .submit_terminal_authored(
-                    self.halt_report
-                        .as_ref()
-                        .unwrap()
-                        .event
-                        .as_ref()
-                        .unwrap()
-                        .clone(),
-                    &self.author,
-                    self.last_ns,
-                    wall,
-                )
-                .map_err(|failure| failure.detail)
-        })();
-        match prepared {
+        match self.prepare_and_submit_halt_fault() {
             Ok(sequence) => {
                 self.halt_report.as_mut().unwrap().fault_sequence = Some(sequence);
                 HaltTraceProgress::FaultRecorded(sequence)
             }
             Err(detail) => {
-                self.halt_report.as_mut().unwrap().unavailable = Some(detail.clone());
+                let report = self.halt_report.as_mut().unwrap();
+                report.unavailable = Some(detail.clone());
+                report.trace_unavailable = self.barrier.standing_failure().is_some();
                 self.halt_report_secondary(Some(self.last_ns), detail);
                 HaltTraceProgress::Unavailable
             }
         }
+    }
+
+    fn prepare_and_submit_halt_fault(&mut self) -> Result<Sequence, String> {
+        let halt = self.flow.halt().expect("failed owner retains its halt");
+        let account = halt
+            .fault_account()
+            .map_err(|error| format!("halt account: {error}"))?;
+        let case = if halt.first().reason == FlowHaltReason::TraceFailed {
+            weaver_types::FaultCase::StreamWriteFailed
+        } else {
+            weaver_types::FaultCase::StateFlowFailed
+        };
+        let report = weaver_types::FaultReport { case, account };
+        let payload = serde_json::value::to_raw_value(&report)
+            .map_err(|error| format!("halt fault encoding: {error}"))?;
+        let event = AuthoredEvent {
+            kind: Kind::Fault,
+            subsystem: weaver_trace::Subsystem::Harness,
+            turn: self.open_turn.clone(),
+            source: super::super::author::AuthoredSource::Runtime,
+            causal_parent: None,
+            payload: Some(Payload::Fault(payload)),
+        };
+        self.halt_report.as_mut().unwrap().event = Some(event);
+        let wall = wall_ms()?;
+        self.barrier.submit_terminal_authored_ref(
+            self.halt_report.as_ref().unwrap().event.as_ref().unwrap(),
+            &self.author,
+            self.last_ns,
+            wall,
+        )
     }
 
     fn halt_report_clock(&mut self, io: &mut impl PumpIo) -> bool {

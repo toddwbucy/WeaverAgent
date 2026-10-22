@@ -39,6 +39,8 @@ pub(in crate::flow) struct InspectionBeginError {
     pub turn: Option<TurnRef>,
     pub refusal: InspectionBeginRefusal,
     pub failure: Option<RunFailure>,
+    /// True only when this call installed an owner that must be resumed or cancelled.
+    pub retained: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +94,12 @@ pub(in crate::flow) enum InspectionCompletion {
         evidence: InspectionEvidence,
     },
     Cancelled(InspectionEvidence),
+    /// Cancellation before request allocation has no answer or Recorded proof.
+    Withdrawn {
+        request: StateControl,
+        turn: Option<TurnRef>,
+        bound: AbsoluteBound,
+    },
 }
 
 pub(super) struct InspectionTransaction {
@@ -102,6 +110,12 @@ pub(super) struct InspectionTransaction {
     recorded: bool,
     cancelled: bool,
     completion: Option<InspectionEvidence>,
+}
+
+impl InspectionTransaction {
+    fn withdrawn(&self) -> bool {
+        self.cancelled && self.request_id.is_none()
+    }
 }
 
 #[cfg(test)]
@@ -125,6 +139,7 @@ impl RecordingContext {
             turn: turn.clone(),
             refusal,
             failure,
+            retained: false,
         };
         if let Err(failure) = self.live(io) {
             return Err(error(InspectionBeginRefusal::WrongPhase, Some(failure)));
@@ -156,7 +171,10 @@ impl RecordingContext {
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()
+            || self.barrier.pending_author().is_some()
             || self.flow.has_pending_record()
+            || self.flow.has_filing_consumer()
+            || self.flow.has_output_consumer()
             || self.flow.pending_control().is_some()
             || self.flow.pending_check().is_some()
             || self.flow.operation_completion().is_some()
@@ -207,7 +225,11 @@ impl RecordingContext {
                 self.deadlines.disarm(PumpDeadline::StateControl);
                 Err(error(InspectionBeginRefusal::Busy, None))
             }
-            Err(failure) => Err(error(InspectionBeginRefusal::WrongPhase, Some(failure))),
+            Err(failure) => {
+                let mut error = error(InspectionBeginRefusal::WrongPhase, Some(failure));
+                error.retained = self.inspection.is_some();
+                Err(error)
+            }
         }
     }
 
@@ -217,6 +239,9 @@ impl RecordingContext {
     ) -> Result<InspectionProgress, RunFailure> {
         self.live(ports.io)?;
         self.inspection_wait_matches(ports.io)?;
+        if self.inspection.as_ref().unwrap().withdrawn() {
+            return Ok(InspectionProgress::Complete);
+        }
         let advance = self.reduce_flow(ports.io)?;
         if self.inspection.as_ref().unwrap().completion.is_some() {
             return Ok(InspectionProgress::Complete);
@@ -228,15 +253,19 @@ impl RecordingContext {
         }
     }
 
-    /// Cancellation revokes the consumer, not the already admitted exchange or
-    /// its measurement. No fresh request, cursor release or time window appears.
+    /// Cancellation before allocation withdraws the original proposal. An allocated
+    /// exchange still drains its measurement. Neither path starts another window.
     pub(in crate::flow) fn cancel_inspection(
         &mut self,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
         self.inspection_wait_matches(io)?;
-        self.inspection.as_mut().unwrap().cancelled = true;
+        let owner = self.inspection.as_mut().unwrap();
+        owner.cancelled = true;
+        if owner.request_id.is_none() {
+            self.deadlines.disarm(PumpDeadline::StateControl);
+        }
         Ok(())
     }
 
@@ -248,11 +277,18 @@ impl RecordingContext {
         let Some(owner) = &self.inspection else {
             return Ok(None);
         };
-        if owner.completion.is_none() {
+        if owner.completion.is_none() && !owner.withdrawn() {
             return Ok(None);
         }
         self.inspection_wait_matches(io)?;
         let owner = self.inspection.take().unwrap();
+        if owner.withdrawn() {
+            return Ok(Some(InspectionCompletion::Withdrawn {
+                request: owner.kind.control(),
+                turn: owner.turn,
+                bound: owner.bound,
+            }));
+        }
         let evidence = owner.completion.unwrap();
         // No fallible clock or yield follows this exact ownership transfer.
         if owner.cancelled {
@@ -264,17 +300,15 @@ impl RecordingContext {
         let completion = match frame {
             StateControlAnswer::Shape(rows) => {
                 let mut runs: Vec<RunShape> = Vec::new();
+                let mut indices = std::collections::HashMap::new();
                 for row in rows {
-                    let index = match runs.iter().position(|run| run.run == row.run) {
-                        Some(index) => index,
-                        None => {
-                            runs.push(RunShape {
-                                run: row.run.clone(),
-                                kinds: Vec::new(),
-                            });
-                            runs.len() - 1
-                        }
-                    };
+                    let index = *indices.entry(row.run.as_str()).or_insert_with(|| {
+                        runs.push(RunShape {
+                            run: row.run.clone(),
+                            kinds: Vec::new(),
+                        });
+                        runs.len() - 1
+                    });
                     runs[index].kinds.push((row.kind.clone(), row.count.0));
                 }
                 InspectionCompletion::Shape {
@@ -309,7 +343,7 @@ impl RecordingContext {
         let Some(owner) = &self.inspection else {
             return Err(self.inspection_fault(io, "inspection has no owner"));
         };
-        let expected = (!owner.recorded).then_some(owner.bound);
+        let expected = (!owner.recorded && !owner.withdrawn()).then_some(owner.bound);
         if self.deadlines.get(PumpDeadline::StateControl) != expected {
             return Err(
                 self.inspection_fault(io, "inspection's original wait was removed or replaced")
@@ -322,7 +356,7 @@ impl RecordingContext {
         self.live(io)?;
         self.inspection_wait_matches(io)?;
         let owner = self.inspection.as_ref().unwrap();
-        if owner.request_id.is_some() {
+        if owner.request_id.is_some() || owner.withdrawn() {
             return Ok(false);
         }
         let operation = ControlOperation::try_from((owner.kind.control(), owner.turn.clone()))
@@ -358,17 +392,21 @@ impl RecordingContext {
         let Some(owner) = &self.inspection else {
             return Ok(());
         };
-        if owner.recorded {
+        if owner.recorded || owner.withdrawn() {
             return Ok(());
         }
         let Some((request, turn, request_id, recorded_ns)) = self.flow.control_recorded_boundary()
         else {
             return Ok(());
         };
-        if request != &owner.kind.control()
-            || turn != &owner.turn
-            || Some(request_id) != owner.request_id
-            || self.deadlines.get(PumpDeadline::StateControl) != Some(owner.bound)
+        if !inspection_identity_matches(
+            request,
+            turn,
+            request_id,
+            &owner.kind.control(),
+            &owner.turn,
+            owner.request_id,
+        ) || self.deadlines.get(PumpDeadline::StateControl) != Some(owner.bound)
         {
             return Err(
                 self.inspection_fault(io, "Recorded inspection differs from its exact owner")
@@ -412,37 +450,21 @@ impl RecordingContext {
         else {
             return Err(self.inspection_fault(io, "inspection received a foreign completion"));
         };
-        let valid = matches!(
-            (&owner.kind, &completion.answer),
-            (
-                InspectionKind::Shape,
-                StateFrame::ControlAnswer {
-                    frame: StateControlAnswer::Shape(_),
-                    ..
-                }
-            ) | (
-                InspectionKind::Grants,
-                StateFrame::ControlAnswer {
-                    frame: StateControlAnswer::Grants { .. },
-                    ..
-                }
-            ) | (
-                _,
-                StateFrame::ControlAnswer {
-                    frame: StateControlAnswer::ControlRefused {
-                        code: ControlRefusalCode::Read(_),
-                        ..
-                    },
-                    ..
-                }
-            )
+        let valid = inspection_answer_matches(
+            owner.kind,
+            &completion.answer,
+            completion.discard_capture_result,
         );
         if !owner.recorded
             || !valid
-            || completion.discard_capture_result
-            || request != &owner.kind.control()
-            || turn != &owner.turn
-            || Some(completion.answer.common().request_id) != owner.request_id
+            || !inspection_identity_matches(
+                request,
+                turn,
+                completion.answer.common().request_id,
+                &owner.kind.control(),
+                &owner.turn,
+                owner.request_id,
+            )
         {
             return Err(self.inspection_fault(io, "inspection completion differs from its request"));
         }
@@ -484,3 +506,48 @@ impl RecordingContext {
         )
     }
 }
+
+// These predicates inspect values only. They cannot create a completion proof.
+fn inspection_identity_matches(
+    request: &StateControl,
+    turn: &Option<TurnRef>,
+    request_id: DecimalU64,
+    expected_request: &StateControl,
+    expected_turn: &Option<TurnRef>,
+    expected_id: Option<DecimalU64>,
+) -> bool {
+    request == expected_request && turn == expected_turn && Some(request_id) == expected_id
+}
+
+fn inspection_answer_matches(kind: InspectionKind, answer: &StateFrame, discarded: bool) -> bool {
+    !discarded
+        && matches!(
+            (kind, answer),
+            (
+                InspectionKind::Shape,
+                StateFrame::ControlAnswer {
+                    frame: StateControlAnswer::Shape(_),
+                    ..
+                }
+            ) | (
+                InspectionKind::Grants,
+                StateFrame::ControlAnswer {
+                    frame: StateControlAnswer::Grants { .. },
+                    ..
+                }
+            ) | (
+                _,
+                StateFrame::ControlAnswer {
+                    frame: StateControlAnswer::ControlRefused {
+                        code: ControlRefusalCode::Read(_),
+                        ..
+                    },
+                    ..
+                }
+            )
+        )
+}
+
+#[cfg(test)]
+#[path = "context_inspection_validation_tests.rs"]
+pub(super) mod validation_tests;

@@ -9,3 +9,7 @@ pub mod admission;
 pub mod binder;
 pub mod channel;
 pub mod dispatcher;
+
+// The merged TEMPLATES compiler consumes this private algorithm at cutover.
+#[allow(dead_code)]
+mod inclusion;
