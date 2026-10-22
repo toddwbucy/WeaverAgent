@@ -34,6 +34,9 @@ pub(in crate::flow) struct HaltReport {
 }
 
 impl HaltReport {
+    pub(super) fn attempted(&self) -> bool {
+        self.attempted
+    }
     pub(in crate::flow) fn fault_sequence(&self) -> Option<Sequence> {
         self.fault_sequence
     }
