@@ -10,26 +10,35 @@ approval of this branch.
 
 ## Proposed election
 
-For Ste100Instruction alone, ModelBinding.artifact names the exact regular
-ste100-model/1 manifest file. No basename is imposed. The SPU opens it relative
+For Ste100Instruction alone, ModelBinding.artifact is the absolute pathname of
+the exact regular ste100-model/1 manifest file. Relative values refuse as syntax
+errors. No basename is imposed. The SPU opens it relative
 to its pinned parent directory, refuses a symbolic-link final component, and
 uses that parent as the root for every manifest reference. Referenced files may
-use relative links whose entire resolution stays under that root. Directory
-discovery, alternate-root fallback and escaping links refuse.
+use relative links only when every intermediate resolution step stays under
+that root. Leaving and later re-entering the root refuses. Directory discovery,
+alternate-root fallback, absolute links and magic links refuse. Object-kind
+checks cannot wait for data from a FIFO or other special file.
 
-The exact acquired manifest bytes are both parsed and hashed. The compiled
-adapter consumes only checked, manifest-named inputs, retaining owned bytes or
-file/mapping owners through its final read. A pathname replacement cannot select
-a new instance between checking and loading. Pinning does not prevent an
-external writer changing an open inode; provisioned immutability remains part
-of the existing artifact custody obligation.
+The exact acquired manifest bytes are both parsed and hashed. The compiled adapter
+consumes only checked, manifest-named inputs. It retains the hashed owned bytes, or
+the same acquired file instance through a descriptor or mapping, until its final read.
+A pathname replacement cannot select a new instance between checking and loading.
+Pinning does not prevent an external writer changing an open inode. Provisioned
+immutability remains part of the existing artifact custody obligation. Unreferenced
+files are not inputs. Their presence alone does not refuse admission. The manifest
+hash covers its bytes only, while each referenced file has a separate declared digest.
 
-The SPU owns acquisition as the agent uid after exec. Admin preserves its
-existing scheme/executable custody and the declared binding. The harness
-transports that instruction without preopening model files or inheriting extra
-artifact descriptors. Missing, unreadable, nonregular, escaping or
-digest-mismatched files use unsupported_artifact and the existing failed-enter
-rollback under the original load budget.
+The SPU owns acquisition as the agent uid after exec. Admin preserves its existing
+scheme/executable custody and the declared binding. The harness transports that
+instruction without preopening model files or inheriting extra artifact descriptors.
+Missing, unreadable, nonregular, escaping or digest-mismatched files use
+unsupported_artifact. DECLARATION maps that and the other non-scheme admission
+refusals to lifecycle template/template_failed. The scheme_mismatch code maps to
+template/scheme_mismatch. Detail keeps the checker code and exact detail.
+EnterFailure::AfterLoad's existing refusal and rollback use the original load budget.
+The manifest admission replaces legacy container resolution for this duty, preserving
+shared syntax and device judgments.
 
 ## Grounds and alternatives
 
@@ -77,15 +86,15 @@ Ready through a test adapter or activate an incomplete serving checker.
 
 | Property | Required evidence and protective mutation |
 | --- | --- |
-| Exact locator | Accept an explicitly named regular manifest; refuse a directory even when it contains a plausible manifest; adding basename guessing must fail |
-| Pinned parent and confinement | Exercise nested references, allowed relative links and forbidden escapes, including a parent replaced after acquisition; following an escaping path must fail |
+| Exact locator | Accept an absolute pathname naming a regular manifest; refuse relative paths and directories even with plausible manifests; adding cwd resolution or basename guessing must fail |
+| Pinned parent and confinement | Exercise nested references, allowed relative links, intermediate escape followed by re-entry and a parent replaced after acquisition; accepting any escape must fail |
 | Regular readable files | Refuse a linked manifest, missing/unreadable file, directory, FIFO or device without waiting for special-file data; removing the object-kind guard must fail |
 | Exact manifest bytes | Changing whitespace without updating the declared digest refuses; hashing a reserialized manifest must fail |
 | Every referenced digest | Missing file or mismatched digest refuses before Ready; repeated names may share an instance only when all hashes match; skipping a digest must fail |
 | Checked instance feeds adapter | Replace a referenced path between acquisition and adapter read and require the checked instance; reopening the path must fail |
 | Retained ownership | Exercise a deferred adapter read after acquisition scope ends and after Ready; dropping its necessary owner early must fail |
-| Closed model input inventory | An unreferenced sidecar cannot become an adapter input; permitting an unchecked input must fail |
-| Failure and launch custody | Acquisition failure sends admission_refused without Ready; no new artifact descriptor is inherited and the original load budget remains in force |
+| Closed model input inventory | An unreferenced sidecar may be present but cannot become an adapter input; refusing its presence or consuming it must fail |
+| Failure and launch custody | Acquisition failure sends admission_refused without Ready and maps to the existing lifecycle code with checker detail retained; no new artifact descriptor is inherited and the original load budget remains in force |
 
 Those are owed tests, not tests run by this proposal. Fixtures prove acquisition
 mechanics, not production classification. The existing primitive's supplied-byte
@@ -106,10 +115,17 @@ No deployment path or installed artifact is changed by this proposal.
 
 ## Validation
 
-ASCII, prose width, local links, version-index agreement and diff whitespace
-passed. Root independently reviewed the proposal and moved acquisition mechanics
-out of the contract, retaining its checked-input custody obligation. The lock
-gate passed. No Cargo, GPU, artifact download or deployment test is claimed.
+The revision addresses Planner review 5609275124's nine findings: legacy
+container admission, absolute paths, unreferenced-file handling, special-file
+nonblocking checks, file-instance custody, lifecycle mapping, the transport
+record, intermediate link escape and manifest-hash scope. No operator election
+or runtime conformance follows from these document corrections.
+
+ASCII, prose width, local links, version-index agreement and diff whitespace checks
+pass for this revision. The coordinating author's fresh lock gate passed. Two
+independent document readings found no concrete semantic defect within the
+nine-finding correction scope. Operator approval and merge remain owed. No Cargo, GPU,
+artifact download or deployment test is claimed.
 
 [protocol]:
 ../crates/state-management/state-management-spec-02-protocol-classifier-gate.md

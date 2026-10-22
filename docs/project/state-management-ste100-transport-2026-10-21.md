@@ -95,9 +95,10 @@ deployment throughput.
 This act supplies no serving cutover, worker fork/exec integration, production SPU
 backend, model selection, grammar qualification or system prompt. H1b2 still owns the
 run-wide pump and lifecycle. C1's remaining production duty and O02-1/O02-2
-qualification remain open. The manifest locator and SPU open-label gaps are separate
-review questions.
-No code in this act chooses their representations.
+qualification remain open. Draft PR #235 proposes the exact manifest locator and
+acquisition custody. It remains unapproved until the operator's ruling and merge. The
+SPU open-label gap is separate. This transport implementation chooses neither
+representation and supplies no artifact acquisition or qualification evidence.
 
 The cross-end read also found that PR #191's SPU fragment helper reports a live empty
 datagram as EOF. This near side distinguishes malformed empty traffic from peer close.

@@ -321,8 +321,10 @@ at load. No label-score answer satisfies this trait. The production adapter uses
 The production bootstrap carries the declared model binding unchanged. Spec 02's
 MANIFEST-LOCATOR makes its artifact the exact manifest file; the SPU acquires it
 and its referenced files. The worker does no directory discovery or model-file
-preopening and passes no extra artifact descriptor across exec. Admission refusal
-keeps the existing after-load rollback and original load deadline. [CLASS-2,
+preopening and passes no extra artifact descriptor across exec. Map admission refusal
+to StateManagementInvalid using Spec 02 DECLARATION's table, retaining the checker
+code and exact detail. It keeps EnterFailure::AfterLoad's existing refusal and
+rollback path and the original load deadline. [CLASS-2,
 CLASS-8, PERSIST-6, SEAM-2]
 
 Validate bindings for a Text block without normalizing its bytes: target and scheme,

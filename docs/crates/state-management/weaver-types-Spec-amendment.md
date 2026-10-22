@@ -121,9 +121,10 @@ representation defined above. The TOML form is kebab-case, the wire form snake_c
 There is one decision_wait, under ste100, not another flow key. [CLASS-2, CLASS-6,
 CLASS-8, CLASS-9]
 
-Within Ste100Instruction, model_binding.artifact denotes Spec 02's exact manifest
-file under MANIFEST-LOCATOR. Keep ModelBinding and ArtifactRef's shared shape and
-existing syntax judgment; filesystem resolution and named-file digest checks belong
+Within Ste100Instruction, model_binding.artifact must be an absolute pathname for
+Spec 02's exact manifest file under MANIFEST-LOCATOR. Keep ModelBinding and
+ArtifactRef's shared shape and existing syntax judgment, with this duty's added
+absolute-path requirement. Filesystem resolution and named-file digest checks belong
 to SPU admission. Neither the declaration codec nor the wire rewrites this locator
 to a directory. Decoder and legacy ClassifyInstruction bindings are unchanged.
 [CLASS-2, CLASS-7, SEAM-2]
@@ -221,6 +222,11 @@ Optional rule_id and path are omitted. Stage/code combinations are closed:
 | template | template_rejected, template_failed, scheme_mismatch |
 | open | open_failed, scheme_mismatch |
 | serving | invalid_span |
+
+Spec 02 DECLARATION maps checker admission scheme_mismatch to template/scheme_mismatch
+and the other admission codes, including unsupported_artifact, to
+template/template_failed. Preserve the checker code and exact detail in detail. This
+does not add a lifecycle code or restart the original load deadline. [CLASS-8, FLOW-3]
 
 Admin syntax failures, including invalid bounds, remain ConfigInvalid with field
 attribution. There is no semantic invalid_bound code. EnterBinding::Serving keeps its

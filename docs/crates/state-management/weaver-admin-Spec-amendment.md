@@ -37,12 +37,13 @@ and scheme digests. No worker opens these root paths again. Reason: the checker 
 receive the same instance that inventory checked, while binary custody stays with admin.
 [CLASS-2, FLOW-3, PERSIST-3]
 
-The instruction's model binding names Spec 02's exact manifest file under
-MANIFEST-LOCATOR. Inventory preserves that declared value and its expected digest;
-admin does not discover or load model files on behalf of the agent uid. The SPU
-owns their acquisition and readability judgment during bootstrap. This locator is
-not another admin root key and does not change scheme or executable custody.
-[CLASS-2, CLASS-7, FLOW-3]
+The instruction's model binding names Spec 02's exact manifest file by an absolute
+pathname under MANIFEST-LOCATOR. A relative value is ConfigInvalid naming the binding
+field. Inventory preserves that declared value and its expected digest. Admin does not
+discover or load model files on behalf of the agent uid. The SPU owns their
+acquisition and readability judgment during bootstrap. This locator is not another
+admin root key and does not change scheme or executable custody. [CLASS-2, CLASS-7,
+FLOW-3]
 
 Keep channel.rs::send_with_sink's complete-envelope check against MAX_ENVELOPE_BYTES
 before sendmsg, including escaping and every sibling field. Its ChannelFault::Truncated
