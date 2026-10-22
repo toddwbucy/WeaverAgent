@@ -16,7 +16,7 @@ use weaver_trace::serving::payloads as trace;
 use weaver_trace::{Subsystem, TurnRef};
 use weaver_traits::{ContentBlock, Message};
 use weaver_types::state_flow::{
-    ContentRef, MarkEffect, SourceBlockId, StatementEffect, TaskScopeRef,
+    ContentRef, MarkEffect, SourceBlockId, StatementEffect, StatementFile, TaskScopeRef,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +86,8 @@ pub(in crate::flow) enum TaskRefusal {
 }
 
 /// Refusal/cancellation retains evidence without an accessor that grants a task.
+/// Only an unconsumed AcceptedInput can be returned. A consumed input's seated
+/// Message and receipts remain private in this account, including after settlement.
 pub(in crate::flow) struct TaskAccount {
     work: MarksTransaction,
 }
@@ -128,7 +130,6 @@ pub(super) struct MarksTransaction {
     settled: bool,
     turn: TurnRef,
     token: Option<AcceptedInput>,
-    input_started: bool,
     input_sequence: Option<Sequence>,
     seated: Option<SeatedInput>,
     input_receipt: Option<ReceiptSet>,
@@ -142,7 +143,56 @@ pub(super) struct MarksTransaction {
     fault_sequence: Option<Sequence>,
     refusal: Option<TaskRefusal>,
     cancelled: bool,
+    // Custody of a withdrawn, never-recorded mark belongs to the cancelled
+    // account. Retaining this evidence does not expose a task or replay port.
     cancelled_event: Option<AuthoredEvent>,
+}
+
+impl MarksTransaction {
+    pub(super) fn has_original_wait(&self, current: Option<AbsoluteBound>) -> bool {
+        current == Some(self.bound)
+    }
+}
+
+// These predicates inspect association values. They cannot construct receipts
+// or publish an input/task grant, including when exercised on copies by tests.
+fn input_receipt_matches(
+    sequence: Option<Sequence>,
+    seated: &SeatedInput,
+    turn: &TurnRef,
+    source: &SourceBlockId,
+    file: &StatementFile,
+) -> bool {
+    source == &seated.source
+        && file.source.kind == "message.user"
+        && file.source.turn.as_deref() == Some(turn.0.as_str())
+        && file.source.causal_parent == Some(seated.offered_sequence)
+        && matches!(seated.message.content.as_slice(), [ContentBlock::Text { text }] if text == &file.text)
+        && sequence == Some(Sequence(seated.source.sequence.0))
+}
+
+fn mark_source_matches(source: &SourceBlockId, run: &str, sequence: Sequence) -> bool {
+    source.run == run && source.sequence.0 == sequence.0 && source.block.0 == 0
+}
+
+fn mark_content_matches(
+    file: &StatementFile,
+    turn: &TurnRef,
+    text: &str,
+    effect: &MarkEffect,
+    rejected: bool,
+) -> bool {
+    let expected = serde_json::to_string(effect).expect("typed effect serializes");
+    file.source.kind == "state.mark"
+        && file.source.channel == "internal"
+        && file.source.origin == "loop"
+        && file.source.turn.as_deref() == Some(turn.0.as_str())
+        && file.text == text
+        && file
+            .context
+            .as_ref()
+            .is_some_and(|context| context.raw.get() == expected)
+        && (rejected || file.effect.as_ref() == Some(&StatementEffect::Mark(effect.clone())))
 }
 
 impl RecordingContext {
@@ -247,7 +297,6 @@ impl RecordingContext {
             settled: false,
             turn,
             token: Some(input),
-            input_started: false,
             input_sequence: None,
             seated: None,
             input_receipt: None,
@@ -314,7 +363,7 @@ impl RecordingContext {
         if work.settled {
             return Ok(TaskProgress::Complete);
         }
-        if self.deadlines.get(PumpDeadline::Decision) != Some(work.bound) {
+        if !work.has_original_wait(self.deadlines.get(PumpDeadline::Decision)) {
             return Err(self.marks_fault(ports.io, "begin_task lost its original Decision bound"));
         }
         self.marks.as_mut().unwrap().driving = true;
@@ -353,7 +402,7 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
         let work = self.marks.as_mut().unwrap();
-        if work.cancelled && !work.input_started {
+        if work.cancelled && work.token.is_some() {
             self.flow.cancel_filing_receipts();
             work.stage = Stage::Complete;
             return Ok(());
@@ -361,14 +410,12 @@ impl RecordingContext {
         if work.seated.is_none() {
             let turn = work.turn.clone();
             let seated = if let Some(token) = work.token.take() {
-                work.input_started = true;
                 match self.consume_input(token, turn, ports) {
                     Ok(seated) => seated,
                     Err(error) => {
                         if let Some(token) = error.token {
                             let work = self.marks.as_mut().unwrap();
                             work.token = Some(token);
-                            work.input_started = false;
                         }
                         return Err(error.failure);
                     }
@@ -402,19 +449,12 @@ impl RecordingContext {
         }
         let work = self.marks.as_ref().unwrap();
         let seated = work.seated.as_ref().unwrap();
-        let outcomes: Vec<_> = work
-            .input_receipt
-            .as_ref()
-            .unwrap()
-            .dispositions()
-            .collect();
-        let valid = matches!(outcomes.as_slice(), [SourceDisposition::Committed(committed)]
-            if committed.source() == &seated.source
-                && matches!(committed.file(), LedgerFile::Statement(file)
-                    if file.source.kind == "message.user" && file.source.turn.as_deref() == Some(work.turn.0.as_str())
-                        && file.source.causal_parent == Some(seated.offered_sequence)
-                        && matches!(seated.message.content.as_slice(), [ContentBlock::Text { text }] if text == &file.text)))
-            && work.input_sequence == Some(Sequence(seated.source.sequence.0));
+        let valid = {
+            let mut outcomes = work.input_receipt.as_ref().unwrap().dispositions();
+            matches!((outcomes.next(), outcomes.next()), (Some(SourceDisposition::Committed(committed)), None)
+                if matches!(committed.file(), LedgerFile::Statement(file)
+                    if input_receipt_matches(work.input_sequence, seated, &work.turn, committed.source(), file)))
+        };
         if !valid {
             return Err(self.marks_fault(
                 ports.io,
@@ -543,11 +583,6 @@ impl RecordingContext {
             else {
                 unreachable!("owned begin_task effect");
             };
-            let span = |value: &weaver_types::state_flow::SpanRef| trace::SpanRef {
-                seed_id: value.seed_id.clone(),
-                local_id: trace::DecimalU64(value.local_id.0),
-                revision: trace::DecimalU64(value.revision.0),
-            };
             let event = AuthoredEvent {
                 kind: Kind::StateMark,
                 subsystem: Subsystem::Harness,
@@ -559,14 +594,10 @@ impl RecordingContext {
                     message: serde_json::value::to_raw_value(work.expansion.message())
                         .expect("typed Message serializes"),
                     context: trace::MarkEffect::BeginTask {
-                        task: span(task),
-                        prompt: span(prompt),
+                        task: super::super::mirror::span_ref(task),
+                        prompt: super::super::mirror::span_ref(prompt),
                         source: trace::ContentRef::Event {
-                            block_id: trace::SourceBlockId {
-                                run: block_id.run.clone(),
-                                sequence: trace::DecimalU64(block_id.sequence.0),
-                                block: trace::DecimalU64(block_id.block.0),
-                            },
+                            block_id: super::super::mirror::source(block_id),
                         },
                     },
                 }))),
@@ -600,17 +631,20 @@ impl RecordingContext {
         }
         let work = self.marks.as_ref().unwrap();
         let filing = work.filing.as_ref().unwrap();
-        let outcomes: Vec<_> = filing.receipts().dispositions().collect();
-        let [outcome] = outcomes.as_slice() else {
+        let outcome = {
+            let mut outcomes = filing.receipts().dispositions();
+            match (outcomes.next(), outcomes.next()) {
+                (Some(outcome), None) => Some(outcome),
+                _ => None,
+            }
+        };
+        let Some(outcome) = outcome else {
             return Err(self.marks_fault(
                 ports.io,
                 "required state.mark content was not selected exactly once",
             ));
         };
-        if outcome.source().run != self.flow.run()
-            || outcome.source().sequence.0 != filing.sequence().0
-            || outcome.source().block.0 != 0
-        {
+        if !mark_source_matches(outcome.source(), self.flow.run(), filing.sequence()) {
             return Err(self.marks_fault(ports.io, "mark receipt names another source"));
         }
         let (file, rejected) = match outcome {
@@ -622,25 +656,13 @@ impl RecordingContext {
             }
             SourceDisposition::CorrectlyRejected(source) => (source.file(), true),
         };
-        let expected =
-            serde_json::to_string(work.effect.as_ref().unwrap()).expect("typed effect serializes");
-        if file.source.kind != "state.mark"
-            || file.source.channel != "internal"
-            || file.source.origin != "loop"
-            || file.source.turn.as_deref() != Some(work.turn.0.as_str())
-            || file.text != work.expansion.text()
-            || file
-                .context
-                .as_ref()
-                .is_none_or(|context| context.raw.get() != expected)
-            || (!rejected
-                && file.effect.as_ref()
-                    != work
-                        .effect
-                        .as_ref()
-                        .map(|effect| StatementEffect::Mark(effect.clone()))
-                        .as_ref())
-        {
+        if !mark_content_matches(
+            file,
+            &work.turn,
+            work.expansion.text(),
+            work.effect.as_ref().unwrap(),
+            rejected,
+        ) {
             return Err(self.marks_fault(
                 ports.io,
                 "mark filing changed its exact template/context/source association",
@@ -768,3 +790,7 @@ impl RecordingContext {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "context_marks_validation_tests.rs"]
+pub(super) mod validation_tests;
