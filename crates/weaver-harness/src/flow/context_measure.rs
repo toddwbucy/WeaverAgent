@@ -740,6 +740,12 @@ impl RecordingContext {
         }
     }
 
+    pub(super) fn has_owed_measure_refusal(&self) -> bool {
+        self.measure
+            .as_ref()
+            .is_some_and(|owner| owner.failed_refusal.is_some() || owner.failed_refusal_queued)
+    }
+
     /// Only owed trace reporting progresses after this measurement's protocol
     /// failure. This uses the halt's existing deadline, never a serving wait,
     /// and cannot issue a copy or a measurement completion.

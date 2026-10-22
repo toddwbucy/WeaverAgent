@@ -145,6 +145,7 @@ pub(crate) struct RecordingContext {
     completed_author: Option<Sequence>,
     failure: Option<RunFailure>,
     failed_wait: Option<WaitAtHalt>,
+    halt_report: Option<halt_driver::HaltReport>,
 }
 
 impl RecordingContext {
@@ -246,6 +247,7 @@ impl RecordingContext {
             completed_author: None,
             failure: None,
             failed_wait: None,
+            halt_report: None,
         })
     }
 
@@ -1629,3 +1631,8 @@ pub(super) use measure_driver::{
 #[cfg(test)]
 #[path = "context_measure_tests.rs"]
 mod measure_tests;
+
+#[path = "context_halt.rs"]
+mod halt_driver;
+#[allow(unused_imports)] // Failed lifecycle composition remains dormant until cutover.
+pub(super) use halt_driver::{HaltReport, HaltReportRefusal, HaltTraceProgress};
