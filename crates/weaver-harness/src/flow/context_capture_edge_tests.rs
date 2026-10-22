@@ -370,6 +370,302 @@ fn capture_cancellation_has_one_recoverable_admission_boundary() {
 }
 
 #[test]
+fn delayed_cancellation_settles_timely_recorded_cleanup_before_its_bound_check() {
+    enum Terminal {
+        Aborted,
+        CancelledRelease,
+        OrdinaryRelease,
+    }
+
+    for terminal in [
+        Terminal::Aborted,
+        Terminal::CancelledRelease,
+        Terminal::OrdinaryRelease,
+    ] {
+        let mut run = active();
+        let mut member = Member::new(&mut run);
+        if matches!(terminal, Terminal::Aborted) {
+            let snapshot = member.snapshot(48, SAVE_NS);
+            let image = member.image(&snapshot, 48);
+            member.result(CaptureProgress::ImageReady, &image);
+        } else {
+            member.finished_capture(48);
+        }
+        if matches!(terminal, Terminal::OrdinaryRelease) {
+            member
+                .run
+                .context
+                .release_member_capture(48.into(), &mut member.run.clock)
+                .unwrap();
+        } else {
+            assert_eq!(
+                member
+                    .run
+                    .context
+                    .cancel_member_capture(48.into(), &mut member.run.clock)
+                    .unwrap(),
+                Advance::Progress
+            );
+        }
+        let request = member.sent();
+        let bound = member
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::StateControl)
+            .unwrap();
+        let response = member.answer(
+            &request,
+            if matches!(terminal, Terminal::Aborted) {
+                s::StateControlAnswer::Aborted {
+                    capture_id: 48.into(),
+                }
+            } else {
+                s::StateControlAnswer::CaptureReleased {
+                    capture_id: 48.into(),
+                }
+            },
+        );
+        member.receive(&response).unwrap();
+        // The coordinator authors the real cleanup observation, while this
+        // context has not yet consumed it or disarmed its StateControl wait.
+        hold_recorded_original(&mut member);
+        let Some(OperationCompletion::Capture { recorded_ns, .. }) =
+            member.run.context.flow.operation_completion()
+        else {
+            panic!("cleanup has no Recorded completion");
+        };
+        let recorded_ns = *recorded_ns;
+        assert!(!bound.expired(recorded_ns));
+        assert_eq!(
+            member.run.context.deadlines.get(PumpDeadline::StateControl),
+            Some(bound)
+        );
+        let records = member.records(Kind::StateStoreMeasurement).len();
+        member
+            .run
+            .clock
+            .advance_to(bound.deadline_ns() + 1)
+            .unwrap();
+
+        for _ in 0..2 {
+            assert_eq!(
+                member
+                    .run
+                    .context
+                    .cancel_member_capture(48.into(), &mut member.run.clock)
+                    .unwrap(),
+                Advance::Progress,
+                "consumer delay cannot expire timely Recorded cleanup"
+            );
+            assert!(member.run.context.halt().is_none());
+            assert_eq!(
+                member.run.context.capture_snapshot().unwrap().phase,
+                CapturePhase::Complete
+            );
+            assert!(
+                member
+                    .run
+                    .context
+                    .deadlines
+                    .get(PumpDeadline::StateControl)
+                    .is_none()
+            );
+            assert_eq!(member.records(Kind::StateStoreMeasurement).len(), records);
+            member.no_request();
+        }
+        let result = member
+            .run
+            .context
+            .take_capture_answer(&mut member.run.clock)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.recorded_ns, recorded_ns);
+        assert_eq!(
+            s::encode_state_line(&result.answer, s::FrameDirection::Response).unwrap(),
+            s::encode_state_line(&response, s::FrameDirection::Response).unwrap()
+        );
+        member
+            .run
+            .context
+            .finish_member_capture(48.into(), &mut member.run.clock)
+            .unwrap();
+        assert!(member.run.context.capture_snapshot().is_none());
+        assert!(member.run.context.halt().is_none());
+    }
+}
+
+#[test]
+fn cancellation_settlement_enqueues_owed_abort_with_one_admission_boundary() {
+    for already_pending in [false, true] {
+        let mut run = active();
+        let mut member = Member::new(&mut run);
+        let request = member.snapshot(49, SAVE_NS);
+        let refusal = member.answer(
+            &request,
+            s::StateControlAnswer::ControlRefused {
+                code: s::ControlRefusalCode::Capture(s::CaptureRefusalCode::SnapshotFailed),
+                detail: "cancel must retain the exact owed cleanup".into(),
+            },
+        );
+        member.receive(&refusal).unwrap();
+        hold_recorded_original(&mut member);
+        if already_pending {
+            let leave = AbsoluteBound::after(member.now(), 10).unwrap();
+            member
+                .run
+                .context
+                .arm(PumpDeadline::Leave, leave, &mut member.run.clock)
+                .unwrap();
+            let mut clock = JumpAtSample {
+                clock: &mut member.run.clock,
+                samples: 0,
+                at: 1,
+                to: leave.deadline_ns(),
+            };
+            assert_eq!(
+                member
+                    .run
+                    .context
+                    .cancel_member_capture(49.into(), &mut clock),
+                Err(RunFailure::Wait {
+                    key: PumpDeadline::Leave,
+                    bound: leave,
+                })
+            );
+            for _ in 0..2 {
+                assert_eq!(
+                    member
+                        .run
+                        .context
+                        .cancel_member_capture(49.into(), &mut member.run.clock),
+                    Err(RunFailure::Wait {
+                        key: PumpDeadline::Leave,
+                        bound: leave,
+                    })
+                );
+                assert!(member.run.context.flow.state().outstanding().is_empty());
+                assert!(member.run.context.capture_refusal().is_none());
+            }
+            member
+                .run
+                .context
+                .complete_wait(PumpDeadline::Leave)
+                .unwrap();
+        }
+        let leave = AbsoluteBound::after(member.now(), 10).unwrap();
+        member
+            .run
+            .context
+            .arm(PumpDeadline::Leave, leave, &mut member.run.clock)
+            .unwrap();
+        let mut clock = JumpAtSample {
+            clock: &mut member.run.clock,
+            samples: 0,
+            at: 2,
+            to: leave.deadline_ns(),
+        };
+        assert_eq!(
+            member
+                .run
+                .context
+                .cancel_member_capture(49.into(), &mut clock),
+            Ok(Advance::Pending),
+            "settlement has already admitted and retained this Abort"
+        );
+        assert_eq!(clock.samples, 2);
+        assert_eq!(
+            member.run.context.capture_snapshot().unwrap().phase,
+            CapturePhase::Aborting
+        );
+        let cleanup = member
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::StateControl)
+            .unwrap();
+        assert_eq!(cleanup.began_ns(), leave.deadline_ns());
+        assert_eq!(cleanup.deadline_ns() - cleanup.began_ns(), SMALL_CONTROL_NS);
+        for _ in 0..2 {
+            assert_eq!(
+                member
+                    .run
+                    .context
+                    .cancel_member_capture(49.into(), &mut member.run.clock),
+                Err(RunFailure::Wait {
+                    key: PumpDeadline::Leave,
+                    bound: leave,
+                })
+            );
+            assert_eq!(member.run.context.flow.state().outstanding().len(), 1);
+            assert_eq!(
+                member.run.context.deadlines.get(PumpDeadline::StateControl),
+                Some(cleanup)
+            );
+            assert!(member.run.context.capture_refusal().is_none());
+        }
+        member
+            .run
+            .context
+            .complete_wait(PumpDeadline::Leave)
+            .unwrap();
+        assert_eq!(
+            member
+                .run
+                .context
+                .cancel_member_capture(49.into(), &mut member.run.clock),
+            Ok(Advance::Pending)
+        );
+        let abort = member.sent();
+        assert_eq!(abort.common(), request.common());
+        member.no_request();
+        member.aborted(&abort, 49);
+    }
+}
+
+#[test]
+fn cancellation_still_checks_the_bound_of_unrecorded_cleanup() {
+    let mut run = active();
+    let mut member = Member::new(&mut run);
+    let request = member.snapshot(50, SAVE_NS);
+    let image = member.image(&request, 50);
+    member.result(CaptureProgress::ImageReady, &image);
+    member
+        .run
+        .context
+        .cancel_member_capture(50.into(), &mut member.run.clock)
+        .unwrap();
+    member.sent();
+    let bound = member
+        .run
+        .context
+        .deadlines
+        .get(PumpDeadline::StateControl)
+        .unwrap();
+    member.run.clock.advance_to(bound.deadline_ns()).unwrap();
+    assert!(matches!(
+        member
+            .run
+            .context
+            .cancel_member_capture(50.into(), &mut member.run.clock),
+        Err(RunFailure::Flow {
+            reason: FlowHaltReason::ControlBound,
+            ..
+        })
+    ));
+    assert_eq!(member.run.context.flow.state().outstanding().len(), 1);
+    assert_eq!(
+        member.run.context.flow.state().outstanding()[0].operation,
+        s::StateOperation::Abort
+    );
+    assert_eq!(
+        member.run.context.deadlines.get(PumpDeadline::StateControl),
+        Some(bound)
+    );
+    member.no_request();
+}
+
+#[test]
 fn wrong_capture_id_cannot_enqueue_an_already_owed_abort() {
     let mut run = active();
     let mut member = Member::new(&mut run);
