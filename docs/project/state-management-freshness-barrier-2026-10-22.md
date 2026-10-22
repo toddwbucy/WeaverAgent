@@ -2,8 +2,8 @@
 
 Date: 2026-10-22. Executor implementation record for epic #146, item B.
 Branch: `code/state-freshness-barrier`, based on draft #239 at `5d6c3de`.
-The initial author gates passed. The turn-boundary correction awaits fresh gates.
-Planner review remains separate.
+The initial author gates and both turn-boundary corrections passed. The test
+follow-up awaits fresh gates. Planner review remains separate.
 No serving activation, production qualification or epic completion is claimed.
 
 ## Authority and implemented boundary
@@ -35,13 +35,14 @@ background filings remain owned and continue through the common flow path.
 
 ## Author and cancellation custody
 
-Admission requires no recorded open turn and refuses active explicit input, output,
-filing, pair, repair, read, measurement and capture transactions. It can drain a generic
-author already retained before the pause. A resumed generic author returns its exact sequence
-to completed_author before another clock or flow hook; its original caller can
+Admission requires no recorded open turn or retained turn.started author and
+refuses active explicit input, output, filing, pair, repair, read, measurement
+and capture transactions. It can drain another generic author already retained
+before the pause. A resumed generic author returns its exact sequence to
+completed_author before another clock or flow hook. Its original caller can
 still retrieve that result. An initial deferred author's retry repeats every
-ordinary admission check. Only that private retained retry can cross the pause;
-new author input receives FreshnessOwned and remains refused evidence.
+ordinary admission check. Only that private retained retry can cross the pause.
+New author input receives FreshnessOwned and remains refused evidence.
 
 New explicit content owners also refuse the active pause. Existing owner resume
 methods remain usable. Even after the Cut is disarmed, an untaken freshness
@@ -62,7 +63,7 @@ not a cut, snapshot, decoder or placement port.
 
 ## Instruments and results
 
-Fourteen tests reuse the actual recorder, classifier socket and member framing
+Nineteen tests reuse the actual recorder, classifier socket and member framing
 fixture. Synthetic classifier responses test mechanics, not language quality.
 
 | Property | Instrument |
@@ -81,6 +82,10 @@ fixture. Synthetic classifier responses test mechanics, not language quality.
 | Refused competing owner | Existing filing keeps its event; refused freshness call keeps its IDs |
 | Arithmetic | Deadline overflow returns the IDs and arms no Cut |
 | Turn boundary | Actual turn.started refuses Cut, then turn.closed permits it |
+| Retained turn boundary | Deferred turn.started and a real pressure-held ticket each refuse Cut before Recorded |
+| Completed-owner replacement | A second prepare returns its IDs while the first result keeps its bound and origin |
+| Bound identity defense | Rearm the vacant Cut key through the real wait API after completion, then refuse result use |
+| Pair refusal priority | Return another context's real checked request unchanged, then complete it in its original context |
 
 The positive fixture checks that Cut is absent before a new ordinary read starts
 its own StateControl bound. Context identity is checked against a second real
@@ -122,6 +127,98 @@ focused test, strict all-target harness clippy, formatting and lock passed.
 Removing the open-turn guard compiled and failed the new test; exact restoration
 passed. The run used /tmp/weaver-146-freshness-target. Logs, recipe and hashes are
 in freshness/turn in the shared evidence deposit.
+
+## Retained-turn correction
+
+Review found that open_turn alone does not establish the between-turn boundary.
+A generic turn.started can remain in waiting_content after a recoverable Leave,
+before its recorder ticket exists. After submission, author_turn retains its kind
+while the ticket is pending. In both cases open_turn remains absent until the
+Recorded continuation settles. Draining either author under Cut would begin a
+turn inside the between-turn pause.
+
+Admission now checks both retained representations before arming Cut. Two real
+fixtures cover initial deferred admission and an existing recorder ticket behind
+a full writer. Each verifies Busy with the requested IDs returned unchanged,
+no freshness owner or Cut, and no lost ticket. Resuming the original author
+records one turn.started. Cut remains unavailable until its real turn.closed
+records, then preparation succeeds. Separate guard-removal recipes target the
+two admission checks. On the joined source, all 1290 harness tests passed with
+18 inherited ignored cases. The three turn-boundary focused tests, strict
+all-target harness clippy, formatting and lock passed. Both guard removals
+compiled and failed their regression, then passed after exact restoration.
+Independent source review found no concrete defect. The run used private target
+/tmp/weaver-146-freshness-target and four test threads for the full suite. Logs,
+recipes, results and source hashes are retained in freshness/retained-turn in
+the shared evidence deposit. These are author checks, not a renewed Planner grade.
+
+The same-shape census found one open_turn assignment, in the generic Recorded
+continuation. Freshness already refuses new generic authors and explicit input
+owners. Its private retry resumes only the author retained at admission, so
+excluding both retained turn.started forms closes that transition without a
+second completion-time refusal. The begin_task descendant already excludes
+waiting_content and pending author tickets before accepting its own work.
+
+The earlier Leave deadline still wins through the shared pump while the original
+Cut bound remains owned. HARNESS-CLOCK requires checked declared elapsed time,
+HARNESS-PUMP chooses the nearest armed absolute deadline, and CUT-WAIT requires
+the earlier lifecycle deadline to win. None requires rewriting the stored Cut
+bound to the lifecycle bound. An empty required-ID vector is allowed and proves
+only that its empty selected set has no outstanding dispositions.
+
+## Planner test follow-up
+
+F2 now exercises a second prepare_cut after completion has disarmed Cut but
+before the original result is taken. The second call returns Busy and its exact
+IDs. The first result still carries its original empty set, bound and context
+origin. Removing the freshness-owner admission check is the protective mutation.
+
+F12 uses the real wait API after completion. At that point Cut is vacant, so a
+caller can arm it with a competing bound while freshness still owns its completed
+result. This is invalid caller composition reached without assigning private
+fields. Advance, cancellation and take each reject that mismatch, latch
+protocol_failed and retain the owner without returning its proof. Bypassing
+freshness_wait_matches is the protective mutation. This tests its completed
+None case, not an otherwise unreachable replacement of an active Cut bound.
+An active key cannot be rearmed, complete_wait cannot retire the pending owned
+Cut, and the other Cut owners are excluded by both sides' admission guards.
+
+F15 uses actual OriginalRequests from another context's checked output. A target
+context with completed, untaken freshness returns Busy and preserves the exact
+generation, request identities and message. The original context then completes
+those returned requests through real pair records and receipts. Removing the
+pair admission's freshness term changes the refusal reason and is the protective
+mutation. This pins refusal priority and custody return. It does not claim that
+the term alone prevents an otherwise valid pair from executing: the generation
+must also match an open turn, which a valid freshness owner cannot have.
+
+F13 is equivalent under that same between-turn invariant. begin_output requires
+its original turn to match open_turn before its freshness check. Admission and
+the retained-author guards prevent such an open turn from appearing while the
+freshness result is owned. A synthetic assignment of open_turn beneath that
+owner would not be a reachable regression fixture. The explicit guard remains
+as a local defense.
+
+F16 is equivalent at the current post-reduce inbox check. Successful reduction
+starts by draining every queued copy into the ledger. Resumed author tickets,
+new coordinator authors and terminal disposal of a waiting copy all drain again
+before returning. Failed or frozen intake exits without a readiness result.
+Pending observations separately retain the newly owed records. Freshness excludes
+the read owner that could bypass reduction and the input, capture and read owners
+whose settlement hooks run afterward. Intake is synchronous, so no writer thread
+can insert another whole copy between that drain and the check. The explicit
+inbox guard remains a defense for future reducer changes. No fabricated queued
+state is used to claim an independent protective failure.
+
+On the joined diagnostic-correction source, all 1295 harness tests passed with
+18 inherited ignored cases. The freshness-focused filter, strict all-target
+harness clippy, formatting and lock passed. All three new mutations compiled
+and failed their named assertions, then passed after exact restoration. Root
+independently reviewed the fixtures and equivalent dispositions. The run used
+/tmp/weaver-146-freshness-target. Logs, recipes and exact hashes are retained in
+freshness/review-batch in the shared evidence deposit. The earlier results above
+belong to the separately validated blocking correction.
+These dispositions change no deadline, cancellation or trace semantics.
 
 ## Remaining integration and assessment
 

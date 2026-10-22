@@ -1,9 +1,8 @@
 //! Actual diagnostic submissions, with conversion and writer custody checked separately.
 use super::*;
 use s::payloads as p;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::os::unix::fs::FileExt;
-use std::sync::atomic::{AtomicU64, Ordering};
 use weaver_trace::{self as t, serving as s};
 
 const RAW: &str = r#"{ "held":"line\n\u00e9", "number":1.00 }"#;
@@ -17,19 +16,7 @@ struct Diagnostic {
 }
 impl Diagnostic {
     fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "weaver-diagnostic-conversion-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let sink = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .unwrap();
-        std::fs::remove_file(path).unwrap();
+        let sink = scratch_file("diagnostic-conversion");
         let record = Record::from(
             weaver_diagnostic::Recorder::receive(
                 sink.try_clone().unwrap().into(),
@@ -54,6 +41,19 @@ impl Diagnostic {
         );
         assert!(self.record.failed(), "the refusal must remain latched");
         assert_eq!(self.bytes(), before, "conversion refusal wrote to the sink");
+    }
+    fn assert_malformed(&mut self, event: s::Event) {
+        let before = self.bytes();
+        assert!(matches!(
+            self.record.submit_shared_diagnostic(event),
+            Err(RecordFailure::Diagnostic(
+                weaver_diagnostic::Failure::SubmitRefused {
+                    refusal: weaver_diagnostic::SubmitRefusal::PayloadKindMismatch
+                }
+            ))
+        ));
+        assert!(self.record.failed());
+        assert_eq!(self.bytes(), before);
     }
     fn assert_writer_sound_without_clearing_the_record_latch(&mut self) {
         assert!(self.record.failed());
@@ -294,7 +294,11 @@ fn diagnostic_rejects_mismatched_legacy_and_shared_payloads_before_writing() {
         let mut fixture = Diagnostic::new();
         assert!(matches!(
             fixture.record.submit(old),
-            Err(RecordFailure::OutsideDiagnosticVocabulary)
+            Err(RecordFailure::Diagnostic(
+                weaver_diagnostic::Failure::SubmitRefused {
+                    refusal: weaver_diagnostic::SubmitRefusal::PayloadKindMismatch
+                }
+            ))
         ));
         assert!(fixture.record.failed());
         assert!(fixture.bytes().is_empty());
@@ -305,9 +309,73 @@ fn diagnostic_rejects_mismatched_legacy_and_shared_payloads_before_writing() {
             s::Payload::Fault(raw())
         });
         let mut fixture = Diagnostic::new();
-        fixture.assert_refused(new);
+        fixture.assert_malformed(new);
         fixture.assert_writer_sound_without_clearing_the_record_latch();
     }
+}
+
+#[test]
+fn diagnostic_shared_payload_required_refuses_before_the_writer() {
+    let cases = compatible();
+    let mut checked = 0;
+    for (_, mut event) in cases {
+        if event.envelope.kind == s::Kind::TurnStarted {
+            continue;
+        }
+        event.payload = None;
+        let missing_payload = |result| match result {
+            Err(RecordFailure::Diagnostic(weaver_diagnostic::Failure::SubmitRefused {
+                refusal: weaver_diagnostic::SubmitRefusal::RequiredFieldAbsent { field },
+            })) => assert_eq!(field.0, "payload"),
+            other => panic!("missing payload was not refused: {other:?}"),
+        };
+        // This assertion pins conversion's own boundary, even though the
+        // diagnostic writer independently refuses a missing required payload.
+        missing_payload(convert_shared(event.clone()).map(|_| ()));
+        let mut fixture = Diagnostic::new();
+        missing_payload(fixture.record.submit_shared_diagnostic(event).map(|_| ()));
+        assert!(fixture.record.failed());
+        assert!(fixture.bytes().is_empty());
+        fixture.assert_writer_sound_without_clearing_the_record_latch();
+        checked += 1;
+    }
+    assert_eq!(checked, 14);
+}
+
+#[test]
+fn diagnostic_writer_replaces_converted_source_identity_and_sequence_on_each_submit() {
+    let mut fixture = Diagnostic::new();
+    for (written, source) in [71, 5].into_iter().enumerate() {
+        let mut event = shared(s::Kind::Fault, Some(s::Payload::Fault(raw())));
+        event.envelope.sequence = Sequence(source);
+        let converted = convert_shared(event.clone()).unwrap();
+        assert_eq!(converted.envelope.session.0, "source-session");
+        assert_eq!(converted.envelope.run.0, "source-run");
+        assert_eq!(converted.envelope.sequence.0, source);
+        assert_eq!(converted.envelope.causal_parent.unwrap().0, 17);
+        assert_eq!(
+            fixture.record.submit_shared_diagnostic(event).unwrap(),
+            Sequence(written as u64)
+        );
+    }
+    let bytes = fixture.bytes();
+    let events: Vec<serde_json::Value> = bytes
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(events.len(), 2);
+    for (written, event) in events.iter().enumerate() {
+        assert_eq!(event["session"], "diagnostic-session");
+        assert_eq!(event["run"], "diagnostic-run");
+        assert_eq!(event["sequence"], written.to_string());
+        assert_eq!(event["causal_parent"], "17");
+        assert_eq!(event["turn"], "source-turn");
+        assert_eq!(event["wall_ms"], 12345);
+        assert_eq!(event["monotonic_ns"], "67890");
+        assert!(event.get("channel").is_none());
+        assert!(event.get("origin").is_none());
+    }
+    assert!(!fixture.record.failed());
 }
 
 #[test]
@@ -501,25 +569,34 @@ fn diagnostic_conversion_keeps_supported_subsystems_and_refuses_foreign_ones() {
 
 #[test]
 fn diagnostic_shared_door_cannot_submit_to_the_legacy_serving_arm() {
-    let mut record = Record::from(
-        t::Recorder::receive(
-            scratch_sink("new-diagnostic-door"),
-            t::RunRef("r-1".into()),
-            t::SessionRef("s-1".into()),
-        )
-        .unwrap(),
-    );
-    let event = shared(s::Kind::Fault, Some(s::Payload::Fault(raw())));
-    assert!(matches!(
-        record.submit_shared_diagnostic(event),
-        Err(RecordFailure::OutsideDiagnosticVocabulary)
-    ));
-    assert!(record.failed());
-    assert_eq!(record.structure().unwrap().by_kind(Kind::Fault).count(), 0);
-    // The existing serving path still uses its own recorder. This checks the
-    // unchanged mechanism while explicitly retaining the run's failed latch.
-    assert_eq!(fault(&author(), &mut record).unwrap(), Sequence(0));
-    record.drain().unwrap();
-    assert_eq!(record.structure().unwrap().by_kind(Kind::Fault).count(), 1);
-    assert!(record.failed());
+    for native in [false, true] {
+        let mut record = Record::from(
+            t::Recorder::receive(
+                scratch_sink("new-diagnostic-door"),
+                t::RunRef("r-1".into()),
+                t::SessionRef("s-1".into()),
+            )
+            .unwrap(),
+        );
+        let event = shared(s::Kind::Fault, Some(s::Payload::Fault(raw())));
+        let refused = if native {
+            record
+                .submit_diagnostic(convert_shared(event).unwrap())
+                .map(|_| ())
+        } else {
+            record.submit_shared_diagnostic(event).map(|_| ())
+        };
+        assert!(matches!(
+            refused,
+            Err(RecordFailure::DiagnosticDoorOnServingRecord)
+        ));
+        assert!(record.failed());
+        assert_eq!(record.structure().unwrap().by_kind(Kind::Fault).count(), 0);
+        // The existing serving path still uses its own recorder. This checks
+        // the unchanged mechanism while retaining the run's failed latch.
+        assert_eq!(fault(&author(), &mut record).unwrap(), Sequence(0));
+        record.drain().unwrap();
+        assert_eq!(record.structure().unwrap().by_kind(Kind::Fault).count(), 1);
+        assert!(record.failed());
+    }
 }
