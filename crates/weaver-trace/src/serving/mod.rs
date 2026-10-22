@@ -3,7 +3,18 @@
 //! Typed authoring, reserved writer capacity and the terminal tap share one
 //! canonical record. The existing selected recorder remains in place until the
 //! foundation cutover. This module neither transports copies nor writes state.
-//! Serving recall authoring awaits its owning payload contract.
+//! Recall carries checked-read provenance without granting material ownership.
+//!
+//! Serving recall cannot enter the legacy diagnostic conversion vocabulary.
+//!
+//! ```compile_fail,E0308
+//! use weaver_trace::serving::payloads::{DecimalU64, ReadSelector, RecallRecord};
+//! let recall = RecallRecord::Read {
+//!     selector: ReadSelector::SystemPrompt {}, snapshot_id: DecimalU64(1),
+//!     sources: Vec::new(), spans: Vec::new(),
+//! };
+//! let _ = weaver_trace::Payload::Recall(recall);
+//! ```
 //!
 //! A validated partition cannot be constructed without its load checks.
 //!
@@ -41,6 +52,8 @@ pub use tee::{
     StatementCopy, TapFailure, TapFailureCode, TapOutcome, Tee,
 };
 
+#[cfg(test)]
+mod recall_tests;
 #[cfg(test)]
 mod tests;
 
