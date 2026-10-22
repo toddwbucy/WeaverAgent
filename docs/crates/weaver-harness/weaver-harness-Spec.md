@@ -7,37 +7,25 @@ floor. Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-harness-Spec`
 **Parent:** `weaver-harness-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #245
+**Landing PR:** #181
 
 ---
 
 ## 0. What this document is
 
-This replacement applies at the state-management foundation cutover. Until then,
-this section's previous serving contract remains applicable under
-[FOUNDATION-TRANSITION](../state-management/state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover).
-
 Build instructions for `weaver-harness`: the module layout, the item signatures,
 the channel mechanics this crate holds, the descriptor custody as code, and the
 elections a builder would otherwise invent. It is derived from
-`weaver-harness-PRD` and from the contracts this crate is party to. The base
-enumeration in that charter's section 4 names nine contracts, including the recall
-library call: `weaver-admin-harness-contract`,
+`weaver-harness-PRD` and from the contracts this crate is party to, which that
+charter's section 4 counts at eight: `weaver-admin-harness-contract`,
 `weaver-harness-gate-contract`, `weaver-harness-spu-contract`,
 `weaver-harness-spu-decode-contract`, `weaver-harness-spu-classify-contract`,
-`weaver-harness-state-contract`, `weaver-harness-trace-contract`,
-`weaver-harness-diagnostic-contract`, and
-[weaver-harness-internal-contract](../contracts/weaver-harness-internal-contract.md),
-together with `weaver-organ-channel`, the
+`weaver-harness-state-contract`, `weaver-harness-trace-contract`, and
+`weaver-harness-diagnostic-contract`, together with `weaver-organ-channel`, the
 drawn material the three organ-channel contracts share. **This document derives
-from eight of the nine**, the label seam's representation being owed to the act
+from seven of the eight**, the label seam's representation being owed to the act
 that builds the classify leg, which is why the count here and the citations
-below differ by one. The separately merged
-[STE100 charter amendment](../state-management/charter-amendments.md#4-ste100-and-recall-duties-in-the-owning-charters)
-and [STE100 contract](../state-management/weaver-harness-spu-ste100-contract.md#0-scope-and-applicability)
-add the tenth contract and seventh socket at cutover, without replacing the existing
-label-scoring seam. Its representation and harness obligations remain in Spec 02
-and the [harness amendment](../state-management/weaver-harness-Spec-amendment.md#2-classifier-port-and-input-check-destination-section-6).
+below differ by one.
 
 Level discipline. The charter says what the crate needs and why. This document
 says how it is represented, and per gate G2 it elects against grounds the charter
@@ -56,7 +44,7 @@ with nothing recording where it went. **The rule admitting a second `asserts` ed
 owed to `WeaverTools-Document-Format`**, whose section 4 states no cardinality for
 that edge, and issue #631 carries the debt. The disposition is argued at that Spec's
 section 7 rather than here. The charter stays the source of this crate's node, its
-parent edge, its two floor links, its declared seams, and its artifact edges, and a
+parent edge, its two floor links, its one declared seam, and its artifact edges, and a
 Spec that restated any of them would give the mapper two sources for one record, per
 that format's section 1. What this document sources is the claims code must conform
 to, declared at the clauses that argue them rather than gathered in one place, per
@@ -166,12 +154,14 @@ to: harness-dev-boundary-in-the-filesystem
 **Edition and toolchain.** Edition 2024 on the pinned nightly, no nightly
 feature used.
 
-This replacement applies at the state-management foundation cutover. Until then,
-this section's previous serving contract remains applicable under
-[FOUNDATION-TRANSITION](../state-management/state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover).
-
-**The normal dependency set is five internal crates and three external ones.**
-`weaver-traits` and `weaver-types` are the floor links the charter declares, the first for the message
+**The dependency set is four internal crates and two external ones, and each is
+argued.** **It became four when `weaver-diagnostic` was built**, that crate being the
+mechanism this crate authors a diagnostic-trace through per the ruling of 2026-08-24,
+and a mechanism this crate authors through is linked rather than dialed, which is the
+ground `weaver-trace` already stands on. The count here is the manifest's and the
+manifest holds four, so the record below reads against what `Cargo.toml` carries and
+that file and the corpus's ruling now say the same thing. `weaver-traits` and
+`weaver-types` are the floor links the charter declares, the first for the message
 model the authoring path licenses, the second for
 the wire vocabulary of loop 0 and the identity types the envelope carries.
 `weaver-types` is taken **without its `config` feature**: this crate reads no field from
@@ -192,39 +182,32 @@ after this branch rather than beside it. `weaver-trace` is the seam tagged `link
 recorder this crate authors through under a serving binding, and `weaver-diagnostic`
 is the recorder it authors through under a diagnostic one, per apex section 6 as
 ruled 2026-08-24, and it stands in the set on the same ground, the member being
-built and the manifest declaring it. `weaver-trace`'s link is recorded as a seam
-tagged `link` via `weaver-harness-trace-contract`, and the
+built and the manifest declaring it.
+**Its contract landed 2026-08-27 and its edge with it.** `weaver-trace`'s link is
+recorded as a seam tagged `link` via `weaver-harness-trace-contract`, and the
 diagnostic member's is recorded the same way via
 `weaver-harness-diagnostic-contract`, declared in `weaver-harness-PRD` section 4
-where the asking side carries it.
-
-The fifth internal crate is `weaver-internal`, elected by
-[HARNESS-RECALL](../state-management/weaver-internal-Spec-amendment.md#2-harness-use-destination-harness-sections-1-and-6).
-Its only new library use in that act is `recall::query`, the pure borrowed-subject
-constructor defined by INTERNAL-QUERY. Its seam is tagged `link` via
-`weaver-harness-internal-contract` in the charter. The harness owns the subject
-through use, scheduling, trace authoring, store I/O and placement; the helper owns
-none of those effects. No dependency on state or the SPU is added, and this compiled
-primitive does not activate the replacement serving path or qualify the coupled
-cutover. Loop orchestration remains in `worker/dev_loop`; classification remains in
-the SPU.
-
-**This section's list reads against the manifest.** `tests/manifest.rs` asserts the
-exact five-crate internal set. `serde_json` encodes and decodes the loop 0 envelopes,
-whose JSON election is `weaver-types-Spec` section 4.3's. `nix` is the OS surface, elected in
-section 2.4 where the grounds and the record live. `sha2` binds the compiled template
-inventory to its exact canonical bytes under Spec 02
-[TEMPLATES](../state-management/state-management-spec-02-protocol-classifier-gate.md#4-harness-templates-and-seed-certification).
-**The set and the feature are two records rather than one.** Gate H2 reads the internal edges against
+where the asking side carries it. **The graph and the manifest are both at four**,
+having parted on purpose while the member was unbuilt: an edge is declared by a
+document and a dependency by a manifest, so the act that wrote the papers moved the
+first and the act that wrote the crate moved the second, and the second has landed.
+**This section's list reads against the manifest**, which is the instrument that
+checks it, and `tests/manifest.rs` asserts the four-crate set and cites this
+section for it, so a list at three was the list being behind rather than the tree
+being ahead. `serde_json` encodes and decodes the loop 0 envelopes, whose JSON
+election is `weaver-types-Spec` section 4.3's. `nix` is the OS surface, elected in
+section 2.4 where the grounds and the record live. **The set and the feature are two
+records rather than one.** Gate H2 reads the internal edges against
 the graph and reads no feature list, and the featureless take is a `Cargo.toml` fact of
 its own, so a single record would hand one instrument's read to a claim it does not
 cover. **The set grounds in the socket invariant and the feature grounds in nothing.**
 Apex section 5.1 is the reason the two organs appear nowhere in this list: a crate this
-one asks across a process line is reached over a socket. The internal set is the floor,
-the two recorders and the pure recall helper. The last three calls cross no process
-line and have governing contracts, so their records are `seam` edges tagged `link`
-rather than `floor-link`. Which features a floor link is taken with is a build
-election that would read the same under any invariant.
+one asks to do something is reached over a socket, so the internal set is the floor plus
+the two recorders this crate authors through, each linked because the call crosses no
+process line, which is what apex section 5.1's rule turns on. The harness does ask
+each to record, which is why the record is a `seam` tagged `link` rather than a
+`floor-link`. Which features a floor link is taken with is a build election that
+would read the same under any invariant.
 
 ```graph
 node: harness-internal-dependency-set
@@ -316,13 +299,7 @@ to: axiom-harness-integrates-by-the-loop
 
 ## 2. The channels, and custody as code
 
-This replacement applies at the state-management foundation cutover. Until then,
-this section's previous serving contract remains applicable under
-[FOUNDATION-TRANSITION](../state-management/state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover).
-
-The six socket seams in the charter's base enumeration are described here; the
-additional required STE100 socket retains the separate contract and amendment named
-in section 0. For these six base seams, this crate creates the pair behind four of
+This crate is party to six socket seams and creates the pair behind four of
 them. The two it does not create are the coordination seam, a named socket this
 crate binds rather than a pair, and the state seam, whose pair admin creates at
 the member's spawn and whose near end arrives here inside the enter directive,
@@ -3224,14 +3201,9 @@ paths, not one per row.
   the doctests for the whole, which is the overclaim this corpus refuses in
   prose and has no reason to admit in a graph.
 
-This replacement applies at the state-management foundation cutover. Until then,
-this section's previous serving contract remains applicable under
-[FOUNDATION-TRANSITION](../state-management/state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover).
-
-**Enforced by the manifest.** The normal internal dependency set is exactly the two
-floor links and the three library seams to trace, diagnostic and the pure internal
-recall helper, five crates as section 1 states, read against the graph under gate H2.
-No async runtime, no logging crate,
+**Enforced by the manifest.** The internal dependency set is exactly the two
+floor links, the trace seam, and the diagnostic mechanism section 1 counts as the
+fourth, read against the graph under gate H2. No async runtime, no logging crate,
 and no HTTP client in the resolved external tree, by the build-time `cargo tree`
 assertion the floor Specs share.
 
@@ -3244,7 +3216,7 @@ number twenty: ten to `axiom-floor-is-vocabulary-behavior-is-socket`, four to
 nothing from this crate,** which reads oddly for the hub that invariant names and
 is right: the hub property is topology, which crate holds a two-initiator channel
 with which, and this document sources no topological record. The charter sources this
-crate's node, its parent edge, its floor links, and its declared seams, per
+crate's node, its parent edge, its floor links, and its one declared seam, per
 section 0, and everything below that line is this crate's interior or its
 channels' mechanics. A crate is an organ or is not by a test read against the
 apex, and no claim here is that reading. **That 5.4 still takes nothing while 5.5

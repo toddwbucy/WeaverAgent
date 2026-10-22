@@ -118,23 +118,16 @@ line is a Unix domain socket, and there is no listening network socket anywhere.
   `/etc/weaver/admin`), opens its trace sink and hands it to the worker, and names its
   SPU by that root's `spu-binary`. Its start step takes the run lock and stands the
   agent's processes as the declaration elects them (Spec section 6, #72).
-- **`weaver-internal`** holds the loop's inward callables: the calculator and the pure
-  recall-query constructor elected by INTERNAL-RECALL. They hold no process. The
-  constructor's harness use remains subject to the qualified foundation cutover under
-  [FOUNDATION-TRANSITION](docs/crates/state-management/state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover).
-  **The gate is the agent's boundary** (the operator's ruling of 2026-10-15,
+- **`weaver-internal`** holds the loop's inward callables (the calculator), which hold no
+  process. **The gate is the agent's boundary** (the operator's ruling of 2026-10-15,
   #172): every tool on its far side is external, the shell the gate runs per call
   included, and a new tool defaults to external unless it bears directly on the loop.
 - **`weaver-traits`** and **`weaver-types`** are the floor: messages, providers, tools,
   permissions, identities, the wire and the agent declaration parser (`config` feature).
   They compile on stable and are demand-derived from what the organs need.
 
-Cargo edges run downward only. The harness's five normal internal dependencies are
-the two floor crates, `weaver-trace`, `weaver-diagnostic`, and `weaver-internal`.
-The last three are library seams under their contracts; the recall helper's is
-[weaver-harness-internal-contract](docs/crates/contracts/weaver-harness-internal-contract.md).
-`weaver-state` links `weaver-trace`, and no organ links another organ. Loop
-orchestration remains in `worker/dev_loop`, and classification remains in the SPU.
+Cargo edges run downward only: every crate links at most the floor, the harness links
+its two members, `weaver-state` links `weaver-trace`, and no organ links another organ.
 Each crate's manifest test reads its own manifest to pin its part of that shape: a
 `tests/manifest.rs` in every crate but `weaver-state`, whose test is
 `trace_is_a_dev_dependency_only` in `src/main.rs`.
