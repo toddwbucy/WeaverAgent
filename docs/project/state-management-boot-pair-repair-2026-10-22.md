@@ -85,8 +85,8 @@ read/filing under its existing bounds. It starts no later terminal or recheck.
 As with begin_task, cancelling a completed but untaken result revokes its grant.
 Already recorded reads and committed terminals remain in the cancelled account.
 Calling advance, cancel or take without a repair owner is a protocol caller defect.
-An old
-loaded call has no serving turn or executing gate exchange, so this owner invents no
+An old loaded call has no serving turn or executing gate exchange, so this owner
+invents no
 stop/not_dispatched outcome, ToolCancel, tool clock or save point.
 
 A failed flow retains the owner and cannot file another terminal. The read owner keeps
@@ -138,10 +138,14 @@ and each owner's admission guard. No artificial owner is used to claim otherwise
 The small predicate extraction preserves production checks. Broad withdrawal,
 receipt-timing and owner-hook consolidation remains batched to avoid unrelated churn.
 
-Follow-up source and recipes are prepared. Compilation, strict lint, formatting,
-lock, the joined full suite and compiled mutations remain pending root's serial
-lane, including joining the #245 hook before Cargo. The baseline results below do
-not validate these new edits.
+The follow-up joined exact #245 b9bad6b and passed all 27 focused boot tests,
+1,371 full harness tests with 18 inherited ignored cases, strict all-target
+harness lint, formatting and the lock gate. All twelve additional protective
+mutations compiled, failed their intended test and passed after exact-byte
+restoration. The private target remained /tmp/weaver-146-boot-pairs-target.
+Review evidence is retained under boot-pairs/review-batch, including recipes
+and source hashes. These results validate this follow-up, while the earlier
+type probes below remain evidence from the original implementation.
 
 Compile-time ambiguity pins require PriorBootOpen and RepairedBootPairs to remain
 non-Clone and non-Default. Additional pins forbid StartIdentity-to-prerequisite and

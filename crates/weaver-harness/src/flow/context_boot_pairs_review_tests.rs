@@ -7,7 +7,12 @@ fn answered_terminal() -> (RepairFixture, AbsoluteBound) {
     let mut fx = RepairFixture::new(vec![old_pair("old-run")]);
     fx.begin();
     fx.until_held(Hold::Terminal(1));
-    let bound = fx.run().context.deadlines.get(PumpDeadline::Decision).unwrap();
+    let bound = fx
+        .run()
+        .context
+        .deadlines
+        .get(PumpDeadline::Decision)
+        .unwrap();
     let index = fx.answered.iter().position(|answered| !answered).unwrap();
     fx.answer(index).unwrap();
     (fx, bound)
@@ -43,27 +48,50 @@ fn boot_pairs_terminal_window_keeps_exact_enter_cap_and_expiry_attribution() {
     fx.begin();
     fx.until_held(Hold::Release(1));
     let enter = fx.run().context.deadlines.get(PumpDeadline::Enter).unwrap();
-    fx.run().clock.advance_to(enter.deadline_ns() - 100).unwrap();
+    fx.run()
+        .clock
+        .advance_to(enter.deadline_ns() - 100)
+        .unwrap();
     let release = fx.answered.iter().position(|answered| !answered).unwrap();
     fx.answer(release).unwrap();
     // Stop as soon as the initial read installs the terminal's actual wait.
     for _ in 0..128 {
         fx.advance().unwrap();
-        if fx.run().context.deadlines.get(PumpDeadline::Decision).is_some() {
+        if fx
+            .run()
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision)
+            .is_some()
+        {
             break;
         }
     }
-    let bound = fx.run().context.deadlines.get(PumpDeadline::Decision).unwrap();
+    let bound = fx
+        .run()
+        .context
+        .deadlines
+        .get(PumpDeadline::Decision)
+        .unwrap();
     assert_eq!(bound.deadline_ns(), enter.deadline_ns());
     assert!(bound.began_ns() >= enter.deadline_ns() - 100);
-    assert_eq!(fx.run().context.deadlines.get(PumpDeadline::Enter), Some(enter));
+    assert_eq!(
+        fx.run().context.deadlines.get(PumpDeadline::Enter),
+        Some(enter)
+    );
     assert!(fx.terminals().is_empty());
     fx.run().clock.advance_to(enter.deadline_ns()).unwrap();
-    assert_eq!(fx.advance().unwrap_err(), RunFailure::Wait {
-        key: PumpDeadline::Enter,
-        bound: enter,
-    });
-    assert_eq!(fx.run().context.deadlines.get(PumpDeadline::Decision), Some(bound));
+    assert_eq!(
+        fx.advance().unwrap_err(),
+        RunFailure::Wait {
+            key: PumpDeadline::Enter,
+            bound: enter,
+        }
+    );
+    assert_eq!(
+        fx.run().context.deadlines.get(PumpDeadline::Decision),
+        Some(bound)
+    );
     assert!(fx.run().context.failure().is_none());
     assert!(fx.records(Kind::ToolCallCompleted).is_empty());
 }
@@ -87,13 +115,26 @@ fn boot_pairs_receipt_recorded_at_or_after_bound_does_not_retire_decision() {
             remaining: 1,
             deadline: bound.deadline_ns() + late_by,
         };
-        assert!(matches!(run.context.reduce_flow(&mut clock), Err(RunFailure::Flow {
-            reason: FlowHaltReason::DecisionBound, ..
-        })));
-        assert_eq!(run.context.flow.filing_recorded_ns(), Some(bound.deadline_ns() + late_by));
+        assert!(matches!(
+            run.context.reduce_flow(&mut clock),
+            Err(RunFailure::Flow {
+                reason: FlowHaltReason::DecisionBound,
+                ..
+            })
+        ));
+        assert_eq!(
+            run.context.flow.filing_recorded_ns(),
+            Some(bound.deadline_ns() + late_by)
+        );
         assert!(run.context.flow.filing_receipts().unwrap().is_complete());
-        assert_eq!(run.context.deadlines.get(PumpDeadline::Decision), Some(bound));
-        assert!(!run.context.owned_filing_recorded_before(receipt_driver::FilingOwner::BootPairs, bound));
+        assert_eq!(
+            run.context.deadlines.get(PumpDeadline::Decision),
+            Some(bound)
+        );
+        assert!(
+            !run.context
+                .owned_filing_recorded_before(receipt_driver::FilingOwner::BootPairs, bound)
+        );
         assert!(run.context.filing.is_some());
         assert!(run.context.boot_pairs.is_some());
         assert!(run.context.take_boot_pairs(&mut run.clock).is_err());
@@ -117,10 +158,15 @@ fn boot_pairs_cancel_between_terminals_settles_without_a_later_terminal_wait() {
     assert!(run.context.deadlines.get(PumpDeadline::Decision).is_none());
     assert!(run.context.filing.is_none());
     assert!(run.context.read.is_none());
-    let Some(BootPairsCompletion::Cancelled(account)) = run.context.take_boot_pairs(&mut run.clock).unwrap() else {
+    let Some(BootPairsCompletion::Cancelled(account)) =
+        run.context.take_boot_pairs(&mut run.clock).unwrap()
+    else {
         panic!("cancelled batch granted repair");
     };
-    assert!(matches!(account.initial(), Some(ReadCompletion::Recorded(_))));
+    assert!(matches!(
+        account.initial(),
+        Some(ReadCompletion::Recorded(_))
+    ));
     assert!(account.recheck().is_none());
     assert!(account.cancelled_event().is_none());
     assert_eq!(account.terminals().len(), 1);
@@ -134,10 +180,20 @@ fn boot_pairs_cancel_between_terminals_settles_without_a_later_terminal_wait() {
 fn boot_pairs_mixed_snapshot_keeps_committed_old_terminal_before_current_run_refusal() {
     let mut fx = RepairFixture::new(vec![old_pair("old-run"), old_pair("run")]);
     fx.begin();
-    let failure = (0..256).find_map(|_| fx.step().err()).expect("current-run call must halt");
-    assert!(matches!(failure, RunFailure::Flow { reason: FlowHaltReason::ProtocolFailed, .. }));
+    let failure = (0..256)
+        .find_map(|_| fx.step().err())
+        .expect("current-run call must halt");
+    assert!(matches!(
+        failure,
+        RunFailure::Flow {
+            reason: FlowHaltReason::ProtocolFailed,
+            ..
+        }
+    ));
     assert_eq!(fx.terminals().len(), 1);
-    let s::PairRecord::Ended(ended) = &fx.terminals()[0].pair else { panic!("terminal") };
+    let s::PairRecord::Ended(ended) = &fx.terminals()[0].pair else {
+        panic!("terminal")
+    };
     assert_eq!(ended.call_id.run, "old-run");
     assert_eq!(ended.reason, Some(s::PairFailure::AbandonedAtLoad {}));
     assert_eq!(fx.records(Kind::ToolCallCompleted).len(), 1);
@@ -171,9 +227,16 @@ fn boot_pairs_release_refuses_initial_between_leg_and_completed_ownership() {
         assert!(run.context.read.is_none() && run.context.filing.is_none());
         let enter = run.context.deadlines.get(PumpDeadline::Enter);
         let leave = AbsoluteBound::after(run.clock.now().unwrap(), 100_000).unwrap();
-        assert!(matches!(run.context.begin_releasing(leave, &mut run.clock), Err(RunFailure::Flow {
-            reason: FlowHaltReason::ProtocolFailed, ..
-        })), "checkpoint {checkpoint}");
+        assert!(
+            matches!(
+                run.context.begin_releasing(leave, &mut run.clock),
+                Err(RunFailure::Flow {
+                    reason: FlowHaltReason::ProtocolFailed,
+                    ..
+                })
+            ),
+            "checkpoint {checkpoint}"
+        );
         assert!(run.context.boot_pairs.is_some());
         assert_eq!(run.context.deadlines.get(PumpDeadline::Enter), enter);
         assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());
@@ -193,19 +256,28 @@ fn boot_pairs_cancel_after_completion_keeps_read_and_terminal_evidence_without_g
         let before = fx.requests.len();
         let run = fx.run();
         run.context.cancel_boot_pairs(&mut run.clock).unwrap();
-        let Some(BootPairsCompletion::Cancelled(account)) = run.context.take_boot_pairs(&mut run.clock).unwrap() else {
+        let Some(BootPairsCompletion::Cancelled(account)) =
+            run.context.take_boot_pairs(&mut run.clock).unwrap()
+        else {
             panic!("cancellation returned an untaken grant");
         };
-        let Some(ReadCompletion::Recorded(initial)) = account.initial() else { panic!("initial read") };
+        let Some(ReadCompletion::Recorded(initial)) = account.initial() else {
+            panic!("initial read")
+        };
         assert_eq!(initial.raw_bytes(), fx.initial);
         assert_eq!(account.terminals().len(), 1);
         assert!(account.terminals()[0].receipts().is_complete());
         assert!(account.cancelled_event().is_none());
         if refused {
-            assert!(matches!(account.recheck(), Some(ReadCompletion::Refused(_))));
+            assert!(matches!(
+                account.recheck(),
+                Some(ReadCompletion::Refused(_))
+            ));
             assert!(account.read_refusal().is_some());
         } else {
-            let Some(ReadCompletion::Recorded(recheck)) = account.recheck() else { panic!("recheck") };
+            let Some(ReadCompletion::Recorded(recheck)) = account.recheck() else {
+                panic!("recheck")
+            };
             assert_eq!(recheck.raw_bytes(), fx.final_read);
             assert!(account.read_refusal().is_none());
         }
@@ -220,15 +292,22 @@ fn boot_pairs_cancelled_account_exposes_exact_unstarted_terminal() {
     fx.begin();
     for _ in 0..128 {
         fx.step().unwrap();
-        if fx.run().context.filing.is_some() { break; }
+        if fx.run().context.filing.is_some() {
+            break;
+        }
     }
     let original = fx.run().context.waiting_content.as_ref().unwrap().clone();
     let run = fx.run();
     run.context.cancel_boot_pairs(&mut run.clock).unwrap();
-    let BootPairsCompletion::Cancelled(account) = fx.complete() else { panic!("cancelled") };
+    let BootPairsCompletion::Cancelled(account) = fx.complete() else {
+        panic!("cancelled")
+    };
     let retained = account.cancelled_event().expect("withdrawn original");
     assert_eq!(format!("{retained:?}"), format!("{original:?}"));
-    assert!(matches!(account.initial(), Some(ReadCompletion::Recorded(_))));
+    assert!(matches!(
+        account.initial(),
+        Some(ReadCompletion::Recorded(_))
+    ));
     assert!(account.recheck().is_none() && account.terminals().is_empty());
     assert!(fx.records(Kind::ToolCallCompleted).is_empty());
     assert!(fx.terminals().is_empty());
@@ -240,11 +319,20 @@ fn boot_pairs_absent_owner_is_a_caller_defect_without_new_work() {
         let mut fx = RepairFixture::new(vec![]);
         let run = fx.run();
         let result = match operation {
-            0 => run.context.advance_boot_pairs(&mut ports(&mut run.clock)).map(|_| ()),
+            0 => run
+                .context
+                .advance_boot_pairs(&mut ports(&mut run.clock))
+                .map(|_| ()),
             1 => run.context.cancel_boot_pairs(&mut run.clock),
             _ => run.context.take_boot_pairs(&mut run.clock).map(|_| ()),
         };
-        assert!(matches!(result, Err(RunFailure::Flow { reason: FlowHaltReason::ProtocolFailed, .. })));
+        assert!(matches!(
+            result,
+            Err(RunFailure::Flow {
+                reason: FlowHaltReason::ProtocolFailed,
+                ..
+            })
+        ));
         assert!(run.context.boot_pairs.is_none());
         assert!(run.context.read.is_none() && run.context.filing.is_none());
         assert!(fx.requests.is_empty());
@@ -262,7 +350,11 @@ fn boot_pairs_first_control_busy_keeps_original_admitted_read_and_window() {
     run.context.flow.defer_control_for_test(usize::MAX);
     assert_eq!(fx.advance().unwrap(), BootPairsProgress::Pending);
     let run = fx.run();
-    let window = run.context.deadlines.get(PumpDeadline::StateControl).unwrap();
+    let window = run
+        .context
+        .deadlines
+        .get(PumpDeadline::StateControl)
+        .unwrap();
     assert!(run.context.read.is_some());
     assert!(run.context.flow.pending_control().is_none());
     assert!(run.context.flow.state().outstanding().is_empty());
@@ -270,7 +362,10 @@ fn boot_pairs_first_control_busy_keeps_original_admitted_read_and_window() {
     run.context.flow.defer_control_for_test(0);
     run.clock.advance_to(window.began_ns() + 17).unwrap();
     fx.until_held(Hold::Read(1));
-    assert_eq!(fx.run().context.deadlines.get(PumpDeadline::StateControl), Some(window));
+    assert_eq!(
+        fx.run().context.deadlines.get(PumpDeadline::StateControl),
+        Some(window)
+    );
     fx.held = Hold::None;
     assert!(matches!(fx.complete(), BootPairsCompletion::Repaired(_)));
     assert_eq!(fx.queries(), 2);

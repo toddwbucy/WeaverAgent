@@ -560,13 +560,13 @@ impl RecordingContext {
                         && source.terminal().outcome == TerminalOutcome::Filed
                         && matches!(source.receipt(), StateFrame::Filed { block_id, .. } if block_id == source.source())
                         && matches!(source.file(), LedgerFile::Pair(file)
-                            if boot_pair_content_matches(
-                                file,
-                                &common.session_id,
-                                &common.run_id,
-                                &self.declaration.scheme.scheme_id,
-                                work.expected.as_ref(),
-                            ))
+                        if boot_pair_content_matches(
+                            file,
+                            &common.session_id,
+                            &common.run_id,
+                            &self.declaration.scheme.scheme_id,
+                            work.expected.as_ref(),
+                        ))
                 }
                 _ => false,
             }
@@ -657,8 +657,10 @@ fn boot_pair_content_matches(
         && file.source.session == session
         && file.source.run == run
         && file.source.kind == "tool.call.completed"
-        && file.source.channel == "tool" && file.source.origin == "loop"
-        && file.source.subsystem == "harness" && file.source.turn.is_none()
+        && file.source.channel == "tool"
+        && file.source.origin == "loop"
+        && file.source.subsystem == "harness"
+        && file.source.turn.is_none()
         && file.source.causal_parent.is_none()
         && file.validate_structure().is_ok()
         && matches!(&file.pair, PairRecord::Ended(ended) if Some(ended) == expected)
