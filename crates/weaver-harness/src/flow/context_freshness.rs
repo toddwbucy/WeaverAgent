@@ -62,7 +62,8 @@ pub(super) struct FreshnessTransaction {
 
 impl RecordingContext {
     /// Start the filing pause before a mandatory fresh read. Existing generic
-    /// author input remains owned; explicit transactions must finish first.
+    /// Non-turn author input remains owned. A retained turn start and explicit
+    /// transactions must finish first.
     pub(in crate::flow) fn prepare_cut(
         &mut self,
         required_ids: Vec<SourceBlockId>,
@@ -87,6 +88,14 @@ impl RecordingContext {
         }
         if self.freshness.is_some()
             || self.open_turn.is_some()
+            || self
+                .waiting_content
+                .as_ref()
+                .is_some_and(|event| event.kind == Kind::TurnStarted)
+            || self
+                .author_turn
+                .as_ref()
+                .is_some_and(|(kind, _)| *kind == Kind::TurnStarted)
             || self.input.snapshot().is_some()
             || self.input_author.is_some()
             || self.input_turn.is_some()

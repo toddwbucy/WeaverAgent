@@ -631,6 +631,166 @@ fn freshness_retains_a_deferred_generic_author_and_its_sequence_across_leave() {
     }
 }
 
+fn retained_turn_start() -> AuthoredEvent {
+    AuthoredEvent {
+        kind: Kind::TurnStarted,
+        subsystem: weaver_trace::Subsystem::Harness,
+        turn: Some(weaver_trace::TurnRef("retained-freshness-turn".into())),
+        source: AuthoredSource::Runtime,
+        causal_parent: None,
+        payload: None,
+    }
+}
+
+fn refuse_cut_then_finish_retained_turn(fx: &mut ReceiptFixture) {
+    assert!(fx.input.run.context.open_turn.is_none());
+    assert!(fx.input.run.context.input.snapshot().is_none());
+    assert!(fx.input.run.context.input_turn.is_none());
+    assert!(fx.input.run.context.output.is_none());
+    let ids = sources(Sequence(987), 1);
+    let ticket = fx
+        .input
+        .run
+        .context
+        .pending_author()
+        .map(|author| author.ticket);
+    let error = fx
+        .input
+        .run
+        .context
+        .prepare_cut(ids.clone(), &mut fx.input.run.clock)
+        .unwrap_err();
+    assert_eq!(error.refusal, FreshnessBeginRefusal::Busy);
+    assert_eq!(error.required_ids, ids);
+    assert!(error.failure.is_none());
+    assert!(fx.input.run.context.failure().is_none());
+    assert!(fx.input.run.context.freshness.is_none());
+    assert!(
+        fx.input
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::Cut)
+            .is_none()
+    );
+    assert!(fx.input.run.context.open_turn.is_none());
+    assert_eq!(
+        fx.input
+            .run
+            .context
+            .pending_author()
+            .map(|author| author.ticket),
+        ticket
+    );
+
+    fx.input.drain_trace();
+    let sequence = fx
+        .input
+        .run
+        .context
+        .resume_author_and_wait(&mut ports(&mut fx.input.run.clock))
+        .unwrap();
+    let turn = retained_turn_start().turn.unwrap();
+    assert_eq!(fx.input.run.context.open_turn.as_ref(), Some(&turn));
+    let records = fx.input.records(Kind::TurnStarted);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["sequence"], sequence.0.to_string());
+    assert!(fx.input.run.context.waiting_content.is_none());
+    assert!(fx.input.run.context.pending_author().is_none());
+    assert!(fx.input.run.context.author_turn.is_none());
+    assert!(fx.input.run.context.refused_author.is_none());
+    assert_eq!(
+        fx.input
+            .run
+            .context
+            .prepare_cut(vec![], &mut fx.input.run.clock)
+            .unwrap_err()
+            .refusal,
+        FreshnessBeginRefusal::Busy
+    );
+    fx.input
+        .run
+        .author(AuthoredEvent {
+            kind: Kind::TurnClosed,
+            subsystem: weaver_trace::Subsystem::Harness,
+            turn: Some(turn),
+            source: AuthoredSource::Runtime,
+            causal_parent: None,
+            payload: Some(Payload::TurnClosed(weaver_trace::TurnClose::Clean)),
+        })
+        .unwrap();
+    let bound = begin(fx, vec![]);
+    let FreshnessCompletion::Prepared(prepared) = finish(fx, None) else {
+        panic!("closed retained turn did not admit the filing pause");
+    };
+    assert_eq!(prepared.bound(), bound);
+    assert!(prepared.required_ids().is_empty());
+    assert_eq!(fx.input.records(Kind::TurnClosed).len(), 1);
+    assert!(fx.input.run.context.failure().is_none());
+}
+
+#[test]
+fn freshness_refuses_a_deferred_turn_start_before_it_has_a_trace_ticket() {
+    let mut fx = fixture(100);
+    let leave = AbsoluteBound::after(fx.input.run.clock.now().unwrap(), 1).unwrap();
+    fx.input
+        .run
+        .context
+        .arm(PumpDeadline::Leave, leave, &mut fx.input.run.clock)
+        .unwrap();
+    fx.input.run.clock.advance_to(leave.deadline_ns()).unwrap();
+    assert_eq!(
+        fx.input.run.author(retained_turn_start()).unwrap_err(),
+        RunFailure::Wait {
+            key: PumpDeadline::Leave,
+            bound: leave
+        }
+    );
+    assert!(fx.input.run.context.author_admission_pending);
+    let retained = fx.input.run.context.waiting_content.as_ref().unwrap();
+    assert_eq!(retained.kind, Kind::TurnStarted);
+    assert_eq!(retained.turn, retained_turn_start().turn);
+    assert!(fx.input.run.context.author_turn.is_none());
+    assert!(fx.input.run.context.pending_author().is_none());
+    assert!(fx.input.records(Kind::TurnStarted).is_empty());
+    assert_eq!(
+        fx.input.run.context.complete_wait(PumpDeadline::Leave),
+        Some(leave)
+    );
+    refuse_cut_then_finish_retained_turn(&mut fx);
+}
+
+#[test]
+fn freshness_refuses_a_turn_start_held_by_an_existing_trace_ticket() {
+    let mut fx = fixture(100);
+    fx.input.fill_trace();
+    let leave = AbsoluteBound::after(fx.input.run.clock.now().unwrap(), 5).unwrap();
+    fx.input
+        .run
+        .context
+        .arm(PumpDeadline::Leave, leave, &mut fx.input.run.clock)
+        .unwrap();
+    assert_eq!(
+        fx.input.run.author(retained_turn_start()).unwrap_err(),
+        RunFailure::Wait {
+            key: PumpDeadline::Leave,
+            bound: leave
+        }
+    );
+    assert!(fx.input.run.context.waiting_content.is_none());
+    assert!(fx.input.run.context.pending_author().is_some());
+    assert_eq!(
+        fx.input.run.context.author_turn,
+        Some((Kind::TurnStarted, retained_turn_start().turn))
+    );
+    assert!(fx.input.records(Kind::TurnStarted).is_empty());
+    assert_eq!(
+        fx.input.run.context.complete_wait(PumpDeadline::Leave),
+        Some(leave)
+    );
+    refuse_cut_then_finish_retained_turn(&mut fx);
+}
+
 #[test]
 fn freshness_resumes_the_existing_trace_ticket_without_taking_its_caller_result() {
     let mut fx = fixture(100);
