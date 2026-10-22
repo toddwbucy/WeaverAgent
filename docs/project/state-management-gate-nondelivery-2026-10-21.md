@@ -88,6 +88,9 @@ the review's deadline-ownership cleanup in row 4.
 The actual containment supervisor now owns its original Instant at construction.
 Its wait accepts only a duration, and its finish obtains the same stored Instant.
 No containment caller can supply None or a replacement deadline to a later wait.
+The reap helper also reads that stored Instant, with no separate deadline argument.
+This answers [the CodeRabbit consistency finding][reap-review]. Both previous callers
+supplied the same Instant, so this signature change preserves the timeout policy.
 Answer delivery uses the same implementation with the ExecutionAnswer's optional
 bound: a refusal before any process starts still has no containment interval. That
 case introduces no synthetic deadline. The ordinary active-execution Supervision
@@ -144,3 +147,13 @@ tests, manifests and lock/toolchain inputs plus this evidence note. The same evi
 is deposited under gate/review3 in the shared weaver-testing deposit named above.
 These are bounded author checks, not a new Planner grade, an operator merge decision
 or completion of issue #146.
+
+The reap-helper signature correction passed the gate suite: 86 tests passed and
+57 were ignored. Strict all-target gate clippy, formatting and lock checks passed
+using /tmp/weaver-146-gate-target. This run includes the existing child/socket
+deadline fixture. The ignored delegated production fixture was not rerun for this
+signature-only change. Its earlier result above remains tied to that earlier
+revision. Logs and source hashes are deposited under gate/reap-api in the shared
+#146 evidence root.
+
+[reap-review]: https://github.com/toddwbucy/WeaverAgent/pull/228#discussion_r4349256477

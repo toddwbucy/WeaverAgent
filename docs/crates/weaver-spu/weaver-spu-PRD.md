@@ -12,7 +12,7 @@ later releasing it.
 **Parent:** `weaver-agent-PRD`
 **Companion contract:** `weaver-harness-spu-contract`, drafted with this document
 **Editorial:** Per the Working Rules.
-**Landing PR:** #181
+**Landing PR:** #235
 
 ---
 
@@ -554,9 +554,11 @@ property comes from non-ownership rather than from the bits.
 **It is an operator artifact and this program verifies rather than authors it.** That is
 the same posture `weaver-admin-PRD` section 1 takes toward the boundary, and it reaches
 here through the two failure points admin already names. Admin refuses a load whose
-configuration leaves the binding's artifact unnamed, before a process exists, and
-judges nothing else about it, per `weaver-admin-PRD` section 4.3 as ruled 2026-09-05
-on issue #456. This crate refuses an admit whose artifact it cannot resolve, read, or
+configuration leaves the binding's artifact unnamed, before a process exists, per
+`weaver-admin-PRD` section 4.3 as ruled 2026-09-05 on issue #456. For the STE100 duty,
+admin also checks the declared locator's absolute-path syntax under the operator's
+ruling of 2026-10-22 on #235. It opens no model file and judges no filesystem property.
+This crate refuses an admit whose artifact it cannot resolve, read, or
 parse, judged as the agent uid, which is the failure admin could not have seen: a
 look from admin's side runs as root and passes a directory the agent is denied. The
 refusal that crosses the seam is the floor's typed case, and the account that stays

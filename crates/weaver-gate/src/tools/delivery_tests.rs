@@ -253,7 +253,7 @@ fn a_retained_refusal_cannot_cross_the_original_bound_during_leader_reap() {
     // reap_within progresses the channel even before its first nonblocking
     // child check. Force that actual zero-time wait past the shared deadline.
     delay_next_wait_until(deadline + Duration::from_millis(1));
-    assert!(reap_supervised(&mut child.0, deadline, &mut supervisor).is_none());
+    assert!(reap_supervised(&mut child.0, &mut supervisor).is_none());
     assert_wait_delay_consumed();
     assert!(Instant::now() >= deadline);
     assert_eq!(

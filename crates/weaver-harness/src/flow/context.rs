@@ -1149,6 +1149,7 @@ impl RecordingContext {
     /// Lifecycle, gate, decoder and label completions remain in their own slots.
     pub(super) fn reduce_flow(&mut self, io: &mut impl PumpIo) -> Result<Advance, RunFailure> {
         self.live(io)?;
+        self.resume_accepted_read(io)?;
         if self.read_blocks_reduction() {
             return Ok(Advance::Pending);
         }
