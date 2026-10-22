@@ -4,7 +4,7 @@
 
 **Landing PR:** #189
 
-**Version:** 0.22 **Date filed:** 2026-10-20 **Parent:** weaver-trace-PRD
+**Version:** 0.23 **Date filed:** 2026-10-20 **Parent:** weaver-trace-PRD
 
 ## 0. What this document is
 
@@ -607,7 +607,8 @@ They are not copied into RecallSpan, which records selected_span occurrences onl
 | plan_flags | plan_flags, visit after then through.block_id, spans empty |
 | observations | observations, no content-source visits, sources and spans empty |
 
-For PlanSnapshot, visit operator_source, nonnull lock_source, then last_source. Visit
+For PlanSnapshot, visit operator_source, nonnull lock_source, then
+last_source.block_id. Visit
 steps in their returned ordinal order. For each step, visit instruction as a
 StatementRef, nonnull work.through.block_id, then nonnull closure_source. Finally, if
 broken is nonnull, visit its nonnull proposed_source and then source. This is the entire

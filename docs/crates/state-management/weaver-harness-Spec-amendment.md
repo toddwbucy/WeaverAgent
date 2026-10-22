@@ -4,7 +4,7 @@
 
 **Landing PR:** #192
 
-**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -1272,7 +1272,12 @@ The boot summary must reflect any boot-repair receipts before loaded is reported
 [PERSIST-6, PLAN-2]
 
 At boot, after pair repair and before enter confirmation/user admission, read
-plan_current through HARNESS-READ. Cache PlanSummary from that snapshot. After every
+plan_current through HARNESS-READ. After Released and recall Recorded, cache
+PlanSummary by projecting plan, status, document_sha256 and last_source from that
+checked PlanSnapshot under PLAN-SUMMARY-EVIDENCE. Preserve its exact nullable turn.
+Do not reconstruct either missing fact from the current run, trace sequence, model
+text or a newly hashed plan. A refused or malformed read cannot clear the previous
+committed cache or establish a successful boot. After every
 plan-effect receipt, refresh it before the control answer or next generation. Observe
 reads this committed cache only. An update in progress still shows the previous receipt,
 under the existing InTransition convention. No null or proposed plan is reported as an

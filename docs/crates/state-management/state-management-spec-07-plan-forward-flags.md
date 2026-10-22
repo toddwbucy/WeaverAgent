@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.12 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
+**Version:** 0.13 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -244,7 +244,8 @@ SEAM-3]
 
 PlanSnapshot is {plan:PlanRef,task:TaskScopeRef,status:PlanStatus,
 review:ReviewSetupRef,operator_source:SourceBlockId,lock_source:SourceBlockId-or-null,
-last_source:SourceBlockId,categories:Vec<Category>,group_drafts:Vec<GroupDraft>,
+document_sha256:Digest,last_source:SourcePosition,categories:Vec<Category>,
+group_drafts:Vec<GroupDraft>,
 groups:Vec<PlanGroup>,steps:Vec<PlanStep>,broken:PlanBreakRecord-or-null}. PlanStatus is
 authorized, locked, broken, complete or superseded. PlanStep is
 {step_id:StepId,ordinal:DecimalU64,instruction:StatementRef,
@@ -258,14 +259,36 @@ retain indices even before authorized steps exist. groups and steps are empty wh
 authorized. Every identity is seed-qualified on output. [PLAN-1, PLAN-2, STORE-3,
 STORE-5]
 
+**PLAN-SUMMARY-EVIDENCE.** Both selectors return document_sha256 from the held
+PlanInputContext at operator_source. last_source carries the exact SourceBlockId
+and required nullable turn of that revision's stored last-transition source.
+Resolve these facts in the same immutable read snapshot as the plan revision.
+The digest is the operator document's digest, not a hash of the snapshot, current
+prompt or materialized plan. A turnless last transition carries turn null, never
+the boot run's turn or the previous nonnull turn. [PLAN-1, PLAN-6, STORE-5, SEAM-3]
+
+After the ordinary release and Recorded recall, the harness projects PlanSummary
+from plan, status, document_sha256 and last_source of that checked snapshot.
+Current null means no committed plan. A read refusal, absent or malformed required
+field, or inconsistent held provenance is not a null plan or a usable summary.
+Apply the existing read, component-failure and adoption rules. Add no selector,
+source lookup, event kind, counter, clock or new refusal code. [PLAN-6, FLOW-3,
+PERSIST-6, SEAM-3]
+
+This read projection does not change the stored last_source content key or the
+PlanFlags after field. When deriving an explicit flag query from the snapshot,
+use last_source.block_id. A digest and a turn annotation add no source visit to
+recall and grant no plan mutation or lifecycle success. [PLAN-3, STORE-5, SEAM-3]
+
 **PLAN-FLAG-READ.** Add the ReadSelector tag plan_flags
 {plan:PlanRef,after:SourceBlockId} and QueryResult tag plan_flags
 {snapshot:PlanFlagSnapshot}. PlanFlagSnapshot is
 {plan:PlanRef,after:SourceBlockId,through:SourcePosition,total_flags:DecimalU64,
 matched_flags:DecimalU64,unmatched_flags:DecimalU64}. It is an observation over held
 statements, not candidate content for place. The store checks the loaded seed, current
-PlanRef and exact last_source equal to after, then takes one read snapshot. A wrong seed
-refuses wrong_seed, an absent plan/source refuses not_found, and a stale revision or
+PlanRef and exact last_source.block_id equal to after, then takes one read snapshot.
+A wrong seed refuses wrong_seed, an absent plan/source refuses not_found, and a
+stale revision or
 transition refuses invalid_selector. The ordinary read-result bound, paging and release
 apply. Reason: a count needs the same committed plan and holding boundary at both ends
 of the read. [PLAN-3, PLAN-6, SEAM-3, COST-4]
@@ -490,6 +513,7 @@ or task success. [PLAN-1 through PLAN-6, R20-12]
 
 | Claim | Instrument and evidence | Protective change that must fail |
 | --- | --- | --- |
+| PLAN-SUMMARY-EVIDENCE | Real plan_current and historical plan reads before and after reload, exact digest and null/non-null last-source turn, delayed Release/Recorded and refused reads | Hash the snapshot, infer a turn, project before Recorded, omit required metadata or map refusal to no plan |
 | PLAN-ADMIN | Root/sudo cause, fixed-file, extra-argument, stdin and whole-envelope cases | Remove cause check or measure unencoded text only |
 | PLAN-TYPES and CATEGORY | Stable-ID and operator-only category fixtures | Reuse a retired ID or accept model category changes |
 | PLAN-EXCHANGE | Busy, stale, cancelled, refused and lost-answer transitions | Blindly retry an unanswered committed update |

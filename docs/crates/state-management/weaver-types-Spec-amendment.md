@@ -4,7 +4,7 @@
 
 **Landing PR:** #213
 
-**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -688,6 +688,12 @@ defined once in Spec 07. No new adjacent response wrapper or untyped Value is ad
 Exhaustive consumers include admin dispatch, worker coordination and CLI answer
 rendering. The schema fixture must decode both ends and reject unknown fields. [PLAN-6,
 FLOW-7]
+
+PlanSnapshot carries document_sha256:Digest and last_source:SourcePosition under
+Spec 07 PLAN-SUMMARY-EVIDENCE. The turn member of that SourcePosition is required
+and nullable. This replaces the former bare SourceBlockId last_source in both
+plan_current and plan results. Existing strict unknown/missing-field rules apply.
+No compatibility decoder invents a missing digest or turn. [PLAN-1, PLAN-6, SEAM-3]
 
 PlanSummary is {plan:PlanRef,status:PlanStatus,document_sha256:Digest,
 last_source:SourcePosition}. Add plan:Option<PlanSummary> to LifecycleAnswer::State,

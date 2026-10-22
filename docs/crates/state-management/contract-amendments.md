@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.17 **Date filed:** 2026-10-20
+**Version:** 0.18 **Date filed:** 2026-10-20
 
 ## 0. What this document is
 
@@ -376,6 +376,15 @@ the supplied label but does not run the tests, judge work or authorize an operat
 read returns the same stable IDs and source evidence after reload. No new direct
 plan-update store call or side feed exists. [PLAN-1, PLAN-2, PLAN-6, MARK-5, SEAM-2,
 SEAM-3]
+
+Both plan_current and historical plan return Spec 07 PLAN-SUMMARY-EVIDENCE in
+their PlanSnapshot: the held operator source's document_sha256 and the exact
+last-transition SourcePosition, including required nullable turn. The state
+member derives them with that revision's read snapshot. The harness validates the
+closed shape and caches the projection only after Released and recall Recorded.
+A missing fact does not authorize an extra source lookup, an inferred value or a
+successful null plan. The wire change and all producers/consumers land together
+at the qualified cutover. [PLAN-1, PLAN-6, FLOW-3, SEAM-3]
 
 The plan_flags read supplies PlanRef and the exact last-effect source. The store may
 assume the caller requests a mechanical count, but must refuse an absent, wrong-seed or

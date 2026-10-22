@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.8 **Date filed:** 2026-10-20
+**Version:** 0.9 **Date filed:** 2026-10-20
 
 ## 0. Scope and parties
 
@@ -60,7 +60,10 @@ component identities. The harness may assume custody and binding checks passed, 
 verify the member's adoption result and exact echoed identity. It records the untapped
 trace head, validates its partition, checks its templates, reads and seats the system
 prompt, and repairs loaded open pairs through the normal feed, then reads the committed
-plan summary before opening input. A failure refuses enter and invokes the existing
+plan summary before opening input. The plan_current snapshot carries the exact
+PLAN-SUMMARY-EVIDENCE fields. The summary is cached only after its Released and
+Recorded boundaries, with no reconstructed document digest or turn. A failure
+refuses enter and invokes the existing
 failed-enter rollback. A successful enter certifies these duties, not semantic truth or
 future model fidelity. [PERSIST-3, PERSIST-6, PROMPT-1, FLOW-3, PAIR-1]
 

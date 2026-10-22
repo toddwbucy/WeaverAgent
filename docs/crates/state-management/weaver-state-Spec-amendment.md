@@ -4,7 +4,7 @@
 
 **Landing PR:** #192
 
-**Version:** 0.19 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
+**Version:** 0.20 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
 
 ## 0. What this document is
 
@@ -537,7 +537,13 @@ MARK-1]
 query is historical lookup after checking the seed. Read categories/groups by their
 ordinal and steps by their ordinal, joining group membership by its unique step key.
 Resolve instruction_id through statement_binding and content_block back to StatementRef,
-and all content IDs back to SourceBlockId. Decode canonical typed JSON strictly. Never
+and all content IDs back to source identities. For the returned last_source,
+resolve its content key to SourcePosition with the stored source's exact nullable
+turn. Resolve operator_source to its held PlanInputContext and return that
+context's document_sha256. Both facts belong to the same immutable result as the
+revision, including historical plan reads and reload. Do not derive either from
+caller input or the current run. This is PLAN-SUMMARY-EVIDENCE and changes no SQL
+schema or stored source key. Decode canonical typed JSON strictly. Never
 expose SQL keys. The result has Spec 07's exact PLAN-READ shape. Reason: one store-owned
 read supplies every consumer's stable step and review account. [PLAN-1, PLAN-2, SEAM-3,
 STORE-5]
