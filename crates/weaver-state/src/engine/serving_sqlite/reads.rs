@@ -268,7 +268,7 @@ fn observations(
     let member: MemberObservationIdentity =
         json_cell!(out, row, "member_observation", MemberObservationIdentity);
     member
-        .validate()
+        .validate_historical()
         .map_err(|_| ReadFailure::ComponentCorruption("invalid member observation"))?;
     let mut max_statement = connection
         .prepare("SELECT MAX(operation_id) AS largest FROM operation_observation WHERE run=?1")?;
@@ -365,7 +365,7 @@ pub(super) fn verify_image_observations(connection: &Connection) -> Result<()> {
         let member: MemberObservationIdentity =
             json_cell!(&out, row, "member_observation", MemberObservationIdentity);
         member
-            .validate()
+            .validate_historical()
             .map_err(|_| ReadFailure::ComponentCorruption("invalid member observation"))?;
         let mut records = connection.prepare(
             "SELECT operation_id,request_id,operation,source_run,source_sequence,

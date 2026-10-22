@@ -129,6 +129,8 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
         }
         let encoded = encoded?;
         sample.phase_end(PhaseName::Encode)?;
+        // The encoded answer remains owned here at the ended_ns boundary.
+        // Complete copy/holding accounting is still unavailable, not zero.
         let observation = sample.finish(None, None)?;
         #[cfg(test)]
         tests::process::before_record_observation(
@@ -373,14 +375,10 @@ fn read_fault(error: ReadFault) -> io::Result<StateControlAnswer> {
 fn sampled_request(line: &[u8], operation_id: u64) -> io::Result<(OperationSample, StateFrame)> {
     let received_ns = monotonic_ns()?;
     let (request_id, operation) = peek_operation(line)?;
-    // Ordinary operations include the full size-dependent hint parse. Snapshot
-    // sampling retains its required counters-before-clock order. Its parsing
-    // interval is the separate Spec 09 timing conflict recorded in the PR.
-    let mut sample = if operation == StateOperation::Snapshot {
-        OperationSample::begin(operation_id.into(), request_id, operation)?
-    } else {
-        OperationSample::begin_at(operation_id.into(), request_id, operation, received_ns)?
-    };
+    // Every operation retains the clock from before the size-dependent hint
+    // parse. Snapshot counters begin later, after validation and preflight.
+    let mut sample =
+        OperationSample::begin_at(operation_id.into(), request_id, operation, received_ns)?;
     sample.phase_begin(PhaseName::Validate)?;
     let request =
         decode_state_line(line, FrameDirection::Request).map_err(|e| invalid(e.to_string()))?;
@@ -529,6 +527,8 @@ macro_rules! fields {
 }
 
 fn encode_payload(payload: &Reply) -> io::Result<Vec<u8>> {
+    #[cfg(test)]
+    tests::timing::mark("encode");
     let mut writer = Bounded { bytes: Vec::new() };
     match payload {
         Reply::Opened {
@@ -548,6 +548,8 @@ fn encode_payload(payload: &Reply) -> io::Result<Vec<u8>> {
         } => fields!(writer,"code"=>code,"detail"=>detail,"block_id"=>block_id),
         Reply::Control(frame) => fields!(writer,"frame"=>frame),
     }
+    #[cfg(test)]
+    tests::timing::mark("payload_encoded");
     Ok(writer.bytes)
 }
 fn header(common: &Common, op: &str) -> io::Result<Vec<u8>> {

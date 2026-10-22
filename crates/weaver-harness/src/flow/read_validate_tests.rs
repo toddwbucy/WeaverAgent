@@ -722,3 +722,30 @@ fn conversation_cannot_turn_an_admitted_statement_into_an_empty_binding_list() {
     original.bindings.clear();
     assert!(validate(&selector, &result(original)).is_err());
 }
+
+#[test]
+fn historical_observation_reads_accept_both_producers_without_relabeling() {
+    let selector = s::ReadSelector::Observations {
+        run: "run".into(),
+        after: 1.into(),
+        through: Some(2.into()),
+    };
+    for (version, accepted) in [
+        ("state-observation/1", true),
+        ("state-observation/2", true),
+        ("state-observation/3", false),
+    ] {
+        let mut member = identity();
+        member.instrument_version = version.into();
+        let result = s::QueryResult::Observations {
+            run: "run".into(),
+            after: 1.into(),
+            through: 2.into(),
+            member_observation: member,
+            records: vec![observation(2)],
+        };
+        let original = serde_json::to_vec(&result).unwrap();
+        assert_eq!(validate(&selector, &result).is_ok(), accepted, "{version}");
+        assert_eq!(serde_json::to_vec(&result).unwrap(), original);
+    }
+}

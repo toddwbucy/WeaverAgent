@@ -115,7 +115,7 @@ pub(super) fn validate(
                     "observation read changed its requested frontier",
                 ));
             }
-            member_observation.validate()?;
+            member_observation.validate_historical()?;
             let mut previous = *after;
             for record in records {
                 record.validate()?;

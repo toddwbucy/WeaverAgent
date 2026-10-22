@@ -190,7 +190,7 @@ impl Fixture {
             read_limits,
             observation,
             member_observation: s::MemberObservationIdentity {
-                instrument_version: "state-observation/1".into(),
+                instrument_version: "state-observation/2".into(),
                 pid: 7,
                 start_ticks: Some(10.into()),
                 ticks_per_second: Some(100.into()),
@@ -248,7 +248,7 @@ impl Fixture {
             load.state_flow.ste100.model_artifact_sha256.clone();
         load.state_member_observation =
             super::super::mirror::member(&s::MemberObservationIdentity {
-                instrument_version: "state-observation/1".into(),
+                instrument_version: "state-observation/2".into(),
                 pid: 7,
                 start_ticks: Some(10.into()),
                 ticks_per_second: Some(100.into()),

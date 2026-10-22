@@ -18,7 +18,7 @@ use weaver_state::{ServingStore, engine::serving_sqlite::seed_image};
 
 #[allow(dead_code)]
 #[path = "../../../tests/serving_member/fixtures.rs"]
-mod fixtures;
+pub(super) mod fixtures;
 
 const CHILD_TEST: &str = "member::tests::process::metadata_failure_child";
 const CHILD_ROOM: &str = "WEAVER_TEST_METADATA_FAILURE_ROOM";

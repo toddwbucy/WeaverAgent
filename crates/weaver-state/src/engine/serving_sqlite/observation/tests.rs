@@ -4,7 +4,7 @@ use weaver_types::state_flow::*;
 
 fn identity() -> MemberObservationIdentity {
     MemberObservationIdentity {
-        instrument_version: "state-observation/1".into(),
+        instrument_version: "state-observation/2".into(),
         pid: 123,
         start_ticks: Some(10.into()),
         ticks_per_second: Some(100.into()),
@@ -415,6 +415,123 @@ fn adoption_refuses_missing_or_impossible_operation_history() {
             load(&store).err().expect(corrupt).code,
             StateRefusalCode::OpenFailed,
             "{corrupt}"
+        );
+    }
+}
+
+#[test]
+fn current_observation_run_refuses_old_or_unknown_identity_before_inserting() {
+    let mut store = store();
+    let open = observation(1, 1, StateOperation::Open);
+    for version in ["state-observation/1", "state-observation/3"] {
+        let mut old = identity();
+        old.instrument_version = version.into();
+        assert!(store.begin_observations(&old, &open).is_err(), "{version}");
+        let count: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM observation_run", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+    store.begin_observations(&identity(), &open).unwrap();
+}
+
+#[test]
+fn observation_history_adoption_and_reads_preserve_v1_and_v2_and_refuse_unknown_versions() {
+    for version in [
+        "state-observation/1",
+        "state-observation/2",
+        "state-observation/3",
+    ] {
+        let mut original = store();
+        original
+            .begin_observations(&identity(), &observation(1, 1, StateOperation::Open))
+            .unwrap();
+        let mut historical = identity();
+        historical.instrument_version = version.into();
+        // Construct an image from each producer version. This test-only SQL is
+        // not a migration: production adoption must preserve these exact bytes.
+        let historical_json = serde_json::to_string(&historical).unwrap();
+        original
+            .connection
+            .execute(
+                "UPDATE observation_run SET member_observation=?1 WHERE run='run'",
+                [&historical_json],
+            )
+            .unwrap();
+        let selector = ReadSelector::Observations {
+            run: "run".into(),
+            after: 0.into(),
+            through: None,
+        };
+        let queried = original.query(&selector);
+        let image = original.image().unwrap();
+        let mut start = original.context.start.clone();
+        start.dump_sha256 = super::super::image::sha256(&image);
+        let adopted = ServingSqlite::adopt(
+            &image,
+            &Common {
+                session_id: "new-session".into(),
+                run_id: "new-run".into(),
+                request_id: 1.into(),
+            },
+            "state-content/1",
+            &original.context.scheme_id,
+            &start,
+            original.read_limits.clone(),
+        );
+        if version == "state-observation/3" {
+            assert!(
+                queried.is_err(),
+                "unknown historical version cannot be read"
+            );
+            assert_eq!(adopted.err().unwrap().code, StateRefusalCode::OpenFailed);
+            continue;
+        }
+        let queried = queried.unwrap();
+        let QueryResult::Observations {
+            member_observation, ..
+        } = &queried
+        else {
+            unreachable!()
+        };
+        assert_eq!(member_observation, &historical);
+        let mut restored = adopted.unwrap();
+        assert_eq!(
+            serde_json::to_vec(&restored.query(&selector).unwrap()).unwrap(),
+            serde_json::to_vec(&queried).unwrap()
+        );
+        let retained: String = restored
+            .connection
+            .query_row(
+                "SELECT member_observation FROM observation_run WHERE run='run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            retained, historical_json,
+            "adoption changed recorded identity bytes"
+        );
+        restored
+            .begin_observations(&identity(), &observation(1, 1, StateOperation::Open))
+            .unwrap();
+        let QueryResult::Observations {
+            member_observation, ..
+        } = restored
+            .query(&ReadSelector::Observations {
+                run: "new-run".into(),
+                after: 0.into(),
+                through: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!(member_observation.instrument_version, "state-observation/2");
+        assert_eq!(
+            serde_json::to_vec(&restored.query(&selector).unwrap()).unwrap(),
+            serde_json::to_vec(&queried).unwrap()
         );
     }
 }

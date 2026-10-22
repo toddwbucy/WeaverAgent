@@ -237,7 +237,7 @@ impl StateFrame {
                         "opened does not echo the complete accepted declaration",
                     ));
                 }
-                member_observation.validate()?;
+                member_observation.validate_current_open()?;
             }
             (Self::Filed { block_id, .. }, Self::File { filing, .. })
                 if block_id == &filing.block_id => {}

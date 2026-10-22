@@ -166,7 +166,7 @@ fn observation(
 
 fn member() -> MemberObservationIdentity {
     MemberObservationIdentity {
-        instrument_version: "state-observation/1".into(),
+        instrument_version: "state-observation/2".into(),
         pid: 1,
         start_ticks: None,
         ticks_per_second: None,
@@ -841,4 +841,42 @@ fn encoder_refuses_multiline_raw_values_and_zero_exchange_ids() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn current_open_requires_v2_while_historical_identity_preserves_v1_or_v2() {
+    for (version, current, historical) in [
+        ("state-observation/1", false, true),
+        ("state-observation/2", true, true),
+        ("state-observation/3", false, false),
+        ("", false, false),
+    ] {
+        let mut answer = opened();
+        let StateFrame::Opened {
+            member_observation, ..
+        } = &mut answer
+        else {
+            unreachable!()
+        };
+        member_observation.instrument_version = version.into();
+        let identity = member_observation.clone();
+        let encoded = encode_state_line(&answer, FrameDirection::Response).unwrap();
+        let decoded = decode_state_line(&encoded, FrameDirection::Response).unwrap();
+        assert_eq!(
+            decoded.validate_response_to(&open(), 1.into()).is_ok(),
+            current,
+            "{version}"
+        );
+        assert_eq!(
+            identity.validate_historical().is_ok(),
+            historical,
+            "{version}"
+        );
+        if historical {
+            let stored = serde_json::to_vec(&identity).unwrap();
+            let restored: MemberObservationIdentity = serde_json::from_slice(&stored).unwrap();
+            restored.validate_historical().unwrap();
+            assert_eq!(restored, identity, "history must never be relabeled");
+        }
+    }
 }

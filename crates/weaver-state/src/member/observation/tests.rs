@@ -1,12 +1,5 @@
 use super::*;
 
-struct NoKernel;
-impl Metrics for NoKernel {
-    fn snapshot(&mut self) -> SnapshotFacts {
-        panic!("ordinary operations must not sample CPU or proc counters")
-    }
-}
-
 fn phases(sample: &mut OperationSample) {
     sample.phase_begin(PhaseName::Validate).unwrap();
     sample.phase_end(PhaseName::Validate).unwrap();
@@ -31,10 +24,12 @@ fn ordinary_operations_never_sample_kernel_resources_or_invent_missing_bytes() {
         StateOperation::Abort,
         StateOperation::ReleaseCapture,
     ] {
-        let mut sample =
-            OperationSample::begin_with(1.into(), 2.into(), operation, &mut NoKernel).unwrap();
+        super::super::tests::timing::enable();
+        let mut sample = OperationSample::begin(1.into(), 2.into(), operation).unwrap();
         phases(&mut sample);
-        let observation = sample.finish_with(Some(25), None, &mut NoKernel).unwrap();
+        let observation = sample.finish(Some(25), None).unwrap();
+        assert_eq!(super::super::tests::timing::resource_sample_count(), 0);
+        super::super::tests::timing::disable();
         assert_eq!(observation.operation, operation);
         assert!(observation.resource.cpu_ns.is_none());
         assert_eq!(observation.resource.copied_bytes, Some(25.into()));
@@ -91,12 +86,14 @@ impl Metrics for KnownKernel {
 #[test]
 fn snapshot_samples_before_and_after_but_disabled_accounting_stays_disabled() {
     let mut kernel = KnownKernel { calls: 0 };
-    let mut sample =
-        OperationSample::begin_with(1.into(), 1.into(), StateOperation::Snapshot, &mut kernel)
-            .unwrap();
+    let mut sample = OperationSample::begin(1.into(), 1.into(), StateOperation::Snapshot).unwrap();
+    assert_eq!(kernel.calls, 0);
+    sample.capture_begin_with(&mut kernel).unwrap();
     assert_eq!(kernel.calls, 1);
+    sample.capture_end_with(&mut kernel).unwrap();
+    assert_eq!(kernel.calls, 2);
     phases(&mut sample);
-    let result = sample.finish_with(Some(4), Some(8), &mut kernel).unwrap();
+    let result = sample.finish(Some(4), Some(8)).unwrap();
     assert_eq!(kernel.calls, 2);
     assert_eq!(result.resource.cpu_ns, Some(10.into()));
     assert_eq!(result.disk.enabled, Some(false));
@@ -136,9 +133,7 @@ fn reset_or_unreadable_snapshot_counters_are_unavailable_instead_of_zero() {
 
 #[test]
 fn phase_lifecycle_refuses_duplicates_unclosed_and_outside_intervals() {
-    let mut sample =
-        OperationSample::begin_with(1.into(), 1.into(), StateOperation::File, &mut NoKernel)
-            .unwrap();
+    let mut sample = OperationSample::begin(1.into(), 1.into(), StateOperation::File).unwrap();
     assert!(sample.phase_end(PhaseName::Query).is_err());
     sample.phase_begin(PhaseName::Validate).unwrap();
     assert!(sample.phase_begin(PhaseName::Validate).is_err());
@@ -154,11 +149,9 @@ fn phase_lifecycle_refuses_duplicates_unclosed_and_outside_intervals() {
             .is_err()
     );
     sample.phase_begin(PhaseName::Encode).unwrap();
-    assert!(sample.finish_with(None, None, &mut NoKernel).is_err());
+    assert!(sample.finish(None, None).is_err());
 
-    let mut sample =
-        OperationSample::begin_with(1.into(), 1.into(), StateOperation::File, &mut NoKernel)
-            .unwrap();
+    let mut sample = OperationSample::begin(1.into(), 1.into(), StateOperation::File).unwrap();
     let start = monotonic_ns().unwrap();
     let end = monotonic_ns().unwrap();
     sample
@@ -169,7 +162,7 @@ fn phase_lifecycle_refuses_duplicates_unclosed_and_outside_intervals() {
         })
         .unwrap();
     phases(&mut sample);
-    let result = sample.finish_with(None, None, &mut NoKernel).unwrap();
+    let result = sample.finish(None, None).unwrap();
     assert_eq!(
         result
             .phases
@@ -208,5 +201,5 @@ fn proc_fields_handle_spaces_and_parentheses_and_refuse_incomplete_values() {
         Err(ObservationUnavailable::Overflow)
     );
     assert!(decimal("-1").is_err());
-    sample_member_identity().validate().unwrap();
+    sample_member_identity().validate_current_open().unwrap();
 }
