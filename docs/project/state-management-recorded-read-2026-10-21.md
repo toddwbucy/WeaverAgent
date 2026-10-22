@@ -61,6 +61,8 @@ sources. A later parallel suite run exposed an inherited classifier EOF fixture 
 another fork can temporarily retain the peer. That test now uses its existing bounded
 kernel-terminal helper before its one production probe, as the neighboring tests do.
 No production classifier or validation rule changed. Both failed runs are retained.
+After merging the capture cancellation correction, the joined harness suite passed
+1193 tests (18 inherited ignored), with all-target harness clippy and formatting.
 
 Logs and exact tested-source/restoration hashes are deposited on the shared bulk store
 under `weaver-testing/state-management-146-olympus-2026-10-21/recorded-read/`.
