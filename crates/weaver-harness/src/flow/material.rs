@@ -62,7 +62,8 @@ pub(super) struct SelectedUnit {
 
 impl SelectedUnit {
     pub(super) fn origin(&self) -> &Arc<()> {
-        // All constructors retain at least one read and check a common owner.
+        // Constructors retain at least one read. RecordingContext checks every
+        // input read's owner before invoking the paired-read constructor.
         self.evidence.reads[0].origin()
     }
 

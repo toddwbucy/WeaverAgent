@@ -1527,3 +1527,48 @@ fn material_statement_step_query_is_refused_before_a_pair_proof_can_be_formed() 
     assert_eq!(proof.raw_bytes(), raw);
     assert!(proof.belongs_to(&member.run.context));
 }
+
+#[test]
+fn journal_system_message_defense_checks_real_unit_inspection_only() {
+    crate::flow::journal::exercise_material_guard(
+        journal_mixed_request_unit(false),
+        crate::flow::journal::MaterialGuard::SystemMessage,
+    );
+}
+
+#[test]
+fn journal_result_only_defense_checks_real_pair_inspection_only() {
+    crate::flow::journal::exercise_material_guard(
+        journal_mixed_request_unit(false),
+        crate::flow::journal::MaterialGuard::MissingRequest,
+    );
+}
+
+#[test]
+fn journal_duplicate_return_defense_checks_real_pair_inspection_only() {
+    crate::flow::journal::exercise_material_guard(
+        journal_mixed_request_unit(false),
+        crate::flow::journal::MaterialGuard::DuplicateReturn,
+    );
+}
+
+#[test]
+fn journal_returned_annotation_refuses_an_existing_valid_result_location() {
+    crate::flow::journal::exercise_material_guard(
+        journal_mixed_request_unit(false),
+        crate::flow::journal::MaterialGuard::ReturnedAnnotation,
+    );
+}
+
+#[test]
+fn journal_shortened_step_query_drops_only_the_occurrence_annotation() {
+    let mut member = Member::new();
+    let proof = read(
+        &mut member,
+        span_selector(&span_ref()),
+        entries(vec![step_query_entry()]),
+    );
+    let mut units = hold(&mut member, proof).into_units();
+    assert_eq!(units.len(), 1);
+    crate::flow::journal::exercise_step_query(units.remove(0));
+}
