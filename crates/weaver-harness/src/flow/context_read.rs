@@ -162,6 +162,7 @@ impl RecordingContext {
         self.begin_read_with_purpose(selector, turn, ReadPurpose::Ordinary, io)
     }
 
+    #[allow(clippy::result_large_err)] // Return the exact selector with admission refusal.
     pub(super) fn begin_marks_read(
         &mut self,
         turn: TurnRef,

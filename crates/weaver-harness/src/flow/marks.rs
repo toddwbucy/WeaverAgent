@@ -35,13 +35,12 @@ pub(super) fn catalog(result: &QueryResult, seed: &str) -> Result<TaskCatalog, C
     if next_span_id.0 == 0 {
         return Err(CatalogError::Invalid);
     }
-    if let Some(current) = current_task {
-        if !valid(&current.task)
+    if let Some(current) = current_task
+        && (!valid(&current.task)
             || !valid(&current.prompt)
-            || current.task.local_id.0.checked_add(1) != Some(current.prompt.local_id.0)
-        {
-            return Err(CatalogError::Invalid);
-        }
+            || current.task.local_id.0.checked_add(1) != Some(current.prompt.local_id.0))
+    {
+        return Err(CatalogError::Invalid);
     }
     let mut parent = None;
     let mut parent_kind = None;

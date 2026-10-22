@@ -1199,6 +1199,16 @@ impl RecordingContext {
         if self.barrier.failure().is_some() || self.barrier.standing_failure().is_some() {
             return Err(self.record_failed(io));
         }
+        // A read can own the recorder and prevent ordinary flow reduction.
+        // Inspect an already observed channel failure without consuming that
+        // author's ticket, progressing transport or replacing its original bound.
+        if let Some(failure) = self.flow.standing_state().and_then(StateChannel::failure) {
+            let failure = FlowFailure {
+                point: "state_transport",
+                detail: failure.to_string(),
+            };
+            return Err(self.flow_failed(io, failure));
+        }
         self.reconcile_pair_send(io)?;
         let now = io.now().map_err(|error| {
             self.fail(
