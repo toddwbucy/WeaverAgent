@@ -9,31 +9,42 @@ The complete serving replacement remains held for the qualified coupled cutover.
 ## Choice requested
 
 Elect a complete current-run Recorded trace watermark, maintained through the shared
-recording owner. Freeze it once when capture admission freezes. Ordinary authors,
-recall and coordinator observations contribute on the same terms. Untapped records
-may advance the live watermark without adding a selected source, changing an existing
-frozen boundary or advancing the member's content position.
+recording owner across enter, serving and leave. Freeze it once when capture admission
+freezes. Load, Boot and Read recall, ordinary authors and coordinator observations
+contribute on the same terms. Untapped records may advance the live watermark without
+adding a selected source, changing an existing frozen boundary or advancing the
+member's content position.
 
 This interpretation gives the word sequence its trace meaning. It does not add a
 second persistence field or pretend that trace observations are filed content. Capture
 still waits for the real dispositions of every selected source through its boundary.
 The proposal deliberately requires completing the watermark across coordinator
-observations. Keeping recall's present assignment alone would not implement it.
+observations. Keeping unmerged #229's recall assignment alone would not implement it.
 
 ## Facts found
 
-[Planner review 5609135461][review], row 6 and mutation O6, found that the recorded-read
-owner advances last_author_sequence while coordinator observations do not. Removing
-the recall assignment survived the reviewed tests. The review classified this as an
-open semantic and a batch test gap, not evidence of lost state or an unsafe capture.
+[Planner review 5609135461][review], row 6 and mutation O6, reviewed unmerged PR #229.
+Its recorded-read owner advances last_author_sequence while coordinator observations
+do not. Removing that recall assignment survived the reviewed tests. The review
+classified this as an open semantic and a batch test gap, not evidence of lost state
+or an unsafe capture. That assignment is absent from context_read.rs on this
+proposal's main base c2646e29. It is not merged behavior.
 
-The code uses last_author_sequence in context_capture.rs::prepare_member_capture.
-coordinator.rs freezes the supplied number in CaptureSnapshot and refuses selected
-ledger/inbox sources above it. It separately waits for all owned obligations and
-observations. That check does not file a turnless recall or equate the number with a
-member commit. context.rs::wait_recorded updates the field for ordinary author
-completions. context_read.rs adds recall's independent update. The coordinator's
-Recorded path does not update that context field.
+On main c2646e29, context_capture.rs::prepare_member_capture uses
+last_author_sequence. coordinator.rs freezes the supplied number in CaptureSnapshot
+and refuses selected ledger/inbox sources above it. It separately waits for all owned
+obligations and observations. That check does not file a turnless recall or equate the
+number with a member commit. context.rs::wait_recorded updates the field for ordinary
+author completions. Its bind_repair_author, bind_pair_author and drain_intake calls are
+fallible and precede that assignment. The coordinator's Recorded path does not update
+that context field.
+
+The proposed rule therefore owes implementation in both paths. The shared recording
+owner must preserve each admitted sequence before those fallible calls, not merely add
+the missing coordinator assignment or retain #229's independent recall update. Tests
+must interrupt ordinary wait_recorded after Recorded but before intake completes and
+verify the retained watermark and continuation. No code change or passing regression
+is claimed here.
 
 The merged Specs require a frozen boundary and actual source dispositions, but do not
 elect which untapped Recorded events contribute to the local number. HARNESS-RECALL
@@ -65,7 +76,8 @@ alternative changes the member's content identity or eliminates the filing barri
 | Persistence contract, this repository's copy | PERSIST-CAPTURE assigns the frozen boundary to the harness, the returned content position to the member, and preservation of that position to admin. |
 | State amendment | STATE-PAIR-READ clarifies that a pair terminal can be the image's SourcePosition, not the harness's trace watermark. STATE-OBSERVE's existing metadata cutoff is unchanged. |
 | Trace | Existing Recorded identity, one pending event and partition exclusion remain authoritative. No event, payload, record limit, writer durability claim or reservation changes. |
-| Types and admin | No wire field, StartIdentity, save result, binding format or publication step changes. Admin continues using the member's returned position. |
+| Types and Spec 05 | TYPES-PERSIST and PAIR-SCHEMA name the captured content SourcePosition explicitly. Wire fields and pair commit ordering do not change. |
+| Admin | No StartIdentity, save result, binding format or publication step changes. Admin continues using the member's returned position. |
 | Worker loop | Existing between-turn admission and lifecycle choreography remain in worker/dev_loop. The loop does not choose an arbitrary smaller frontier or infer a source disposition from the watermark. |
 
 The capture watermark is local and run-bound. A loaded position can name another run
@@ -85,7 +97,7 @@ existing STATE-OBSERVE rule.
 
 | Case | Required observation | Protective change |
 | --- | --- | --- |
-| Ordinary author, successful Read, successful Boot, classifier result, state measurement and flow sample | Each real Recorded identity updates the same live watermark before capture. | Omit any one author class or maintain only the recall assignment. |
+| Enter load, successful Boot, ordinary author, successful Read, classifier result, state measurement and flow sample | Each real Recorded identity updates the same live watermark before capture, across enter, serving and leave. | Exclude enter/load/Boot, omit an author class or maintain only the recall assignment. |
 | Author held at CapacityPending | No invented identity or watermark advance. A pending content author cannot be omitted by freezing early. | Advance at submit or freeze past pending content. |
 | Refused read | No recall event is invented. Its real operation measurement still contributes when Recorded. | Treat refusal as empty success or skip its measurement identity. |
 | Late observation during filing or capture | Live watermark advances, frozen frontier and original deadlines do not. | Recompute the frozen frontier or reset a wait after a wake. |
@@ -94,7 +106,7 @@ existing STATE-OBSERVE rule.
 | Seed-only and no-new-content captures | Recorded load supplies a local boundary. Image position remains null or the loaded content position. | Require a new selected source or replace image position with a trace sequence. |
 | Same content with and without extra recall/measurements | Watermarks differ by real trace history. Content positions agree. Metadata follows its own capture cutoff. | Claim byte-identical dumps despite different observation metadata. |
 | Wrong run or caller-chosen smaller value | No foreign or truncated frontier can be installed. | Substitute the loaded run's sequence or accept an arbitrary lower bound. |
-| Recoverable lifecycle wait immediately after Recorded | The identity remains owned and no event is authored twice. | Update only after a fallible check or replay the event on resume. |
+| Recoverable lifecycle wait immediately after Recorded, including ordinary wait_recorded before drain_intake completes | The identity and watermark remain owned and no event is authored twice. | Update only after intake, another fallible check, or replay the event on resume. |
 
 O6 alone pins a representation choice. The later-source and pending-receipt cases pin
 the safety boundary, and must be tested separately. Real member fixtures should check
@@ -103,11 +115,22 @@ different observations have identical bytes. API or type pins are separate from
 compiled behavioral mutations. The eventual implementation owes affected tests, lint,
 formatting and a lock check with a private target.
 
-No implementation or runtime gate result is claimed by this draft. Static document
-checks pass for ASCII, prose width, synchronized versions, local links and diff hygiene.
-The coordinating author's lock gate passed. Two independent document readings found no
-concrete semantic defect within this proposal's scope. The operator election and
-Planner review remain owed on draft PR #237.
+[Planner review 5609450946][proposal-review] found contradictions and ambiguous wording
+at d08cb8fe. This revision removes the caller-supplied prepare_save frontier, names the
+image's content position consistently, preserves the contract's complete image-content
+bound and distinguishes the main and #229 implementation evidence. It also includes
+enter/load/Boot in the proposed watermark and names ordinary wait_recorded's fallible
+ordering as owed implementation. Mark closure and preview frontiers retain their own
+committed-source meaning. Operation metadata retains its independent capture cutoff.
+
+No implementation or runtime gate result is claimed by this draft. The prior lock gate
+and two document readings preceded that Planner return and are not validation of this
+revision. Static checks of this revision cover ASCII, prose width, synchronized
+versions, local links and diff hygiene. The fresh lock gate passed, and the
+coordinating review found no remaining concrete contradiction. Renewed Planner review
+and the operator election remain owed. PR #237 remains a draft.
 
 [review]:
 https://github.com/toddwbucy/WeaverAgent/pull/229#pullrequestreview-5609135461
+[proposal-review]:
+https://github.com/toddwbucy/WeaverAgent/pull/237#pullrequestreview-5609450946

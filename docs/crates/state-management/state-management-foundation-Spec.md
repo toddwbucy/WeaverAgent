@@ -392,11 +392,11 @@ successful rebind is a separate administrative act. [PERSIST-1, PERSIST-4, R2, R
 | --- | --- | --- | --- |
 | Requested | Send save window, or leave under its existing lifecycle timing | Queue to boundary, or drain/wind down/lower for leave | No action |
 | Beginning | Receive SavePointBeginning and validate its windows | Freeze input, send the exact capture and tail windows | No action |
-| Barrier | Await outcome within applicable windows | Drain authoring and filing through frontier using cut_wait | Finish accepted writes |
+| Barrier | Await outcome within applicable windows | Drain authoring and filing through the frozen trace boundary using cut_wait | Finish accepted writes |
 | Capturing | Await named image | Send snapshot with new capture_id | Serialize and write part, answer name/size/position |
 | Hashing | Open judged room part, copy into private publication directory, compute A | Remain paused and keep state slot | Hold capture, accept no file/read |
 | Finishing | Send A through harness | Send acknowledge with same exchange ID | Finish named image, return finished |
-| Preparing | Write configuration with A, compute B, write binding, send SavePointPrepared | Check same healthy frontier and no halt | Hold stable image |
+| Preparing | Write configuration with A, compute B, write binding, send SavePointPrepared | Check frozen trace boundary, settled source obligations and no halt | Hold stable image |
 | Confirming | Await SavePointCommit | Author save_point confirmation with A/B, then send Commit if latch still clear | No mutation |
 | Publishing | Publish and index after valid Commit | Remain paused until outcome | No mutation |
 | Published | Return SavePointTaken or successful leave outcome | Record outcome, resume serving or finish clean unload | Release capture |
@@ -406,21 +406,19 @@ successful rebind is a separate administrative act. [PERSIST-1, PERSIST-4, R2, R
 | Cleanup fails or aborted misses its bound | Failed run, no retryable save outcome | Latch component failure, no further state ask | No successful cleanup inferred |
 | Failure after Commit | Mark broken, stop publication, retain artifacts and report their locations | Halt, no further capture | No new save |
 
-The frozen capture frontier is HARNESS-CAPTURE's current-run Recorded trace boundary.
-It includes untapped serving trace completions already Recorded at freeze, but grants
-no filing by itself. Later observations required to settle owed work do not move that
-frozen boundary. The member's captured SourcePosition separately names its last
-committed content source. STATE-OBSERVE's metadata cutoff is separate from both. A
-recall or measurement may advance the live trace watermark without changing the
-image's content position. No new wire field or image rewrite follows from this
-distinction. [FLOW-3, PERSIST-3, PERSIST-4, STORE-5, COST-2]
-
 The ladder above summarizes duties. The actor tables below determine transitions. The
 member's complete state table is STATE-PERSIST-STATES. The harness owns the one
 outstanding state exchange. On image/finished timeout its only permitted continuation
 is PERSIST-CLEANUP's abort with the original request and capture IDs. No fresh state ask
 passes it before matching aborted. Admin never treats a room file as a protocol answer.
 [SEAM-2, PERSIST-4]
+
+The frozen capture frontier is HARNESS-CAPTURE's current-run Recorded trace boundary.
+Its phase coverage and completion rules are owned there. It grants no filing by itself.
+Later observations required to settle owed work do not move that frozen boundary. The
+member's captured SourcePosition separately names its last committed content source.
+STATE-OBSERVE's metadata cutoff is separate from both. No new wire field or image
+rewrite follows from this distinction. [FLOW-3, PERSIST-3, PERSIST-4, STORE-5, COST-2]
 
 | Admin state | Event | Action and next state |
 | --- | --- | --- |
@@ -432,7 +430,7 @@ passes it before matching aborted. Admin never treats a room file as a protocol 
 | Hashing | Complete bounded copy and A computed, deadline valid | Send ImageChecked, AwaitFinished |
 | AwaitFinished | Matching ImageFinished | Build configuration and binding, Preparing |
 | Preparing | Complete A/B and binding, deadline valid | Send Prepared, AwaitCommit |
-| AwaitCommit | Matching Commit | Captured frontier authorized, Publishing |
+| AwaitCommit | Matching Commit | Matching captured image and its content position authorized, Publishing |
 | Publishing | Rename, index append and sync complete | Send Published, AwaitOutcome |
 | AwaitOutcome, on demand | Matching SavePointTaken | Validate report against indexed artifact, answer caller, Done |
 | AwaitOutcome, leave | Matching SavePointCaptureComplete | Disarm capture window, retain shared/outer leave windows, AwaitLeft |
@@ -455,7 +453,7 @@ passes it before matching aborted. Admin never treats a room file as a protocol 
 | AwaitImage | Matching snapshot result | Relay Image, AwaitChecked |
 | AwaitChecked | Matching ImageChecked | Send acknowledge on held state exchange, AwaitFinished |
 | AwaitFinished | Matching finished result | Relay ImageFinished, AwaitPrepared |
-| AwaitPrepared | Matching Prepared, same frontier, latch clear | Author confirmed, AwaitRecorded |
+| AwaitPrepared | Matching Prepared, unchanged trace boundary, settled source obligations, latch clear | Author confirmed, AwaitRecorded |
 | AwaitRecorded | confirmed returns Recorded and latch remains clear | Send Commit, AwaitPublished |
 | AwaitPublished | Matching Published | Author published, release_capture, Completing |
 | Completing, on demand | Capture released and trace records complete | Answer SavePointTaken within capture window, resume serving |
@@ -492,9 +490,11 @@ FLOW-5, PERSIST-4, R3]
 | Publication error before index append | No public success, latest unchanged, discard unlisted root part |
 | Index appended but final worker outcome missing | Mark the save point broken and ineligible, keep artifact identity and Open marker as evidence |
 
-Commit authorizes one healthy captured frontier. It proves neither publication nor
-completion of the save operation. A worker failure before final matching SavePointTaken
-or Left breaks that save point, even after a valid Commit. Admin stops publication,
+Commit authorizes the matching captured image and its returned content SourcePosition,
+after the harness checks the unchanged frozen trace boundary, settled selected-source
+obligations and clear latch. It proves neither publication nor completion of the save
+operation. A worker failure before final matching SavePointTaken or Left breaks that
+save point, even after a valid Commit. Admin stops publication,
 keeps committed artifacts in place and reports the capture, A/B when known, phase and
 every extant location. It never promotes the leftovers in recovery. A save completed
 before a later unrelated worker failure remains a good save point. [PERSIST-2,
@@ -767,10 +767,11 @@ document-PR direction, R20-5]
 The flow pass certifies one accounted disposition per selected source and committed
 acceptance before dependent actions, under the tested tuple. The load pass certifies
 verified starting bytes, required duties and a seated prompt before input. The save pass
-certifies the healthy captured frontier and the publication outcome that the chosen
-protocol proves. None certifies model truth, sink durability or untested future tuples.
-Each behavioral test above must fail when its protective check is removed. A written
-acceptance test or a test double is not its execution result. [FLOW-4, FLOW-7,
+certifies settled source obligations through the frozen trace boundary, healthy flow,
+the matching image with its content SourcePosition and the publication outcome that the
+chosen protocol proves. None certifies model truth, sink durability or untested future
+tuples. Each behavioral test above must fail when its protective check is removed. A
+written acceptance test or a test double is not its execution result. [FLOW-4, FLOW-7,
 PERSIST-3, PERSIST-6, CLASS-7]
 
 The baseline inventory coordinates below define each affected mechanic and its
@@ -791,7 +792,7 @@ changed. No separate inventory document is needed to interpret an INV reference.
 | INV-10 | Sqlite::land uses one transaction but ingest sends no success receipt | STATE-FILE/PAIR-FILE return source-matched acceptance only after commit. Real-member fixtures hold or lose the answer without granting acceptance early |
 | INV-11 | AgentConfig parses state-election while the apex names state-management | TYPES-CONFIG implements the chartered table and retires the old serving spelling at cutover. Declaration fixtures reject the retired form |
 | INV-12 | Load passes the tap, and recall/Identity records the boot identity read | TRACE-LOAD makes load the untapped trace head. HARNESS-BOOT records the read without copying or filing it. Seeded-boot fixtures check both boundaries |
-| INV-13 | sqlite.rs shape, recall, position_of and identity_of read the old event/field tables | STATE-READ replaces shape, recall, save frontier and boot identity queries with the new schema. The retired-reader census leaves no serving old-table reader |
+| INV-13 | sqlite.rs shape, recall, position_of and identity_of read the old event/field tables | STATE-READ replaces shape, recall, captured content position and boot identity queries with the new schema. The retired-reader census leaves no serving old-table reader |
 | INV-14 | The #76 seeding turn admits live system input, empty first load and the none engine | ADMIN-SEED, verified boot and TYPES-CONFIG retire all three with their writer and readers. Whole-path cutover fixtures refuse old or empty starting state |
 | INV-15 | save_points.rs publishes one-file images and recovers finished room artifacts | Section 5 and ADMIN-SAVE/RECOVERY require three-file A/B binding, healthy-capture Commit and indexed selection. Publication fixtures refuse broken or unconfirmed artifacts |
 | INV-16 | Diagnostic preload and replay depend on the old tables and election | STATE-MODE and the analysis-state amendment preserve a separate diagnostic binding/catalog. Mode fixtures refuse serving preload and cross-mode adoption |
