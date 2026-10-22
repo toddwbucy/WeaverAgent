@@ -1099,3 +1099,6 @@ fn boot_pairs_current_run_call_is_not_relabelled_as_abandoned_at_load() {
     assert!(fx.terminals().is_empty());
     assert!(fx.records(Kind::ToolCallCompleted).is_empty());
 }
+
+#[path = "context_boot_pairs_review_tests.rs"]
+mod review_tests;

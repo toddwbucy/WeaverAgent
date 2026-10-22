@@ -38,10 +38,14 @@ with the transaction. An initial typed refusal has no cursor to release. A later
 refusal releases its acquired cursor once. A malformed result or failed seam follows
 the existing latch and close path. Refusal never becomes an empty successful list.
 
-Every pair in the initial snapshot receives a current-run tool.call.completed in the
-returned order, with its original CallId and failed/abandoned_at_load. The event has
+Each old-run pair reached in the initial snapshot receives a current-run
+tool.call.completed in returned order, with its original CallId and
+failed/abandoned_at_load. The event has
 Origin::Loop, no turn, execution or outcome, and the complete verified loaded_from.
-A current-run call cannot be relabelled as an old abandoned call. The normal author,
+A current-run call cannot be relabelled as an old abandoned call. The check is
+per pair. In an old/current mixed snapshot, the prior old terminal may already
+be committed before the later current-run call halts repair. Its correct receipt
+remains owned and no final recheck or repair grant follows. The normal author,
 tap, PairCopy, file_pair and recorded receipt subscription carry the terminal. There
 is no direct state edit, replacement opening, classifier ask, gate exchange or model
 return. Existing serving CompletedPair and ToolResult constructors are not used.
@@ -55,6 +59,8 @@ does not initiate another repair pass or append new pairs to this batch.
 
 Both read owners and all terminal receipts remain in the private repaired proof.
 Cancellation and refusal retain their account without a success-proof accessor.
+Borrowed account views expose both read outcomes, committed terminals and the exact
+withdrawn unstarted event. They cannot mint repaired evidence.
 Competing reads, authors, explicit operations and lifecycle release cannot take over
 its active or completed ownership slot. Taking its result does not retire Enter.
 
@@ -75,7 +81,11 @@ boot budget still remains in force. No wait helper may steal an owned Enter/Deci
 A recoverable lifecycle Wait retains the current stage, exact author/read/filing and
 its bound. It is not automatically a cancellation. Explicit cancellation revokes the
 final success, withdraws a staged unstarted terminal, or finishes an already admitted
-read/filing under its existing bounds. It starts no later terminal or recheck. An old
+read/filing under its existing bounds. It starts no later terminal or recheck.
+As with begin_task, cancelling a completed but untaken result revokes its grant.
+Already recorded reads and committed terminals remain in the cancelled account.
+Calling advance, cancel or take without a repair owner is a protocol caller defect.
+An old
 loaded call has no serving turn or executing gate exchange, so this owner invents no
 stop/not_dispatched outcome, ToolCancel, tool clock or save point.
 
@@ -87,7 +97,8 @@ the separate refused-partition path and is not reused as a substitute for that w
 
 ## Instruments and measured validation
 
-Seventeen tests use the actual load/template/boot-read owners, state sockets, recorder,
+The original seventeen tests use the actual load/template/boot-read owners, state
+sockets, recorder,
 ordinary tap, file_pair and receipt machinery with scripted classifier/member answers.
 The prior decoder Open remains the explicit test-only assumption. Cases include:
 
@@ -103,13 +114,40 @@ The prior decoder Open remains the explicit test-only assumption. Cases include:
 - Original Enter/read deadlines and an earlier Leave cap after Leave is retired.
 - Forty-eight nested Leave checkpoints through read and receipt ownership transfers.
 - A timely recorded terminal consumed after its Decision deadline but within Enter.
-- Current-run abandonment rejected before any terminal record or store write.
+- A single current-run call rejected before its terminal record or store write.
+
+The #247 Planner follow-up adds ten tests. They cover the exact Enter-capped
+terminal window and expiry attribution, an actual receipt Recorded at or after
+Decision expiry during bounded work, cancellation between two committed-terminal
+steps, release refusal in initial/between-leg/completed states, a mixed old/current
+snapshot, and cancellation after both successful and refused completion. Account
+views are checked against actual reads, committed receipts and withdrawn events.
+No-owner operation use is pinned as a caller defect.
+
+Three unchanged receipt association predicates are tested with inspection copies
+from a real committed terminal. The wrong turn, changed pair and changed source
+sequence never replace a sealed receipt or simulate a reachable member echo. The
+changed pair's raw payload is changed together so its structural check still passes.
+These fixtures pin defensive checks without weakening read or filing validation.
+
+The post-admission Busy case reuses #245's per-instance coordinator hook. Normal
+synchronous admission already checks the real Busy predicates. The hook allocates
+no competing operation or request and is described as a defensive returned-Busy
+probe. Foreign read and filing checks remain redundant with the private purposes
+and each owner's admission guard. No artificial owner is used to claim otherwise.
+The small predicate extraction preserves production checks. Broad withdrawal,
+receipt-timing and owner-hook consolidation remains batched to avoid unrelated churn.
+
+Follow-up source and recipes are prepared. Compilation, strict lint, formatting,
+lock, the joined full suite and compiled mutations remain pending root's serial
+lane, including joining the #245 hook before Cargo. The baseline results below do
+not validate these new edits.
 
 Compile-time ambiguity pins require PriorBootOpen and RepairedBootPairs to remain
 non-Clone and non-Default. Additional pins forbid StartIdentity-to-prerequisite and
 pair-vector-to-result conversions. The production prerequisite has no constructor.
 Olympus used private target /tmp/weaver-146-boot-pairs-target and the pinned toolchain.
-The final joined harness suite passed 1356 tests with 18 inherited ignored cases.
+The prior joined baseline passed 1356 tests with 18 inherited ignored cases.
 All 17 focused boot tests, strict all-target harness clippy, formatting and lock passed.
 All nineteen protective mutations compiled, failed their intended test and passed after
 exact-byte restoration. All six ownership probes reached the intended E0283 ambiguity,
