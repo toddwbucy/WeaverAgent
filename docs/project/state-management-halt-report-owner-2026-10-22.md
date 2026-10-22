@@ -5,7 +5,7 @@ Date: 2026-10-22. Draft PR: #249.
 ## Scope and authority
 
 This slice advances issue #146 E through an actual consumer of the stopped recorder's
-first-fault reserve. Its parent is #248 at f16b616. That ancestry retains #190's
+first-fault reserve. Its parent is #248. That ancestry retains #190's
 operator hold for the foundation cutover. Runtime serving remains on the complete
 legacy implementation.
 
@@ -82,8 +82,9 @@ locked dependency resolution:
 - All twelve focused tests passed on the joined inspection/boot stack.
 - Full harness suite: 1391 passed, with 18 inherited ignored cases.
 - Strict all-target harness clippy, formatting and lock checks passed.
-- All fourteen compiled protective mutations failed their intended tests. Each
-  exact restored source passed its corresponding baseline.
+- The author run reported fourteen compiled protective failures with exact
+  restored baselines. The subsequent Planner pass found two surviving mutations,
+  H3 and H7, and those gaps are addressed in the follow-up below.
 - Three E0283 probes rejected Clone, Default and conversion from a bare Sequence.
   Exact restoration and the final baseline check passed.
 
@@ -95,6 +96,97 @@ this scope. The code-review skill was unavailable, so no skill invocation is cla
 
 Logs, source hashes, runners and recipes are deposited under `halt-report/` in
 `/bulk-store/weaver-testing/state-management-146-olympus-2026-10-21/`.
+
+## Review follow-up
+
+The Planner review at 5512789c found no fix-bucket issue, but H3 and H7 did not
+protect fault turn attribution or secondary evidence from a failed terminal
+attempt. The new H3 fixture records TurnStarted through the context, triggers a
+real bound failure, and reads the resulting fault's run and turn. The existing
+used-permit fixture now reads the exact secondary detail, point and observation,
+and verifies that the frozen fault still has an empty secondary list while the
+unload view carries that later evidence.
+
+The stopped-tap drain now repeats the existing run and release-purpose check
+before writer admission. A lower-owner misuse fixture passes a foreign author
+run or an incompatible purpose through the real admission API. Both fail
+without losing their exact original ticket, prepared event or source payload.
+This test does not claim that the healthy context constructs either mismatch.
+
+RecordBarrier now retains its latest actual stopped-tap Recorded sequence.
+HaltReport initializes and refreshes its separate trace evidence from that slot
+before any post-work clock check. A real decoder refusal is drained before
+report admission and its sequence remains available afterward. This does not
+change the frozen first-fault account, settle its pending-author snapshot, or
+implement the separate Recorded watermark rule merged in #237.
+The slot covers ordinary stopped-tap drain admissions only. It excludes the
+separate reserved fault sequence and is not a global trace-sequence maximum.
+
+The inherited measurement helper can resume an older pending event and return
+None because its Some result belongs only to its own refusal. That admitted
+sequence is now retained by the common barrier. The healthy measurement path
+checks both pending event and pending author before consuming its reserved
+decoder reply, and admission excludes competing authors. No fixture forges a
+simultaneous older author and fatal decoded refusal to claim public reachability.
+
+A confirmed recorder failure during the first fault attempt now makes later
+advances return Unavailable without another drain attempt, even with no pending
+work. Real closed-sink fixtures cover both pending and empty cases and preserve
+the first attempt's secondary count. An inner measurement clock error retains
+its ticket and exact secondary without claiming a failed sink. A rejected
+generic drain still stops that invalid reporting road while preserving its
+original pending event.
+
+The fault helper now borrows its retained original through the same terminal
+submission API, preserving the recorder's one-use per-kind permits. A private
+method replaces the immediately invoked closure. The existing owned wrapper
+still returns its original event on failure.
+
+Five tests were added and two existing checks strengthened. The follow-up passed
+16 focused halt-report tests and the stopped-drain guard test, followed by the full
+harness suite: 1425 passed, with 18 inherited ignored cases. Strict all-target
+harness clippy, formatting and lock checks passed. Nine protective mutations
+compiled and failed their intended assertions, and each exact restored baseline
+passed. The independent source reading found no remaining concrete defect in this
+scope; it is not a Planner grade. Follow-up logs and source hashes are retained at
+`/tmp/weaver-146-evidence/review-round2-249/`; these new results have not been
+deposited in the shared evidence store.
+
+Batch dispositions remain explicit. The final unload integration must reconcile
+later admitted author evidence without rewriting the first snapshot. No unload
+is authored here. The existing closed reason vocabulary remains unchanged, with
+precise clock or deadline detail under trace_failed/teardown. The measurement
+helper retains its independent clock check because callers can invoke it
+without HaltReport, and the outer before/after checks still bound this driver.
+The fixtures remain nested under read_tests to reuse their actual socket and
+recorder setup. Neither a new reason spelling nor a fixture-module relocation
+is required for these corrections.
+
+## Review dispositions
+
+Planner review 5610812388 and its merge-only carry 5611201559 are answered
+by scope, without changing the merged failure vocabulary:
+
+| Finding | Disposition |
+| --- | --- |
+| H3, fault turn | Record a real TurnStarted and compare the fault run/turn with that recorded envelope. |
+| H7, failed-attempt secondary | Assert the exact secondary detail, observation and teardown point; the first account stays frozen and the unload view carries the secondary. |
+| 1, drain run/purpose guard | Apply both existing author checks before stopped-tap submission; retain the original on rejection. The direct malformed-owner probes are defensive, not reachable healthy producers. |
+| 2, lost older drain sequence | Retain the latest ordinary stopped-tap admission in RecordBarrier and expose it separately from the reserved fault sequence. Both measurement drain sites and the generic halt drain use that same retained slot. |
+| 3, pending author in frozen account | Keep the first snapshot immutable as HARNESS-HALT-ACCOUNT requires. The separate actual admission sequence remains available to the future unload owner; no invented live snapshot replaces the frozen one. |
+| 4, non-sink measurement error | Inspect the actual standing recorder failure before setting the sink-unavailable state. The clock-error fixture retains the owed ticket and exact secondary. |
+| 5, first-attempt sink failure | Make reporting unavailable immediately when the recorder confirms failure; repeated advances retain the one secondary without another trace attempt, with and without pending work. |
+| 6, clock/deadline reason | Retain the existing trace_failed/teardown spelling and exact detail. A new closed reason is a separate Spec decision, not required to correct attribution evidence here. |
+| 7, fault clone | Submit a borrow of the retained original; preserve the owned wrapper for existing callers that require their original returned on refusal. |
+| 8, repeated clocks | Retain the inner check: failed_measure_refusal_progress is also callable without HaltReport. The outer before/after checks bound this adapter and preserve consumed evidence before a late failure. Removing either ownership boundary would weaken its existing deadline contract. |
+| 9, inline closure | Extract prepare_and_submit_halt_fault; retain the event before terminal submission. |
+| 10, nested tests | Keep the existing actual read-peer fixture in its current module. Relocating it would broaden the change across read-owner tests without strengthening the halt invariant. The test names identify halt behavior explicitly. |
+
+The affected consumer sweep found three stopped-tap drain sites: the generic
+halt owner, the measurement owner's prior event, and its own refusal. The new
+retention slot covers all three. Terminal submission has the halt owner and
+lower-level permit tests as consumers; the borrowed adapter retains the same
+one-use recorder gate and creates no new terminal permit.
 
 ## Remaining integration
 

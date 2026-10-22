@@ -24,6 +24,9 @@ mod material_tests;
 #[path = "context_read_recall_tests.rs"]
 mod recall_tests;
 
+#[path = "context_read_resume_tests.rs"]
+mod resume_tests;
+
 #[path = "context_boot_read_tests.rs"]
 mod boot_tests;
 

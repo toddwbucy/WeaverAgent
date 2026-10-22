@@ -1078,8 +1078,9 @@ fn begin_task_rejects_out_of_range_and_nonadjacent_catalog_ids() {
             failure,
             RunFailure::Flow {
                 reason: FlowHaltReason::ProtocolFailed,
+                ref detail,
                 ..
-            }
+            } if detail == "malformed begin_task mark catalog"
         ));
         assert!(fx.input.records(Kind::StateMark).is_empty());
         assert!(
@@ -1242,6 +1243,70 @@ fn begin_task_cancellation_after_input_receipt_starts_no_read_or_mark() {
             .all(|request| matches!(request, s::StateFrame::File { .. }))
     );
     assert!(fx.input.run.context.read.is_none());
+    assert!(fx.input.run.context.failure().is_none());
+}
+
+#[test]
+fn begin_task_cancelled_input_receipt_completes_without_a_new_read_step() {
+    let mut fx = TaskFixture::new();
+    fx.hold_input = true;
+    fx.begin();
+    fx.steps(24);
+    assert!(fx.input.run.context.open_turn.is_some());
+    assert!(fx.input.run.context.input_turn.is_none());
+    assert!(fx.input.run.context.flow.has_filing_consumer());
+    assert!(matches!(
+        fx.pending.first(),
+        Some(s::StateFrame::File { filing, .. }) if filing.source.kind == "message.user"
+    ));
+    assert_eq!(fx.input.records(Kind::MessageUser).len(), 1);
+
+    // The accepted input is consumed, but the real member has not returned its
+    // Filed response. Cancel before the owner consumes that exact receipt.
+    fx.input.run.context.cancel_task();
+    fx.hold_input = false;
+    let mut completed = false;
+    for _ in 0..256 {
+        let progress = fx.step().unwrap();
+        if !fx.input.run.context.flow.has_filing_consumer() {
+            // Receipt consumption must settle cancellation and retire Decision
+            // together. Moving to Read would leave another fallible live step.
+            assert_eq!(progress, TaskProgress::Complete);
+            assert!(
+                fx.input
+                    .run
+                    .context
+                    .deadlines
+                    .get(PumpDeadline::Decision)
+                    .is_none()
+            );
+            completed = true;
+            break;
+        }
+    }
+    assert!(completed, "cancelled input filing did not settle");
+    fx.input
+        .run
+        .clock
+        .advance_to(fx.bound.deadline_ns() + 1)
+        .unwrap();
+    let Some(TaskCompletion::Cancelled(mut account)) = fx
+        .input
+        .run
+        .context
+        .take_task(&mut fx.input.run.clock)
+        .unwrap()
+    else {
+        panic!("settled cancellation did not retain its account");
+    };
+    assert!(account.take_unconsumed_input().is_none());
+    assert!(fx.input.run.context.read.is_none());
+    assert!(fx.input.records(Kind::StateMark).is_empty());
+    assert!(
+        fx.requests
+            .iter()
+            .all(|request| matches!(request, s::StateFrame::File { .. }))
+    );
     assert!(fx.input.run.context.failure().is_none());
 }
 

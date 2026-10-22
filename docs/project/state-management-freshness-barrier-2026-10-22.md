@@ -3,7 +3,9 @@
 Date: 2026-10-22. Executor implementation record for epic #146, item B.
 Branch: `code/state-freshness-barrier`, based on draft #239 at `5d6c3de`.
 The initial author gates and both turn-boundary corrections passed. The test
-follow-up awaits fresh gates. Planner review remains separate.
+follow-up at `b5b5893` passed 1295 harness tests with 18 inherited ignored cases
+and three protective mutations. Planner review 6334295280 confirms that revision.
+These results do not claim validation of later merged heads.
 No serving activation, production qualification or epic completion is claimed.
 
 ## Authority and implemented boundary

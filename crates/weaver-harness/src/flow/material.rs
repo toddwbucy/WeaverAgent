@@ -123,8 +123,9 @@ impl SelectedUnit {
     pub(super) fn step_queries(&self) -> &[StepQueryOccurrence] {
         &self.unit.step_queries
     }
-    /// Candidate-producing content reads only. Fresh task input has no read
-    /// rank and is mandatory-only under SORT-PORT.
+    /// Candidate-producing content reads only. This slice is empty for fresh
+    /// task input; callers must inspect it before indexing. That material has
+    /// no read rank and is mandatory-only under SORT-PORT.
     pub(super) fn reads(&self) -> &[RecordedRead] {
         self.evidence.reads()
     }
@@ -651,10 +652,8 @@ fn task_unit(task: &BegunTask) -> Result<Unit, MaterialFailure> {
     let [ContentBlock::Text { text }] = message.content.as_slice() else {
         return Err(MaterialFailure::Invalid("filed task input is not one Text"));
     };
-    if message.role != Role::User || text.is_empty() {
-        return Err(MaterialFailure::Invalid(
-            "filed task input is not user Text",
-        ));
+    if text.is_empty() {
+        return Err(MaterialFailure::Invalid("filed task input Text is empty"));
     }
     let source = ContentRef::Event {
         block_id: task.input().source().clone(),
@@ -662,7 +661,12 @@ fn task_unit(task: &BegunTask) -> Result<Unit, MaterialFailure> {
     let mut unit = Unit::new(UnitId::Block {
         source: source.clone(),
     });
-    unit.messages.push(message.clone());
+    // FiledTaskInput proves message.user. The source kind determines the
+    // canonical role, rather than a role supplied on an inspection Message.
+    unit.messages.push(Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text { text: text.clone() }],
+    });
     unit.map(
         MaterialRef::Text {
             source,

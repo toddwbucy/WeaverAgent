@@ -39,10 +39,11 @@ under the [harness amendment][harness]. The old open adapter structurally decode
 counts but does not validate those placement contracts. Marks, cuts and the placement
 journal remain H3b work in the [implementation map][map].
 
-The existing Spec gap remains explicit: OPEN-FACTS asks for an identity-prefix open
-measurement label, while TYPES-DECODE defines only four Opened counts and leaves
-Generation unchanged. This slice invents no carrier for that label. The unmerged
-recall amendment #189 remains a separate boot/placement provenance dependency.
+The paired Open carrier in [TYPES-DECODE][types] and [SPU-OPEN][spu] adds exact
+request/measurement evidence to the four counts. This slice implements only the
+counts; the carrier proposal's approval and merge precede its paired code act.
+Generation remains unchanged. Recall provenance #189 is merged, with its
+boot/placement integration still a separate dependency.
 
 Original #218 used code/state-decode-measurement from #184 at 6d5e6b0d. Its exact
 head 8b387eff joined #217 at bdfa3a76 through merge 32a57b57 in #219. Those changes

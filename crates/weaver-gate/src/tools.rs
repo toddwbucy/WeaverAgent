@@ -380,7 +380,7 @@ fn run_in_home(
         let _ = nix::sys::signal::kill(group, nix::sys::signal::Signal::SIGKILL);
         #[cfg(test)]
         delivery_tests::reap_entered(deadline);
-        reap_supervised(&mut child, deadline, &mut supervision)
+        reap_supervised(&mut child, &mut supervision)
     } else {
         None
     };
@@ -458,9 +458,9 @@ fn reap_within(
 /// run_in_home path also has a delegated child/socket regression.
 fn reap_supervised(
     child: &mut std::process::Child,
-    deadline: std::time::Instant,
     supervision: &mut ContainmentSupervisor<'_>,
 ) -> Option<std::io::Result<std::process::ExitStatus>> {
+    let deadline = supervision.deadline;
     reap_within(child, deadline, |slice| supervision.wait(slice))
 }
 
