@@ -53,7 +53,8 @@ fixture failed during real partition activation, before the mark owner could exi
 The corrected test now asserts that actual upstream refusal for both message.user and
 state.mark. TRACE-VALIDATION requires these projections, so downstream empty-selection
 guards are defensive equivalents under current admission. No fabricated active
-partition or bypassed AcceptedInput is used. A second fixture attempt reached an active-writer accessor before activation.
+partition or bypassed AcceptedInput is used. A second fixture attempt reached an active-
+writer accessor before activation.
 It now drains and reads the real untapped writer. Both failed attempts are retained.
 The corrected focused run passed all thirteen tests. The focused harness filter is
 context::marks_tests. Thirteen tests use the real recorder, classifier packet channel,
@@ -74,7 +75,8 @@ member stream and existing accepted-input owner with synthetic replies. They exe
 Compile-time pins reject Clone for both BegunTask and FiledTaskInput. They also reject
 conversion from a public TaskScopeRef into BegunTask, or from SeatedInput into
 FiledTaskInput. Four external trait-addition probes must each reach the intended
-E0283 ambiguity and restore the exact source. All four probes reached that diagnostic, and the exact-source restored check passed.
+E0283 ambiguity and restore the exact source. All four probes reached that diagnostic,
+and the exact-source restored check passed.
 
 An early independent Executor reading identified closed-prompt reuse and completion
 wait retirement. Both corrections and their regressions are included. That reading
@@ -93,7 +95,8 @@ The production instruction words, language artifacts and measured limits remain 
 Journal mark registration, Open evidence, native mark constructors, plan effects,
 placement and generation confirmation remain separate work.
 
-The freshness owner through 1c5e53f is joined. Mark admission excludes retained freshness
+The freshness owner through 1c5e53f is joined. Mark admission excludes retained
+freshness
 ownership, and freshness admission excludes retained marks ownership, including
 completed results. Existing generic-author continuation and each port's two exclusions
 are preserved. The combined gates passed as recorded below.
