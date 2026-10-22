@@ -76,7 +76,7 @@ pub(super) fn load_record() -> LoadRecord {
             },
         },
         state_start: StartIdentity {
-            seed_id: "seed".into(),
+            seed_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
             artifact_id: "seed-artifact".into(),
             dump_sha256: "a".repeat(64),
             config_sha256: "b".repeat(64),

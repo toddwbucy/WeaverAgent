@@ -20,9 +20,12 @@ use weaver_state::{ServingStore, engine::serving_sqlite::seed_image};
 #[path = "../../../tests/serving_member/fixtures.rs"]
 pub(super) mod fixtures;
 
+mod accounting;
+
 const CHILD_TEST: &str = "member::tests::process::metadata_failure_child";
 const CHILD_ROOM: &str = "WEAVER_TEST_METADATA_FAILURE_ROOM";
 const CHILD_MODE: &str = "WEAVER_TEST_STATE_BOUNDARY_MODE";
+const CHILD_OBSERVATIONS: &str = "WEAVER_TEST_STATE_OBSERVATIONS";
 static NEXT_ROOM: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
@@ -89,7 +92,7 @@ fn metadata_failure_child() {
     let mode = std::env::var(CHILD_MODE).unwrap();
     assert!(matches!(
         mode.as_str(),
-        "metadata" | "timing" | "oversized-control"
+        "metadata" | "timing" | "oversized-control" | "accounting"
     ));
     if mode == "metadata" {
         INJECT_AFTER_COMMIT.with(|armed| armed.set(true));
@@ -97,6 +100,10 @@ fn metadata_failure_child() {
         super::timing::enable();
     }
     let result = run(&mut channel, &room, image);
+    // This hook covers post-Open operations. Open is checked separately by
+    // the parent fixture at the actual Opened response.
+    let expected: u64 = std::env::var(CHILD_OBSERVATIONS).unwrap().parse().unwrap();
+    assert_eq!(OBSERVATIONS_CHECKED.with(Cell::get), expected);
     if mode == "metadata" {
         assert!(
             COMMIT_VERIFIED.with(Cell::get),
@@ -111,10 +118,6 @@ fn metadata_failure_child() {
         );
     } else {
         result.unwrap();
-        assert_eq!(
-            OBSERVATIONS_CHECKED.with(Cell::get),
-            if mode == "oversized-control" { 4 } else { 2 }
-        );
     }
     drop(channel);
     room.clear_remnants().unwrap();
@@ -151,7 +154,7 @@ impl Drop for Fixture {
     }
 }
 
-fn launch(mode: &str) -> (Fixture, BufReader<UnixStream>, SeedRequest) {
+fn launch(mode: &str, observations: u64) -> (Fixture, BufReader<UnixStream>, SeedRequest) {
     let seed = fixtures::seed();
     let image = seed_image(&seed).unwrap().into_bytes();
     let root = std::env::temp_dir().join(format!(
@@ -178,6 +181,7 @@ fn launch(mode: &str) -> (Fixture, BufReader<UnixStream>, SeedRequest) {
         .args(["--exact", CHILD_TEST, "--nocapture"])
         .env(CHILD_ROOM, &root)
         .env(CHILD_MODE, mode)
+        .env(CHILD_OBSERVATIONS, observations.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(File::create(root.join("stderr")).unwrap());
@@ -208,15 +212,19 @@ fn launch(mode: &str) -> (Fixture, BufReader<UnixStream>, SeedRequest) {
         .unwrap();
     let mut opened = Vec::new();
     assert!(peer.read_until(b'\n', &mut opened).unwrap() > 0);
-    let opened = decode_state_line(&opened, FrameDirection::Response).unwrap();
+    let opened_bytes = opened;
+    let opened = decode_state_line(&opened_bytes, FrameDirection::Response).unwrap();
     assert!(matches!(opened, StateFrame::Opened { .. }));
     opened.validate_response_to(&open, 1.into()).unwrap();
+    if mode == "accounting" {
+        accounting::check_open(&open, &opened, &opened_bytes);
+    }
     (fixture, peer, seed)
 }
 
 #[test]
 fn metadata_persistence_failure_after_content_commit_closes_without_answer_bytes() {
-    let (mut fixture, mut peer, seed) = launch("metadata");
+    let (mut fixture, mut peer, seed) = launch("metadata", 1);
     let file = StateFrame::File {
         common: fixtures::common(2),
         filing: fixtures::statement(&seed, 1, "Read committed."),
@@ -241,7 +249,7 @@ fn metadata_persistence_failure_after_content_commit_closes_without_answer_bytes
 
 #[test]
 fn file_and_pair_observations_start_before_the_real_operation_hint_parse() {
-    let (mut fixture, mut peer, seed) = launch("timing");
+    let (mut fixture, mut peer, seed) = launch("timing", 2);
     let statement = fixtures::statement(&seed, 1, "Read committed.");
     let opening = fixtures::opening(&statement);
     let pair = fixtures::pair(&seed, 2, PairRecord::Started(opening));
@@ -277,7 +285,7 @@ fn file_and_pair_observations_start_before_the_real_operation_hint_parse() {
 
 #[test]
 fn serving_snapshot_and_preflight_refusal_finish_after_real_payload_encoding() {
-    let (mut fixture, mut peer, _) = launch("timing");
+    let (mut fixture, mut peer, _) = launch("timing", 2);
     for request_id in [2, 3] {
         let request = StateFrame::Control {
             common: fixtures::common(request_id),
@@ -345,7 +353,7 @@ fn serving_oversized_position_returns_answer_too_large_and_keeps_the_read_cursor
         answer
     }
 
-    let (mut fixture, mut peer, seed) = launch("oversized-control");
+    let (mut fixture, mut peer, seed) = launch("oversized-control", 4);
     let mut filing = fixtures::statement(&seed, 1, "Read committed.");
     // Turn identities are opaque. This valid filing fits the 8 MiB request
     // allowance, and its Filed receipt carries only the small block identity.

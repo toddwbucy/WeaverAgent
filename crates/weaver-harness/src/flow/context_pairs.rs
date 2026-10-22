@@ -176,7 +176,9 @@ impl RecordingContext {
             || !self.barrier.is_active()
         {
             Some(PairBeginRefusal::WrongPhase)
-        } else if (self.repair_blocks_external() && self.repair_owns_pairs())
+        } else if self.marks.is_some()
+            || (self.repair_blocks_external() && self.repair_owns_pairs())
+            || self.freshness.is_some()
             || self.pair_work.is_some()
             || self.pair_rejected_authoring
             || self.pairs.pending_rejection().is_some()

@@ -27,7 +27,8 @@ fn ordinary_operations_never_sample_kernel_resources_or_invent_missing_bytes() {
         super::super::tests::timing::enable();
         let mut sample = OperationSample::begin(1.into(), 2.into(), operation).unwrap();
         phases(&mut sample);
-        let observation = sample.finish(Some(25), None).unwrap();
+        sample.copied = BufferBytes::measured(25);
+        let observation = sample.finish().unwrap();
         assert_eq!(super::super::tests::timing::resource_sample_count(), 0);
         super::super::tests::timing::disable();
         assert_eq!(observation.operation, operation);
@@ -93,7 +94,9 @@ fn snapshot_samples_before_and_after_but_disabled_accounting_stays_disabled() {
     sample.capture_end_with(&mut kernel).unwrap();
     assert_eq!(kernel.calls, 2);
     phases(&mut sample);
-    let result = sample.finish(Some(4), Some(8)).unwrap();
+    sample.copied = BufferBytes::measured(4);
+    sample.held = BufferBytes::measured(8);
+    let result = sample.finish().unwrap();
     assert_eq!(kernel.calls, 2);
     assert_eq!(result.resource.cpu_ns, Some(10.into()));
     assert_eq!(result.disk.enabled, Some(false));
@@ -149,7 +152,7 @@ fn phase_lifecycle_refuses_duplicates_unclosed_and_outside_intervals() {
             .is_err()
     );
     sample.phase_begin(PhaseName::Encode).unwrap();
-    assert!(sample.finish(None, None).is_err());
+    assert!(sample.finish().is_err());
 
     let mut sample = OperationSample::begin(1.into(), 1.into(), StateOperation::File).unwrap();
     let start = monotonic_ns().unwrap();
@@ -162,7 +165,7 @@ fn phase_lifecycle_refuses_duplicates_unclosed_and_outside_intervals() {
         })
         .unwrap();
     phases(&mut sample);
-    let result = sample.finish(None, None).unwrap();
+    let result = sample.finish().unwrap();
     assert_eq!(
         result
             .phases

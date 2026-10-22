@@ -21,7 +21,6 @@ impl Pages {
     pub(super) fn busy(&self) -> bool {
         self.held.is_some()
     }
-    #[cfg(test)]
     pub(super) fn held_bytes(&self) -> usize {
         self.held.as_ref().map_or(0, |h| h.bytes.len())
     }

@@ -15,8 +15,14 @@ use weaver_types::state_flow as s;
 const CONTROL_NS: u64 = 2_000_000_000;
 const EMPTY: &[u8] = br#"{"entries":{"entries":[]}}"#;
 
+#[path = "context_material_tests.rs"]
+mod material_tests;
+
 #[path = "context_read_recall_tests.rs"]
 mod recall_tests;
+
+#[path = "context_boot_read_tests.rs"]
+mod boot_tests;
 
 fn ports<I: PumpIo>(io: &mut I) -> PumpPorts<'_, I> {
     PumpPorts {

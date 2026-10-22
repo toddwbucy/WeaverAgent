@@ -526,6 +526,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.pending_record.is_some()
     }
 
+    /// A filing pause must also carry observations queued before a trace ticket.
+    pub(super) fn has_pending_observations(&self) -> bool {
+        self.pending_record.is_some() || !self.notices.is_empty()
+    }
+
     /// Trace admission is the logical recording boundary even when a final
     /// terminal probe must yield. This exposes timing, never usable acceptance.
     pub(super) fn pending_classifier_recorded(
@@ -1200,6 +1205,20 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     }
     pub(super) fn standing_state(&self) -> Option<&StateChannel> {
         self.state.as_ref()
+    }
+
+    /// Isolate the passive channel-latch boundary using the real stream parser.
+    /// Production transport_one maps the error immediately instead of retaining
+    /// this deliberately unmapped intermediate state.
+    #[cfg(test)]
+    pub(super) fn probe_state_without_failure_mapping_for_test(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<(), super::channel::ChannelFailure> {
+        self.state
+            .as_mut()
+            .expect("test has a standing state channel")
+            .progress(&mut || io.now())
     }
     pub(super) fn standing_classifier(&self) -> Option<&Classifier<P>> {
         self.classifier.as_ref()

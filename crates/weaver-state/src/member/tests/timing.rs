@@ -169,14 +169,14 @@ pub(in crate::member) fn image_result(
     result
 }
 
-struct Fixture {
-    root: std::path::PathBuf,
-    room: Room,
-    session: Session,
+pub(super) struct Fixture {
+    pub(super) root: std::path::PathBuf,
+    pub(super) room: Room,
+    pub(super) session: Session,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
@@ -301,7 +301,7 @@ fn assert_capture_interval(observation: &StateOperationObservation) {
     assert!(timestamp("payload_encoded") <= observation.ended_ns);
     assert_eq!(timestamp("ended"), observation.ended_ns);
     assert_eq!(SAMPLE_COUNT.get(), 2);
-    assert!(observation.resource.copied_bytes.is_none());
+    assert!(observation.resource.copied_bytes.is_some());
     assert!(
         observation.resource.held_bytes.is_none(),
         "incomplete accounting must stay unavailable"

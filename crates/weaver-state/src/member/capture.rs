@@ -6,7 +6,7 @@ use super::{
     room::{Room, WriteFault},
 };
 use std::io;
-use weaver_state::engine::serving_sqlite::ServingSqlite;
+use weaver_state::{engine::serving_sqlite::ServingSqlite, serving_bytes::BufferBytes};
 use weaver_types::state_flow::*;
 
 #[derive(Default)]
@@ -31,6 +31,23 @@ pub(super) enum Capture {
 }
 
 impl Capture {
+    /// The image Vec lives only inside snapshot. A held disk file is not RAM;
+    /// only these actual capture-owned strings remain at observation finish.
+    pub(super) fn held_bytes(&self) -> BufferBytes {
+        let mut held = BufferBytes::default();
+        match self {
+            Self::Held { name, .. } => held.add(name.len()),
+            Self::Finished {
+                name, _admin_hash, ..
+            } => {
+                held.add(name.len());
+                held.add(_admin_hash.as_str().len());
+            }
+            Self::None | Self::Refused { .. } => {}
+        }
+        held
+    }
+
     pub(super) fn held(&self) -> bool {
         matches!(self, Self::Held { .. } | Self::Finished { .. })
     }
@@ -83,6 +100,11 @@ impl Capture {
         #[cfg(test)]
         super::tests::timing::mark("serialize");
         let image = store.image();
+        if let Ok(image) = &image {
+            // bounded_image makes one Rust Vec after SQLite serialization. Its
+            // borrowed room write adds no copy, even if that write later refuses.
+            sample.copied.add(image.len());
+        }
         #[cfg(test)]
         let image = super::tests::timing::image_result(image);
         sample.phase_end(PhaseName::Capture)?;
