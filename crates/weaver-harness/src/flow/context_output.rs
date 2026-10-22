@@ -95,6 +95,7 @@ impl RecordingContext {
             });
         };
         if self.marks.is_some()
+            || self.boot_pairs.is_some()
             || !self.repair_allows_output()
             || self.freshness.is_some()
             || self.output.is_some()
@@ -109,6 +110,7 @@ impl RecordingContext {
             || self.input_author.is_some()
             || self.member_capture.is_some()
             || self.read.is_some()
+            || self.inspection.is_some()
             || self.measure_blocks_external()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()

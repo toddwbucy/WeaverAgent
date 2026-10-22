@@ -216,6 +216,7 @@ pub(super) struct RecordBarrier {
     pending_author: Option<AuthorTicket>,
     next_ticket: Option<u64>,
     admitted_before_failure: Option<Sequence>,
+    last_trace_only_sequence: Option<Sequence>,
     failure: Option<RecordFailure>,
 }
 
@@ -239,6 +240,7 @@ impl RecordBarrier {
             pending_author: None,
             next_ticket: Some(0),
             admitted_before_failure: None,
+            last_trace_only_sequence: None,
             failure: None,
         }
     }
@@ -544,6 +546,10 @@ impl RecordBarrier {
     pub(super) fn admitted_before_failure(&self) -> Option<Sequence> {
         self.admitted_before_failure
     }
+    /// Latest ordinary admission after tap stop, excluding terminal reserves.
+    pub(super) fn last_trace_only_sequence(&self) -> Option<Sequence> {
+        self.last_trace_only_sequence
+    }
 
     /// Only the halt owner calls this after stopping the tap. Reserved evidence
     /// bypasses an unadmitted ordinary author without taking or replacing it.
@@ -557,18 +563,27 @@ impl RecordBarrier {
         raw_ns: u64,
         wall_ms: u64,
     ) -> Result<Sequence, TerminalAuthorFailure> {
-        let result = author
-            .prepare(&event, raw_ns, wall_ms)
+        self.submit_terminal_authored_ref(&event, author, raw_ns, wall_ms)
+            .map_err(|detail| TerminalAuthorFailure { event, detail })
+    }
+
+    /// Borrow an original which its halt owner already retains on both outcomes.
+    pub(super) fn submit_terminal_authored_ref(
+        &mut self,
+        event: &AuthoredEvent,
+        author: &ServingAuthor,
+        raw_ns: u64,
+        wall_ms: u64,
+    ) -> Result<Sequence, String> {
+        author
+            .prepare(event, raw_ns, wall_ms)
             .map_err(|e| format!("terminal author: {e:?}"))
             .and_then(|prepared| {
                 self.recorder
                     .submit_terminal(prepared)
                     .map_err(|e| format!("terminal trace: {e:?}"))
-            });
-        match result {
-            Ok(submission) => Ok(submission.sequence),
-            Err(detail) => Err(TerminalAuthorFailure { event, detail }),
-        }
+            })
+            .map(|submission| submission.sequence)
     }
 
     /// A refusal already observed when serving stopped still owes a trace
@@ -624,14 +639,20 @@ impl RecordBarrier {
                 reason: weaver_trace::SubmitRefusal::PayloadMalformed,
             });
         }
-        let Some((event, _)) = self.pending.as_ref() else {
+        let Some((event, purpose)) = self.pending.as_ref() else {
             return Ok(None);
         };
+        if event.envelope.run.0 != self.run || !matches_purpose(event, purpose) {
+            return Err(weaver_trace::Failure::RefusedOnSubmit {
+                reason: weaver_trace::SubmitRefusal::PayloadMalformed,
+            });
+        }
         match self.recorder.submit(event.clone())? {
             SubmitAttempt::CapacityPending(_) => Ok(None),
             SubmitAttempt::Recorded(submission) => {
                 self.pending = None;
                 self.pending_author = None;
+                self.last_trace_only_sequence = Some(submission.sequence);
                 Ok(Some(submission.sequence))
             }
         }

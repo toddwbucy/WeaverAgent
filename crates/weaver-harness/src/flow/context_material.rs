@@ -1,9 +1,38 @@
-//! Context admission for read-backed material; conversion has no I/O continuation.
+//! Context admission for source-backed material; conversion has no I/O continuation.
 
 use super::*;
-use crate::flow::material::{self, HeldMaterial, MaterialError, MaterialFailure};
+use crate::flow::material::{
+    self, HeldMaterial, MaterialError, MaterialFailure, TaskMaterialError,
+};
 
 impl RecordingContext {
+    /// Only a completed begin_task can supply this fresh source. A raw seated
+    /// input or a cancelled/refused task account has no conversion into it.
+    pub(in crate::flow) fn hold_task_material(
+        &mut self,
+        task: BegunTask,
+        io: &mut impl PumpIo,
+    ) -> Result<HeldMaterial, TaskMaterialError> {
+        if let Err(failure) = self.live(io) {
+            return Err(TaskMaterialError {
+                kind: MaterialFailure::Unavailable,
+                task: Box::new(task),
+                failure: Some(failure),
+            });
+        }
+        if !task.belongs_to(self) {
+            return Err(self.task_material_error(
+                TaskMaterialError {
+                    kind: MaterialFailure::ForeignContext,
+                    task: Box::new(task),
+                    failure: None,
+                },
+                io,
+            ));
+        }
+        material::from_task(task).map_err(|error| self.task_material_error(error, io))
+    }
+
     pub(in crate::flow) fn hold_material(
         &mut self,
         read: RecordedRead,
@@ -59,21 +88,43 @@ impl RecordingContext {
     }
 
     fn material_error(&mut self, mut error: MaterialError, io: &mut impl PumpIo) -> MaterialError {
-        let detail = match error.kind {
-            MaterialFailure::ForeignContext => {
-                Some("material read belongs to another recording context")
-            }
-            MaterialFailure::Invalid(detail) => Some(detail),
+        error.failure = self.material_fault(
+            &error.kind,
+            "material read belongs to another recording context",
+            HaltPoint::StateReply,
+            io,
+        );
+        error
+    }
+
+    pub(super) fn task_material_error(
+        &mut self,
+        mut error: TaskMaterialError,
+        io: &mut impl PumpIo,
+    ) -> TaskMaterialError {
+        // The task producer and context association are harness-owned. Their
+        // invariant failures do not attribute a malformed reply to the member.
+        error.failure = self.material_fault(
+            &error.kind,
+            "material task belongs to another recording context",
+            HaltPoint::Barrier,
+            io,
+        );
+        error
+    }
+
+    fn material_fault(
+        &mut self,
+        kind: &MaterialFailure,
+        foreign: &'static str,
+        point: HaltPoint,
+        io: &mut impl PumpIo,
+    ) -> Option<RunFailure> {
+        let detail = match kind {
+            MaterialFailure::ForeignContext => Some(foreign),
+            MaterialFailure::Invalid(detail) => Some(*detail),
             _ => None,
         };
-        if let Some(detail) = detail {
-            error.failure = Some(self.fail(
-                io,
-                FlowHaltReason::ProtocolFailed,
-                HaltPoint::StateReply,
-                detail,
-            ));
-        }
-        error
+        detail.map(|detail| self.fail(io, FlowHaltReason::ProtocolFailed, point, detail))
     }
 }
