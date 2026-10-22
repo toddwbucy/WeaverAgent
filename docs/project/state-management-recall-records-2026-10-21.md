@@ -7,9 +7,10 @@ stacked on PR #225 at `01479f057ea54d81c81b5c5a4912986781b8ee29`.
 ## Behavior and authority
 
 The serving trace now accepts its own serialize-only RecallRecord, with closed read
-and boot variants. It reuses the existing seven trace identity/selector shapes and adds
-no Weaver crate dependency. Admission checks context-free selector constraints, positive
-snapshot IDs, source and span identities, unique sources, increasing binding ordinals,
+and boot variants. It reuses ReadSelector, ContentRef and SpanRef directly, plus
+StatementRef and PlanRef inside the selector shapes. It adds no Weaver crate dependency.
+Admission checks context-free selector constraints, positive snapshot IDs, source and
+span identities, unique sources, increasing binding ordinals,
 cited nonempty intervals and boot Message/end agreement. Repeated selected occurrences
 remain valid. The licensed envelope is recall/internal/runtime/harness with no turn.
 
@@ -54,6 +55,14 @@ restoration and a passing rerun. An initial adjacent-only duplicate rejection di
 affect the intentionally nonadjacent repeated-span fixture. The corrected all-prior
 duplicate rejection failed as required; both probe results remain in the evidence.
 
+[Planner review][planner-review] found that removing the ContentRef variant tag survived
+the source-identity fixture. The review follow-up adds a seed and an event with
+matching other key fields. Their distinct variants must remain admitted together.
+The review correction passed 150 trace tests, all-target trace clippy, lock and
+formatting checks using /tmp/weaver-146-trace-review-target. The tag-removal
+mutation compiled and failed the intended assertion; exact restoration passed.
+No production validation rule changed.
+
 Durable evidence is deposited under the shared bulk-store path
 `weaver-testing/state-management-146-olympus-2026-10-21/recall/`.
 Source and evidence manifests identify tested bytes. The local staging path is
@@ -63,3 +72,5 @@ Independent source review found no concrete defect and explicitly left harness s
 traversal and runtime diagnostic conversion ungraded. These author checks do not replace
 the Planner's grade or production qualification. This PR is submitted as a draft for
 the operator's review. Issue #146 remains open and only the operator merges.
+
+[planner-review]: https://github.com/toddwbucy/WeaverAgent/pull/226#pullrequestreview-5608872660

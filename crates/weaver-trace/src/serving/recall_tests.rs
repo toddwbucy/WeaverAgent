@@ -316,6 +316,15 @@ fn recall_source_uniqueness_uses_the_complete_tagged_content_identity() {
             seed_id: SEED.into(),
             ordinal: 1.into(),
         },
+        // The scalar fields equal the preceding seed's untagged key. The
+        // variant still makes this a distinct, legally cited content source.
+        ContentRef::Event {
+            block_id: SourceBlockId {
+                run: SEED.into(),
+                sequence: 1.into(),
+                block: 0.into(),
+            },
+        },
         ContentRef::Seed {
             seed_id: "a".repeat(32),
             ordinal: 0.into(),
