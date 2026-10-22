@@ -280,9 +280,11 @@ The operator authorized consolidation onto main. Runtime activation and deployme
 remain held until the coupled foundation cutover, and the old serving path stays
 active. Inward pair execution and boot repair, complete journal/place ownership,
 plan and forward-flag ports, serve-side selection, lifecycle/author migration,
-failed-run teardown and the complete cutover remain owed. Draft Specs #189, #192 and
-#213 are not implementation authority. OPEN-FACTS still lacks the identity-prefix
-open-measurement carrier. Production language artifacts, the separately reviewed
+failed-run teardown and the complete cutover remain owed. Specs #189, #192 and
+#213 are merged; their integration remains distinct from the primitive evidence
+recorded here. [Spec 06] specifies the paired OPEN-FACTS carrier proposal; approval
+and merge precede its separate producer/consumer implementation. Production
+language artifacts, the separately reviewed
 system prompt, measured limits and the required host instruments remain separate
 qualification obligations. Keep weaver-state, worker/dev_loop orchestration and
 SPU classification. Only the operator merges.

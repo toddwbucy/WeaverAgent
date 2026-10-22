@@ -413,12 +413,12 @@ H3b retains marks, measured proposal ownership and the between-turn grant. The
 existing serving loop remains active until the coupled cutover. The replacement
 decode vocabulary must not deploy separately from its complete consumers.
 
-H3b has a named open-measurement gap. Spec 06 OPEN-FACTS requires an identity-prefix
-label at open, while TYPES-DECODE specifies only four counts in Opened and leaves
-Generation unchanged. The existing SPU Spec section 6 emits no open measurement.
-No implementation may invent the missing carrier. The existing PromptPartition
-offset validator is also not wired into production measurement. Its unit tests
-cannot establish the section 6 tokenizer-offset requirement. These remain explicit
+H3b's paired Open evidence carrier is specified in Spec 06 OPEN-FACTS,
+TYPES-DECODE and SPU-OPEN. The proposal's approval and merge precede its separate
+producer/consumer act; the current code still returns only four Opened counts.
+Generation remains unchanged. The existing PromptPartition offset validator is
+also not wired into production measurement. Its unit tests cannot establish the
+section 6 tokenizer-offset requirement. These remain explicit implementation
 work for the SPU slice, not evidence supplied by its binding mechanics.
 
 H1a is [draft PR #198][filing], on code/state-harness-filing. Its branch joins
@@ -526,10 +526,10 @@ slice evidence above does not validate those later changes.
 The result grants no recall or placement authority. Draft #189 must settle the recall
 carrier before public recall, held-material and boot adapters complete. The later H3b1
 and H3bm slices below build on #197's internal SPU measurement primitive. Journal
-construction against read/material proofs remains owed. The OPEN-FACTS carrier gap above
-remains open. Outbound identity sort and noun extraction can proceed independently of
-serve-side selection and plan orchestration. No production language artifact is inferred
-from these fixtures.
+construction against read/material proofs remains owed. The OPEN-FACTS carrier work
+above remains open. Outbound identity sort and noun extraction can proceed independently
+of serve-side selection and plan orchestration. No production language artifact is
+inferred from these fixtures.
 
 H3b1 was published as #218 on code/state-decode-measurement, originally based on #184 at
 6d5e6b0d. It carries the exact required Opened body, MeasureDelta and DeltaMeasured on

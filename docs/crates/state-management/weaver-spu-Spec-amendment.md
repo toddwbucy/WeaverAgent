@@ -22,9 +22,6 @@ amendment extends that path. It adds no harness tokenizer, new session owner, sa
 representation or replacement decode operation. [PLACE-5, PLACE-6, DEFER-1,
 weaver-spu-PRD 13.4]
 
-The Open evidence [proposal and acceptance record][open-election] names this carrier
-act's choices and the implementation work still owed.
-
 ## 1. Rendering and open facts, destinations sections 4.2, 4.3 and 5
 
 This replacement applies at the [foundation cutover][cutover]. Until then, the previous
@@ -72,7 +69,7 @@ request = {rendered: String, template: String}
 measurement = {
     model: String,
     weights_hash: String,
-    input_tokens: Vec<u32>,
+    prefix_token_ids: Vec<u32>,
     blocks: [{label: "identity-prefix", start: 0, end: u64}]
 }
 ```
@@ -80,7 +77,7 @@ measurement = {
 request.rendered is the complete identity render used for this Open, including the
 family preamble, with no schema Message or generation opener. request.template uses
 the existing renderer template identity. measurement.model and weights_hash use the
-admitted residency's existing section 6 meanings. input_tokens is the actual ordered
+admitted residency's existing section 6 meanings. prefix_token_ids is the actual ordered
 vector supplied to this successful session.open, not a second tokenization. Its checked
 length equals prefix_tokens. blocks contains exactly one block, whose label is
 identity-prefix and whose UTF-8 byte interval is [0, request.rendered.len()). It covers
@@ -98,11 +95,11 @@ No prompt is read or filed again. [PROMPT-1, FLOW-3, STORE-8, COST-2]
 
 Only a successful Open returns these boxes. Existing ordering, column and family
 refusals grant no Opened evidence. Backend, encoding, channel or checked-conversion
-failure follows the existing component-failure path. If the complete evidence cannot
-fit the existing whole-message bound, fail the exchange without truncation or a second
-Open. Release temporary rendering and evidence after the answer, while retaining only
-the resident session's existing state. No new cancel exchange or success acknowledgment
-is added. [SEAM-2, PLACE-5, FLOW-4]
+failure follows the existing component-failure path. If the complete evidence cannot fit
+DECODE_MESSAGE_BOUND (8 MiB for the complete decode JSON message), fail the exchange
+without truncation or a second Open. Release temporary rendering and evidence after the
+answer, while retaining only the resident session's existing state. No new cancel
+exchange or success acknowledgment is added. [SEAM-2, PLACE-5, FLOW-4]
 
 ## 2. Measurement protocol, destinations sections 4.2, 6 and 9
 
@@ -291,6 +288,3 @@ existing ModernBERT implementation can supply this result. [CLASS-7, FLOW-7, PRO
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 [protocol]: state-management-spec-02-protocol-classifier-gate.md
 [contract]: weaver-harness-spu-ste100-contract.md
-
-[open-election]:
-../../project/state-management-open-facts-carrier-2026-10-21.md

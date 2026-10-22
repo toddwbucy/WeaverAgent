@@ -13,9 +13,6 @@ coder to design a contract. Representations live in the matching crate amendment
 PRD IDs name the reason for each obligation. All unnamed exchanges keep their existing
 meaning. A contract below must land with its parties' amendments.
 
-The Open evidence [proposal and acceptance record][open-election] names this carrier
-act's choices and the implementation work still owed.
-
 ## 1. Harness-trace contract, sections 2.1, 3, 4, 5, and 7
 
 This replacement applies at the [foundation cutover][cutover]. Until then, the previous
@@ -320,18 +317,19 @@ SPU-OPEN request/measurement boxes under TYPES-DECODE. The harness may rely on t
 facts, not on a token count it derives independently. [PLACE-1, PLACE-3, PLACE-5]
 
 The SPU guarantees that Opened's request is its single complete identity render, and
-the measurement's input_tokens are the vector used by its successful prefix prefill.
+the measurement's prefix_token_ids are the vector used by its successful prefix prefill.
 The one identity-prefix block covers that rendered UTF-8 byte interval. Template
 identity belongs only in request. No generation, timing or residual reading is invented.
 The harness checks the session, closed shape, count and interval agreement against its
 held request, complete send and exact reserved port. It preserves the raw boxes for the
 assembly-zero state.placement, causally linked to the previously Recorded boot recall.
 It does not render, tokenize or equate family-rendered text with canonical prompt Text.
-TRACE-PLACEMENT rejects malformed evidence and never projects it. [PROMPT-1, FLOW-3,
-PLACE-1, PLACE-5, SEAM-2, TAP-3]
+The harness refuses malformed evidence before authoring. TRACE-PLACEMENT checks its
+outer wrapper and event envelope while retaining the SPU boxes opaquely, and never
+projects them. [PROMPT-1, FLOW-3, PLACE-1, PLACE-5, SEAM-2, TAP-3]
 
 HARNESS-OPEN retains the complete exchange and author continuation under the original
-enter bound. Recorded placement plus checked fit and live admission permit journal
+enter bound. Recorded placement plus checked fit and HARNESS-OPEN-LIVE permit journal
 initialization, not a second BootHead. A valid Opened followed by failed configured fit
 still records its seated-prefix evidence before boot_failed. An SPU refusal or invalid
 answer supplies no accepted placement. Cancellation revokes readiness and may only
@@ -341,9 +339,14 @@ incomplete account. Preserve the first failure and the existing release duties. 
 Open retry, intermediate, acknowledgment or cancellation directive. [FLOW-3, FLOW-4,
 FLOW-5, PERSIST-6, SEAM-2]
 
-Both peers and trace must reject an answer or record exceeding their existing whole
-message bounds. They neither truncate the evidence nor retry Open. The paired cutover
-includes every decode client and serving trace reader. Diagnostic decode clients
+Both decode peers enforce DECODE_MESSAGE_BOUND on the complete Opened JSON message.
+The recorder has no per-record byte ceiling; TRACE-PLACEMENT requires qualification
+of the complete encoded line and retained memory, including envelope and escaping.
+The state member's request-line bound does not apply to this unprojectable record.
+Encoding or sink errors keep their existing failure disposition. Allocation failure
+never grants readiness; this carrier adds no recovery guarantee for process-wide
+allocation failure. No party truncates evidence or retries Open. The paired cutover includes every decode
+client and serving trace reader. Diagnostic decode clients
 validate the new Opened body and consume it without a new diagnostic trace event.
 Generation request/measurement events remain turn-bound, and diagnostic conversion of
 serving placement remains refused. No earlier additive deployment of the new wire is
@@ -478,6 +481,3 @@ cause. [FLOW-3, PLAN-5, PLACE-4]
 
 [cutover]:
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
-
-[open-election]:
-../../project/state-management-open-facts-carrier-2026-10-21.md

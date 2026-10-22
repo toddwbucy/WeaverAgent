@@ -13,9 +13,6 @@ section 10. It implements FLOW-1 through FLOW-8 and TAP-1 through TAP-5 at the t
 boundary. It requires the charter and harness-trace contract amendments in this packet.
 The crate still authors no event and owns no store interface.
 
-The Open evidence [proposal and acceptance record][open-election] names this carrier
-act's choices and the implementation work still owed.
-
 ## 1. Envelope and event registry, destination section 3
 
 This replacement applies at the [foundation cutover][cutover]. Until then, the previous
@@ -365,16 +362,44 @@ Assembly zero is the single boot placement, causally linked to the boot recall. 
 PLACE-5, MARK-6, COST-4]
 
 open_evidence is a required final field. It is null for cut and append, and for boot it
-is a serialize-only trace-owned wrapper {session:String,request:Box<RawValue>,
-measurement:Box<RawValue>}. Splice both SPU-OPEN boxes without normalization. Admit only
-their specified closed shapes, including checked u32 token elements, length equal to
-prefix_tokens, and one identity-prefix block covering the entire rendered UTF-8 string.
-Reject missing, duplicate or unknown members. The wrapper session equals the event's
-session. Boot requires prefix_tokens no greater than capacity, terminal_tokens one,
+is the serialize-only trace-owned OpenEvidenceRecord
+{request:Box<RawValue>,measurement:Box<RawValue>}. Splice both SPU-OPEN boxes without
+normalization. The trace owns this closed outer wrapper and requires both boxes
+to be JSON objects. It does not parse their members, token IDs, model identity or
+partition. HARNESS-OPEN checks those contents, including duplicate/unknown keys,
+token count and the whole-render interval, before authoring. This preserves the
+base trace Spec's custody: the organ owns the contents of its opaque boxes.
+[FLOW-3, PLACE-5, SEAM-2]
+
+Boot requires prefix_tokens no greater than capacity, terminal_tokens one,
 assembly zero, no turn, cut null, and a causal_parent naming the earlier boot recall.
-Trace validates the envelope and local structural agreement. The harness proves the
-held Open, source-port and causal-source correspondence. No template
-or family interpretation occurs here. [FLOW-3, PLACE-5, SEAM-2, PROMPT-1]
+Trace validates the event envelope, boot/nonboot wrapper presence and local outer
+placement fields. The harness proves the held Open, wire session echo, source port
+and causal-source correspondence. The event envelope already supplies the trace
+session; OpenEvidenceRecord has no additional session member. Serialize-only
+authoring does not give the trace a decoder for the SPU's measurement vocabulary.
+[FLOW-3, PLACE-5, SEAM-2, PROMPT-1]
+
+The serving recorder has entry-count capacity, not a per-record byte ceiling.
+DECODE_MESSAGE_BOUND limits the complete incoming Opened JSON message to 8 MiB;
+it does not bound the larger state.placement line with its trace envelope. Qualify
+the actual final encoded line, including all JSON escaping and its LF, and the
+simultaneously retained evidence/line memory under Spec 09's tuple. Record limits
+of external trace readers separately. No new recorder byte limit is elected by
+this carrier. Encoding or sink errors keep their existing trace
+failure disposition. Current infallible allocations may terminate the process; no
+new allocation-failure recovery is elected. A failed submission grants no Recorded;
+a later sink
+failure does not erase an already assigned Recorded sequence. No truncation or
+successful completion may be invented.
+[FLOW-3, FLOW-4, COST-4, COST-5]
+
+STATE_REQUEST_LINE_BOUND applies to state request frames and includes their LF.
+It is not a limit on this trace record: state.placement has no legal projection,
+so the active tee returns Unselected and emits no state filing for its evidence.
+The trace's canonical envelope parsing and sink write still process the whole
+record. Qualification therefore cannot infer trace-record capacity from the
+member's 8 MiB request bound. [TAP-3, SEAM-3, COST-4]
 
 The nested request/measurement are Open evidence, not model.request/model.measurement
 events. Those generation kinds remain turn-bound. Boot placement can account for a
@@ -700,6 +725,3 @@ implementer to guess payload shapes.
 
 [cutover]:
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
-
-[open-election]:
-../../project/state-management-open-facts-carrier-2026-10-21.md

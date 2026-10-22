@@ -25,9 +25,6 @@ change the framing ruling in weaver-spu-PRD section 13.4. The PRD's harness rend
 message-level place, with token facts supplied by the SPU. [PLACE-1, PLACE-5, PLACE-6,
 DEFER-1, October 18 R7]
 
-The Open evidence [proposal and acceptance record][open-election] names this carrier
-act's choices and the implementation work still owed.
-
 ## 1. Marks and their creation
 
 **IDENTITY.** Use SpanRef {seed_id, local_id, revision} from the foundation. Counters
@@ -249,8 +246,8 @@ u64 facts {prefix_tokens,capacity,generation_limit,terminal_tokens}, and the two
 JSON boxes request and measurement defined by SPU-OPEN in the
 [SPU amendment][open-spu]. The prefix is the SPU family's rendering of the boot system
 prompt and is made resident once. It is never appended again. Opened.prefix_tokens is
-the floor of N for that session. The actual input token vector and the identity-prefix
-byte partition are open
+the floor of N for that session. The actual prefix_token_ids vector and the
+identity-prefix byte partition are Open
 measurement evidence, with template identity only in request. No timing or generation
 reading is invented. generation_limit is the resolved max-tokens-per-turn, including
 the OperatorTunable value that the harness cannot infer from the declaration.
@@ -375,7 +372,7 @@ authoring state.mark.position. [MARK-1, MARK-3, MARK-6]
 
 | Source | Required evidence and exact endpoint |
 | --- | --- |
-| boot | Recorded boot recall, matching validated Opened, Recorded boot placement, checked fit and live admission under HARNESS-OPEN. Span is the seeded system span and end is head |
+| boot | Recorded boot recall, matching validated Opened, Recorded boot placement, checked fit and HARNESS-OPEN-LIVE. Span is the seeded system span and end is head |
 | placed | A successful complete append containing one whole closed-span unit. End is the last block of that unit's last Message, including any complete attached return |
 | native task prompt | Filed begin_task or operator plan effect and the prompt's complete held Text is present in one current source-map interval. End is that interval's end |
 | native execution end | Filed close/retire effect for an observed active task, subtask or step. End is the logical argument end after its last completed generation and before later-scope generation |
@@ -684,22 +681,25 @@ content. Each newly authored loop instruction has its own earlier event under FL
 Held material cites its original source. The assembled argument record includes the
 complete selected canonical messages, including the boot head by reference, without
 filing them again. open_evidence is required and is null for cut and append. For boot
-it is exactly {session,request,measurement}, with the Opened session string and the
-unchanged SPU-OPEN raw boxes. Its session equals the containing trace session and the
-held Open request. Its input-token length equals placement.prefix_tokens. It grants no
-selectable content or generation event. [FLOW-3, FLOW-8, MARK-6, COST-4]
+it is exactly {request,measurement}, the unchanged SPU-OPEN raw boxes. The harness
+checks the Opened session echo against the held request and trace session before
+conversion; the trace wrapper adds no redundant session. The measurement's
+prefix_token_ids length equals placement.prefix_tokens. It grants no selectable
+content or generation event. [FLOW-3, FLOW-8, MARK-6, COST-4]
 
 Reserve assembly_id zero for boot. After a validated Opened, record one turnless
 state.placement with phase boot, cut null, N and resident_before both prefix_tokens,
 input_tokens zero, empty unit_map and message_ids, null assistant_message_id and
-recomputed_messages zero.
-wait_ns is the completed open wait, excluding recorder wait. Its causal_parent names
-the earlier boot recall that recorded the full system Message. Subsequent assembly IDs
-start at one. The record accounts for a seated prefix, including when the valid facts
-subsequently fail the configured fit. That case records the boot placement and then the
-existing boot_failed enter refusal, with no journal readiness or user gate. An SPU Open
-refusal or invalid answer has no accepted boot placement. Only Recorded plus successful
-fit and live admission releases initialized journal/decoder-use authority and boot mark
+recomputed_messages zero. Placement.input_tokens counts an appended delta; boot appends
+no delta. Open evidence measurement.prefix_token_ids is the separate actual
+prefix-prefill vector; its length is prefix_tokens, not placement.input_tokens. wait_ns
+is the completed open wait, excluding recorder wait. Its causal_parent names the earlier
+boot recall that recorded the full system Message. Subsequent assembly IDs start at one.
+The record accounts for a seated prefix, including when the valid facts subsequently
+fail the configured fit. That case records the boot placement and then the existing
+boot_failed enter refusal, with no journal readiness or user gate. An SPU Open refusal
+or invalid answer has no accepted boot placement. Only Recorded plus successful fit and
+HARNESS-OPEN-LIVE releases initialized journal/decoder-use authority and boot mark
 readiness. HARNESS-OPEN owns interruption and teardown accounting under the existing
 bounds. There is no second prompt read, filing or Open. [PROMPT-1, PERSIST-6, PLACE-1,
 FLOW-3, FLOW-4]
@@ -837,9 +837,6 @@ FLOW-7]
 
 [transition]:
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
-
-[open-election]:
-../../project/state-management-open-facts-carrier-2026-10-21.md
 
 [open-spu]:
 weaver-spu-Spec-amendment.md

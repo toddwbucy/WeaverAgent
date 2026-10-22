@@ -14,9 +14,6 @@ implemented `[state-management]` parser despite the apex declaring that table. T
 amendment implements that table's flow portion. It does not add a third config reader or
 change Message. [TAP-1, TAP-2, SEAM-2]
 
-The Open evidence [proposal and acceptance record][open-election] names this carrier
-act's choices and the implementation work still owed.
-
 ## 1. Declaration representation, destination section 2
 
 This replacement applies at the [foundation cutover][cutover]. Until then, the previous
@@ -954,10 +951,19 @@ PLACE-3, PLACE-5, PLACE-6]
 | --- | --- |
 | TokenDirective::AppendAndGenerate | Existing turn:TurnKey and delta:Vec<Message>, plus tool_schemas:Vec<String> |
 | TokenDirective::MeasureDelta | keep:u64, delta:Vec<Message>, tool_schemas:Vec<String> |
-| TokenAnswer::Opened | session:SessionId, prefix_tokens:u64, capacity:u64, generation_limit:u64, terminal_tokens:u64, request:Box<RawValue>, measurement:Box<RawValue> |
+| TokenAnswer::Opened(Opened) | Adjacent-tag body is the named Opened wrapper below |
 | TokenAnswer::DeltaMeasured | resident:u64, prefix_tokens:u64, keep:u64, input_tokens:u64, capacity:u64 |
 | TokenAsk::MeasureDelta | keep:u64, under TokenAsk's existing ask tag |
 | RefusalRecord::Placement | assembly_id:DecimalU64, code:PlacementCode, detail:String, seam value placement |
+
+Opened is a named struct with session:SessionId, prefix_tokens:u64, capacity:u64,
+generation_limit:u64, terminal_tokens:u64, request:Box<RawValue> and
+measurement:Box<RawValue>, in that wire field order. It derives Debug, Clone,
+Serialize and Deserialize, and implements PartialEq manually: compare the session
+and every count normally and compare each raw box's get() bytes exactly. This keeps
+TokenAnswer's PartialEq contract without requiring RawValue to implement it. Use
+Generation's existing raw-box comparison pattern; no parse or normalization enters
+equality. Unknown or duplicate outer fields refuse. [PLACE-1, PLACE-5, SEAM-2]
 
 PlacementCode is invalid_span, invalid_pair, invalid_cut, head_over_capacity,
 tail_over_capacity, generation_room or stale_position, as PLACE-PORT uses. No new
@@ -968,8 +974,10 @@ session, evidence box or schemas member is defaulted. An empty schema list is ex
 Reject unknown or duplicate outer fields. SessionId is the unchanged String newtype
 and echoes the exact Open.session. The floor carries the two raw boxes without
 normalization or interpreting their contents, as Generation does. SPU-OPEN owns their
-closed contents and the harness/trace checks. No new floor measurement mirror or
-generation variant is introduced. [PLACE-3, PLACE-4, PLACE-5, SEAM-2]
+closed contents and HARNESS-OPEN validates them. TRACE-PLACEMENT owns only its
+outer wrapper and envelope checks, retaining those contents as opaque boxes.
+No new floor measurement mirror or generation variant is introduced.
+[PLACE-3, PLACE-4, PLACE-5, SEAM-2]
 
 CUT-RELOAD's ReloadTail, ReloadItem, StagedTail, Staged, ReloadRefused, Busy and
 ReloadCode are private harness types defined by Spec 06. They add no wire arm.
@@ -1005,6 +1013,3 @@ state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 [canonical]: ../weaver-trace/weaver-trace-Spec.md#2-canonical-form
 [empty-correction-ruling]:
 https://github.com/toddwbucy/WeaverAgent/pull/213#issuecomment-6330669954
-
-[open-election]:
-../../project/state-management-open-facts-carrier-2026-10-21.md
