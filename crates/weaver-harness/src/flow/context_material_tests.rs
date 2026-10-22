@@ -1041,3 +1041,16 @@ fn material_different_calls_cannot_reuse_one_source_event_for_different_payloads
     assert!(error.failure.is_some());
     assert_eq!(error.reads[0].raw_bytes(), bytes);
 }
+
+#[test]
+fn journal_retains_real_read_provenance_and_keeps_repeated_pairs_separate() {
+    let mut member = Member::new();
+    let mut entry = filtered();
+    entry.pairs.push(external(0, 1));
+    let proof = read(&mut member, history(), entries(vec![entry.clone()]));
+    let held = hold(&mut member, proof);
+    let mut other = Member::new();
+    let proof = read(&mut other, history(), entries(vec![entry]));
+    let mut foreign = hold(&mut other, proof).into_units();
+    crate::flow::journal::exercise_material(held.into_units(), foreign.remove(0));
+}

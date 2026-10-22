@@ -14,6 +14,7 @@ mod coordinator;
 mod halt_snapshot;
 mod input;
 mod intake;
+mod journal;
 mod ledger;
 mod material;
 mod mirror;

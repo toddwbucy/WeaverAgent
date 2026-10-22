@@ -41,6 +41,10 @@ pub(in crate::flow) struct RecordedRead {
 }
 
 impl RecordedRead {
+    pub(in crate::flow) fn origin(&self) -> &std::sync::Arc<()> {
+        &self.origin
+    }
+
     pub(in crate::flow) fn belongs_to(&self, context: &RecordingContext) -> bool {
         std::sync::Arc::ptr_eq(&self.origin, &context.read_origin)
     }
