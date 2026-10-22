@@ -123,6 +123,7 @@ pub(super) struct ReadTransaction {
 #[allow(clippy::large_enum_variant)] // Retain exact boot inputs in the one read owner.
 enum ReadPurpose {
     Ordinary,
+    Marks,
     Boot {
         start: StartIdentity,
         enter: AbsoluteBound,
@@ -161,6 +162,14 @@ impl RecordingContext {
         self.begin_read_with_purpose(selector, turn, ReadPurpose::Ordinary, io)
     }
 
+    pub(super) fn begin_marks_read(
+        &mut self,
+        turn: TurnRef,
+        io: &mut impl PumpIo,
+    ) -> Result<(), ReadBeginError> {
+        self.begin_read_with_purpose(ReadSelector::Marks {}, Some(turn), ReadPurpose::Marks, io)
+    }
+
     #[allow(clippy::result_large_err)]
     fn begin_read_with_purpose(
         &mut self,
@@ -188,7 +197,8 @@ impl RecordingContext {
                 failure: None,
             });
         }
-        if self.read.is_some()
+        if (self.marks.is_some() && !matches!(purpose, ReadPurpose::Marks))
+            || self.read.is_some()
             || self.measure_blocks_external()
             || self.member_capture.is_some()
             || self.output.is_some()
@@ -296,6 +306,9 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<ReadProgress, RunFailure> {
         self.live(ports.io)?;
+        if self.marks_blocks_external() {
+            return Err(RunFailure::MarksOwned);
+        }
         self.read_wait_matches(ports.io)?;
         if self.read_blocks_reduction() {
             return self.advance_read_recall(ports);
@@ -321,6 +334,9 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<ReadCompletion>, RunFailure> {
         self.live(io)?;
+        if self.marks_blocks_external() {
+            return Err(RunFailure::MarksOwned);
+        }
         if self
             .read
             .as_ref()
@@ -363,6 +379,9 @@ impl RecordingContext {
     /// a caller defect and uses the same protocol-failure path as other owners.
     pub(in crate::flow) fn cancel_read(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         self.live(io)?;
+        if self.marks_blocks_external() {
+            return Err(RunFailure::MarksOwned);
+        }
         self.read_wait_matches(io)?;
         self.read.as_mut().expect("checked read owner").cancelled = true;
         Ok(())
@@ -545,7 +564,9 @@ impl RecordingContext {
             } else {
                 let completed = read.released.as_ref().unwrap().as_ref().unwrap();
                 let record = match &mut read.purpose {
-                    ReadPurpose::Ordinary => completed.recall().map_err(|error| error.to_string()),
+                    ReadPurpose::Ordinary | ReadPurpose::Marks => {
+                        completed.recall().map_err(|error| error.to_string())
+                    }
                     ReadPurpose::Boot {
                         start, candidate, ..
                     } => BootCandidate::prepare(completed, start).map(|(held, record)| {

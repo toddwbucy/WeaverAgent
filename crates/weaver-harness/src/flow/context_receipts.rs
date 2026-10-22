@@ -64,6 +64,7 @@ pub(super) enum FilingOwner {
     Ordinary,
     Pair,
     Outbound,
+    Marks,
 }
 
 pub(super) struct FilingTransaction {
@@ -87,7 +88,7 @@ impl RecordingContext {
         key: PumpDeadline,
         io: &mut impl PumpIo,
     ) -> Result<(), FilingBeginError> {
-        if self.repair_blocks_external() {
+        if self.marks.is_some() || self.repair_blocks_external() {
             return Err(FilingBeginError {
                 event,
                 refusal: FilingBeginRefusal::Busy,
@@ -453,6 +454,23 @@ impl RecordingContext {
             recorded_ns,
             receipts,
         }))
+    }
+
+    /// Withdraw only an original that has not reached the recorder ticket.
+    /// A pending/admitted author keeps its owed filing even during cancellation.
+    pub(super) fn withdraw_unstarted_mark(&mut self) -> Option<AuthoredEvent> {
+        let owner = self.filing.as_ref()?;
+        if owner.owner != FilingOwner::Marks
+            || owner.sequence.is_some()
+            || self.barrier.pending_author().is_some()
+            || self.waiting_content.is_none()
+        {
+            return None;
+        }
+        let event = self.waiting_content.take();
+        self.flow.cancel_filing_receipts();
+        self.filing = None;
+        event
     }
 
     pub(in crate::flow) fn cancel_filing(&mut self) {
