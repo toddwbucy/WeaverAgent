@@ -319,19 +319,20 @@ at load. No label-score answer satisfies this trait. The production adapter uses
 02's CHANNEL and PORT, preserving this near side. [CLASS-2, CLASS-7, CLASS-8, R10]
 
 Validate bindings for a Text block without normalizing its bytes: target and scheme,
-nonempty ordered statements, valid UTF-8 spans, one or more nouns within each statement,
-condition nullability, and verb dictionary membership. Author each complete Ste100Reply
-as ste100.result before using it, including template replies during enter. The load
-event precedes those replies and records their input inventory, not future results. The
-model result target exists even when the partition did not select that source. Correct
-rejection then authorizes repair but no filing. Invalid result shape is a component
-failure. [CLASS-2, CLASS-9, STORE-3, SORT-4]
+nonempty ordered statements, valid UTF-8 spans, one or more nouns in each binding within
+that binding's statement_span, condition nullability, and verb dictionary membership.
+Author each complete Ste100Reply as ste100.result before using it, including template
+replies during enter. The load event precedes those replies and records their input
+inventory, not future results. The model result target exists even when the partition
+did not select that source. Correct rejection then authorizes repair but no filing.
+Invalid result shape is a component failure. [CLASS-2, CLASS-9, STORE-3, SORT-4]
 
 **HARNESS-RECALL-REFUSAL.** The model association and repair owners implement
 Spec 02 RECALL-REFUSAL before constructing an inward pair or query. The accepted
 association account alone supplies the reserved CallId, original Text index, exact
-StatementRef and shape facts to TYPES-RECALL-REFUSAL. An Accepted Text reply with zero
-nouns fails HARNESS-CLASSIFY before that account exists. No guessed subject or unchecked
+StatementRef and shape facts to TYPES-RECALL-REFUSAL. An Accepted Text reply with a
+zero-noun binding fails HARNESS-CLASSIFY before that account exists, even if another
+binding shares its statement_span and has a noun. No guessed subject or unchecked
 caller vector may construct the operation refusal. [READ-3, CLASS-2, CLASS-8, CLASS-9]
 
 Author the existing refusal kind through HARNESS-AWAIT-AUTHOR, with internal/runtime,

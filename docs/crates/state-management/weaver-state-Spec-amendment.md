@@ -707,8 +707,9 @@ conformance outcome. [PAIR-1, PAIR-4, CLASS-8]
 
 For a recall opening, require exactly one noun on the held binding, no governing
 condition and subject bytes equal to that noun. Membership among several nouns is not
-sufficient. Refuse invalid_pair with full rollback on mismatch, and apply the same
-checks when validating saved pairs for adoption. The harness owns recall-key recognition
+sufficient. A live filing refuses invalid_pair with full rollback on mismatch.
+STATE-ADOPT applies the same shape check to saved pairs under its open refusal family.
+The harness owns recall-key recognition
 and the distinct RECALL-REFUSAL operation before pair creation. These store checks
 enforce the existing valid recall shape, without a new pair variant, classifier call or
 catalog change. [READ-3, PAIR-4, PERSIST-4, CLASS-2]
@@ -1226,19 +1227,22 @@ exact state-content/1 catalog, quick_check success, no foreign_key_check rows, o
 store_meta row, one complete system_prompt span and valid bindings. Compare that row's
 scheme_id to open.scheme_id and its seed_id to open.start.seed_id. Compare the last
 committed source position to open.start.position. Refuse scheme_mismatch on a scheme
-difference and open_failed on any other structural difference. Echo the verified scheme
-and StartIdentity in opened. Adopt once only after every check. For marks, validate
-consecutive local IDs, revision 1, permitted parent/kind pairs, one open path, one
-prompt child per task, source and prefix references, all UTF-8 and binding boundaries,
-and matching source contexts/effects. Recompute every runtime terminal span's canonical
-members at its recorded end and compare them with span_member byte for byte and ordinal
-for ordinal. Check its fixed pair frontier. Open spans have no finalized members. The
-seed is the sole source-free closed span. Refuse a structurally inconsistent image
-rather than repairing it. [MARK-1, MARK-3, MARK-5, PERSIST-6] No old Election argument
-or index_election runs. A failure leaves no serving store and refuses open. Pass means
-schema and structural integrity of those bytes, not semantic truth or authorization of
-an operator's prior choices. The evidence is the verified image A and the measured
-catalog/check results. [PERSIST-3, PERSIST-6, STORE-3]
+difference and open_failed on any other structural difference. For every saved recall
+pair, require its held binding to have exactly one noun, no governing condition and
+subject bytes equal to that noun, as in STATE-PAIR-FILE. A mismatch refuses open_failed
+before adoption. It is not a live invalid_pair filing refusal and changes no saved row.
+Echo the verified scheme and StartIdentity in opened. Adopt once only after every check.
+For marks, validate consecutive local IDs, revision 1, permitted parent/kind pairs, one
+open path, one prompt child per task, source and prefix references, all UTF-8 and
+binding boundaries, and matching source contexts/effects. Recompute every runtime
+terminal span's canonical members at its recorded end and compare them with span_member
+byte for byte and ordinal for ordinal. Check its fixed pair frontier. Open spans have no
+finalized members. The seed is the sole source-free closed span. Refuse a structurally
+inconsistent image rather than repairing it. [MARK-1, MARK-3, MARK-5, PERSIST-6] No old
+Election argument or index_election runs. A failure leaves no serving store and refuses
+open. Pass means schema and structural integrity of those bytes, not semantic truth or
+authorization of an operator's prior choices. The evidence is the verified image A and
+the measured catalog/check results. [PERSIST-3, PERSIST-6, STORE-3]
 
 **STATE-CAPTURE.** After the harness barrier, serialize the current in-memory SQLite
 connection to a complete RAM image, as Store::image does today. Serving remains paused
@@ -1344,7 +1348,7 @@ weaver-state dependency of any kind. [FLOW-4, FLOW-5, SEAM-2, SCOPE-1]
 | STATE-MODE | Process launch matrix and preload probes | Infer mode from frame or allow serving preload |
 | STATE-CHANNEL | Every row, partial writes, exact frame limits | Accept second open, over-bound frame, or premature second exchange |
 | STATE-SEED | Seed-mode process test, TYPES-SEED corpus and live-writer refusal | Seed an existing store, ignore a supplied scheme/checker mismatch or admit prompt without end mark |
-| STATE-ADOPT | Wrong catalog/hash/span/foreign-key images | Adopt before every check or accept old one-file format |
+| STATE-ADOPT | Wrong catalog/hash/span/foreign-key images and saved compound/conditional recall pairs | Adopt before every check, weaken recall shape to noun membership, use a live filing refusal for an invalid image or accept old one-file format |
 | STATE-CAPTURE | Member-room process fixture with size and disk failures | Publish partial image or mutate during capture |
 | STATE-CIRCUIT-INSTRUMENT | Spawned member, real recorder and response proxy | Skip a missing binary, accept a held/corrupted receipt, resend uncertain filing or query a hidden test door |
 | STATE-NO-SAVE | Kill at each capture/confirmation boundary | Recover an unconfirmed image as latest |

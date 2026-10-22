@@ -333,11 +333,14 @@ statement and request identities from Spec 02. Unknown, duplicated or foreign-so
 identities refuse invalid_candidate. This first implementation performs no ranking,
 authorization or dispatch. Spec 02 RECALL-REFUSAL dispositions remain in the private
 repair account, outside the conforming request list. Their CallIds cannot construct a
-SortAct::Recall, although their accepted effective statements remain statement
-candidates. Sort never converts a refused ID into a pair or chooses a final-answer
-policy. More criteria require an explicit Spec addition. Reason: a sort selects acts,
-while execution remains with the caller and the relevant permission boundary. [OUT-1,
-OUT-2, SORT-1, SORT-4]
+SortAct::Recall. Their accepted statements remain in EffectiveEmission.statements and
+text. If the caller selects their accepted Text block as answer material, the existing
+SortAct::Answer carries that block's SourceBlockId under the ordinary source-order rule.
+No SortAct carries a bare StatementRef, and retaining a statement does not automatically
+select an Answer act. Sort never converts a refused ID into a pair or chooses a
+final-answer policy. More criteria require an explicit Spec addition. Reason: a sort
+selects acts, while execution remains with the caller and the relevant permission
+boundary. [OUT-1, OUT-2, SORT-1, SORT-4]
 
 **SELECTION-STATES.** One selection owns its immutable prefix and candidate snapshot
 until its result or refusal. The port does not hold an open store cursor while

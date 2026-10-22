@@ -67,12 +67,13 @@ both the trace and declaration parser. [TAP-1, TAP-3]
 
 The existing refusal kind also carries the harness-authored raw encoding of
 TYPES-RECALL-REFUSAL. It has no selectable projection. For that variant the harness
-licenses internal/runtime, subsystem harness, the same open turn and the checked
-statement event as causal_parent under Spec 02 RECALL-REFUSAL. Trace keeps its existing
-refusal payload representation and envelope checks. The harness validates the floor
-carrier and its checked source proof before submission. Trace gains no floor dependency,
-new kind or pair mirror, and does not infer bindings from the refusal payload. [FLOW-3,
-TAP-1, TAP-5, READ-3]
+licenses internal/runtime, subsystem harness, the same open turn and the sequence of the
+message.assistant containing the referenced checked statement as causal_parent under
+Spec 02 RECALL-REFUSAL. The parent is not the ste100.result sequence. Trace keeps its
+existing refusal payload representation and envelope checks. The harness validates the
+floor carrier and its checked source proof before submission. Trace gains no floor
+dependency, new kind or pair mirror, and does not infer bindings from the refusal
+payload. [FLOW-3, TAP-1, TAP-5, READ-3]
 
 `input_id` is a run-local decimal-string counter assigned by the harness at serialized
 check intake, before input.offered authoring, under Spec 02's INPUT. The gate deadline

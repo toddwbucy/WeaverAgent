@@ -16,11 +16,12 @@ FOUNDATION-TRANSITION's coupled cutover remains in force. The pure recall helper
 
 ## Existing authority and the gap
 
-Spec 02 MODEL requires one or more object spans. BINDING and PORT reject malformed
-Accepted evidence before a checked generation exists. An Accepted zero-noun result
-therefore follows invalid_result/component failure. A correct non_ste100 judgment can
-instead lead to ordinary Text repair. Neither result licenses a guessed recall CallId
-or accepted StatementRef. This proposal preserves that boundary and the pinned grammar.
+Spec 02 MODEL requires one or more object spans per binding. BINDING and PORT reject
+malformed Accepted evidence before a checked generation exists. An Accepted zero-noun
+binding therefore follows invalid_result/component failure. A correct non_ste100
+judgment can instead lead to ordinary Text repair. Neither result licenses a guessed
+recall CallId or accepted StatementRef. This proposal preserves that boundary and the
+pinned grammar.
 
 Several nouns and a governing condition are valid general Binding shapes, but RECALL
 requires exactly one noun without a condition. Its previous blanket typed-refusal
@@ -50,12 +51,14 @@ Its count is positive, and either the count differs from one or a condition exis
 TYPES-RECALL-REFUSAL defines strict representation and Spec 02 RECALL-REFUSAL owns its
 meaning. There is no optional subject or string-encoded identity.
 
-The harness authors the existing refusal kind as internal/runtime, subsystem harness,
-in the same open turn, parented to the checked statement's message.assistant. It
-retains the event and evidence before admission and the receipt before another fallible
-step. The private repair account exposes Recorded refusals alongside valid requests.
-No refused ID enters a SortAct::Recall. Accepted selected statements still file, and
-unrelated requests retain their identities. The original CallId and corrected
+The harness authors the existing refusal kind as internal/runtime, subsystem harness, in
+the same open turn, parented to the checked statement's message.assistant. It retains
+the event and evidence before admission and the receipt before another fallible step.
+The private RepairAccount exposes an ordered recall_refusals view of
+RecordedRecallRefusal {refusal:RecallRequestRefusal,sequence:DecimalU64} alongside valid
+requests. Both EffectiveEmission and RepairExhausted retain that account in their exact
+field lists. No refused ID enters a SortAct::Recall. Accepted selected statements still
+file, and unrelated requests retain their identities. The original CallId and corrected
 StatementRef of a repaired external sibling remain separate identities.
 
 A correction containing malformed recall records correction_call once for that pass,
@@ -70,6 +73,16 @@ and original bounds apply. There is no new teardown reserve or late success afte
 | Refuse before pair creation, proposed | One typed identity carrier and an explicit exception to recall pair creation. The loop can inspect the operation refusal without a fabricated tool result. Valid pair, read and material representations stay unchanged. |
 | Pair every invalid request | Add an invalid-recall PairRequest variant carrying exact binding/defect evidence and expand PAIR-OPEN beyond conforming requests. Existing completed/null-reason/ToolOutcome::Refused can carry its terminal with execution null. Store filing/adoption, trace mirrors, read material, result grants and boot repair all need corresponding authority. This is the alternative if a stored pair and model-facing return are required. |
 | Reject the language in the checker | Requires a separate grammar and qualification election. Harness cannot relabel a presently valid compound or conditional binding as non_ste100. |
+
+The proposed choice gives the model no ToolResult or other new feedback for the invalid
+request. attempted_call remains true. A model that repeats a compound recall such as
+"Recall the pump and the valve." can emit it each round until the caller's existing
+round limit. The operation does not become a grammar defect or automatically request
+restatement. READ-3's query-and-return behavior applies to a valid inward request. The
+operator is electing this trace/caller-only outcome against the invalid-pair variant
+above, which would supply stored pair evidence and a model-facing refusal. This proposal
+does not hide that loss of direct model feedback or supply a new loop policy to repair
+it.
 
 Existing NotDispatched causes describe conforming requests barred by purpose or
 lifecycle. NotGranted belongs to missing external permission. EmptySubject describes
@@ -88,8 +101,8 @@ no matches, so it cannot stand for a query that never existed.
 | Harness | Checked association proof, source envelope, retained author/receipt, original Decision bound and once-only correction accounting. |
 | Internal | Refuse invalid shape before constructing a query. Keep the pure constructor and exact-byte borrow contract. |
 | Trace | Carry the existing raw refusal payload with no projection. Harness validates typed domain evidence, trace retains its envelope duty and no floor dependency. |
-| Spec 08 | Keep refused request IDs outside identity-sort candidates while retaining accepted statement candidates. |
-| State | Enforce one held noun, no condition and exact subject equality on filing and adoption, with rollback. No classifier or new catalog. |
+| Spec 08 | Keep refused request IDs outside Recall acts. Accepted effective statements remain available through the existing block-level Answer identity when the caller chooses it, with no bare-StatementRef SortAct or automatic answer selection. |
+| State | Enforce one held noun, no condition and exact subject equality. Live filing refuses invalid_pair with rollback. STATE-ADOPT refuses open_failed before adopting an invalid saved pair. No classifier or new catalog. |
 | Harness/state and harness/SPU contracts | State each party's checking boundary without moving grammar judgment, adding a seam or enlarging gate tools. |
 
 Gate, admin, diagnostic, decoder and the pure query library gain no new message or
@@ -102,14 +115,14 @@ placement grant, a generation permission or a final-answer policy.
 | Boundary | Required fixture and protective change |
 | --- | --- |
 | Shape | Several nouns, one noun with condition, both defects and a valid one-noun request. Selecting or concatenating a subject must fail. |
-| Classifier | Accepted zero-noun reply fails before association, while a real non_ste100 nounless Text takes ordinary repair. Creating a recall refusal from malformed Accepted evidence must fail. |
-| Identity | Mixed external and inward requests, later valid recall ordinals, and a repaired external sibling. Renumbering CallId or replacing corrected StatementRef with original source must fail. |
-| Codec and envelope | Exact tagged payload, positive count and invalid-shape predicates, strict keys, source turn and causal_parent. Losing an identity, changing detail or accepting a duplicate key must fail. |
+| Classifier | An Accepted zero-noun binding fails before association, including when a sibling binding shares its statement_span and has a noun. A real non_ste100 nounless Text takes ordinary repair. Creating a recall refusal from malformed Accepted evidence must fail. |
+| Identity and order | Mixed external and inward requests, later valid recall ordinals, and a repaired external sibling. Malformed refusals precede EffectiveEmission release while conforming pair records retain their source-content order. Renumbering CallId, requiring a global merged order or replacing corrected StatementRef with original source must fail. |
+| Codec and envelope | Exact tagged payload, positive count and invalid-shape predicates, strict keys, source turn and message.assistant causal_parent. Losing an identity, changing detail, parenting to ste100.result or accepting a duplicate key must fail. |
 | Recorder | Actual capacity pressure and a lifecycle wait after Recorded but before continuation. Early exposure, duplicate authoring or lost receipt must fail. |
-| Repair | Several malformed recalls plus valid correction calls below and at cap. Missing correction_call, missing per-request refusal or incrementing failed_corrections before complete accounting must fail. |
+| Repair | Several malformed recalls plus valid correction calls below and at cap. EffectiveEmission and RepairExhausted expose the exact ordered refusal payloads and Recorded sequences. Missing correction_call, losing that account or incrementing failed_corrections before complete accounting must fail. |
 | Cancellation | Stop and leave before and after author admission, under the original bound. Discarding accepted work, renewing the interval or releasing later success must fail. |
 | Excluded effects | Query, state, gate and pair spies on malformed requests. A read, opening, ToolResult or empty-success result must fail. |
-| Existing store obligation | Forged compound/conditional openings, transaction rollback and saved-image adoption. Mere subject membership must not satisfy exact valid recall shape. |
+| Existing store obligation | Forged compound/conditional openings, transaction rollback and saved-image adoption. Mere subject membership must not satisfy exact valid recall shape. Live invalid_pair and adoption open_failed remain distinct, and neither commits invalid holdings. |
 | Valid inward call | Exact subject bytes, bounded read/release and a real pair terminal for read refusal. Omitting the terminal or mapping refusal to empty history must fail. |
 
 Compile each behavioral mutation and run its named assertion, then restore the exact
@@ -127,3 +140,21 @@ proposed rule. This is not a Planner grade or operator approval.
 The lock gate passed. Draft PR #241 retains this proposal and the required evidence
 list. No Cargo test, runtime source change or qualification run is claimed. Planner
 verification, operator election and merge remain required before implementation.
+
+## Planner consistency follow-up
+
+Review [5609645425][review] found seven documentation issues in the proposal. The
+correction supplies the exact private account carriers, the saved-pair adoption check
+and its existing open_failed family, the per-binding noun minimum, the precise
+message.assistant parent, the existing Answer act representation and the distinction
+between pre-pair refusal recording and conforming pair order. The model-feedback
+tradeoff is explicit above and remains part of the operator's pending election.
+
+These are proposal corrections, not an approval or implementation result. ASCII,
+88-column added prose, no added semicolons or prohibited words, all 20 local link
+targets, seven header/index versions and preserved Date filed values, and diff
+whitespace checks
+pass across this follow-up's eight changed files. The earlier lock result describes the
+initial published proposal. No Cargo or runtime check is claimed for these corrections.
+
+[review]: https://github.com/toddwbucy/WeaverAgent/pull/241#pullrequestreview-5609645425

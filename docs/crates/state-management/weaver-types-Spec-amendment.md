@@ -574,8 +574,9 @@ CLASS-10, PAIR-1]
 The harness derives this value from its checked association account. call_block is the
 original Text content index, and statement names the accepted Binding. CallId and
 StatementRef are separately validated identities, not aliases whose sequence must be
-made equal by the codec. A zero-noun Accepted reply remains a malformed classifier
-result and cannot construct this refusal. The floor carrier grants no pair, store read
+made equal by the codec. Any zero-noun binding in an Accepted reply remains a malformed
+classifier result and cannot construct this refusal. Another binding's noun cannot
+satisfy this requirement. The floor carrier grants no pair, store read
 or model-facing result. [CLASS-2, CLASS-8, STORE-5, PAIR-1]
 
 ToolInterrupt becomes `ToolInterrupt { by: KillCause }`, allowing only unload or

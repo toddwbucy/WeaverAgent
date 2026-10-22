@@ -571,18 +571,18 @@ discard their ledger account. [CLASS-9, CLASS-10, PAIR-1, PAIR-4]
 
 **EFFECTIVE-EMISSION.** After repair, expose a private EffectiveEmission to the caller.
 Its fields are source:SourcePosition, finish:weaver_types::Finish,
-statements:Vec<StatementRef>, requests:Vec<PairStarted>, text:String and
-attempted_call:bool. source and finish are the original generation's. requests contains
-the pending model request records in Spec 05's dispatch order, not receipts or
-permission to execute them. Review requests are never model records. text joins the
-effective statement spans with a single LF. attempted_call is true if the original parse
-found ToolCall or UnrecoveredCall, or the effective bindings request recall. Replace
-each rejected original Text in that logical list with its successful correction's
-bindings, in correction-block and binding order. Accepted original siblings keep their
-positions. A rejected correction contributes nothing to the list. Physical argument
-Messages and trace events are never edited by this substitution. For a held external
-call, the replacement still meets TOOL-STATEMENT's one-statement rule. [CLASS-9,
-CLASS-10, STORE-3, OUT-1]
+statements:Vec<StatementRef>, requests:Vec<PairStarted>, text:String,
+attempted_call:bool and account:RepairAccount. source and finish are the original
+generation's. requests contains the pending model request records in Spec 05's dispatch
+order, not receipts or permission to execute them. Review requests are never model
+records. text joins the effective statement spans with a single LF. attempted_call is
+true if the original parse found ToolCall or UnrecoveredCall, or the effective bindings
+request recall. Replace each rejected original Text in that logical list with its
+successful correction's bindings, in correction-block and binding order. Accepted
+original siblings keep their positions. A rejected correction contributes nothing to the
+list. Physical argument Messages and trace events are never edited by this substitution.
+For a held external call, the replacement still meets TOOL-STATEMENT's one-statement
+rule. [CLASS-9, CLASS-10, STORE-3, OUT-1]
 
 Text-only plan or summary consumers use this complete logical list, including
 corrections from later emissions. They cannot select convenient accepted sentences from
@@ -592,23 +592,29 @@ corrected text order. Reason: repair changes what may be acted on without rewrit
 record or forcing a valid correction back into its old source ID. [CLASS-9, PLAN-1,
 STRAT-2, FLOW-3]
 
-The private repair account also retains an inspectable ordered list of Recorded
-RECALL-REFUSAL dispositions, with each exact typed refusal and its trace sequence. It
-retains original and correction-pass evidence under their own generation identities.
-EffectiveEmission exposes that account alongside its valid request list. A refused
-CallId is absent from requests, while its accepted effective statement remains in
-statements and text. Failed corrections still contribute no effective statements.
-The refusal account grants no dispatch or model-facing result and chooses no subsequent
-workflow or final-answer policy. [CLASS-9, CLASS-10, OUT-1, FLOW-3]
+RepairAccount is the private owner of original and correction-pass evidence under their
+own generation identities. Its inspection view is
+recall_refusals:Vec<RecordedRecallRefusal>, with each entry
+{refusal:RecallRequestRefusal,sequence:DecimalU64}. Only the owner can construct an
+entry after its exact RECALL-REFUSAL event is Recorded. sequence is that event's trace
+sequence. The view preserves record order across the original and correction passes and
+confers no constructor or mutable access. EffectiveEmission exposes that retained
+account alongside its valid request list. A refused CallId is absent from requests,
+while its accepted effective statement remains in statements and text. Failed
+corrections still contribute no effective statements. The refusal account grants no
+dispatch or model-facing result and chooses no subsequent workflow or final-answer
+policy. [CLASS-9, CLASS-10, OUT-1, FLOW-3]
 
 **REPAIR-REFUSAL.** RepairExhausted is {source:SourceBlockId,
-failed_corrections:DecimalU64,retry_cap:DecimalU64}. The ledger records state.flow phase
-repair_exhausted before returning it. This is a conformance outcome, not component
-failure. It grants no successful response or action. The caller uses the existing
-stopped/refused surface, with run and turn only when answering an open turn. The service
-remains available for another input. Lifecycle callers retain their existing earlier
-deadline. How they schedule correction passes belongs to the loop. [CLASS-9, COST-5,
-FALS-2, R20-12]
+failed_corrections:DecimalU64,retry_cap:DecimalU64,account:RepairAccount}. Its account
+retains the same RecordedRecallRefusal view and original/correction evidence defined by
+EFFECTIVE-EMISSION. Exhaustion does not discard that account. The ledger records
+state.flow phase repair_exhausted before returning it. This is a conformance outcome,
+not component failure. It grants no successful response or action. The caller uses the
+existing stopped/refused surface, with run and turn only when answering an open turn.
+The service remains available for another input. Lifecycle callers retain their existing
+earlier deadline. How they schedule correction passes belongs to the loop. [CLASS-9,
+COST-5, FALS-2, R20-12]
 
 **TOOL-STATEMENT.** Keep Message and ToolCall unchanged. For a recovered ToolCall, the
 immediately preceding Text block supplies its STE100 request statement. Require one
@@ -664,11 +670,19 @@ accepted Text still files normally, and unrelated conforming requests keep their
 identities and dispositions. Reason: the language result is valid, but it supplies no
 single unconditional noun-history operation. [READ-3, CLASS-9, CLASS-10, PAIR-1]
 
-An Accepted Text reply with zero nouns violates MODEL and BINDING before a checked
-generation exists. PORT treats it as invalid_result/component failure, not
-RecallRequest refusal. A correctly reported non_ste100 result instead follows ordinary
-repair. Neither case invents an accepted StatementRef or recall CallId from rejected or
-unclassified text. This rule does not change the checker's grammar. [CLASS-2, CLASS-8]
+This choice supplies trace and caller evidence only. It gives the model no ToolResult
+or other new feedback for this request, and attempted_call remains true. A later model
+round may repeat the same malformed recall until the caller's existing round bound.
+This refusal does not itself request a restatement or choose another workflow. Providing
+a stored pair and model-facing refusal instead requires the alternative PairRequest
+election, not an invented result grant. [READ-3, CLASS-9, OUT-1, STRAT-2]
+
+An Accepted Text reply containing any binding with zero nouns violates MODEL and BINDING
+before a checked generation exists. PORT treats it as invalid_result/component failure,
+not RecallRequest refusal. A correctly reported non_ste100 result instead follows
+ordinary repair. Neither case invents an accepted StatementRef or recall CallId from
+rejected or unclassified text. This rule does not change the checker's grammar.
+[CLASS-2, CLASS-8]
 
 Use kind refusal, channel internal, origin runtime and subsystem harness, on the same
 open turn. causal_parent names the message.assistant sequence containing the referenced

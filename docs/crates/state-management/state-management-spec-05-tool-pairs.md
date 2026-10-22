@@ -44,12 +44,17 @@ pending. [PAIR-1, PAIR-2, STORE-5]
 Inward recall uses the same CallId domain after the recovered external-call count.
 Enumerate recall bindings by original Text index then binding ordinal. Its call_block is
 that Text index. Reserve an ordinal for every accepted recall binding, including one
-whose operation shape requires Spec 02 RECALL-REFUSAL. Such a refusal never renumbers
-a later request. An invalid classifier result supplies no accepted recall binding or
-CallId. Spec 02 forbids a recall binding from also serving as an external
-ToolCall statement. Both kinds are handled in source-content order, with binding order
-breaking an inward tie. No call ID is added to the gate payload. The harness binds the
-active CallId to its outgoing ExchangeId before sending. [READ-3, PAIR-3]
+whose operation shape requires Spec 02 RECALL-REFUSAL. Such a refusal never renumbers a
+later request. An invalid classifier result supplies no accepted recall binding or
+CallId. Spec 02 forbids a recall binding from also serving as an external ToolCall
+statement. Conforming external and inward requests are handled in source-content order,
+with binding order breaking an inward tie. That order governs their pair records and
+dispatch, not a merged trace order with RECALL-REFUSAL. The repair owner records
+malformed-recall refusals before releasing EffectiveEmission, so a later refused ordinal
+can have its refusal recorded before an earlier conforming request's pair opens. The
+reserved identities and the conforming request order remain unchanged. No call ID is
+added to the gate payload. The harness binds the active CallId to its outgoing
+ExchangeId before sending. [READ-3, PAIR-3]
 
 **PAIR-OPEN.** Add flow/pairs.rs in the harness. For every conforming recovered request,
 including requests that a plan break, stop or round bound prevents executing, author
