@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #241
+**Landing PR:** #244
 
-**Version:** 0.28 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.29 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -693,6 +693,12 @@ shape, defined there once. Pair sources preserve the complete raw opening and te
 blocks. These are attached to the request's statement, never parsed as another Text
 block. No internal SQLite ID crosses the socket. [STORE-3, STORE-5, PAIR-3]
 
+PlanSnapshot carries document_sha256:Digest and last_source:SourcePosition under
+Spec 07 PLAN-SUMMARY-EVIDENCE. The turn member of that SourcePosition is required
+and nullable. This replaces the former bare SourceBlockId last_source in both
+plan_current and plan results. Existing strict unknown/missing-field rules apply.
+No compatibility decoder invents a missing digest or turn. [PLAN-1, PLAN-6, SEAM-3]
+
 PlanFlagSnapshot has exactly {plan,after,through,total_flags,matched_flags,
 unmatched_flags}, with the types in PLAN-FLAG-READ. The codec preserves nonnull
 identities and DecimalU64 counts. The harness checks the plan/after echo and the checked
@@ -833,7 +839,7 @@ from an external caller. [PERSIST-1 through PERSIST-4, FLOW-5]
 
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
-| TYPES-READ | Cross-crate frame corpus and unknown-field cases | Admit SQL, missing identity, or wrong cursor offset encoding |
+| TYPES-READ | Cross-crate frame corpus and unknown-field cases, PlanSnapshot digest and required nullable last-source turn | Admit SQL, missing identity, wrong cursor offset, a missing/malformed digest or an omitted last-source turn |
 | TYPES-PERSIST | Draft/published parse matrix, save/load corpus and snapshot/finished/abort correlation cases | Load an unbound draft, accept a caller destination, change the abort exchange ID or accept a stale aborted answer |
 | TYPES-SEED | Shared admin/member codec corpus, every refusal and substituted scheme/checker case | Accept numeric request_id, a nested refusal payload, missing scheme bytes or certificate bindings checked against another dictionary |
 

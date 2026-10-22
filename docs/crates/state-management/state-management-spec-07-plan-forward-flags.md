@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #244
 
-**Version:** 0.12 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
+**Version:** 0.13 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -244,31 +244,71 @@ SEAM-3]
 
 PlanSnapshot is {plan:PlanRef,task:TaskScopeRef,status:PlanStatus,
 review:ReviewSetupRef,operator_source:SourceBlockId,lock_source:SourceBlockId-or-null,
-last_source:SourceBlockId,categories:Vec<Category>,group_drafts:Vec<GroupDraft>,
-groups:Vec<PlanGroup>,steps:Vec<PlanStep>,broken:PlanBreakRecord-or-null}. PlanStatus is
-authorized, locked, broken, complete or superseded. PlanStep is
+document_sha256:Digest,last_source:SourcePosition,categories:Vec<Category>,
+group_drafts:Vec<GroupDraft>,groups:Vec<PlanGroup>,steps:Vec<PlanStep>,
+broken:PlanBreakRecord-or-null}. PlanStatus is authorized, locked, broken, complete
+or superseded. PlanStep is
 {step_id:StepId,ordinal:DecimalU64,instruction:StatementRef,
 category:String,group:String-or-null,status:StepStatus,span:SpanRef-or-null,
 outcome_span:SpanRef-or-null,review_call:CallId-or-null,work:WorkRef-or-null,
-closure_source:SourceBlockId-or-null}. StepStatus is waiting, active, closed or retired.
-PlanBreakRecord is {case:PlanBreakCase,step_id:StepId-or-null,
-proposed_source:SourceBlockId-or-null,source:SourceBlockId}. Categories and groups keep
-operator order, steps sort by ordinal, and group members follow step order. group_drafts
-retain indices even before authorized steps exist. groups and steps are empty while
-authorized. Every identity is seed-qualified on output. [PLAN-1, PLAN-2, STORE-3,
-STORE-5]
+closure_source:SourceBlockId-or-null}. StepStatus is waiting, active, closed or
+retired. PlanBreakRecord is {case:PlanBreakCase,step_id:StepId-or-null,
+proposed_source:SourceBlockId-or-null,source:SourceBlockId}. Categories and groups
+keep operator order, steps sort by ordinal, and group members follow step order.
+group_drafts retain indices even before authorized steps exist. groups and steps are
+empty while authorized. Every identity is seed-qualified on output. [PLAN-1, PLAN-2,
+STORE-3, STORE-5]
+
+**PLAN-SUMMARY-EVIDENCE.** Both selectors return document_sha256 from the held
+PlanInputContext at operator_source. last_source carries the exact SourceBlockId
+and required nullable turn of that revision's stored last-transition source.
+Resolve these facts in the same immutable read snapshot as the plan revision.
+The digest is the operator document's digest, not a hash of the snapshot, current
+prompt or materialized plan. A turnless last transition carries turn null, never
+the boot run's turn or the previous nonnull turn. [PLAN-1, PLAN-6, STORE-5, SEAM-3]
+
+The member owns consistency with its held operator and transition sources, both
+when adopting the image and when deriving a read. At boot the harness validates
+strict shape, selector/result association and any already-held trusted expected
+facts. With no independent expected digest or turn, it relies on the member's
+source validation. It cannot detect a well-shaped false digest or turn merely
+from that snapshot. No extra source lookup or invented comparison is required.
+[PLAN-1, PLAN-6, STORE-5, PERSIST-6, SEAM-3]
+
+At HARNESS-RECALL's Recording/Recorded transition, after HARNESS-READ has completed
+snapshot release, the harness projects PlanSummary from plan, status,
+document_sha256 and last_source. After its own plan-effect receipt, it must also
+match last_source to that effect's exact SourcePosition, including nullable turn.
+It compares document_sha256 with any already-held trusted expected operator digest
+for that revision. The comparison uses the held expectation, not a value copied
+back from the same response. A valid current null means no committed plan only
+when no held receipt requires one. [PLAN-1, PLAN-6, FLOW-3, SEAM-3]
+
+A refused or malformed mandatory boot read cannot establish enter success. A
+refusal, malformed result, failed seam or trusted-expectation mismatch during the
+required refresh after a committed effect latches component failure through the
+existing foundation path. Do not serve the old cache as a successful committed
+Observe/show result, answer PlanUpdated or start another generation. The committed
+effect remains committed and its receipt stays evidence. Add no selector, source
+lookup, event kind, counter, clock or new refusal code. [PLAN-6, FLOW-3, FLOW-4,
+PERSIST-6, SEAM-3]
+
+This read projection does not change the stored last_source content key or the
+PlanFlags after field. When deriving an explicit flag query from the snapshot,
+use last_source.block_id. A digest and a turn annotation add no source visit to
+recall and grant no plan mutation or lifecycle success. [PLAN-3, STORE-5, SEAM-3]
 
 **PLAN-FLAG-READ.** Add the ReadSelector tag plan_flags
 {plan:PlanRef,after:SourceBlockId} and QueryResult tag plan_flags
 {snapshot:PlanFlagSnapshot}. PlanFlagSnapshot is
 {plan:PlanRef,after:SourceBlockId,through:SourcePosition,total_flags:DecimalU64,
 matched_flags:DecimalU64,unmatched_flags:DecimalU64}. It is an observation over held
-statements, not candidate content for place. The store checks the loaded seed, current
-PlanRef and exact last_source equal to after, then takes one read snapshot. A wrong seed
-refuses wrong_seed, an absent plan/source refuses not_found, and a stale revision or
-transition refuses invalid_selector. The ordinary read-result bound, paging and release
-apply. Reason: a count needs the same committed plan and holding boundary at both ends
-of the read. [PLAN-3, PLAN-6, SEAM-3, COST-4]
+statements, not candidate content for place. The store checks the loaded seed,
+current PlanRef and exact last_source.block_id equal to after, then takes one read
+snapshot. A wrong seed refuses wrong_seed, an absent plan/source refuses not_found,
+and a stale revision or transition refuses invalid_selector. The ordinary read-result
+bound, paging and release apply. Reason: a count needs the same committed plan and
+holding boundary at both ends of the read. [PLAN-3, PLAN-6, SEAM-3, COST-4]
 
 Count each held binding with a canonical positive `step:<local_id>` condition once,
 across the loaded chain. A compound noun does not multiply it. matched_flags counts
@@ -490,6 +530,7 @@ or task success. [PLAN-1 through PLAN-6, R20-12]
 
 | Claim | Instrument and evidence | Protective change that must fail |
 | --- | --- | --- |
+| PLAN-SUMMARY-EVIDENCE | Member current/historical reads and reload verify held-source derivation. Harness fixtures check strict shape, held receipt/digest expectations, Recording/Recorded gating and failed refresh | Member hashes snapshot or substitutes turn/source. Harness omits required fields, ignores held expectation, projects early or serves stale success after failed refresh |
 | PLAN-ADMIN | Root/sudo cause, fixed-file, extra-argument, stdin and whole-envelope cases | Remove cause check or measure unencoded text only |
 | PLAN-TYPES and CATEGORY | Stable-ID and operator-only category fixtures | Reuse a retired ID or accept model category changes |
 | PLAN-EXCHANGE | Busy, stale, cancelled, refused and lost-answer transitions | Blindly retry an unanswered committed update |

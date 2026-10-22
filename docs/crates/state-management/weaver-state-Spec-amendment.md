@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #241
+**Landing PR:** #244
 
-**Version:** 0.21 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
+**Version:** 0.22 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
 
 ## 0. What this document is
 
@@ -537,8 +537,16 @@ MARK-1]
 query is historical lookup after checking the seed. Read categories/groups by their
 ordinal and steps by their ordinal, joining group membership by its unique step key.
 Resolve instruction_id through statement_binding and content_block back to StatementRef,
-and all content IDs back to SourceBlockId. Decode canonical typed JSON strictly. Never
-expose SQL keys. The result has Spec 07's exact PLAN-READ shape. Reason: one store-owned
+and all content IDs back to source identities. For the returned last_source,
+resolve its content key to SourcePosition with the stored source's exact nullable
+turn. Resolve operator_source to its held PlanInputContext and return that
+context's document_sha256. Both facts belong to the same immutable result as the
+revision, including historical plan reads and reload. The member owns consistency
+with these held sources, under existing adoption and read validation. Do not derive
+either from caller input or the current run. PLAN-SUMMARY-EVIDENCE in Spec 07 owns
+the harness validation boundary. This changes no SQL schema or stored source key.
+Decode canonical typed JSON strictly. Never expose SQL keys. The result has Spec 07's
+exact PLAN-READ shape. Reason: one store-owned
 read supplies every consumer's stable step and review account. [PLAN-1, PLAN-2, SEAM-3,
 STORE-5]
 
@@ -569,9 +577,10 @@ PERSIST-6]
 **STATE-PLAN-FLAGS.** plan_flags is a read-only aggregate with Spec 07's exact
 PLAN-FLAG-READ result. In one read transaction, check store_meta.seed_id, resolve the
 plan and source, and compare the requested plan/after against STATE-PLAN-READ's current
-revision and last_source. Refuse wrong_seed, not_found or invalid_selector as that
-contract states. Resolve position in the same transaction for through. This selector
-calculates no next ID and does not refuse merely because allocation is exhausted.
+revision and stored last_source (its block_id). Refuse wrong_seed, not_found or
+invalid_selector as that contract states. Resolve position in the same transaction
+for through. This selector calculates no next ID and does not refuse merely because
+allocation is exhausted.
 Reason: the flags and their possible targets must describe one boundary. [PLAN-3,
 PLAN-6, STORE-5, SEAM-3, COST-4]
 
@@ -1334,7 +1343,7 @@ weaver-state dependency of any kind. [FLOW-4, FLOW-5, SEAM-2, SCOPE-1]
 | STATE-OBSERVATION-SCHEMA/READ/OBSERVE | Exact metadata JSON, real response writes, explicit query, capture metadata-cutoff, ordered snapshot-sampling and historical-version fixtures | Mix metadata with content, reobserve an insert, omit a required row, include the read itself, send success after metadata failure, reorder sampling or relabel old evidence |
 | STATE-SCHEMA | Execute literal DDL, inspect catalog, EXPLAIN noun and verb queries | Remove index, source CHECK, or FK |
 | STATE-FILE | STATE-FILING-INSTRUMENTS and shared malformed corpus | Emit receipt before commit or accept partial noun rows |
-| STATE-PLAN-SCHEMA, STATE-PLAN-READ | Literal DDL, ordered reads and reload fixtures | Allow two unfinished plans/active steps, renumber IDs or omit historical references |
+| STATE-PLAN-SCHEMA, STATE-PLAN-READ | Literal DDL, ordered current/historical reads and reload, exact operator digest and null/non-null last-transition turn | Allow two unfinished plans/active steps, renumber IDs, omit references, hash the snapshot or substitute another source/digest/turn |
 | STATE-PLAN-FILE | Every effect guard and atomic source/plan/mark transaction | Skip expected status, close without category-required review evidence, preserve changed evidence or commit one half |
 | STATE-PLAN-FLAGS | Literal target/count queries, stale source/revision checks, empty plans and maximum unsigned IDs | Count nouns, case-fold addresses, accept an overflowing/noncanonical ID, use an old target set or change a held sample after filing |
 | STATE-MARK-FILE | Atomic source/effect fixtures for every operation row | Commit the source without the mark, skip context equality, permit a crossed scope or edit terminal membership |
