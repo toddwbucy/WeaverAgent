@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** #189
 
-**Version:** 0.22 **Date filed:** 2026-10-20 **Parent:** weaver-harness-PRD
+**Version:** 0.23 **Date filed:** 2026-10-20 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -901,11 +901,11 @@ nullability from TYPES-OBSERVATION-READ. A supplied nonnull through must echo ex
 Its result cannot construct HeldMaterial, SelectedUnit or a cut grant. The outer
 response observation remains separate from the queried metadata. A wrong variant is
 protocol failure, never empty history. Preserve each entry's pairs, including exact
-whole return blocks. Author existing recall with selector, snapshot_id, source
-identities and, for boot, the complete seated Message. Ordinary recalls retain
-identifiers, original binding ordinals and spans, not duplicate filing. An initial
-refusal acquires no snapshot and sends no release. After receiving a valid first page,
-retain its snapshot_id and send release exactly once on success or a valid later
+whole return blocks. Author existing recall through HARNESS-RECALL, retaining the
+selector, snapshot_id, original source and binding identities, selected span occurrences
+and, for boot, the complete seated Message. No recalled content is filed again. An
+initial refusal acquires no snapshot and sends no release. After receiving a valid first
+page, retain its snapshot_id and send release exactly once on success or a valid later
 operation refusal, using the read's remaining absolute deadline. A failed seam closes
 the channel instead. Closure drops the member's cursor. The adapter never guesses an ID
 from the request counter. Reason: release acts only on an acquired snapshot, and cleanup
@@ -928,11 +928,59 @@ For an observations read, recall retains the exact typed selector and snapshot_i
 sources and spans empty. These are operation identities, not content provenance. No
 observation is placed by the read adapter. [SEAM-3, FLOW-3, R20-19]
 
-For a successful plan_flags read, recall.sources is after followed by through.block_id,
-deduplicated by identity, and recall.spans is empty. Its selector and snapshot_id retain
-their ordinary typed meanings. The counts appear only in the later plan observation.
+For a successful plan_flags read, recall.sources cites after then through.block_id as
+TRACE-RECALL-SOURCES defines, with no binding ordinals, and recall.spans is empty. Its
+selector and snapshot_id retain their ordinary typed meanings. The counts appear only
+in the later plan observation.
 Release the snapshot once and never retain a read cursor just to produce a measurement.
 [PLAN-3, SEAM-3, FLOW-3, COST-4]
+
+**HARNESS-RECALL.** flow/read.rs converts one completely reassembled and checked
+QueryResult into the trace-owned RecallRecord defined by [TRACE-RECALL][recall-shape].
+The adapter copies the exact submitted ReadSelector and acquired snapshot_id. It applies
+TRACE-RECALL-SOURCES' complete traversal, ordinal union, first-encounter source order
+and occurrence-preserving span order. It never treats source identity, binding ordinal
+or returned-vector position as interchangeable. Reason: recall provenance must describe
+the checked result before a consumer can use it. [FLOW-3, STORE-3, STORE-5, SEAM-3]
+
+The adapter accepts only HARNESS-READ's matching selector/result pair. It checks the
+step_successor reference against the requested plan and previous_step, and its
+instruction against the same StatementRef, before the provenance walk. It retains
+original pair opening and terminal source identities, including a null terminal for an
+open pair. Every boot identity and byte check in TRACE-RECALL-BOOT runs against the
+loaded state_start and the complete system_prompt entry. The boot Message uses the
+existing canonical Message shape. The conversion into the trace's checked raw field
+preserves those bytes and adds no trace dependency on another crate. [STORE-3, PAIR-3,
+MARK-3, PLAN-4, PROMPT-1, PERSIST-6, SEAM-3]
+
+Read is used for every successful nonboot query, including later system_prompt queries
+and all metadata selectors. Boot is used only for HARNESS-BOOT's first content read.
+Both author internal/runtime recall without a turn, under the existing turnless rule.
+Only boot includes held content bytes. Both variants stay excluded by the partition
+and construct no filing. Metadata reads retain their existing restriction against
+HeldMaterial, SelectedUnit and cut-grant construction. [FLOW-3, TAP-3, STORE-8,
+MARK-3, PERSIST-6]
+
+| Read state | Observation | Provenance obligation |
+| --- | --- | --- |
+| Awaiting full result | Valid page, more pages remain | Hold bytes, author no recall, keep the original deadline |
+| Awaiting full result | Initial or later valid refusal | Keep its typed refusal, perform existing acquired-snapshot cleanup, author no recall |
+| Checking | Complete result matches the selector and source rules, and HARNESS-READ has completed snapshot release | Construct exactly one immutable Read or Boot record |
+| Recording | CapacityPending | Retain that record and result, service the pump, do not requery, refile or rebuild an empty success |
+| Recording | Recorded | Snapshot release is already complete under HARNESS-READ. Expose the checked result or seat BootHead |
+| Any read state | Malformed result, failed seam or applicable bound | Existing failure account and latch, no inferred successful recall |
+
+Recording retains the read's original deadline and the existing pump's stop/leave
+handling. A recorded result cannot be recorded a second time on resume. Snapshot release
+remains HARNESS-READ's single acquired-cursor obligation, completed before recall
+construction or recording for both Read and Boot. A valid empty result records an empty
+success with its real selector and snapshot ID. A refusal does not. This state table
+adds no clock or release exchange. [FLOW-3, FLOW-4, SEAM-3, CLASS-8]
+
+A pass certifies faithful provenance for the completed typed result and recording before
+its consumer. It does not certify selection quality, permit a metadata result to be
+placed, or establish that the query contained every relevant fact. [FLOW-3, READ-1,
+SEAM-3, FALS-4]
 
 **HARNESS-READ-CALLERS.** The retained serving inspection methods have these signatures
 in engine.rs, with their result types re-exported from lib.rs:
@@ -948,8 +996,8 @@ NonZeroU64 is std::num::NonZeroU64. ReadEntry is TYPES-READ's shared type. ReadF
 defined in flow/read.rs, is Refused {code:ReadRefusalCode, detail:String} or FlowFailed.
 The latter returns only after the common failure latch is set. Correct operation refusal
 preserves the exact store code and detail. It never becomes None or an empty successful
-vector. recall submits conversation with the positive bound, completes paging, records
-provenance and releases the snapshot before returning. session_shape uses the typed
+vector. recall submits conversation with the positive bound, completes paging and
+snapshot release, then records provenance before returning. session_shape uses the typed
 shape control. Both drive the common pump and its existing read deadline. Reason: the
 old public readers must have a concrete replacement, not leave each Rust caller to
 invent a failure convention. [SEAM-3, READ-1, READ-5, FLOW-4]
@@ -1099,6 +1147,7 @@ claim that a between-turn pause has zero elapsed cost is made. [COST-2, COST-4]
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
 | HARNESS-READ | Real member pagination and query-result trace checks | Place partial bytes, restart deadline per page, or file a recall |
+| HARNESS-RECALL | Every selector/result pair, null and populated plan snapshots, repeated prefixes, whole pairs, filtered ordinals, empty/refused reads, held or failed release and pending recorder fixtures | Walk metadata in another order, renumber bindings, deduplicate spans, invent a source for the seed, record a partial/refused read or before Released, expose before Recorded or author twice after a wake |
 | HARNESS-MATERIAL | Filtered binding, whole-pair, current-result and stored-span fixtures plus private-constructor pins | Renumber a binding, omit an attached return, duplicate the live request or mint a live grant from a stored record |
 | HARNESS-SELECTION-INPUT | Explicit criterion and complete unit fixtures | Invent a default strategy or accept an incomplete unit |
 | HARNESS-MARKS | One input/task fixture, stop/leave rows, concurrent plan-operation and template-defect cases | Start generation before mark receipt, reuse an uncertain ID, skip input coverage or turn a correct defect into a halt |
@@ -1316,3 +1365,6 @@ owed.
 
 [cutover]:
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
+
+[recall-shape]:
+weaver-trace-Spec-amendment.md#61-serving-recall-representation
