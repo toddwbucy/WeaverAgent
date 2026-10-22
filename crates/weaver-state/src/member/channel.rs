@@ -21,6 +21,10 @@ impl Channel {
         })
     }
 
+    pub(super) fn buffered_bytes(&self) -> usize {
+        self.buffered.len()
+    }
+
     pub(super) fn receive(&mut self) -> io::Result<Option<Vec<u8>>> {
         loop {
             if let Some(end) = self.buffered.iter().position(|b| *b == b'\n') {

@@ -434,9 +434,39 @@ impl Serialize for StateFrame {
     }
 }
 
+/// A decoded frame and the exact owned outer RawValue bytes materialized by
+/// its strict decoder. This is one copy category, not a complete operation total.
+/// None means the checked sum overflowed. No failed decode produces an answer.
+#[derive(Debug)]
+pub struct DecodedStateFrame {
+    pub frame: StateFrame,
+    pub raw_field_bytes: Option<u64>,
+}
+
+impl<'de> Deserialize<'de> for DecodedStateFrame {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (frame, raw_field_bytes) = StateFrame::deserialize_counted(deserializer)?;
+        Ok(Self {
+            frame,
+            raw_field_bytes,
+        })
+    }
+}
+
 impl<'de> Deserialize<'de> for StateFrame {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::deserialize_counted(deserializer).map(|(frame, _)| frame)
+    }
+}
+
+impl StateFrame {
+    fn deserialize_counted<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<(Self, Option<u64>), D::Error> {
         let mut fields = RawFields::deserialize(deserializer)?;
+        let raw_field_bytes = fields.0.values().try_fold(0_u64, |sum, value| {
+            sum.checked_add(u64::try_from(value.get().len()).ok()?)
+        });
         let protocol: String = fields.take("protocol")?;
         if protocol != STATE_FLOW_PROTOCOL {
             return Err(D::Error::custom("unknown serving protocol"));
@@ -514,7 +544,7 @@ impl<'de> Deserialize<'de> for StateFrame {
         };
         fields.finish()?;
         result.validate_envelope().map_err(D::Error::custom)?;
-        Ok(result)
+        Ok((result, raw_field_bytes))
     }
 }
 

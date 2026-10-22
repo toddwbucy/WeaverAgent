@@ -20,6 +20,8 @@ use weaver_state::{ServingStore, engine::serving_sqlite::seed_image};
 #[path = "../../../tests/serving_member/fixtures.rs"]
 pub(super) mod fixtures;
 
+mod accounting;
+
 const CHILD_TEST: &str = "member::tests::process::metadata_failure_child";
 const CHILD_ROOM: &str = "WEAVER_TEST_METADATA_FAILURE_ROOM";
 const CHILD_MODE: &str = "WEAVER_TEST_STATE_BOUNDARY_MODE";
@@ -89,7 +91,7 @@ fn metadata_failure_child() {
     let mode = std::env::var(CHILD_MODE).unwrap();
     assert!(matches!(
         mode.as_str(),
-        "metadata" | "timing" | "oversized-control"
+        "metadata" | "timing" | "oversized-control" | "accounting"
     ));
     if mode == "metadata" {
         INJECT_AFTER_COMMIT.with(|armed| armed.set(true));
@@ -111,10 +113,14 @@ fn metadata_failure_child() {
         );
     } else {
         result.unwrap();
-        assert_eq!(
-            OBSERVATIONS_CHECKED.with(Cell::get),
-            if mode == "oversized-control" { 4 } else { 2 }
-        );
+        if mode == "accounting" {
+            assert!(OBSERVATIONS_CHECKED.with(Cell::get) > 0);
+        } else {
+            assert_eq!(
+                OBSERVATIONS_CHECKED.with(Cell::get),
+                if mode == "oversized-control" { 4 } else { 2 }
+            );
+        }
     }
     drop(channel);
     room.clear_remnants().unwrap();
@@ -208,9 +214,13 @@ fn launch(mode: &str) -> (Fixture, BufReader<UnixStream>, SeedRequest) {
         .unwrap();
     let mut opened = Vec::new();
     assert!(peer.read_until(b'\n', &mut opened).unwrap() > 0);
-    let opened = decode_state_line(&opened, FrameDirection::Response).unwrap();
+    let opened_bytes = opened;
+    let opened = decode_state_line(&opened_bytes, FrameDirection::Response).unwrap();
     assert!(matches!(opened, StateFrame::Opened { .. }));
     opened.validate_response_to(&open, 1.into()).unwrap();
+    if mode == "accounting" {
+        accounting::check_open(&open, &opened, &opened_bytes);
+    }
     (fixture, peer, seed)
 }
 
