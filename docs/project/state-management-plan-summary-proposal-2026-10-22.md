@@ -141,13 +141,20 @@ boot summary then cannot succeed. Issue #246 tracks this endpoint decision. This
 leaves the refusal and endpoint unchanged and does not add another query or mask
 it as no plan.
 
-The open proposal branches #232, #235, #237, #241 and #244 share document headers
-and base versions. Whichever the operator lands first, later proposals need the
-then-current paired text and next versions, including README rows. This is merge
-planning context, not an instruction to merge or an automatic merge order.
+Proposals #232, #235, #237 and #241 are merged. This branch joins main at
+1acf0bdf and reconciles the shared document headers and README versions while
+preserving their paired text.
 
 Current-revision checks pass for ASCII, added prose width, local links, paired
 versions, preserved Date filed values, Landing PR fields and whitespace. The
 second independent reading and root lock check passed. No Cargo result,
 runtime fix, production qualification or issue completion follows from this
-proposal. Operator election and Planner verification remain required.
+proposal. Planner review 5610257792 found no remaining review rows; the later
+main join at a19d2412 changed shared headers only.
+
+On 2026-10-22 the operator approved the revised proposal in this document:
+document_sha256 plus complete SourcePosition, the stated independent-validation
+boundary, and component failure after an unsuccessful required post-effect
+refresh. The real commit remains evidence and stale success or generation is
+forbidden. This records the election; review and merge remain required before
+implementation.
