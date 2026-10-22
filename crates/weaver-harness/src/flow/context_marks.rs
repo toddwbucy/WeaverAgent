@@ -64,6 +64,9 @@ pub(in crate::flow) struct BegunTask {
     mark: Option<FilingCompletion>,
 }
 impl BegunTask {
+    pub(in crate::flow) fn origin(&self) -> &std::sync::Arc<()> {
+        self.catalog.origin()
+    }
     pub(in crate::flow) fn scope(&self) -> &TaskScopeRef {
         &self.scope
     }
@@ -233,6 +236,7 @@ impl RecordingContext {
             || self.pair_work.is_some()
             || self.repair.is_some()
             || self.read.is_some()
+            || self.inspection.is_some()
             || self.member_capture.is_some()
             || self.measure.is_some()
             || self.input_turn.is_some()

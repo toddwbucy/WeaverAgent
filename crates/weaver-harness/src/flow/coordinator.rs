@@ -195,6 +195,7 @@ pub(super) enum OperationCompletion {
         request: StateControl,
         turn: Option<TurnRef>,
         completion: StateCompletion,
+        recorded_ns: u64,
     },
     Check(RecordedCheck),
 }
@@ -1585,6 +1586,47 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 .then_some(self.state_recorded_ns)
                 .flatten()
         })
+    }
+
+    /// The original ordinary control's Recorded boundary remains available while
+    /// its final nonblocking channel probe is pending. This grants no answer.
+    pub(super) fn control_recorded_boundary(
+        &self,
+    ) -> Option<(&StateControl, &Option<TurnRef>, DecimalU64, u64)> {
+        if let Some(OperationCompletion::State {
+            request,
+            turn,
+            completion,
+            recorded_ns,
+        }) = &self.operation_completion
+        {
+            return Some((
+                request,
+                turn,
+                completion.answer.common().request_id,
+                *recorded_ns,
+            ));
+        }
+        if !matches!(self.pending_record, Some(PendingRecord::StateRelease)) {
+            return None;
+        }
+        let (request, turn) = self.state_operation.as_ref()?;
+        let request_id = self
+            .state()
+            .held_measurement()?
+            .observation
+            .request_id
+            .0
+            .into();
+        Some((request, turn, request_id, self.state_recorded_ns?))
+    }
+
+    #[cfg(test)]
+    pub(super) fn interrupt_next_state_release_for_test(&mut self) {
+        self.state
+            .as_mut()
+            .expect("state exists")
+            .interrupt_next_release_for_test();
     }
 
     /// The context has frozen ordinary admission at a turn boundary. Existing
@@ -3307,6 +3349,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 request,
                 turn,
                 completion,
+                recorded_ns: recorded_ns.ok_or_else(|| {
+                    self.fail(cx, "state_reply", "control lost its recording time")
+                })?,
             });
             return Ok(Advance::Progress);
         }

@@ -230,7 +230,8 @@ impl RecordingContext {
             || self.load_duty.is_none()
         {
             Some(BootPairsBeginRefusal::WrongOpen)
-        } else if self.open_turn.is_some()
+        } else if self.inspection.is_some()
+            || self.open_turn.is_some()
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()

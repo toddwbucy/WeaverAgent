@@ -234,6 +234,7 @@ impl RecordingContext {
             || (matches!(purpose, ReadPurpose::BootPairs) && !self.boot_pairs_read_allowed())
             || (self.marks.is_some() && !matches!(purpose, ReadPurpose::Marks))
             || self.read.is_some()
+            || self.inspection.is_some()
             || self.measure_blocks_external()
             || self.member_capture.is_some()
             || self.freshness.is_some()
@@ -248,7 +249,10 @@ impl RecordingContext {
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()
+            || self.barrier.pending_author().is_some()
             || self.flow.has_pending_record()
+            || self.flow.has_filing_consumer()
+            || self.flow.has_output_consumer()
             || self.flow.pending_control().is_some()
             || self.flow.pending_check().is_some()
             || self.flow.operation_completion().is_some()
@@ -567,6 +571,7 @@ impl RecordingContext {
             request,
             turn,
             completion,
+            ..
         } = completion
         else {
             return Err(self.read_fault(io, "read owner received a foreign completion"));

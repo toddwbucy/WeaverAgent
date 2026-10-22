@@ -1846,3 +1846,236 @@ fn invalid_expected_positions_return_the_proposal_without_any_decode_write() {
         );
     }
 }
+
+#[test]
+fn halt_report_preserves_measurement_refusal_owner_and_records_it_after_the_fault() {
+    let mut peer = Peer::new();
+    peer.begin(request(), PumpDeadline::Decision);
+    peer.sent();
+    peer.fill_trace();
+    let raw = serde_json::to_vec(&TokenRefusal::NotOpen).unwrap();
+    send_bytes(peer.peer.as_fd(), &raw);
+    let failure = peer.advance(PollFlags::POLLIN).unwrap_err();
+    peer.run
+        .context
+        .freeze_halt_account(crate::flow::halt_snapshot::ExternalFacts {
+            outstanding_pairs: peer.run.context.outstanding_pairs(),
+            capture: None,
+            wait: peer.run.context.halt_wait().cloned(),
+            input_id: None,
+        })
+        .unwrap();
+    peer.run.context.begin_halt_report().unwrap();
+    let HaltTraceProgress::FaultRecorded(fault) = peer
+        .run
+        .context
+        .advance_halt_trace(&mut peer.run.clock)
+        .unwrap()
+    else {
+        panic!("reserved halt fault");
+    };
+    assert!(peer.records(Kind::Refusal).is_empty());
+    assert_eq!(
+        peer.run
+            .context
+            .advance_halt_trace(&mut peer.run.clock)
+            .unwrap(),
+        HaltTraceProgress::Pending
+    );
+    assert_eq!(peer.run.context.pending_measure_raw(), Some(raw.as_slice()));
+    peer.drain_trace();
+    let mut refusal = None;
+    for _ in 0..64 {
+        if let HaltTraceProgress::TraceRecorded(sequence) = peer
+            .run
+            .context
+            .advance_halt_trace(&mut peer.run.clock)
+            .unwrap()
+        {
+            refusal = Some(sequence);
+            break;
+        }
+    }
+    assert!(refusal.unwrap().0 > fault.0);
+    assert!(!peer.run.context.has_owed_measure_refusal());
+    assert_eq!(
+        peer.run
+            .context
+            .failed_measure_refusal_progress(&mut peer.run.clock)
+            .unwrap(),
+        refusal
+    );
+    assert_eq!(peer.records(Kind::Refusal).len(), 1);
+    assert!(
+        peer.records(Kind::Refusal)[0]
+            .to_string()
+            .contains("not_open")
+    );
+    assert_eq!(
+        peer.run
+            .context
+            .advance_halt_trace(&mut peer.run.clock)
+            .unwrap(),
+        HaltTraceProgress::Idle
+    );
+    assert_eq!(peer.run.context.pending_measure_raw(), Some(raw.as_slice()));
+    assert_eq!(
+        peer.run
+            .context
+            .take_measurement(3.into(), &mut peer.decode, &mut peer.run.clock)
+            .unwrap_err(),
+        failure
+    );
+}
+
+#[test]
+fn halt_report_retains_measurement_trace_recorded_before_report_admission() {
+    let mut peer = Peer::new();
+    peer.begin(request(), PumpDeadline::Decision);
+    peer.sent();
+    peer.fill_trace();
+    peer.send_refusal(&TokenRefusal::NotOpen);
+    let first = peer.advance(PollFlags::POLLIN).unwrap_err();
+    assert!(peer.records(Kind::Refusal).is_empty());
+    peer.drain_trace();
+    let refusal = peer
+        .run
+        .context
+        .failed_measure_refusal_progress(&mut peer.run.clock)
+        .unwrap()
+        .expect("the real stopped recorder admits the retained refusal");
+    assert_eq!(peer.records(Kind::Refusal).len(), 1);
+    assert_eq!(
+        peer.records(Kind::Refusal)[0]["sequence"],
+        refusal.0.to_string()
+    );
+    assert_eq!(
+        peer.run.context.barrier.last_trace_only_sequence(),
+        Some(refusal)
+    );
+    assert!(!peer.run.context.has_owed_measure_refusal());
+    peer.run
+        .context
+        .freeze_halt_account(crate::flow::halt_snapshot::ExternalFacts {
+            outstanding_pairs: peer.run.context.outstanding_pairs(),
+            capture: None,
+            wait: peer.run.context.halt_wait().cloned(),
+            input_id: None,
+        })
+        .unwrap();
+    let frozen = peer
+        .run
+        .context
+        .halt()
+        .unwrap()
+        .fault_account()
+        .unwrap()
+        .get()
+        .to_owned();
+    peer.run.context.begin_halt_report().unwrap();
+    assert_eq!(
+        peer.run
+            .context
+            .halt_report()
+            .unwrap()
+            .last_trace_sequence(),
+        Some(refusal)
+    );
+    let HaltTraceProgress::FaultRecorded(fault) = peer
+        .run
+        .context
+        .advance_halt_trace(&mut peer.run.clock)
+        .unwrap()
+    else {
+        panic!("reserved fault");
+    };
+    assert!(fault.0 > refusal.0);
+    assert_eq!(
+        peer.run
+            .context
+            .halt_report()
+            .unwrap()
+            .last_trace_sequence(),
+        Some(refusal)
+    );
+    assert_eq!(
+        peer.run
+            .context
+            .advance_halt_trace(&mut peer.run.clock)
+            .unwrap(),
+        HaltTraceProgress::Idle
+    );
+    assert_eq!(
+        peer.run
+            .context
+            .halt()
+            .unwrap()
+            .fault_account()
+            .unwrap()
+            .get(),
+        frozen
+    );
+    assert_eq!(peer.run.context.failure(), Some(&first));
+}
+
+#[test]
+fn halt_report_measurement_clock_error_does_not_claim_a_failed_sink() {
+    struct InnerReadFails {
+        now: u64,
+        calls: u8,
+    }
+    impl PumpIo for InnerReadFails {
+        fn now(&mut self) -> io::Result<u64> {
+            self.calls += 1;
+            if self.calls == 2 {
+                Err(io::Error::other("inner refusal clock failed"))
+            } else {
+                Ok(self.now)
+            }
+        }
+        fn wait(&mut self, _: &[WaitInterest<'_>], _: Option<u64>) -> io::Result<WaitOutcome> {
+            panic!("failed trace progress must not wait");
+        }
+    }
+    let mut peer = Peer::new();
+    peer.begin(request(), PumpDeadline::Decision);
+    peer.sent();
+    peer.fill_trace();
+    peer.send_refusal(&TokenRefusal::NotOpen);
+    let first = peer.advance(PollFlags::POLLIN).unwrap_err();
+    peer.run
+        .context
+        .freeze_halt_account(crate::flow::halt_snapshot::ExternalFacts {
+            outstanding_pairs: peer.run.context.outstanding_pairs(),
+            capture: None,
+            wait: peer.run.context.halt_wait().cloned(),
+            input_id: None,
+        })
+        .unwrap();
+    peer.run.context.begin_halt_report().unwrap();
+    assert!(matches!(
+        peer.run
+            .context
+            .advance_halt_trace(&mut peer.run.clock)
+            .unwrap(),
+        HaltTraceProgress::FaultRecorded(_)
+    ));
+    let ticket = peer.run.context.pending_author().unwrap().ticket;
+    let mut clock = InnerReadFails {
+        now: peer.run.clock.now().unwrap(),
+        calls: 0,
+    };
+    assert_eq!(
+        peer.run.context.advance_halt_trace(&mut clock).unwrap(),
+        HaltTraceProgress::Unavailable
+    );
+    assert_eq!(clock.calls, 3);
+    assert!(!peer.run.context.halt_report().unwrap().trace_unavailable());
+    assert!(peer.run.context.barrier.standing_failure().is_none());
+    assert_eq!(peer.run.context.pending_author().unwrap().ticket, ticket);
+    assert_eq!(peer.run.context.failure(), Some(&first));
+    let secondary = peer.run.context.halt().unwrap().secondary();
+    assert_eq!(secondary.len(), 1);
+    assert!(secondary[0].detail.contains("inner refusal clock failed"));
+    assert!(peer.records(Kind::Refusal).is_empty());
+}
