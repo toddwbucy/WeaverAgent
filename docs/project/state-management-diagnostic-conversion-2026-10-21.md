@@ -120,3 +120,29 @@ Executor read the corrected source without a concrete finding. These checks
 do not replace the Planner's regrade. No new carrier, limit, serving activation
 or history rewrite is part of
 this batch. New stack merges use the required descriptive subject prefix.
+
+## Payload-free bracket follow-up
+
+Planner follow-up 6334321041 found no blocking batch findings and retained D3, a
+missing protective assertion for turn.started admitting another kind's payload.
+The trace Spec's section 3 requires this bracket to carry no payload member. This
+test-only correction gives an otherwise valid turn.started envelope a nonempty
+Fault payload that is licensed under fault. Direct legacy and shared conversion
+must return PayloadKindMismatch before the diagnostic writer can mask a converter
+defect. Actual diagnostic submissions retain the failed-run latch, write no bytes
+and consume no sequence. A later payload-free bracket is a writer-mechanism probe
+with the latch still set, not permission to resume service.
+
+A separate actual trace recorder fixture requires PayloadMalformed, an empty
+working structure and no sink bytes after drain. The corrected payload-free
+bracket receives sequence zero and emits exactly one line without payload. The
+scope is turn.started. SessionClosed remains outside diagnostic conversion and
+does not need a new case for this finding. No production behavior changes.
+
+Both new tests passed in the serial host lane with private target
+/tmp/weaver-146-diagnostic-target. Strict all-target harness and trace clippy,
+formatting and lock checks passed. Each of two protective recipes widened only
+TurnStarted's shared pairing predicate, compiled, failed the intended assertion
+and passed after exact-byte restoration. The prior full-suite results above are
+historical. This test-only follow-up claims its focused gates, not a fresh full
+suite. Evidence is deposited under diagnostic/turn-started-payload.
