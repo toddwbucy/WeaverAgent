@@ -1,6 +1,6 @@
 # State management inward recall owner
 
-Date: 2026-10-22 Branch: code/state-inward-recall PR: pending assignment Epic: #146
+Date: 2026-10-22 Branch: code/state-inward-recall PR: #245 Epic: #146
 
 ## Authority and scope
 
