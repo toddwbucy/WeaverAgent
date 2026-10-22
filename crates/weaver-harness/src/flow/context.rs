@@ -110,6 +110,8 @@ pub(crate) struct RecordingContext {
     input_turns: std::collections::BTreeSet<String>,
     member_capture: Option<capture_driver::MemberCapture>,
     read: Option<read_driver::ReadTransaction>,
+    // Pointer identity survives moves and is never recreated from trace IDs.
+    read_origin: std::sync::Arc<()>,
     measure: Option<measure_driver::MeasureTransaction>,
     filing: Option<receipt_driver::FilingTransaction>,
     output: Option<output_driver::OutputTransaction>,
@@ -209,6 +211,7 @@ impl RecordingContext {
             input_turns: std::collections::BTreeSet::new(),
             member_capture: None,
             read: None,
+            read_origin: std::sync::Arc::new(()),
             measure: None,
             filing: None,
             output: None,
@@ -1521,6 +1524,9 @@ pub(super) use repair_driver::{
 #[cfg(test)]
 #[path = "context_repair_tests.rs"]
 mod repair_tests;
+
+#[path = "context_material.rs"]
+mod material_driver;
 
 #[path = "context_read.rs"]
 mod read_driver;

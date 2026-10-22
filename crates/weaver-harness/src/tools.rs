@@ -161,40 +161,7 @@ impl ToolResult {
     /// names its cause and carries what drained before it - marked as
     /// partial, so a fragment cannot read as an answer.
     pub(crate) fn granted(outcome: &ToolOutcome) -> ToolResult {
-        let content = match outcome {
-            ToolOutcome::Result { content } => content.clone(),
-            ToolOutcome::Refused { reason } => {
-                format!("the call was refused: {reason}")
-            }
-            ToolOutcome::Errored { detail } => {
-                format!("the tool machinery failed: {detail}")
-            }
-            ToolOutcome::Killed { partial, by } => {
-                let ending = match by {
-                    weaver_types::KillCause::Clock => {
-                        "the command ran past the clock and was killed"
-                    }
-                    weaver_types::KillCause::Cancel => {
-                        "the command was killed by the operator's stop"
-                    }
-                    weaver_types::KillCause::Unload => {
-                        "the command was interrupted by the agent's unload"
-                    }
-                    weaver_types::KillCause::FlowFailure => {
-                        "the command was contained after the agent's state flow failed"
-                    }
-                    weaver_types::KillCause::Fault => {
-                        "the gate failed with the command open, and its outcome is unknown"
-                    }
-                };
-                match partial {
-                    Some(partial) => {
-                        format!("{ending}. Partial output before the kill:\n{partial}")
-                    }
-                    None => format!("{ending}, with no output before the kill"),
-                }
-            }
-        };
+        let content = outcome_content(outcome);
         ToolResult { content }
     }
 
@@ -204,6 +171,40 @@ impl ToolResult {
     pub(crate) fn block(&self) -> ToolResultBlock {
         ToolResultBlock {
             content: self.content.clone(),
+        }
+    }
+}
+
+/// Pure presentation shared with held records; this creates no live tool grant.
+pub(crate) fn outcome_content(outcome: &ToolOutcome) -> String {
+    match outcome {
+        ToolOutcome::Result { content } => content.clone(),
+        ToolOutcome::Refused { reason } => {
+            format!("the call was refused: {reason}")
+        }
+        ToolOutcome::Errored { detail } => {
+            format!("the tool machinery failed: {detail}")
+        }
+        ToolOutcome::Killed { partial, by } => {
+            let ending = match by {
+                weaver_types::KillCause::Clock => "the command ran past the clock and was killed",
+                weaver_types::KillCause::Cancel => "the command was killed by the operator's stop",
+                weaver_types::KillCause::Unload => {
+                    "the command was interrupted by the agent's unload"
+                }
+                weaver_types::KillCause::FlowFailure => {
+                    "the command was contained after the agent's state flow failed"
+                }
+                weaver_types::KillCause::Fault => {
+                    "the gate failed with the command open, and its outcome is unknown"
+                }
+            };
+            match partial {
+                Some(partial) => {
+                    format!("{ending}. Partial output before the kill:\n{partial}")
+                }
+                None => format!("{ending}, with no output before the kill"),
+            }
         }
     }
 }
