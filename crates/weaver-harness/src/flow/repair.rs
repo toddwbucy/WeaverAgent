@@ -8,8 +8,8 @@ use weaver_trace::TurnRef;
 use weaver_types::Finish;
 use weaver_types::state_flow::{
     CallId, DecimalU64, NonDispatchCause, PairFailure, PairLane, PairStarted, ProtocolRepairCase,
-    SchemeDeclaration, SourceBlockId, SourcePosition, StatementRef, Ste100Result, Ste100Target,
-    TerminalPairFate,
+    RecallRequestRefusal, SchemeDeclaration, SourceBlockId, SourcePosition, StatementRef,
+    Ste100Result, Ste100Target, TerminalPairFate,
 };
 
 use super::pairs::CompletedPair;
@@ -63,9 +63,7 @@ pub(super) enum RepairIntent {
         source: SourceBlockId,
         correction: SourcePosition,
     },
-    InvalidRecallGap {
-        source: SourcePosition,
-    },
+    RecallRefusal(RecallRequestRefusal),
     Cancelled,
     Frozen,
     Transferred,
@@ -103,6 +101,21 @@ impl RepairAssociationRefusal {
     }
 }
 
+/// Read-only evidence installed by the owner at its exact Recorded boundary.
+#[derive(Debug)]
+pub(in crate::flow) struct RecordedRecallRefusal {
+    refusal: RecallRequestRefusal,
+    sequence: DecimalU64,
+}
+impl RecordedRecallRefusal {
+    pub(in crate::flow) fn refusal(&self) -> &RecallRequestRefusal {
+        &self.refusal
+    }
+    pub(in crate::flow) fn sequence(&self) -> DecimalU64 {
+        self.sequence
+    }
+}
+
 /// The original and every correction keep their exact source leases alive.
 /// Requests are derived by this owner only, never accepted from a caller vector.
 #[derive(Debug)]
@@ -110,6 +123,7 @@ pub(in crate::flow) struct RepairAccount {
     original: OriginalRequests,
     corrections: Vec<OriginalRequests>,
     requests: Vec<PairStarted>,
+    recall_refusals: Vec<RecordedRecallRefusal>,
     nonce: Arc<()>,
 }
 impl RepairAccount {
@@ -134,6 +148,9 @@ impl RepairAccount {
     }
     pub(in crate::flow) fn corrections(&self) -> &[OriginalRequests] {
         &self.corrections
+    }
+    pub(in crate::flow) fn recall_refusals(&self) -> &[RecordedRecallRefusal] {
+        &self.recall_refusals
     }
 }
 
@@ -258,7 +275,6 @@ enum Stage {
     Complete,
     Exhausted,
     EmptyRefusal,
-    RecallGap,
     Cancelled,
     Frozen,
     Transferred,
@@ -273,6 +289,7 @@ pub(super) struct RepairLedger {
     stage: Stage,
     frontier: u64,
     pending: Option<OriginalRequests>,
+    pending_protocol_recorded: bool,
     correction_out: Option<SourcePosition>,
     account_out: Option<Arc<()>>,
     associations: Vec<RepairAssociationRefusal>,
@@ -318,15 +335,9 @@ impl RepairLedger {
             .refusals()
             .iter()
             .any(|refusal| matches!(refusal, AssociationRefusal::External { .. }));
-        let has_invalid_recall = original
-            .refusals()
-            .iter()
-            .any(|refusal| matches!(refusal, AssociationRefusal::InvalidRecall { .. }));
         let stage = if contexts.is_empty() {
             if !original_refusals_recorded {
                 Stage::Association
-            } else if has_invalid_recall {
-                Stage::RecallGap
             } else {
                 Stage::Complete
             }
@@ -338,6 +349,7 @@ impl RepairLedger {
                 original,
                 corrections: vec![],
                 requests,
+                recall_refusals: vec![],
                 nonce: Arc::new(()),
             }),
             contexts,
@@ -346,6 +358,7 @@ impl RepairLedger {
             stage,
             frontier,
             pending: None,
+            pending_protocol_recorded: false,
             correction_out: None,
             account_out: None,
             associations: vec![],
@@ -355,6 +368,13 @@ impl RepairLedger {
     }
 
     pub(super) fn intent(&self) -> RepairIntent {
+        if !matches!(
+            self.stage,
+            Stage::Frozen | Stage::Transferred | Stage::Cancelled
+        ) && let Some(refusal) = self.next_recall_refusal()
+        {
+            return RepairIntent::RecallRefusal(refusal);
+        }
         match self.stage {
             Stage::Requested => RepairIntent::Requested {
                 source: self.context().source.clone(),
@@ -388,9 +408,6 @@ impl RepairLedger {
                 source: self.context().source.clone(),
                 correction: self.pending.as_ref().unwrap().generation().source().clone(),
             },
-            Stage::RecallGap => RepairIntent::InvalidRecallGap {
-                source: self.account.as_ref().unwrap().source().clone(),
-            },
             Stage::Cancelled => RepairIntent::Cancelled,
             Stage::Frozen => RepairIntent::Frozen,
             Stage::Transferred => RepairIntent::Transferred,
@@ -410,6 +427,77 @@ impl RepairLedger {
     }
     pub(super) fn pending_correction(&self) -> Option<&OriginalRequests> {
         self.pending.as_ref()
+    }
+    #[cfg(test)]
+    pub(super) fn recorded_refusals(&self) -> &[RecordedRecallRefusal] {
+        self.account
+            .as_ref()
+            .map_or(&[], RepairAccount::recall_refusals)
+    }
+
+    /// Only checked association evidence supplies a refusal. The account's
+    /// private Recorded entries retire each exact request once, in record order.
+    pub(super) fn next_recall_refusal(&self) -> Option<RecallRequestRefusal> {
+        let account = self.account.as_ref()?;
+        std::iter::once(&account.original)
+            .chain(account.corrections.iter())
+            .chain(self.pending.iter())
+            .flat_map(|generation| generation.refusals())
+            .filter_map(AssociationRefusal::recall_refusal)
+            .find(|refusal| {
+                !account
+                    .recall_refusals
+                    .iter()
+                    .any(|recorded| recorded.refusal.call_id == refusal.call_id)
+            })
+    }
+
+    pub(super) fn recorded_recall_refusal(
+        &mut self,
+        source: SourcePosition,
+    ) -> Result<(), RepairError> {
+        if self.stage == Stage::Frozen {
+            return Err(RepairError::Frozen);
+        }
+        let refusal = self.next_recall_refusal().ok_or(RepairError::WrongPhase)?;
+        self.record(source.clone())?;
+        self.account
+            .as_mut()
+            .unwrap()
+            .recall_refusals
+            .push(RecordedRecallRefusal {
+                refusal,
+                sequence: source.block_id.sequence,
+            });
+        Ok(())
+    }
+
+    pub(super) fn cancelled_protocol_refusal(&self) -> Option<SourcePosition> {
+        let pending = self.pending.as_ref()?;
+        (self.stage == Stage::Cancelled
+            && pending.attempted_call()
+            && !self.pending_protocol_recorded)
+            .then(|| pending.generation().source().clone())
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn observe_cancelled_correction(
+        &mut self,
+        correction: OriginalRequests,
+    ) -> Result<(), (OriginalRequests, RepairError)> {
+        let validation = self.require(Stage::Cancelled).and_then(|()| {
+            if self.pending.is_some() {
+                return Err(RepairError::WrongPhase);
+            }
+            self.validate_correction(&correction)
+        });
+        if let Err(error) = validation {
+            return Err((correction, error));
+        }
+        self.frontier = generation_frontier(correction.generation());
+        self.pending = Some(correction);
+        self.pending_protocol_recorded = false;
+        Ok(())
     }
     pub(super) fn failed_corrections(&self) -> Option<u32> {
         self.contexts
@@ -473,6 +561,7 @@ impl RepairLedger {
         self.frontier = generation_frontier(correction.generation());
         if correction.attempted_call() {
             self.pending = Some(correction);
+            self.pending_protocol_recorded = false;
             self.stage = Stage::ProtocolRefusal;
             return Ok(CorrectionProgress::ProtocolRefusal);
         }
@@ -507,9 +596,19 @@ impl RepairLedger {
         &mut self,
         recorded: SourcePosition,
     ) -> Result<(), RepairError> {
-        self.require(Stage::ProtocolRefusal)?;
+        if self.stage != Stage::Cancelled {
+            self.require(Stage::ProtocolRefusal)?;
+        }
+        if self.pending_protocol_recorded
+            || self.pending.as_ref().is_none_or(|p| !p.attempted_call())
+        {
+            return Err(RepairError::WrongPhase);
+        }
         self.record(recorded)?;
-        self.stage = Stage::CorrectionAccounting;
+        self.pending_protocol_recorded = true;
+        if self.stage != Stage::Cancelled {
+            self.stage = Stage::CorrectionAccounting;
+        }
         Ok(())
     }
 
@@ -531,7 +630,7 @@ impl RepairLedger {
     }
 
     pub(super) fn take_correction_accounting(&mut self) -> Option<OriginalRequests> {
-        if self.stage != Stage::CorrectionAccounting {
+        if self.stage != Stage::CorrectionAccounting || self.next_recall_refusal().is_some() {
             return None;
         }
         let correction = self.pending.take()?;
@@ -599,7 +698,7 @@ impl RepairLedger {
     }
 
     pub(super) fn take_exhausted_account(&mut self) -> Option<RepairAccount> {
-        if self.stage != Stage::ExhaustedAccounting {
+        if self.stage != Stage::ExhaustedAccounting || self.next_recall_refusal().is_some() {
             return None;
         }
         let account = self.account.take()?;
@@ -649,7 +748,7 @@ impl RepairLedger {
         if self.stage == Stage::Frozen {
             return Err(RepairError::Frozen);
         }
-        if self.stage != Stage::Complete {
+        if self.stage != Stage::Complete || self.next_recall_refusal().is_some() {
             return Ok(None);
         }
         let account = self.account.as_ref().unwrap();
@@ -713,6 +812,8 @@ impl RepairLedger {
         if self.stage != Stage::Cancelled
             || self.correction_out.is_some()
             || self.account_out.is_some()
+            || self.next_recall_refusal().is_some()
+            || self.cancelled_protocol_refusal().is_some()
         {
             return None;
         }
@@ -732,16 +833,6 @@ impl RepairLedger {
     fn finished_stage(&self) -> Stage {
         if !self.association_recorded || !self.original_refusals_recorded {
             Stage::Association
-        } else if self
-            .account
-            .as_ref()
-            .unwrap()
-            .original
-            .refusals()
-            .iter()
-            .any(|refusal| matches!(refusal, AssociationRefusal::InvalidRecall { .. }))
-        {
-            Stage::RecallGap
         } else {
             Stage::Complete
         }

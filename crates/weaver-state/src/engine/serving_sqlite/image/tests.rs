@@ -444,6 +444,92 @@ fn image_adoption_keeps_committed_order_across_new_runs_and_refuses_old_run_writ
 }
 
 #[test]
+fn malformed_recall_adoption_refuses_exact_shape_even_with_consistent_pair_and_hash() {
+    use super::super::filing::tests::{opening, pair_file, statement};
+    use weaver_types::state_flow::*;
+    for (compound, conditional, subject) in [
+        (true, false, "item"),
+        (false, true, "item"),
+        (true, true, "item"),
+        (false, false, "other"),
+        (false, false, "item"),
+    ] {
+        let request = fixture();
+        let seed = seed_image(&request).unwrap();
+        let mut store = ServingSqlite::adopt(
+            seed.as_bytes(),
+            &common(),
+            &request.schema_id,
+            &request.scheme_id,
+            &identity(seed.as_bytes()),
+            limits(),
+        )
+        .unwrap();
+        let mut send = statement(1, "message.assistant");
+        send.scheme_id = request.scheme_id.clone();
+        if !compound {
+            send.bindings[0].nouns.truncate(1);
+        }
+        if conditional {
+            send.bindings[0].condition = Some("file".into());
+            send.bindings[0].condition_span = Some(Span {
+                start: 14.into(),
+                end: 18.into(),
+            });
+        }
+        store.file(&send).unwrap();
+        // An external send may legitimately use this binding. Rewriting only
+        // the consistent pair lane/request models an image forged around filing.
+        let mut started = opening(&send);
+        let mut filed = pair_file(2, PairRecord::Started(started.clone()), "model");
+        filed.scheme_id = request.scheme_id.clone();
+        store.file_pair(&filed).unwrap();
+        started.lane = PairLane::Recall;
+        started.request = PairRequest::Recall {
+            subject: subject.into(),
+        };
+        started.call_block = 0.into();
+        let db = connection(&store.image().unwrap());
+        db.execute(
+            "UPDATE tool_pair SET lane='recall', call_block=?1, request=?2",
+            params![
+                0_u64.to_be_bytes(),
+                serde_json::to_string(&started.request).unwrap()
+            ],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE content_block SET raw_block=?1 WHERE id=(SELECT opened_event FROM tool_pair)",
+            [serde_json::to_string(&started).unwrap()],
+        )
+        .unwrap();
+        let image = bounded_image(&db, crate::save_point::SAVE_POINT_BOUND).unwrap();
+        let mut start = identity(&image);
+        start.position = store.position().unwrap();
+        let adopted = ServingSqlite::adopt(
+            &image,
+            &common(),
+            &request.schema_id,
+            &request.scheme_id,
+            &start,
+            limits(),
+        );
+        if compound || conditional || subject != "item" {
+            let error = adopted
+                .err()
+                .expect("invalid recall shape must refuse adoption");
+            assert_eq!(error.code, StateRefusalCode::OpenFailed);
+            assert!(error.detail.contains("single held noun"), "{error}");
+        } else {
+            assert!(
+                adopted.is_ok(),
+                "valid single unconditional subject remains adoptable"
+            );
+        }
+    }
+}
+
+#[test]
 fn abandoned_pair_adoption_requires_a_prior_run_even_with_rebound_image_identity() {
     use super::super::filing::tests::{opening, pair_file, statement};
     use weaver_types::state_flow::*;

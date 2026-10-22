@@ -139,6 +139,104 @@ fn input_refusal_does_not_change_existing_refusal_shapes() {
 }
 
 #[test]
+fn recall_request_refusal_is_exact_closed_and_keeps_independent_identities() {
+    use crate::state_flow::{CallId, RecallRequestRefusal, SourceBlockId, StatementRef};
+    let refusal = RecallRequestRefusal {
+        call_id: CallId {
+            run: "original".into(),
+            sequence: 17.into(),
+            call: 4.into(),
+        },
+        call_block: 8.into(),
+        statement: StatementRef {
+            block_id: SourceBlockId {
+                run: "checked".into(),
+                sequence: 29.into(),
+                block: 2.into(),
+            },
+            binding: 3.into(),
+        },
+        noun_count: 2.into(),
+        has_condition: false,
+        detail: RecallRequestRefusal::DETAIL.into(),
+    };
+    let record = RefusalRecord::RecallRequest(refusal.clone());
+    let expected = r#"{"seam":"recall_request","call_id":{"run":"original","sequence":"17","call":"4"},"call_block":"8","statement":{"block_id":{"run":"checked","sequence":"29","block":"2"},"binding":"3"},"noun_count":"2","has_condition":false,"detail":"recall requires exactly one noun and no governing condition"}"#;
+    assert_eq!(serde_json::to_string(&record).unwrap(), expected);
+    assert_eq!(
+        crate::state_flow::decode_strict::<RefusalRecord>(expected).unwrap(),
+        record
+    );
+    for (count, condition) in [(1, true), (2, true), (u64::MAX, false)] {
+        let value = RecallRequestRefusal {
+            noun_count: count.into(),
+            has_condition: condition,
+            ..refusal.clone()
+        };
+        let raw = serde_json::to_string(&RefusalRecord::RecallRequest(value.clone())).unwrap();
+        assert_eq!(
+            crate::state_flow::decode_strict::<RefusalRecord>(&raw).unwrap(),
+            RefusalRecord::RecallRequest(value)
+        );
+    }
+    for field in [
+        "call_id",
+        "call_block",
+        "statement",
+        "noun_count",
+        "has_condition",
+        "detail",
+    ] {
+        let mut value: serde_json::Value = serde_json::from_str(expected).unwrap();
+        value.as_object_mut().unwrap().remove(field);
+        assert_refusal_rejected(&value.to_string());
+    }
+    for path in ["call_id", "statement", "block_id"] {
+        let mut value: serde_json::Value = serde_json::from_str(expected).unwrap();
+        match path {
+            "call_id" => value["call_id"] = serde_json::json!(["original", "17", "4"]),
+            "statement" => {
+                value["statement"] = serde_json::json!([value["statement"]["block_id"], "3"])
+            }
+            "block_id" => {
+                value["statement"]["block_id"] = serde_json::json!(["checked", "29", "2"])
+            }
+            _ => unreachable!(),
+        }
+        assert_refusal_rejected(&value.to_string());
+    }
+    let positional = serde_json::json!([
+        refusal.call_id,
+        refusal.call_block,
+        refusal.statement,
+        refusal.noun_count,
+        refusal.has_condition,
+        refusal.detail,
+    ])
+    .to_string();
+    assert!(serde_json::from_str::<RecallRequestRefusal>(&positional).is_err());
+    assert!(crate::state_flow::decode_strict::<RecallRequestRefusal>(&positional).is_err());
+    for (from, to) in [
+        ("\"noun_count\":\"2\"", "\"noun_count\":\"0\""),
+        ("\"noun_count\":\"2\"", "\"noun_count\":\"1\""),
+        ("\"noun_count\":\"2\"", "\"noun_count\":2"),
+        ("\"call_block\":\"8\"", "\"call_block\":\"08\""),
+        ("\"call\":\"4\"", "\"call\":\"18446744073709551616\""),
+        ("\"binding\":\"3\"", "\"binding\":\"-1\""),
+        ("\"sequence\":\"17\"", "\"sequence\":\"0\""),
+        ("\"sequence\":\"29\"", "\"sequence\":\"0\""),
+        ("\"detail\":", "\"subject\":\"guessed\",\"detail\":"),
+        ("\"detail\":", "\"detail\":\"duplicate\",\"detail\":"),
+        ("\"noun_count\":", "\"noun_count\":\"3\",\"noun_count\":"),
+        ("\"call\":", "\"call\":\"3\",\"call\":"),
+        ("\"binding\":", "\"binding\":\"2\",\"binding\":"),
+        (RecallRequestRefusal::DETAIL, "different detail"),
+    ] {
+        assert_refusal_rejected(&expected.replace(from, to));
+    }
+}
+
+#[test]
 fn protocol_repair_refusal_keeps_exact_source_case_and_flat_seam_shape() {
     use crate::state_flow::{ProtocolRepairCase, SourceBlockId};
 

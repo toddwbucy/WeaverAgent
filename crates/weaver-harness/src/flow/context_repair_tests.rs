@@ -17,6 +17,8 @@ use weaver_types::state_flow as s;
 
 #[path = "context_empty_correction_tests.rs"]
 mod empty_correction_tests;
+#[path = "context_recall_refusal_tests.rs"]
+mod recall_refusal_tests;
 #[path = "context_sort_tests.rs"]
 mod sort_tests;
 

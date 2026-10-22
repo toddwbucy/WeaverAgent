@@ -27,6 +27,7 @@ const _: fn() = || {
     impl<T: Clone> NotClone<u8> for T {}
     let _ = <RepairLedger as NotClone<_>>::check;
     let _ = <RepairAccount as NotClone<_>>::check;
+    let _ = <RecordedRecallRefusal as NotClone<_>>::check;
     let _ = <EffectiveEmission as NotClone<_>>::check;
     let _ = <RestatementRequest as NotClone<_>>::check;
     trait NotDefault<M> {
@@ -654,6 +655,8 @@ fn cancellation_and_freeze_preserve_evidence_without_a_success_grant() {
         } else {
             ledger.cancel();
             assert!(ledger.take_effective().unwrap().is_none());
+            assert!(ledger.take_cancelled().is_none());
+            ledger.recorded_protocol_refusal(record(140)).unwrap();
             let cancelled = ledger.take_cancelled().unwrap();
             assert_eq!(cancelled.account().source(), &record(10));
             assert_eq!(
@@ -862,7 +865,7 @@ fn cancellation_recovers_a_lent_exhaustion_account_without_erasing_its_pending_s
 }
 
 #[test]
-fn invalid_recall_remains_an_explicit_owned_gap_without_an_invented_wire_refusal() {
+fn invalid_recall_requires_its_actual_refusal_record_before_transfer() {
     let (declaration, scheme) = scheme();
     let mut result = accepted("Recall first and second.");
     let Ste100Result::Accepted { bindings } = &mut result else {
@@ -888,10 +891,12 @@ fn invalid_recall_remains_an_explicit_owned_gap_without_an_invented_wire_refusal
     );
     let original = OriginalRequests::from_checked(checked, &scheme).unwrap();
     let mut ledger = RepairLedger::begin(original, 2).unwrap();
-    assert_eq!(
-        ledger.intent(),
-        RepairIntent::InvalidRecallGap { source: record(10) }
-    );
+    let RepairIntent::RecallRefusal(refusal) = ledger.intent() else {
+        panic!("checked invalid recall must owe its exact refusal");
+    };
+    assert_eq!(refusal.call_id.sequence.0, 10);
+    assert_eq!(refusal.call_block.0, 0);
+    assert_eq!(refusal.noun_count.0, 2);
     assert_eq!(ledger.original_refusals().len(), 1);
     assert!(ledger.associations().is_empty());
     assert_eq!(
@@ -900,6 +905,22 @@ fn invalid_recall_remains_an_explicit_owned_gap_without_an_invented_wire_refusal
     );
     assert!(ledger.take_effective().unwrap().is_none());
     ledger.cancel();
+    assert!(ledger.take_cancelled().is_none());
+    ledger.recorded_recall_refusal(record(40)).unwrap();
+    assert_eq!(
+        ledger.recorded_recall_refusal(record(41)),
+        Err(RepairError::WrongPhase)
+    );
+    assert_eq!(
+        ledger.account.as_ref().unwrap().recall_refusals()[0].refusal(),
+        &refusal
+    );
+    assert_eq!(
+        ledger.account.as_ref().unwrap().recall_refusals()[0]
+            .sequence()
+            .0,
+        40
+    );
     assert_eq!(
         ledger
             .take_cancelled()

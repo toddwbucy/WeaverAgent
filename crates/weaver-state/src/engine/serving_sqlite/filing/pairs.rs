@@ -85,9 +85,15 @@ fn start(
         return Err(invalid("review identity does not name its instruction"));
     }
     if let PairRequest::Recall { subject } = &started.request {
-        let matched: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM binding_noun WHERE binding_id=?1 AND value=?2 COLLATE BINARY)",params![statement.id,subject],|row|row.get(0))?;
+        let matched: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM statement_binding b JOIN binding_noun n ON n.binding_id=b.id
+             WHERE b.id=?1 AND b.condition IS NULL AND n.value=?2 COLLATE BINARY
+               AND (SELECT COUNT(*) FROM binding_noun WHERE binding_id=b.id)=1)",
+            params![statement.id, subject], |row| row.get(0))?;
         if subject.is_empty() || !matched {
-            return Err(invalid("recall subject is not a held noun"));
+            return Err(invalid(
+                "recall requires its exact single held noun and no condition",
+            ));
         }
     }
     let exists: bool = tx.query_row(

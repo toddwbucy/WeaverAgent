@@ -857,6 +857,60 @@ pub(super) mod filing {
     }
 
     #[test]
+    fn malformed_recall_opening_refuses_compound_and_conditional_bindings_atomically() {
+        for (compound, conditional, subject) in [
+            (true, false, "item"),
+            (false, true, "item"),
+            (true, true, "item"),
+            (false, false, "other"),
+        ] {
+            let mut store = store();
+            let mut send = statement(1, "message.assistant");
+            if !compound {
+                send.bindings[0].nouns.truncate(1);
+            }
+            if conditional {
+                send.bindings[0].condition = Some("file".into());
+                send.bindings[0].condition_span = Some(Span {
+                    start: 14.into(),
+                    end: 18.into(),
+                });
+            }
+            store.file(&send).unwrap();
+            let before = rows(&store.connection);
+            let mut started = opening(&send);
+            started.lane = PairLane::Recall;
+            started.request = PairRequest::Recall {
+                subject: subject.into(),
+            };
+            started.call_block = 0.into();
+            let refused = store
+                .file_pair(&pair_file(2, PairRecord::Started(started), "model"))
+                .unwrap_err();
+            assert_eq!(refused.code, StateRefusalCode::InvalidPair);
+            assert!(refused.detail.contains("single held noun"));
+            assert_eq!(
+                rows(&store.connection),
+                before,
+                "refused opening must not leave a source or pair row"
+            );
+        }
+        let mut store = store();
+        let mut send = statement(1, "message.assistant");
+        send.bindings[0].nouns.truncate(1);
+        store.file(&send).unwrap();
+        let mut started = opening(&send);
+        started.lane = PairLane::Recall;
+        started.request = PairRequest::Recall {
+            subject: "item".into(),
+        };
+        started.call_block = 0.into();
+        store
+            .file_pair(&pair_file(2, PairRecord::Started(started), "model"))
+            .unwrap();
+    }
+
+    #[test]
     fn pair_lane_request_mismatch_refuses_and_rolls_back_its_source() {
         let mut store = store();
         let send = statement(1, "message.assistant");
@@ -1136,7 +1190,8 @@ pub(super) mod filing {
     #[test]
     fn inward_terminal_and_abandoned_pair_have_no_fabricated_gate_execution() {
         let mut store = store();
-        let send = statement(1, "message.assistant");
+        let mut send = statement(1, "message.assistant");
+        send.bindings[0].nouns.truncate(1);
         store.file(&send).unwrap();
         let mut started = opening(&send);
         started.lane = PairLane::Recall;

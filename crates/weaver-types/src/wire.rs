@@ -1283,6 +1283,8 @@ pub enum RefusalRecord {
     Classify { refusal: LabelRefusal },
     /// The pre-turn input check's attributed operation refusal.
     Input(InputRefusal),
+    /// A checked recall binding with no single unconditional noun operation.
+    RecallRequest(crate::state_flow::RecallRequestRefusal),
     /// A model pass cannot supply a usable tool statement, attempts a call
     /// during restatement, or returns an empty correction. This is no component halt.
     ProtocolRepair {
