@@ -1,9 +1,50 @@
-//! Context admission for read-backed material; conversion has no I/O continuation.
+//! Context admission for source-backed material; conversion has no I/O continuation.
 
 use super::*;
-use crate::flow::material::{self, HeldMaterial, MaterialError, MaterialFailure};
+use crate::flow::material::{
+    self, HeldMaterial, MaterialError, MaterialFailure, TaskMaterialError,
+};
 
 impl RecordingContext {
+    /// Only a completed begin_task can supply this fresh source. A raw seated
+    /// input or a cancelled/refused task account has no conversion into it.
+    pub(in crate::flow) fn hold_task_material(
+        &mut self,
+        task: BegunTask,
+        io: &mut impl PumpIo,
+    ) -> Result<HeldMaterial, TaskMaterialError> {
+        if let Err(failure) = self.live(io) {
+            return Err(TaskMaterialError {
+                kind: MaterialFailure::Unavailable,
+                task: Box::new(task),
+                failure: Some(failure),
+            });
+        }
+        if !task.belongs_to(self) {
+            return Err(TaskMaterialError {
+                kind: MaterialFailure::ForeignContext,
+                task: Box::new(task),
+                failure: Some(self.fail(
+                    io,
+                    FlowHaltReason::ProtocolFailed,
+                    HaltPoint::StateReply,
+                    "material task belongs to another recording context",
+                )),
+            });
+        }
+        material::from_task(task).map_err(|mut error| {
+            if let MaterialFailure::Invalid(detail) = error.kind {
+                error.failure = Some(self.fail(
+                    io,
+                    FlowHaltReason::ProtocolFailed,
+                    HaltPoint::StateReply,
+                    detail,
+                ));
+            }
+            error
+        })
+    }
+
     pub(in crate::flow) fn hold_material(
         &mut self,
         read: RecordedRead,

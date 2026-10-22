@@ -1588,7 +1588,7 @@ mod repair_tests;
 mod marks_driver;
 #[allow(unused_imports)] // Composed by the loop at the coupled cutover.
 pub(in crate::flow) use marks_driver::{
-    BeginTaskError, BeginTaskRefusal, TaskCompletion, TaskProgress,
+    BeginTaskError, BeginTaskRefusal, BegunTask, TaskCompletion, TaskProgress,
 };
 
 #[cfg(test)]

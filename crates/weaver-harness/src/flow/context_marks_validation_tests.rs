@@ -3,6 +3,29 @@
 
 use super::*;
 
+/// Read-only snapshot of a real task's retained licensing evidence. Debug text
+/// here compares private receipts without exposing a constructor or wire form.
+#[derive(Debug, PartialEq)]
+pub(in crate::flow::context) struct TaskMaterialEvidence {
+    input: String,
+    scope: TaskScopeRef,
+    catalog: Vec<u8>,
+    recall: Sequence,
+    mark: Option<String>,
+}
+
+pub(in crate::flow::context) fn task_material_evidence(
+    task: &BegunTask,
+) -> TaskMaterialEvidence {
+    TaskMaterialEvidence {
+        input: format!("{:?}", task.input),
+        scope: task.scope.clone(),
+        catalog: task.catalog.raw_bytes().to_vec(),
+        recall: task.catalog.recall_sequence(),
+        mark: task.mark.as_ref().map(|mark| format!("{mark:?}")),
+    }
+}
+
 pub(in crate::flow::context) fn input_associations(task: &BegunTask) {
     let input = &task.input;
     let seated = &input.seated;

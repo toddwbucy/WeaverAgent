@@ -13,6 +13,9 @@ use std::sync::OnceLock;
 use weaver_trace::TurnRef;
 use weaver_types::{TurnFrame, state_flow as s};
 
+#[path = "context_task_material_tests.rs"]
+mod task_material;
+
 // Public task/source values cannot recreate the private receipt-bearing owners.
 const _: fn() = || {
     trait MustNotClone<Marker> {

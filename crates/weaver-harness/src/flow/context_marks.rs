@@ -64,6 +64,9 @@ pub(in crate::flow) struct BegunTask {
     mark: Option<FilingCompletion>,
 }
 impl BegunTask {
+    pub(in crate::flow) fn origin(&self) -> &std::sync::Arc<()> {
+        self.catalog.origin()
+    }
     pub(in crate::flow) fn scope(&self) -> &TaskScopeRef {
         &self.scope
     }
