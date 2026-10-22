@@ -98,6 +98,68 @@ fn owed_refusal_queues_only_after_halt_and_cannot_replace_an_original_or_admit_c
 }
 
 #[test]
+fn stopped_trace_drain_rechecks_run_and_release_purpose_without_losing_the_ticket() {
+    for wrong_run in [false, true] {
+        let (recorder, _reader) = recorder();
+        let mut barrier = RecordBarrier::new(recorder, "run".into());
+        let mut inbox = FlowInbox::new();
+        let mut budget = budget(2);
+        let original = authored("Read retained original.");
+        let author = if wrong_run {
+            ServingAuthor::new("session".into(), "other-run".into(), 42, 1_000).unwrap()
+        } else {
+            author()
+        };
+        let purpose = if wrong_run {
+            RecordPurpose::Content
+        } else {
+            RecordPurpose::Observation
+        };
+        // This is explicit lower-level caller misuse. The healthy context never
+        // supplies a foreign run or an incompatible release obligation.
+        assert!(matches!(
+            barrier.submit_authored_with_clock(
+                original.clone(),
+                purpose,
+                &author,
+                1,
+                &mut inbox,
+                &mut budget,
+                &mut || Ok(1_001)
+            ),
+            RecordProgress::Failed
+        ));
+        let ticket = barrier.pending_author().unwrap().ticket;
+        let prepared = serde_json::to_string(barrier.pending().unwrap()).unwrap();
+        assert!(barrier.recorder().tap_stopped());
+        for _ in 0..2 {
+            assert!(matches!(
+                barrier.resume_trace_only(),
+                Err(weaver_trace::Failure::RefusedOnSubmit {
+                    reason: weaver_trace::SubmitRefusal::PayloadMalformed,
+                })
+            ));
+            assert_eq!(barrier.pending_author().unwrap().ticket, ticket);
+            same_original(&barrier.pending_author().unwrap().event, &original);
+            assert_eq!(
+                serde_json::to_string(barrier.pending().unwrap()).unwrap(),
+                prepared
+            );
+            assert_eq!(barrier.last_trace_only_sequence(), None);
+        }
+        assert_eq!(
+            barrier
+                .recorder()
+                .structure()
+                .by_kind(Kind::MessageUser)
+                .count(),
+            0
+        );
+        assert_eq!(inbox.queued().count(), 0);
+    }
+}
+
+#[test]
 fn owned_ticket_preserves_source_and_prepares_only_once_under_pressure() {
     let (mut recorder, reader) = recorder();
     fill_capacity(&mut recorder);

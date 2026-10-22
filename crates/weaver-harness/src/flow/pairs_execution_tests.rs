@@ -979,3 +979,19 @@ fn a_sent_execution_cannot_be_withdrawn_or_replaced_by_a_stop_terminal() {
         TerminalPairFate::Completed
     );
 }
+
+#[test]
+fn frozen_execution_does_not_reopen_a_prior_gate_death_closure() {
+    // This private ledger test assumes the separate cleanup owner's verified
+    // death boundary. It does not assert process or cgroup containment.
+    let (mut ledger, call, _) = ready();
+    dispatch(&mut ledger, &call, 1);
+    ledger.close_gate_fault(&call).unwrap();
+    ledger.freeze();
+    assert!(ledger.halt_execution().is_none());
+    assert!(matches!(
+        ledger.halted_terminal().unwrap().1.reason,
+        Some(PairFailure::GateFault {})
+    ));
+    assert!(ledger.halt_gate_terminal(&call).is_none());
+}

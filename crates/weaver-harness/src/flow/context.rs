@@ -152,6 +152,8 @@ pub(crate) struct RecordingContext {
     completed_author: Option<Sequence>,
     failure: Option<RunFailure>,
     failed_wait: Option<WaitAtHalt>,
+    halt_report: Option<halt_driver::HaltReport>,
+    halt_gate: Option<halt_gate_driver::HaltGate>,
 }
 
 impl RecordingContext {
@@ -256,6 +258,8 @@ impl RecordingContext {
             completed_author: None,
             failure: None,
             failed_wait: None,
+            halt_report: None,
+            halt_gate: None,
         })
     }
 
@@ -1626,7 +1630,7 @@ mod repair_tests;
 mod marks_driver;
 #[allow(unused_imports)] // Composed by the loop at the coupled cutover.
 pub(in crate::flow) use marks_driver::{
-    BeginTaskError, BeginTaskRefusal, TaskCompletion, TaskProgress,
+    BeginTaskError, BeginTaskRefusal, BegunTask, TaskCompletion, TaskProgress,
 };
 
 #[cfg(test)]
@@ -1675,6 +1679,16 @@ pub(super) use measure_driver::{
 #[cfg(test)]
 #[path = "context_measure_tests.rs"]
 mod measure_tests;
+
+#[path = "context_halt.rs"]
+mod halt_driver;
+#[allow(unused_imports)] // Failed lifecycle composition remains dormant until cutover.
+pub(super) use halt_driver::{HaltReport, HaltReportRefusal, HaltTraceProgress};
+
+#[path = "context_halt_gate.rs"]
+mod halt_gate_driver;
+#[allow(unused_imports)] // Failed lifecycle composition remains held for cutover.
+pub(super) use halt_gate_driver::{HaltGate, HaltGateProgress, HaltGateRefusal};
 
 #[path = "context_inspection.rs"]
 mod inspection_driver;

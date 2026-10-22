@@ -1510,3 +1510,6 @@ fn validation_crossing_the_deadline_cannot_publish_a_page_or_released_result() {
         assert_eq!(member.requests.len(), if at_release { 2 } else { 1 });
     }
 }
+
+#[path = "context_halt_tests.rs"]
+mod halt_tests;
