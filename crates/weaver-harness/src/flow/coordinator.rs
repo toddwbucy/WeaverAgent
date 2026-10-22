@@ -436,6 +436,8 @@ pub(super) struct FlowCoordinator<P> {
     state_recorded_ns: Option<u64>,
     classifier_release: Option<ClassifierRelease>,
     refused_author: Option<RefusedAuthor>,
+    #[cfg(test)]
+    control_busy_for_test: usize,
 }
 
 impl<P: Ste100Port> FlowCoordinator<P> {
@@ -501,6 +503,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             state_recorded_ns: None,
             classifier_release: None,
             refused_author: None,
+            #[cfg(test)]
+            control_busy_for_test: 0,
         })
     }
 
@@ -567,6 +571,12 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             .as_mut()
             .expect("standing classifier")
             .interrupt_terminal_probes_for_test(count);
+    }
+
+    /// Defensive boundary injection, not a competing operation or a receipt.
+    #[cfg(test)]
+    pub(super) fn defer_control_for_test(&mut self, count: usize) {
+        self.control_busy_for_test = count;
     }
 
     /// Wake the common pump for a sample only when reduction can author it.
@@ -1301,6 +1311,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             state_recorded_ns: None,
             classifier_release: None,
             refused_author: None,
+            #[cfg(test)]
+            control_busy_for_test: 0,
         })
     }
 
@@ -2022,6 +2034,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             || !self.state().outstanding().is_empty()
             || self.state().held_measurement().is_some()
         {
+            return Ok(OperationStart::Busy(request));
+        }
+        #[cfg(test)]
+        if self.control_busy_for_test > 0 {
+            self.control_busy_for_test -= 1;
             return Ok(OperationStart::Busy(request));
         }
         let now = io.now().map_err(|e| self.fail(cx, "clock", e))?;
