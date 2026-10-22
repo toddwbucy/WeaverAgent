@@ -282,6 +282,19 @@ impl PairLedger {
         Some(&entry.started)
     }
 
+    /// Exercise the helper's defensive empty-input boundary after real receipts.
+    /// This deliberately differs from the immutable opening evidence and cannot
+    /// be produced by checked noun spans. It creates no production proof door.
+    #[cfg(test)]
+    pub(super) fn empty_ready_inward_subject_for_test(&mut self, call: &CallId) {
+        assert_eq!(self.next_ready().map(|ready| &ready.call_id), Some(call));
+        let PairRequest::Recall { subject } = &mut self.entry_mut(call).unwrap().started.request
+        else {
+            panic!("fixture requires a ready recall");
+        };
+        subject.clear();
+    }
+
     pub(super) fn start_inward(&mut self, call: &CallId) -> Result<(), PairError> {
         self.live()?;
         let ready = self
