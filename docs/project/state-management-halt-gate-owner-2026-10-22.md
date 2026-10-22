@@ -2,6 +2,7 @@
 
 Date: 2026-10-22.
 Branch: code/state-halt-gate-owner.
+PR: #251.
 Parent PR: #250.
 Epic: #146.
 
