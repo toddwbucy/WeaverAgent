@@ -128,9 +128,30 @@ struct TaskFixture {
 }
 impl TaskFixture {
     fn new() -> Self {
+        Self::with_template_prefix(false)
+    }
+    fn with_template_prefix(prefix: bool) -> Self {
         let inventory = inventory();
         let declaration = tests::config();
         let mut input = InputFixture::with_declaration(Some(&inventory), declaration);
+        if prefix {
+            input
+                .run
+                .author(AuthoredEvent {
+                    kind: Kind::ModelMeasurement,
+                    subsystem: weaver_trace::Subsystem::Harness,
+                    turn: Some(TurnRef("template-prefix".into())),
+                    source: crate::flow::author::AuthoredSource::Runtime,
+                    causal_parent: None,
+                    payload: Some(Payload::ModelMeasurement(
+                        serde_json::value::to_raw_value(
+                            &serde_json::json!({"fixture":"shift template transcript"}),
+                        )
+                        .unwrap(),
+                    )),
+                })
+                .unwrap();
+        }
         input
             .run
             .context
@@ -391,6 +412,25 @@ impl TaskFixture {
             local_id: id.into(),
             revision: 1.into(),
         }
+    }
+    fn until_input_receipt_taken(&mut self) {
+        for _ in 0..256 {
+            self.step().unwrap();
+            let context = &self.input.run.context;
+            if context.open_turn.is_some()
+                && context.input_turn.is_none()
+                && !context.flow.has_filing_consumer()
+            {
+                assert!(context.read.is_none());
+                assert!(
+                    self.requests
+                        .iter()
+                        .all(|request| matches!(request, s::StateFrame::File { .. }))
+                );
+                return;
+            }
+        }
+        panic!("input receipt did not reach the pre-read handoff");
     }
 }
 
@@ -993,4 +1033,268 @@ fn begin_task_nested_leave_yields_preserve_the_input_owner_and_exact_record() {
         assert_eq!(fx.input.records(Kind::MessageUser).len(), 1);
         assert_eq!(fx.input.records(Kind::StateMark).len(), 1);
     }
+}
+
+#[test]
+fn begin_task_rejects_out_of_range_and_nonadjacent_catalog_ids() {
+    for adjacent in [false, true] {
+        let mut fx = TaskFixture::new();
+        fx.result = s::QueryResult::Marks {
+            next_span_id: if adjacent { 2.into() } else { 4.into() },
+            current_task: Some(s::TaskScopeRef {
+                task: fx.span(1),
+                prompt: fx.span(if adjacent { 2 } else { 3 }),
+            }),
+            open_scopes: vec![],
+        };
+        fx.begin();
+        let failure = (0..256)
+            .find_map(|_| fx.step().err())
+            .expect("bad catalog was accepted");
+        assert!(matches!(
+            failure,
+            RunFailure::Flow {
+                reason: FlowHaltReason::ProtocolFailed,
+                ..
+            }
+        ));
+        assert!(fx.input.records(Kind::StateMark).is_empty());
+        assert!(
+            fx.input
+                .run
+                .context
+                .take_task(&mut fx.input.run.clock)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn begin_task_uses_the_last_two_representable_span_ids() {
+    let mut fx = TaskFixture::new();
+    fx.result = s::QueryResult::Marks {
+        next_span_id: (u64::MAX - 1).into(),
+        current_task: None,
+        open_scopes: vec![],
+    };
+    fx.begin();
+    let TaskCompletion::Begun(task) = fx.finish() else {
+        panic!("last valid two-ID proposal refused");
+    };
+    assert_eq!(task.scope().task, fx.span(u64::MAX - 1));
+    assert_eq!(task.scope().prompt, fx.span(u64::MAX));
+    assert_eq!(fx.input.records(Kind::StateMark).len(), 1);
+    // The scripted receipt proves this owner's proposal, not a SQL commit.
+    // MARK-READ specifies CounterExhausted when the next MAX+1 is requested.
+}
+
+#[test]
+fn begin_task_input_association_defenses_inspect_real_receipt_values() {
+    let mut fx = TaskFixture::new();
+    fx.begin();
+    let TaskCompletion::Begun(task) = fx.finish() else {
+        panic!("no actual task");
+    };
+    marks_driver::validation_tests::input_associations(&task);
+}
+
+#[test]
+fn begin_task_mark_association_defenses_inspect_real_receipt_values() {
+    let mut fx = TaskFixture::new();
+    fx.begin();
+    let TaskCompletion::Begun(task) = fx.finish() else {
+        panic!("no actual task");
+    };
+    marks_driver::validation_tests::mark_associations(&task);
+}
+
+#[test]
+fn begin_task_bound_validator_inspects_an_actual_owner_without_replacing_it() {
+    let mut fx = TaskFixture::new();
+    fx.begin();
+    assert_eq!(
+        fx.input.run.context.complete_wait(PumpDeadline::Decision),
+        None
+    );
+    let work = fx.input.run.context.marks.as_ref().unwrap();
+    assert!(work.has_original_wait(Some(fx.bound)));
+    assert!(!work.has_original_wait(None));
+    let duration = fx.bound.deadline_ns() - fx.bound.began_ns();
+    for bound in [
+        AbsoluteBound::after(fx.bound.began_ns(), duration - 1).unwrap(),
+        AbsoluteBound::after(fx.bound.began_ns() + 1, duration - 1).unwrap(),
+    ] {
+        assert!(!work.has_original_wait(Some(bound)));
+    }
+    // These are inspection values. The real registry and owner still agree.
+    assert!(matches!(fx.finish(), TaskCompletion::Begun(_)));
+}
+
+#[test]
+fn begin_task_rejects_a_decision_rearmed_after_completion() {
+    let mut fx = TaskFixture::new();
+    fx.begin();
+    for _ in 0..256 {
+        if fx.step().unwrap() == TaskProgress::Complete {
+            break;
+        }
+    }
+    assert!(
+        fx.input
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision)
+            .is_none()
+    );
+    let competing = AbsoluteBound::after(fx.input.run.clock.now().unwrap(), 100).unwrap();
+    fx.input
+        .run
+        .context
+        .arm(PumpDeadline::Decision, competing, &mut fx.input.run.clock)
+        .unwrap();
+    let failure = fx
+        .input
+        .run
+        .context
+        .take_task(&mut fx.input.run.clock)
+        .unwrap_err();
+    assert!(matches!(
+        failure,
+        RunFailure::Flow {
+            reason: FlowHaltReason::ProtocolFailed,
+            ..
+        }
+    ));
+    assert!(fx.input.run.context.marks.is_some());
+    assert_eq!(fx.input.run.context.failure(), Some(&failure));
+}
+
+#[test]
+fn begin_task_private_marks_read_purpose_excludes_a_public_read_at_handoff() {
+    let mut fx = TaskFixture::new();
+    fx.begin();
+    fx.until_input_receipt_taken();
+    let selector = s::ReadSelector::Marks {};
+    let error = fx
+        .input
+        .run
+        .context
+        .begin_read(
+            selector.clone(),
+            Some(TurnRef("task-turn".into())),
+            &mut fx.input.run.clock,
+        )
+        .unwrap_err();
+    assert_eq!(error.refusal, ReadBeginRefusal::Busy);
+    assert_eq!(error.selector, selector);
+    assert!(error.failure.is_none());
+    assert!(fx.input.run.context.read.is_none());
+    assert!(
+        fx.input
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::StateControl)
+            .is_none()
+    );
+    assert!(matches!(fx.finish(), TaskCompletion::Begun(_)));
+}
+
+#[test]
+fn begin_task_cancellation_after_input_receipt_starts_no_read_or_mark() {
+    let mut fx = TaskFixture::new();
+    fx.begin();
+    fx.until_input_receipt_taken();
+    fx.input.run.context.cancel_task();
+    let TaskCompletion::Cancelled(mut account) = fx.finish() else {
+        panic!("cancel granted a task");
+    };
+    assert!(account.take_unconsumed_input().is_none());
+    assert_eq!(fx.input.records(Kind::MessageUser).len(), 1);
+    assert!(fx.input.records(Kind::StateMark).is_empty());
+    assert!(
+        fx.requests
+            .iter()
+            .all(|request| matches!(request, s::StateFrame::File { .. }))
+    );
+    assert!(fx.input.run.context.read.is_none());
+    assert!(fx.input.run.context.failure().is_none());
+}
+
+#[test]
+fn begin_task_rejects_a_certificate_from_another_recorded_transcript() {
+    let mut fx = TaskFixture::new();
+    let other = TaskFixture::with_template_prefix(true);
+    assert_eq!(
+        fx.certificate.inventory_sha256(),
+        other.certificate.inventory_sha256()
+    );
+    assert_eq!(fx.certificate.run_id(), other.certificate.run_id());
+    assert_ne!(
+        fx.certificate.accepted()[0].result_source(),
+        other.certificate.accepted()[0].result_source()
+    );
+    let token = fx.token();
+    let error = fx
+        .input
+        .run
+        .context
+        .begin_task(
+            token,
+            TurnRef("task-turn".into()),
+            &other.certificate,
+            &mut fx.input.run.clock,
+        )
+        .unwrap_err();
+    assert_eq!(error.refusal, BeginTaskRefusal::InvalidTemplate);
+    assert!(error.failure.is_none());
+    assert!(fx.input.run.context.marks.is_none());
+    assert!(!fx.input.run.context.flow.has_filing_consumer());
+    assert!(fx.input.records(Kind::TurnStarted).is_empty());
+    fx.input
+        .run
+        .context
+        .begin_task(
+            error.input,
+            TurnRef("task-turn".into()),
+            &fx.certificate,
+            &mut fx.input.run.clock,
+        )
+        .unwrap();
+    assert!(matches!(fx.finish(), TaskCompletion::Begun(_)));
+}
+
+#[test]
+fn begin_task_cancellation_after_settlement_retains_private_input_and_mark_evidence() {
+    let mut fx = TaskFixture::new();
+    fx.begin();
+    for _ in 0..256 {
+        if fx.step().unwrap() == TaskProgress::Complete {
+            break;
+        }
+    }
+    assert!(
+        fx.input
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision)
+            .is_none()
+    );
+    fx.input.run.context.cancel_task();
+    let Some(TaskCompletion::Cancelled(mut account)) = fx
+        .input
+        .run
+        .context
+        .take_task(&mut fx.input.run.clock)
+        .unwrap()
+    else {
+        panic!("settled cancellation exposed a task grant");
+    };
+    assert!(account.take_unconsumed_input().is_none());
+    marks_driver::validation_tests::cancelled_evidence(&account);
+    assert_eq!(fx.input.records(Kind::MessageUser).len(), 1);
+    assert_eq!(fx.input.records(Kind::StateMark).len(), 1);
+    assert!(fx.input.run.context.failure().is_none());
 }
