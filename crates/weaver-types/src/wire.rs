@@ -1172,8 +1172,8 @@ pub enum RefusalRecord {
     Classify { refusal: LabelRefusal },
     /// The pre-turn input check's attributed operation refusal.
     Input(InputRefusal),
-    /// A model pass cannot supply a usable tool statement or attempts a call
-    /// while it was asked only to restate held text. This is no component halt.
+    /// A model pass cannot supply a usable tool statement, attempts a call
+    /// during restatement, or returns an empty correction. This is no component halt.
     ProtocolRepair {
         source_id: crate::state_flow::SourceBlockId,
         case: crate::state_flow::ProtocolRepairCase,
