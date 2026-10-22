@@ -114,5 +114,11 @@ from normal pump failure mapping. Its batch rows have these dispositions:
 - Row 10: the inspection source and actual stacked parent are distinguished
   above, and this record now names its assigned PR.
 
-The new detail pin and second unmapped-latch order await focused gates and the
-protective recipe run. No result is inferred from the previous suite.
+On the join with #240 at b5b5893 and #239 at 21bfd08, all six channel-focused
+regressions passed. Strict all-target harness clippy, formatting and lock passed
+using /tmp/weaver-146-read-channel-target. Replacing the supplied channel detail
+with a constant compiled and failed the new assertion, then passed after exact
+restoration. The initial filter matched zero tests and is excluded from evidence.
+The full-suite count above remains scoped to the earlier source. These test-only
+changes do not claim another full-suite run. Logs, the recipe and source hashes
+are retained in read-channel/review-batch in the shared evidence deposit.
