@@ -342,9 +342,18 @@ impl RecordingContext {
         {
             return Err(self.capture_fault(io, "cancellation names another capture"));
         }
-        self.allow_capture_cleanup(io)?;
+        let before_settle = self.member_capture.as_ref().expect("checked capture").phase;
         self.settle_recorded_capture(io)?;
-        if self.member_capture.as_ref().expect("checked capture").phase == Phase::Barrier {
+        let phase = self.member_capture.as_ref().expect("capture owner").phase;
+        if before_settle != Phase::Aborting && phase == Phase::Aborting {
+            // Settlement admitted and enqueued the original leg's owed Abort.
+            // Its intent is already owned, so do not add a second live check.
+            return Ok(Advance::Pending);
+        }
+        // A timely Recorded cleanup ends its wait before consumer scheduling
+        // can expire that wait. Unfinished cleanup still checks the bound.
+        self.allow_capture_cleanup(io)?;
+        if phase == Phase::Barrier {
             self.flow
                 .cancel_capture_barrier(
                     &mut FlowRecording {
@@ -361,7 +370,6 @@ impl RecordingContext {
             self.member_capture = None;
             return Ok(Advance::Progress);
         }
-        let phase = self.member_capture.as_ref().expect("capture owner").phase;
         if matches!(phase, Phase::Aborting | Phase::ReleaseCleanup) {
             return Ok(Advance::Pending);
         }
