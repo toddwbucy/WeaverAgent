@@ -7,15 +7,16 @@
 use std::collections::BTreeSet;
 
 use weaver_types::state_flow::{
-    EventSource, PairEnded, PairFate, PairStarted, PlanSnapshot, QueryResult, ReadEntry, ReadPair,
-    ReadSelector, ReadSource, SourcePathPart, Span, SpanRef, StatementRef, TerminalPairFate,
-    ValidationError, decode_strict,
+    EventSource, PairEnded, PairFate, PairStarted, PlanRef, PlanSnapshot, QueryResult, ReadEntry,
+    ReadPair, ReadSelector, ReadSource, SourcePathPart, Span, SpanRef, StatementRef, StepId,
+    StepQueryRef, TerminalPairFate, ValidationError, decode_strict,
 };
 
 pub(super) fn validate(
     selector: &ReadSelector,
     result: &QueryResult,
 ) -> Result<(), ValidationError> {
+    validate_selector_identities(selector)?;
     if !result.matches_selector(selector) {
         return Err(ValidationError("read result tag differs from its selector"));
     }
@@ -71,6 +72,7 @@ pub(super) fn validate(
                 instruction,
             },
         ) => {
+            validate_step_query(reference)?;
             if &reference.plan != plan
                 || &reference.previous_step != previous_step
                 || reference.step_id.seed_id != plan.plan_id.seed_id
@@ -84,6 +86,7 @@ pub(super) fn validate(
             require_statement(instruction, &reference.instruction)
         }
         (ReadSelector::PlanFlags { plan, after }, QueryResult::PlanFlags { snapshot }) => {
+            validate_plan_ref(&snapshot.plan)?;
             // through is a store commit frontier. Run strings do not order it.
             if &snapshot.plan != plan || &snapshot.after != after || !snapshot.counts_agree() {
                 return Err(ValidationError(
@@ -135,10 +138,103 @@ pub(super) fn validate(
             }
             Ok(())
         }
-        (ReadSelector::Marks {}, QueryResult::Marks { .. }) => Ok(()),
+        (
+            ReadSelector::Marks {},
+            QueryResult::Marks {
+                current_task,
+                open_scopes,
+                ..
+            },
+        ) => {
+            if let Some(task) = current_task {
+                validate_span_ref(&task.task)?;
+                validate_span_ref(&task.prompt)?;
+            }
+            for scope in open_scopes {
+                validate_span_ref(&scope.span)?;
+                for span in [&scope.parent, &scope.replacement].into_iter().flatten() {
+                    validate_span_ref(span)?;
+                }
+            }
+            Ok(())
+        }
         _ => Err(ValidationError(
             "read result has no matching validation branch",
         )),
+    }
+}
+
+pub(super) fn validate_seed(seed: &str) -> Result<(), ValidationError> {
+    if seed.len() == 32
+        && seed
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(())
+    } else {
+        Err(ValidationError("read source has invalid seed identity"))
+    }
+}
+
+pub(super) fn validate_span_ref(span: &SpanRef) -> Result<(), ValidationError> {
+    validate_seed(&span.seed_id)?;
+    if span.revision.0 != 1 {
+        return Err(ValidationError("read span has invalid revision"));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_plan_ref(plan: &PlanRef) -> Result<(), ValidationError> {
+    validate_seed(&plan.plan_id.seed_id)?;
+    if plan.plan_id.local_id.0 == 0 || plan.revision.0 == 0 {
+        return Err(ValidationError("read plan has invalid identity"));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_step_id(step: &StepId) -> Result<(), ValidationError> {
+    validate_seed(&step.seed_id)?;
+    if step.local_id.0 == 0 {
+        return Err(ValidationError("read step has invalid identity"));
+    }
+    Ok(())
+}
+
+fn validate_step_query(reference: &StepQueryRef) -> Result<(), ValidationError> {
+    validate_plan_ref(&reference.plan)?;
+    validate_step_id(&reference.step_id)?;
+    if let Some(previous) = &reference.previous_step {
+        validate_step_id(previous)?;
+    }
+    Ok(())
+}
+
+fn validate_selector_identities(selector: &ReadSelector) -> Result<(), ValidationError> {
+    match selector {
+        ReadSelector::Span {
+            seed_id,
+            local_id,
+            revision,
+        } => validate_span_ref(&SpanRef {
+            seed_id: seed_id.clone(),
+            local_id: *local_id,
+            revision: *revision,
+        }),
+        ReadSelector::SpanPreview { span, .. } => validate_span_ref(span),
+        ReadSelector::Plan { plan } | ReadSelector::PlanFlags { plan, .. } => {
+            validate_plan_ref(plan)
+        }
+        ReadSelector::StepSuccessor {
+            plan,
+            previous_step,
+        } => {
+            validate_plan_ref(plan)?;
+            if let Some(step) = previous_step {
+                validate_step_id(step)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 
@@ -366,12 +462,18 @@ fn validate_entry(entry: &ReadEntry) -> Result<(), ValidationError> {
                 ));
             }
         }
-        ReadSource::Seed(source) if source.seed_id.is_empty() || !entry.pairs.is_empty() => {
-            return Err(ValidationError(
-                "seed source is missing identity or has runtime pairs",
-            ));
+        ReadSource::Seed(source) => {
+            validate_seed(&source.seed_id)?;
+            if !entry.pairs.is_empty() {
+                return Err(ValidationError("seed source has runtime pairs"));
+            }
         }
-        ReadSource::Seed(_) => {}
+    }
+    if let Some(selected) = &entry.selected_span {
+        validate_span_ref(&selected.span_ref)?;
+    }
+    if let Some(reference) = &entry.step_query {
+        validate_step_query(reference)?;
     }
     let selected = entry.selected_span.as_ref().map(|selected| Span {
         start: selected.start,
@@ -497,6 +599,9 @@ fn validate_pair_source(source: &EventSource, kind: &str) -> Result<(), Validati
 fn validate_plan(snapshot: &PlanSnapshot) -> Result<(), ValidationError> {
     // The store owns transition legality. Here retain the read's documented step
     // ordering and seed qualification without turning a snapshot into authority.
+    validate_plan_ref(&snapshot.plan)?;
+    validate_span_ref(&snapshot.task.task)?;
+    validate_span_ref(&snapshot.task.prompt)?;
     let seed = &snapshot.plan.plan_id.seed_id;
     if snapshot.task.task.seed_id != *seed || snapshot.task.prompt.seed_id != *seed {
         return Err(ValidationError(
@@ -506,6 +611,15 @@ fn validate_plan(snapshot: &PlanSnapshot) -> Result<(), ValidationError> {
     let mut previous = None;
     let mut identities = BTreeSet::new();
     for step in &snapshot.steps {
+        validate_step_id(&step.step_id)?;
+        for span in [&step.span, &step.outcome_span].into_iter().flatten() {
+            validate_span_ref(span)?;
+        }
+        if let Some(work) = &step.work {
+            validate_plan_ref(&work.plan)?;
+            validate_step_id(&work.step_id)?;
+            validate_span_ref(&work.span)?;
+        }
         if step.step_id.seed_id != *seed
             || previous.is_some_and(|ordinal| ordinal >= step.ordinal)
             || !identities.insert(step.step_id.local_id)
@@ -515,6 +629,13 @@ fn validate_plan(snapshot: &PlanSnapshot) -> Result<(), ValidationError> {
             ));
         }
         previous = Some(step.ordinal);
+    }
+    if let Some(step) = snapshot
+        .broken
+        .as_ref()
+        .and_then(|broken| broken.step_id.as_ref())
+    {
+        validate_step_id(step)?;
     }
     Ok(())
 }
