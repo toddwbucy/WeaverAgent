@@ -519,7 +519,7 @@ fn admit(event: &Event, session: &SessionRef, run: &RunRef) -> Result<(), Failur
         // closest case the contract's vocabulary expresses.
         return refuse(SubmitRefusal::PayloadMalformed);
     }
-    if !pairing_licensed(kind, event.payload.as_ref()) {
+    if !payload_pairing_licensed(kind, event.payload.as_ref()) {
         return match event.payload {
             None => refuse(SubmitRefusal::RequiredFieldAbsent {
                 field: FieldName("payload".to_string()),
@@ -629,7 +629,9 @@ pub struct Pressure {
 /// always carries `UnloadClose` as of 2026-10-03**, its cause and, where a
 /// member stood, the grant surface read back at the leave, so it left the
 /// payload-free set.
-fn pairing_licensed(kind: Kind, payload: Option<&Payload>) -> bool {
+/// This pure shape check grants no recorder admission, sequence or writer access.
+/// Converters may reuse it before mapping an event to another record vocabulary.
+pub fn payload_pairing_licensed(kind: Kind, payload: Option<&Payload>) -> bool {
     matches!(
         (kind, payload),
         (Kind::SessionClosed | Kind::TurnStarted, None)
