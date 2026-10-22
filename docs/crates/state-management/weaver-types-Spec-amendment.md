@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #235
+**Landing PR:** #232
 
-**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.26 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -971,18 +971,33 @@ PLACE-3, PLACE-5, PLACE-6]
 | --- | --- |
 | TokenDirective::AppendAndGenerate | Existing turn:TurnKey and delta:Vec<Message>, plus tool_schemas:Vec<String> |
 | TokenDirective::MeasureDelta | keep:u64, delta:Vec<Message>, tool_schemas:Vec<String> |
-| TokenAnswer::Opened | prefix_tokens:u64, capacity:u64, generation_limit:u64, terminal_tokens:u64 |
+| TokenAnswer::Opened(Opened) | Adjacent-tag body is the named Opened wrapper below |
 | TokenAnswer::DeltaMeasured | resident:u64, prefix_tokens:u64, keep:u64, input_tokens:u64, capacity:u64 |
 | TokenAsk::MeasureDelta | keep:u64, under TokenAsk's existing ask tag |
 | RefusalRecord::Placement | assembly_id:DecimalU64, code:PlacementCode, detail:String, seam value placement |
+
+Opened is a named struct with session:SessionId, prefix_tokens:u64, capacity:u64,
+generation_limit:u64, terminal_tokens:u64, request:Box<RawValue> and
+measurement:Box<RawValue>, in that wire field order. It derives Debug, Clone,
+Serialize and Deserialize, and implements PartialEq manually: compare the session
+and every count normally and compare each raw box's get() bytes exactly. This keeps
+TokenAnswer's PartialEq contract without requiring RawValue to implement it. Use
+Generation's existing raw-box comparison pattern; no parse or normalization enters
+equality. Unknown or duplicate outer fields refuse. [PLACE-1, PLACE-5, SEAM-2]
 
 PlacementCode is invalid_span, invalid_pair, invalid_cut, head_over_capacity,
 tail_over_capacity, generation_room or stale_position, as PLACE-PORT uses. No new
 TokenRefusal variant is required. NotOpen, OutOfOrder and MalformedDelta answer
 measurement where appropriate, while a physically oversized proposal can still return
-its count. Opened is no longer a unit answer after cutover, and an absent body or
-schemas member is not defaulted. An empty schema list is explicit. [PLACE-3, PLACE-4,
-PLACE-5]
+its count. Opened is no longer a unit or four-count-only answer after cutover. No body,
+session, evidence box or schemas member is defaulted. An empty schema list is explicit.
+Reject unknown or duplicate outer fields. SessionId is the unchanged String newtype
+and echoes the exact Open.session. The floor carries the two raw boxes without
+normalization or interpreting their contents, as Generation does. SPU-OPEN owns their
+closed contents and HARNESS-OPEN validates them. TRACE-PLACEMENT owns only its
+outer wrapper and envelope checks, retaining those contents as opaque boxes.
+No new floor measurement mirror or generation variant is introduced.
+[PLACE-3, PLACE-4, PLACE-5, SEAM-2]
 
 CUT-RELOAD's ReloadTail, ReloadItem, StagedTail, Staged, ReloadRefused, Busy and
 ReloadCode are private harness types defined by Spec 06. They add no wire arm.
@@ -1001,7 +1016,7 @@ facts. UnitOccurrenceId cannot stand in for MarkOccurrenceId. [MARK-6, PLACE-5]
 
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
-| TYPES-DECODE | Shared Rust enum/serde corpus at both peers | Accept old unit Opened, default schemas, confuse count and SpanRef, or decode a wrong response arm |
+| TYPES-DECODE | Shared Rust enum/serde corpus at both peers, including exact raw boxes and required Opened fields | Accept old unit/four-count Opened, missing/unknown/duplicate fields, normalize raw boxes, default schemas, confuse count and SpanRef, or decode a wrong response arm |
 | PlacementConfig | Parser and load-fit cases with a resolved OperatorTunable SPU generation limit | Guess an absent tunable value, wrap capacity arithmetic or open user channel after failed fit |
 
 ## 7. Open elections

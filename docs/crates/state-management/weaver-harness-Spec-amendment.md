@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #235
+**Landing PR:** #232
 
-**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.26 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -147,8 +147,8 @@ independent of the lifecycle's existing positions. [FLOW-2, FLOW-3, FLOW-5, SCOP
 | --- | --- | --- |
 | Preflight | State open and load, trace-capacity wake, lifecycle and enter deadline. No decode, tool or user input | Move the same context into Run after Recorded load |
 | Entered | Partition activation, template checks, boot, then serving as each port stands | Clean leave after filing barriers and capture, or first halt |
-| Releasing | Existing release and shutdown evidence only. No new content or filing. Remove a transport only after its final completion is consumed | Unload, bounded drain where required, Closed |
-| Failed | HARNESS-HALT owns terminal permits, partial transports and the first failure account | Failed exit under the halt deadline |
+| Releasing | Existing release and shutdown evidence, including HARNESS-OPEN's private owed account. No new content or filing. Remove a transport only after its final completion is consumed | Unload, bounded drain where required, Closed |
+| Failed | HARNESS-HALT owns terminal permits, partial transports, the first failure account and HARNESS-OPEN's private owed account. Settle or abandon that account before retiring its transport and authoring unload | Failed exit under the halt deadline |
 | Closed | No authoring, port reduction or reactivation | Terminal |
 
 In a clean release, the coordinator remains present after the state transport closes.
@@ -616,9 +616,18 @@ existing outcomes unless they also produce a flow component failure. [FLOW-4, FL
 | Reporting | Author fault/StateFlowFailed and one refused save_point for an unconfirmed pending capture through reserved entries where trace works | Interrupting |
 | Interrupting | Send ToolInterrupt{by:flow_failure}, await gate containment within halt deadline | Closing |
 | Closing | Close open turn Stopped/fault, answer caller stopped if reachable, lower gate | Releasing |
-| Releasing | Release SPU, close state and classifier, author unload with end_reason component_failure | Draining |
+| Releasing | Settle or abandon HARNESS-OPEN's owed account under its earlier bound before retiring the decode transport; release SPU, close state and classifier, then author unload with end_reason component_failure | Draining |
 | Draining | Bounded trace drain, return ChannelFault::Closed | Failed worker exit |
 | Any halt phase | Further failure | Preserve first cause, append available evidence, never restart teardown |
+
+HARNESS-OPEN supplies one additional trace-only author permit for an Open already
+sent before cancellation or failure. It may finish that exchange's owed boot placement
+account while trace and the earlier enter/teardown bound permit. It is not ordinary
+author admission, a new decoder request or permission to initialize the journal. Keep
+the first failure and the existing terminal obligations. This account uses ordinary
+writer capacity, never one of TRACE-CAPACITY's seven reserved terminal entries. It does
+not delay mandatory terminal work. An unavailable account does not delay expiry or
+clear the latch. [FLOW-3, FLOW-4, FLOW-5, PERSIST-6]
 
 ToolInterrupt is amended in types and harness-gate contract. A live gate reports
 FlowFailure only after containment. Fault retains its existing gate-death meaning and
@@ -1142,6 +1151,13 @@ recall. Run Spec 05's BOOT-REPAIR through open_pairs, tool.call.completed, PairC
 file_pair, then require its second empty query before gate open. It uses the remaining
 load budget and never edits during adoption. [PERSIST-5, PERSIST-6, PROMPT-1, STORE-8]
 
+Boot recall Recorded establishes BootHead before decoder Open. HARNESS-OPEN consumes
+that private provenance to bind the one Open exchange and its boot placement. The
+placement cannot create BootHead retrospectively. Only its successful Recorded and
+checked-fit boundary permits journal initialization, boot mark readiness and later
+enter stages. Pair repair and its second empty query remain required before the gate.
+[PROMPT-1, PERSIST-6, PLACE-1, FLOW-3]
+
 **HARNESS-SAVE.** After prepare_save, relay the member snapshot result as
 SavePointImage. On SavePointImageChecked relay acknowledge, then send
 SavePointImageFinished. Validate Prepared A/B against that capture. Author save_point
@@ -1164,7 +1180,7 @@ claim that a between-turn pause has zero elapsed cost is made. [COST-2, COST-4]
 | HARNESS-MATERIAL | Filtered binding, whole-pair, current-result and stored-span fixtures plus private-constructor pins | Renumber a binding, omit an attached return, duplicate the live request or mint a live grant from a stored record |
 | HARNESS-SELECTION-INPUT | Explicit criterion and complete unit fixtures | Invent a default strategy or accept an incomplete unit |
 | HARNESS-MARKS | One input/task fixture, stop/leave rows, concurrent plan-operation and template-defect cases | Start generation before mark receipt, reuse an uncertain ID, skip input coverage or turn a correct defect into a halt |
-| HARNESS-BOOT | Seeded member plus recorder/decoder double | Duplicate boot read, omit end mark, refile prompt, or open gate early |
+| HARNESS-BOOT | Seeded member plus recorder/decoder double, boot recall before Open and placement Recorded before journal/mark readiness | Duplicate boot read, omit end mark, create BootHead from Opened, refile prompt or open gate early |
 | HARNESS-SAVE | All three-party transitions with fault injection | Send Commit with latch set, use edited draft, or answer before Published |
 
 ## 7. Place and decode facts, destination sections 5 and 6
@@ -1184,18 +1200,100 @@ overflow, bypass and duplicate consumption. [CLASS-8, MARK-4, PLACE-5, R20-15, R
 
 **HARNESS-PLACE.** flow/place.rs implements Spec 06's PLACE-PORT, journal, capacity
 checks and cut coordinator. It holds canonical messages, source occurrences and SPU
-counts, never token IDs or a tokenizer. The engine remains the sole decoder writer and
-the pump its sole reader. A placement request retains its exact delta and ordered
-granted schemas until append or refusal. The existing shell_schema producer supplies the
+counts, never a usable token vector or a tokenizer. HARNESS-OPEN's opaque trace evidence
+may contain token IDs, but grants no token-level operation. The engine remains the
+sole decoder writer and the pump its sole reader. A placement request retains its
+exact delta and ordered granted schemas until append or refusal. The existing
+shell_schema producer supplies the
 schemas, recorded with the effective grant in load and in the assembly's evidence. No
 family formatting occurs here. [PLACE-1, PLACE-3, PLACE-5, FLOW-3]
 
-At boot, consume the complete new Opened body and check all counts, effective
-generation/terminator facts and the declared head/tail budget with checked arithmetic.
-Use StatePersistenceInvalid stage boot, case boot_failed for a failed fit, record the
-refusal and run failed-enter teardown. Cache the successful facts with BootHead and
-author assembly zero as Spec 06 defines. Later explicit reads do not replace that head
-or run Open again. [PROMPT-1, PERSIST-6, PLACE-1, PLACE-3]
+**HARNESS-OPEN.** The boot owner holds the existing recorded BootHead, exact Open
+request, decode reservation, source-port identity and original absolute enter bound.
+It uses the sole pump reader and requires the complete request send and one complete
+matching Opened before accepting evidence. Echoed session must equal the held request
+and trace session. Validate all four counts, prefix_tokens no greater than capacity,
+terminal_tokens equal to one, and the SPU-OPEN closed box shape. Check each input token
+in measurement.prefix_token_ids as u32, its checked vector length against prefix_tokens,
+and exactly one identity-prefix
+interval from zero through the
+decoded rendered string's UTF-8 byte length. Reject unknown, missing or duplicate
+members. Preserve both raw boxes unchanged without creating a usable token-vector
+cache. The harness has no renderer and must not compare rendered text with the
+unframed BootHead Text. Producer fixtures prove rendering/token/prefill truth.
+[PROMPT-1, PERSIST-6, PLACE-1, PLACE-5, SEAM-2]
+
+Check the declared head/tail budget and effective generation reserve with Spec 06's
+checked arithmetic. A valid Opened describes a prefix already seated, whether or not
+that configured fit succeeds. Retain its exact evidence and author the assembly-zero
+placement with the existing boot recall sequence as causal_parent. Keep the reservation
+and active boot ownership through recorder backpressure. A shared author ticket has
+this one purpose and cannot be consumed by an input, repair or other owner. Save the
+returned Recorded sequence and next continuation before any recoverable lifecycle
+check. No wake authors the event twice or consumes a proof before retaining its next
+state. No stage restarts the original enter bound. [FLOW-3, PERSIST-6, PLACE-1,
+PLACE-3, COST-4]
+
+**HARNESS-OPEN-LIVE.** Live admission for this owner means RecordingPhase::Entered,
+an active coordinator, a clear first-failure latch, no observed stop or leave for
+this enter, and the exact original Enter bound still owned and unexpired at the
+common clock sample. Check it before sending the first Open byte and again before
+releasing journal or boot-mark readiness after Recorded. Once cancellation or
+failure revokes this owner's readiness it cannot regain admission on a later wake.
+The private trace-only teardown permit below does not satisfy this predicate.
+[FLOW-3, FLOW-4, FLOW-5, PERSIST-6]
+
+Only Recorded, successful fit and HARNESS-OPEN-LIVE install the checked journal facts
+once. Use StatePersistenceInvalid stage boot, case boot_failed for a failed configured
+fit, after the truthful boot placement, and run failed-enter teardown. An SPU typed
+Open refusal follows the existing refusal account and failed enter, with no placement.
+A wrong source, session, reply arm, malformed evidence or inconsistent count is a
+protocol failure, not a fit refusal. It grants no accepted placement or readiness.
+An answer exceeding DECODE_MESSAGE_BOUND is component failure. Trace encoding or
+sink errors follow the existing trace failure path. Allocation failure grants no
+readiness, and this
+carrier adds no process-wide allocation-failure recovery. TRACE-PLACEMENT
+states the distinct record-size qualification obligation; the recorder has no
+per-record byte ceiling to borrow here. Never truncate evidence or retry Open.
+Later explicit reads
+cannot replace the existing BootHead or open the residency again. [PROMPT-1, PERSIST-6,
+PLACE-1, PLACE-3, FLOW-4]
+
+| Boot owner position | Observation | Retained work and next disposition |
+| --- | --- | --- |
+| Prepared | HARNESS-OPEN-LIVE | Send the one held Open, AwaitOpen |
+| Prepared | Stop or leave | No Open, existing failed-enter cleanup |
+| AwaitOpen | Partial send or partial answer | Retain exact exchange under the original bound |
+| AwaitOpen | Valid complete Opened | Retain boxes, counts, fit result and completed open wait, AwaitRecord |
+| AwaitOpen | Typed refusal or invalid answer | Existing refusal or failure account, no accepted placement |
+| AwaitRecord | Recorder pressure or recoverable lifecycle wait | Retain exact event, ticket and fit result |
+| AwaitRecord | Recorded, fit and HARNESS-OPEN-LIVE | Install journal facts once, continue enter |
+| AwaitRecord | Recorded but failed fit | Record boot_failed, failed-enter teardown |
+| Any sent-Open position | Stop, leave or first failure | Revoke readiness and retain only bounded exchange/accounting obligations |
+| Any waiting position | Applicable bound, failed seam or failed trace | Account available facts, dispose without readiness, existing teardown |
+
+Before any Open bytes are sent, cancellation withdraws the unsent reservation. A
+partial send remains owned by the existing partial-message cleanup. It is neither
+restarted nor accepted as complete without complete-send proof. After a sent Open,
+cancellation does not undo a seated prefix. Drain the existing
+exchange where its channel and remaining bound permit. A valid completion after
+cancellation but before that bound may record the same boot placement as a trace-only
+teardown obligation, even
+when ordinary author admission is closed in Releasing or Failed. This permit is private
+to the already-sent Open and its recorded boot source. It permits no ordinary content,
+filing, generation, mark readiness or journal grant. It uses ordinary writer capacity
+without spending or delaying reserved terminal work. The earlier of the original enter
+bound and any active leave/halt bound limits both exchange and recording. Preserve the
+first failure, do not renew a bound, and release the residency under existing cleanup.
+In both Releasing and Failed, finish that account or declare it incomplete before
+retiring its decode transport and before authoring unload. At its bound or a failed
+seam/sink, abandon the remaining account and continue terminal cleanup without
+inventing placement. This ordering does not postpone reserved terminal work that
+precedes Releasing in HARNESS-HALT.
+An unanswered Open or failed trace leaves an incomplete account and never a fabricated
+placement, successful enter or successful Left. No new Open cancellation directive,
+reconnect, prompt read or retry is introduced. [FLOW-3, FLOW-4, FLOW-5, PERSIST-6,
+SEAM-2, COST-4]
 
 On an explicit prepare_prefix request, prepare the exact logical prefix under Spec 06's
 PREFIX-PREPARE. With no pending rebuild, an ordinary append uses the last confirmed
@@ -1260,7 +1358,8 @@ mark results cannot supply CutReady. [PLACE-4, PLACE-5, MARK-6, FALS-4]
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
 | HARNESS-PLACE | Real family/session fixture with source-map capture | Count tokens in harness, reorder schemas, use different delta after measure or place on refusal |
-| Boot facts | Fixed/tunable SPU facts, failed head/tail arithmetic and prompt-source fixtures | Guess an effective value, wrap arithmetic, refile head or open user input after failed fit |
+| HARNESS-OPEN | Shared SPU-OPEN corpus, fixed/tunable facts, failed fit, wrong session/port/reservation, partial send/answer and malformed boxes | Guess an effective value, wrap arithmetic, substitute source/answer, retokenize or grant without complete correlation |
+| Boot recording | Real recorder pressure and lifecycle interruption at admission and Recorded settlement, successful and failed fit, cancellation before/after send, silent/oversized reply and failed trace | Lose or duplicate evidence, steal another author's ticket, consume before retaining continuation, renew a bound, emit placement on invalid answer or grant readiness after cancellation |
 | Placement wait | Pump test with writer pressure, delayed measure and stop/leave | Restart the deadline, block the pump or append after cancellation |
 | Cut boundary | Multi-round turn fixture and invalid/stale occurrence corpus | Mint CutReady mid-turn, use preview as an end mark or accept a returned count mismatch |
 | Logical prefix | Repeated marks, unplaced review metadata, empty answer and successive-cut fixtures | Infer native position from final stored member, reuse a removed boundary or append rebuild twice |
