@@ -63,7 +63,7 @@ file, and unrelated requests retain their identities. The original CallId and co
 StatementRef of a repaired external sibling remain separate identities.
 
 A correction containing malformed recall records correction_call once for that pass,
-each identified malformed recall refusal, and the required terminal accounts for its
+each identified RECALL-REFUSAL, and the required terminal accounts for its
 valid requests. Only after those obligations does the ledger charge one failed
 correction. Several invalid calls do not consume several attempts. Cancellation
 revokes successful continuation, not accepted author custody. Existing phase permissions

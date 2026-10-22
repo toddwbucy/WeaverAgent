@@ -4,7 +4,7 @@
 
 **Landing PR:** #241
 
-**Version:** 0.9 **Date filed:** 2026-10-20 **Document ID:** state-management-spec-05
+**Version:** 0.10 **Date filed:** 2026-10-20 **Document ID:** state-management-spec-05
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -304,9 +304,9 @@ pair_event, tool_pair and the pair_statement/pair_open indexes. They belong to t
 initial state-content/1 catalog before its first cutover. No smaller draft catalog is
 accepted and no runtime ALTER converts old agents. Statement and seed writes set
 content_type statement. Pair writes set pair and statement_text NULL. Every admitted
-item shares content_block's global commit order, so position, shape and save-frontier
-reads include pair events. Counter blobs use the foundation's 8-byte big-endian
-encoding. [STORE-3, STORE-5, PAIR-1, PERSIST-4]
+item shares content_block's global commit order, so position, shape and captured
+content position reads include pair events. Counter blobs use the foundation's 8-byte
+big-endian encoding. [STORE-3, STORE-5, PAIR-1, PERSIST-4]
 
 On started, resolve StatementRef to exactly one committed statement_binding, check its
 source, lane and binding shape, insert content_block and pair_event at its ID, then an
@@ -494,7 +494,7 @@ PAIR-4, October 18 A1, R4]
 | weaver-state-Spec sections 3, 4 and 5 | Add the complete PAIR-SCHEMA, file_pair transaction and pair read joins to the serving catalog and its adoption validator. Diagnostic schema stays separate. |
 | weaver-trace-PRD section 3.1 and Spec sections 3 and 11 | Extend started/completed payloads and admit one new kind tool.return_rejected. Pair terminal is turnless only during boot repair. Registry projection and load coverage are PAIR-PROJECTION. Model-facing result records remain unselectable. |
 | weaver-harness-Spec section 4 and harness-diagnostic contract vocabulary | Converter rejects serving pair payloads/new rejected-return kind as outside diagnostic vocabulary. Legacy diagnostic records retain their old shapes. |
-| weaver-admin-Spec sections 3.0 and 6 | Enter confirmation waits for BOOT-REPAIR. Healthy save waits for the pair frontier. Broken flow still follows foundation no-save/failed-run cells. No new lifecycle command or timeout clock. |
+| weaver-admin-Spec sections 3.0 and 6 | Enter confirmation waits for BOOT-REPAIR. Healthy save waits for pair source dispositions through the frozen trace boundary. Broken flow still follows foundation no-save/failed-run cells. No new lifecycle command or timeout clock. |
 | weaver-internal-Spec sections 2 and 4 | Use Spec 02's pure recall-query constructor. Harness executes and accounts the read as an inward pair. No socket or model-facing tool schema belongs to the helper. |
 
 This revises the harness-gate supplies clause that unopened remaining calls have no
