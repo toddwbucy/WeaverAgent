@@ -49,6 +49,12 @@ pub(in crate::flow) struct CompletedRead {
 }
 
 impl CompletedRead {
+    pub(in crate::flow) fn recall(
+        &self,
+    ) -> Result<weaver_trace::serving::payloads::RecallRecord, PageReadError> {
+        recall::convert(self)
+    }
+
     pub(in crate::flow) fn selector(&self) -> &ReadSelector {
         &self.selector
     }
@@ -65,6 +71,9 @@ impl CompletedRead {
         &self.raw
     }
 }
+
+#[path = "read_recall.rs"]
+mod recall;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
