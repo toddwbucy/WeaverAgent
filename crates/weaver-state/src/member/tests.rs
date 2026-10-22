@@ -77,7 +77,8 @@ fn page_budget_reserves_actual_wrapper_and_worst_case_metadata() {
     let page = pages
         .start(vec![b'x'; 524_288], 524_288.into(), budget)
         .unwrap();
-    let payload = encode_payload(&Reply::Control(StateControlAnswer::ReadPage(page))).unwrap();
+    let payload =
+        encode_payload(&Reply::Control(StateControlAnswer::ReadPage(page)), None).unwrap();
     assert!(
         payload.len() + wrapper_reserve(&common, "control_answer").unwrap()
             <= STATE_ANSWER_LINE_BOUND

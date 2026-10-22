@@ -43,8 +43,8 @@ neither is an allocation counter.
 | Strict floor decoder | Exact sum of its owned outer RawValue lengths | Decoder temporaries are gone before dispatch completes |
 | Typed request | Deeper Text/raw/context copies remain uninstrumented for filing, adoption and content Read | Dispatch consumes it. Only the current Common and optional filing SourceBlockId strings remain |
 | Open echo | Adoption copies remain uninstrumented | The separate member identity remains until metadata insertion. read_limits is session configuration and excluded here and later. The typed echo drops before finish |
-| Query Output | Counts bytes actually appended, including a refused prefix | Complete query Vec moves into Pages without copying |
-| Shape Output | Its encoded array is counted locally, including a refused prefix, but decoded row copies are uninstrumented and the total remains null | Temporary encoding and decoded rows drop before finish |
+| Query Output | Optional local tally counts actual writes, including a refused prefix. Serving Read skips this subtotal while decoded copies remain uninstrumented | Complete query Vec moves into Pages without copying |
+| Shape Output | Optional local tally counts its encoded array, including a refused prefix. Serving Shape skips this subtotal while decoded row copies remain uninstrumented and the total is null | Temporary encoding and decoded rows drop before finish |
 | Pages | Each base64 page is one new buffer | The complete frozen result remains through the final page until release, never only its unsent suffix |
 | Snapshot image | One successful SQLite-to-Rust Vec copy, even if the room write later refuses | Image Vec drops before answer completion. A room file is not a live image buffer |
 | Capture continuation | No second image copy on acknowledge, abort or release_capture | Held filename, plus the Finished admin-hash string. Abort and release remove these owners |
@@ -147,12 +147,48 @@ passed. The earlier broader matrix above describes the reviewed predecessor.
 Two independent source readings found no concrete defect in this corrected inventory.
 Current logs, recipes and source hashes are in the shared accounting/review deposit.
 
-Rows 5-9 remain batch work: exact accounting-child observation counts, moving finish
-counters directly from the sample, consolidating observed wrappers, removing or
-explicitly preparing Read's discarded subtotal, and consolidating the strict decoder
-entry points. Read's local tally is preparatory only and never exposes a total while
-any decoded-content category is missing. None of those refactors is required to make
-the corrected Shape disposition truthful.
+## Remaining batch followup
+
+Rows 5-9 are addressed without changing the measurement categories or version:
+
+- Row 5: Each accounting child now asserts its exact post-Open observation count:
+  six for read/capture cleanup, five for preflight/failed-write cleanup, and six
+  for filing and metadata controls. Open remains separately checked by the parent
+  at the actual Opened response. The timing and metadata-failure modes also supply
+  their exact expected counts through child-only test configuration.
+- Row 6: OperationSample.finish consumes its own copied and held counters. The
+  completion owner no longer extracts them merely to pass them back.
+- Row 7: The five query, Shape and payload observed/unobserved pairs are single
+  entry points. Their bounded writers accept an optional local tally and add only
+  successful writes, preserving the actual prefix when a later write refuses.
+  Ordinary, sizing and wrapper callers use no tally instead of a discarded counter.
+- Row 8: Serving Read and Shape skip the preparatory query-encoding subtotal.
+  Shared raw decoding, page and payload work still passes through the sticky
+  operation counter, so those paths remain null with Uninstrumented. The focused
+  encoder instruments explicitly request a local tally; they claim only encoded
+  writes, never a complete content-query or Shape copy total.
+- Row 9: Both line APIs share strict line, decode and direction validation. Typed
+  frame construction shares the same closed-field parser. Only the observed
+  DecodedStateFrame entry folds owned RawValue lengths; ordinary StateFrame
+  deserialization no longer computes an unused subtotal.
+
+The existing actual-process, failed-encoding-prefix, refused-query-prefix and strict
+wire fixtures remain the regression checks. Protective recipes omit the final
+Release from the child count, omit payload writer bytes, and lose an exact-bound
+query prefix before its later refusal. No new tests mirror the pure cleanup.
+The Olympus run used private target /tmp/weaver-146-accounting-target. Types
+passed 130 tests, and its config-feature suite passed 185. State passed 212 tests
+with 8 inherited ignored, and the no-default-feature suite passed 31. Strict
+all-target clippy passed for both types configurations and both state feature
+configurations. Formatting and lock passed. All three compiled mutations failed
+their intended assertions and exact restorations passed.
+
+The first state compile found one test call missing the new optional tally
+argument. The corrected call uses None. Its failed log is retained beside the
+successful run. Two independent source readings found no concrete defect in the
+cleanup. Logs, recipes and source hashes are in accounting/batch in the shared
+evidence deposit. Earlier results above describe their named predecessor source.
+These author checks neither replace Planner review nor complete #221.
 
 #221 remains open for complete filing, adoption, content-query and Shape copy
 accounting.
