@@ -112,6 +112,9 @@ pub(crate) struct RecordingContext {
     read: Option<read_driver::ReadTransaction>,
     // Pointer identity survives moves and is never recreated from trace IDs.
     read_origin: std::sync::Arc<()>,
+    content_read_started: bool,
+    boot_read_started: bool,
+    boot_head: Option<read_driver::BootHead>,
     measure: Option<measure_driver::MeasureTransaction>,
     filing: Option<receipt_driver::FilingTransaction>,
     output: Option<output_driver::OutputTransaction>,
@@ -212,6 +215,9 @@ impl RecordingContext {
             member_capture: None,
             read: None,
             read_origin: std::sync::Arc::new(()),
+            content_read_started: false,
+            boot_read_started: false,
+            boot_head: None,
             measure: None,
             filing: None,
             output: None,
@@ -1384,7 +1390,10 @@ impl RecordingContext {
                 author: &self.author,
             },
         );
-        if self.read.is_some()
+        if self
+            .read
+            .as_ref()
+            .is_some_and(|read| read.needs_failed_close())
             && let Err(error) = self.flow.close_failed_read()
             && let Some(halt) = self.flow.halt_mut()
         {
@@ -1532,7 +1541,8 @@ mod material_driver;
 mod read_driver;
 #[allow(unused_imports)] // Composed by dependent boot, recall and placement primitives.
 pub(super) use read_driver::{
-    CancelledRead, ReadBeginError, ReadBeginRefusal, ReadCompletion, ReadProgress, RecordedRead,
+    BootHead, BootReadBeginError, BootReadBeginRefusal, BootReadCompletion, CancelledRead,
+    ReadBeginError, ReadBeginRefusal, ReadCompletion, ReadProgress, RecordedRead,
 };
 
 #[cfg(test)]

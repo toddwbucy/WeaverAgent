@@ -180,22 +180,13 @@ fn number(value: shared::DecimalU64) -> trace::DecimalU64 {
 }
 
 fn seed(seed: &str) -> Result<(), PageReadError> {
-    if seed.len() == 32
-        && seed
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        Ok(())
-    } else {
-        Err(PageReadError("recall source has invalid seed identity"))
-    }
+    crate::flow::read_validate::validate_seed(seed)
+        .map_err(|_| PageReadError("recall source has invalid seed identity"))
 }
 
 fn span(value: &shared::SpanRef) -> Result<trace::SpanRef, PageReadError> {
-    seed(&value.seed_id)?;
-    if value.revision.0 != 1 {
-        return Err(PageReadError("recall span has invalid revision"));
-    }
+    crate::flow::read_validate::validate_span_ref(value)
+        .map_err(|_| PageReadError("recall span has invalid identity"))?;
     Ok(trace::SpanRef {
         seed_id: value.seed_id.clone(),
         local_id: number(value.local_id),
@@ -204,10 +195,8 @@ fn span(value: &shared::SpanRef) -> Result<trace::SpanRef, PageReadError> {
 }
 
 fn plan(value: &shared::PlanRef) -> Result<trace::PlanRef, PageReadError> {
-    seed(&value.plan_id.seed_id)?;
-    if value.plan_id.local_id.0 == 0 || value.revision.0 == 0 {
-        return Err(PageReadError("recall plan has invalid identity"));
-    }
+    crate::flow::read_validate::validate_plan_ref(value)
+        .map_err(|_| PageReadError("recall plan has invalid identity"))?;
     Ok(trace::PlanRef {
         plan_id: trace::PlanId {
             seed_id: value.plan_id.seed_id.clone(),
@@ -218,10 +207,8 @@ fn plan(value: &shared::PlanRef) -> Result<trace::PlanRef, PageReadError> {
 }
 
 fn step(value: &shared::StepId) -> Result<trace::StepId, PageReadError> {
-    seed(&value.seed_id)?;
-    if value.local_id.0 == 0 {
-        return Err(PageReadError("recall step has invalid identity"));
-    }
+    crate::flow::read_validate::validate_step_id(value)
+        .map_err(|_| PageReadError("recall step has invalid identity"))?;
     Ok(trace::StepId {
         seed_id: value.seed_id.clone(),
         local_id: number(value.local_id),
