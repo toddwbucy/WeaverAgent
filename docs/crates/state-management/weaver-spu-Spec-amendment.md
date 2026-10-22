@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** pending assignment for this draft proposal
+**Landing PR:** #232
 
 **Version:** 0.6 **Date filed:** 2026-10-21 **Parent:** weaver-spu-PRD
 

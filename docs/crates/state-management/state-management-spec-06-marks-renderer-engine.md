@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** pending assignment for this draft proposal
+**Landing PR:** #232
 
 **Version:** 0.12 **Date filed:** 2026-10-21 **Document ID:** `state-management-spec-06`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
