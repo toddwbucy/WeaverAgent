@@ -1,6 +1,6 @@
 //! Placement facts on the existing decode owner, under SPU-RENDER,
-//! SPU-OPEN and SPU-MEASURE. These internal values introduce no wire
-//! carrier. Replacement Opened/MeasureDelta carriage remains a coupled change.
+//! SPU-OPEN and SPU-MEASURE. The serial dispatcher carries these facts on the
+//! existing decode wire without retaining a proposal or changing the session.
 
 use weaver_spu::decoder::backend::{DecodeFault, TokenId};
 use weaver_spu::decoder::session::Session;
@@ -20,7 +20,6 @@ pub(super) struct OpenedSession<'r> {
     /// belongs to the selected family.
     pub(super) template: &'static str,
     generation_opener: &'static str,
-    #[allow(dead_code)] // Used by open_facts when the replacement seam is wired.
     parameters: EffectiveSessionParameters,
     /// Counted from zero within a turn and reset when the turn changes. A
     /// placement query must not advance this seed-derivation ordinal.
@@ -41,9 +40,7 @@ pub(super) struct PreparedDelta {
     pub(super) tokens: Vec<TokenId>,
 }
 
-// These count-only results are intentionally internal until the replacement
-// decode protocol and its callers can change together.
-#[allow(dead_code)]
+// The dispatcher renders these private facts into the shared wire shapes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct OpenFacts {
     pub(super) prefix_tokens: u64,
@@ -52,7 +49,6 @@ pub(super) struct OpenFacts {
     pub(super) terminal_tokens: u64,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct DeltaMeasured {
     pub(super) resident: u64,
@@ -97,7 +93,6 @@ impl<'r> OpenedSession<'r> {
         )
     }
 
-    #[allow(dead_code)] // Ready for the coupled decode protocol replacement.
     pub(super) fn measure_delta(
         &self,
         keep: u64,
@@ -119,7 +114,6 @@ impl<'r> OpenedSession<'r> {
         })
     }
 
-    #[allow(dead_code)] // The legacy Opened remains a unit variant until cutover.
     pub(super) fn open_facts(&self) -> Result<OpenFacts, DecodeFault> {
         let position = self.session.placement_position(0)?;
         Ok(OpenFacts {

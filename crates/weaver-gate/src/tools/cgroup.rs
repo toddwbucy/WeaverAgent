@@ -126,27 +126,44 @@ impl Tools {
         )
         .ok()?;
         let text = std::io::read_to_string(std::fs::File::from(fd)).ok()?;
-        text.lines()
+        let populated = text
+            .lines()
             .find_map(|line| line.strip_prefix("populated "))
             .and_then(|value| match value.trim() {
                 "0" => Some(false),
                 "1" => Some(true),
                 _ => None,
-            })
+            });
+        #[cfg(test)]
+        super::interrupt_tests::populated_observed(populated);
+        populated
     }
 
     /// **The wait**: `true` once `tools/` reads `populated 0` within
     /// `bound`, a read that fails read as not yet empty (6.1).
     pub fn wait_empty(&self, bound: Duration) -> bool {
-        let deadline = Instant::now() + bound;
+        self.wait_empty_until_with(Instant::now() + bound, std::thread::sleep)
+    }
+
+    /// Wait against an existing containment deadline while the supervisor keeps
+    /// servicing its channel. The callback may return early, but never receives
+    /// more than the original deadline's remaining slice. Failed reads remain
+    /// populated until that deadline, as in the ordinary wait.
+    pub(super) fn wait_empty_until_with(
+        &self,
+        deadline: Instant,
+        mut progress: impl FnMut(Duration),
+    ) -> bool {
         loop {
+            progress(Duration::ZERO);
             if self.populated() == Some(false) {
                 return true;
             }
-            if Instant::now() >= deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
                 return false;
             }
-            std::thread::sleep(WAIT_SLICE);
+            progress(remaining.min(WAIT_SLICE));
         }
     }
 

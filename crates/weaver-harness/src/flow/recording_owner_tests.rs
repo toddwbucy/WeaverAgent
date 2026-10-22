@@ -37,6 +37,67 @@ fn same_original(actual: &AuthoredEvent, expected: &AuthoredEvent) {
 }
 
 #[test]
+fn owed_refusal_queues_only_after_halt_and_cannot_replace_an_original_or_admit_content() {
+    let (recorder, _reader) = recorder();
+    let mut barrier = RecordBarrier::new(recorder, "run".into());
+    let original = AuthoredEvent {
+        kind: Kind::Refusal,
+        subsystem: Subsystem::SpuDecoder,
+        turn: None,
+        source: AuthoredSource::Runtime,
+        causal_parent: None,
+        payload: Some(Payload::Refusal(
+            serde_json::value::to_raw_value(&weaver_types::RefusalRecord::Decode {
+                asked: weaver_types::TokenAsk::MeasureDelta { keep: 19 },
+                refusal: weaver_types::TokenRefusal::NotOpen,
+            })
+            .unwrap(),
+        )),
+    };
+    let refused = barrier
+        .queue_trace_only_authored(original.clone(), &author(), 1_001, 1)
+        .unwrap_err();
+    same_original(&refused.event, &original);
+    assert!(barrier.pending_author().is_none());
+    barrier.stop_for_flow_failure();
+    let content = authored("Read forbidden content.");
+    let refused = barrier
+        .queue_trace_only_authored(content.clone(), &author(), 1_002, 1)
+        .unwrap_err();
+    same_original(&refused.event, &content);
+    assert!(barrier.pending_author().is_none());
+    barrier
+        .queue_trace_only_authored(original.clone(), &author(), 1_003, 1)
+        .unwrap();
+    let ticket = barrier.pending_author().unwrap().ticket;
+    let refused = barrier
+        .queue_trace_only_authored(original.clone(), &author(), 1_004, 1)
+        .unwrap_err();
+    same_original(&refused.event, &original);
+    assert_eq!(barrier.pending_author().unwrap().ticket, ticket);
+    same_original(&barrier.pending_author().unwrap().event, &original);
+    assert!(barrier.resume_trace_only().unwrap().is_some());
+    assert_eq!(barrier.resume_trace_only().unwrap(), None);
+    assert!(barrier.recorder().tap_stopped());
+    assert_eq!(
+        barrier
+            .recorder()
+            .structure()
+            .by_kind(Kind::Refusal)
+            .count(),
+        1
+    );
+    assert_eq!(
+        barrier
+            .recorder()
+            .structure()
+            .by_kind(Kind::MessageUser)
+            .count(),
+        0
+    );
+}
+
+#[test]
 fn owned_ticket_preserves_source_and_prepares_only_once_under_pressure() {
     let (mut recorder, reader) = recorder();
     fill_capacity(&mut recorder);

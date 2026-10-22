@@ -123,7 +123,7 @@ impl OutputFixture {
         ))
     }
 
-    fn from_input(mut input: InputFixture) -> Self {
+    pub(super) fn from_input(mut input: InputFixture) -> Self {
         input.run.state.set_nonblocking(true).unwrap();
         input
             .run

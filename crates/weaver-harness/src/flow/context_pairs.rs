@@ -51,18 +51,33 @@ pub(in crate::flow) enum PairReadError {
     UnknownCall,
 }
 
-struct PairLeg {
+pub(super) struct PairLeg {
     call: CallId,
     phase: PairRecordPhase,
     recorded: Option<SourceBlockId>,
 }
 
 pub(super) struct PairTransaction {
-    bound: AbsoluteBound,
-    leg: Option<PairLeg>,
+    pub(super) bound: Option<AbsoluteBound>,
+    pub(super) leg: Option<PairLeg>,
     // A failed receipt check must not drop the exact evidence it rejected.
     refused_receipt: Option<SourceDisposition>,
     refused_filing: Option<FilingCompletion>,
+    pub(super) send: Option<crate::flow::pump_transport::OrganSend>,
+    pub(super) refused_send: Option<weaver_types::OrganEnvelope>,
+}
+
+impl PairTransaction {
+    pub(super) fn new(bound: AbsoluteBound) -> Self {
+        Self {
+            bound: Some(bound),
+            leg: None,
+            refused_receipt: None,
+            refused_filing: None,
+            send: None,
+            refused_send: None,
+        }
+    }
 }
 
 impl RecordingContext {
@@ -155,7 +170,7 @@ impl RecordingContext {
         Ok(())
     }
 
-    fn pair_begin_refusal(&self) -> Option<PairBeginRefusal> {
+    pub(super) fn pair_begin_refusal(&self) -> Option<PairBeginRefusal> {
         if self.phase != RecordingPhase::Entered
             || self.flow.phase() != CoordinatorPhase::Active
             || !self.barrier.is_active()
@@ -163,6 +178,8 @@ impl RecordingContext {
             Some(PairBeginRefusal::WrongPhase)
         } else if (self.repair_blocks_external() && self.repair_owns_pairs())
             || self.pair_work.is_some()
+            || self.pair_rejected_authoring
+            || self.pairs.pending_rejection().is_some()
             || self.output.is_some()
             || self.filing.is_some()
             || self.templates_block_content()
@@ -171,6 +188,8 @@ impl RecordingContext {
             || self.input_turn.is_some()
             || self.input_author.is_some()
             || self.member_capture.is_some()
+            || self.read.is_some()
+            || self.measure_blocks_external()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()
@@ -189,15 +208,11 @@ impl RecordingContext {
     }
 
     fn start_pair_work(&mut self, cause: NonDispatchCause) {
-        self.pair_work = Some(PairTransaction {
-            bound: self
-                .deadlines
+        self.pair_work = Some(PairTransaction::new(
+            self.deadlines
                 .get(PumpDeadline::Decision)
                 .expect("checked bound"),
-            leg: None,
-            refused_receipt: None,
-            refused_filing: None,
-        });
+        ));
         // accept establishes the active batch. A failure here is an internal
         // contract error, with the batch still retained in the frozen owner.
         self.pairs
@@ -212,7 +227,7 @@ impl RecordingContext {
             })
     }
 
-    fn pair_generation_matches(&self, generation: &CheckedGeneration) -> bool {
+    pub(super) fn pair_generation_matches(&self, generation: &CheckedGeneration) -> bool {
         generation.scheme() == &self.declaration.scheme
             && generation.source().block_id.run == self.flow.state().identity().1
             && self.open_turn.as_ref() == Some(&generation.original().turn)
@@ -251,7 +266,7 @@ impl RecordingContext {
         })
     }
 
-    fn repair_pair_custody_matches(&self, account: &RepairAccount) -> bool {
+    pub(super) fn repair_pair_custody_matches(&self, account: &RepairAccount) -> bool {
         account
             .generations()
             .all(|generation| self.generation_custody_matches(generation))
@@ -276,21 +291,32 @@ impl RecordingContext {
         if self.repair_blocks_external() && self.repair_owns_pairs() {
             return Err(RunFailure::RepairOwned);
         }
+        if self.pairs.executing().is_some() {
+            return Err(RunFailure::PairOwned);
+        }
         self.pairs
             .set_not_dispatched(cause)
             .map_err(|error| self.pair_fault(io, format!("pair disposition: {error:?}")))
     }
 
     pub(super) fn pair_wait_still_owned(&self, key: PumpDeadline) -> bool {
-        key == PumpDeadline::Decision && self.pair_work.is_some() && !self.pairs.is_complete()
+        if key == PumpDeadline::Decision && self.pair_rejection_wait.is_some() {
+            return true;
+        }
+        key == PumpDeadline::Decision
+            && self
+                .pair_work
+                .as_ref()
+                .is_some_and(|work| work.bound.is_some())
+            && !self.pairs.is_complete()
     }
 
-    fn pair_wait_matches(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+    pub(super) fn pair_wait_matches(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         let Some(work) = &self.pair_work else {
             return Err(RunFailure::PairOwned);
         };
         let actual = self.deadlines.get(PumpDeadline::Decision);
-        if actual != Some(work.bound) && !(actual.is_none() && self.pairs.is_complete()) {
+        if actual != work.bound && !(actual.is_none() && self.pairs.is_complete()) {
             return Err(self.pair_fault(io, "pair accounting lost its original wait"));
         }
         Ok(())
@@ -304,7 +330,18 @@ impl RecordingContext {
         if self.repair_blocks_external() && self.repair_owns_pairs() {
             return Err(RunFailure::RepairOwned);
         }
+        if self.pair_rejected_authoring || self.pairs.pending_rejection().is_some() {
+            return Ok(PairProgress::Pending);
+        }
         self.pair_wait_matches(ports.io)?;
+        if self
+            .pair_work
+            .as_ref()
+            .is_some_and(|work| work.bound.is_none())
+            || self.pairs.pending_rejection().is_some()
+        {
+            return Ok(PairProgress::Pending);
+        }
         self.collect_pair_statement(ports.io)?;
         if self.pair_work.as_ref().unwrap().leg.is_some() {
             let progress = self.advance_owned_filing(FilingOwner::Pair, ports)?;
@@ -329,7 +366,15 @@ impl RecordingContext {
         if self.pairs.is_complete() {
             return Ok(PairProgress::Complete);
         }
-        let next = if let Some((call, record)) = self.pairs.next_opening() {
+        // Spec 05 permits overlapping openings but does not require them. This
+        // execution owner has one receipt wait: finish its first pair before
+        // another opening can acquire that wait or obstruct the first answer.
+        let opening = if self.pairs.has_effective() {
+            self.pairs.next_execution_opening()
+        } else {
+            self.pairs.next_opening()
+        };
+        let next = if let Some((call, record)) = opening {
             Some((
                 call.clone(),
                 PairRecordPhase::Opening,
@@ -352,6 +397,10 @@ impl RecordingContext {
             });
         };
         let opening = phase == PairRecordPhase::Opening;
+        let gate = !opening
+            && self.pairs.terminal_is_gate(&call).map_err(|error| {
+                self.pair_fault(ports.io, format!("pair attribution: {error:?}"))
+            })?;
         let turn = self
             .pairs
             .original()
@@ -366,10 +415,16 @@ impl RecordingContext {
             } else {
                 Kind::ToolCallCompleted
             },
-            subsystem: Subsystem::Harness,
+            subsystem: if gate {
+                Subsystem::Gate
+            } else {
+                Subsystem::Harness
+            },
             turn: Some(turn),
             source: if opening {
                 AuthoredSource::Model
+            } else if gate {
+                AuthoredSource::Tool
             } else {
                 AuthoredSource::Loop
             },
@@ -464,6 +519,7 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         let leg = self.pair_work.as_ref().unwrap().leg.as_ref().unwrap();
+        let terminal = leg.phase == PairRecordPhase::Terminal;
         if leg.recorded.as_ref().map(|source| source.sequence.0) != Some(completion.sequence().0)
             || completion.receipts().sources().count() != 1
         {
@@ -495,6 +551,9 @@ impl RecordingContext {
             return Err(self.pair_fault(io, format!("pair receipt mismatch: {error:?}")));
         }
         self.pair_work.as_mut().unwrap().leg = None;
+        if terminal && self.pairs.has_effective() && !self.pairs.is_complete() {
+            self.begin_next_pair_send_wait(io)?;
+        }
         Ok(())
     }
 
@@ -509,7 +568,7 @@ impl RecordingContext {
         if self.pair_work.is_none() {
             return Ok(None);
         }
-        if self.pairs.has_repair_account() {
+        if self.pairs.has_repair_account() || self.pairs.has_effective() {
             return Err(RunFailure::PairOwned);
         }
         self.pair_wait_matches(io)?;
@@ -535,7 +594,7 @@ impl RecordingContext {
         if self.pair_work.is_none() {
             return Ok(None);
         }
-        if !self.pairs.has_repair_account() {
+        if !self.pairs.has_repair_account() || self.pairs.has_effective() {
             return Err(RunFailure::PairOwned);
         }
         self.pair_wait_matches(io)?;
@@ -581,7 +640,11 @@ impl RecordingContext {
         facts
     }
 
-    fn pair_fault(&mut self, io: &mut impl PumpIo, detail: impl Into<String>) -> RunFailure {
+    pub(super) fn pair_fault(
+        &mut self,
+        io: &mut impl PumpIo,
+        detail: impl Into<String>,
+    ) -> RunFailure {
         self.fail(
             io,
             FlowHaltReason::ProtocolFailed,

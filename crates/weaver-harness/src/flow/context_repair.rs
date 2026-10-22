@@ -233,6 +233,8 @@ impl RecordingContext {
             || self.input_turn.is_some()
             || self.input_author.is_some()
             || self.member_capture.is_some()
+            || self.read.is_some()
+            || self.measure_blocks_external()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || (self.barrier.pending_author().is_some() && !self.flow.has_pending_record())
@@ -341,7 +343,7 @@ impl RecordingContext {
         Ok(())
     }
 
-    fn repair_certificate_matches(&self, certificate: &TemplateCertificate) -> bool {
+    pub(super) fn repair_certificate_matches(&self, certificate: &TemplateCertificate) -> bool {
         let Some(duty) = &self.load_duty else {
             return false;
         };

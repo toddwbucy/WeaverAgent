@@ -307,6 +307,13 @@ impl StateChannel {
         self.failure.as_ref()
     }
 
+    /// A failed paged read has no valid cleanup exchange. Closing the seam
+    /// makes the member drop its snapshot without inventing a release receipt.
+    /// Keep all local request and answer evidence for the halt account.
+    pub(super) fn close_failed_read(&self) -> io::Result<()> {
+        self.stream.shutdown(std::net::Shutdown::Both)
+    }
+
     pub(super) fn outstanding(&self) -> Vec<ExchangeProgress> {
         self.exchanges.iter().map(Exchange::progress).collect()
     }

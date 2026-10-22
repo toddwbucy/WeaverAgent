@@ -53,6 +53,8 @@ pub(super) enum RunFailure {
     PairOwned,
     /// A repair transaction retains this author or pair account.
     RepairOwned,
+    /// A measurement owns the decode exchange or its exact pending author.
+    MeasureOwned,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -79,6 +81,7 @@ struct LoadDuty {
     instruction: serving::payloads::Ste100Instruction,
     persistence: serving::payloads::PersistenceConfig,
     template_inventory: serving::payloads::TemplateInventory,
+    tools: serving::payloads::ToolPolicies,
 }
 
 pub(crate) struct RecordingContext {
@@ -104,10 +107,16 @@ pub(crate) struct RecordingContext {
     input_turn: Option<input_driver::InputTurn>,
     input_turns: std::collections::BTreeSet<String>,
     member_capture: Option<capture_driver::MemberCapture>,
+    read: Option<read_driver::ReadTransaction>,
+    measure: Option<measure_driver::MeasureTransaction>,
     filing: Option<receipt_driver::FilingTransaction>,
     output: Option<output_driver::OutputTransaction>,
     pairs: pairs::PairLedger,
     pair_work: Option<pair_driver::PairTransaction>,
+    pair_gate_identity: Option<crate::flow::pump_transport::PortIdentity>,
+    pair_rejected_authoring: bool,
+    pair_rejection_wait: Option<(AbsoluteBound, bool)>,
+    pair_refused_gate: Option<crate::flow::pump_transport::ReceivedOrgan>,
     repair: Option<repair_driver::RepairTransaction>,
     repair_certificate: Option<super::templates::TemplateCertificate>,
     last_author_sequence: Option<Sequence>,
@@ -117,6 +126,9 @@ pub(crate) struct RecordingContext {
     /// It is distinct from the recorder's first pending author.
     refused_author: Option<AuthoredEvent>,
     waiting_content: Option<AuthoredEvent>,
+    // An initial lifecycle wait retained a valid original before admission.
+    // Its retry must pass the generic admission checks again.
+    author_admission_pending: bool,
     completed_author: Option<Sequence>,
     failure: Option<RunFailure>,
     failed_wait: Option<WaitAtHalt>,
@@ -194,10 +206,16 @@ impl RecordingContext {
             input_turn: None,
             input_turns: std::collections::BTreeSet::new(),
             member_capture: None,
+            read: None,
+            measure: None,
             filing: None,
             output: None,
             pairs,
             pair_work: None,
+            pair_gate_identity: None,
+            pair_rejected_authoring: false,
+            pair_rejection_wait: None,
+            pair_refused_gate: None,
             repair: None,
             repair_certificate: None,
             last_author_sequence: None,
@@ -205,6 +223,7 @@ impl RecordingContext {
             open_turn: None,
             refused_author: None,
             waiting_content: None,
+            author_admission_pending: false,
             completed_author: None,
             failure: None,
             failed_wait: None,
@@ -371,7 +390,7 @@ impl RecordingContext {
         self.live(io)?;
         // A template result belongs to its ordered transcript, never a second
         // operation consumer. Correct rejection keeps that boundary closed.
-        if self.templates_block_content() || self.output.is_some() {
+        if self.templates_block_content() || self.output.is_some() || self.read.is_some() {
             return Ok(None);
         }
         let result = self.flow.take_operation_completion(&mut FlowRecording {
@@ -437,6 +456,8 @@ impl RecordingContext {
             || self.output_wait_still_owned(key)
             || self.pair_wait_still_owned(key)
             || self.repair_wait_still_owned(key)
+            || self.read_wait_still_owned(key)
+            || self.measure_wait_still_owned(key)
             || (key == PumpDeadline::Enter
                 && self.phase == RecordingPhase::Entered
                 && self
@@ -462,6 +483,8 @@ impl RecordingContext {
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.member_capture.is_some()
+            || self.read.is_some()
+            || self.measure.is_some()
             || self.open_turn.is_some()
         {
             return Err(self.fail(
@@ -621,15 +644,27 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
         event: AuthoredEvent,
     ) -> Result<Sequence, RunFailure> {
-        if let Err(failure) = self.live(ports.io) {
-            self.retain_refused(event);
-            return Err(failure);
-        }
+        let initial_wait = match self.live(ports.io) {
+            Ok(()) => None,
+            Err(failure @ RunFailure::Wait { .. }) => Some(failure),
+            Err(failure) => {
+                self.retain_refused(event);
+                return Err(failure);
+            }
+        };
         if self.repair_blocks_external() {
             self.retain_refused(event);
             return Err(RunFailure::RepairOwned);
         }
-        if self.filing.is_some() || self.output.is_some() || self.pair_work.is_some() {
+        if self.measure_blocks_external() {
+            self.retain_refused(event);
+            return Err(RunFailure::MeasureOwned);
+        }
+        if self.filing.is_some()
+            || self.output.is_some()
+            || self.pair_work.is_some()
+            || self.pair_rejected_authoring
+        {
             self.retain_refused(event);
             return Err(self.fail(
                 ports.io,
@@ -688,6 +723,10 @@ impl RecordingContext {
             ));
         }
         self.waiting_content = Some(event);
+        if let Some(failure) = initial_wait {
+            self.author_admission_pending = true;
+            return Err(failure);
+        }
         self.continue_waiting_content(ports)
     }
 
@@ -695,6 +734,14 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
+        if self.author_admission_pending {
+            let event = self
+                .waiting_content
+                .take()
+                .expect("deferred author keeps its original");
+            self.author_admission_pending = false;
+            return self.author_and_wait(ports, event);
+        }
         let kind = self
             .waiting_content
             .as_ref()
@@ -728,6 +775,7 @@ impl RecordingContext {
                 instruction: load.state_flow.ste100.clone(),
                 persistence: load.state_flow.persistence.clone(),
                 template_inventory: load.template_inventory.clone(),
+                tools: load.state_flow.tools.clone(),
             });
         }
         let wall_ms = match wall_ms() {
@@ -765,7 +813,14 @@ impl RecordingContext {
         if self.repair_blocks_external() {
             return Err(RunFailure::RepairOwned);
         }
-        if self.filing.is_some() || self.output.is_some() || self.pair_work.is_some() {
+        if self.measure_blocks_external() {
+            return Err(RunFailure::MeasureOwned);
+        }
+        if self.filing.is_some()
+            || self.output.is_some()
+            || self.pair_work.is_some()
+            || self.pair_rejected_authoring
+        {
             return Err(self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
@@ -773,6 +828,14 @@ impl RecordingContext {
                 "generic resume cannot consume a content owner's author",
             ));
         }
+        self.resume_owned_author_and_wait(ports)
+    }
+
+    // Only a private owner that reserved this exact author may call this path.
+    fn resume_owned_author_and_wait<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<Sequence, RunFailure> {
         if let Some(sequence) = self.completed_author.take() {
             return Ok(sequence);
         }
@@ -960,6 +1023,9 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<PumpStep, RunFailure> {
+        if let Some(decode) = ports.decode.as_deref() {
+            self.check_measure_port(decode)?;
+        }
         self.live(ports.io)?;
         if self.phase == RecordingPhase::Preflight
             && (ports.gate.is_some()
@@ -985,11 +1051,28 @@ impl RecordingContext {
             },
             &self.deadlines,
         );
+        let sent = self.reconcile_pair_send(ports.io)?;
         match step {
+            Ok(PumpStep::Deadline {
+                key: PumpDeadline::Decision,
+                ..
+            }) if sent && self.deadlines.get(PumpDeadline::Decision).is_none() => {
+                self.live(ports.io)?;
+                Ok(PumpStep::Progress {
+                    sources: vec![PumpSource::Gate],
+                })
+            }
             Ok(PumpStep::Deadline { key, bound }) => Err(self.expired(ports.io, key, bound)),
             Ok(step) => Ok(step),
             Err(PumpFailure::Transport { source, failure }) => {
-                Err(RunFailure::Transport { source, failure })
+                if source == PumpSource::Decode && self.measure.is_some() {
+                    if let Some(decode) = ports.decode.as_deref_mut() {
+                        self.retain_measure_transport_evidence(decode);
+                    }
+                    Err(self.measure_fault(ports.io, format!("decode transport: {failure:?}")))
+                } else {
+                    Err(RunFailure::Transport { source, failure })
+                }
             }
             Err(error) => {
                 if self.flow.failure().is_some() {
@@ -1028,6 +1111,7 @@ impl RecordingContext {
         let advance = result.map_err(|failure| self.flow_failed(io, failure))?;
         self.settle_recorded_input(io)?;
         self.settle_recorded_capture(io)?;
+        self.settle_recorded_read(io)?;
         self.live(io)?;
         Ok(advance)
     }
@@ -1058,6 +1142,7 @@ impl RecordingContext {
         if self.barrier.failure().is_some() || self.barrier.standing_failure().is_some() {
             return Err(self.record_failed(io));
         }
+        self.reconcile_pair_send(io)?;
         let now = io.now().map_err(|error| {
             self.fail(
                 io,
@@ -1254,6 +1339,12 @@ impl RecordingContext {
         self.input.halt();
         self.pairs.freeze();
         self.freeze_repair();
+        if let Some(read) = &mut self.read {
+            read.freeze();
+        }
+        if let Some(measure) = &mut self.measure {
+            measure.freeze();
+        }
         self.phase = RecordingPhase::Failed;
         self.failure = Some(failure.clone());
         self.barrier.stop_for_flow_failure();
@@ -1278,6 +1369,17 @@ impl RecordingContext {
                 author: &self.author,
             },
         );
+        if self.read.is_some()
+            && let Err(error) = self.flow.close_failed_read()
+            && let Some(halt) = self.flow.halt_mut()
+        {
+            let _ = halt.append_secondary(SecondaryFailure {
+                reason: FlowHaltReason::CarryFailed,
+                point: HaltPoint::Teardown,
+                detail: format!("close failed read: {error}"),
+                observed_ns: io.now().ok().map(Into::into),
+            });
+        }
         failure
     }
 }
@@ -1340,10 +1442,15 @@ mod template_tests;
 
 #[path = "context_receipts.rs"]
 mod receipt_driver;
+
+#[path = "context_sort.rs"]
+mod sort_driver;
 #[allow(unused_imports)] // Dormant filing consumer, consumed by dependent primitive ports.
 pub(super) use receipt_driver::{
     FilingBeginError, FilingBeginRefusal, FilingCancellation, FilingCompletion, FilingProgress,
 };
+#[allow(unused_imports)] // The worker consumes the held outbound port at cutover.
+pub(in crate::flow) use sort_driver::{OutboundBeginError, OutboundCompletion, OutboundProgress};
 
 #[cfg(test)]
 #[path = "context_receipt_tests.rs"]
@@ -1366,12 +1473,16 @@ mod output_receipt_tests;
 
 #[path = "context_pairs.rs"]
 mod pair_driver;
+#[path = "context_pair_execution.rs"]
+mod pair_execution;
 #[path = "pairs.rs"]
 mod pairs;
 #[allow(unused_imports)] // The loop composes this port at the coupled cutover.
 pub(super) use pair_driver::{
     PairBeginError, PairBeginRefusal, PairProgress, PairReadError, RepairPairBeginError,
 };
+#[allow(unused_imports)]
+pub(super) use pair_execution::{ExecutionBeginError, ExecutionProgress, ExecutionRefusal};
 #[allow(unused_imports)]
 pub(super) use pairs::CompletedPair;
 
@@ -1398,3 +1509,24 @@ pub(super) use repair_driver::{
 #[cfg(test)]
 #[path = "context_repair_tests.rs"]
 mod repair_tests;
+
+#[path = "context_read.rs"]
+mod read_driver;
+#[allow(unused_imports)] // Composed by dependent boot, recall and placement primitives.
+pub(super) use read_driver::{ReadBeginError, ReadBeginRefusal, ReadProgress};
+
+#[cfg(test)]
+#[path = "context_read_tests.rs"]
+mod read_tests;
+
+#[path = "context_measure.rs"]
+mod measure_driver;
+#[allow(unused_imports)] // The later place owner consumes these count-only proofs.
+pub(super) use measure_driver::{
+    CancelledMeasure, MeasureBeginError, MeasureBeginRefusal, MeasureCompletion, MeasureFacts,
+    MeasurePosition, MeasureProgress, MeasureRequest, MeasuredProposal, RefusedMeasure,
+};
+
+#[cfg(test)]
+#[path = "context_measure_tests.rs"]
+mod measure_tests;

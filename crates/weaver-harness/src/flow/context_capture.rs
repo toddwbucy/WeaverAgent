@@ -70,11 +70,15 @@ impl RecordingContext {
         if self.templates_block_content() {
             return Err(RunFailure::TemplateBlocked);
         }
+        if self.measure_blocks_external() {
+            return Err(RunFailure::MeasureOwned);
+        }
         if self.phase != RecordingPhase::Entered
             || self.output.is_some()
             || self.filing.is_some()
             || self.pair_work.is_some()
             || self.member_capture.is_some()
+            || self.read.is_some()
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.open_turn.is_some()

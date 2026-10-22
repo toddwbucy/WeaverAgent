@@ -63,9 +63,11 @@ pub(in crate::flow) struct FilingCancellation {
 pub(super) enum FilingOwner {
     Ordinary,
     Pair,
+    Outbound,
 }
 
 pub(super) struct FilingTransaction {
+    pub(super) outbound: Option<super::sort_driver::OutboundWork>,
     owner: FilingOwner,
     key: PumpDeadline,
     bound: AbsoluteBound,
@@ -161,6 +163,8 @@ impl RecordingContext {
             || self.input_turn.is_some()
             || self.input_author.is_some()
             || self.member_capture.is_some()
+            || self.read.is_some()
+            || self.measure_blocks_external()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()
@@ -190,6 +194,7 @@ impl RecordingContext {
             });
         }
         self.filing = Some(FilingTransaction {
+            outbound: None,
             owner,
             key,
             bound: bound.expect("existing borrowed bound"),
@@ -209,7 +214,8 @@ impl RecordingContext {
         self.filing.as_ref().is_some_and(|owner| {
             owner.key == key
                 && !owner.cancelled
-                && !(owner.author_done
+                && !(owner.outbound.is_none()
+                    && owner.author_done
                     && self
                         .flow
                         .filing_receipts()
@@ -252,6 +258,9 @@ impl RecordingContext {
         sequence: Sequence,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
+        if self.bind_outbound_fault(sequence) {
+            return Ok(());
+        }
         let Some(owner) = self.filing.as_ref() else {
             return Ok(());
         };
@@ -383,6 +392,20 @@ impl RecordingContext {
         owner: FilingOwner,
         io: &mut impl PumpIo,
     ) -> Result<Option<FilingCompletion>, RunFailure> {
+        let result = self.collect_owned_filing(owner, io)?;
+        if result.is_some() {
+            self.filing = None;
+        }
+        Ok(result)
+    }
+
+    /// Collect evidence while an outbound owner retains the exclusive author
+    /// slot for an owed runtime-template fault.
+    pub(super) fn collect_owned_filing(
+        &mut self,
+        owner: FilingOwner,
+        io: &mut impl PumpIo,
+    ) -> Result<Option<FilingCompletion>, RunFailure> {
         if self
             .filing
             .as_ref()
@@ -425,7 +448,6 @@ impl RecordingContext {
         let Some(receipts) = result.map_err(|error| self.flow_failed(io, error))? else {
             return Ok(None);
         };
-        self.filing = None;
         Ok(Some(FilingCompletion {
             sequence,
             recorded_ns,

@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::BTreeSet;
 use weaver_types::{AccessRule, AgentName, ExchangeId, GateInstruction};
 
 /// conforms: gate-cancel-past-the-answer-is-dropped
@@ -63,7 +62,7 @@ fn a_cancel_past_the_answer_is_dropped_in_tools() {
         let n = recv(harness.as_raw_fd(), &mut buffer, MsgFlags::empty()).unwrap();
         serde_json::from_slice::<OrganEnvelope>(&buffer[..n]).unwrap()
     };
-    for ordinal in [2, 3, 4] {
+    for ordinal in [2, 3, 4, 5] {
         let exchange = weaver_types::ExchangeId {
             opener: Opener::Harness,
             ordinal,
@@ -88,7 +87,12 @@ fn a_cancel_past_the_answer_is_dropped_in_tools() {
         );
         let late = match ordinal {
             2 => Some(Payload::ToolCancel),
-            3 => Some(Payload::ToolInterrupt),
+            3 => Some(Payload::ToolInterrupt {
+                by: weaver_types::KillCause::Unload,
+            }),
+            4 => Some(Payload::ToolInterrupt {
+                by: weaver_types::KillCause::FlowFailure,
+            }),
             _ => None,
         };
         if let Some(payload) = late {
@@ -108,7 +112,12 @@ fn a_cancel_past_the_answer_is_dropped_in_tools() {
             }),
         ),
         (Position::Open, Payload::ToolCancel),
-        (Position::Open, Payload::ToolInterrupt),
+        (
+            Position::Open,
+            Payload::ToolInterrupt {
+                by: weaver_types::KillCause::Unload,
+            },
+        ),
     ] {
         write(&OrganEnvelope {
             exchange: weaver_types::ExchangeId {
@@ -223,7 +232,9 @@ fn the_interrupt_then_the_quiesce_through_the_served_loop_in_tools() {
     write(&OrganEnvelope {
         exchange: execution.clone(),
         position: Position::Continue,
-        payload: Payload::ToolInterrupt,
+        payload: Payload::ToolInterrupt {
+            by: weaver_types::KillCause::Unload,
+        },
     });
     let killed = read();
     assert_eq!(
@@ -817,4 +828,55 @@ fn the_tools_handle_never_reaches_the_shell_in_tools() {
         listed.contains(&"etc=1"),
         "the wall holds in the served shell: {listed:?}"
     );
+}
+
+/// A sent answer is immutable, but a never-opened control is not late.
+#[test]
+fn idle_controls_require_a_known_answer_and_valid_cause() {
+    let answered = BTreeSet::from([7]);
+    for by in [
+        weaver_types::KillCause::Unload,
+        weaver_types::KillCause::FlowFailure,
+    ] {
+        let mut envelope = OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Harness,
+                ordinal: 7,
+            },
+            position: Position::Continue,
+            payload: Payload::ToolInterrupt { by },
+        };
+        assert!(idle_tool_control(&envelope, &answered).unwrap());
+        envelope.exchange.ordinal = 8;
+        assert!(!idle_tool_control(&envelope, &answered).unwrap());
+        let mut state = HookState::BeforeRaise;
+        assert!(matches!(
+            dispatch_at(&mut state, &envelope, std::time::Instant::now()),
+            Dispatched::Answer(Payload::Refusal(LifecycleRefusal::OutOfOrder))
+        ));
+        envelope.exchange.ordinal = 7;
+        envelope.position = Position::Open;
+        assert!(!idle_tool_control(&envelope, &answered).unwrap());
+        envelope.position = Position::Continue;
+        envelope.exchange.opener = Opener::Admin;
+        assert!(!idle_tool_control(&envelope, &answered).unwrap());
+    }
+    for by in [
+        weaver_types::KillCause::Clock,
+        weaver_types::KillCause::Cancel,
+        weaver_types::KillCause::Fault,
+    ] {
+        let envelope = OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Harness,
+                ordinal: 7,
+            },
+            position: Position::Continue,
+            payload: Payload::ToolInterrupt { by },
+        };
+        assert!(matches!(
+            idle_tool_control(&envelope, &answered),
+            Err(ChannelFault::Undecodable)
+        ));
+    }
 }

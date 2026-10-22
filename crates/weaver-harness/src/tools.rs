@@ -19,9 +19,11 @@
 //! that could not author a tool-result turn would leave the conversation with
 //! a hole where the answer goes.
 //!
-//! The replacement pair port also constructs a harness-authored non-dispatch
-//! notice, only after its exact opening and terminal commits. The private
-//! `not_dispatched` constructor has one call site in the pair coordinator.
+//! The replacement pair port grants a result only after its exact statement,
+//! opening and terminal commits. Its one `granted` call site owns the received
+//! outcome through that final receipt. It also constructs a harness-authored
+//! non-dispatch notice, through one `not_dispatched` call site. Both stay behind
+//! the coupled cutover while the legacy path remains live.
 //!
 //! **Three negatives, each a compile property**, the `PeerIdentity` pattern
 //! one seam over: the gate exchange supplies it and no code asserts it.
@@ -148,9 +150,10 @@ impl ToolResult {
         }
     }
 
-    /// The one door, crate-private: called at the four sites of
-    /// `Engine::execute_call` that close a call (the module's header) and
-    /// nowhere else, which `tests/manifest.rs` pins.
+    /// Crate-private: four legacy sites in `Engine::execute_call` and one
+    /// replacement site in the pair owner's `install_terminal`. The manifest
+    /// recursively pins those sites across the crate. The replacement requires
+    /// the exact terminal commit before construction.
     ///
     /// Every outcome becomes renderable content, in words the model reasons
     /// over, whichever of the exchange's four contents arrived: a result is
@@ -176,6 +179,9 @@ impl ToolResult {
                     }
                     weaver_types::KillCause::Unload => {
                         "the command was interrupted by the agent's unload"
+                    }
+                    weaver_types::KillCause::FlowFailure => {
+                        "the command was contained after the agent's state flow failed"
                     }
                     weaver_types::KillCause::Fault => {
                         "the gate failed with the command open, and its outcome is unknown"

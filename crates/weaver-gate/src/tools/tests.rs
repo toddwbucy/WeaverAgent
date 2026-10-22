@@ -16,7 +16,7 @@ use weaver_types::ToolName;
 /// constructor alone (#29). The clock, the cancel and the containment are
 /// program-neutral, and these fixtures need what the confined busybox does not
 /// hold. The confinement has its own suite (`confine/tests.rs`).
-fn bare() -> super::Shell {
+pub(super) fn bare() -> super::Shell {
     super::Shell::bare("bash")
 }
 
@@ -85,7 +85,7 @@ impl Drop for ScratchTools {
     }
 }
 
-fn pair() -> (Channel, Channel) {
+pub(super) fn pair() -> (Channel, Channel) {
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
     let (near, far) = socketpair(
         AddressFamily::Unix,
@@ -100,7 +100,7 @@ fn pair() -> (Channel, Channel) {
     )
 }
 
-fn exchange() -> ExchangeId {
+pub(super) fn exchange() -> ExchangeId {
     ExchangeId {
         opener: weaver_types::Opener::Harness,
         ordinal: 1,
@@ -218,7 +218,9 @@ fn an_interrupt_kills_an_open_execution_by_unload() {
             .send(&OrganEnvelope {
                 exchange: exchange(),
                 position: Position::Continue,
-                payload: Payload::ToolInterrupt,
+                payload: Payload::ToolInterrupt {
+                    by: KillCause::Unload,
+                },
             })
             .unwrap();
         harness
@@ -341,8 +343,10 @@ fn an_absent_grant_refuses_every_execution_by_name() {
         },
         &near,
         &exchange(),
+        &BTreeSet::new(),
     )
-    .expect("an answer");
+    .expect("an answer")
+    .outcome;
     let ToolOutcome::Refused { reason } = outcome else {
         panic!("refused: {outcome:?}");
     };

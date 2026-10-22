@@ -1189,6 +1189,12 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     pub(super) fn state(&self) -> &StateChannel {
         self.state.as_ref().expect("standing state channel")
     }
+
+    pub(super) fn close_failed_read(&self) -> io::Result<()> {
+        self.state
+            .as_ref()
+            .map_or(Ok(()), StateChannel::close_failed_read)
+    }
     pub(super) fn classifier(&self) -> &Classifier<P> {
         self.classifier.as_ref().expect("standing classifier")
     }

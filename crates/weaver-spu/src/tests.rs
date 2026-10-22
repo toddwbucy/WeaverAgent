@@ -365,6 +365,7 @@ fn open() -> TokenDirective {
 
 fn append() -> TokenDirective {
     TokenDirective::AppendAndGenerate {
+        tool_schemas: vec![],
         turn: weaver_types::TurnKey("t-1".into()),
         delta: vec![],
     }
@@ -404,6 +405,11 @@ fn a_directive_before_any_open_answers_not_open() {
             turn: weaver_types::TurnKey("t-1".into()),
         },
         TokenDirective::Flush { keep: 0 },
+        TokenDirective::MeasureDelta {
+            keep: 0,
+            delta: vec![],
+            tool_schemas: vec![],
+        },
     ] {
         assert_eq!(
             judge_decode(DecodePosition::BeforeOpen, true, &directive),
@@ -522,6 +528,18 @@ fn cancel_and_flush_are_in_order_at_rest() {
         judge_decode(
             DecodePosition::AtRest,
             true,
+            &TokenDirective::MeasureDelta {
+                keep: u64::MAX,
+                delta: vec![],
+                tool_schemas: vec!["schema".into()],
+            },
+        ),
+        None
+    );
+    assert_eq!(
+        judge_decode(
+            DecodePosition::AtRest,
+            true,
             &TokenDirective::Cancel {
                 turn: weaver_types::TurnKey("t-1".into()),
             },
@@ -536,6 +554,63 @@ fn cancel_and_flush_are_in_order_at_rest() {
         ),
         None
     );
+}
+
+#[test]
+fn active_decode_refuses_measurement_without_cancelling_or_queuing_it() {
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, setsockopt, socketpair};
+    use nix::sys::time::TimeVal;
+    use weaver_spu::channel::decode_from_owned;
+
+    let (client, server) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+    setsockopt(
+        &client,
+        nix::sys::socket::sockopt::ReceiveTimeout,
+        &TimeVal::new(2, 0),
+    )
+    .unwrap();
+    let client = decode_from_owned(client);
+    let server = decode_from_owned(server);
+    client
+        .send_octets(
+            &serde_json::to_vec(&TokenDirective::MeasureDelta {
+                keep: 0,
+                delta: vec![],
+                tool_schemas: vec!["schema".into()],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    // This is the same poll used by active generation and diagnostic re-feed.
+    let mut poll = SeamCancel {
+        socket: &server,
+        cancelled: false,
+        fatal: false,
+    };
+    assert!(!poll.cancelled());
+    assert!(!poll.cancelled && !poll.fatal);
+    assert_eq!(
+        serde_json::from_slice::<TokenRefusal>(&client.recv_octets().unwrap()).unwrap(),
+        TokenRefusal::OutOfOrder,
+    );
+    assert!(client.try_recv_octets().unwrap().is_none());
+    assert!(!poll.cancelled());
+    client
+        .send_octets(
+            &serde_json::to_vec(&TokenDirective::Cancel {
+                turn: weaver_types::TurnKey("active".into()),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    assert!(poll.cancelled());
+    assert!(poll.cancelled && !poll.fatal);
 }
 
 /// **The report crosses on the answer**, per Spec section 10 on the

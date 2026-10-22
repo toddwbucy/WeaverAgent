@@ -417,39 +417,26 @@ mod device {
         generations
     }
 
-    /// Exercise the actual composition-root branch over its legacy socket.
-    /// Measurement's proposal is not a reservation: this separate open repeats
-    /// preparation and must emit those exact input ids in the existing report.
-    fn legacy_decode_agrees(resident: &Resident, parameters: EffectiveSessionParameters) {
-        use nix::sys::socket::{AddressFamily, SockFlag, SockType, setsockopt, socketpair};
-        use nix::sys::time::TimeVal;
+    /// The actual composition root produces every count over its decode socket.
+    /// The reference preparation uses the same resident, while append repeats it.
+    fn paired_decode_agrees(resident: &Resident, parameters: EffectiveSessionParameters) {
         use weaver_spu::channel::decode_from_owned;
         use weaver_types::{SessionId, TokenAnswer, TokenDirective};
 
         let delta = vec![text(Role::User, "Count from one to ten.")];
-        let (measured, prepared, prefix) = {
+        let schemas = vec![
+            "Tool: read a file.".into(),
+            "Tool: list a directory.".into(),
+        ];
+        let (measured, prepared, facts) = {
             let mut observer = open(resident, parameters);
-            let measured = observer.measure_delta(u64::MAX, &delta, &[]).unwrap();
-            let prepared = observer.prepare_delta(&delta, &[]).unwrap();
-            let prefix = observer.open_facts().unwrap().prefix_tokens;
+            let measured = observer.measure_delta(u64::MAX, &delta, &schemas).unwrap();
+            let prepared = observer.prepare_delta(&delta, &schemas).unwrap();
+            let facts = observer.open_facts().unwrap();
             observer.session.close();
-            (measured, prepared, prefix)
+            (measured, prepared, facts)
         };
-        let (client, server) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .unwrap();
-        for end in [&client, &server] {
-            setsockopt(
-                end,
-                nix::sys::socket::sockopt::ReceiveTimeout,
-                &TimeVal::new(60, 0),
-            )
-            .unwrap();
-        }
+        let (client, server) = decode_pair();
         let client = std::thread::spawn(move || {
             let channel = decode_from_owned(client);
             let send = |directive: TokenDirective| {
@@ -457,27 +444,72 @@ mod device {
                     .send_octets(&serde_json::to_vec(&directive).unwrap())
                     .unwrap();
             };
+            let receive =
+                || serde_json::from_slice::<TokenAnswer>(&channel.recv_octets().unwrap()).unwrap();
+            let proposal = |keep, delta: Vec<Message>, tool_schemas: Vec<String>| {
+                TokenDirective::MeasureDelta {
+                    keep,
+                    delta,
+                    tool_schemas,
+                }
+            };
+            send(proposal(0, delta.clone(), schemas.clone()));
+            assert_eq!(
+                serde_json::from_slice::<TokenRefusal>(&channel.recv_octets().unwrap()).unwrap(),
+                TokenRefusal::NotOpen
+            );
             send(TokenDirective::Open {
-                session: SessionId("placement legacy seam".into()),
+                session: SessionId("placement paired seam".into()),
                 messages: vec![text(Role::System, "Answer briefly.")],
                 column_ask: false,
             });
-            let opened = channel.recv_octets().unwrap();
             assert_eq!(
-                serde_json::from_slice::<serde_json::Value>(&opened).unwrap(),
-                serde_json::json!({"kind": "opened"})
+                receive(),
+                TokenAnswer::Opened {
+                    prefix_tokens: facts.prefix_tokens,
+                    capacity: facts.capacity,
+                    generation_limit: facts.generation_limit,
+                    terminal_tokens: 1,
+                }
             );
+            send(proposal(0, vec![malformed()], schemas.clone()));
+            assert_eq!(
+                serde_json::from_slice::<TokenRefusal>(&channel.recv_octets().unwrap()).unwrap(),
+                TokenRefusal::MalformedDelta
+            );
+            send(proposal(
+                0,
+                vec![text(Role::User, &"large proposal ".repeat(2048))],
+                schemas.clone(),
+            ));
+            assert!(matches!(receive(), TokenAnswer::DeltaMeasured {
+                resident, prefix_tokens, keep, input_tokens, capacity,
+            } if resident == facts.prefix_tokens && prefix_tokens == facts.prefix_tokens
+                && keep == facts.prefix_tokens && capacity == facts.capacity
+                && input_tokens > capacity));
+            for keep in [0, u64::MAX] {
+                send(proposal(keep, delta.clone(), schemas.clone()));
+                assert_eq!(
+                    receive(),
+                    TokenAnswer::DeltaMeasured {
+                        resident: measured.resident,
+                        prefix_tokens: measured.prefix_tokens,
+                        keep: measured.keep,
+                        input_tokens: measured.input_tokens,
+                        capacity: measured.capacity,
+                    }
+                );
+            }
             send(TokenDirective::AppendAndGenerate {
                 turn: TurnKey("placement seam turn".into()),
-                delta,
+                delta: delta.clone(),
+                tool_schemas: schemas.clone(),
             });
             let generated = loop {
-                match serde_json::from_slice::<TokenAnswer>(&channel.recv_octets().unwrap())
-                    .unwrap()
-                {
+                match receive() {
                     TokenAnswer::Token { .. } => {}
                     TokenAnswer::Generated(generated) => break generated,
-                    other => panic!("unexpected legacy decode answer: {other:?}"),
+                    other => panic!("unexpected decode answer: {other:?}"),
                 }
             };
             let measurement: serde_json::Value =
@@ -500,28 +532,222 @@ mod device {
             assert_eq!(request["rendered"], prepared.rendered);
             assert_eq!(
                 generated.resident,
-                prefix
+                facts.prefix_tokens
                     + measured.input_tokens
                     + measurement["output_tokens"].as_array().unwrap().len() as u64
                     + 1
             );
             assert_eq!(generated.capacity, measured.capacity);
+            for keep in [0, u64::MAX] {
+                send(proposal(keep, delta.clone(), schemas.clone()));
+                assert_eq!(
+                    receive(),
+                    TokenAnswer::DeltaMeasured {
+                        resident: generated.resident,
+                        prefix_tokens: facts.prefix_tokens,
+                        keep: if keep == 0 {
+                            facts.prefix_tokens
+                        } else {
+                            generated.resident
+                        },
+                        input_tokens: measured.input_tokens,
+                        capacity: measured.capacity,
+                    }
+                );
+            }
+            send(TokenDirective::AppendAndGenerate {
+                turn: TurnKey("placement seam turn".into()),
+                delta: delta.clone(),
+                tool_schemas: schemas.clone(),
+            });
+            let second = loop {
+                match receive() {
+                    TokenAnswer::Token { .. } => {}
+                    TokenAnswer::Generated(generated) => break generated,
+                    other => panic!("unexpected second decode answer: {other:?}"),
+                }
+            };
+            let second_measurement: serde_json::Value =
+                serde_json::from_str(second.measurement.get()).unwrap();
+            let second_request: serde_json::Value =
+                serde_json::from_str(second.request.get()).unwrap();
+            assert_eq!(second_request["rendered"], prepared.rendered);
+            assert_eq!(
+                second_request["sampling"]["generation_seed"],
+                serde_json::json!(weaver_spu::sampling::derived_seed(
+                    knobs().seed,
+                    &TurnKey("placement seam turn".into()),
+                    1,
+                ))
+            );
+            assert_eq!(
+                second.resident,
+                generated.resident
+                    + measured.input_tokens
+                    + second_measurement["output_tokens"]
+                        .as_array()
+                        .unwrap()
+                        .len() as u64
+                    + 1
+            );
+            send(TokenDirective::Flush { keep: 0 });
+            assert_eq!(
+                receive(),
+                TokenAnswer::Flushed {
+                    resident_before: second.resident,
+                    resident_after: facts.prefix_tokens,
+                }
+            );
+            send(proposal(u64::MAX, delta, schemas));
+            assert_eq!(
+                receive(),
+                TokenAnswer::DeltaMeasured {
+                    resident: facts.prefix_tokens,
+                    prefix_tokens: facts.prefix_tokens,
+                    keep: facts.prefix_tokens,
+                    input_tokens: measured.input_tokens,
+                    capacity: measured.capacity,
+                }
+            );
         });
         let result = crate::serve_decode(
             &decode_from_owned(server),
             resident,
-            &crate::Effective {
-                knobs: knobs(),
-                session: parameters,
-                field_depth: None,
-                refeed_permission: false,
-                column_permission: false,
-                readout_elected: true,
-            },
+            &wire_effective(parameters, false),
         );
         client
             .join()
-            .expect("the legacy peer completes its exchange");
+            .expect("the paired peer completes its exchange");
+        assert_eq!(result, Ok(()));
+    }
+
+    fn decode_pair() -> (std::os::fd::OwnedFd, std::os::fd::OwnedFd) {
+        use nix::sys::socket::{AddressFamily, SockFlag, SockType, setsockopt, socketpair};
+        use nix::sys::time::TimeVal;
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        for end in [&client, &server] {
+            setsockopt(
+                end,
+                nix::sys::socket::sockopt::ReceiveTimeout,
+                &TimeVal::new(60, 0),
+            )
+            .unwrap();
+        }
+        (client, server)
+    }
+
+    fn wire_effective(parameters: EffectiveSessionParameters, refeed: bool) -> crate::Effective {
+        crate::Effective {
+            knobs: knobs(),
+            session: parameters,
+            field_depth: None,
+            refeed_permission: refeed,
+            column_permission: false,
+            readout_elected: true,
+        }
+    }
+
+    /// Queue the deliberate ordering breach before the server starts, so the
+    /// test cannot race a short generation. Both active drives use SeamCancel.
+    fn active_measure_refuses(
+        resident: &Resident,
+        parameters: EffectiveSessionParameters,
+        refeed: bool,
+    ) {
+        use weaver_spu::channel::decode_from_owned;
+        use weaver_types::{SessionId, TokenAnswer, TokenDirective};
+        let delta = vec![text(Role::User, "Count from one to ten.")];
+        let active = if refeed {
+            let mut observer = open(resident, parameters);
+            let prepared = observer.prepare_delta(&delta, &[]).unwrap();
+            observer.session.close();
+            TokenDirective::ReFeed {
+                turn: TurnKey("active measure".into()),
+                rendered: prepared.rendered,
+                path: vec![resident.tokenize("one").unwrap()[0].0; 8],
+            }
+        } else {
+            TokenDirective::AppendAndGenerate {
+                turn: TurnKey("active measure".into()),
+                delta,
+                tool_schemas: vec![],
+            }
+        };
+        let (client, server) = decode_pair();
+        let client = decode_from_owned(client);
+        for directive in [
+            TokenDirective::Open {
+                session: SessionId("active measure".into()),
+                messages: vec![text(Role::System, "Answer briefly.")],
+                column_ask: false,
+            },
+            active,
+            TokenDirective::MeasureDelta {
+                keep: 0,
+                delta: vec![],
+                tool_schemas: vec![],
+            },
+        ] {
+            client
+                .send_octets(&serde_json::to_vec(&directive).unwrap())
+                .unwrap();
+        }
+        let client = std::thread::spawn(move || {
+            let opened: TokenAnswer =
+                serde_json::from_slice(&client.recv_octets().unwrap()).unwrap();
+            assert!(matches!(
+                opened,
+                TokenAnswer::Opened {
+                    terminal_tokens: 1,
+                    ..
+                }
+            ));
+            let mut refusals = 0;
+            loop {
+                let raw = client.recv_octets().unwrap();
+                if let Ok(refusal) = serde_json::from_slice::<TokenRefusal>(&raw) {
+                    assert_eq!(refusal, TokenRefusal::OutOfOrder);
+                    refusals += 1;
+                    continue;
+                }
+                match serde_json::from_slice::<TokenAnswer>(&raw).unwrap() {
+                    TokenAnswer::Token { .. } if !refeed => {}
+                    TokenAnswer::Generated(_) if !refeed => break,
+                    TokenAnswer::ReFed(_) if refeed => break,
+                    other => panic!("wrong active-drive answer: {other:?}"),
+                }
+            }
+            assert_eq!(
+                refusals, 1,
+                "measurement refuses once and never becomes queued work"
+            );
+            client
+                .send_octets(
+                    &serde_json::to_vec(&TokenDirective::Cancel {
+                        turn: TurnKey("active measure".into()),
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<TokenAnswer>(&client.recv_octets().unwrap()).unwrap(),
+                TokenAnswer::AtRest
+            );
+        });
+        let result = crate::serve_decode(
+            &decode_from_owned(server),
+            resident,
+            &wire_effective(parameters, refeed),
+        );
+        client
+            .join()
+            .expect("active drive rejects the concurrent measurement");
         assert_eq!(result, Ok(()));
     }
 
@@ -565,6 +791,8 @@ mod device {
         assert_eq!(standing.open_facts().unwrap().generation_limit, 3);
         standing.session.close();
         drop(standing);
-        legacy_decode_agrees(resident, parameters);
+        paired_decode_agrees(resident, parameters);
+        active_measure_refuses(resident, parameters, false);
+        active_measure_refuses(resident, parameters, true);
     }
 }

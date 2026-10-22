@@ -243,6 +243,38 @@ fn source_position(value: &shared::SourcePosition) -> trace::SourcePosition {
     }
 }
 
+pub(super) fn outbound(
+    source: &shared::SourcePosition,
+    acts: &[shared::SortAct],
+) -> trace::SortDecision {
+    trace::SortDecision::Outbound {
+        source: source_position(source),
+        criterion: trace::OutboundCriterion::Identity,
+        acts: acts
+            .iter()
+            .map(|act| match act {
+                shared::SortAct::Tool {
+                    call_id: id,
+                    statement: stmt,
+                } => trace::SortAct::Tool {
+                    call_id: call_id(id),
+                    statement: statement(stmt),
+                },
+                shared::SortAct::Recall {
+                    call_id: id,
+                    statement: stmt,
+                } => trace::SortAct::Recall {
+                    call_id: call_id(id),
+                    statement: statement(stmt),
+                },
+                shared::SortAct::Answer { source: id } => trace::SortAct::Answer {
+                    source: self::source(id),
+                },
+            })
+            .collect(),
+    }
+}
+
 fn review_setup(value: &shared::ReviewSetupRef) -> trace::ReviewSetupRef {
     let shared::ReviewSetupRef { setup_id, sha256 } = value;
     trace::ReviewSetupRef {
@@ -346,6 +378,7 @@ fn tool_outcome(value: &weaver_types::ToolOutcome) -> trace::ToolOutcome {
                 weaver_types::KillCause::Clock => trace::KillCause::Clock,
                 weaver_types::KillCause::Cancel => trace::KillCause::Cancel,
                 weaver_types::KillCause::Unload => trace::KillCause::Unload,
+                weaver_types::KillCause::FlowFailure => trace::KillCause::FlowFailure,
                 weaver_types::KillCause::Fault => trace::KillCause::Fault,
             },
         },
