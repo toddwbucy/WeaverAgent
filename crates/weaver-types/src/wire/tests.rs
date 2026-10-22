@@ -178,6 +178,42 @@ fn protocol_repair_refusal_keeps_exact_source_case_and_flat_seam_shape() {
 }
 
 #[test]
+fn empty_correction_refusal_keeps_exact_original_source_and_detail() {
+    use crate::state_flow::{ProtocolRepairCase, SourceBlockId};
+    let record = RefusalRecord::ProtocolRepair {
+        source_id: SourceBlockId {
+            run: "run-7".into(),
+            sequence: 17.into(),
+            block: 2.into(),
+        },
+        case: ProtocolRepairCase::EmptyCorrection,
+        detail: ProtocolRepairCase::EMPTY_CORRECTION_DETAIL.into(),
+    };
+    let expected = r#"{"seam":"protocol_repair","source_id":{"run":"run-7","sequence":"17","block":"2"},"case":"empty_correction","detail":"correction contains no Text block or attempted call"}"#;
+    assert_eq!(serde_json::to_string(&record).unwrap(), expected);
+    assert_eq!(
+        crate::state_flow::decode_strict::<RefusalRecord>(expected).unwrap(),
+        record
+    );
+    for bad in ["unknown_correction", "EmptyCorrection", "non_ste100"] {
+        assert_refusal_rejected(&expected.replace("empty_correction", bad));
+    }
+    for field in ["source_id", "case", "detail"] {
+        let mut value: serde_json::Value = serde_json::from_str(expected).unwrap();
+        value.as_object_mut().unwrap().remove(field);
+        assert_refusal_rejected(&value.to_string());
+    }
+    assert_refusal_rejected(
+        &expected.replace("\"detail\":", "\"detail\":\"duplicate\",\"detail\":"),
+    );
+    assert_refusal_rejected(&expected.replace(
+        "\"sequence\":\"17\"",
+        "\"sequence\":\"17\",\"sequence\":\"18\"",
+    ));
+    assert_refusal_rejected(&expected.replace("\"detail\":", "\"extra\":true,\"detail\":"));
+}
+
+#[test]
 fn instruction_refusal_keeps_exact_template_case_and_flat_seam_shape() {
     use crate::state_flow::InstructionRefusal;
 
@@ -240,7 +276,7 @@ fn repair_and_instruction_refusals_reject_missing_null_and_foreign_members() {
         for case in [
             "non_ste100",
             "component_failed",
-            "empty_correction",
+            "unknown_correction",
             "CorrectionCall",
         ] {
             let mut alien = original.clone();

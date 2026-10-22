@@ -15,6 +15,8 @@ use std::io::{Read, Write};
 use weaver_traits::{ContentBlock, ToolCall};
 use weaver_types::state_flow as s;
 
+#[path = "context_empty_correction_tests.rs"]
+mod empty_correction_tests;
 #[path = "context_sort_tests.rs"]
 mod sort_tests;
 
@@ -249,7 +251,7 @@ impl RepairFixture {
 
     fn checker(&mut self) {
         if let Some(request) = self.receive_check() {
-            let rejected = request.text.starts_with("bad");
+            let rejected = request.text.starts_with("bad") || request.text.is_empty();
             self.input.reply(&reply(&request, rejected));
         }
     }

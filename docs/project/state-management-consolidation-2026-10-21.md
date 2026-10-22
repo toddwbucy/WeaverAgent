@@ -3,6 +3,11 @@
 Date: 2026-10-21.
 Branch: code/state-gate-interrupt. Landing PR: #215.
 
+The operator merged #215 at a42d1f02 on 2026-10-21 after its final review.
+The validation sections below retain their original tested revisions. The later
+Spec merges #189, #192 and #213 authorize the next implementation acts, tracked
+in [issue #146](https://github.com/toddwbucy/WeaverAgent/issues/146).
+
 ## Integration and authority
 
 The operator authorized integrating main into the #215 root and retargeting
@@ -280,8 +285,9 @@ The operator authorized consolidation onto main. Runtime activation and deployme
 remain held until the coupled foundation cutover, and the old serving path stays
 active. Inward pair execution and boot repair, complete journal/place ownership,
 plan and forward-flag ports, serve-side selection, lifecycle/author migration,
-failed-run teardown and the complete cutover remain owed. Draft Specs #189, #192 and
-#213 are not implementation authority. OPEN-FACTS still lacks the identity-prefix
+failed-run teardown and the complete cutover remain owed. Specs #189, #192 and
+#213 are now merged authority. Their recall/boot, sampling/version and empty-correction
+implementations remain owed. OPEN-FACTS still lacks the identity-prefix
 open-measurement carrier. Production language artifacts, the separately reviewed
 system prompt, measured limits and the required host instruments remain separate
 qualification obligations. Keep weaver-state, worker/dev_loop orchestration and
