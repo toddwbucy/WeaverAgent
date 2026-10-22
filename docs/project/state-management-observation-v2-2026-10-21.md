@@ -73,6 +73,21 @@ skipping the complete-answer bound. Each exact source restoration passed its foc
 test. The real serving process now catches both formerly surviving ordering mutations.
 An independent source review found no defect in the shared completion or page cleanup.
 
+The [completion-path re-grade][completion-review] at 1537d4df confirms the two ordering
+guards and identifies one surviving wiring mutation: run() passing None instead of its
+CompletionBounds. A new serving-process fixture addresses that gap with real input:
+a valid filing retains a turn identity larger than the answer limit but below the
+request limit. Its Filed receipt succeeds. A later Position answer exceeds the encoder
+bound and must produce AnswerTooLarge through run()'s fallback. A previously acquired
+prompt-read cursor remains releasable after that refusal. No encoder failure is
+injected. The existing child timing markers also check the fallback's observation.
+The new fixture passed in a 203-test state suite (8 inherited ignored), with state
+all-target clippy, lock and formatting. Disconnecting run() from CompletionBounds
+compiled and failed this process fixture; exact restoration passed. An independent
+source review found no defect in the new fixture. The test does not force an oversized
+generated page; page_budget already reserves the complete
+wrapper and maximum observation before the base64 page is built.
+
 Logs and SHA-256 source and restoration manifests are deposited on the shared bulk
 store under
 `weaver-testing/state-management-146-olympus-2026-10-21/observation/`.
@@ -88,3 +103,4 @@ counter/phase classification retain their review dispositions. Only the operator
 merges, and issue #146 remains open. No deployed agent or serving activation changed.
 
 [planner]: https://github.com/toddwbucy/WeaverAgent/pull/225#pullrequestreview-5608802535
+[completion-review]: https://github.com/toddwbucy/WeaverAgent/pull/225#pullrequestreview-5608907601
