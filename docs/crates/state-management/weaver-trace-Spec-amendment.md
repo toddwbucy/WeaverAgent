@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #189
+**Landing PR:** pending assignment for this draft proposal
 
-**Version:** 0.22 **Date filed:** 2026-10-20 **Parent:** weaver-trace-PRD
+**Version:** 0.23 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
 
 ## 0. What this document is
 
@@ -12,6 +12,9 @@ Replacement text for trace Spec sections 3, 5, 6, 9, and 11, with instruments ad
 section 10. It implements FLOW-1 through FLOW-8 and TAP-1 through TAP-5 at the trace
 boundary. It requires the charter and harness-trace contract amendments in this packet.
 The crate still authors no event and owns no store interface.
+
+The Open evidence [proposal and acceptance record][open-election] names this carrier
+act's choices and the implementation work still owed.
 
 ## 1. Envelope and event registry, destination section 3
 
@@ -361,6 +364,32 @@ record is channel internal, origin loop. It holds no selectable Text or context 
 Assembly zero is the single boot placement, causally linked to the boot recall. [FLOW-3,
 PLACE-5, MARK-6, COST-4]
 
+open_evidence is a required final field. It is null for cut and append, and for boot it
+is a serialize-only trace-owned wrapper {session:String,request:Box<RawValue>,
+measurement:Box<RawValue>}. Splice both SPU-OPEN boxes without normalization. Admit only
+their specified closed shapes, including checked u32 token elements, length equal to
+prefix_tokens, and one identity-prefix block covering the entire rendered UTF-8 string.
+Reject missing, duplicate or unknown members. The wrapper session equals the event's
+session. Boot requires prefix_tokens no greater than capacity, terminal_tokens one,
+assembly zero, no turn, cut null, and a causal_parent naming the earlier boot recall.
+Trace validates the envelope and local structural agreement. The harness proves the
+held Open, source-port and causal-source correspondence. No template
+or family interpretation occurs here. [FLOW-3, PLACE-5, SEAM-2, PROMPT-1]
+
+The nested request/measurement are Open evidence, not model.request/model.measurement
+events. Those generation kinds remain turn-bound. Boot placement can account for a
+valid seated prefix whose configured fit failed, or whose enter was cancelled, without
+claiming readiness. Its payload grants no projection, including a wildcard. Diagnostic
+conversion refuses the serving placement instead of dropping the new field or creating
+a diagnostic event. Serving readers must accept this required shape at the paired
+cutover, including null open_evidence on nonboot placements. [FLOW-3, TAP-3, SCOPE-1]
+
+HARNESS-OPEN's owed teardown account uses normal submission capacity with the tee
+stopped when required. It gains no submit_terminal license and cannot spend any of
+TRACE-CAPACITY's seven reserved entries. Missing ordinary capacity preserves the held
+event only within the existing bound. No additional queue reserve is elected here.
+[FLOW-3, FLOW-4, FLOW-5, COST-4]
+
 Payload::MarkPosition mirrors Spec 06's MARK-POSITION, including the distinct
 MarkOccurrenceId, ArgumentCursor and boot/placed/native source variants. The harness
 authors state.mark.position only after its licensing receipt or complete append. The
@@ -424,6 +453,7 @@ feed. The result is forbidden by the partition validator. [SORT-4, FLOW-3, STORE
 | --- | --- | --- |
 | TRACE-WAKE | Saturate the real writer behind a held sink, release one slot, poll wake descriptor | Remove writer notification or reserve after sequence assignment |
 | TRACE-LOAD | Canonical load, failed-partition, failed-template and diagnostic fixtures | Author before load, omit inventory identity or starting hash, or claim a certificate before its results |
+| TRACE-PLACEMENT | Shared Open evidence corpus, actual event admission, byte-preserving serialization, boot/nonboot and fit/cancelled boot cases | Accept absent/wrong-phase evidence, malformed boxes, count/range/session mismatch, a boot turn or missing causal parent, normalize boxes or permit a projection/diagnostic conversion |
 | TRACE-RESULT | Rebuild bindings from source plus result records and compare committed rows | Remove one noun or condition from the trace payload |
 | TRACE-SORT | Exact decision/measurement captures with optional and mandatory overflow | Hide a dropped unit, admit measurement content, truncate a return or mutate an earlier event |
 
@@ -663,9 +693,13 @@ No numeric queue size is changed. The new kind set must be accepted by serving t
 consumers before deployment. The A/B representation is in this unit's persistence
 amendments. The load keeps its existing organ binary identities and declared elections
 as well as the new fields. Actual model identity and effective parameters remain in
-model.measurement and model.request. Tool metadata and any later selected event kind
-must enter the registry through its owning amendment before it can be configured. These
-are dependencies, not permission for an implementer to guess payload shapes.
+generation model.measurement/model.request and boot placement's Open evidence. Tool
+metadata and any later selected event kind must enter the registry through its owning
+amendment before it can be configured. These are dependencies, not permission for an
+implementer to guess payload shapes.
 
 [cutover]:
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
+
+[open-election]:
+../../project/state-management-open-facts-carrier-2026-10-21.md

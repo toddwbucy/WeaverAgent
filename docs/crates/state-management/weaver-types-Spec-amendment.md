@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #213
+**Landing PR:** pending assignment for this draft proposal
 
-**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -13,6 +13,9 @@ AgentConfig.state_election, StateElection, and EnterPayload.state_election. It h
 implemented `[state-management]` parser despite the apex declaring that table. This
 amendment implements that table's flow portion. It does not add a third config reader or
 change Message. [TAP-1, TAP-2, SEAM-2]
+
+The Open evidence [proposal and acceptance record][open-election] names this carrier
+act's choices and the implementation work still owed.
 
 ## 1. Declaration representation, destination section 2
 
@@ -951,7 +954,7 @@ PLACE-3, PLACE-5, PLACE-6]
 | --- | --- |
 | TokenDirective::AppendAndGenerate | Existing turn:TurnKey and delta:Vec<Message>, plus tool_schemas:Vec<String> |
 | TokenDirective::MeasureDelta | keep:u64, delta:Vec<Message>, tool_schemas:Vec<String> |
-| TokenAnswer::Opened | prefix_tokens:u64, capacity:u64, generation_limit:u64, terminal_tokens:u64 |
+| TokenAnswer::Opened | session:SessionId, prefix_tokens:u64, capacity:u64, generation_limit:u64, terminal_tokens:u64, request:Box<RawValue>, measurement:Box<RawValue> |
 | TokenAnswer::DeltaMeasured | resident:u64, prefix_tokens:u64, keep:u64, input_tokens:u64, capacity:u64 |
 | TokenAsk::MeasureDelta | keep:u64, under TokenAsk's existing ask tag |
 | RefusalRecord::Placement | assembly_id:DecimalU64, code:PlacementCode, detail:String, seam value placement |
@@ -960,9 +963,13 @@ PlacementCode is invalid_span, invalid_pair, invalid_cut, head_over_capacity,
 tail_over_capacity, generation_room or stale_position, as PLACE-PORT uses. No new
 TokenRefusal variant is required. NotOpen, OutOfOrder and MalformedDelta answer
 measurement where appropriate, while a physically oversized proposal can still return
-its count. Opened is no longer a unit answer after cutover, and an absent body or
-schemas member is not defaulted. An empty schema list is explicit. [PLACE-3, PLACE-4,
-PLACE-5]
+its count. Opened is no longer a unit or four-count-only answer after cutover. No body,
+session, evidence box or schemas member is defaulted. An empty schema list is explicit.
+Reject unknown or duplicate outer fields. SessionId is the unchanged String newtype
+and echoes the exact Open.session. The floor carries the two raw boxes without
+normalization or interpreting their contents, as Generation does. SPU-OPEN owns their
+closed contents and the harness/trace checks. No new floor measurement mirror or
+generation variant is introduced. [PLACE-3, PLACE-4, PLACE-5, SEAM-2]
 
 CUT-RELOAD's ReloadTail, ReloadItem, StagedTail, Staged, ReloadRefused, Busy and
 ReloadCode are private harness types defined by Spec 06. They add no wire arm.
@@ -981,7 +988,7 @@ facts. UnitOccurrenceId cannot stand in for MarkOccurrenceId. [MARK-6, PLACE-5]
 
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
-| TYPES-DECODE | Shared Rust enum/serde corpus at both peers | Accept old unit Opened, default schemas, confuse count and SpanRef, or decode a wrong response arm |
+| TYPES-DECODE | Shared Rust enum/serde corpus at both peers, including exact raw boxes and required Opened fields | Accept old unit/four-count Opened, missing/unknown/duplicate fields, normalize raw boxes, default schemas, confuse count and SpanRef, or decode a wrong response arm |
 | PlacementConfig | Parser and load-fit cases with a resolved OperatorTunable SPU generation limit | Guess an absent tunable value, wrap capacity arithmetic or open user channel after failed fit |
 
 ## 7. Open elections
@@ -998,3 +1005,6 @@ state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 [canonical]: ../weaver-trace/weaver-trace-Spec.md#2-canonical-form
 [empty-correction-ruling]:
 https://github.com/toddwbucy/WeaverAgent/pull/213#issuecomment-6330669954
+
+[open-election]:
+../../project/state-management-open-facts-carrier-2026-10-21.md

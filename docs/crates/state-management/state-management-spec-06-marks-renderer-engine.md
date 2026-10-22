@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** pending assignment for this draft proposal
 
-**Version:** 0.11 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-06`
+**Version:** 0.12 **Date filed:** 2026-10-21 **Document ID:** `state-management-spec-06`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -24,6 +24,9 @@ revision removes the invented decode call and harness tokenizer from v0.1. It do
 change the framing ruling in weaver-spu-PRD section 13.4. The PRD's harness renderer is
 message-level place, with token facts supplied by the SPU. [PLACE-1, PLACE-5, PLACE-6,
 DEFER-1, October 18 R7]
+
+The Open evidence [proposal and acceptance record][open-election] names this carrier
+act's choices and the implementation work still owed.
 
 ## 1. Marks and their creation
 
@@ -241,18 +244,29 @@ returns Busy with its request. Place's preparation pass certifies shape, fit and
 attribution, not decoder completion. Its completion pass certifies the matching engine
 facts, not the model's decision. [FLOW-3, MARK-6, PLACE-5, R20-12]
 
-**OPEN-FACTS.** Extend TokenAnswer::Opened from a unit to
-{prefix_tokens,capacity,generation_limit,terminal_tokens}, all u64. The prefix is the
-SPU family's rendering of the boot system prompt and is made resident once. It is never
-appended again. Opened.prefix_tokens is the floor of N for that session. The harness
-traces these facts in the boot placement record, tied to the earlier boot read. The
-family labels the prefix identity-prefix in its open measurement, satisfying the owed
-label in SPU Spec section 6. The request retains template identity in its existing box
-only. generation_limit is the resolved max-tokens-per-turn, including the resolved
-OperatorTunable value that the harness cannot infer from the declaration.
+**OPEN-FACTS.** TokenAnswer::Opened requires the exact Open.session echo, the four
+u64 facts {prefix_tokens,capacity,generation_limit,terminal_tokens}, and the two raw
+JSON boxes request and measurement defined by SPU-OPEN in the
+[SPU amendment][open-spu]. The prefix is the SPU family's rendering of the boot system
+prompt and is made resident once. It is never appended again. Opened.prefix_tokens is
+the floor of N for that session. The actual input token vector and the identity-prefix
+byte partition are open
+measurement evidence, with template identity only in request. No timing or generation
+reading is invented. generation_limit is the resolved max-tokens-per-turn, including
+the OperatorTunable value that the harness cannot infer from the declaration.
 terminal_tokens is one under the merged single-token terminator contract. No alternate
 framing is silently elected by this field. Reason: the SPU owns both the actual prefix
 length and the effective generation limits. [PROMPT-1, PERSIST-6, PLACE-1, PLACE-5]
+
+The harness binds the complete answer to its exact sent Open, sole decode reservation,
+source port and existing recorded BootHead. It checks the session echo, closed boxes,
+token-vector length and whole-render byte interval without rendering or tokenizing.
+Family framing means rendered text need not equal the canonical system Text. The SPU's
+instrument proves the actual render/prefill correspondence. The harness preserves both
+boxes unchanged for PLACEMENT-RECORD, without a usable token-vector cache. The counts
+remain typed journal facts only after that record is Recorded and the fit succeeds.
+BootHead itself is already held from the earlier boot recall. [PROMPT-1, FLOW-3,
+PLACE-1, PLACE-5, SEAM-2]
 
 **MEASURE-DELTA.** Add the read-only TokenDirective::MeasureDelta {keep, delta,
 tool_schemas} and TokenAnswer::DeltaMeasured {resident, prefix_tokens, keep,
@@ -361,7 +375,7 @@ authoring state.mark.position. [MARK-1, MARK-3, MARK-6]
 
 | Source | Required evidence and exact endpoint |
 | --- | --- |
-| boot | Successful boot read and Opened. Span is the seeded system span and end is head |
+| boot | Recorded boot recall, matching validated Opened, Recorded boot placement, checked fit and live admission under HARNESS-OPEN. Span is the seeded system span and end is head |
 | placed | A successful complete append containing one whole closed-span unit. End is the last block of that unit's last Message, including any complete attached return |
 | native task prompt | Filed begin_task or operator plan effect and the prompt's complete held Text is present in one current source-map interval. End is that interval's end |
 | native execution end | Filed close/retire effect for an observed active task, subtask or step. End is the logical argument end after its last completed generation and before later-scope generation |
@@ -375,7 +389,8 @@ and can acquire a placed occurrence later. step_outcome uses the placed rule, si
 statement is not automatically part of the model's argument. [MARK-1, MARK-3, PLAN-2,
 PLAN-4, FLOW-8]
 
-At registration require the source effect receipt or the whole append completion, the
+At registration require the boot evidence above, source effect receipt or whole append
+completion as applicable, the
 matching span identity and the exact current cursor. A preview never supplies this
 evidence. MarkPosition is measurement only and creates no store field or filing.
 Repeated reminders leave earlier valid occurrences alone. A cut removes every active
@@ -660,22 +675,34 @@ PLACE-5, COST-4, PERSIST-6, SCOPE-1, R20-16]
 **PLACEMENT-RECORD.** Author state.placement, channel internal, origin loop, before the
 next append. Its payload is {assembly_id, phase, context, cut, method, N, prefix_tokens,
 resident_before, input_tokens, capacity, generation_limit, terminal_tokens, unit_map,
-message_ids, assistant_message_id, recomputed_messages, wait_ns}. phase is boot, cut or
-append. context is null for boot/cut and PlacementContext for append. method is null for
-boot and CutMethod otherwise. message_ids and recomputed_messages use Placed's types.
+message_ids, assistant_message_id, recomputed_messages, wait_ns, open_evidence}. phase
+is boot, cut or append. context is null for boot/cut and PlacementContext for append.
+method is null for boot and CutMethod otherwise. message_ids and recomputed_messages
+use Placed's types.
 assistant_message_id is DecimalU64 or null. It is measurement, not selectable statement
 content. Each newly authored loop instruction has its own earlier event under FLOW-8.
 Held material cites its original source. The assembled argument record includes the
 complete selected canonical messages, including the boot head by reference, without
-filing them again. [FLOW-3, FLOW-8, MARK-6, COST-4]
+filing them again. open_evidence is required and is null for cut and append. For boot
+it is exactly {session,request,measurement}, with the Opened session string and the
+unchanged SPU-OPEN raw boxes. Its session equals the containing trace session and the
+held Open request. Its input-token length equals placement.prefix_tokens. It grants no
+selectable content or generation event. [FLOW-3, FLOW-8, MARK-6, COST-4]
 
-Reserve assembly_id zero for boot. After Opened, record one state.placement with phase
-boot, cut null, N and resident_before both prefix_tokens, input_tokens zero, empty
-unit_map and message_ids, null assistant_message_id and recomputed_messages zero.
-wait_ns is the completed open wait. Its causal_parent names the earlier boot recall that
-recorded the full system Message. Subsequent assembly IDs start at one. A boot fit
-refusal is an enter refusal and the user channel never opens. There is no second prompt
-read or filing. [PROMPT-1, PERSIST-6, PLACE-1, FLOW-3]
+Reserve assembly_id zero for boot. After a validated Opened, record one turnless
+state.placement with phase boot, cut null, N and resident_before both prefix_tokens,
+input_tokens zero, empty unit_map and message_ids, null assistant_message_id and
+recomputed_messages zero.
+wait_ns is the completed open wait, excluding recorder wait. Its causal_parent names
+the earlier boot recall that recorded the full system Message. Subsequent assembly IDs
+start at one. The record accounts for a seated prefix, including when the valid facts
+subsequently fail the configured fit. That case records the boot placement and then the
+existing boot_failed enter refusal, with no journal readiness or user gate. An SPU Open
+refusal or invalid answer has no accepted boot placement. Only Recorded plus successful
+fit and live admission releases initialized journal/decoder-use authority and boot mark
+readiness. HARNESS-OPEN owns interruption and teardown accounting under the existing
+bounds. There is no second prompt read, filing or Open. [PROMPT-1, PERSIST-6, PLACE-1,
+FLOW-3, FLOW-4]
 
 After a confirmed Flush or Elide, phase cut records its preparation's measured
 replacement and recomputed_messages count, with empty unit_map and message_ids and null
@@ -726,7 +753,7 @@ demonstrate that a bad N or dangling mark is refused. [MARK-4, PLACE-5]
 | PLACE-PORT | Compile pin for refusal without delta, deterministic message/map fixture | Permit argument on refusal or reorder units |
 | STEP-QUERY | Closed predecessor, first step, repeated instruction and foreign revision fixtures | Lose typed query context, substitute previous work or accept a different predecessor |
 | PLACE-CALLS | Private grant, no-decode spy, stale grant and matching-completion fixture | Start decode during preparation, reuse grant or install prospective IDs without completion |
-| OPEN-FACTS | SPU fixture, one boot read and one prefix render with count | Reappend head or omit prefix count |
+| OPEN-FACTS | Real SPU open and harness transport fixtures, exact render/tokens/partition, session/port/send correlation and one prior boot recall | Reappend head, tokenize twice, accept stale/partial/wrong-session facts, change boxes or omit prefix count |
 | MEASURE-DELTA | SPU fixture, measure leaves resident tokens and sampler untouched | Decode during measure or use different render path |
 | CAPACITY | Boundary fixtures include schemas, opener, generation and terminator reserve | Omit any counted part |
 | POSITION, N | Session fixture with inside-message mark, repeats and multiple tool rounds | Round N forward or use text token equality |
@@ -739,7 +766,7 @@ demonstrate that a bad N or dangling mark is refused. [MARK-4, PLACE-5]
 | CUT-RELOAD, RELOAD-CLASSIFY | Missing classifier, pending/held Text, rejected Text and complete-pair fixtures | Skip classification/filing, refile held content or classify a return |
 | RELOAD-STATES | Every state/stop/leave row, including empty suffix, empty tail, Busy ownership and cancellation with a confirmed or refused cut | Mutate before fit, lose the rejected call's inputs, discard a confirmed tail, report staged material resident, install unconfirmed IDs or restart the cut deadline |
 | STAGED-APPEND | Private grant, pinned ordering, added-input overflow, full/stopped answer counts and cancellation fixture | Bypass or replace the pinned tail, consume it twice, use only its old measure, omit terminator, accept wrong resident count or clear before confirmation |
-| PLACEMENT-RECORD, FIT-REFUSAL | Trace/world capture, refusal precedes close with correct identity grammar | Omit record or name an unopened turn |
+| PLACEMENT-RECORD, FIT-REFUSAL | Trace/world capture, boot success and fit refusal, invalid Opened, recorder pressure and bounded teardown | Omit or duplicate placement, grant before Recorded, lose retained evidence, grant after cancellation or name an unopened turn |
 | DEFERRED | Cargo manifest check, harness links no tokenizer or SPU member | Add a forbidden dependency |
 
 The token oracle is a session that appends the same actual deltas and sampled paths from
@@ -810,3 +837,9 @@ FLOW-7]
 
 [transition]:
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
+
+[open-election]:
+../../project/state-management-open-facts-carrier-2026-10-21.md
+
+[open-spu]:
+weaver-spu-Spec-amendment.md

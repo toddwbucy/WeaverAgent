@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #182
+**Landing PR:** pending assignment for this draft proposal
 
-**Version:** 0.17 **Date filed:** 2026-10-20
+**Version:** 0.18 **Date filed:** 2026-10-21
 
 ## 0. What this document is
 
@@ -12,6 +12,9 @@ Each section supplies replacement or additional contract text, not a request for
 coder to design a contract. Representations live in the matching crate amendments. The
 PRD IDs name the reason for each obligation. All unnamed exchanges keep their existing
 meaning. A contract below must land with its parties' amendments.
+
+The Open evidence [proposal and acceptance record][open-election] names this carrier
+act's choices and the implementation work still owed.
 
 ## 1. Harness-trace contract, sections 2.1, 3, 4, 5, and 7
 
@@ -312,8 +315,39 @@ exchange beside the existing decode exchanges. The harness supplies the exact ca
 proposal and granted tool schemas, with the resident prefix it proposes to keep. The SPU
 renders through the same family and tokenizer as append and returns the resulting counts
 without decoding or changing the resident sequence. Open also returns the actual prefix,
-capacity and effective generation limits. The harness may rely on those facts, not on a
-token count it derives independently. [PLACE-1, PLACE-3, PLACE-5]
+capacity and effective generation limits, the exact requested session echo, and the
+SPU-OPEN request/measurement boxes under TYPES-DECODE. The harness may rely on those
+facts, not on a token count it derives independently. [PLACE-1, PLACE-3, PLACE-5]
+
+The SPU guarantees that Opened's request is its single complete identity render, and
+the measurement's input_tokens are the vector used by its successful prefix prefill.
+The one identity-prefix block covers that rendered UTF-8 byte interval. Template
+identity belongs only in request. No generation, timing or residual reading is invented.
+The harness checks the session, closed shape, count and interval agreement against its
+held request, complete send and exact reserved port. It preserves the raw boxes for the
+assembly-zero state.placement, causally linked to the previously Recorded boot recall.
+It does not render, tokenize or equate family-rendered text with canonical prompt Text.
+TRACE-PLACEMENT rejects malformed evidence and never projects it. [PROMPT-1, FLOW-3,
+PLACE-1, PLACE-5, SEAM-2, TAP-3]
+
+HARNESS-OPEN retains the complete exchange and author continuation under the original
+enter bound. Recorded placement plus checked fit and live admission permit journal
+initialization, not a second BootHead. A valid Opened followed by failed configured fit
+still records its seated-prefix evidence before boot_failed. An SPU refusal or invalid
+answer supplies no accepted placement. Cancellation revokes readiness and may only
+finish the already-sent exchange and its private trace-only teardown account within the
+earlier original-enter/active teardown bound. Failed channels or trace can leave an
+incomplete account. Preserve the first failure and the existing release duties. Add no
+Open retry, intermediate, acknowledgment or cancellation directive. [FLOW-3, FLOW-4,
+FLOW-5, PERSIST-6, SEAM-2]
+
+Both peers and trace must reject an answer or record exceeding their existing whole
+message bounds. They neither truncate the evidence nor retry Open. The paired cutover
+includes every decode client and serving trace reader. Diagnostic decode clients
+validate the new Opened body and consume it without a new diagnostic trace event.
+Generation request/measurement events remain turn-bound, and diagnostic conversion of
+serving placement remains refused. No earlier additive deployment of the new wire is
+authorized. [SEAM-1, SEAM-2, SCOPE-1, FLOW-4]
 
 The SPU may assume one outstanding request on the existing decode channel. The harness
 must refuse an unexpected, malformed or incomplete answer, and may not reuse a
@@ -330,7 +364,13 @@ terminator guarantees remain. New counts and schema carriage use the existing
 whole-message channel, without another socket or a store feed. [MARK-4, PLACE-5,
 PLACE-6, October 18 R7]
 
-Conformance cases compare measurement with actual append rendering, prove no
+Conformance cases include one shared strict Opened/evidence corpus at both peers and
+trace, real family prefill fixtures proving the reported render and vector were used,
+and harness pressure/cancellation fixtures preserving the original source and bound.
+They reject old unit/four-count Opened, wrong session, missing/duplicate/unknown fields,
+wrong counts or byte intervals, incomplete send/answer and oversized evidence. Removing
+one admission or continuation predicate must fail the corresponding case. They also
+compare measurement with actual append rendering, prove no
 resident/backend/sampler mutation during measurement, and exercise every refusal and
 turn-boundary guard. The paired amendments must clear together. Diagnostic senders
 consume the same token vocabulary while their separate replay operation retains its own
@@ -438,3 +478,6 @@ cause. [FLOW-3, PLAN-5, PLACE-4]
 
 [cutover]:
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
+
+[open-election]:
+../../project/state-management-open-facts-carrier-2026-10-21.md
