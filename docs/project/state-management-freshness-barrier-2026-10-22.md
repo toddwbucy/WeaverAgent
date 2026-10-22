@@ -2,7 +2,8 @@
 
 Date: 2026-10-22. Executor implementation record for epic #146, item B.
 Branch: `code/state-freshness-barrier`, based on draft #239 at `5d6c3de`.
-The author gates passed. Planner review remains separate.
+The initial author gates passed. The turn-boundary correction awaits fresh gates.
+Planner review remains separate.
 No serving activation, production qualification or epic completion is claimed.
 
 ## Authority and implemented boundary
@@ -34,9 +35,9 @@ background filings remain owned and continue through the common flow path.
 
 ## Author and cancellation custody
 
-Admission refuses active explicit input, output, filing, pair, repair, read,
-measurement and capture transactions. It can drain a generic author already
-retained before the pause. A resumed generic author returns its exact sequence
+Admission requires no recorded open turn and refuses active explicit input, output,
+filing, pair, repair, read, measurement and capture transactions. It can drain a generic
+author already retained before the pause. A resumed generic author returns its exact sequence
 to completed_author before another clock or flow hook; its original caller can
 still retrieve that result. An initial deferred author's retry repeats every
 ordinary admission check. Only that private retained retry can cross the pause;
@@ -61,7 +62,7 @@ not a cut, snapshot, decoder or placement port.
 
 ## Instruments and results
 
-Thirteen tests reuse the actual recorder, classifier socket and member framing
+Fourteen tests reuse the actual recorder, classifier socket and member framing
 fixture. Synthetic classifier responses test mechanics, not language quality.
 
 | Property | Instrument |
@@ -79,6 +80,7 @@ fixture. Synthetic classifier responses test mechanics, not language quality.
 | Admission pause | Completed-but-untaken owner refuses read, input, generic author and ordinary filing |
 | Refused competing owner | Existing filing keeps its event; refused freshness call keeps its IDs |
 | Arithmetic | Deadline overflow returns the IDs and arms no Cut |
+| Turn boundary | Actual turn.started refuses Cut, then turn.closed permits it |
 
 The positive fixture checks that Cut is absent before a new ordinary read starts
 its own StateControl bound. Context identity is checked against a second real
@@ -103,13 +105,36 @@ Logs, recipes, results and exact source hashes are retained in the shared bulk
 store at weaver-testing/state-management-146-olympus-2026-10-21/freshness. These
 are author checks, not a Planner grade or integrated qualification.
 
+## Turn-boundary correction
+
+A later authority reading found that the admission guard omitted open_turn. An
+actual recorded turn.started can exist after explicit input or output ownership
+has ended, so the other owner checks do not prove the between-turn boundary.
+Admission now rejects that retained open turn without arming Cut or consuming the
+requested IDs. The regression authors real turn.started and turn.closed events,
+then checks refusal before the close and successful preparation afterward.
+
+The original record also incorrectly said inward recall must prepare freshness.
+That claim is corrected above and below without changing the inward contract.
+The earlier gate counts describe 3415405. On the corrected joined source, the
+full harness suite passed 1276 tests with 18 inherited ignored cases. The new
+focused test, strict all-target harness clippy, formatting and lock passed.
+Removing the open-turn guard compiled and failed the new test; exact restoration
+passed. The run used /tmp/weaver-146-freshness-target. Logs, recipe and hashes are
+in freshness/turn in the shared evidence deposit.
+
 ## Remaining integration and assessment
 
-This is a private primitive. The caller still supplies the actual required source
-set. Mandatory inward recall needs a sealed pair-owned composition that claims
-the existing pair, prepares freshness, releases Cut and begins the bounded read
-without bypassing unrelated admission guards. This slice intentionally refuses
-an active pair_work owner and does not claim that integration complete.
+This is a private between-turn primitive. The caller still supplies the actual
+required source set. HARNESS-CLOCK starts Cut after the preceding turn closes and
+before decode for the next turn. HARNESS-READ requires this pause before mandatory
+fresh history, then releases Cut before the read's own deadline starts.
+
+Model-elected inward recall is a separate active-turn operation. Spec 02 RECALL,
+internal HARNESS-RECALL and Spec 05 PAIR-STATES require its exact request receipts
+and ordinary bounded read/release contract. They do not require an active-turn Cut.
+Its future pair-owned read adapter must preserve unrelated owner exclusion, but
+must not turn this filing pause into an additional inward execution clock.
 
 The current ordinary read port remains usable for selectors that do not demand
 this freshness barrier. No new raw-result or material authority is introduced.
@@ -123,7 +148,7 @@ cutover is ready and the operator approves it.
 Preparation exposed that flow observations can be queued before pending_record
 is set. The narrow has_pending_observations accessor includes both states so a
 filing pause cannot skip an already-owed author. Preserve this distinction when
-composing future barriers. The gate failure and its correction are recorded above. No Planner grade is
-inferred from this draft.
+composing future barriers. The gate failure and its correction are recorded above.
+No Planner grade is inferred from this draft.
 
 [harness]: ../crates/state-management/weaver-harness-Spec-amendment.md

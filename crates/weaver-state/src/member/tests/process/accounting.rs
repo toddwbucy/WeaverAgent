@@ -144,7 +144,7 @@ fn finish(fixture: &mut Fixture, peer: &mut BufReader<UnixStream>) {
 
 #[test]
 fn capture_accounting_counts_one_image_copy_and_only_live_buffers_through_cleanup() {
-    let (mut fixture, mut peer, _) = launch("accounting");
+    let (mut fixture, mut peer, _) = launch("accounting", 6);
     let read = exchange(
         &mut peer,
         2,
@@ -250,7 +250,7 @@ fn capture_accounting_counts_one_image_copy_and_only_live_buffers_through_cleanu
 
 #[test]
 fn capture_preflight_and_failed_write_do_not_invent_held_image_or_lose_copies() {
-    let (mut fixture, mut peer, _) = launch("accounting");
+    let (mut fixture, mut peer, _) = launch("accounting", 5);
     let zero = exchange(
         &mut peer,
         2,
@@ -328,7 +328,7 @@ fn capture_preflight_and_failed_write_do_not_invent_held_image_or_lose_copies() 
 
 #[test]
 fn metadata_controls_keep_partial_shape_and_filing_copy_totals_unavailable() {
-    let (mut fixture, mut peer, seed) = launch("accounting");
+    let (mut fixture, mut peer, seed) = launch("accounting", 6);
     // Missing coverage is a property of this path, not a claim that an empty
     // answer measured zero copies. Check it again after actual content exists.
     let empty_shape = exchange(&mut peer, 2, 2, StateControl::Shape {});

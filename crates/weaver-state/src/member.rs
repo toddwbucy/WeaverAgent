@@ -312,9 +312,9 @@ impl Session {
                 }
                 let page_budget = page_budget(common)?;
                 sample.phase_begin(PhaseName::Query)?;
-                let result = self
-                    .store
-                    .query_encoded_observed(selector, &mut sample.copied);
+                // Read still lacks decoded-content copy coverage. Skip its
+                // preparatory encoding subtotal; copied remains unavailable.
+                let result = self.store.query_encoded(selector, None);
                 sample.phase_end(PhaseName::Query)?;
                 match result {
                     Ok(bytes) => Ok(
@@ -355,10 +355,7 @@ impl Session {
             StateControl::Shape {} | StateControl::Held {} | StateControl::Position {} => {
                 sample.phase_begin(PhaseName::Query)?;
                 let result = match control {
-                    StateControl::Shape {} => self
-                        .store
-                        .shape_observed(&mut sample.copied)
-                        .map(StateControlAnswer::Shape),
+                    StateControl::Shape {} => self.store.shape(None).map(StateControlAnswer::Shape),
                     StateControl::Held {} => self
                         .store
                         .held()
@@ -495,7 +492,7 @@ fn complete(
     bounds: Option<CompletionBounds<'_>>,
 ) -> io::Result<(StateOperationObservation, Vec<u8>)> {
     sample.phase_begin(PhaseName::Encode)?;
-    let mut encoded = encode_payload_observed(&payload, &mut sample.copied);
+    let mut encoded = encode_payload(&payload, Some(&mut sample.copied));
     if let Some(bounds) = bounds {
         let reserve = wrapper_reserve(bounds.common, payload.op())?;
         if payload.op() == "control_answer"
@@ -508,7 +505,7 @@ fn complete(
                 code: ControlRefusalCode::Read(ReadRefusalCode::AnswerTooLarge),
                 detail: "complete control answer exceeds ANSWER_BOUND".into(),
             });
-            encoded = encode_payload_observed(&payload, &mut sample.copied);
+            encoded = encode_payload(&payload, Some(&mut sample.copied));
         }
         sample.held.add(bounds.pages.held_bytes());
     }
@@ -518,9 +515,7 @@ fn complete(
     // remains owned through ended_ns; wrapper/metadata and send happen later.
     drop(payload);
     sample.held.add(encoded.len());
-    let copied = sample.copied;
-    let held = sample.held;
-    let observation = sample.finish(copied, held)?;
+    let observation = sample.finish()?;
     Ok((observation, encoded))
 }
 
@@ -534,15 +529,16 @@ fn page_budget(common: &Common) -> io::Result<usize> {
         octets: String::new(),
         done: false,
     });
-    let fixed = encode_payload(&Reply::Control(shape))?.len();
+    let fixed = encode_payload(&Reply::Control(shape), None)?.len();
     Ok(STATE_ANSWER_LINE_BOUND
         .saturating_sub(wrapper_reserve(common, "control_answer")?.saturating_add(fixed)))
 }
 
-struct Bounded {
+struct Bounded<'a> {
     bytes: Vec<u8>,
+    copied: Option<&'a mut BufferBytes>,
 }
-impl Write for Bounded {
+impl Write for Bounded<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if bytes.len() > STATE_ANSWER_LINE_BOUND.saturating_sub(self.bytes.len()) {
             return Err(invalid("answer exceeds bound"));
@@ -551,6 +547,9 @@ impl Write for Bounded {
             .try_reserve(bytes.len())
             .map_err(io::Error::other)?;
         self.bytes.extend_from_slice(bytes);
+        if let Some(copied) = &mut self.copied {
+            copied.add(bytes.len());
+        }
         Ok(bytes.len())
     }
     fn flush(&mut self) -> io::Result<()> {
@@ -602,14 +601,13 @@ macro_rules! fields {
     }};
 }
 
-fn encode_payload(payload: &Reply) -> io::Result<Vec<u8>> {
-    encode_payload_observed(payload, &mut BufferBytes::default())
-}
-
-fn encode_payload_observed(payload: &Reply, copied: &mut BufferBytes) -> io::Result<Vec<u8>> {
+fn encode_payload(payload: &Reply, copied: Option<&mut BufferBytes>) -> io::Result<Vec<u8>> {
     #[cfg(test)]
     tests::timing::mark("encode");
-    let mut writer = Bounded { bytes: Vec::new() };
+    let mut writer = Bounded {
+        bytes: Vec::new(),
+        copied,
+    };
     let result = (|| -> io::Result<()> {
         match payload {
             Reply::Opened {
@@ -631,14 +629,16 @@ fn encode_payload_observed(payload: &Reply, copied: &mut BufferBytes) -> io::Res
         }
         Ok(())
     })();
-    copied.add(writer.bytes.len());
     result?;
     #[cfg(test)]
     tests::timing::mark("payload_encoded");
     Ok(writer.bytes)
 }
 fn header(common: &Common, op: &str) -> io::Result<Vec<u8>> {
-    let mut writer = Bounded { bytes: Vec::new() };
+    let mut writer = Bounded {
+        bytes: Vec::new(),
+        copied: None,
+    };
     fields!(writer,"protocol"=>STATE_FLOW_PROTOCOL,"session_id"=>&common.session_id,"run_id"=>&common.run_id,"request_id"=>&common.request_id,"op"=>op);
     Ok(writer.bytes)
 }
@@ -656,6 +656,7 @@ fn wrap(
 ) -> io::Result<Vec<u8>> {
     let mut writer = Bounded {
         bytes: header(common, op)?,
+        copied: None,
     };
     writer.bytes.pop();
     writer.write_all(b",")?;
