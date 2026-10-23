@@ -124,7 +124,15 @@ fn worker_input_gate_child() {
         let reply: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
         assert_eq!(reply.exchange, frame(&mode, 101).exchange);
         assert_eq!(reply.position, Position::Close);
-        if mode.contains("stop-") {
+        if mode.contains("generation") {
+            let Payload::Frame(frame) = &reply.payload else {
+                panic!("actual operation close")
+            };
+            let value: serde_json::Value =
+                serde_json::from_slice(&frame.octets().unwrap()).unwrap();
+            assert_eq!(value["kind"], "stopped");
+            assert_eq!(value["turn"], "generation-turn");
+        } else if mode.contains("stop-") {
             let Payload::Frame(frame) = &reply.payload else {
                 panic!("actual stopped frame")
             };
@@ -250,6 +258,7 @@ pub(in super::super) fn exercise(
             Ok(FoundationInputResult::Refused(serving)) => Held::Serving(serving),
             Ok(FoundationInputResult::Aborted(serving)) => Held::Serving(serving),
             Ok(FoundationInputResult::Turn(turn)) => Held::Turn(turn),
+            Ok(FoundationInputResult::Generated(output)) => Held::Input(output.into_service()),
             Err(input) => Held::Input(input),
         });
         assert!(matches!(

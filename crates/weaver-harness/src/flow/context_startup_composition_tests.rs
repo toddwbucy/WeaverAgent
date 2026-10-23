@@ -100,6 +100,18 @@ fn startup_composition_child() {
                             };
                         }
                         reply
+                    } else if mode.contains("generation")
+                        && matches!(request.target, s::Ste100Target::Source(_))
+                    {
+                        let mut reply = super::super::input_tests::accepted(&request);
+                        if mode.ends_with("output-refusal") && request.text == "Read result." {
+                            reply.result = s::Ste100Result::NotSte100 {
+                                code: s::Ste100DefectCode::NonSte100,
+                                detail: "fixture output refusal".into(),
+                                spans: vec![],
+                            };
+                        }
+                        reply
                     } else {
                         s::Ste100Reply {
                             request_id: request.request_id,

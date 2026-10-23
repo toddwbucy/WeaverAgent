@@ -12,6 +12,8 @@ use crate::flow::report::{FlowHaltReason, HaltPoint};
 use weaver_trace::{Subsystem, TurnRef, serving};
 use weaver_types::{Opener, OrganEnvelope, Payload, Position, TurnKey};
 
+#[path = "context_worker_generation.rs"]
+pub(crate) mod generation;
 #[path = "context_worker_management.rs"]
 pub(crate) mod management;
 
@@ -20,6 +22,11 @@ pub enum FoundationInputProgress {
     Pending,
     Accepted,
     Turn,
+    Task,
+    Placed,
+    Generated,
+    /// An operation refused. Its full account remains with this owner.
+    OperationRefused,
     Refused,
     /// The stopped turn's world close has been completely carried.
     Aborted,
@@ -39,6 +46,7 @@ enum Stage {
     Refused,
     Aborted,
     Turn,
+    Engine,
     Stopped,
 }
 
@@ -63,6 +71,7 @@ pub struct FoundationInput<'a> {
     report: Option<(ReceivedOrgan, Subsystem)>,
     report_started: bool,
     failure: Option<RunFailure>,
+    engine: Option<Box<generation::EngineWork>>,
 }
 
 impl<'a> FoundationServing<'a> {
@@ -81,6 +90,7 @@ impl<'a> FoundationServing<'a> {
             report: None,
             report_started: false,
             failure: None,
+            engine: None,
         })
     }
 }
@@ -96,6 +106,7 @@ impl<'a> FoundationInput<'a> {
         match self.stage {
             Stage::Accepted => FoundationInputProgress::Accepted,
             Stage::Turn => FoundationInputProgress::Turn,
+            Stage::Engine => self.engine.as_ref().unwrap().progress(),
             Stage::Refused => FoundationInputProgress::Refused,
             Stage::Aborted => FoundationInputProgress::Aborted,
             _ => FoundationInputProgress::Pending,
@@ -172,6 +183,9 @@ impl<'a> FoundationInput<'a> {
     }
 
     fn step(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        if self.stage == Stage::Engine {
+            return self.advance_engine(None, io);
+        }
         let owner = &mut self.serving.owner;
         owner.context.live(io)?;
         let mut ports = PumpPorts {
@@ -387,8 +401,10 @@ impl<'a> FoundationInput<'a> {
         Ok(())
     }
 
-    /// Only whole world-close delivery or Recorded checked source authoring grants
-    /// a result. Every other attempt returns the full original owner.
+    /// Only whole world-close delivery, Recorded checked source authoring or a
+    /// confirmed/check-recorded generation grants a result. The generated arm
+    /// retains custody for repair/sort; it grants no final answer or dispatch.
+    /// Every other attempt returns the full original owner.
     pub fn finish(mut self: Box<Self>) -> Result<FoundationInputResult<'a>, Box<Self>> {
         match self.progress() {
             FoundationInputProgress::Refused => Ok(FoundationInputResult::Refused(self.serving)),
@@ -400,6 +416,9 @@ impl<'a> FoundationInput<'a> {
                     input: self.seated.take().expect("recorded source"),
                 })))
             }
+            FoundationInputProgress::Generated => Ok(FoundationInputResult::Generated(
+                generation::FoundationGeneration { input: self },
+            )),
             _ => Err(self),
         }
     }
@@ -409,6 +428,7 @@ pub enum FoundationInputResult<'a> {
     Refused(FoundationServing<'a>),
     Aborted(FoundationServing<'a>),
     Turn(Box<FoundationTurn<'a>>),
+    Generated(generation::FoundationGeneration<'a>),
 }
 
 /// Actual checked source and the still-open gate exchange, beside the original
@@ -445,6 +465,7 @@ impl<'a> FoundationTurn<'a> {
             report: None,
             report_started: false,
             failure: None,
+            engine: None,
         })
     }
     pub fn message(&self) -> &weaver_traits::Message {

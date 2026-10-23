@@ -6,6 +6,37 @@ use weaver_harness::{
 };
 use weaver_types::TurnKey;
 
+/// Workflow choices are separate from the harness's protocol transitions. The
+/// caller chooses when to start a task, select its source and use its placement.
+/// Management and refusal return the same owner for the loop's next decision.
+pub fn task<'a>(mut input: Box<FoundationInput<'a>>, turn: TurnKey) -> Box<FoundationInput<'a>> {
+    if input.start_task(turn).is_ok() {
+        drive(&mut input);
+    }
+    input
+}
+pub fn place_task<'a>(
+    mut input: Box<FoundationInput<'a>>,
+    label: String,
+    method: weaver_types::state_flow::CutMethod,
+) -> Box<FoundationInput<'a>> {
+    if input.place_task(label, method).is_ok() {
+        drive(&mut input);
+    }
+    input
+}
+pub fn generate(mut input: Box<FoundationInput<'_>>) -> Box<FoundationInput<'_>> {
+    if input.generate().is_ok() {
+        drive(&mut input);
+    }
+    input
+}
+fn drive(input: &mut FoundationInput<'_>) {
+    while input.progress() == FoundationInputProgress::Pending {
+        input.advance();
+    }
+}
+
 /// Service the actual held root connection, then resume the same
 /// input. Without a pending connection it returns the input unchanged. Other
 /// lifecycle directives retain their complete management owner.

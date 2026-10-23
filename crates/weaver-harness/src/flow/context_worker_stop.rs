@@ -1,5 +1,4 @@
-//! Stop at the checked-source boundary. Later operation owners must settle their
-//! own exchanges before transferring their turn here; this owner starts none.
+//! Stop retains the original source/task/generation owner through settlement.
 use super::*;
 use weaver_trace::{Sequence, StopReason, TurnClose};
 use weaver_types::{Cause, LifecycleAnswer, TurnFrame};
@@ -23,10 +22,20 @@ impl StopWork {
         cause: Cause,
         io: &mut impl PumpIo,
     ) -> Result<Self, RunFailure> {
-        let valid = input.stage == Stage::Turn
+        let valid = ((input.stage == Stage::Turn
             && input.seated.as_ref().is_some_and(|source| {
                 input.serving.owner.context.open_turn.as_ref() == Some(&source.turn)
-            })
+            }))
+            || (input.stage == Stage::Engine
+                && input.turn.as_ref().is_some_and(|turn| {
+                    input
+                        .serving
+                        .owner
+                        .context
+                        .open_turn
+                        .as_ref()
+                        .is_some_and(|open| open.0 == turn.0)
+                })))
             && input
                 .received
                 .as_ref()
@@ -36,11 +45,18 @@ impl StopWork {
                 io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Barrier,
-                "Stop requires the actual completed source and original gate request",
+                "Stop requires the actual turn owner and original gate request",
             ));
         }
         Ok(Self {
-            turn: input.seated.as_ref().unwrap().turn.clone(),
+            turn: input
+                .serving
+                .owner
+                .context
+                .open_turn
+                .as_ref()
+                .unwrap()
+                .clone(),
             cause,
             author_started: false,
             close_sequence: None,
@@ -60,6 +76,11 @@ impl StopWork {
         peer: Option<&mut LifecyclePeer>,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
+        input.cancel_engine(io)?;
+        if !input.engine_settled() {
+            input.advance_engine(peer, io)?;
+            return Ok(());
+        }
         let owner = &mut input.serving.owner;
         let mut ports = PumpPorts {
             lifecycle: LifecyclePorts {

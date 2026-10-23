@@ -78,7 +78,7 @@ impl<'a> FoundationManagement<'a> {
     pub fn advance(&mut self) -> FoundationManagementProgress {
         self.advance_with_io(&mut MonotonicIo)
     }
-    fn advance_with_io(&mut self, io: &mut impl PumpIo) -> FoundationManagementProgress {
+    pub(super) fn advance_with_io(&mut self, io: &mut impl PumpIo) -> FoundationManagementProgress {
         if self.progress != FoundationManagementProgress::Pending {
             return self.progress;
         }
@@ -184,6 +184,18 @@ impl<'a> FoundationManagement<'a> {
                 Payload::Directive(LifecycleDirective::Observe | LifecycleDirective::Stop { .. })
             ) {
                 self.progress = FoundationManagementProgress::DirectivePending;
+                return Ok(());
+            }
+            // An earlier measured refusal owns its close. Settle that exact
+            // transaction before deciding whether this Stop has a turn left;
+            // two owners must never author competing turn.closed events.
+            if matches!(
+                envelope.payload,
+                Payload::Directive(LifecycleDirective::Stop { .. })
+            ) && !self.input.settle_refusal_before_stop(
+                (!self.peer_unavailable).then_some(&mut self.peer),
+                io,
+            )? {
                 return Ok(());
             }
             self.message =
