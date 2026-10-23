@@ -71,7 +71,14 @@ enum Fault {
 }
 
 fn circuit(fault: Fault) {
-    circuit_with_fixture(fault, TemplateFixture::new(), inventory(), false);
+    circuit_with_fixture(
+        fault,
+        TemplateFixture::new(),
+        inventory(),
+        false,
+        None,
+        None,
+    );
 }
 
 pub(in crate::flow::context) fn after_startup(
@@ -85,7 +92,30 @@ pub(in crate::flow::context) fn after_startup(
     let fx = TemplateFixture {
         input: super::super::input_tests::InputFixture { run, peer },
     };
-    circuit_with_fixture(Fault::None, fx, inventory, true);
+    circuit_with_fixture(Fault::None, fx, inventory, true, None, None);
+}
+
+pub(in crate::flow::context) fn after_residency(
+    run: super::super::tests::Fixture,
+    inventory: crate::flow::templates::CompiledInventory,
+    resources: &mut FailedEnterResources,
+) {
+    let (end, _unused) = crate::channel::ClassifyChannel::pair().unwrap();
+    let peer =
+        crate::flow::ste100_channel::Channel::from_owned(end.into_pump_fd().unwrap(), 262144)
+            .unwrap();
+    let fx = TemplateFixture {
+        input: super::super::input_tests::InputFixture { run, peer },
+    };
+    let (residency, decode) = resources.spu_ports_mut().unwrap();
+    circuit_with_fixture(
+        Fault::None,
+        fx,
+        inventory,
+        true,
+        Some(decode),
+        Some(residency),
+    );
 }
 
 fn circuit_with_fixture(
@@ -93,6 +123,8 @@ fn circuit_with_fixture(
     mut fx: TemplateFixture,
     inventory: crate::flow::templates::CompiledInventory,
     actual_child: bool,
+    actual_decode: Option<&mut DecodePort>,
+    mut actual_residency: Option<&mut crate::flow::pump_transport::OrganPort>,
 ) {
     let enter = fx
         .input
@@ -112,9 +144,11 @@ fn circuit_with_fixture(
         .seed_id
         .clone();
     let (channel, decoder) = DecodeChannel::pair().unwrap();
-    let mut decode = DecodePort::from_channel(channel).unwrap();
+    let mut fallback_decode = DecodePort::from_channel(channel).unwrap();
+    let actual_spu = actual_decode.is_some();
+    let decode = actual_decode.unwrap_or(&mut fallback_decode);
     fx.input.run.state.set_nonblocking(true).unwrap();
-    let mut boot = BootComposition::new(&mut fx.input.run.context, &mut decode, inventory);
+    let mut boot = BootComposition::new(&mut fx.input.run.context, decode, inventory);
     let mut input = Vec::new();
     let mut queries = Vec::new();
     let mut releases = 0;
@@ -157,7 +191,10 @@ fn circuit_with_fixture(
             );
         }
         let progress = boot.advance(
-            LifecyclePorts::default(),
+            LifecyclePorts {
+                residency: actual_residency.as_deref_mut(),
+                ..LifecyclePorts::default()
+            },
             &mut CircuitIo(&mut fx.input.run.clock),
         );
         assert_eq!(boot.context.origin_ns(), origin);
@@ -191,7 +228,13 @@ fn circuit_with_fixture(
                     boot.stopped()
                 ),
             }
-            let stopped = match boot.finish(LifecyclePorts::default(), &mut fx.input.run.clock) {
+            let stopped = match boot.finish(
+                LifecyclePorts {
+                    residency: actual_residency.as_deref_mut(),
+                    ..LifecyclePorts::default()
+                },
+                &mut fx.input.run.clock,
+            ) {
                 Err(owner) => match owner.into_stopped() {
                     Ok(stopped) => stopped,
                     Err(_) => panic!("stopped owner not returned"),
@@ -218,7 +261,7 @@ fn circuit_with_fixture(
                 assert_eq!(held_steps, 10);
             }
             assert_eq!(checks, if actual_child { 0 } else { 3 });
-            assert_eq!(opens, 1);
+            assert_eq!(opens, if actual_spu { 0 } else { 1 });
             assert_eq!(releases, 4);
             assert_eq!(queries, ["prompt", "pairs", "pairs", "summary"]);
             assert!(boot.context.place_engine.is_some());
@@ -226,8 +269,13 @@ fn circuit_with_fixture(
             assert!(boot.context.boot_head.is_some());
             if matches!(fault, Fault::ExpireBeforeFinish) {
                 fx.input.run.clock.advance_to(enter.deadline_ns()).unwrap();
-                let stopped = match boot.finish(LifecyclePorts::default(), &mut fx.input.run.clock)
-                {
+                let stopped = match boot.finish(
+                    LifecyclePorts {
+                        residency: actual_residency.as_deref_mut(),
+                        ..LifecyclePorts::default()
+                    },
+                    &mut fx.input.run.clock,
+                ) {
                     Err(owner) => owner,
                     Ok(_) => panic!("expired boot transferred completion"),
                 };
@@ -237,11 +285,16 @@ fn circuit_with_fixture(
                 ));
                 assert!(stopped.context.place_engine.is_some());
             } else {
-                let completed =
-                    match boot.finish(LifecyclePorts::default(), &mut fx.input.run.clock) {
-                        Ok(completed) => completed,
-                        Err(owner) => panic!("completed sequence refused: {:?}", owner.stopped()),
-                    };
+                let completed = match boot.finish(
+                    LifecyclePorts {
+                        residency: actual_residency.as_deref_mut(),
+                        ..LifecyclePorts::default()
+                    },
+                    &mut fx.input.run.clock,
+                ) {
+                    Ok(completed) => completed,
+                    Err(owner) => panic!("completed sequence refused: {:?}", owner.stopped()),
+                };
                 assert_eq!(completed.certificate.accepted().len(), 3);
                 assert_eq!(completed.context.origin_ns(), origin);
                 assert!(completed.decode.held().is_none());
@@ -289,7 +342,7 @@ fn circuit_with_fixture(
             if let s::StateFrame::FilePair { filing, .. } = &request {
                 assert!(matches!(fault, Fault::RepairPairs));
                 assert_eq!(queries, ["prompt", "pairs"]);
-                assert_eq!(opens, 1);
+                assert_eq!(opens, if actual_spu { 0 } else { 1 });
                 let now = fx.input.run.clock.now().unwrap();
                 let response = s::StateFrame::Filed {
                     common: request.common().clone(),
@@ -387,6 +440,9 @@ fn circuit_with_fixture(
                 .state
                 .write_all(&s::encode_state_line(&response, s::FrameDirection::Response).unwrap())
                 .unwrap();
+        }
+        if actual_spu {
+            continue;
         }
         match recv(
             decoder.as_fd().as_raw_fd(),

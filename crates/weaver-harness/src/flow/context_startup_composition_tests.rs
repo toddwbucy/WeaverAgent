@@ -156,6 +156,7 @@ enum Case {
     DelayedOpen,
     ThroughBoot,
     RefuseOpen,
+    Residency(&'static str),
 }
 
 fn circuit(case: Case) {
@@ -306,6 +307,28 @@ fn circuit(case: Case) {
                     Ok(prepared) => prepared,
                     Err(owner) => panic!("startup finish refused {:?}", owner.stopped()),
                 };
+                if let Case::Residency(mode) = case {
+                    if let Some(admitted) = super::super::residency_composition::tests::drive(
+                        prepared,
+                        &mut run.clock,
+                        mode,
+                    ) {
+                        let (context, _, inventory, evidence) = admitted.into_parts();
+                        assert_eq!(context.origin_ns(), origin);
+                        assert!(evidence.send.sent());
+                        if mode == "full" {
+                            super::super::boot_composition::tests::after_residency(
+                                run,
+                                inventory,
+                                &mut resources,
+                            );
+                            resources.reap_startup_test_children();
+                            return;
+                        }
+                    }
+                    resources.reap_startup_test_children();
+                    return;
+                }
                 let (context, _, inventory, evidence) = prepared.into_parts();
                 assert_eq!(evidence.load, Sequence(0));
                 assert_eq!(evidence.classifier, ready);
@@ -422,4 +445,8 @@ fn startup_composition_drives_into_recorded_boot_and_placement() {
 #[test]
 fn startup_composition_open_refusal_retains_unwritten_load_and_never_forks() {
     circuit(Case::RefuseOpen);
+}
+
+pub(in crate::flow::context) fn residency(mode: &'static str) {
+    circuit(Case::Residency(mode));
 }

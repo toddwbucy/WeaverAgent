@@ -318,6 +318,7 @@ struct Outbound {
     decode_reservation: Option<Arc<DecodeReservationState>>,
     generation: bool,
     resident_mutation: bool,
+    admit: bool,
     cancel: bool,
 }
 
@@ -388,6 +389,12 @@ impl ReceivedOrgan {
 }
 
 impl OrganPort {
+    pub(super) fn admit_not_started(&self) -> bool {
+        self.outgoing
+            .as_ref()
+            .is_some_and(|out| out.admit && out.offset == 0 && !out.preamble_sent)
+    }
+
     pub(super) fn port_identity(&self) -> PortIdentity {
         self.identity.clone()
     }
@@ -407,7 +414,18 @@ impl OrganPort {
         &mut self,
         input: OrganEnvelope,
     ) -> Result<Stage<OrganEnvelope>, StageFailure<OrganEnvelope>> {
-        self.stage_encoded(input, serde_json::to_vec)
+        let admit = matches!(
+            &input.payload,
+            weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Admit { .. })
+        );
+        let result = self.stage_encoded(input, serde_json::to_vec)?;
+        if matches!(result, Stage::Queued) {
+            self.outgoing
+                .as_mut()
+                .expect("queued organ directive")
+                .admit = admit;
+        }
+        Ok(result)
     }
 
     /// Issue a sealed proof for exactly this stage, without changing the
@@ -1209,6 +1227,7 @@ impl<T> PacketPort<T> {
                 decode_reservation: None,
                 generation: false,
                 resident_mutation: false,
+                admit: false,
                 cancel: false,
             })
         })();

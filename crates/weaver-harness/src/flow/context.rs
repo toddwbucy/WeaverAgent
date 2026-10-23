@@ -2004,6 +2004,9 @@ pub(super) use capture_driver::{CaptureAnswer, CaptureProgress};
 #[path = "context_capture_tests.rs"]
 mod capture_tests;
 
+#[path = "context_residency_composition.rs"]
+pub(in crate::flow) mod residency_composition;
+
 #[path = "context_startup_composition.rs"]
 pub(in crate::flow) mod startup_composition;
 

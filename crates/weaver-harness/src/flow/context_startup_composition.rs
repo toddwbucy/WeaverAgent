@@ -338,4 +338,4 @@ impl<'a> StartupComposition<'a> {
 
 #[cfg(test)]
 #[path = "context_startup_composition_tests.rs"]
-mod tests;
+pub(super) mod tests;

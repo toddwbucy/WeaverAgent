@@ -690,6 +690,20 @@ impl CommonPump {
             // cancellation that the owner observes. Keep receive and terminal
             // observation on the sole socket owner, including a final packet
             // before HUP. Unrelated lifecycle traffic cannot suppress the send.
+            if source == PumpSource::Residency
+                && ports
+                    .lifecycle
+                    .residency
+                    .as_deref()
+                    .is_some_and(|port| port.admit_not_started())
+                && ports
+                    .lifecycle
+                    .peer
+                    .as_deref()
+                    .is_some_and(|peer| peer.cancels_boot_open())
+            {
+                ready[source as usize].remove(PollFlags::POLLOUT);
+            }
             if source == PumpSource::Decode
                 && ports.decode.as_deref().is_some_and(|decode| {
                     decode.open_not_started() || decode.placement_not_started()
@@ -781,7 +795,19 @@ impl CommonPump {
                 }
             }
             PumpSource::Residency => {
-                packet_unit(ports.lifecycle.residency.as_deref_mut(), send).map_err(transport)
+                let Some(port) = ports.lifecycle.residency.as_deref_mut() else {
+                    return Ok(false);
+                };
+                if send {
+                    port.try_send_observed(ports.io)
+                        .map(|progress| progress != SendProgress::Pending)
+                        .map_err(transport)
+                } else {
+                    let was_held = port.held().is_some();
+                    port.try_receive()
+                        .map(|progress| !was_held && progress != ReceiveProgress::Pending)
+                        .map_err(transport)
+                }
             }
             PumpSource::Gate => {
                 let Some(port) = ports.gate.as_deref_mut() else {

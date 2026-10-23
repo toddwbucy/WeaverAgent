@@ -155,6 +155,11 @@ impl FailedEnterResources {
             .map_err(|error| format!("classifier bootstrap: {error:?}"))
     }
 
+    pub(super) fn spu_ports_mut(&mut self) -> Option<(&mut OrganPort, &mut DecodePort)> {
+        let spu = self.spu.as_mut()?;
+        Some((spu.residency.as_mut()?, spu.decode.as_mut()?))
+    }
+
     pub(in crate::flow) fn decode_mut(&mut self) -> Option<&mut DecodePort> {
         self.spu.as_mut()?.decode.as_mut()
     }
