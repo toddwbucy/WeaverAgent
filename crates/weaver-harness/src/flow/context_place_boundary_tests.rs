@@ -1426,3 +1426,6 @@ fn place_extracted_boot_proof_cannot_install_after_held_enter_cancellation() {
 
 #[path = "context_place_returned_boot_tests.rs"]
 mod returned_boot_tests;
+
+#[path = "context_place_custody_review_tests.rs"]
+mod custody_review_tests;

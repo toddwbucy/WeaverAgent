@@ -184,6 +184,12 @@ impl RecordingContext {
         if !reservation.belongs_to(decode) {
             return Err(RunFailure::PlaceOwned);
         }
+        // A consumed terminal already settles this request. Starting another
+        // Cancel would create a new AtRest obligation after a complete refusal.
+        // A previously queued Cancel remains unsettled until its own answer.
+        if decode.reservation_settled(reservation) {
+            return Ok(());
+        }
         if !reservation.sent() {
             if decode.placement_not_started() {
                 let reservation = work.reservation.take().unwrap();

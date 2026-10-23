@@ -232,6 +232,7 @@ pub(super) struct RecordBarrier {
     place_owed: bool,
     next_ticket: Option<u64>,
     admitted_before_failure: Option<Sequence>,
+    recorded_author: Option<(u64, Sequence)>,
     last_trace_only_sequence: Option<Sequence>,
     failure: Option<RecordFailure>,
 }
@@ -259,6 +260,7 @@ impl RecordBarrier {
             place_owed: false,
             next_ticket: Some(0),
             admitted_before_failure: None,
+            recorded_author: None,
             last_trace_only_sequence: None,
             failure: None,
         }
@@ -314,7 +316,27 @@ impl RecordBarrier {
         budget: &mut RetentionBudget,
         now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
-        self.submit_authored_inner(event, purpose, None, author, wall_ms, inbox, budget, now)
+        self.submit_authored_inner(
+            event, purpose, None, author, wall_ms, inbox, budget, now, false,
+        )
+    }
+
+    /// Allocate and prepare the exact original without admitting it. The
+    /// private caller binds this real ticket to its owner before first resume.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn queue_authored_with_clock(
+        &mut self,
+        event: AuthoredEvent,
+        purpose: RecordPurpose,
+        author: &ServingAuthor,
+        wall_ms: u64,
+        inbox: &mut FlowInbox,
+        budget: &mut RetentionBudget,
+        now: &mut impl FnMut() -> std::io::Result<u64>,
+    ) -> RecordProgress {
+        self.submit_authored_inner(
+            event, purpose, None, author, wall_ms, inbox, budget, now, true,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -338,6 +360,7 @@ impl RecordBarrier {
             inbox,
             budget,
             now,
+            false,
         )
     }
 
@@ -352,6 +375,7 @@ impl RecordBarrier {
         inbox: &mut FlowInbox,
         budget: &mut RetentionBudget,
         now: &mut impl FnMut() -> std::io::Result<u64>,
+        queue_only: bool,
     ) -> RecordProgress {
         if let Some(scope) = release {
             if let Some(owed) = self.owed_author() {
@@ -439,7 +463,11 @@ impl RecordBarrier {
             Err(error) => return self.fail(RecordFailure::Author(error), budget),
         };
         self.pending = Some((prepared, purpose));
-        self.resume_inner(release, inbox, budget, now)
+        if queue_only {
+            RecordProgress::Pending
+        } else {
+            self.resume_inner(release, inbox, budget, now)
+        }
     }
 
     pub(super) fn submit(
@@ -611,7 +639,10 @@ impl RecordBarrier {
             }
             Ok(SubmitAttempt::Recorded(submission)) => {
                 let (recorded_event, purpose) = self.pending.take().expect("pending event");
-                self.pending_author = None;
+                self.recorded_author = self
+                    .pending_author
+                    .take()
+                    .map(|original| (original.ticket, submission.sequence));
                 // Failure below is after trace admission. It must not be
                 // reported as an unadmitted author in the halt account.
                 self.admitted_before_failure = Some(submission.sequence);
@@ -755,6 +786,13 @@ impl RecordBarrier {
             .expect("real pending author")
             .ticket = ticket;
         ticket
+    }
+    /// Private factual witness, derived only from an actually admitted ticket.
+    /// Raw prepared events carry no authored ticket and clear this witness.
+    pub(super) fn recorded_author_ticket(&self, sequence: Sequence) -> Option<u64> {
+        self.recorded_author
+            .filter(|(_, recorded)| *recorded == sequence)
+            .map(|(ticket, _)| ticket)
     }
     pub(super) fn admitted_before_failure(&self) -> Option<Sequence> {
         self.admitted_before_failure
@@ -979,7 +1017,10 @@ impl RecordBarrier {
             SubmitAttempt::CapacityPending(_) => Ok(None),
             SubmitAttempt::Recorded(submission) => {
                 self.pending = None;
-                self.pending_author = None;
+                self.recorded_author = self
+                    .pending_author
+                    .take()
+                    .map(|original| (original.ticket, submission.sequence));
                 self.last_trace_only_sequence = Some(submission.sequence);
                 Ok(Some(submission.sequence))
             }

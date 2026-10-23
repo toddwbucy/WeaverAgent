@@ -41,16 +41,17 @@ The next drafts stack from this baseline, each on its preceding carrier:
 | #271 code/state-boot-rollback-custody | Completed Boot evidence remains truthful after revocation; extracted pre-install proof returns its original owner for bounded rollback. Harness 1,694/18 ignored, trace 160, 19 protective controls, a separate installed-borrow type pin and required lint/fmt/lock pass. Full boot/lifecycle composition and qualified cutover remain owed. |
 | #272 code/state-ste100-runtime | Separate dormant duty process, retained backend/input ownership, bounded reactor handoffs and artifact/codec review corrections. Types 168 default/224 config, SPU cuda,gguf 380, admin 498/37 ignored and harness 1,694/18 ignored pass; 48 behavior probes plus manifest/reporting controls fail and exact restores pass. Production has no compatible compiled adapter and cannot return Ready. Worker wiring and qualified artifacts/limits remain owed. |
 | #273 code/state-place-stop-returns | Returns exact cancelled reload custody and settles completed native marks after turn-scoped Stop. Nine actual-owner tests, harness 1,703/18 ignored, trace 160 and 14 compiled protective failures with restored passes. #269 fix rows 1-2 addressed for review; worker composition, remaining review rows and qualification remain owed. |
-| code/state-owner-custody-review | Combined #270/#271 custody followups: separate held/fatal originals, exact release withdrawal, shared pair-proof scan and typed completed Boot cleanup through state retirement. Harness 1,721/18 ignored and trace 160 pass; final repair/lint/fmt checks pass after an equivalent condition collapse. All 32 compiled protective failures and restored controls pass, with a separate typed-carrier pin. Full lifecycle composition and qualification remain owed. |
+| #274 code/state-owner-custody-review | Combined #270/#271 custody followups: separate held/fatal originals, exact release withdrawal, shared pair-proof scan and typed completed Boot cleanup through state retirement. Harness 1,721/18 ignored and trace 160 pass; final repair/lint/fmt checks pass after an equivalent condition collapse. All 32 compiled protective failures and restored controls pass, with a separate typed-carrier pin. Full lifecycle composition and qualification remain owed. |
+| code/state-place-author-custody | Actual reserved refusal assembly, exact author-ticket binding, append/drain controls and no new Cancel after a consumed settled terminal. Harness 1,733/18 ignored, trace 160 and affected lint/fmt/lock pass. All fifteen compiled protective failures and exact restores pass; remaining review and full composition duties stay open. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
 
 #269 Planner review 5624951821 found two fix rows: cancelled reload can strand
 Staged or returned inputs, and cancelled native marks can block later turn work.
-The place-stop-returns followup addresses both for review above exact #272
-044d1049. The original #269 head is unchanged and retains its grade until the
-followup is reviewed and joined. Its batch and filed rows remain tracked.
+#273's Planner grade at 6bd5ddf8 closes both with biting controls and undrafts
+that followup. The original #269 head remains unchanged and stays draft pending
+the join. Its batch and filed rows remain tracked.
 #270 review 5625064169 has zero fix rows and its Codex code review is complete
 without findings at 51a54907; the Planner undrafted it. Its seven batch rows
 remain tracked, and it still depends on #269. The boot rollback slice answers
@@ -71,6 +72,12 @@ two filed edge cases and three distinct test gaps: pending-reply wait
 writability, orderly Idle process exit and backend destruction before grammar
 inputs. R1/R7 are redundant guards. Its shared ModelBinding decoder also narrows
 live admin TOML parsing by rejecting positional arrays, now named in its record.
+
+#273's eight batch rows remain open. N1/N2 and M3/M6 are redundant or implied;
+N4/M2/M4/M5 are distinct test gaps. Its record now distinguishes the retained,
+possibly re-prepared prefix from the initial caller value and names the native
+adoption phase gap honestly. The next followup addresses its remaining custody,
+API and test items without granting production readiness.
 
 The Planner graded #255 at b26420e5 with no fix-bucket findings and reproduced
 its gates and 17 protective mutations. Its TRACE-PLACEMENT claim is limited to

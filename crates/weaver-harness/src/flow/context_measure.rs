@@ -175,6 +175,7 @@ enum AuthorPurpose {
 }
 
 struct MeasureAuthor {
+    identity: std::sync::Arc<()>,
     purpose: AuthorPurpose,
     ticket: Option<u64>,
     sequence: Option<Sequence>,
@@ -558,6 +559,7 @@ impl RecordingContext {
     fn stage_measure_author(&mut self, purpose: AuthorPurpose, kind: Kind, payload: Payload) {
         let owner = self.measure.as_mut().expect("measurement owns its author");
         owner.author = Some(MeasureAuthor {
+            identity: std::sync::Arc::new(()),
             purpose,
             ticket: None,
             sequence: None,
@@ -639,17 +641,34 @@ impl RecordingContext {
             {
                 return Err(self.measure_fault(ports.io, "measurement author ticket changed"));
             }
-            let result = self.resume_owned_author_and_wait(ports);
-            if let Some(ticket) = self.barrier.pending_author().map(|a| a.ticket) {
-                self.measure
-                    .as_mut()
+            let identity = std::sync::Arc::clone(
+                &self
+                    .measure
+                    .as_ref()
                     .unwrap()
                     .author
-                    .as_mut()
+                    .as_ref()
                     .unwrap()
-                    .ticket = Some(ticket);
+                    .identity,
+            );
+            let sequence = self
+                .resume_claimed_author_and_wait(ports, Some(AuthorClaim::Measurement(identity)))?;
+            if self
+                .measure
+                .as_ref()
+                .unwrap()
+                .author
+                .as_ref()
+                .unwrap()
+                .sequence
+                != Some(sequence)
+            {
+                return Err(self.measure_fault(
+                    ports.io,
+                    "measurement completion has another author's ticket",
+                ));
             }
-            result?
+            sequence
         };
         self.measure_wait_matches(ports.io)?;
         // The shared author has transferred this sequence. Save the next
@@ -1159,13 +1178,44 @@ impl RecordingContext {
 }
 
 impl RecordingContext {
+    pub(super) fn claim_measure_author_ticket(
+        &mut self,
+        identity: &std::sync::Arc<()>,
+        ticket: u64,
+    ) -> bool {
+        let Some(author) = self.measure.as_mut().and_then(|w| w.author.as_mut()) else {
+            return false;
+        };
+        if !std::sync::Arc::ptr_eq(&author.identity, identity)
+            || author.sequence.is_some()
+            || author.ticket.is_some_and(|held| held != ticket)
+        {
+            return false;
+        }
+        author.ticket = Some(ticket);
+        true
+    }
     pub(super) fn bind_place_measure_author(&mut self, sequence: Sequence) {
+        let recorded_ticket = self.barrier.recorded_author_ticket(sequence);
         if let Some(author) = self.measure.as_mut().and_then(|w| w.author.as_mut())
+            && author.ticket.is_some()
+            && author.ticket == recorded_ticket
             && self.waiting_content.is_none()
             && author.sequence.is_none()
         {
             author.sequence = Some(sequence)
         }
+    }
+    #[cfg(test)]
+    pub(super) fn measure_request_for_test(&self) -> Option<&MeasureRequest> {
+        self.measure.as_ref().map(|w| &w.request)
+    }
+    #[cfg(test)]
+    pub(super) fn measure_author_record_state(&self) -> Option<(Option<u64>, Option<Sequence>)> {
+        self.measure
+            .as_ref()
+            .and_then(|w| w.author.as_ref())
+            .map(|a| (a.ticket, a.sequence))
     }
     pub(super) fn place_measure_author_ticket(&self) -> Option<u64> {
         self.measure

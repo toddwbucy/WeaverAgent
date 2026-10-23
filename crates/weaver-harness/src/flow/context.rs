@@ -98,6 +98,13 @@ struct LoadDuty {
     tools: serving::payloads::ToolPolicies,
 }
 
+/// A private owner's original is queued under this exact identity, never
+/// inferred from event shape or from another owner's empty completion slot.
+enum AuthorClaim {
+    Placement(std::sync::Arc<()>),
+    Measurement(std::sync::Arc<()>),
+}
+
 pub(crate) struct RecordingContext {
     phase: RecordingPhase,
     origin: ClockOrigin,
@@ -930,6 +937,14 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
+        self.continue_claimed_content(ports, None)
+    }
+
+    fn continue_claimed_content<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+        claim: Option<AuthorClaim>,
+    ) -> Result<Sequence, RunFailure> {
         if self.author_admission_pending {
             let event = self
                 .waiting_content
@@ -988,7 +1003,46 @@ impl RecordingContext {
             }
         };
         self.author_turn = Some((event.kind, event.turn.clone()));
-        let progress = self.submit_context_author(event, purpose, wall_ms, ports.io);
+        let progress = if let Some(claim) = claim {
+            let queued = self.barrier.queue_authored_with_clock(
+                event,
+                purpose,
+                &self.author,
+                wall_ms,
+                &mut self.inbox,
+                &mut self.budget,
+                &mut || ports.io.now(),
+            );
+            // Failed preparation may already own its allocated original too.
+            // Busy returns the new original and must never claim an older slot.
+            if matches!(&queued, RecordProgress::Pending | RecordProgress::Failed)
+                && let Some(ticket) = self.barrier.pending_author().map(|a| a.ticket)
+            {
+                let retained = match claim {
+                    AuthorClaim::Placement(identity) => {
+                        self.claim_place_author_ticket(&identity, ticket)
+                    }
+                    AuthorClaim::Measurement(identity) => {
+                        self.claim_measure_author_ticket(&identity, ticket)
+                    }
+                };
+                if !retained {
+                    return Err(self.fail(
+                        ports.io,
+                        FlowHaltReason::ProtocolFailed,
+                        HaltPoint::Author,
+                        "queued author lost its exact private owner",
+                    ));
+                }
+            }
+            if matches!(&queued, RecordProgress::Pending) {
+                self.resume_context_author(ports.io)
+            } else {
+                queued
+            }
+        } else {
+            self.submit_context_author(event, purpose, wall_ms, ports.io)
+        };
         self.wait_recorded(ports, progress)
     }
 
@@ -1051,6 +1105,14 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
+        self.resume_claimed_author_and_wait(ports, None)
+    }
+
+    fn resume_claimed_author_and_wait<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+        claim: Option<AuthorClaim>,
+    ) -> Result<Sequence, RunFailure> {
         if let Some(sequence) = self.completed_author.take() {
             self.finish_release_author();
             return Ok(sequence);
@@ -1059,7 +1121,7 @@ impl RecordingContext {
             // A backlog wait can suspend before the caller owns a trace ticket.
             // Continue that original input, including any coordinator-owned
             // measurement which must record before the backlog can move.
-            return self.continue_waiting_content(ports);
+            return self.continue_claimed_content(ports, claim);
         }
         if self.flow.has_pending_record() || self.barrier.pending_author().is_none() {
             return Err(self.fail(
@@ -1079,7 +1141,16 @@ impl RecordingContext {
         mut progress: RecordProgress,
     ) -> Result<Sequence, RunFailure> {
         loop {
-            // Record identity before any fallible intake, clock or deadline hook.
+            // Retain this exact owner's actual admission even when the recorder
+            // subsequently reports an observer failure. The failure remains
+            // terminal; this witness cannot mint ordinary caller completion.
+            if matches!(&progress, RecordProgress::Failed)
+                && let Some(sequence) = self.barrier.admitted_before_failure()
+            {
+                self.bind_place_measure_author(sequence);
+                self.bind_place_author(sequence)?;
+            }
+            // Other completion hooks keep their existing successful boundary.
             if let RecordProgress::Recorded {
                 sequence,
                 proof: None,

@@ -255,6 +255,7 @@ impl PlaceAccount {
 }
 #[derive(Debug)]
 struct PlaceAuthor {
+    identity: Arc<()>,
     event: Option<AuthoredEvent>,
     ticket: Option<u64>,
     sequence: Option<Sequence>,
@@ -264,6 +265,7 @@ struct PlaceAuthor {
 impl PlaceAuthor {
     fn new(event: AuthoredEvent) -> Self {
         Self {
+            identity: Arc::new(()),
             kind: event.kind,
             turn: event.turn.clone(),
             event: Some(event),
@@ -344,6 +346,38 @@ pub(super) struct ReloadTransaction {
     reload_detail: Option<String>,
     started_ns: Option<u64>,
     account_deadline: Option<u64>,
+}
+
+#[cfg(test)]
+pub(super) struct ReloadDrainEvidence<'a> {
+    pub bound: Option<AbsoluteBound>,
+    pub measured: bool,
+    pub reserved: bool,
+    pub refused: bool,
+    pub code: Option<ReloadCode>,
+    pub detail: Option<&'a str>,
+}
+
+#[cfg(test)]
+impl ReloadTransaction {
+    pub(super) fn drain_evidence_for_test(&self) -> ReloadDrainEvidence<'_> {
+        ReloadDrainEvidence {
+            bound: self.bound,
+            measured: self.measurement.is_some(),
+            reserved: self.reservation.is_some(),
+            refused: self.refused,
+            code: self.reload_code,
+            detail: self.reload_detail.as_deref(),
+        }
+    }
+
+    pub(super) fn saved_prefix_for_drain_review(&self) -> &PreparedPrefix {
+        self.prefix.as_ref().expect("live reload owns its prefix")
+    }
+
+    pub(super) fn saved_prefix_mut_for_drain_review(&mut self) -> &mut PreparedPrefix {
+        self.prefix.as_mut().expect("live reload owns its prefix")
+    }
 }
 
 impl RecordingContext {
@@ -820,7 +854,12 @@ impl RecordingContext {
             }
             if let Some(MeasureCompletion::Refused(refused)) = &work.measurement {
                 work.refusal = Some(PlaceRefused {
-                    assembly_id: work.request.prefix.assembly,
+                    assembly_id: work
+                        .pending
+                        .as_ref()
+                        .expect("measured reservation")
+                        .assembly()
+                        .into(),
                     code: refused.code(),
                     detail: "decode measurement refused".into(),
                     account: None,
@@ -841,7 +880,12 @@ impl RecordingContext {
             let limits = self.place_engine.as_ref().unwrap().limits();
             let event = if let Err(code) = crate::flow::place::fit(&facts, limits) {
                 let refusal = PlaceRefused {
-                    assembly_id: work.request.prefix.assembly,
+                    assembly_id: work
+                        .pending
+                        .as_ref()
+                        .expect("measured reservation")
+                        .assembly()
+                        .into(),
                     code,
                     detail: "measured argument exceeds declared placement budget".into(),
                     account: None,
@@ -971,25 +1015,6 @@ impl RecordingContext {
         self.deadlines.disarm(PumpDeadline::Decision);
         Ok(Some(PlacementCompletion::Granted(grant)))
     }
-    pub(in crate::flow) fn cancel_place(
-        &mut self,
-        _decode: &mut DecodePort,
-        io: &mut impl PumpIo,
-    ) -> Result<(), RunFailure> {
-        if let Some(work) = self.place.as_mut() {
-            work.cancelled = true;
-            work.driving = true;
-        } else {
-            return Err(RunFailure::PlaceOwned);
-        };
-        let result = if self.measure.is_some() {
-            self.cancel_measurement(io)
-        } else {
-            Ok(())
-        };
-        self.place.as_mut().unwrap().driving = false;
-        result
-    }
     fn place_response_ready(&self) -> bool {
         self.phase == RecordingPhase::Entered
             && self.failure.is_none()
@@ -1063,11 +1088,47 @@ impl RecordingContext {
         }
         self.place_notice.as_mut().and_then(|w| w.author.as_mut())
     }
+    #[cfg(test)]
+    pub(super) fn place_author_record_state(
+        &self,
+    ) -> Option<(Option<u64>, Option<Sequence>, Kind)> {
+        self.active_place_author()
+            .map(|a| (a.ticket, a.sequence, a.kind))
+    }
     pub(super) fn place_owns_pending_author(&self) -> bool {
         self.active_place_author()
             .is_some_and(|a| a.sequence.is_none() && (a.ticket.is_some() || a.event.is_none()))
     }
+    pub(super) fn claim_place_author_ticket(&mut self, identity: &Arc<()>, ticket: u64) -> bool {
+        let Some(author) = self.active_place_author_mut() else {
+            return false;
+        };
+        if !Arc::ptr_eq(&author.identity, identity)
+            || author.event.is_some()
+            || author.sequence.is_some()
+            || author.ticket.is_some_and(|held| held != ticket)
+        {
+            return false;
+        }
+        author.ticket = Some(ticket);
+        true
+    }
+
     pub(super) fn bind_place_author(&mut self, sequence: Sequence) -> Result<(), RunFailure> {
+        let Some(author) = self.active_place_author() else {
+            return Ok(());
+        };
+        if author.sequence == Some(sequence) {
+            return Ok(());
+        }
+        let recorded_ticket = self.barrier.recorded_author_ticket(sequence);
+        if author.event.is_some()
+            || author.sequence.is_some()
+            || author.ticket.is_none()
+            || author.ticket != recorded_ticket
+        {
+            return Ok(());
+        }
         let closing = self
             .active_place_author()
             .filter(|a| a.event.is_none() && a.kind == Kind::TurnClosed)
@@ -1159,15 +1220,19 @@ impl RecordingContext {
         {
             return Err(self.place_fault(ports.io, "placement author ticket was replaced"));
         }
+        let identity = Arc::clone(&author.identity);
         if let Some(event) = self.active_place_author_mut().unwrap().event.take() {
             self.waiting_content = Some(event);
         }
-        let result = self.resume_owned_author_and_wait(ports);
-        if let Some(ticket) = self.barrier.pending_author().map(|a| a.ticket) {
-            self.active_place_author_mut().unwrap().ticket = Some(ticket);
-        }
+        let result =
+            self.resume_claimed_author_and_wait(ports, Some(AuthorClaim::Placement(identity)));
         if let Ok(sequence) = result {
             self.bind_place_author(sequence)?;
+            if self.active_place_author().and_then(|a| a.sequence) != Some(sequence) {
+                return Err(
+                    self.place_fault(ports.io, "placement completion has another author's ticket")
+                );
+            }
         }
         result.map(|_| ())
     }
