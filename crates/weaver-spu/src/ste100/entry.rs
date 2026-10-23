@@ -34,6 +34,15 @@ fn limit(args: impl IntoIterator<Item = OsString>) -> Result<usize, &'static str
 // This is an explicit absence of a compiled adapter, not a permissive factory.
 // No command-line/config field can select a fixture or the old label scorer.
 struct NoCompiledAdapter;
+impl NoCompiledAdapter {
+    fn refusal() -> Ste100AdmissionRefused {
+        Ste100AdmissionRefused {
+            protocol: weaver_types::state_flow::STE100_PROTOCOL.into(),
+            code: Ste100AdmissionCode::UnsupportedArtifact,
+            detail: "no compatible STE100 adapter is compiled into this executable".into(),
+        }
+    }
+}
 impl SealedAdapter for NoCompiledAdapter {}
 enum UnavailableBackend {}
 impl AdapterAdmission for NoCompiledAdapter {
@@ -41,19 +50,15 @@ impl AdapterAdmission for NoCompiledAdapter {
     fn kind(&self) -> AdapterKind {
         AdapterKind::Production
     }
-    fn is_available(&self) -> bool {
-        false
+    fn precheck(&self) -> Result<(), Ste100AdmissionRefused> {
+        Err(Self::refusal())
     }
     fn admit(
         &self,
         _: &VerifiedArtifacts,
         _: &VerifiedFiles,
     ) -> Result<Self::Backend, Ste100AdmissionRefused> {
-        Err(Ste100AdmissionRefused {
-            protocol: weaver_types::state_flow::STE100_PROTOCOL.into(),
-            code: Ste100AdmissionCode::UnsupportedArtifact,
-            detail: "no compatible STE100 adapter is compiled into this executable".into(),
-        })
+        Err(Self::refusal())
     }
 }
 impl CheckBackend for UnavailableBackend {
@@ -64,7 +69,17 @@ impl CheckBackend for UnavailableBackend {
 
 /// Run only the separate STE100 executable. The parent remains responsible for
 /// its existing privilege, stderr, lifetime, timeout and reap choreography.
-pub fn run() -> ExitCode {
+///
+/// # Safety
+///
+/// Call only at process entry with uniquely owned, unwrapped inherited fd3, before
+/// opening files or starting workers. No other owner may close or replace that
+/// descriptor. This forwards the first-ownership contract of adopt_ste100.
+///
+/// ```compile_fail
+/// let _ = weaver_spu::ste100::run();
+/// ```
+pub unsafe fn run() -> ExitCode {
     let limit = match limit(std::env::args_os().skip(1)) {
         Ok(limit) => limit,
         Err(error) => {
@@ -72,7 +87,9 @@ pub fn run() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let fd = match crate::channel::adopt_ste100() {
+    // SAFETY: the caller transfers the uniquely inherited fd3. Parsing the
+    // launch limit above opens no descriptor and starts no worker.
+    let fd = match unsafe { crate::channel::adopt_ste100() } {
         Ok(fd) => fd,
         Err(error) => {
             eprintln!("STE100 boundary: {error:?}");

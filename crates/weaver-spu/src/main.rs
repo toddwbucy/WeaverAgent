@@ -1291,7 +1291,9 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let inherited = match channel::adopt() {
+    // SAFETY: this executable has only parsed argv since exec. Its fd3/fd4 are
+    // the harness's unwrapped inherited ends; no file owner or worker exists yet.
+    let inherited = match unsafe { channel::adopt() } {
         Ok(inherited) => inherited,
         Err(fault) => {
             eprintln!("{}", entry_refusal_line(&fault));
@@ -1360,6 +1362,7 @@ fn entry_refusal_line(fault: &EntryFault) -> String {
             "{{\"refusal\":\"descriptors_unusable\",\"held_beyond_standard_streams\":{found}}}"
         ),
         EntryFault::DescriptorsUnusable => "{\"refusal\":\"descriptors_unusable\"}".to_string(),
+        EntryFault::AlreadyAdopted => "{\"refusal\":\"descriptors_already_adopted\"}".to_string(),
         EntryFault::HygieneFailed => "{\"refusal\":\"boundary_unverified\"}".to_string(),
     }
 }

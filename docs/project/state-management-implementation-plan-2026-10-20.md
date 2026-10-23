@@ -46,9 +46,10 @@ The next drafts stack from this baseline, each on its preceding carrier:
 | #277 code/state-ste100-review | Eleven #272 runtime followups: static absent-adapter refusal, bounded retained reads, unwind notification, shared descriptor ownership/digest checks, retirement cleanup and real wait/exit/destruction-order tests. Full SPU 393, types 168/226, admin 498/37 ignored and harness 1,733/18 ignored pass; final focused/lint/fmt checks pass after a test-only helper move. All 18 compiled protective failures and exact restores pass; production adapter and lifecycle/qualification duties remain owed. |
 | #278 code/state-place-phase-custody | #273 followups: phase-bound reload evidence/extraction, explicit cancelled Staged, checked consumed-lease disposal, private returned inputs and native proposal moves. Harness 1,738/18 ignored, trace 160 and affected gates pass. Ten unique compiled protective failures pass after strengthening one initially surviving source-identity fixture; the separate four-field privacy pin passes. Original failure/survivor evidence is retained. |
 | #279 code/state-held-author-admission | #274 rows 2-9: held-original admission/release/Closed guards with exact admitted-owner continuations, pending ordinary Unload debt custody, typed summary rollback and correction proof accounting. Thirty-one incoming source paths and one root test migration; harness 1,752/18 ignored, trace 160 and affected gates pass. All 26 compiled protective failures and restores pass; separate E0308 typed-Boot rejection and eight restored tests pass. Row 1 remains #276. |
-| #280 code/state-failed-enter-cleanup | Bounded Failed pre-input context/resource cleanup: actual fork custody, owed Boot accounts, descriptorless retirement, exact Release/reap/Unload and original-cap drain. Eighteen source paths reviewed; harness 1,779/18 ignored, trace 160 and final21 owner/lint gates pass. All 20 unique compiled protective failures and restores pass, plus three separate ownership compiler pins. Initial survivor/instrument error remain preserved. Healthy refusal and complete lifecycle composition remain owed. |
+| #280 code/state-failed-enter-cleanup | Bounded Failed pre-input context/resource cleanup: actual fork custody, owed Boot accounts, descriptorless retirement, exact Release/reap/Unload and original-cap drain. Eighteen source paths reviewed; harness 1,779/18 ignored, trace 160 and final 21 owner/lint gates pass. All 20 unique compiled protective failures and restores pass, plus three separate ownership compiler pins. Initial survivor/instrument error remain preserved. Healthy refusal and complete lifecycle composition remain owed. |
 | #281 code/state-author-claims | #275 rows 1-9: exact waiting-original/claim carrier, actual allocated ticket, immediate trace-only witness binding, immutable refusal identity and separate settled-cancel accounting. Harness 1,793/18 ignored, trace 160 and affected gates pass. All 23 unique compiled controls and restores pass after a filter-only rerun of the preserved A9 survivor; two separate non-Clone pins pass. Defensive caller and redundant-cache limits remain explicit. |
-| code/state-management-refusal | Elected closed lifecycle refusal vocabulary and dormant exact admission mapping, full-envelope bounds and original value custody. Types 171/229, harness 1,798/18 ignored, trace 160, admin 498/37 ignored and downstream checks pass; final affected lint/fmt/lock pass after an exact private tuple alias. All 15 compiled protective failures and exact restores pass. Full healthy rollback remains owed. |
+| #283 code/state-management-refusal | Elected closed lifecycle refusal vocabulary and dormant exact admission mapping, full-envelope bounds and original value custody. Types 171/229, harness 1,798/18 ignored, trace 160, admin 498/37 ignored and downstream checks pass; final affected lint/fmt/lock pass after an exact private tuple alias. All 15 compiled protective failures and exact restores pass. Full healthy rollback remains owed. |
+| code/state-spu-admission-ownership | #277 seven followups: unsafe first-ownership entry APIs, recursive scoped fixture inventory, adapter-owned precheck refusal, structural notification-before-backend-drop and distinct repeated-adoption diagnostics. SPU cuda,gguf 407, affected lint/fmt/lock gates, eleven compiled named control failures/restores and four separate E0133 pins pass. Full lifecycle and production qualification remain owed. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
@@ -113,6 +114,23 @@ rows remain tracked. The fatal-versus-correctable held-boundary behavior and
 second-held-author loss belong to the still-unelected #276 proposal; other
 refusal consistency, proof-helper and actual admission/account-return tests
 remain owed. Its grade does not authorize the pending proposal.
+
+#280's Planner grade at 49e276aa has zero fix rows and confirms the scoped
+1,779/18 harness count. Eleven followup rows, including its addendum, remain:
+terminal reporting/reap order, stale lifecycle-answer custody, shared retirement
+predicate, bounded secondary diagnostics, completed-author refusal, absent-SPU
+Unload facts, terminal result accessors, inherited wait bounds, reap wakeup
+policy, missing terminal/clock controls and parallel child-fixture robustness.
+The mandatory Unload SPU field lacks an absent-child representation; this needs
+a paired Spec disposition before a complete pre-decoder composer can claim it.
+
+#281's Planner grade at eddcd9ca has zero fix rows and closes #275 rows 1-6
+and 9, with 7-8 partly closed. Its eleven followups cover remaining stopped
+queue/bind consistency, private test seams, claim ownership and result shape,
+direct record/ticket tests, and the same inherited #280 child-fixture race.
+The first full Planner run failed that inherited fixture; two reruns passed.
+The original author gates remain historical evidence, not a claim that this
+parallel observation issue has already been repaired.
 
 Separate draft #276 on main proposes a move-owned author rejection result to
 return an unaccepted original while preserving earlier held/fatal custody.
