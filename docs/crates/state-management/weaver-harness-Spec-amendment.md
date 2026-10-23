@@ -4,7 +4,7 @@
 
 **Landing PR:** #244
 
-**Version:** 0.29 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.30 **Date filed:** 2026-10-22 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -1297,8 +1297,11 @@ unframed BootHead Text. Producer fixtures prove rendering/token/prefill truth.
 [PROMPT-1, PERSIST-6, PLACE-1, PLACE-5, SEAM-2]
 
 Check the declared head/tail budget and effective generation reserve with Spec 06's
-checked arithmetic. A valid Opened describes a prefix already seated, whether or not
-that configured fit succeeds. Retain its exact evidence and author the assembly-zero
+checked arithmetic, including generation_limit greater than zero for foundation
+serving. Zero is valid evidence of the resolved limit but fails this configured fit;
+it follows the truthful placement then boot_failed path below, not protocol failure.
+A valid Opened describes a prefix already seated, whether or not that configured fit
+succeeds. Retain its exact evidence and author the assembly-zero
 placement with the existing boot recall sequence as causal_parent. Keep the reservation
 and active boot ownership through recorder backpressure. A shared author ticket has
 this one purpose and cannot be consumed by an input, repair or other owner. Save the
