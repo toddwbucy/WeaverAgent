@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #244
+**Landing PR:** #276 (proposed; prior merged revision #244).
 
-**Version:** 0.29 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.30 **Date filed:** 2026-10-23 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -12,6 +12,10 @@ Replacement text for harness Spec 2, 3, 4, 6, and 7, with instruments for sectio
 This unit includes the store/read and seed/boot clauses. Its classifier near side is
 buildable against a declared double. The production STE100 duty and tool pairing remain
 dependencies, not implied implementation. Source anchors use 2eb5c5a2.
+
+The author-return and held-boundary amendments in #276 remain proposed until the
+operator's revised ruling, review and merge. This header states the landing state
+required by Working Process section 2; it does not authorize pre-merge implementation.
 
 ## 1. Ownership, authoring, and capacity, destinations sections 2 and 4
 
@@ -215,14 +219,54 @@ attempt's unadmitted preparation and bookkeeping. A withdrawal assigns no trace 
 and renews no wait. Existing mandatory account settlement continues; no return permits
 skipping it. [FLOW-2, FLOW-3, FLOW-4, FLOW-5]
 
-New owner admission and entry to release refuse while the held caller slot or the
-template-blocked caller slot is occupied. Existing admitted owners may complete their
-exact private continuations; the held input grants no new work or continuation of its
-own. Closed also refuses while either slot is occupied, including an input held after
-release began. The caller takes the exact original before retrying these boundaries.
-Failure does not erase that custody: the existing context or caller owner retains it
-through bounded teardown. This rule adds no halt-account member or fabricated ticket and
-permits no successful close that drops an untaken original. [FLOW-2, FLOW-3, FLOW-5]
+**HARNESS-HELD-BOUNDARY (proposed election).** New owner admission, release,
+Enter rollback, member-capture preparation and Closed refuse while the held caller slot
+or the template-blocked caller slot is occupied, including an original held after
+release began. Recommend a recoverable Busy refusal when the held original is the
+blocking condition, rather than latching protocol_failed for that condition alone.
+This recommendation requires the operator's explicit ruling on #276 before
+implementation. It does not alter the separate second-submit caller-error rule above.
+[FLOW-2, FLOW-3, FLOW-5]
+
+Use one shared private held-input predicate and reason across these admission roads.
+The Busy reason identifies the occupied caller-held or template-blocked slot; if both
+are occupied, both originals remain owed. The method's existing result family may carry
+that private reason, but may not translate held input into WrongProof, MissingHead or
+TemplateBlocked. In particular, completed_template_enter cannot claim a template
+failure merely because an ordinary caller original is held, and install_place must
+return the same offered proof with Busy rather than claiming it mismatched. Genuine
+incomplete/rejected certification retains its own TemplateBlocked reason. Neither Busy
+nor TemplateBlocked by itself creates a trace refusal or a new wire vocabulary.
+[FLOW-2, FLOW-3, CLASS-8]
+
+The following four boundary guards change under the recommended election: held input
+at begin_releasing, begin_enter_rollback, close_after_drain and prepare_member_capture
+returns recoverable Busy, not a new fatal ProtocolFailed. Other invalid phase, missing
+proof, wrong bound or unmet protocol preconditions keep their existing rules. A held
+refusal leaves phase, pending ticket, exact originals, resources and original deadlines
+unchanged; it neither arms a replacement wait nor starts release or capture. Taking the
+exact originals only removes this hold. A subsequent attempt must still pass all
+ordinary phase, proof, ownership and deadline checks; it is not a promise that retry
+succeeds and it grants no ordinary author retry permission. [FLOW-2, FLOW-3, FLOW-5]
+
+An already latched fatal cause remains first and is returned before a nonfatal held
+reason. Existing clock/deadline and independent failure checks still run where required;
+Busy must not mask an observed failure, renew a bound or revive Failed. Taking an
+original in Failed does not make these healthy boundary APIs available. Independently
+bounded fatal teardown remains required under HARNESS-HALT-BOUND: the existing context
+or caller evidence owner retains each untaken or returned original, settles only real
+owed work, and closes/exits failed at the original cap without claiming successful
+Closed or successful Left. No held-input recovery wait extends that cap, and no original
+is dropped just to satisfy close. [FLOW-2, FLOW-3, FLOW-5]
+
+Existing admitted owners may complete their exact private continuations; held input
+grants none of its own. This rule adds no halt-account member, fabricated ticket,
+implicit submission, overflow queue or successful close that loses an original. The
+alternative election is to retain fatal caller-error treatment at the four boundaries;
+then taking the original permits custody recovery and fatal teardown only, not retry of
+the healthy boundary. The [proposal][author-return-proposal] states this choice and the
+required evidence. Until operator election, review and merge, neither alternative is
+new implementation authority. [FLOW-2, FLOW-3, FLOW-5]
 
 Every caller handles both ownership outcomes explicitly. A returned original goes back
 to that caller's existing event or stopped-evidence owner; a caller may not use an error
@@ -787,7 +831,7 @@ a fresh observation or blocks teardown on that read. [FLOW-3, FLOW-5]
 | Gate, cut, decision or undisputed control bound expires | Corresponding bound reason, barrier | Wait stage, original start/deadline and observation time, source or input where known |
 | Whole-copy backlog still blocks next model request at decision_wait expiry | queue_limit, barrier | Waiting copy, original decision deadline and current backlog sample, never an immediate-full failure |
 | Harness counter overflow | protocol_failed, counter | Counter domain in detail, current source/request where known, no wrapped ID |
-| Busy misuse, invalid ticket or unknown barrier source | protocol_failed, author or barrier | Pending author or supplied source identity, detail names the failed check |
+| Busy misuse (excluding the proposed HARNESS-HELD-BOUNDARY recovery refusal), invalid ticket or unknown barrier source | protocol_failed, author or barrier | Pending author or supplied source identity, detail names the failed check |
 | Trace admission, render, append, queue or sink failure | trace_failed, author | Pending author where present, source event only after admission. Keep existing StreamWriteFailed fault case |
 
 R20-6 keeps missing snapshot/finished answers on the retry path after PERSIST-CLEANUP.
@@ -1630,3 +1674,6 @@ state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 
 [recall-shape]:
 weaver-trace-Spec-amendment.md#61-serving-recall-representation
+
+[author-return-proposal]:
+../../project/state-management-author-return-proposal-2026-10-23.md

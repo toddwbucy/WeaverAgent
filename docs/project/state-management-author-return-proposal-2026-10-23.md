@@ -1,9 +1,12 @@
 # Proposed author rejection custody
 
-This proposal defines the proposed Spec closure of #274 Planner rows 1-2 for
-issue #146; it does not claim those changes have landed. It is based on exact
-#275 8d86a2545e53ab023bd086756b8852c03d07bd99. It changes no code and is not
-implementation authority until the operator's election, review and merge.
+Date: 2026-10-23. Status: proposed; the operator's revised election, review and
+merge are pending. This clarifies draft #276 at exact
+11e96da3dcfac5fb7a3b2de407632836d9d4ddb0 after the #279 Planner review at
+5f7a337256a4693d97900efffa1d8a38d0aa337e. It addresses #274 rows 1-2 and
+#279's carried row 1 election for issue #146. It changes no code and is not
+implementation authority. The earlier author-result choice and the new explicit
+boundary choice must be considered together before this proposal is elected.
 
 The current owner retains one nonfatal held original and one immutable
 first-fatal original. A third call consumes its AuthoredEvent but returns only
@@ -31,25 +34,82 @@ account work, it can return its original even when the held slot is occupied.
 Its preparation and attempt bookkeeping retire together without a new sequence
 or renewed deadline.
 
-New owner admission and release refuse while either the held caller slot or
-the template-blocked caller slot is occupied. Closed also refuses an untaken
-original, including one held after release began. The caller must take the
-exact original before retrying these boundaries. Existing admitted owners may
-finish their exact private continuations; the held input grants none. Teardown
-retains that custody without enlarging the halt account or inventing a ticket.
-No successful close may silently drop an untaken original.
+## Explicit held-boundary election
 
-A separate source-only implementation batch addresses admission/release and
-other #274 findings. It has not landed and does not implement this proposed
-author-result election. Its existence does not turn this draft into merged
-Spec authority or change the pending operator election.
+The #279 review found that its held-original guards in release, Enter rollback,
+Closed and member-capture preparation currently latch fatal ProtocolFailed.
+That follows the merged caller-error convention, retains the original, and is
+not a defect against the merged Spec. The earlier #276 phrase "before retrying
+these boundaries" implied recovery which that behavior does not provide. This
+revision surfaces the choice instead of deciding it by default.
 
-The alternative is a borrowing admission interface that refuses before taking
-the caller's original, with ownership transfer represented in its type. An
-advisory preflight bool is insufficient because the old consuming call remains
-able to discard a third original. Retaining an unbounded queue, cloning events
-into errors, inventing tickets, or expanding the halt-account wire format are
-not part of this proposal.
+Recommend a recoverable Busy refusal for the held-input condition at new owner
+admission and these four boundaries. Use one private held-input predicate and
+reason that identifies the occupied caller-held or template-blocked slot. Both
+slots retain their exact originals if both are occupied. Methods may keep their
+existing result families, but a held original must not be reported as a wrong
+proof, missing head or failed template certification. Genuine template
+certification remains TemplateBlocked; a held-template original is a separate
+custody reason. This adds no wire field, trace refusal or new event kind.
+
+| Boundary | Proposed change for held input alone | What recovery still requires |
+| --- | --- | --- |
+| begin_releasing | Return Busy before release/phase/wait mutation, instead of latching ProtocolFailed | Take all held originals; satisfy the same settled-owner and original Leave checks. |
+| begin_enter_rollback | Return Busy before rollback/phase/wait mutation, instead of latching ProtocolFailed | Take all held originals; retain the actual recorded Enter refusal and same explicit Leave authority. |
+| close_after_drain | Return Busy without entering Failed or Closed, instead of latching ProtocolFailed | Take originals held even after release began; prove actual recorded Unload, resource retirement and drain under the same cap. |
+| prepare_member_capture | Return Busy before capture/barrier admission, instead of latching ProtocolFailed | Take all held originals; recheck the real between-turn boundary, declared window and all other capture prerequisites. |
+
+The common reason also corrects ordinary caller-held input misreported by
+completed_template_enter as TemplateBlocked and by install_place as WrongProof.
+The latter must return the same offered Boot proof with Busy. This proposal
+does not select a new clock, permit fresh work from held input, or turn a
+held original into a ticket. Previously admitted owners retain only their
+exact existing private continuations. Other invalid phases, bounds, proofs
+and protocol preconditions retain their current rules.
+
+No fatal state is recoverable through this election. An already latched cause
+keeps precedence over Busy and remains immutable. Required clock/deadline and
+independent failure observations still apply. Taking the original in Failed
+restores custody to its caller; it does not revive the context, enable healthy
+release/Closed, or restart Enter/Leave/halt time. Independently bounded fatal
+teardown must retain the exact caller/context originals and actual pending
+work, account only what is real, and close/exit failed at the original cap.
+It cannot wait beyond that cap for a caller to fix the hold, fabricate a
+successful Closed/Left, or drop originals to make closure pass. Full lifecycle
+composition must carry those retained facts; this election alone does not
+supply that integration.
+
+A caller with no fatal failure may take the exact original and offer the
+boundary again while its original bounds and other preconditions permit.
+The Busy return changes no phase, ticket, original, resource or deadline.
+It gives no guarantee of later success and no new permission to resubmit an
+author event. In particular the separate second-submit misuse above still
+latches protocol_failed if no earlier fatal cause exists, and otherwise
+returns that earlier cause with the new original.
+
+**Alternative: fatal caller error.** Keep ProtocolFailed at all four named
+boundaries, preserving any earlier cause. Under this election taking the
+original permits evidence recovery and bounded fatal teardown only; healthy
+release, rollback, capture and Closed cannot be retried on that context.
+The earlier retry wording must then be removed. This is consistent with the
+current merged convention, but makes a correctable held-input ordering mistake
+terminate the run. The operator must choose explicitly; this draft recommends
+the recoverable alternative and does not implement either choice.
+
+The #279 admission work and this draft remain distinct: its current fatal
+boundary behavior is accurately described above, while the last-wins author
+result remains deferred to #276. This clarification does not claim the prior
+implementation batch has or has not merged, and does not resolve its remaining
+review/test rows by changing this prose.
+
+## Author-result alternative and caller migration
+
+An alternative to the proposed consuming author-result interface is a borrowing
+admission interface that refuses before taking the caller's original, with ownership
+transfer represented in its type. An advisory preflight bool is insufficient because
+the old consuming call remains able to discard a third original. Retaining an
+unbounded queue, cloning events into errors, inventing tickets, or expanding the halt-
+account wire format are not part of this proposal.
 
 Implementation after merge must migrate all six direct production author
 sites: four input paths, mark-refusal authoring and repair authoring. It also
@@ -61,15 +121,23 @@ existing event/stopped-evidence owner must accept the exact return, and
 started flags must reflect actual context custody. There is no new worker
 orchestration or serving activation in this election.
 
-Required evidence includes two and three caller attempts, an already-latched
-failure, a pending release returning under debt while another original is held
-through either resume entry, exact original identity and stage retention,
-unchanged ticket/sequence and deadline facts, and propagation into bounded
-caller cleanup. New admission, release and Closed must refuse untaken held or
-template-blocked input while existing private work can settle. Compile-time
-negative pins must reject cloning AuthorFailure and any From<AuthorFailure>
-for RunFailure implementation. Existing owned pending authors and first-fatal
-evidence remain distinct from an unaccepted return.
+Required evidence includes two and three caller attempts, an already-latched failure,
+a pending release returning under debt while another original is held through either
+resume entry, exact original identity and stage retention, unchanged ticket/sequence
+and deadline facts, and propagation into bounded caller cleanup. New admission and all
+four boundaries above must refuse untaken held or template-blocked input while
+existing private work can settle. Under the recommended election, actual otherwise-
+valid boundary fixtures must show nonfatal Busy, unchanged phase/bounds/exact
+originals, then successful or truthfully expired retry after the real take. Repeat
+with both held slots, an already-latched cause and an independent failure observed
+during the call: no case may clear the latch, delay fatal teardown, replace a cause,
+falsely report a template/proof failure or fabricate Closed. Tests must separately pin
+the unchanged second-submit fatal rule. Protective changes that relatch a held-only
+boundary, bypass held custody, grant a fresh retry wait or ignore the first failure
+must fail the matching fixture. Compile-time negative pins must reject cloning
+AuthorFailure and any From<AuthorFailure> for RunFailure implementation. Existing
+owned pending authors and first-fatal evidence remain distinct from an unaccepted
+return.
 
 This does not enlarge HARNESS-HALT-ACCOUNT. Only a real allocated pending
 ticket belongs in AuthorAtHalt; no unaccepted original is encoded there by
