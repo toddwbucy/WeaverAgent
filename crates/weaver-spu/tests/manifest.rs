@@ -271,3 +271,69 @@ fn each_target_reads_its_documented_fixtures() {
         );
     }
 }
+
+/// The merged STE100 amendment adds one exact executable, preserving both older
+/// duty names and the library target used by the existing doctest instruments.
+#[test]
+fn ste100_binary_set() {
+    let manifest =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
+    let mut bins = Vec::new();
+    for section in manifest.split("[[bin]]").skip(1) {
+        let mut name = None;
+        let mut path = None;
+        let mut required = None;
+        for line in section.lines().map(str::trim) {
+            if line.starts_with('[') {
+                break;
+            }
+            if line.starts_with('#') {
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("name = ") {
+                name = Some(value.to_owned());
+            }
+            if let Some(value) = line.strip_prefix("path = ") {
+                path = Some(value.to_owned());
+            }
+            if let Some(value) = line.strip_prefix("required-features = ") {
+                required = Some(value.to_owned());
+            }
+        }
+        bins.push((name.unwrap(), path.unwrap(), required));
+    }
+    bins.sort();
+    assert_eq!(
+        bins,
+        vec![
+            ("\"weaver-spu\"".into(), "\"src/main.rs\"".into(), None),
+            (
+                "\"weaver-spu-classify\"".into(),
+                "\"src/bin/classify.rs\"".into(),
+                Some("[\"cuda\"]".into())
+            ),
+            (
+                "\"weaver-spu-ste100\"".into(),
+                "\"src/bin/ste100.rs\"".into(),
+                None
+            ),
+        ]
+    );
+    let library = manifest
+        .split("[lib]")
+        .nth(1)
+        .unwrap()
+        .split("[[bin]]")
+        .next()
+        .unwrap();
+    assert!(
+        library
+            .lines()
+            .any(|line| line.trim() == "name = \"weaver_spu\"")
+    );
+    assert!(
+        library
+            .lines()
+            .any(|line| line.trim() == "path = \"src/lib.rs\"")
+    );
+}

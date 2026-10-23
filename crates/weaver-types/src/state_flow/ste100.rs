@@ -18,16 +18,17 @@ pub const STE100_LABELS: [&str; 7] = [
     "O", "B-VERB", "I-VERB", "B-NOUN", "I-NOUN", "B-COND", "I-COND",
 ];
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Ste100Instruction {
-    pub model_binding: ModelBinding,
-    pub model_artifact_sha256: Digest,
-    pub instances: u32,
-    pub max_wire_bytes: DecimalU64,
-    pub measurement_ref: String,
-    pub repair_cap: RepairCap,
-    pub decision_wait: MeasuredWait,
+super::codec::closed_object! {
+    #[derive(Debug, Clone, PartialEq, Serialize)]
+    pub struct Ste100Instruction {
+        pub model_binding: ModelBinding,
+        pub model_artifact_sha256: Digest,
+        pub instances: u32,
+        pub max_wire_bytes: DecimalU64,
+        pub measurement_ref: String,
+        pub repair_cap: RepairCap,
+        pub decision_wait: MeasuredWait,
+    }
 }
 
 impl Ste100Instruction {
@@ -66,11 +67,12 @@ impl Ste100Instruction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RepairCap {
-    pub attempts: u32,
-    pub measurement_ref: String,
+super::codec::closed_object! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct RepairCap {
+        pub attempts: u32,
+        pub measurement_ref: String,
+    }
 }
 
 impl RepairCap {
@@ -226,12 +228,13 @@ impl Ste100Reply {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Ste100Bootstrap {
-    pub protocol: String,
-    pub scheme_text: String,
-    pub instruction: Ste100Instruction,
+super::codec::closed_object! {
+    #[derive(Debug, Clone, PartialEq, Serialize)]
+    pub struct Ste100Bootstrap {
+        pub protocol: String,
+        pub scheme_text: String,
+        pub instruction: Ste100Instruction,
+    }
 }
 
 impl Ste100Bootstrap {
@@ -407,215 +410,100 @@ pub enum InstructionRefusal {
     WrongTurn,
 }
 
-/// An artifact describes the language instance. Parsing it does not qualify that language.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Ste100Scheme {
-    pub format: String,
-    pub reference: SchemeReference,
-    pub grammar: GrammarBlob,
-    pub verbs: Vec<VerbDefinition>,
-    pub technical_names: Vec<TechnicalNameDefinition>,
-    pub conditions: GrammarBlob,
-    pub recall_keys: Vec<String>,
-    pub qualification: SchemeQualification,
-}
-
-impl<'de> Deserialize<'de> for Ste100Scheme {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            format: String,
-            reference: SchemeReference,
-            grammar: GrammarBlob,
-            verbs: Vec<VerbDefinition>,
-            technical_names: Vec<TechnicalNameDefinition>,
-            conditions: GrammarBlob,
-            recall_keys: Vec<String>,
-            qualification: SchemeQualification,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            format: fields.format,
-            reference: fields.reference,
-            grammar: fields.grammar,
-            verbs: fields.verbs,
-            technical_names: fields.technical_names,
-            conditions: fields.conditions,
-            recall_keys: fields.recall_keys,
-            qualification: fields.qualification,
-        })
+super::codec::closed_object! {
+    /// An artifact describes the language instance. Parsing it does not qualify that language.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct Ste100Scheme {
+        pub format: String,
+        pub reference: SchemeReference,
+        pub grammar: GrammarBlob,
+        pub verbs: Vec<VerbDefinition>,
+        pub technical_names: Vec<TechnicalNameDefinition>,
+        pub conditions: GrammarBlob,
+        pub recall_keys: Vec<String>,
+        pub qualification: SchemeQualification,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct SchemeReference {
-    pub edition: String,
-    pub document_sha256: Digest,
-    pub rule_ids: Vec<String>,
-    pub dictionary_sha256: Digest,
-}
-
-impl<'de> Deserialize<'de> for SchemeReference {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            edition: String,
-            document_sha256: Digest,
-            rule_ids: Vec<String>,
-            dictionary_sha256: Digest,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            edition: fields.edition,
-            document_sha256: fields.document_sha256,
-            rule_ids: fields.rule_ids,
-            dictionary_sha256: fields.dictionary_sha256,
-        })
+super::codec::closed_object! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct SchemeReference {
+        pub edition: String,
+        pub document_sha256: Digest,
+        pub rule_ids: Vec<String>,
+        pub dictionary_sha256: Digest,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct GrammarBlob {
-    pub format: String,
-    pub bytes_base64: String,
-    pub sha256: Digest,
-}
-
-impl<'de> Deserialize<'de> for GrammarBlob {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            format: String,
-            bytes_base64: String,
-            sha256: Digest,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            format: fields.format,
-            bytes_base64: fields.bytes_base64,
-            sha256: fields.sha256,
-        })
+super::codec::closed_object! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct GrammarBlob {
+        pub format: String,
+        pub bytes_base64: String,
+        pub sha256: Digest,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct VerbDefinition {
-    pub key: String,
-    pub forms: Vec<String>,
-    pub sense: String,
-    pub authority: RuleReference,
-}
-
-impl<'de> Deserialize<'de> for VerbDefinition {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            key: String,
-            forms: Vec<String>,
-            sense: String,
-            authority: RuleReference,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            key: fields.key,
-            forms: fields.forms,
-            sense: fields.sense,
-            authority: fields.authority,
-        })
+super::codec::closed_object! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct VerbDefinition {
+        pub key: String,
+        pub forms: Vec<String>,
+        pub sense: String,
+        pub authority: RuleReference,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct TechnicalNameDefinition {
-    pub text: String,
-    pub authority: RuleReference,
-}
-
-impl<'de> Deserialize<'de> for TechnicalNameDefinition {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            text: String,
-            authority: RuleReference,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            text: fields.text,
-            authority: fields.authority,
-        })
+super::codec::closed_object! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct TechnicalNameDefinition {
+        pub text: String,
+        pub authority: RuleReference,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RuleReference {
-    pub rule_id: String,
-    pub disposition: RuleDisposition,
-}
-
-impl<'de> Deserialize<'de> for RuleReference {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            rule_id: String,
-            disposition: RuleDisposition,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            rule_id: fields.rule_id,
-            disposition: fields.disposition,
-        })
+super::codec::closed_object! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct RuleReference {
+        pub rule_id: String,
+        pub disposition: RuleDisposition,
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RuleDisposition {
-    ApprovedWord,
-    TechnicalUse,
-}
+// One declaration supplies both the closed spelling set and the exhaustive writer.
+macro_rules! rule_dispositions {
+    ($($variant:ident => $spelling:literal),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum RuleDisposition { $($variant,)+ }
 
-impl<'de> Deserialize<'de> for RuleDisposition {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = String::deserialize(deserializer)?;
-        match value.as_str() {
-            "approved_word" => Ok(Self::ApprovedWord),
-            "technical_use" => Ok(Self::TechnicalUse),
-            _ => Err(serde::de::Error::unknown_variant(
-                &value,
-                &["approved_word", "technical_use"],
-            )),
+        impl Serialize for RuleDisposition {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(match self { $(Self::$variant => $spelling,)+ })
+            }
         }
-    }
-}
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct SchemeQualification {
-    pub report_sha256: Digest,
-    pub corpus_sha256: Digest,
-    pub checker_abi: String,
-}
-
-impl<'de> Deserialize<'de> for SchemeQualification {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            report_sha256: Digest,
-            corpus_sha256: Digest,
-            checker_abi: String,
+        impl<'de> Deserialize<'de> for RuleDisposition {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let value = String::deserialize(deserializer)?;
+                match value.as_str() {
+                    $($spelling => Ok(Self::$variant),)+
+                    _ => Err(serde::de::Error::unknown_variant(&value, &[$($spelling,)+])),
+                }
+            }
         }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            report_sha256: fields.report_sha256,
-            corpus_sha256: fields.corpus_sha256,
-            checker_abi: fields.checker_abi,
-        })
+    };
+}
+rule_dispositions! {
+    ApprovedWord => "approved_word",
+    TechnicalUse => "technical_use",
+}
+
+super::codec::closed_object! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct SchemeQualification {
+        pub report_sha256: Digest,
+        pub corpus_sha256: Digest,
+        pub checker_abi: String,
     }
 }
 
@@ -626,6 +514,17 @@ impl Ste100Scheme {
         actual_digest: &Digest,
         declared: &SchemeDeclaration,
     ) -> Result<(), ValidationError> {
+        self.validate_and_decode(actual_digest, declared)
+            .map(|_| ())
+    }
+
+    /// Validate the same metadata and encoding rules, returning each decoded blob once.
+    /// The artifact owner still owes digest checks over these exact retained bytes.
+    pub fn validate_and_decode(
+        &self,
+        actual_digest: &Digest,
+        declared: &SchemeDeclaration,
+    ) -> Result<(Vec<u8>, Vec<u8>), ValidationError> {
         declared.validate()?;
         if self.format != "ste100-scheme/1"
             || actual_digest != &declared.artifact_sha256
@@ -660,9 +559,7 @@ impl Ste100Scheme {
                 return Err(ValidationError("invalid technical name"));
             }
         }
-        self.grammar.decode()?;
-        self.conditions.decode()?;
-        Ok(())
+        Ok((self.grammar.decode()?, self.conditions.decode()?))
     }
 
     /// Cryptographic implementation is supplied by the artifact owner, not another floor dependency.
@@ -679,6 +576,8 @@ impl Ste100Scheme {
 impl GrammarBlob {
     /// Decode canonical padded RFC 4648 base64, rejecting nonzero unused bits.
     pub fn decode(&self) -> Result<Vec<u8>, ValidationError> {
+        #[cfg(test)]
+        scheme_codec_tests::note_blob_decode();
         let bytes = self.bytes_base64.as_bytes();
         if self.format.is_empty() || bytes.is_empty() || !bytes.len().is_multiple_of(4) {
             return Err(ValidationError("invalid grammar blob encoding"));
@@ -720,90 +619,34 @@ fn base64_digit(byte: u8) -> Result<u8, ValidationError> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Ste100ModelManifest {
-    pub format: String,
-    pub checker_abi: String,
-    pub encoder: EncoderArtifact,
-    pub tokenizer: ArtifactFile,
-    pub span_head: ArtifactFile,
-    pub alignment: String,
-    pub max_sentence_tokens: u32,
-    pub labels: Vec<String>,
-}
-
-impl<'de> Deserialize<'de> for Ste100ModelManifest {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            format: String,
-            checker_abi: String,
-            encoder: EncoderArtifact,
-            tokenizer: ArtifactFile,
-            span_head: ArtifactFile,
-            alignment: String,
-            max_sentence_tokens: u32,
-            labels: Vec<String>,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            format: fields.format,
-            checker_abi: fields.checker_abi,
-            encoder: fields.encoder,
-            tokenizer: fields.tokenizer,
-            span_head: fields.span_head,
-            alignment: fields.alignment,
-            max_sentence_tokens: fields.max_sentence_tokens,
-            labels: fields.labels,
-        })
+super::codec::closed_object! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct Ste100ModelManifest {
+        pub format: String,
+        pub checker_abi: String,
+        pub encoder: EncoderArtifact,
+        pub tokenizer: ArtifactFile,
+        pub span_head: ArtifactFile,
+        pub alignment: String,
+        pub max_sentence_tokens: u32,
+        pub labels: Vec<String>,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct EncoderArtifact {
-    pub family: String,
-    pub config: ArtifactFile,
-    pub weights: Vec<ArtifactFile>,
-}
-
-impl<'de> Deserialize<'de> for EncoderArtifact {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            family: String,
-            config: ArtifactFile,
-            weights: Vec<ArtifactFile>,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            family: fields.family,
-            config: fields.config,
-            weights: fields.weights,
-        })
+super::codec::closed_object! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct EncoderArtifact {
+        pub family: String,
+        pub config: ArtifactFile,
+        pub weights: Vec<ArtifactFile>,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ArtifactFile {
-    pub name: String,
-    pub sha256: Digest,
-}
-
-impl<'de> Deserialize<'de> for ArtifactFile {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            name: String,
-            sha256: Digest,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            name: fields.name,
-            sha256: fields.sha256,
-        })
+super::codec::closed_object! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct ArtifactFile {
+        pub name: String,
+        pub sha256: Digest,
     }
 }
 

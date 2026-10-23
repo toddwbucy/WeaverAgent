@@ -306,19 +306,29 @@ impl ClassifySocket {
 /// two-end adoption performs, in the same order: count, wrap, close-on-exec,
 /// dumpable clear.
 pub fn adopt_classify() -> Result<ClassifySocket, EntryFault> {
+    adopt_single().map(|end| ClassifySocket { end })
+}
+
+/// Adopt fd3 for the separate STE100 duty, before starting any runtime worker.
+/// The STE100 Channel then verifies connected SEQPACKET identity without cloning
+/// the descriptor or adding an organ envelope.
+pub fn adopt_ste100() -> Result<OwnedFd, EntryFault> {
+    adopt_single()
+}
+
+fn adopt_single() -> Result<OwnedFd, EntryFault> {
     let held = descriptors_beyond_the_standard_streams()?;
     if held != 1 {
         return Err(EntryFault::DescriptorCountWrong { found: held });
     }
     let borrowed = unsafe { BorrowedFd::borrow_raw(CLASSIFY_FD) };
     fcntl(borrowed, FcntlArg::F_GETFD).map_err(|_| EntryFault::DescriptorsUnusable)?;
-    // SAFETY: the number was confirmed open above, the count check confirmed
-    // exactly one beyond the standard streams, and this is the classify
-    // binary's one construction of an owned handle from an inherited number.
+    // SAFETY: fd3 is open and the only nonstandard descriptor. This executable
+    // calls adoption exactly once before constructing any other owned handle.
     let end = unsafe { OwnedFd::from_raw_fd(CLASSIFY_FD) };
     set_close_on_exec(end.as_fd())?;
     clear_dumpable()?;
-    Ok(ClassifySocket { end })
+    Ok(end)
 }
 
 /// Reassemble a segment series where the first frame is its preamble, per

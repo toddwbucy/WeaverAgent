@@ -38,7 +38,8 @@ The next drafts stack from this baseline, each on its preceding carrier:
 | #267 code/state-plan-summary-review-followups | #262 review corrections: refuse pre-boot effect admission, keep state traffic moving while unsent generation waits, exact summary Cut ownership, retained completed dispositions and tested admission/account guards. Dedicated-target gates and 17 compiled protective failures with exact restores pass; full plan producer/lifecycle/placement composition remains owed. |
 | #269 code/state-placement-owner | Dormant measured placement, generation confirmation, native marks, queued Cut and Staged carry; decoder-health and extracted-Boot cancellation guards. Harness 1,668/18 ignored, trace 160, 67 protective controls and required lint/fmt/lock pass. Production admission, lifecycle/selection and qualification remain owed. |
 | #270 code/state-release-repair-review | #265/#266 review consistency: exact release-mark/original custody, typed boot/placement debt, monotone refused-pair causes, exact errors and retained settled proofs. Harness 1,678/18 ignored, trace 160, 19 protective controls, one separate non-Clone pin and required lint/fmt/lock pass; no #263 counting change or serving activation. |
-| code/state-boot-rollback-custody | Completed Boot evidence remains truthful after revocation; extracted pre-install proof returns its original owner for bounded rollback. Harness 1,694/18 ignored, trace 160, 19 protective controls, a separate installed-borrow type pin and required lint/fmt/lock pass. Full boot/lifecycle composition and qualified cutover remain owed. |
+| #271 code/state-boot-rollback-custody | Completed Boot evidence remains truthful after revocation; extracted pre-install proof returns its original owner for bounded rollback. Harness 1,694/18 ignored, trace 160, 19 protective controls, a separate installed-borrow type pin and required lint/fmt/lock pass. Full boot/lifecycle composition and qualified cutover remain owed. |
+| code/state-ste100-runtime | Separate dormant duty process, retained backend/input ownership, bounded reactor handoffs and artifact/codec review corrections. Types 168 default/224 config, SPU cuda,gguf 380, admin 498/37 ignored and harness 1,694/18 ignored pass; 48 behavior probes plus manifest/reporting controls fail and exact restores pass. Production has no compatible compiled adapter and cannot return Ready. Worker wiring and qualified artifacts/limits remain owed. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
@@ -50,6 +51,12 @@ Both remain open in a separate followup, along with its batch and filed rows.
 without findings at 51a54907; the Planner undrafted it. Its seven batch rows
 remain tracked, and it still depends on #269. The boot rollback slice answers
 #267 row 1 only; it does not close the two #269 fixes.
+
+#271 Planner review 5625350211 has zero fix rows at 9ca28702 and closes #267
+row 1 within its dormant scope. The Planner undrafted it. Its five batch rows
+remain tracked: complete failed-Enter restoration order, typed successful Boot
+evidence, shared identity checks, single-match extraction and named test fields.
+The restoration-order duty must be resolved before full failed-Enter composition.
 
 The Planner graded #255 at b26420e5 with no fix-bucket findings and reproduced
 its gates and 17 protective mutations. Its TRACE-PLACEMENT claim is limited to

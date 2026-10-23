@@ -22,7 +22,8 @@
 //!
 //! Semantic operations live beside `decoder/`, with their own process seams.
 //! The `ste100` module implements the new duty's protocol and binding mechanics.
-//! Its production grammar, backend and executable remain qualification work.
+//! Its separate executable refuses unsupported artifacts; production grammar,
+//! backend and measured limits remain qualification work.
 
 pub mod artifact;
 pub mod channel;

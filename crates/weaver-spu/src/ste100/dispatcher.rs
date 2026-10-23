@@ -12,7 +12,7 @@ use weaver_types::state_flow::{
     Ste100Request, Ste100Result, decode_strict,
 };
 
-use super::admission::{Admitted, validate_bootstrap};
+use super::admission::{AdmissionIdentity, Admitted, ValidatedBootstrap, validate_bootstrap};
 use super::channel::{Channel, Fault as ChannelFault, Message, Receive, SendProgress, Tag};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,7 +101,9 @@ mod tests {
             0,
             serde_json::to_vec(&bootstrap).unwrap(),
         );
-        assert_eq!(duty.advance().unwrap(), Action::Bootstrap(bootstrap));
+        assert!(
+            matches!(duty.advance().unwrap(), Action::Bootstrap(checked) if checked.bootstrap() == &bootstrap)
+        );
         assert_eq!(duty.position(), Position::Admitting);
         assert_eq!(duty.advance().unwrap(), Action::Pending);
         duty.admit(&admitted).unwrap();
@@ -312,7 +314,9 @@ mod tests {
                 0,
                 serde_json::to_vec(&bootstrap).unwrap(),
             );
-            assert_eq!(duty.advance().unwrap(), Action::Bootstrap(bootstrap));
+            assert!(
+                matches!(duty.advance().unwrap(), Action::Bootstrap(checked) if checked.bootstrap() == &bootstrap)
+            );
             assert!(
                 matches!(duty.admit(&admitted), Err(Fault::Protocol(_))),
                 "{field}"
@@ -523,7 +527,7 @@ pub enum Stop {
 pub enum Action {
     Pending,
     Progress,
-    Bootstrap(Ste100Bootstrap),
+    Bootstrap(ValidatedBootstrap),
     Check(Ste100Request),
     Stopped(Stop),
 }
@@ -588,6 +592,10 @@ impl Dispatcher {
     /// Install only checked admission. It must belong to this exact bootstrap,
     /// not another successfully admitted artifact or another launch limit.
     pub fn admit<B>(&mut self, admitted: &Admitted<B>) -> Result<(), Fault> {
+        self.admit_identity(&admitted.identity())
+    }
+
+    pub(super) fn admit_identity(&mut self, admitted: &AdmissionIdentity) -> Result<(), Fault> {
         if self.position != Position::Admitting {
             return self.fail(Fault::Protocol("admission outside bootstrap"));
         }
@@ -740,7 +748,7 @@ impl Dispatcher {
                     &message.payload,
                 ) {
                     Ok(bootstrap) => {
-                        self.bootstrap = Some(bootstrap.clone());
+                        self.bootstrap = Some(bootstrap.bootstrap().clone());
                         Ok(Action::Bootstrap(bootstrap))
                     }
                     Err(refusal) => {
@@ -778,7 +786,7 @@ impl Dispatcher {
         }
     }
 
-    fn fail<T>(&mut self, fault: Fault) -> Result<T, Fault> {
+    pub(super) fn fail<T>(&mut self, fault: Fault) -> Result<T, Fault> {
         self.channel.close();
         self.bootstrap = None;
         self.outstanding = None;

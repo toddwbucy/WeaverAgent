@@ -198,3 +198,6 @@ fn a_failed_exec_is_reported_to_the_parent() {
         "a missing executable is an error, never a spawn the parent believes"
     );
 }
+
+#[path = "entry/ste100.rs"]
+mod ste100;
