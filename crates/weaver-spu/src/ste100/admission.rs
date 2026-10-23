@@ -39,16 +39,16 @@ pub struct SuppliedArtifacts<'a> {
 /// Only manifest-referenced files whose complete bytes matched their declared digest.
 #[derive(Debug)]
 pub struct VerifiedFiles {
-    pub(super) files: BTreeMap<String, Arc<[u8]>>,
+    pub(super) files: BTreeMap<String, Arc<Vec<u8>>>,
 }
 
 impl VerifiedFiles {
     pub fn get(&self, name: &str) -> Option<&[u8]> {
-        self.files.get(name).map(AsRef::as_ref)
+        self.files.get(name).map(|bytes| bytes.as_slice())
     }
 
     /// Retain the same checked immutable bytes for a deferred adapter read.
-    pub fn retain(&self, name: &str) -> Option<Arc<[u8]>> {
+    pub fn retain(&self, name: &str) -> Option<Arc<Vec<u8>>> {
         self.files.get(name).cloned()
     }
 }
@@ -75,7 +75,7 @@ pub struct RetainedBackend<B> {
     #[allow(dead_code)] // Concrete adapter operations remain O02-2; custody already owns it.
     backend: B,
     files: VerifiedFiles,
-    manifest: Arc<[u8]>,
+    manifest: Arc<Vec<u8>>,
 }
 
 impl<B> RetainedBackend<B> {
@@ -223,7 +223,7 @@ impl<B> Admitted<B> {
 /// Validate a complete bootstrap against the trusted first-receive limit.
 ///
 /// Transport checks the declared total before allocation. This second check makes
-/// the supplied-byte entry point enforce the same bound before JSON decoding.
+/// both the transport parser and the declared-path entry enforce that bound before JSON decoding.
 pub fn validate_bootstrap(
     launch_limit: DecimalU64,
     bytes: &[u8],
@@ -261,7 +261,7 @@ pub fn validate_bootstrap(
     Ok(bootstrap)
 }
 
-/// Admit supplied bytes through a compiled production adapter.
+/// Exercise a production adapter with supplied bytes in test builds only.
 ///
 /// No production adapter factory is elected here. Unsupported grammar or model
 /// formats remain admission refusals, never a fallback to synthetic checking.
@@ -307,11 +307,13 @@ fn admit_checked<A: AdapterAdmission>(
     fixture: bool,
 ) -> Result<Admitted<A::Backend>, Ste100AdmissionRefused> {
     let bootstrap = validate_bootstrap(launch_limit, bootstrap_bytes)?;
-    let manifest_bytes: Arc<[u8]> = Arc::from(supplied.manifest);
-    let manifest = verify_manifest(&bootstrap.instruction, &manifest_bytes)?;
+    let scheme = verify_scheme(bootstrap)?;
+    let manifest_bytes = Arc::new(supplied.manifest.to_vec());
+    let manifest = verify_manifest(&scheme.bootstrap.instruction, &manifest_bytes)?;
+    verify_compatibility(&scheme, &manifest, fixture)?;
     let files = verify_files(&manifest, supplied.files)?;
-    let artifacts = verify_artifacts(bootstrap, manifest)?;
-    finish_admission(artifacts, files, manifest_bytes, adapter, fixture)
+    let artifacts = scheme.with_manifest(manifest);
+    finish_admission(artifacts, files, manifest_bytes, adapter)
 }
 
 /// Acquire the exact declared manifest and every confined named input as the
@@ -334,8 +336,16 @@ pub fn admit_from_path<A: AdapterAdmission>(
             "a test adapter cannot produce production readiness",
         ));
     }
-    let acquired = super::artifacts::AcquiredArtifacts::acquire(&bootstrap.instruction)?;
-    admit_acquired(bootstrap, acquired, adapter, false)
+    let scheme = verify_scheme(bootstrap)?;
+    // validate_bootstrap already checked this exact immutable instruction. Cheap
+    // scheme checks precede any filesystem access; manifest compatibility precedes
+    // every referenced-file acquisition.
+    let acquired = super::artifacts::AcquiredArtifacts::acquire_validated(
+        &scheme.bootstrap.instruction,
+        |manifest| verify_compatibility(&scheme, manifest, false),
+    )?;
+    let artifacts = scheme.with_manifest(acquired.manifest);
+    finish_admission(artifacts, acquired.files, acquired.manifest_bytes, adapter)
 }
 
 #[cfg(test)]
@@ -350,40 +360,26 @@ pub(super) fn admit_acquired_fixture<A: AdapterAdmission>(
             "the fixture constructor requires a test-only adapter",
         ));
     }
-    admit_acquired(bootstrap, acquired, adapter, true)
-}
-
-fn admit_acquired<A: AdapterAdmission>(
-    bootstrap: Ste100Bootstrap,
-    acquired: super::artifacts::AcquiredArtifacts,
-    adapter: &A,
-    fixture: bool,
-) -> Result<Admitted<A::Backend>, Ste100AdmissionRefused> {
-    // Recheck the exact held bytes against this bootstrap, never another path.
-    let manifest = verify_manifest(&bootstrap.instruction, &acquired.manifest_bytes)?;
-    let artifacts = verify_artifacts(bootstrap, manifest)?;
-    finish_admission(
-        artifacts,
-        acquired.files,
-        acquired.manifest_bytes,
-        adapter,
-        fixture,
-    )
+    // A fixture may pass a separately acquired owner, so bind it to this exact
+    // instruction without reparsing or rehashing the owner's immutable manifest.
+    if acquired.instruction != bootstrap.instruction {
+        return Err(refused(
+            Ste100AdmissionCode::UnsupportedArtifact,
+            "acquired manifest belongs to a different instruction",
+        ));
+    }
+    let scheme = verify_scheme(bootstrap)?;
+    verify_compatibility(&scheme, &acquired.manifest, true)?;
+    let artifacts = scheme.with_manifest(acquired.manifest);
+    finish_admission(artifacts, acquired.files, acquired.manifest_bytes, adapter)
 }
 
 fn finish_admission<A: AdapterAdmission>(
     artifacts: VerifiedArtifacts,
     files: VerifiedFiles,
-    manifest_bytes: Arc<[u8]>,
+    manifest_bytes: Arc<Vec<u8>>,
     adapter: &A,
-    fixture: bool,
 ) -> Result<Admitted<A::Backend>, Ste100AdmissionRefused> {
-    if !fixture && fixture_artifact(&artifacts) {
-        return Err(refused(
-            Ste100AdmissionCode::UnsupportedArtifact,
-            "fixture-read/1 cannot be admitted by a production adapter",
-        ));
-    }
     let backend = adapter.admit(&artifacts, &files).map_err(|error| {
         if error.validate().is_ok() {
             error
@@ -417,10 +413,29 @@ fn finish_admission<A: AdapterAdmission>(
     })
 }
 
-fn verify_artifacts(
+// Private cheap-input phase; no caller can construct a verified owner directly.
+struct VerifiedScheme {
     bootstrap: Ste100Bootstrap,
-    manifest: Ste100ModelManifest,
-) -> Result<VerifiedArtifacts, Ste100AdmissionRefused> {
+    scheme: Ste100Scheme,
+    declaration: SchemeDeclaration,
+    grammar: Vec<u8>,
+    conditions: Vec<u8>,
+}
+
+impl VerifiedScheme {
+    fn with_manifest(self, manifest: Ste100ModelManifest) -> VerifiedArtifacts {
+        VerifiedArtifacts {
+            bootstrap: self.bootstrap,
+            scheme: self.scheme,
+            declaration: self.declaration,
+            manifest,
+            grammar: self.grammar,
+            conditions: self.conditions,
+        }
+    }
+}
+
+fn verify_scheme(bootstrap: Ste100Bootstrap) -> Result<VerifiedScheme, Ste100AdmissionRefused> {
     let scheme_hash = sha256(bootstrap.scheme_text.as_bytes());
     let scheme: Ste100Scheme = decode_strict(&bootstrap.scheme_text).map_err(|error| {
         refused(
@@ -450,20 +465,42 @@ fn verify_artifacts(
         .decode()
         .map_err(|error| refused(Ste100AdmissionCode::InvalidGrammar, error.to_string()))?;
 
-    if scheme.qualification.checker_abi != manifest.checker_abi {
+    Ok(VerifiedScheme {
+        bootstrap,
+        scheme,
+        declaration,
+        grammar,
+        conditions,
+    })
+}
+
+fn verify_compatibility(
+    scheme: &VerifiedScheme,
+    manifest: &Ste100ModelManifest,
+    fixture: bool,
+) -> Result<(), Ste100AdmissionRefused> {
+    if scheme.scheme.qualification.checker_abi != manifest.checker_abi {
         return Err(refused(
             Ste100AdmissionCode::SchemeMismatch,
             "scheme and model checker ABIs differ",
         ));
     }
-    Ok(VerifiedArtifacts {
-        bootstrap,
-        scheme,
-        declaration,
-        manifest,
-        grammar,
-        conditions,
-    })
+    if !fixture
+        && [
+            scheme.scheme.reference.edition.as_str(),
+            scheme.scheme.grammar.format.as_str(),
+            scheme.scheme.conditions.format.as_str(),
+            manifest.encoder.family.as_str(),
+            manifest.alignment.as_str(),
+        ]
+        .contains(&"fixture-read/1")
+    {
+        return Err(refused(
+            Ste100AdmissionCode::UnsupportedArtifact,
+            "fixture-read/1 cannot be admitted by a production adapter",
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn verify_manifest(
@@ -519,7 +556,7 @@ fn verify_files(
 fn verify_file(
     reference: &ArtifactFile,
     inventory: &BTreeMap<&str, &[u8]>,
-    files: &mut BTreeMap<String, Arc<[u8]>>,
+    files: &mut BTreeMap<String, Arc<Vec<u8>>>,
 ) -> Result<(), Ste100AdmissionRefused> {
     if !files.contains_key(&reference.name) {
         let bytes = inventory.get(reference.name.as_str()).ok_or_else(|| {
@@ -528,7 +565,7 @@ fn verify_file(
                 format!("manifest file is absent: {}", reference.name),
             )
         })?;
-        files.insert(reference.name.clone(), Arc::from(*bytes));
+        files.insert(reference.name.clone(), Arc::new(bytes.to_vec()));
     }
     // Hash the retained owner, including every digest of a repeated reference.
     verify_file_digest(reference, &files[&reference.name])
@@ -545,17 +582,6 @@ pub(super) fn verify_file_digest(
         ));
     }
     Ok(())
-}
-
-fn fixture_artifact(artifacts: &VerifiedArtifacts) -> bool {
-    [
-        artifacts.scheme.reference.edition.as_str(),
-        artifacts.scheme.grammar.format.as_str(),
-        artifacts.scheme.conditions.format.as_str(),
-        artifacts.manifest.encoder.family.as_str(),
-        artifacts.manifest.alignment.as_str(),
-    ]
-    .contains(&"fixture-read/1")
 }
 
 pub(super) fn sha256(bytes: &[u8]) -> Digest {

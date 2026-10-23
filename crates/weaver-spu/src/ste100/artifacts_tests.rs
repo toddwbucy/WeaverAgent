@@ -119,7 +119,16 @@ fn refused<T: std::fmt::Debug>(result: Result<T, Ste100AdmissionRefused>, refere
 #[test]
 fn exact_manifest_locator_rejects_relative_before_any_acquisition_or_adapter() {
     let mut fixture = Fixture::new();
-    for relative in ["model.json", "./model.json", "../model.json", ""] {
+    for relative in [
+        "model.json",
+        "./model.json",
+        "../model.json",
+        "",
+        "/",
+        "/models/",
+        "/models/.",
+        "/models/x/..",
+    ] {
         fixture.bootstrap.instruction.model_binding.artifact.0 = relative.into();
         let mut touched = false;
         let result = acquire_with(&fixture.bootstrap.instruction, |_| touched = true);
@@ -152,9 +161,6 @@ fn exact_locator_has_no_directory_basename_or_trailing_component_fallback() {
     std::fs::copy(&actual, fixture.root.join("ste100-model.json")).unwrap();
     for locator in [
         fixture.root.to_str().unwrap().to_owned(),
-        format!("{}/", actual.display()),
-        format!("{}/.", actual.display()),
-        format!("{}/..", actual.display()),
         fixture
             .root
             .join("missing.json")
@@ -376,7 +382,7 @@ fn replacement_after_each_acquisition_never_changes_checked_input_bytes() {
 
 #[derive(Debug)]
 struct Deferred {
-    inputs: Vec<Weak<[u8]>>,
+    inputs: Vec<Weak<Vec<u8>>>,
 }
 impl Deferred {
     fn read(&self) {
@@ -385,7 +391,7 @@ impl Deferred {
                 input
                     .upgrade()
                     .expect("retained backend lost an admitted owner")
-                    .as_ref(),
+                    .as_slice(),
                 expected
             );
         }
@@ -574,9 +580,44 @@ fn acquisition_failure_sends_only_the_exact_admission_refusal() {
     assert_ne!(duty.position(), Position::Idle);
 }
 
+// Run access checks as the same uid/gid as the instrument, so ancestors and ACLs
+// count as well as the final mode bits. An inaccessible Cargo target or TMPDIR is
+// an unavailable environment, not evidence that the artifact permission guard ran.
+fn unprivileged_environment_available(executable: &Path, temporary: &Path) -> bool {
+    use std::os::unix::process::CommandExt;
+    [
+        ("-x", executable),
+        ("-d", temporary),
+        ("-w", temporary),
+        ("-x", temporary),
+    ]
+    .into_iter()
+    .all(|(mode, path)| {
+        Command::new("/usr/bin/test")
+            .args([std::ffi::OsStr::new(mode), path.as_os_str()])
+            .uid(65534)
+            .gid(65534)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    })
+}
+
 const CHILD: &str = "WEAVER_STE100_ARTIFACT_TEST_CHILD";
 fn bounded_child(test: &str, case: &str, unprivileged: bool) {
-    let mut command = Command::new(std::env::current_exe().unwrap());
+    let executable = std::env::current_exe().unwrap();
+    if unprivileged
+        && nix::unistd::geteuid().is_root()
+        && !unprivileged_environment_available(&executable, &std::env::temp_dir())
+    {
+        eprintln!(
+            "SKIP unreadable-input instrument: uid 65534 cannot execute the test binary or use the fixture root; no permission-boundary result was obtained"
+        );
+        return;
+    }
+    let mut command = Command::new(executable);
     command
         .args(["--exact", test, "--nocapture"])
         .env(CHILD, case)
@@ -668,4 +709,388 @@ fn unreadable_input_is_judged_under_the_actual_unprivileged_identity() {
         "unreadable",
         true,
     );
+}
+
+#[test]
+fn shared_file_bytes_keep_the_original_payload_allocation() {
+    let bytes = (0..100_000)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    let original = bytes.as_ptr();
+    let retained = share_bytes(bytes);
+    assert_eq!(
+        retained.as_ptr(),
+        original,
+        "sharing copied the file payload"
+    );
+    let second = Arc::clone(&retained);
+    drop(retained);
+    assert_eq!(second.as_ptr(), original);
+    assert_eq!(second.len(), 100_000);
+}
+
+#[test]
+fn wrong_large_manifest_stream_never_enters_materialization() {
+    struct LargeWrongFile {
+        remaining: usize,
+        max_read: usize,
+        reads: usize,
+        seeks: usize,
+    }
+    impl Read for LargeWrongFile {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            self.max_read = self.max_read.max(bytes.len());
+            self.reads += 1;
+            let length = bytes.len().min(self.remaining);
+            bytes[..length].fill(b'x');
+            self.remaining -= length;
+            Ok(length)
+        }
+    }
+    impl Seek for LargeWrongFile {
+        fn seek(&mut self, _: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.seeks += 1;
+            panic!("wrong digest reached retained-byte materialization")
+        }
+    }
+    let fixture = Fixture::new();
+    let mut wrong = LargeWrongFile {
+        remaining: 64 * 1024 * 1024,
+        max_read: 0,
+        reads: 0,
+        seeks: 0,
+    };
+    let refusal =
+        read_matching_manifest(&mut wrong, u64::MAX, &fixture.bootstrap.instruction, || {
+            panic!("wrong digest passed the streaming precheck")
+        })
+        .unwrap_err();
+    assert_eq!(refusal.code, Ste100AdmissionCode::UnsupportedArtifact);
+    assert!(refusal.detail.contains("manifest digest differs"));
+    assert_eq!(wrong.remaining, 0);
+    assert!(wrong.reads > 1);
+    assert_eq!(wrong.max_read, READ_CHUNK);
+    assert_eq!(wrong.seeks, 0);
+}
+
+#[test]
+fn matching_manifest_reuses_the_descriptor_and_rechecks_materialized_bytes() {
+    let fixture = Fixture::new();
+    let raw = std::fs::read(fixture.path()).unwrap();
+    let (mut file, len) = regular_file(File::open(fixture.path()).unwrap(), "manifest").unwrap();
+    let held = fixture.root.join("held-manifest");
+    let (bytes, manifest) =
+        read_matching_manifest(&mut file, len, &fixture.bootstrap.instruction, || {
+            std::fs::rename(fixture.path(), &held).unwrap();
+            std::fs::write(fixture.path(), b"replacement pathname").unwrap();
+        })
+        .unwrap();
+    assert_eq!(bytes.as_slice(), raw);
+    assert_eq!(manifest, fixture.manifest);
+
+    // In-place changes are different from pathname replacement. They must fail
+    // the digest of the actual retained second-pass bytes before any parse/use.
+    std::fs::write(fixture.path(), &raw).unwrap();
+    let (mut file, len) = regular_file(File::open(fixture.path()).unwrap(), "manifest").unwrap();
+    let mut changed = fixture.manifest.clone();
+    changed.encoder.family = "different-but-valid-family".into();
+    let changed = serde_json::to_vec(&changed).unwrap();
+    let refusal = read_matching_manifest(&mut file, len, &fixture.bootstrap.instruction, || {
+        std::fs::write(fixture.path(), &changed).unwrap();
+    })
+    .unwrap_err();
+    assert_eq!(refusal.code, Ste100AdmissionCode::UnsupportedArtifact);
+    assert!(refusal.detail.contains("digest differs"));
+}
+
+#[test]
+fn regular_kind_check_clears_nonblocking_before_reading_data() {
+    let fixture = Fixture::new();
+    let descriptor = open(
+        fixture.path(),
+        OFlag::O_RDONLY | OFlag::O_NONBLOCK,
+        Mode::empty(),
+    )
+    .unwrap();
+    assert!(
+        OFlag::from_bits_truncate(fcntl(&descriptor, FcntlArg::F_GETFL).unwrap())
+            .contains(OFlag::O_NONBLOCK)
+    );
+    let (mut file, len) = regular_file(File::from(descriptor), "manifest").unwrap();
+    assert!(
+        !OFlag::from_bits_truncate(fcntl(&file, FcntlArg::F_GETFL).unwrap())
+            .contains(OFlag::O_NONBLOCK)
+    );
+    assert_eq!(
+        read_owned(&mut file, len, "manifest").unwrap().as_slice(),
+        std::fs::read(fixture.path()).unwrap()
+    );
+}
+
+#[test]
+fn confined_open_retries_only_eagain_and_stops_after_three_attempts() {
+    let mut calls = 0;
+    let result = retry_confined_open(|| {
+        calls += 1;
+        if calls < 3 {
+            Err(Errno::EAGAIN)
+        } else {
+            Ok("same root success")
+        }
+    });
+    assert_eq!(result, Ok("same root success"));
+    assert_eq!(calls, 3);
+    calls = 0;
+    let result: Result<(), _> = retry_confined_open(|| {
+        calls += 1;
+        Err(Errno::EAGAIN)
+    });
+    assert_eq!(result, Err(Errno::EAGAIN));
+    assert_eq!(calls, 3);
+    for error in [
+        Errno::EACCES,
+        Errno::EXDEV,
+        Errno::ELOOP,
+        Errno::ENOENT,
+        Errno::EINTR,
+    ] {
+        calls = 0;
+        let result: Result<(), _> = retry_confined_open(|| {
+            calls += 1;
+            Err(error)
+        });
+        assert_eq!(result, Err(error));
+        assert_eq!(calls, 1, "retried permanent/non-EAGAIN error {error}");
+    }
+}
+
+#[test]
+fn invalid_cheap_scheme_refuses_before_even_a_missing_manifest_is_opened() {
+    let fixture = Fixture::new();
+    let original: serde_json::Value = serde_json::from_str(&fixture.bootstrap.scheme_text).unwrap();
+    let mut cases = vec!["not JSON".to_owned()];
+    for field in ["grammar", "conditions"] {
+        let mut value = original.clone();
+        value[field]["bytes_base64"] = serde_json::json!("not base64@");
+        cases.push(serde_json::to_string(&value).unwrap());
+        let mut value = original.clone();
+        value[field]["sha256"] = serde_json::json!("0".repeat(64));
+        cases.push(serde_json::to_string(&value).unwrap());
+    }
+    // A valid control sees the missing file, proving these invalid cases are not
+    // falling through to a later filesystem or adapter refusal.
+    std::fs::remove_file(fixture.path()).unwrap();
+    let adapter = RejectingProduction {
+        calls: Cell::new(0),
+    };
+    let call = |bootstrap: &Ste100Bootstrap| {
+        admit_from_path(
+            bootstrap.instruction.max_wire_bytes,
+            &serde_json::to_vec(bootstrap).unwrap(),
+            &adapter,
+        )
+    };
+    assert_eq!(
+        call(&fixture.bootstrap).unwrap_err().code,
+        Ste100AdmissionCode::UnsupportedArtifact
+    );
+    for scheme_text in cases {
+        let mut bootstrap = fixture.bootstrap.clone();
+        bootstrap.scheme_text = scheme_text;
+        assert_eq!(
+            call(&bootstrap).unwrap_err().code,
+            Ste100AdmissionCode::InvalidGrammar
+        );
+    }
+    assert_eq!(adapter.calls.get(), 0);
+}
+
+#[test]
+fn manifest_compatibility_refuses_before_any_referenced_input_is_opened() {
+    let fixture = Fixture::new();
+    let mut bootstrap = fixture.bootstrap.clone();
+    let mut scheme: serde_json::Value = serde_json::from_str(&bootstrap.scheme_text).unwrap();
+    scheme["qualification"]["checker_abi"] = serde_json::json!("different-checker/1");
+    bootstrap.scheme_text = serde_json::to_string(&scheme).unwrap();
+    std::fs::remove_file(fixture.root.join("config.json")).unwrap();
+    let adapter = RejectingProduction {
+        calls: Cell::new(0),
+    };
+    let refusal = admit_from_path(
+        bootstrap.instruction.max_wire_bytes,
+        &serde_json::to_vec(&bootstrap).unwrap(),
+        &adapter,
+    )
+    .unwrap_err();
+    assert_eq!(refusal.code, Ste100AdmissionCode::SchemeMismatch);
+    assert_eq!(refusal.detail, "scheme and model checker ABIs differ");
+    assert_eq!(adapter.calls.get(), 0);
+    // Fixture compatibility is also cheap and runs before the missing input.
+    let refusal = admit_from_path(
+        fixture.bootstrap.instruction.max_wire_bytes,
+        &serde_json::to_vec(&fixture.bootstrap).unwrap(),
+        &adapter,
+    )
+    .unwrap_err();
+    assert!(refusal.detail.contains("fixture-read/1"));
+}
+
+#[test]
+fn acquired_fixture_cannot_be_rebound_to_another_instruction_without_rehashing() {
+    let fixture = Fixture::new();
+    let acquired = fixture.acquire().unwrap();
+    let mut substituted = fixture.bootstrap.clone();
+    substituted.instruction.model_artifact_sha256 = sha256(b"another manifest");
+    refused(
+        admit_acquired_fixture(substituted, acquired, &DeferredAdapter),
+        "different instruction",
+    );
+}
+
+#[test]
+fn unprivileged_permission_instrument_detects_inaccessible_ancestors_and_temp_roots() {
+    if !nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let fixture = Fixture::new();
+    std::fs::set_permissions(&fixture.root, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let executable = fixture.root.join("executable");
+    std::fs::write(&executable, b"unused executable witness").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if !unprivileged_environment_available(&executable, &fixture.root) {
+        eprintln!(
+            "SKIP environment preflight instrument: temporary ancestors are not traversable by uid 65534"
+        );
+        return;
+    }
+    let private = fixture.root.join("private");
+    std::fs::create_dir(&private).unwrap();
+    let private_executable = private.join("executable");
+    std::fs::copy(&executable, &private_executable).unwrap();
+    std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(!unprivileged_environment_available(
+        &private_executable,
+        &fixture.root
+    ));
+    assert!(!unprivileged_environment_available(&executable, &private));
+    std::fs::set_permissions(&fixture.root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        !unprivileged_environment_available(&executable, &fixture.root),
+        "read/search alone cannot create the test fixture"
+    );
+}
+
+#[test]
+fn acquired_scheme_rejects_all_object_array_aliases_before_adapter_admission() {
+    let mut fixture = Fixture::new();
+    fixture.bootstrap.scheme_text = fixture
+        .bootstrap
+        .scheme_text
+        .replace("fixture-read/1", "unsupported-production");
+    fixture.manifest.encoder.family = "unsupported-production".into();
+    fixture.manifest.alignment = "unsupported-production".into();
+    fixture.save();
+    let valid: serde_json::Value = serde_json::from_str(&fixture.bootstrap.scheme_text).unwrap();
+    let adapter = RejectingProduction {
+        calls: Cell::new(0),
+    };
+    // A valid closed scheme reaches the real adapter boundary after acquiring
+    // every declared manifest input. This double still refuses production Ready.
+    refused(
+        admit_from_path(
+            fixture.bootstrap.instruction.max_wire_bytes,
+            &serde_json::to_vec(&fixture.bootstrap).unwrap(),
+            &adapter,
+        ),
+        "compiled adapter",
+    );
+    assert_eq!(adapter.calls.get(), 1);
+    for (pointer, fields) in [
+        (
+            "",
+            &[
+                "format",
+                "reference",
+                "grammar",
+                "verbs",
+                "technical_names",
+                "conditions",
+                "recall_keys",
+                "qualification",
+            ][..],
+        ),
+        (
+            "/reference",
+            &[
+                "edition",
+                "document_sha256",
+                "rule_ids",
+                "dictionary_sha256",
+            ][..],
+        ),
+        ("/grammar", &["format", "bytes_base64", "sha256"][..]),
+        ("/conditions", &["format", "bytes_base64", "sha256"][..]),
+        ("/verbs/0", &["key", "forms", "sense", "authority"][..]),
+        ("/technical_names/0", &["text", "authority"][..]),
+        ("/verbs/0/authority", &["rule_id", "disposition"][..]),
+        (
+            "/technical_names/0/authority",
+            &["rule_id", "disposition"][..],
+        ),
+        (
+            "/qualification",
+            &["report_sha256", "corpus_sha256", "checker_abi"][..],
+        ),
+    ] {
+        let mut malformed = valid.clone();
+        let object = malformed.pointer_mut(pointer).unwrap();
+        *object =
+            serde_json::Value::Array(fields.iter().map(|field| object[*field].clone()).collect());
+        fixture.bootstrap.scheme_text = serde_json::to_string(&malformed).unwrap();
+        // The path entry computes the scheme hash from these exact changed
+        // bytes, so an old caller-supplied digest cannot mask an open decoder.
+        adapter.calls.set(0);
+        let error = admit_from_path(
+            fixture.bootstrap.instruction.max_wire_bytes,
+            &serde_json::to_vec(&fixture.bootstrap).unwrap(),
+            &adapter,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, Ste100AdmissionCode::InvalidGrammar, "{pointer}");
+        assert!(
+            error.detail.starts_with("invalid scheme:"),
+            "{pointer}: {}",
+            error.detail
+        );
+        assert_eq!(adapter.calls.get(), 0, "{pointer}");
+    }
+
+    for pointer in [
+        "/verbs/0/authority/disposition",
+        "/technical_names/0/authority/disposition",
+    ] {
+        for spelling in ["approved_word", "technical_use"] {
+            let mut malformed = valid.clone();
+            *malformed.pointer_mut(pointer).unwrap() = serde_json::json!({(spelling):null});
+            fixture.bootstrap.scheme_text = serde_json::to_string(&malformed).unwrap();
+            adapter.calls.set(0);
+            let error = admit_from_path(
+                fixture.bootstrap.instruction.max_wire_bytes,
+                &serde_json::to_vec(&fixture.bootstrap).unwrap(),
+                &adapter,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.code,
+                Ste100AdmissionCode::InvalidGrammar,
+                "{pointer}/{spelling}"
+            );
+            assert!(
+                error.detail.starts_with("invalid scheme:"),
+                "{pointer}: {}",
+                error.detail
+            );
+            assert_eq!(adapter.calls.get(), 0, "{pointer}/{spelling}");
+        }
+    }
 }
