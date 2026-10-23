@@ -22,6 +22,7 @@ pub(in crate::flow) enum StartupStage {
     Load,
     Activate,
     OpenMeasurement,
+    InitialGrants,
     Classifier,
     Complete,
     Stopped,
@@ -34,6 +35,7 @@ pub(in crate::flow) enum StartupStop {
     InvalidEntry,
     OpenRefused(weaver_types::state_flow::StateRefusalCode, String),
     Activation(ActivationFailure),
+    InitialGrants(InspectionBeginError),
     ClassifierStart(String),
     ClassifierRefused(weaver_types::state_flow::Ste100AdmissionRefused),
 }
@@ -42,6 +44,7 @@ pub(in crate::flow) enum StartupStop {
 pub(in crate::flow) struct StartupEvidence {
     pub opened: StateCompletion,
     pub load: Sequence,
+    pub initial_grants: InspectionCompletion,
     pub classifier: weaver_types::state_flow::Ste100Ready,
 }
 
@@ -59,6 +62,7 @@ pub(in crate::flow) struct StartupComposition<'a> {
     started: bool,
     load_sequence: Option<Sequence>,
     opened: Option<StateCompletion>,
+    initial_grants: Option<InspectionCompletion>,
     classifier: Option<weaver_types::state_flow::Ste100Ready>,
     stop: Option<StartupStop>,
 }
@@ -83,6 +87,7 @@ pub(in crate::flow) struct StoppedStartupAccount {
     pub inventory: CompiledInventory,
     pub load_sequence: Option<Sequence>,
     pub opened: Option<StateCompletion>,
+    pub initial_grants: Option<InspectionCompletion>,
     pub classifier: Option<weaver_types::state_flow::Ste100Ready>,
 }
 
@@ -130,6 +135,7 @@ impl<'a> StartupComposition<'a> {
             started: false,
             load_sequence: None,
             opened: None,
+            initial_grants: None,
             classifier: None,
             stop: invalid.then_some(StartupStop::InvalidEntry),
         }
@@ -160,6 +166,18 @@ impl<'a> StartupComposition<'a> {
         self.context.observe_place_lifecycle(lifecycle);
         if self.context.boot_enter_cancelled || self.context.place_admission_stopped() {
             self.stop(StartupStop::Interrupted);
+            return false;
+        }
+        if self.enter_bound.is_none()
+            || self.context.deadlines.get(PumpDeadline::Enter) != self.enter_bound
+        {
+            let failure = self.context.fail(
+                io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                "startup lost original Enter wait",
+            );
+            self.stop(StartupStop::Run(failure));
             return false;
         }
         if let Err(error) = self.context.live(io) {
@@ -242,13 +260,44 @@ impl<'a> StartupComposition<'a> {
                     Some(OperationCompletion::Opened(opened)) => {
                         self.opened = Some(opened);
                         self.started = false;
-                        self.stage = StartupStage::Classifier;
+                        self.stage = StartupStage::InitialGrants;
                     }
                     None if progress == Advance::Pending => {
                         self.context.pump_once(&mut ports)?;
                     }
                     None => {}
                     Some(_) => unreachable!("exclusive startup admits only Open"),
+                }
+            }
+            StartupStage::InitialGrants => {
+                if !self.started {
+                    if let Err(error) =
+                        self.context
+                            .begin_inspection(InspectionKind::Grants, None, ports.io)
+                    {
+                        self.stop(StartupStop::InitialGrants(error));
+                        return Ok(());
+                    }
+                    self.started = true;
+                }
+                let progress = self.context.advance_inspection(&mut ports)?;
+                if let Some(completion) = self.context.take_inspection(ports.io)? {
+                    // A measured read refusal is an unavailable initial reading,
+                    // not an empty surface or a component failure. Preserve it
+                    // intact for the terminal comparison, just like a success.
+                    let usable = matches!(
+                        completion,
+                        InspectionCompletion::Grants { .. } | InspectionCompletion::Refused { .. }
+                    );
+                    self.initial_grants = Some(completion);
+                    if usable {
+                        self.started = false;
+                        self.stage = StartupStage::Classifier;
+                    } else {
+                        self.stop(StartupStop::Interrupted);
+                    }
+                } else if progress == InspectionProgress::Pending {
+                    self.context.pump_once(&mut ports)?;
                 }
             }
             StartupStage::Classifier => {
@@ -302,6 +351,7 @@ impl<'a> StartupComposition<'a> {
             evidence: StartupEvidence {
                 opened: self.opened.expect("actual recorded Open retained"),
                 load: self.load_sequence.expect("actual load retained"),
+                initial_grants: self.initial_grants.expect("actual initial Grants retained"),
                 classifier: self.classifier.expect("actual classifier Ready retained"),
             },
         })
@@ -335,6 +385,7 @@ impl<'a> StartupComposition<'a> {
                 inventory: self.inventory,
                 load_sequence: self.load_sequence,
                 opened: self.opened,
+                initial_grants: self.initial_grants,
                 classifier: self.classifier,
             },
         ))

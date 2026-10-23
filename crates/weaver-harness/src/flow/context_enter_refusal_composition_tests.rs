@@ -15,7 +15,10 @@ fn ports(io: &mut FakePumpIo) -> PumpPorts<'_, FakePumpIo> {
     }
 }
 
-fn fill(context: &mut RecordingContext, io: &mut FakePumpIo) {
+pub(in crate::flow::context::startup_composition) fn fill(
+    context: &mut RecordingContext,
+    io: &mut FakePumpIo,
+) {
     let payload =
         serde_json::value::to_raw_value(&serde_json::json!({"pressure": "x".repeat(32_768)}))
             .unwrap();
@@ -48,7 +51,10 @@ fn fill(context: &mut RecordingContext, io: &mut FakePumpIo) {
     panic!("actual ordinary queue did not fill")
 }
 
-pub(super) fn drain(context: &RecordingContext, reader: &mut UnixStream) {
+pub(in crate::flow::context::startup_composition) fn drain(
+    context: &RecordingContext,
+    reader: &mut UnixStream,
+) {
     reader.set_nonblocking(true).unwrap();
     let watchdog = Instant::now() + Duration::from_secs(3);
     let mut bytes = [0; 65536];

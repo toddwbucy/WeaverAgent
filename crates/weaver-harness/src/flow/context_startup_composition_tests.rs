@@ -30,9 +30,9 @@ impl PumpIo for CircuitIo<'_> {
             interests
                 .iter()
                 .enumerate()
-                .map(|(index, i)| ReadyFd {
-                    index,
-                    events: i.events & (PollFlags::POLLIN | PollFlags::POLLOUT),
+                .filter_map(|(index, i)| {
+                    let events = i.events & (PollFlags::POLLIN | PollFlags::POLLOUT);
+                    (!events.is_empty()).then_some(ReadyFd { index, events })
                 })
                 .collect(),
         )?;
@@ -155,12 +155,21 @@ enum Case {
     Partition,
     Expiry,
     DelayedOpen,
+    DelayedGrants,
+    RefuseGrants,
+    GrantsPressure,
+    ExpireGrants,
+    ReplaceGrantsEnter,
     ThroughBoot,
     RefuseOpen,
     Residency(&'static str),
 }
 
 fn circuit(case: Case) {
+    let grants_refused = matches!(
+        case,
+        Case::RefuseGrants | Case::RefusalJoin("response-initial-grants-refused")
+    );
     let child = ChildFixture::new(
         if matches!(case, Case::Refused)
             || matches!(case, Case::RefusalJoin(mode) if mode != "ready")
@@ -212,16 +221,23 @@ fn circuit(case: Case) {
     let mut opened = None;
     let mut delayed = 0;
     let mut opens = 0;
+    let mut grants = 0;
+    let mut grant_answer = None;
+    let mut expected_grants: Option<Vec<u8>> = None;
+    let mut delayed_grants = 0;
+    let mut pressure_steps = 0;
     let mut terminal = false;
     for _ in 0..3000 {
         // SAFETY: this test thread retains and reaps the child before returning.
         let stage =
             unsafe { owner.advance(LifecyclePorts::default(), &mut CircuitIo(&mut run.clock)) };
         assert_eq!(owner.context.origin_ns(), origin);
-        assert_eq!(
-            owner.context.deadlines.get(PumpDeadline::Enter),
-            Some(enter)
-        );
+        if !matches!(case, Case::ReplaceGrantsEnter) || grant_answer.is_none() {
+            assert_eq!(
+                owner.context.deadlines.get(PumpDeadline::Enter),
+                Some(enter)
+            );
+        }
         if matches!(stage, StartupStage::Stopped | StartupStage::Complete)
             && let Case::RefusalJoin(mode) = case
         {
@@ -237,6 +253,13 @@ fn circuit(case: Case) {
         }
         if stage == StartupStage::Stopped {
             match case {
+                Case::ExpireGrants | Case::ReplaceGrantsEnter => {
+                    assert!(matches!(owner.stopped(), Some(StartupStop::Run(_))));
+                    assert!(owner.resources.classifier_child().is_none());
+                    assert!(owner.initial_grants.is_none());
+                    assert!(owner.context.inspection.is_some());
+                    assert_eq!(grants, 1);
+                }
                 Case::RefuseOpen => {
                     assert!(
                         matches!(owner.stopped(), Some(StartupStop::OpenRefused(s::StateRefusalCode::OpenFailed, detail)) if detail == "scripted Open refusal")
@@ -279,6 +302,10 @@ fn circuit(case: Case) {
             }
             if matches!(case, Case::Refused) {
                 assert!(account.opened.is_some());
+                assert!(matches!(
+                    account.initial_grants,
+                    Some(InspectionCompletion::Grants { .. })
+                ));
                 assert!(matches!(account.cause, StartupStop::ClassifierRefused(_)));
                 assert!(children.classifier_child().is_some());
                 for _ in 0..3000 {
@@ -297,11 +324,24 @@ fn circuit(case: Case) {
         }
         if stage == StartupStage::Complete {
             assert_eq!(opens, 1);
+            assert_eq!(grants, 1);
+            let initial = owner
+                .initial_grants
+                .as_ref()
+                .expect("initial Grants retained");
+            assert_initial_grants(
+                initial,
+                expected_grants.as_ref().unwrap(),
+                grants_refused,
+                enter,
+            );
+            assert!(owner.context.failure().is_none());
             assert_eq!(owner.load_sequence, Some(Sequence(0)));
             assert_eq!(owner.classifier.as_ref(), Some(&ready));
             assert!(owner.opened.is_some());
             let records = owner.context.barrier.recorder().structure();
             assert_eq!(records.by_kind(Kind::Load).count(), 1);
+            assert_eq!(records.by_kind(Kind::StateStoreMeasurement).count(), 2);
             assert!(owner.context.flow.standing_classifier().is_some());
             if matches!(case, Case::Expiry) {
                 run.clock.advance_to(enter.deadline_ns()).unwrap();
@@ -334,6 +374,12 @@ fn circuit(case: Case) {
                         let (context, _, inventory, evidence) = admitted.into_parts();
                         assert_eq!(context.origin_ns(), origin);
                         assert!(evidence.send.sent());
+                        assert_initial_grants(
+                            &evidence.startup.initial_grants,
+                            expected_grants.as_ref().unwrap(),
+                            false,
+                            enter,
+                        );
                         if mode == "full" {
                             super::super::boot_composition::tests::after_residency(
                                 run,
@@ -348,6 +394,12 @@ fn circuit(case: Case) {
                     return;
                 }
                 let (context, _, inventory, evidence) = prepared.into_parts();
+                assert_initial_grants(
+                    &evidence.initial_grants,
+                    expected_grants.as_ref().unwrap(),
+                    grants_refused,
+                    enter,
+                );
                 assert_eq!(evidence.load, Sequence(0));
                 assert_eq!(evidence.classifier, ready);
                 assert_eq!(context.origin_ns(), origin);
@@ -362,6 +414,19 @@ fn circuit(case: Case) {
             terminal = true;
             break;
         }
+        if matches!(case, Case::GrantsPressure)
+            && grants == 1
+            && grant_answer.is_none()
+            && pressure_steps < 10
+        {
+            pressure_steps += 1;
+            assert_eq!(owner.stage(), StartupStage::InitialGrants);
+            assert!(owner.initial_grants.is_none());
+            assert!(owner.resources.classifier_child().is_none());
+            if pressure_steps == 10 {
+                super::refusal::tests::drain(owner.context, &mut run._reader);
+            }
+        }
         let mut part = [0u8; 65536];
         match run.state.read(&mut part) {
             Ok(n) => bytes.extend_from_slice(&part[..n]),
@@ -371,6 +436,54 @@ fn circuit(case: Case) {
         if let Some(end) = bytes.iter().position(|b| *b == b'\n') {
             let line: Vec<_> = bytes.drain(..=end).collect();
             let request = s::decode_state_line(&line, s::FrameDirection::Request).unwrap();
+            if let s::StateFrame::Control {
+                frame: s::StateControl::Grants {},
+                ..
+            } = &request
+            {
+                grants += 1;
+                assert_eq!(grants, 1);
+                assert!(owner.resources.classifier_child().is_none());
+                assert!(owner.opened.is_some());
+                assert_eq!(owner.load_sequence, Some(Sequence(0)));
+                let now = run.clock.now().unwrap();
+                let answer = s::StateFrame::ControlAnswer {
+                    common: request.common().clone(),
+                    frame: if grants_refused {
+                        s::StateControlAnswer::ControlRefused {
+                            code: s::ControlRefusalCode::Read(s::ReadRefusalCode::AnswerTooLarge),
+                            detail: "exact initial Grants refusal".into(),
+                        }
+                    } else {
+                        s::StateControlAnswer::Grants {
+                            surface: vec!["owner:actual".into(), "mode:0750".into()],
+                        }
+                    },
+                    observation: operation(&request, 2, now),
+                };
+                let encoded = s::encode_state_line(&answer, s::FrameDirection::Response).unwrap();
+                expected_grants = Some(encoded.clone());
+                grant_answer = Some(encoded);
+                if matches!(case, Case::GrantsPressure) {
+                    super::refusal::tests::fill(owner.context, &mut run.clock);
+                }
+                if matches!(case, Case::ExpireGrants) {
+                    run.clock.advance_to(enter.deadline_ns()).unwrap();
+                }
+                if matches!(case, Case::ReplaceGrantsEnter) {
+                    owner.context.deadlines.disarm(PumpDeadline::Enter);
+                    owner
+                        .context
+                        .deadlines
+                        .arm(
+                            PumpDeadline::Enter,
+                            AbsoluteBound::from_absolute(enter.began_ns(), enter.deadline_ns() + 1)
+                                .unwrap(),
+                        )
+                        .unwrap();
+                }
+                continue;
+            }
             let observation = operation(&request, 1, run.clock.now().unwrap());
             let s::StateFrame::Open {
                 common,
@@ -427,6 +540,26 @@ fn circuit(case: Case) {
                     .unwrap();
             }
         }
+        if grant_answer.is_some() && !matches!(case, Case::ExpireGrants | Case::ReplaceGrantsEnter)
+        {
+            if matches!(case, Case::DelayedGrants) && delayed_grants < 10 {
+                delayed_grants += 1;
+                assert_eq!(owner.stage(), StartupStage::InitialGrants);
+                assert!(owner.initial_grants.is_none());
+                assert!(owner.resources.classifier_child().is_none());
+                assert_eq!(
+                    owner
+                        .context
+                        .deadlines
+                        .get(PumpDeadline::StateControl)
+                        .unwrap()
+                        .deadline_ns(),
+                    enter.deadline_ns()
+                );
+            } else {
+                run.state.write_all(&grant_answer.take().unwrap()).unwrap();
+            }
+        }
         std::thread::sleep(Duration::from_millis(1));
     }
     // Actual child cleanup for this instrument, not a claim about lifecycle Left.
@@ -471,4 +604,62 @@ pub(in crate::flow::context) fn residency(mode: &'static str) {
 
 pub(super) fn refusal_join(mode: &'static str) {
     circuit(Case::RefusalJoin(mode));
+}
+
+fn assert_initial_grants(
+    completion: &InspectionCompletion,
+    expected: &[u8],
+    refused: bool,
+    enter: AbsoluteBound,
+) {
+    let evidence = match completion {
+        InspectionCompletion::Grants { surface, evidence } if !refused => {
+            assert_eq!(
+                surface,
+                &["owner:actual".to_owned(), "mode:0750".to_owned()]
+            );
+            evidence
+        }
+        InspectionCompletion::Refused { failure, evidence } if refused => {
+            assert!(
+                matches!(failure, crate::flow::read::ReadFailure::Refused { code: s::ReadRefusalCode::AnswerTooLarge, detail } if detail == "exact initial Grants refusal")
+            );
+            evidence
+        }
+        _ => panic!("wrong retained initial Grants: {completion:?}"),
+    };
+    assert_eq!(
+        s::encode_state_line(evidence.answer(), s::FrameDirection::Response).unwrap(),
+        expected
+    );
+    assert!(matches!(evidence.request(), s::StateControl::Grants {}));
+    assert!(evidence.turn().is_none());
+    assert!(!evidence.bound().expired(evidence.recorded_ns()));
+    assert!(evidence.bound().deadline_ns() <= enter.deadline_ns());
+}
+
+#[test]
+fn startup_grants_composition_preserves_initial_measurement_through_residency() {
+    circuit(Case::Residency("full"));
+}
+#[test]
+fn startup_grants_composition_refusal_remains_unavailable_without_halting() {
+    circuit(Case::RefuseGrants);
+}
+#[test]
+fn startup_grants_composition_waits_before_classifier_fork() {
+    circuit(Case::DelayedGrants);
+}
+#[test]
+fn startup_grants_composition_expiry_retains_pending_inspection_without_fork() {
+    circuit(Case::ExpireGrants);
+}
+#[test]
+fn startup_grants_composition_replaced_enter_cannot_extend_inspection() {
+    circuit(Case::ReplaceGrantsEnter);
+}
+
+#[test]
+fn startup_grants_composition_trace_pressure_holds_classifier_until_recorded() {
+    circuit(Case::GrantsPressure);
 }

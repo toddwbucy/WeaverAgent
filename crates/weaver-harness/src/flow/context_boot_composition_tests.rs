@@ -155,7 +155,7 @@ fn circuit_with_fixture(
     let mut checks = 0;
     let mut opens = 0;
     let mut filed_pairs = 0;
-    let mut operation_id = 2;
+    let mut operation_id = if actual_child { 3 } else { 2 };
     let mut snapshot = 10u64;
     let mut held_release: Option<(s::StateFrame, usize)> = None;
     let mut held_steps = 0;

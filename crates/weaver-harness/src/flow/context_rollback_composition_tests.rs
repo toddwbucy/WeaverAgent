@@ -497,7 +497,7 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
                         surface: vec!["read".into()],
                     }
                 },
-                observation: operation(&request, 2, began),
+                observation: operation(&request, 3, began),
             };
             let encoded = s::encode_state_line(&answer, s::FrameDirection::Response).unwrap();
             io.advance_to(began + 2).unwrap();
@@ -512,6 +512,32 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
         panic!("actual Grants")
     };
     assert_eq!(surface, &["read".to_owned()]);
+    let initial = match rollback.initial() {
+        InspectionCompletion::Grants { surface, evidence }
+            if mode != "response-initial-grants-refused" =>
+        {
+            assert_eq!(
+                surface,
+                &["owner:actual".to_owned(), "mode:0750".to_owned()]
+            );
+            evidence
+        }
+        InspectionCompletion::Refused { failure, evidence }
+            if mode == "response-initial-grants-refused" =>
+        {
+            assert!(
+                matches!(failure, crate::flow::read::ReadFailure::Refused { code: s::ReadRefusalCode::AnswerTooLarge, detail } if detail == "exact initial Grants refusal")
+            );
+            evidence
+        }
+        other => panic!("lost initial Grants: {other:?}"),
+    };
+    assert_ne!(
+        initial.answer().common().request_id,
+        evidence.answer().common().request_id
+    );
+    assert!(initial.recorded_ns() < evidence.recorded_ns());
+
     assert_eq!(
         s::encode_state_line(evidence.answer(), s::FrameDirection::Response).unwrap(),
         expected_answer.unwrap()
@@ -631,4 +657,9 @@ scenario!(
 scenario!(
     rollback_composition_rollback_is_forced_while_preserving_original_wire_bit,
     "response-wire-unforced"
+);
+
+scenario!(
+    startup_grants_composition_preserves_initial_refusal_through_actual_rollback,
+    "response-initial-grants-refused"
 );

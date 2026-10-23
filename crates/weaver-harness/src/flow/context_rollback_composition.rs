@@ -278,6 +278,15 @@ impl RollbackComposition<'_> {
     pub(in crate::flow) fn current(&self) -> Option<&InspectionCompletion> {
         self.current.as_ref()
     }
+    pub(in crate::flow) fn initial(&self) -> &InspectionCompletion {
+        self.response
+            .refusal
+            .owner
+            .startup
+            .initial_grants
+            .as_ref()
+            .expect("classifier refusal follows the retained initial Grants")
+    }
     fn stopped(&mut self, cause: RollbackStop) -> RollbackStage {
         self.stop = Some(cause);
         self.stage = RollbackStage::Stopped;
