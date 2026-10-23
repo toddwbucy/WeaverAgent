@@ -12,6 +12,9 @@ use crate::flow::report::{FlowHaltReason, HaltPoint};
 use weaver_trace::{Subsystem, TurnRef, serving};
 use weaver_types::{Opener, OrganEnvelope, Payload, Position, TurnKey};
 
+#[path = "context_worker_management.rs"]
+pub(crate) mod management;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoundationInputProgress {
     Pending,
@@ -104,11 +107,14 @@ impl<'a> FoundationInput<'a> {
     }
 
     fn advance_with_io(&mut self, io: &mut impl PumpIo) -> FoundationInputProgress {
-        if self.progress() != FoundationInputProgress::Pending {
+        if matches!(
+            self.progress(),
+            FoundationInputProgress::Stopped | FoundationInputProgress::ManagementPending
+        ) {
             return self.progress();
         }
         let result = self.observe(io).and_then(|()| {
-            if self.serving.owner.listener.held().is_some() {
+            if self.progress() != FoundationInputProgress::Pending {
                 Ok(())
             } else {
                 self.step(io)

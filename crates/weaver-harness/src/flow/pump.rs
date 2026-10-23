@@ -363,6 +363,26 @@ impl LifecyclePeer {
         }
         Ok(result)
     }
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_observation(
+        &mut self,
+        envelope: weaver_types::state_flow::enter::ObservationEnvelope,
+    ) -> Result<
+        super::pump_transport::TrackedStage<weaver_types::state_flow::enter::ObservationEnvelope>,
+        StageFailure<weaver_types::state_flow::enter::ObservationEnvelope>,
+    > {
+        if let Err(failure) = self.live() {
+            return Err(StageFailure {
+                input: envelope,
+                failure,
+            });
+        }
+        let result = self.sender.stage_observation(envelope)?;
+        if matches!(result, super::pump_transport::TrackedStage::Queued(_)) {
+            self.enter_ready_guard = false;
+        }
+        Ok(result)
+    }
     fn enter_ready_pending(&self) -> bool {
         self.enter_ready_guard && self.sender.send_pending()
     }

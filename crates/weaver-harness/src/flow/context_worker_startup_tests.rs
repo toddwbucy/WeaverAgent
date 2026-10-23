@@ -476,6 +476,18 @@ fn circuit(mode: &str) {
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-worker") {
             drop(peer);
+            if mode.contains("observe") {
+                super::input::management::tests::exercise(
+                    serving,
+                    &mut member,
+                    &mut reader,
+                    &mut clock,
+                    &path,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
             super::input::tests::exercise(
                 serving,
                 &mut member,
@@ -555,6 +567,18 @@ fn circuit(mode: &str) {
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-") {
             drop(peer); // Normal admin departure does not revoke serving.
+            if mode.contains("observe") {
+                super::input::management::tests::exercise(
+                    serving,
+                    &mut member,
+                    &mut reader,
+                    &mut clock,
+                    &path,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
             super::input::tests::exercise(
                 serving,
                 &mut member,
@@ -801,3 +825,61 @@ scenario!(
 );
 
 scenario!(worker_input_composition_refused_then_next, "input-two");
+
+scenario!(
+    worker_observe_composition_accepted,
+    "input-observe-accepted"
+);
+
+scenario!(worker_observe_composition_active, "input-observe-active");
+
+scenario!(
+    worker_observe_composition_checking,
+    "input-observe-checking"
+);
+
+scenario!(
+    worker_observe_composition_pressure,
+    "input-observe-pressure"
+);
+
+scenario!(
+    worker_observe_composition_wrong_opener,
+    "input-observe-opener"
+);
+
+scenario!(
+    worker_observe_composition_wrong_position,
+    "input-observe-position"
+);
+
+scenario!(worker_observe_composition_handles, "input-observe-handles");
+
+scenario!(
+    worker_observe_composition_leave_retained,
+    "input-observe-leave"
+);
+
+scenario!(
+    worker_observe_composition_stop_retained,
+    "input-observe-stop"
+);
+
+scenario!(
+    worker_observe_composition_save_retained,
+    "input-observe-save"
+);
+
+scenario!(worker_observe_composition_malformed, "input-observe-bad");
+
+scenario!(worker_observe_composition_eof, "input-observe-eof");
+
+scenario!(
+    worker_observe_composition_silent_input_expiry,
+    "input-observe-expiry"
+);
+
+scenario!(
+    worker_observe_composition_actual_admin_and_dev_loop,
+    "input-worker-observe"
+);

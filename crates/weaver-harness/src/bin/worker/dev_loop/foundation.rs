@@ -6,6 +6,22 @@ use weaver_harness::{
 };
 use weaver_types::TurnKey;
 
+/// Service Observe on the actual held root connection, then resume the same
+/// input. Without a pending connection it returns the input unchanged. Other
+/// lifecycle directives retain their complete management owner.
+pub fn observe(
+    input: Box<FoundationInput<'_>>,
+) -> Result<Box<FoundationInput<'_>>, Box<weaver_harness::FoundationManagement<'_>>> {
+    let mut owner = match input.management() {
+        Ok(owner) => owner,
+        Err(input) => return Ok(input),
+    };
+    while owner.progress() == weaver_harness::FoundationManagementProgress::Pending {
+        owner.advance();
+    }
+    owner.finish()
+}
+
 /// Drive a single gate request through the actual serving ports. The loop owns
 /// the proposed turn identity; it is used only after recorded input acceptance.
 /// A pending management or failed arm returns all custody for its next owner.

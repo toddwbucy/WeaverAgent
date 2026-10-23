@@ -129,6 +129,9 @@ pub use channel::{
 };
 pub use engine::{Ports, TurnError, TurnOutcome};
 pub use failure::{AdoptionFault, ChannelFault, Outcome, UnlicensedMessage};
+pub use flow::context::worker_startup::input::management::{
+    FoundationManagement, FoundationManagementProgress,
+};
 pub use flow::context::worker_startup::input::{
     FoundationInput, FoundationInputProgress, FoundationInputResult, FoundationTurn,
 };
