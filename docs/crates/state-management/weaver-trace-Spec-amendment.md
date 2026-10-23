@@ -499,6 +499,44 @@ trace PRD 3.1's numeric kind count with the closed TRACE-REGISTRY set, so an add
 serving kind has one registry owner. Persistence extends existing payloads and adds no
 further kind. [FLOW-2, FLOW-3, TAP-1 through TAP-5]
 
+**TRACE-RELEASE-ABSENT.** At the foundation cutover, replace the base trace
+Spec section 3's Release definition with:
+
+```rust
+pub struct Release {
+    pub spu: Option<ReleaseOutcome>,
+    pub member: Option<MemberRelease>,
+}
+```
+
+Every new replacement serving Unload carries the outer `release`, on ordinary
+leave, healthy refusal rollback and component failure alike. Omit its `spu` only
+when the harness created no SPU child for this run. At the read, absence inside a
+present `release` means actual noncreation, never a created child's confirmed or
+unconfirmed release. Do not write null or a new enum spelling; explicit null is
+invalid. Present values retain exactly `confirmed` and `unconfirmed`, according
+to the existing sent Release/Released rule. A created SPU that dies during release
+still has an Unconfirmed outcome and its fault precedes Unload.
+
+Successful fork returning a child PID in the parent makes the child present for
+this purpose, even if exec, Load or Open later fails or the child is already
+reaped. A fork that creates no child does not stand an SPU. Derive absence from
+actual process ownership, never a missing port, missing reply, cleared resource
+slot or successful reap. Unknown or lost child custody is not absence.
+
+The member retains its independent Closed/Unconfirmed/absent rule. If neither
+organ stood, `release` is an empty object; if only a member stood, it contains
+only the member outcome. Historical absence of the whole `release` continues to
+mean the old record did not carry that evidence. Existing present SPU values
+retain their meaning and need no rewrite, including old Unconfirmed values that
+alone do not distinguish noncreation from a created but unconfirmed SPU.
+
+This amendment takes effect only at the foundation cutover. Until then the base
+trace Spec and its mandatory `Release.spu: ReleaseOutcome` govern the existing
+serving writer. Replacement readers and writers adopt this representation
+together before cutover; this clause does not activate a partial replacement.
+[FLOW-3, FLOW-4, FLOW-5]
+
 **TRACE-HALT.** Keep fault as the existing FaultReport raw payload. The harness supplies
 HARNESS-HALT-ACCOUNT under the HALT-ACCOUNT-SIZE bound, one account per terminal record,
 under case state_flow_failed, or the existing stream_write_failed case for trace
@@ -514,8 +552,8 @@ The harness supplies the same first-failure snapshot as the fault and adds only 
 secondary failures to account.secondary. fault_sequence names the successfully recorded
 first fault in this run, or is null if it could not be recorded. Existing forced,
 forced_by, cause and grant_surface keep their meanings. Release remains required
-on every new Unload; optional `release.spu` follows the paired trace
-Spec's absent-SPU rule and HARNESS-RELEASE-ABSENT. Its absence describes actual
+on every new Unload; optional `release.spu` follows TRACE-RELEASE-ABSENT and
+HARNESS-RELEASE-ABSENT at the same foundation cutover. Its absence describes actual
 noncreation of an SPU child, not missing failure evidence. An unload with
 component_failure supplies no successful Left. A reader joins the fault sequence rather
 than counting the repeated account as a second halt. The trace's raw account arm stays

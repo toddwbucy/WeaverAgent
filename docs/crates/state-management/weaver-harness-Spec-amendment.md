@@ -692,8 +692,9 @@ before SPU fork both leave that fact false. A successful SPU fork makes it true,
 including later exec, Load or Open failure and a child already reaped. Port
 retirement never resets it. Do not start an SPU merely to obtain a release outcome.
 
-Every new Unload still carries `release`. Use the paired trace Spec's optional
-`release.spu`: omit it only when no SPU child was created; otherwise retain the
+At the foundation cutover, every new Unload still carries `release`. Use the
+paired trace amendment's TRACE-RELEASE-ABSENT optional `release.spu`: omit it only
+when no SPU child was created; otherwise retain the
 exact existing Confirmed/Unconfirmed rule. Retain the member's independent actual
 Closed/Unconfirmed/absent disposition. Absence creates no Release exchange, death
 fault, new terminal permit, successful Left or additional time. A healthy refusal
