@@ -1310,6 +1310,11 @@ fn generic_author_and_resume_cannot_steal_the_pending_repair_record() {
             serde_json::value::to_raw_value(&serde_json::json!({"fixture":"unrelated"})).unwrap(),
         )),
     );
+    let Some(Payload::ModelMeasurement(raw)) = event.payload.as_ref() else {
+        unreachable!()
+    };
+    let original_bytes = raw.get().to_owned();
+    let original_pointer = raw.get().as_ptr();
     assert!(matches!(
         fx.input
             .run
@@ -1331,6 +1336,15 @@ fn generic_author_and_resume_cannot_steal_the_pending_repair_record() {
     assert!(fx.input.run.context.failure().is_none());
     fx.input.drain_trace();
     let request = fx.restatement(true);
+    // The admitted repair progresses with its competing caller still held.
+    // A new correction output requires the caller to take that exact input.
+    let held = fx.input.run.context.take_held_author().unwrap();
+    assert_eq!(held.kind, Kind::ModelMeasurement);
+    let Some(Payload::ModelMeasurement(raw)) = held.payload else {
+        panic!("the held unrelated original must remain unchanged");
+    };
+    assert_eq!(raw.get(), original_bytes);
+    assert_eq!(raw.get().as_ptr(), original_pointer);
     let correction = fx.generation(vec![text("Read replacement.")], true);
     fx.observe(request.source(), correction);
     assert_eq!(fx.effective(true).text(), "Read replacement.");

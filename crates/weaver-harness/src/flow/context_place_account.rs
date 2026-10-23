@@ -208,6 +208,7 @@ impl RecordingContext {
             && self.native_marks.is_none()
             && self.place_notice.is_none())
             || !self.place_owed()
+            || self.caller_author_held()
             || self.phase != RecordingPhase::Entered
         {
             return Err(RunFailure::PlaceOwned);
