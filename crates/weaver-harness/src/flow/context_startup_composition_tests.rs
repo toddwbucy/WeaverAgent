@@ -16,7 +16,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 use weaver_types::state_flow as s;
 
-pub(super) struct CircuitIo<'a>(pub(super) &'a mut FakePumpIo);
+pub(in crate::flow::context) struct CircuitIo<'a>(pub(in crate::flow::context) &'a mut FakePumpIo);
 impl PumpIo for CircuitIo<'_> {
     fn now(&mut self) -> std::io::Result<u64> {
         self.0.now()

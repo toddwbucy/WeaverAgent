@@ -103,6 +103,10 @@ impl<'a> RaisedBoot<'a> {
     }
 }
 impl EnterReady<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn test_gate_child(&mut self) -> Option<&mut OwnedChild> {
+        self.raised.test_gate_child()
+    }
     pub(in crate::flow) fn stage(&self) -> ReadyStage {
         self.stage
     }

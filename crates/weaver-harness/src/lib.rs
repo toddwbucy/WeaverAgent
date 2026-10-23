@@ -116,6 +116,10 @@ mod state;
 mod tools;
 mod tools_cgroup;
 
+// Exercise the actual external worker adapter in the composed unit instrument.
+#[cfg(test)]
+extern crate self as weaver_harness;
+
 pub use assembly::{Prompt, assemble};
 pub use authorship::{Author, licensed};
 pub use channel::{
@@ -125,6 +129,10 @@ pub use channel::{
 };
 pub use engine::{Ports, TurnError, TurnOutcome};
 pub use failure::{AdoptionFault, ChannelFault, Outcome, UnlicensedMessage};
+pub use flow::context::worker_startup::{
+    FoundationAdmission, FoundationAdmissionProgress, FoundationEnter, FoundationEnterProgress,
+    FoundationProgram, FoundationRun, FoundationServing,
+};
 pub use lifecycle::{Harness, OrganBinaries, OrganParameters};
 pub use record::{Record, RecordFailure};
 pub use spawn::fork_organ;

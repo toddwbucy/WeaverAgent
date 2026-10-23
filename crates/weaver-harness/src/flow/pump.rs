@@ -197,6 +197,13 @@ impl LifecycleListener {
         self.failure.as_ref()
     }
 
+    /// Before a recording context exists, accept through this same credential
+    /// check. Transfer the untouched peer to its sole Enter recvmsg owner.
+    pub(super) fn accept_enter(&mut self) -> Result<Option<LifecyclePeer>, Failure> {
+        self.advance()?;
+        Ok(self.take_connection())
+    }
+
     fn interest(&self) -> (BorrowedFd<'_>, PollFlags) {
         if let Some(peer) = &self.held {
             (peer.fd(), terminal_flags())

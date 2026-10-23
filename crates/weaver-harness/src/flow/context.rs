@@ -2030,6 +2030,9 @@ pub(in crate::flow) mod residency_composition;
 #[path = "context_startup_composition.rs"]
 pub(in crate::flow) mod startup_composition;
 
+#[path = "context_worker_startup.rs"]
+pub(crate) mod worker_startup;
+
 #[path = "context_boot_composition.rs"]
 pub(in crate::flow) mod boot_composition;
 
