@@ -128,7 +128,7 @@ impl RecordingContext {
                     HaltTraceProgress::Unavailable
                 }
             }
-        } else if self.boot_owns_pending_author() {
+        } else if self.boot_owns_pending_author() || self.plan_owns_pending_recall() {
             // Its dedicated bounded driver must retain Recorded and the next
             // boot continuation before any fallible clock/lifecycle hook.
             HaltTraceProgress::Pending

@@ -302,6 +302,7 @@ impl RecordingContext {
         if self.marks.is_some()
             || self.boot_pairs.is_some()
             || self.boot_open_blocks_external()
+            || self.plan_summary_blocks_external()
             || self.measure.is_some()
             || self.output.is_some()
             || self.filing.is_some()

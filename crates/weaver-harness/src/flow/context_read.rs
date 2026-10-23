@@ -100,7 +100,8 @@ pub(in crate::flow) enum ReadCompletion {
     Cancelled(CancelledRead),
 }
 
-pub(super) struct ReadTransaction {
+#[derive(Debug)]
+pub(in crate::flow) struct ReadTransaction {
     purpose: ReadPurpose,
     pages: PageRead,
     turn: Option<TurnRef>,
@@ -112,6 +113,8 @@ pub(super) struct ReadTransaction {
     released: Option<Result<CompletedRead, ReadFailure>>,
     recall: Option<AuthoredEvent>,
     author_started: bool,
+    author_ticket: Option<u64>,
+    orphan_recorded: Option<RecordedRead>,
     recorded: Option<Sequence>,
     cancelled: bool,
     complete: bool,
@@ -121,10 +124,12 @@ pub(super) struct ReadTransaction {
 }
 
 #[allow(clippy::large_enum_variant)] // Retain exact boot inputs in the one read owner.
+#[derive(Debug)]
 enum ReadPurpose {
     Ordinary,
     Marks,
     BootPairs,
+    PlanSummary,
     Inward(weaver_types::state_flow::CallId),
     Boot {
         start: StartIdentity,
@@ -134,12 +139,49 @@ enum ReadPurpose {
 }
 
 impl ReadTransaction {
+    pub(super) fn orphan_recorded(&self) -> Option<&RecordedRead> {
+        self.orphan_recorded.as_ref()
+    }
+    pub(in crate::flow) fn rejected_answer(&self) -> Option<&OperationCompletion> {
+        self.rejected.as_ref()
+    }
+    pub(in crate::flow) fn assembled_bytes(&self) -> &[u8] {
+        self.pages.buffered_bytes()
+    }
+    pub(in crate::flow) fn acquired_snapshot(&self) -> Option<DecimalU64> {
+        self.pages.snapshot()
+    }
+    pub(super) fn plan_bound(&self) -> AbsoluteBound {
+        self.bound
+    }
+    pub(super) fn plan_ticket(&self) -> Option<u64> {
+        self.author_ticket
+    }
+    pub(super) fn plan_recorded(&self) -> Option<Sequence> {
+        self.recorded
+    }
+    pub(super) fn plan_recall(&self) -> Option<&AuthoredEvent> {
+        self.recall.as_ref()
+    }
+    pub(super) fn plan_expected(&self) -> Option<&(DecimalU64, StateControl)> {
+        self.expected.as_ref()
+    }
+    pub(super) fn is_summary(&self) -> bool {
+        matches!(self.purpose, ReadPurpose::PlanSummary)
+    }
+    pub(super) fn plan_refusal(&self) -> Option<&ReadFailure> {
+        self.released
+            .as_ref()
+            .and_then(|outcome| outcome.as_ref().err())
+    }
     pub(super) fn freeze(&mut self) {
         self.pages.freeze();
     }
 
     pub(super) fn needs_failed_close(&self) -> bool {
-        self.released.is_none() && self.accepted != Some(ReadAdvance::Complete)
+        self.recorded.is_none()
+            && self.released.is_none()
+            && self.accepted != Some(ReadAdvance::Complete)
     }
 
     #[cfg(test)]
@@ -192,6 +234,41 @@ impl RecordingContext {
     }
 
     #[allow(clippy::result_large_err)]
+    pub(super) fn begin_plan_summary_read(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<(), ReadBeginError> {
+        self.begin_read_with_purpose(
+            ReadSelector::PlanCurrent {},
+            None,
+            ReadPurpose::PlanSummary,
+            io,
+        )
+    }
+    pub(super) fn cancel_plan_summary_read(&mut self) {
+        if let Some(read) = &mut self.read {
+            assert!(matches!(read.purpose, ReadPurpose::PlanSummary));
+            read.cancelled = true;
+        }
+    }
+    pub(super) fn finish_plan_summary_read(&mut self) -> Result<Option<ReadFailure>, RunFailure> {
+        if self.read.as_ref().is_none_or(|read| {
+            !read.complete
+                || !matches!(read.purpose, ReadPurpose::PlanSummary)
+                || !(matches!(read.released, Some(Err(_)))
+                    || (read.released.is_none() && read.recorded.is_some()))
+        }) {
+            return Err(RunFailure::PlanSummaryOwned);
+        }
+        let read = self.read.take().unwrap();
+        match read.released {
+            Some(Err(refusal)) => Ok(Some(refusal)),
+            None if read.recorded.is_some() => Ok(None),
+            _ => unreachable!("validated complete summary read"),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
     fn begin_read_with_purpose(
         &mut self,
         selector: ReadSelector,
@@ -230,7 +307,9 @@ impl RecordingContext {
             }
             _ => None,
         };
-        if (self.boot_pairs.is_some() && !matches!(purpose, ReadPurpose::BootPairs))
+        if self.plan_summary_blocks_external()
+            || (matches!(purpose, ReadPurpose::PlanSummary) && !self.plan_summary_read_allowed())
+            || (self.boot_pairs.is_some() && !matches!(purpose, ReadPurpose::BootPairs))
             || (matches!(purpose, ReadPurpose::BootPairs) && !self.boot_pairs_read_allowed())
             || (self.marks.is_some() && !matches!(purpose, ReadPurpose::Marks))
             || self.read.is_some()
@@ -286,6 +365,13 @@ impl RecordingContext {
                     end = end.min(bound.deadline_ns());
                 }
             }
+            if matches!(purpose, ReadPurpose::PlanSummary) {
+                end = end.min(
+                    self.plan_summary_read_bound()
+                        .expect("summary inherits owner bound")
+                        .deadline_ns(),
+                );
+            }
             let bound =
                 AbsoluteBound::from_absolute(start, end).map_err(|error| error.to_string())?;
             self.deadlines
@@ -314,6 +400,8 @@ impl RecordingContext {
             released: None,
             recall: None,
             author_started: false,
+            author_ticket: None,
+            orphan_recorded: None,
             recorded: None,
             cancelled: false,
             complete: false,
@@ -333,7 +421,13 @@ impl RecordingContext {
             Ok(true) => Ok(()),
             // Admission already transferred the inward pair or boot repair into
             // this read owner. Retain its deadline and retry without rollback.
-            Ok(false) if inward.is_some() || self.boot_pairs_read_allowed() => Ok(()),
+            Ok(false)
+                if inward.is_some()
+                    || self.boot_pairs_read_allowed()
+                    || self.plan_summary_read_allowed() =>
+            {
+                Ok(())
+            }
             Ok(false) => {
                 self.read = None;
                 self.deadlines.disarm(PumpDeadline::StateControl);
@@ -360,6 +454,9 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<ReadProgress, RunFailure> {
         self.live(ports.io)?;
+        if self.plan_summary_blocks_external() {
+            return Err(RunFailure::PlanSummaryOwned);
+        }
         if self.boot_pairs_blocks_external() {
             return Err(RunFailure::BootPairsOwned);
         }
@@ -394,6 +491,9 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<ReadCompletion>, RunFailure> {
         self.live(io)?;
+        if self.plan_summary_blocks_external() {
+            return Err(RunFailure::PlanSummaryOwned);
+        }
         if self.boot_pairs_blocks_external() {
             return Err(RunFailure::BootPairsOwned);
         }
@@ -403,11 +503,12 @@ impl RecordingContext {
         if self.inward_blocks_external() {
             return Err(RunFailure::PairOwned);
         }
-        if self
-            .read
-            .as_ref()
-            .is_some_and(|read| matches!(read.purpose, ReadPurpose::Boot { .. }))
-        {
+        if self.read.as_ref().is_some_and(|read| {
+            matches!(
+                read.purpose,
+                ReadPurpose::Boot { .. } | ReadPurpose::PlanSummary
+            )
+        }) {
             return Err(RunFailure::ReadOwned);
         }
         let Some(read) = self.read.as_mut().filter(|read| read.complete) else {
@@ -445,6 +546,9 @@ impl RecordingContext {
     /// a caller defect and uses the same protocol-failure path as other owners.
     pub(in crate::flow) fn cancel_read(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         self.live(io)?;
+        if self.plan_summary_blocks_external() {
+            return Err(RunFailure::PlanSummaryOwned);
+        }
         if self.boot_pairs_blocks_external() {
             return Err(RunFailure::BootPairsOwned);
         }
@@ -460,9 +564,9 @@ impl RecordingContext {
     }
 
     pub(super) fn read_blocks_reduction(&self) -> bool {
-        self.read
-            .as_ref()
-            .is_some_and(|read| read.released.is_some() && !read.complete)
+        self.read.as_ref().is_some_and(|read| {
+            (read.released.is_some() || read.recorded.is_some()) && !read.complete
+        })
     }
 
     pub(super) fn read_wait_still_owned(&self, key: PumpDeadline) -> bool {
@@ -654,6 +758,7 @@ impl RecordingContext {
                     ReadPurpose::Ordinary
                     | ReadPurpose::Marks
                     | ReadPurpose::BootPairs
+                    | ReadPurpose::PlanSummary
                     | ReadPurpose::Inward(_) => {
                         completed.recall().map_err(|error| error.to_string())
                     }
@@ -695,6 +800,12 @@ impl RecordingContext {
             return Err(self.read_fault(ports.io, "recall author has an unsettled predecessor"));
         }
         let progress = if self.read.as_ref().unwrap().author_started {
+            let ticket = self.read.as_ref().unwrap().author_ticket;
+            if ticket.is_none() || self.barrier.pending_author().map(|held| held.ticket) != ticket {
+                return Err(
+                    self.read_fault(ports.io, "recall author lost its exact recorder ticket")
+                );
+            }
             self.barrier
                 .resume_with_clock(&mut self.inbox, &mut self.budget, &mut || ports.io.now())
         } else {
@@ -709,7 +820,7 @@ impl RecordingContext {
             let read = self.read.as_mut().unwrap();
             let event = read
                 .recall
-                .take()
+                .clone()
                 .expect("released success keeps its immutable recall");
             read.author_started = true;
             self.barrier.submit_authored_with_clock(
@@ -728,38 +839,13 @@ impl RecordingContext {
                 proof: None,
             } => {
                 // Save the actual admitted identity before any fallible hook.
-                self.read.as_mut().unwrap().recorded = Some(sequence);
-                self.last_author_sequence = Some(sequence);
-                let now = ports.io.now().map_err(|error| {
-                    self.fail(
-                        ports.io,
-                        FlowHaltReason::TraceFailed,
-                        HaltPoint::Author,
-                        format!("recall Recorded clock failed: {error}"),
-                    )
-                })?;
-                if now < self.last_ns {
-                    return Err(self.fail(
-                        ports.io,
-                        FlowHaltReason::TraceFailed,
-                        HaltPoint::Author,
-                        "recall Recorded clock reversed",
-                    ));
+                if let Err(detail) = self.retain_read_recorded(sequence) {
+                    return Err(self.read_fault(ports.io, detail));
                 }
-                self.last_ns = now;
-                let bound = self.read.as_ref().unwrap().bound;
-                if bound.expired(now) {
-                    // An earlier lifecycle expiry still owns precedence. The
-                    // admitted sequence remains held and cannot be resubmitted.
-                    self.live(ports.io)?;
-                    return Err(self.expired(ports.io, PumpDeadline::StateControl, bound));
-                }
-                self.read.as_mut().unwrap().complete = true;
-                self.deadlines.disarm(PumpDeadline::StateControl);
-                self.live(ports.io)?;
-                Ok(ReadProgress::Complete)
+                self.finish_recorded_recall(ports.io)
             }
             RecordProgress::Pending => {
+                self.retain_read_author_ticket();
                 self.live(ports.io)?;
                 Ok(ReadProgress::Pending)
             }
@@ -767,11 +853,87 @@ impl RecordingContext {
                 self.retain_refused(event);
                 Err(self.record_failed(ports.io))
             }
-            RecordProgress::Failed => Err(self.record_failed(ports.io)),
+            RecordProgress::Failed => {
+                if let Some(sequence) = self.barrier.admitted_before_failure() {
+                    if let Err(detail) = self.retain_read_recorded(sequence) {
+                        return Err(self.read_fault(ports.io, detail));
+                    }
+                } else {
+                    self.retain_read_author_ticket();
+                }
+                Err(self.record_failed(ports.io))
+            }
             RecordProgress::Busy { .. } | RecordProgress::Recorded { proof: Some(_), .. } => {
                 Err(self.read_fault(ports.io, "recall author received another owner's proof"))
             }
         }
+    }
+
+    pub(super) fn retain_read_author_ticket(&mut self) {
+        if let Some(ticket) = self.barrier.pending_author().map(|author| author.ticket)
+            && let Some(read) = &mut self.read
+        {
+            read.author_ticket = Some(ticket);
+            read.author_started = true;
+        }
+    }
+    pub(super) fn retain_read_recorded(&mut self, sequence: Sequence) -> Result<(), &'static str> {
+        let read = self
+            .read
+            .as_mut()
+            .ok_or("recall Recorded lost its read owner")?;
+        if read.recorded.is_some() {
+            return Err("recall Recorded twice");
+        }
+        read.recorded = Some(sequence);
+        read.author_ticket = None;
+        self.last_author_sequence = Some(sequence);
+        if read.is_summary() {
+            let Some(Ok(completed)) = read.released.take() else {
+                return Err("summary recall lost its released result");
+            };
+            let proof = RecordedRead {
+                read: completed,
+                sequence,
+                origin: self.read_origin.clone(),
+            };
+            if let Err((proof, detail)) = self.bind_plan_summary_recorded(proof) {
+                self.read.as_mut().unwrap().orphan_recorded = Some(proof);
+                return Err(detail);
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_recorded_recall(&mut self, io: &mut impl PumpIo) -> Result<ReadProgress, RunFailure> {
+        let now = io.now().map_err(|error| {
+            self.fail(
+                io,
+                FlowHaltReason::TraceFailed,
+                HaltPoint::Author,
+                format!("recall Recorded clock failed: {error}"),
+            )
+        })?;
+        if now < self.last_ns {
+            return Err(self.fail(
+                io,
+                FlowHaltReason::TraceFailed,
+                HaltPoint::Author,
+                "recall Recorded clock reversed",
+            ));
+        }
+        self.last_ns = now;
+        let bound = self.read.as_ref().unwrap().bound;
+        if bound.expired(now) {
+            // An earlier lifecycle expiry still owns precedence. The
+            // admitted sequence remains held and cannot be resubmitted.
+            self.live(io)?;
+            return Err(self.expired(io, PumpDeadline::StateControl, bound));
+        }
+        self.read.as_mut().unwrap().complete = true;
+        self.deadlines.disarm(PumpDeadline::StateControl);
+        self.live(io)?;
+        Ok(ReadProgress::Complete)
     }
 
     fn read_fault(&mut self, io: &mut impl PumpIo, detail: impl Into<String>) -> RunFailure {

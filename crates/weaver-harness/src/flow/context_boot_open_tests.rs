@@ -14,6 +14,9 @@ use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
 use std::time::{Duration, Instant};
 use weaver_types::{Opened, SessionId, TokenAnswer, TokenDirective, TokenRefusal};
 
+#[path = "context_plan_summary_tests.rs"]
+mod plan_summary_tests;
+
 const _: fn() = || {
     trait Private<M> {
         fn pin() {}

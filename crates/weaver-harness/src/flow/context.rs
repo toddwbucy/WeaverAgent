@@ -66,6 +66,7 @@ pub(super) enum RunFailure {
     /// Dormant boot repair retains its reads, terminal authors and receipts.
     BootPairsOwned,
     BootOpenOwned,
+    PlanSummaryOwned,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -121,6 +122,8 @@ pub(crate) struct RecordingContext {
     member_capture: Option<capture_driver::MemberCapture>,
     freshness: Option<freshness_driver::FreshnessTransaction>,
     read: Option<read_driver::ReadTransaction>,
+    plan_cache: super::plan::PlanSummaryCache,
+    plan_summary: Option<plan_summary_driver::PlanSummaryTransaction>,
     inspection: Option<inspection_driver::InspectionTransaction>,
     marks: Option<marks_driver::MarksTransaction>,
     // Pointer identity survives moves and is never recreated from trace IDs.
@@ -235,6 +238,8 @@ impl RecordingContext {
             member_capture: None,
             freshness: None,
             read: None,
+            plan_cache: super::plan::PlanSummaryCache::default(),
+            plan_summary: None,
             inspection: None,
             marks: None,
             read_origin: std::sync::Arc::new(()),
@@ -431,6 +436,9 @@ impl RecordingContext {
         self.live(io)?;
         // A template result belongs to its ordered transcript, never a second
         // operation consumer. Correct rejection keeps that boundary closed.
+        if self.plan_summary_blocks_external() {
+            return Err(RunFailure::PlanSummaryOwned);
+        }
         if self.boot_open_blocks_external() {
             return Err(RunFailure::BootOpenOwned);
         }
@@ -503,6 +511,7 @@ impl RecordingContext {
     }
 
     pub(super) fn complete_wait(&mut self, key: PumpDeadline) -> Option<AbsoluteBound> {
+        self.freeze_plan_summary_account_bound();
         if self.failure.is_some()
             || self.phase == RecordingPhase::Closed
             || self.filing_wait_still_owned(key)
@@ -510,6 +519,7 @@ impl RecordingContext {
             || self.pair_wait_still_owned(key)
             || self.repair_wait_still_owned(key)
             || self.read_wait_still_owned(key)
+            || self.plan_summary_wait_owned(key)
             || self.inspection_wait_still_owned(key)
             || self.measure_wait_still_owned(key)
             || (key == PumpDeadline::Decision && self.marks.is_some())
@@ -536,6 +546,7 @@ impl RecordingContext {
     ) -> Result<(), RunFailure> {
         self.live(io)?;
         if self.boot_open_blocks_external()
+            || self.plan_summary.is_some()
             || self.output.is_some()
             || self.repair.is_some()
             || self.pair_work.is_some()
@@ -725,6 +736,12 @@ impl RecordingContext {
                 return Err(failure);
             }
         };
+        if (self.plan_summary_blocks_external() && !self.plan_summary_allows_turn_close(&event))
+            || (receipt_driver::is_plan_effect_event(&event) && !self.plan_effect_inflight())
+        {
+            self.retain_refused(event);
+            return Err(RunFailure::PlanSummaryOwned);
+        }
         if self.boot_open_blocks_external() {
             self.retain_refused(event);
             return Err(RunFailure::BootOpenOwned);
@@ -908,6 +925,14 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
         self.live(ports.io)?;
+        if self.plan_summary_blocks_external()
+            && !self
+                .barrier
+                .pending_author()
+                .is_some_and(|held| self.plan_summary_allows_turn_close(&held.event))
+        {
+            return Err(RunFailure::PlanSummaryOwned);
+        }
         if self.boot_open_blocks_external() {
             return Err(RunFailure::BootOpenOwned);
         }
@@ -1156,6 +1181,15 @@ impl RecordingContext {
             ));
         }
         self.observe_boot_lifecycle(&ports.lifecycle);
+        self.observe_plan_summary_lifecycle(&ports.lifecycle);
+        if self.plan_summary_blocks_generation()
+            && ports
+                .decode
+                .as_deref()
+                .is_some_and(|decode| decode.generation_not_started())
+        {
+            return Err(RunFailure::PlanSummaryOwned);
+        }
         if ports.decode.is_some() && self.boot_open_revoked() {
             return Err(RunFailure::BootOpenOwned);
         }
@@ -1179,6 +1213,7 @@ impl RecordingContext {
             &self.deadlines,
         );
         self.observe_boot_lifecycle(&ports.lifecycle);
+        self.observe_plan_summary_lifecycle(&ports.lifecycle);
         let sent = self.reconcile_pair_send(ports.io)?;
         match step {
             Ok(PumpStep::Deadline {
@@ -1263,6 +1298,17 @@ impl RecordingContext {
     }
 
     fn live(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        self.observe_plan_effect_receipts();
+        if self.failure.is_none()
+            && let Some(detail) = self.plan_cache.invalid
+        {
+            return Err(self.fail(
+                io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::StateReply,
+                detail,
+            ));
+        }
         if let Some(failure) = &self.failure {
             return Err(failure.clone());
         }
@@ -1484,6 +1530,8 @@ impl RecordingContext {
             owner.revoke();
         }
         // Revoke before sampling or reporting. A broken clock cannot grant work.
+        self.observe_plan_effect_receipts();
+        self.plan_cache.fail();
         self.input.halt();
         self.pairs.freeze();
         self.freeze_repair();
@@ -1518,6 +1566,7 @@ impl RecordingContext {
             },
         );
         self.freeze_boot_account_bound();
+        self.freeze_plan_summary_account_bound();
         if self
             .read
             .as_ref()
@@ -1693,6 +1742,16 @@ mod boot_pair_driver;
 pub(super) use boot_pair_driver::{
     BootPairsBeginError, BootPairsBeginRefusal, BootPairsCompletion, BootPairsProgress,
     BootPairsRefusal, PriorBootOpen, RepairedBootPairs,
+};
+
+#[path = "context_plan_summary.rs"]
+pub(in crate::flow) mod plan_summary_driver;
+#[allow(unused_imports)]
+pub(in crate::flow) use super::plan::PlanSummaryUnavailable;
+#[allow(unused_imports)]
+pub(in crate::flow) use plan_summary_driver::{
+    BootPlanSummary, EffectPlanSummary, PlanSummaryAccount, PlanSummaryBeginError,
+    PlanSummaryBeginRefusal, PlanSummaryCompletion, PlanSummaryProgress,
 };
 
 #[path = "context_read.rs"]

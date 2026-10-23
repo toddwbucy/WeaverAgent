@@ -20,6 +20,7 @@ mod marks;
 mod material;
 mod mirror;
 mod observation;
+mod plan;
 mod pump;
 mod pump_transport;
 mod read;

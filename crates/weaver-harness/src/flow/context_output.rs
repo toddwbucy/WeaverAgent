@@ -112,6 +112,7 @@ impl RecordingContext {
             || self.read.is_some()
             || self.inspection.is_some()
             || self.boot_open_blocks_external()
+            || self.plan_summary_blocks_external()
             || self.measure_blocks_external()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()

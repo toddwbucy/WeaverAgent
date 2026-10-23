@@ -411,6 +411,7 @@ pub(super) struct FlowCoordinator<P> {
     state: Option<StateChannel>,
     state_retired: bool,
     unused_open: Option<UnusedOpen>,
+    stopped_plan_read: Option<Box<StoppedPlanRead>>,
     observations: Option<Observation>,
     observation_config: Option<(MeasuredInterval, u64)>,
     scheme: SchemeDeclaration,
@@ -479,6 +480,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             state: Some(state),
             state_retired: false,
             unused_open: None,
+            stopped_plan_read: None,
             observations: Some(observations),
             observation_config: None,
             phase: CoordinatorPhase::Active,
@@ -1286,6 +1288,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             state: Some(state),
             state_retired: false,
             unused_open: None,
+            stopped_plan_read: None,
             observations: None,
             observation_config: Some((observation_interval, lag_alarm_turns)),
             scheme,
@@ -1483,6 +1486,111 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         }
         self.phase = CoordinatorPhase::Releasing;
         Ok(())
+    }
+
+    /// The sealed boot summary rollback may retire an expired read without
+    /// inventing a Release or losing any locally held transport/record evidence.
+    pub(super) fn begin_plan_read_rollback(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        permit: &super::context::plan_summary_driver::PlanReadRollbackPermit,
+    ) -> Result<(), FlowFailure> {
+        // Deliberately do not call require_active/live after expired Enter.
+        // Every waived obligation below must belong to this exact read.
+        let expected = permit.expected();
+        let control_matches = self.state_operation.as_ref().is_none_or(|(request, turn)| {
+            expected.is_some_and(|(_, wanted)| request == wanted && turn.is_none())
+        });
+        let completion_matches = self.operation_completion.as_ref().is_none_or(|completion|
+            matches!(completion, OperationCompletion::State { request, turn, completion, .. }
+                if expected.is_some_and(|(id, wanted)| request == wanted && turn.is_none()
+                    && completion.answer.common().request_id == *id && !completion.discard_capture_result)));
+        let exchanges_match = self.state.as_ref().is_some_and(|state| {
+            state.outstanding().iter().all(|exchange| {
+                expected.is_some_and(|(id, request)| {
+                    exchange.common.request_id == *id
+                        && exchange.common.run_id == self.run
+                        && exchange.common.session_id == state.identity().0
+                        && exchange.operation == request.operation()
+                })
+            })
+        });
+        let pending_matches = match self.pending_record {
+            None => !permit.measurement_pending(),
+            Some(PendingRecord::State | PendingRecord::StateRelease) => {
+                expected.is_some()
+                    && (permit.measurement_pending() || cx.barrier.pending().is_none())
+            }
+            _ => false,
+        };
+        if self.phase != CoordinatorPhase::Active
+            || self.failure.is_some()
+            || self.stopped_plan_read.is_some()
+            || self.state_retired
+            || self.capture.is_some()
+            || self.receipt_reservation.is_some()
+            || self.output_checks.is_some()
+            || self.output_receipts.is_some()
+            || self.instruction_check.is_some()
+            || self.ledger.receipts().is_some()
+            || self.ledger.facts().next().is_some()
+            || cx.inbox.queued().next().is_some()
+            || cx.inbox.failure().is_some()
+            || cx.budget.waiting_copy().is_some()
+            || cx.budget.gauges() != (0, 0)
+            || !self.notices.is_empty()
+            || self.input_account.is_some()
+            || self.reuse.is_some()
+            || self.check_operation.is_some()
+            || self.admission_completion.is_some()
+            || self.starting_classifier.is_some()
+            || self
+                .classifier
+                .as_ref()
+                .is_some_and(|owner| owner.state() != ClassifierState::Idle)
+            || !control_matches
+            || !completion_matches
+            || !exchanges_match
+            || !pending_matches
+            || !permit.matches_record(cx.barrier)
+        {
+            return Err(FlowFailure {
+                point: "barrier",
+                detail: "summary rollback retains foreign work".into(),
+            });
+        }
+        let record = cx
+            .barrier
+            .retain_summary_rollback_record(permit)
+            .map_err(|detail| FlowFailure {
+                point: "barrier",
+                detail: detail.into(),
+            })?;
+        let state = self.state.take().expect("validated exact read channel");
+        // Remove the descriptor from the common pump before shutdown. Partial
+        // frames and received answers remain owned here through final close.
+        let close_error = state
+            .close_failed_read()
+            .err()
+            .map(|error| error.to_string());
+        self.stopped_plan_read = Some(Box::new(StoppedPlanRead {
+            _state: state,
+            _operation: self.state_operation.take(),
+            _completion: self.operation_completion.take(),
+            _pending_record: self.pending_record.take(),
+            _recorded_ns: self.state_recorded_ns.take(),
+            _release_timing: self.state_release_timing.take(),
+            _record: record,
+            close_error,
+        }));
+        self.state_retired = true;
+        self.phase = CoordinatorPhase::Releasing;
+        Ok(())
+    }
+    pub(super) fn stopped_plan_read_close_error(&self) -> Option<&str> {
+        self.stopped_plan_read
+            .as_ref()
+            .and_then(|account| account.close_error.as_deref())
     }
 
     pub(super) fn begin_releasing(
@@ -3986,3 +4094,16 @@ mod input_tests;
 #[cfg(test)]
 #[path = "coordinator_capture_tests.rs"]
 mod capture_tests;
+
+/// Retired evidence, never a second stream reader. Fields stay owned through
+/// ordinary failed-Enter unload and cannot return to the active coordinator.
+struct StoppedPlanRead {
+    _state: StateChannel,
+    _operation: Option<(StateControl, Option<TurnRef>)>,
+    _completion: Option<OperationCompletion>,
+    _pending_record: Option<PendingRecord>,
+    _recorded_ns: Option<u64>,
+    _release_timing: Option<(u64, u64)>,
+    _record: super::recording::StoppedReadRecord,
+    close_error: Option<String>,
+}

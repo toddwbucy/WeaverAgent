@@ -155,6 +155,7 @@ impl RecordingContext {
             || self.boot_pairs.is_some()
             || self.read.is_some()
             || self.boot_open_blocks_external()
+            || self.plan_summary_blocks_external()
             || self.measure.is_some()
             || self.member_capture.is_some()
             || self.freshness.is_some()

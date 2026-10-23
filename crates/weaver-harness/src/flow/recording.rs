@@ -698,6 +698,47 @@ impl RecordBarrier {
         Ok(())
     }
 
+    pub(super) fn queue_plan_recall_account(
+        &mut self,
+        permit: &super::context::plan_summary_driver::OwedPlanRecall,
+        author: &ServingAuthor,
+        raw_ns: u64,
+        wall_ms: u64,
+    ) -> Result<(), String> {
+        if !self.recorder.tap_stopped()
+            || self.recorder.is_closed()
+            || self.pending.is_some()
+            || self.pending_author.is_some()
+        {
+            return Err("summary account requires its stopped, empty ordinary slot".into());
+        }
+        let event = permit.event();
+        let ticket = self.next_ticket.ok_or("author ticket overflow")?;
+        let prepared = author
+            .prepare(event, raw_ns, wall_ms)
+            .map_err(|error| format!("summary recall author: {error:?}"))?;
+        self.next_ticket = ticket.checked_add(1);
+        self.pending_author = Some(AuthorTicket {
+            ticket,
+            event: event.clone(),
+        });
+        self.pending = Some((prepared, RecordPurpose::Observation));
+        Ok(())
+    }
+
+    pub(super) fn retain_summary_rollback_record(
+        &mut self,
+        permit: &super::context::plan_summary_driver::PlanReadRollbackPermit,
+    ) -> Result<StoppedReadRecord, &'static str> {
+        if !permit.matches_record(self) {
+            return Err("summary rollback lost its exact record");
+        }
+        Ok(StoppedReadRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        })
+    }
+
     /// Release this owner's unadmitted ticket on bounded incomplete teardown.
     pub(super) fn abandon_boot_author(&mut self, ticket: u64) -> bool {
         if self
@@ -819,3 +860,10 @@ fn is_completion(kind: Kind) -> bool {
 #[cfg(test)]
 #[path = "recording_tests.rs"]
 mod tests;
+
+/// Incomplete trace evidence retains prepared bytes and author identity. It has
+/// no admission sequence and cannot be submitted again after rollback.
+pub(super) struct StoppedReadRecord {
+    _pending: Option<(Event, RecordPurpose)>,
+    _author: Option<AuthorTicket>,
+}

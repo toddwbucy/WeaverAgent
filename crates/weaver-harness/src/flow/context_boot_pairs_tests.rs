@@ -36,7 +36,7 @@ const _: fn() = || {
     let _ = <RepairedBootPairs as MustNotFromPairs<_>>::pin;
 };
 
-fn old_pair(run: &str) -> s::ReadPair {
+pub(super) fn old_pair(run: &str) -> s::ReadPair {
     let corpus: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("fixtures/recall-sources.json")).unwrap();
     let mut pair = corpus
@@ -69,7 +69,7 @@ enum Hold {
     Terminal(usize),
 }
 
-struct RepairFixture {
+pub(super) struct RepairFixture {
     boot: BootFixture,
     prior: Option<PriorBootOpen>,
     initial: Vec<u8>,
@@ -85,13 +85,23 @@ struct RepairFixture {
 }
 
 impl RepairFixture {
-    fn new(pairs: Vec<s::ReadPair>) -> Self {
+    pub(super) fn new(pairs: Vec<s::ReadPair>) -> Self {
         let mut boot = BootFixture::new(true);
         let entry = boot.entry();
         let request = boot.begin();
         boot.released(&request, entry);
         assert!(matches!(boot.finish(), BootReadCompletion::Seated));
         let prior = PriorBootOpen::assume_checked_open_for_test(&boot.member.run.context);
+        Self::from_boot(boot, prior, pairs)
+    }
+    pub(super) fn from_checked(
+        boot: BootFixture,
+        checked: CheckedBootOpen,
+        pairs: Vec<s::ReadPair>,
+    ) -> Self {
+        Self::from_boot(boot, PriorBootOpen::from_checked(checked), pairs)
+    }
+    fn from_boot(boot: BootFixture, prior: PriorBootOpen, pairs: Vec<s::ReadPair>) -> Self {
         let initial = s::QueryResult::OpenPairs { pairs };
         crate::flow::read_validate::validate(&s::ReadSelector::OpenPairs {}, &initial).unwrap();
         boot.member.run.state.set_nonblocking(true).unwrap();
@@ -113,7 +123,7 @@ impl RepairFixture {
     fn run(&mut self) -> &mut Fixture {
         &mut self.boot.member.run
     }
-    fn begin(&mut self) {
+    pub(super) fn begin(&mut self) {
         let prior = self.prior.take().unwrap();
         let run = self.run();
         run.context.begin_boot_pairs(prior, &mut run.clock).unwrap();
@@ -302,7 +312,7 @@ impl RepairFixture {
         }
         panic!("missing held {held:?}");
     }
-    fn complete(&mut self) -> BootPairsCompletion {
+    pub(super) fn complete(&mut self) -> BootPairsCompletion {
         for _ in 0..512 {
             if self.step().unwrap() == BootPairsProgress::Complete {
                 let run = self.run();
@@ -314,6 +324,9 @@ impl RepairFixture {
             }
         }
         panic!("boot repair did not finish");
+    }
+    pub(super) fn into_boot(self) -> BootFixture {
+        self.boot
     }
     fn records(&self, kind: Kind) -> Vec<serde_json::Value> {
         self.boot.member.records(kind)

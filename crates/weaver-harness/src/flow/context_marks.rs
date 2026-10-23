@@ -239,6 +239,7 @@ impl RecordingContext {
             || self.inspection.is_some()
             || self.member_capture.is_some()
             || self.boot_open_blocks_external()
+            || self.plan_summary_blocks_external()
             || self.measure.is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()

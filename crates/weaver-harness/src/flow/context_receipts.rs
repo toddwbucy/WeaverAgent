@@ -31,12 +31,28 @@ pub(in crate::flow) enum FilingProgress {
 
 #[derive(Debug)]
 pub(in crate::flow) struct FilingCompletion {
+    origin: std::sync::Arc<()>,
+    receipt_identity: std::sync::Arc<()>,
+    key: PumpDeadline,
+    bound: AbsoluteBound,
     sequence: Sequence,
     recorded_ns: u64,
     receipts: ReceiptSet,
 }
 
 impl FilingCompletion {
+    pub(in crate::flow) fn belongs_to(&self, context: &RecordingContext) -> bool {
+        std::sync::Arc::ptr_eq(&self.origin, &context.read_origin)
+    }
+    pub(super) fn receipt_identity(&self) -> &std::sync::Arc<()> {
+        &self.receipt_identity
+    }
+    pub(super) fn wait_key(&self) -> PumpDeadline {
+        self.key
+    }
+    pub(super) fn wait_bound(&self) -> AbsoluteBound {
+        self.bound
+    }
     pub(in crate::flow) fn sequence(&self) -> Sequence {
         self.sequence
     }
@@ -69,6 +85,8 @@ pub(super) enum FilingOwner {
 }
 
 pub(super) struct FilingTransaction {
+    receipt_identity: std::sync::Arc<()>,
+    plan_effect: bool,
     pub(super) outbound: Option<super::sort_driver::OutboundWork>,
     owner: FilingOwner,
     key: PumpDeadline,
@@ -80,7 +98,29 @@ pub(super) struct FilingTransaction {
     cancelled_receipts: Option<ReceiptSet>,
 }
 
+impl FilingTransaction {
+    pub(super) fn cancelled(&self) -> bool {
+        self.cancelled
+    }
+    pub(super) fn receipt_identity(&self) -> &std::sync::Arc<()> {
+        &self.receipt_identity
+    }
+    pub(super) fn wait_key(&self) -> PumpDeadline {
+        self.key
+    }
+    pub(super) fn wait_bound(&self) -> AbsoluteBound {
+        self.bound
+    }
+}
+pub(super) fn is_plan_effect_event(event: &AuthoredEvent) -> bool {
+    matches!(event.payload.as_ref(), Some(Payload::PlanEffect(_)))
+        || matches!(event.payload.as_ref(), Some(Payload::StepOutcome(record)) if record.context.is_some())
+}
+
 impl RecordingContext {
+    pub(super) fn plan_effect_inflight(&self) -> bool {
+        self.filing.as_ref().is_some_and(|owner| owner.plan_effect)
+    }
     // A refused operation returns the original event without an error-path allocation.
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn begin_filing(
@@ -171,6 +211,7 @@ impl RecordingContext {
             || self.read.is_some()
             || self.inspection.is_some()
             || self.boot_open_blocks_external()
+            || self.plan_summary_blocks_external()
             || self.measure_blocks_external()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
@@ -201,6 +242,8 @@ impl RecordingContext {
             });
         }
         self.filing = Some(FilingTransaction {
+            receipt_identity: std::sync::Arc::new(()),
+            plan_effect: is_plan_effect_event(&event),
             outbound: None,
             owner,
             key,
@@ -254,25 +297,31 @@ impl RecordingContext {
 
     pub(super) fn filing_wait_still_owned(&self, key: PumpDeadline) -> bool {
         self.filing.as_ref().is_some_and(|owner| {
-            owner.key == key
-                && !owner.cancelled
-                && !(owner.outbound.is_none()
-                    && owner.author_done
-                    && self
-                        .flow
-                        .filing_receipts()
-                        .is_some_and(ReceiptSet::is_complete)
-                    && self
-                        .flow
-                        .filing_recorded_ns()
-                        .is_some_and(|at| !owner.bound.expired(at)))
+            if owner.key != key {
+                return false;
+            }
+            if owner.plan_effect && owner.cancelled_event.is_none() {
+                return true;
+            }
+            let settled = owner.outbound.is_none()
+                && owner.author_done
+                && self
+                    .flow
+                    .filing_receipts()
+                    .is_some_and(ReceiptSet::is_complete)
+                && self
+                    .flow
+                    .filing_recorded_ns()
+                    .is_some_and(|at| !owner.bound.expired(at));
+            !(owner.cancelled || settled)
         })
     }
 
     fn filing_wait_matches(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
         let owner = self.filing.as_ref().ok_or(RunFailure::Closed)?;
         let current = self.deadlines.get(owner.key);
-        let retired_after_completion = current.is_none()
+        let retired_after_completion = !owner.plan_effect
+            && current.is_none()
             && owner.author_done
             && self
                 .flow
@@ -282,7 +331,10 @@ impl RecordingContext {
                 .flow
                 .filing_recorded_ns()
                 .is_some_and(|at| !owner.bound.expired(at));
-        if !owner.cancelled && current != Some(owner.bound) && !retired_after_completion {
+        if (!owner.cancelled || (owner.plan_effect && owner.cancelled_event.is_none()))
+            && current != Some(owner.bound)
+            && !retired_after_completion
+        {
             return Err(self.fail(
                 io,
                 FlowHaltReason::ProtocolFailed,
@@ -315,8 +367,9 @@ impl RecordingContext {
             ));
         }
         let cancelled = owner.cancelled;
+        let plan_effect = owner.plan_effect;
         self.filing.as_mut().unwrap().sequence = Some(sequence);
-        if !cancelled {
+        if !cancelled || plan_effect {
             let recorded_ns = io.now().map_err(|error| {
                 self.fail(
                     io,
@@ -398,7 +451,7 @@ impl RecordingContext {
                 FilingProgress::Progress
             });
         }
-        if owner.cancelled {
+        if owner.cancelled && (!owner.plan_effect || owner.cancelled_event.is_some()) {
             return Ok(FilingProgress::Cancelled);
         }
         if self
@@ -406,7 +459,11 @@ impl RecordingContext {
             .filing_receipts()
             .is_some_and(ReceiptSet::is_complete)
         {
-            return Ok(FilingProgress::Complete);
+            return Ok(if owner.cancelled {
+                FilingProgress::Cancelled
+            } else {
+                FilingProgress::Complete
+            });
         }
         let advance = self.reduce_flow(ports.io)?;
         if self
@@ -414,7 +471,11 @@ impl RecordingContext {
             .filing_receipts()
             .is_some_and(ReceiptSet::is_complete)
         {
-            Ok(FilingProgress::Complete)
+            Ok(if self.filing.as_ref().unwrap().cancelled {
+                FilingProgress::Cancelled
+            } else {
+                FilingProgress::Complete
+            })
         } else if advance == Advance::Progress {
             Ok(FilingProgress::Progress)
         } else {
@@ -466,6 +527,9 @@ impl RecordingContext {
             return Ok(None);
         }
         let sequence = owner.sequence.expect("recorded original");
+        let receipt_identity = owner.receipt_identity.clone();
+        let key = owner.key;
+        let bound = owner.bound;
         if !self
             .flow
             .filing_receipts()
@@ -481,6 +545,7 @@ impl RecordingContext {
                 "complete filing lost its Recorded timestamp",
             )
         })?;
+        self.observe_plan_effect_receipts();
         let result = self.flow.take_filing_receipts(&mut FlowRecording {
             barrier: &mut self.barrier,
             inbox: &mut self.inbox,
@@ -491,6 +556,10 @@ impl RecordingContext {
             return Ok(None);
         };
         Ok(Some(FilingCompletion {
+            origin: self.read_origin.clone(),
+            receipt_identity,
+            key,
+            bound,
             sequence,
             recorded_ns,
             receipts,
@@ -522,8 +591,16 @@ impl RecordingContext {
             return;
         }
         owner.cancelled = true;
-        owner.cancelled_receipts = self.flow.cancel_filing_receipts();
-        if owner.sequence.is_none() && self.waiting_content.is_some() {
+        let unstarted = owner.sequence.is_none() && self.waiting_content.is_some();
+        if owner.plan_effect {
+            // A late member commit must retain its receipt subscription even
+            // after the consumer cancels. Revocation is not a claimed commit.
+            self.plan_cache.revoke();
+        }
+        if !owner.plan_effect || unstarted {
+            owner.cancelled_receipts = self.flow.cancel_filing_receipts();
+        }
+        if unstarted {
             // No author ticket was allocated. Return the unchanged caller input.
             owner.cancelled_event = self.waiting_content.take();
             owner.author_done = true;
@@ -537,6 +614,27 @@ impl RecordingContext {
             .is_some_and(|r| r.owner == FilingOwner::Ordinary && r.cancelled && r.author_done)
         {
             return None;
+        }
+        let retained_plan = self
+            .filing
+            .as_ref()
+            .is_some_and(|owner| owner.plan_effect && owner.cancelled_event.is_none());
+        if retained_plan {
+            if !self
+                .flow
+                .filing_receipts()
+                .is_some_and(ReceiptSet::is_complete)
+                || self.flow.has_pending_record()
+                || self.barrier.pending().is_some()
+            {
+                return None;
+            }
+            self.observe_plan_effect_receipts();
+            self.filing.as_mut().unwrap().cancelled_receipts = self.flow.cancel_filing_receipts();
+            // The cancelled account owns the exact committed facts. It never
+            // reopens the previous cache or licenses another effect/refresh.
+            self.plan_cache.required = None;
+            self.plan_cache.revoke();
         }
         let owner = self.filing.take().expect("completed cancellation");
         Some(FilingCancellation {

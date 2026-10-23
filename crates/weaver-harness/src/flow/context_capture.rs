@@ -73,6 +73,9 @@ impl RecordingContext {
         if self.templates_block_content() {
             return Err(RunFailure::TemplateBlocked);
         }
+        if self.plan_summary_blocks_external() {
+            return Err(RunFailure::PlanSummaryOwned);
+        }
         if self.boot_open_blocks_external() {
             return Err(RunFailure::BootOpenOwned);
         }

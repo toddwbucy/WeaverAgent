@@ -119,8 +119,7 @@ fn status_name(status: PlanStatus) -> &'static str {
 
 impl Operation<'_, '_> {
     fn current(&self) -> Result<Option<PlanSnapshot>, FileFault> {
-        reads::current_plan_snapshot(self.tx, &self.context.seed_id, self.limits.max_result_bytes)
-            .map_err(read_fault)
+        reads::current_plan_snapshot(self.tx, &self.context.seed_id).map_err(read_fault)
     }
 
     fn expected(&self, expected: &PlanRef) -> Result<PlanSnapshot, FileFault> {

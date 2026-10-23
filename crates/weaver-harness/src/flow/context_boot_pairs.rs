@@ -83,6 +83,9 @@ impl RepairedBootPairs {
     pub(in crate::flow) fn belongs_to(&self, context: &RecordingContext) -> bool {
         std::sync::Arc::ptr_eq(&self.account.prior.origin, &context.read_origin)
     }
+    pub(in crate::flow) fn checked_open(&self) -> Option<&CheckedBootOpen> {
+        self.account.prior.checked.as_ref()
+    }
     pub(in crate::flow) fn initial(&self) -> &RecordedRead {
         match self.account.initial.as_ref().unwrap() {
             ReadCompletion::Recorded(read) => read,
@@ -240,7 +243,10 @@ impl RecordingContext {
             || self.load_duty.is_none()
         {
             Some(BootPairsBeginRefusal::WrongOpen)
-        } else if self.boot_open_blocks_external() || self.boot_begin_busy() {
+        } else if self.boot_open_blocks_external()
+            || self.plan_summary_blocks_external()
+            || self.boot_begin_busy()
+        {
             Some(BootPairsBeginRefusal::Busy)
         } else {
             None

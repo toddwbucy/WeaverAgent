@@ -308,6 +308,7 @@ struct Outbound {
     offset: usize,
     tracked: Option<Arc<TrackedSend>>,
     decode_reservation: Option<Arc<DecodeReservationState>>,
+    generation: bool,
 }
 
 #[derive(Debug)]
@@ -527,7 +528,23 @@ impl DecodePort {
                 failure: Failure::invalid("measurement requires an owned decode reservation"),
             });
         }
-        self.stage_encoded(input, serde_json::to_vec)
+        let generation = matches!(input, TokenDirective::AppendAndGenerate { .. });
+        let result = self.stage_encoded(input, serde_json::to_vec)?;
+        if matches!(result, Stage::Queued) {
+            self.outgoing
+                .as_mut()
+                .expect("queued decode directive")
+                .generation = generation;
+        }
+        Ok(result)
+    }
+
+    /// Inspect only this staged directive's pre-first-byte state. Cancellation
+    /// and draining an earlier exchange remain transport duties, not new work.
+    pub(super) fn generation_not_started(&self) -> bool {
+        self.outgoing
+            .as_ref()
+            .is_some_and(|out| out.generation && out.offset == 0 && !out.preamble_sent)
     }
 
     /// Reserve and stage atomically. Existing buffered work belongs to its
@@ -952,6 +969,7 @@ impl<T> PacketPort<T> {
                 offset: 0,
                 tracked: None,
                 decode_reservation: None,
+                generation: false,
             })
         })();
         match prepared {

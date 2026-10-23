@@ -63,6 +63,15 @@ impl TemplateFixture {
         }
     }
 
+    pub(super) fn with_enter(remaining_enter_ns: u64) -> Self {
+        Self {
+            input: InputFixture::with_template_inventory_and_enter(
+                &inventory(),
+                remaining_enter_ns,
+            ),
+        }
+    }
+
     pub(super) fn begin(&mut self) {
         self.input
             .run

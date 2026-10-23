@@ -30,7 +30,8 @@ The next drafts stack from this baseline, each on its preceding carrier:
 | #257 code/state-malformed-recall-owner | Identity-bearing refusal before an inward pair, with Recorded custody and no model feedback. Published draft ee7488e6. Complete inward boot/repair and serving selection remain owed. |
 | #258 code/state-boot-open-owner | Exact reserved Open from real BootHead, Recorded placement, checked fit/LIVE, private journal initialization and bounded stopped accounting. Published 066d51a3; Planner undrafted after its scoped grade. Review followups and worker boot composition, place/generation and qualified cutover remain owed. |
 | #259 code/state-ste100-artifact-owner | Exact absolute manifest acquisition, confined named regular files, checked retained bytes and sealed production admission entry. Published e3833de2. Production adapters, lifecycle composition and language qualification remain owed. |
-| code/state-review-custody-followups | Contained #255-#258 review corrections above exact #259: actual Recorded repair custody, strict codecs/shared provenance, canonical Open decoding and boot ticket/cancellation/event ownership. Author gates and 54 compiled protective failures pass; full failed-enter composition remains owed. |
+| #261 code/state-review-custody-followups | Contained #255-#258 review corrections above exact #259: actual Recorded repair custody, strict codecs/shared provenance, canonical Open decoding and boot ticket/cancellation/event ownership. Published ef32e86b. Author gates and 54 compiled protective failures pass; full failed-enter composition remains owed. |
+| code/state-plan-summary-owner | Actual boot/effect PlanSummary cache owner, exact receipt/read/Recorded custody, original-bound rollback and internal state metadata independent of public result caps. Author gates and 27 compiled protective failures with restored passes complete. Active lifecycle/plan producer and qualified cutover remain owed. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
@@ -55,8 +56,8 @@ implemented and reviewed. The operator alone requests paid CodeRabbit reviews;
 Codex must not trigger them. All new PRs are submitted as drafts.
 
 #258's grade 5622585660 identifies two dormant failed-account edges, six distinct
-surviving behavioral probes and two redundant/tautological guards. These are
-assigned to the next review-followup slice. Its stopped-tap release composition
+surviving behavioral probes and two redundant/tautological guards. The contained
+corrections and distinct survivor probes are published in #261. Its stopped-tap release composition
 must be proved before activation. Zero effective generation remains valid under
 the merged rules; the operator approved draft #260's positive foundation-boot fit
 on 2026-10-22. Planner review 5622765455 found no fix-bucket rows; the two prose
@@ -86,9 +87,10 @@ trace 160 and SPU cuda,gguf lib/bins 275 plus one actual loaded decode-seam test
 The final gates and all 54 protective mutations use its own private target.
 Earlier reused-target logs remain retained and superseded. An inherited closed-fd
 test race is corrected with isolated child execution; production fd handling is
-unchanged. Full PlanSummary owner integration is the next prepared slice, including
-the internal plan metadata/public-response cap separation. Source review of that
-staging is not a runtime pass or a completed landing.
+unchanged. The PlanSummary owner now passes 1,551 harness tests with 18 inherited
+ignores, state 225 with eight ignores, and 31 state tests without SQLite. Both
+changed-crate lint gates, lock, formatting and diff checks pass. All 27 protective
+mutations fail with restored passes; no owner primitive is an active serving cutover.
 
 The foundation, trace and additive harness roots reached main on 2026-10-21.
 The operator merged #215 at a42d1f02, #189 at 4edf1513, #192 at aec3dcc2 and
