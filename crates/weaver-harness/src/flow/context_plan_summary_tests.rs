@@ -2158,3 +2158,6 @@ fn plan_summary_boot_rollback_seal_cannot_retire_a_foreign_recall_ticket() {
     assert!(run.context.take_stopped_plan_summary().is_err());
     fx.drain();
 }
+
+#[path = "context_release_integration_tests.rs"]
+mod release_integration_tests;

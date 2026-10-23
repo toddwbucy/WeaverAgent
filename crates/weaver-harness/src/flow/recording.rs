@@ -2,6 +2,8 @@
 //! Capacity pressure retains one exact event. It does not reduce a port reply,
 //! recursively author a measurement, or allow a second content event to pass.
 
+use std::sync::Arc;
+
 use weaver_trace::Sequence;
 use weaver_trace::serving::{
     Event, Kind, Payload, Recorder, SubmitAttempt, TapFailure, TapOutcome,
@@ -9,6 +11,7 @@ use weaver_trace::serving::{
 use weaver_types::state_flow::{SourceBlockId, SourcePosition, StateStoreMeasurement, Ste100Reply};
 
 use super::author::{AuthorError, AuthoredEvent, ServingAuthor};
+use super::context::release_driver::{ReleaseAuthor, ReleaseScope, ReleaseTicket, shutdown_kind};
 use super::intake::{FlowInbox, IntakeFailure, IntakeOutcome, RetentionBudget};
 use weaver_trace::serving::payloads::{FlowObservation, FlowPhase};
 
@@ -214,6 +217,8 @@ pub(super) struct RecordBarrier {
     run: String,
     pending: Option<(Event, RecordPurpose)>,
     pending_author: Option<AuthorTicket>,
+    author_identity: Arc<()>,
+    pending_release: Option<ReleaseTicket>,
     boot_open_owed: bool,
     next_ticket: Option<u64>,
     admitted_before_failure: Option<Sequence>,
@@ -239,6 +244,8 @@ impl RecordBarrier {
             run,
             pending: None,
             pending_author: None,
+            author_identity: Arc::new(()),
+            pending_release: None,
             boot_open_owed: false,
             next_ticket: Some(0),
             admitted_before_failure: None,
@@ -297,6 +304,60 @@ impl RecordBarrier {
         budget: &mut RetentionBudget,
         now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
+        self.submit_authored_inner(event, purpose, None, author, wall_ms, inbox, budget, now)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn submit_release_authored_with_clock(
+        &mut self,
+        permit: ReleaseAuthor<'_>,
+        purpose: RecordPurpose,
+        author: &ServingAuthor,
+        wall_ms: u64,
+        inbox: &mut FlowInbox,
+        budget: &mut RetentionBudget,
+        now: &mut impl FnMut() -> std::io::Result<u64>,
+    ) -> RecordProgress {
+        let (scope, event) = permit.into_parts();
+        self.submit_authored_inner(
+            event,
+            purpose,
+            Some(&scope),
+            author,
+            wall_ms,
+            inbox,
+            budget,
+            now,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn submit_authored_inner(
+        &mut self,
+        event: AuthoredEvent,
+        purpose: RecordPurpose,
+        release: Option<&ReleaseScope<'_>>,
+        author: &ServingAuthor,
+        wall_ms: u64,
+        inbox: &mut FlowInbox,
+        budget: &mut RetentionBudget,
+        now: &mut impl FnMut() -> std::io::Result<u64>,
+    ) -> RecordProgress {
+        if let Some(scope) = release {
+            if self.boot_open_owed {
+                return RecordProgress::BusyAuthored { event, purpose };
+            }
+            if !scope.allows(&self.author_identity)
+                || !shutdown_kind(event.kind)
+                || !matches!(purpose, RecordPurpose::Observation)
+            {
+                self.remember_failure(
+                    RecordFailure::Protocol("invalid release author scope".into()),
+                    budget,
+                );
+                return RecordProgress::BusyAuthored { event, purpose };
+            }
+        }
         // Unload is held by the owed boot account, not by a competing author.
         // Return its original intact without poisoning the still-live barrier.
         if event.kind == Kind::Unload && self.boot_open_owed {
@@ -326,6 +387,7 @@ impl RecordBarrier {
             return RecordProgress::BusyAuthored { event, purpose };
         };
         self.next_ticket = ticket.checked_add(1);
+        self.pending_release = release.map(|scope| scope.ticket(ticket, event.kind));
         self.pending_author = Some(AuthorTicket { ticket, event });
         let raw_ns = match now() {
             Ok(value) => value,
@@ -337,7 +399,7 @@ impl RecordBarrier {
             Err(error) => return self.fail(RecordFailure::Author(error), budget),
         };
         self.pending = Some((prepared, purpose));
-        self.resume_with_clock(inbox, budget, now)
+        self.resume_inner(release, inbox, budget, now)
     }
 
     pub(super) fn submit(
@@ -408,6 +470,26 @@ impl RecordBarrier {
         budget: &mut RetentionBudget,
         now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
+        self.resume_inner(None, inbox, budget, now)
+    }
+
+    pub(super) fn resume_release_with_clock(
+        &mut self,
+        scope: &ReleaseScope<'_>,
+        inbox: &mut FlowInbox,
+        budget: &mut RetentionBudget,
+        now: &mut impl FnMut() -> std::io::Result<u64>,
+    ) -> RecordProgress {
+        self.resume_inner(Some(scope), inbox, budget, now)
+    }
+
+    fn resume_inner(
+        &mut self,
+        release: Option<&ReleaseScope<'_>>,
+        inbox: &mut FlowInbox,
+        budget: &mut RetentionBudget,
+        now: &mut impl FnMut() -> std::io::Result<u64>,
+    ) -> RecordProgress {
         if self.failure.is_some() {
             return RecordProgress::Failed;
         }
@@ -432,6 +514,31 @@ impl RecordBarrier {
                 budget,
             );
         }
+        let released = match (&self.pending_release, release) {
+            (Some(ticket), Some(scope)) => {
+                !self.boot_open_owed
+                    && ticket.matches(
+                        scope,
+                        &self.author_identity,
+                        self.pending_author.as_ref(),
+                        event,
+                        purpose,
+                    )
+            }
+            (None, None) => false,
+            _ => {
+                return self.fail(
+                    RecordFailure::Protocol("release author lost its exact scope or ticket".into()),
+                    budget,
+                );
+            }
+        };
+        if (self.pending_release.is_some() || self.recorder.tap_stopped()) && !released {
+            return self.fail(
+                RecordFailure::Protocol("ordinary author has no live release scope".into()),
+                budget,
+            );
+        }
         // Retain the exact pending author for the halt account even if the
         // recorder rejects it. The clone shares raw text where its type permits.
         let attempt = self.recorder.submit(event.clone());
@@ -444,6 +551,7 @@ impl RecordBarrier {
             Ok(SubmitAttempt::Recorded(submission)) => {
                 let (recorded_event, purpose) = self.pending.take().expect("pending event");
                 self.pending_author = None;
+                self.pending_release = None;
                 // Failure below is after trace admission. It must not be
                 // reported as an unadmitted author in the halt account.
                 self.admitted_before_failure = Some(submission.sequence);
@@ -472,11 +580,7 @@ impl RecordBarrier {
                     }
                     TapOutcome::HeadUntapped if !self.recorder.is_active() => {}
                     TapOutcome::Stopped if self.recorder.is_preflight_shutdown() => {}
-                    TapOutcome::Stopped
-                        if recorded_event.envelope.kind == Kind::Unload
-                            && matches!(purpose, RecordPurpose::Observation)
-                            && !self.boot_open_owed
-                            && self.recorder.is_closed() => {}
+                    TapOutcome::Stopped if released => {}
                     TapOutcome::Stopped | TapOutcome::HeadUntapped => {
                         return self.fail(
                             RecordFailure::Protocol("ordinary record has no live tap".into()),
@@ -565,6 +669,19 @@ impl RecordBarrier {
     }
     pub(super) fn pending_author(&self) -> Option<&AuthorTicket> {
         self.pending_author.as_ref()
+    }
+    pub(super) fn author_identity(&self) -> Arc<()> {
+        Arc::clone(&self.author_identity)
+    }
+    #[cfg(test)]
+    pub(super) fn replace_pending_author_ticket_for_test(&mut self) -> u64 {
+        let ticket = self.next_ticket.expect("fixture ticket capacity");
+        self.next_ticket = ticket.checked_add(1);
+        self.pending_author
+            .as_mut()
+            .expect("real pending author")
+            .ticket = ticket;
+        ticket
     }
     pub(super) fn admitted_before_failure(&self) -> Option<Sequence> {
         self.admitted_before_failure
@@ -748,6 +865,7 @@ impl RecordBarrier {
         {
             self.pending = None;
             self.pending_author = None;
+            self.pending_release = None;
             true
         } else {
             false
@@ -775,6 +893,7 @@ impl RecordBarrier {
             SubmitAttempt::Recorded(submission) => {
                 self.pending = None;
                 self.pending_author = None;
+                self.pending_release = None;
                 self.last_trace_only_sequence = Some(submission.sequence);
                 Ok(Some(submission.sequence))
             }

@@ -158,6 +158,7 @@ pub(crate) struct RecordingContext {
     // Its retry must pass the generic admission checks again.
     author_admission_pending: bool,
     completed_author: Option<Sequence>,
+    release_author: Option<release_driver::ReleaseAttempt>,
     failure: Option<RunFailure>,
     failed_wait: Option<WaitAtHalt>,
     halt_report: Option<halt_driver::HaltReport>,
@@ -269,6 +270,7 @@ impl RecordingContext {
             waiting_content: None,
             author_admission_pending: false,
             completed_author: None,
+            release_author: None,
             failure: None,
             failed_wait: None,
             halt_report: None,
@@ -906,15 +908,7 @@ impl RecordingContext {
             }
         };
         self.author_turn = Some((event.kind, event.turn.clone()));
-        let progress = self.barrier.submit_authored_with_clock(
-            event,
-            purpose,
-            &self.author,
-            wall_ms,
-            &mut self.inbox,
-            &mut self.budget,
-            &mut || ports.io.now(),
-        );
+        let progress = self.submit_context_author(event, purpose, wall_ms, ports.io);
         self.wait_recorded(ports, progress)
     }
 
@@ -975,6 +969,7 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
         if let Some(sequence) = self.completed_author.take() {
+            self.finish_release_author();
             return Ok(sequence);
         }
         if self.waiting_content.is_some() {
@@ -991,9 +986,7 @@ impl RecordingContext {
                 "resume requires this caller's pending author",
             ));
         }
-        let progress =
-            self.barrier
-                .resume_with_clock(&mut self.inbox, &mut self.budget, &mut || ports.io.now());
+        let progress = self.resume_context_author(ports.io);
         self.wait_recorded(ports, progress)
     }
 
@@ -1009,6 +1002,7 @@ impl RecordingContext {
                 proof: None,
             } = &progress
             {
+                self.retain_release_recorded(*sequence);
                 self.bind_marks_author(*sequence, ports.io)?;
                 self.bind_repair_author(*sequence, ports.io)?;
                 self.bind_pair_author(*sequence, ports.io)?;
@@ -1034,10 +1028,12 @@ impl RecordingContext {
                     self.bind_filing_author(sequence, ports.io)?;
                     self.bind_output_author(sequence, ports.io)?;
                     self.live(ports.io)?;
-                    return Ok(self
+                    let sequence = self
                         .completed_author
                         .take()
-                        .expect("recorded caller result is owned"));
+                        .expect("recorded caller result is owned");
+                    self.finish_release_author();
+                    return Ok(sequence);
                 }
                 RecordProgress::Pending => {
                     if let PumpStep::Deadline { key, bound } = self.pump_once(ports)? {
@@ -1058,9 +1054,7 @@ impl RecordingContext {
                     ));
                 }
             }
-            progress =
-                self.barrier
-                    .resume_with_clock(&mut self.inbox, &mut self.budget, &mut || ports.io.now());
+            progress = self.resume_context_author(ports.io);
         }
     }
 
@@ -1079,13 +1073,7 @@ impl RecordingContext {
                     if self.load_matches(load))
             }
             RecordingPhase::Entered => !matches!(event.kind, Kind::Load | Kind::Unload),
-            RecordingPhase::Releasing => {
-                serving::content_schema(event.kind) == ContentSchema::None
-                    && matches!(
-                        event.kind,
-                        Kind::Unload | Kind::SessionClosed | Kind::Fault | Kind::Refusal
-                    )
-            }
+            RecordingPhase::Releasing => release_driver::shutdown_kind(event.kind),
             RecordingPhase::Failed | RecordingPhase::Closed => false,
         }
     }
@@ -1803,3 +1791,6 @@ pub(super) use inspection_driver::{
     InspectionBeginError, InspectionBeginRefusal, InspectionCompletion, InspectionEvidence,
     InspectionKind, InspectionProgress,
 };
+
+#[path = "context_release.rs"]
+pub(in crate::flow) mod release_driver;
