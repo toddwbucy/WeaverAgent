@@ -137,6 +137,7 @@ pub(crate) struct RecordingContext {
     place_close: Option<weaver_types::TurnFrame>,
     plan_cache: super::plan::PlanSummaryCache,
     plan_summary: Option<plan_summary_driver::PlanSummaryTransaction>,
+    retired_enter: Option<AbsoluteBound>,
     inspection: Option<inspection_driver::InspectionTransaction>,
     marks: Option<marks_driver::MarksTransaction>,
     // Pointer identity survives moves and is never recreated from trace IDs.
@@ -165,7 +166,9 @@ pub(crate) struct RecordingContext {
     open_turn: Option<weaver_trace::TurnRef>,
     /// A caller's source remains owned if refusal happens before a ticket.
     /// It is distinct from the recorder's first pending author.
+    // First fatal original is immutable; retryable holds have separate custody.
     refused_author: Option<AuthoredEvent>,
+    held_author: Option<AuthoredEvent>,
     waiting_content: Option<AuthoredEvent>,
     // An initial lifecycle wait retained a valid original before admission.
     // Its retry must pass the generic admission checks again.
@@ -266,6 +269,7 @@ impl RecordingContext {
             place_notice: None,
             plan_cache: super::plan::PlanSummaryCache::default(),
             plan_summary: None,
+            retired_enter: None,
             inspection: None,
             marks: None,
             read_origin: std::sync::Arc::new(()),
@@ -292,6 +296,7 @@ impl RecordingContext {
             author_turn: None,
             open_turn: None,
             refused_author: None,
+            held_author: None,
             waiting_content: None,
             author_admission_pending: false,
             completed_author: None,
@@ -315,8 +320,21 @@ impl RecordingContext {
     pub(super) fn pending_author(&self) -> Option<&super::recording::AuthorTicket> {
         self.barrier.pending_author()
     }
+    /// Original associated with the first fatal author refusal. Never retryable.
     pub(super) fn refused_author(&self) -> Option<&AuthoredEvent> {
         self.refused_author.as_ref()
+    }
+
+    /// Latest nonfatal owner hold. A later held attempt replaces only this slot;
+    /// callers needing an earlier original must take it before another attempt.
+    pub(super) fn held_author(&self) -> Option<&AuthoredEvent> {
+        self.held_author.as_ref()
+    }
+
+    /// Return the exact unadmitted original. Taking it does not grant admission:
+    /// retry must pass the same owner/phase/deadline checks as any new attempt.
+    pub(super) fn take_held_author(&mut self) -> Option<AuthoredEvent> {
+        self.held_author.take()
     }
 
     pub(super) fn halt(&self) -> Option<&super::report::HaltLatch> {
@@ -540,7 +558,11 @@ impl RecordingContext {
                 HaltPoint::Barrier,
                 error.to_string(),
             )
-        })
+        })?;
+        if key == PumpDeadline::Enter {
+            self.retired_enter = None;
+        }
+        Ok(())
     }
 
     pub(super) fn complete_wait(&mut self, key: PumpDeadline) -> Option<AbsoluteBound> {
@@ -571,7 +593,19 @@ impl RecordingContext {
         {
             return None;
         }
-        self.deadlines.disarm(key)
+        self.disarm_wait(key)
+    }
+
+    /// A retired Enter receipt proves the original registered cap was actually
+    /// removed. A no-op disarm cannot invent or erase retirement evidence.
+    fn disarm_wait(&mut self, key: PumpDeadline) -> Option<AbsoluteBound> {
+        let retired = self.deadlines.disarm(key);
+        if key == PumpDeadline::Enter
+            && let Some(bound) = retired
+        {
+            self.retired_enter = Some(bound);
+        }
+        retired
     }
 
     pub(super) fn begin_releasing(
@@ -781,45 +815,45 @@ impl RecordingContext {
         if self.place_blocks_external()
             || (self.place_admission_stopped() && event.kind == Kind::TurnStarted)
         {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::PlaceOwned);
         }
         if (self.plan_summary_blocks_external() && !self.plan_summary_allows_turn_close(&event))
             || (receipt_driver::is_plan_effect_event(&event) && !self.plan_effect_inflight())
         {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::PlanSummaryOwned);
         }
         if self.boot_open_blocks_external() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::BootOpenOwned);
         }
         if self.boot_pairs_blocks_external() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::BootPairsOwned);
         }
         if self.marks_blocks_external() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::MarksOwned);
         }
         if self.freshness.is_some() && !retained_retry {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::FreshnessOwned);
         }
         if self.inspection.is_some() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::InspectionOwned);
         }
         if self.read.is_some() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::ReadOwned);
         }
         if self.repair_blocks_external() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::RepairOwned);
         }
         if self.measure_blocks_external() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::MeasureOwned);
         }
         if self.filing.is_some()
@@ -858,7 +892,7 @@ impl RecordingContext {
             return Err(RunFailure::TemplateBlocked);
         }
         if matches!(event.kind, Kind::ToolCallStarted | Kind::ToolCallCompleted) {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::PairOwned);
         }
         if !self.author_allowed(&event) {
@@ -1100,17 +1134,26 @@ impl RecordingContext {
                     }
                 }
                 RecordProgress::BusyAuthored { event, owed, .. } => {
-                    self.retain_refused(event);
-                    // Preserve the original first, then observe genuine failures
-                    // before returning a nonfatal account hold.
-                    self.drain_intake(ports.io)?;
                     if let Some(owed) = owed {
+                        // The barrier returns this exact unadmitted attempt,
+                        // including withdrawing its pending ticket on resume.
+                        // Retain it before any fallible observer and retire only
+                        // this attempt's turn/release bookkeeping.
+                        self.held_author = Some(event);
+                        self.author_turn = None;
                         self.finish_release_author();
+                        if let Err(failure) = self.drain_intake(ports.io) {
+                            let original = self.held_author.take().expect("returned original");
+                            self.retain_refused(original);
+                            return Err(failure);
+                        }
                         return Err(match owed {
                             OwedAuthor::BootOpen => RunFailure::BootOpenOwned,
                             OwedAuthor::Placement => RunFailure::PlaceOwned,
                         });
                     }
+                    self.retain_refused(event);
+                    self.drain_intake(ports.io)?;
                     return Err(self.record_failed(ports.io));
                 }
                 RecordProgress::Failed => return Err(self.record_failed(ports.io)),

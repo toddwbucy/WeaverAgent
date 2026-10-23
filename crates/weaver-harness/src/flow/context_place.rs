@@ -353,9 +353,7 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), PlaceInstallError> {
         let failure = self.live(io).err();
-        let valid = boot.repaired().belongs_to(self)
-            && boot.repaired().checked_open().is_some()
-            && self.boot_journal.is_some()
+        let valid = self.boot_proof_current(boot.repaired())
             && self.committed_plan_summary().is_ok()
             && self.place_engine.is_none()
             && self.load_duty.is_some()

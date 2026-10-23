@@ -40,7 +40,8 @@ The next drafts stack from this baseline, each on its preceding carrier:
 | #270 code/state-release-repair-review | #265/#266 review consistency: exact release-mark/original custody, typed boot/placement debt, monotone refused-pair causes, exact errors and retained settled proofs. Harness 1,678/18 ignored, trace 160, 19 protective controls, one separate non-Clone pin and required lint/fmt/lock pass; no #263 counting change or serving activation. |
 | #271 code/state-boot-rollback-custody | Completed Boot evidence remains truthful after revocation; extracted pre-install proof returns its original owner for bounded rollback. Harness 1,694/18 ignored, trace 160, 19 protective controls, a separate installed-borrow type pin and required lint/fmt/lock pass. Full boot/lifecycle composition and qualified cutover remain owed. |
 | #272 code/state-ste100-runtime | Separate dormant duty process, retained backend/input ownership, bounded reactor handoffs and artifact/codec review corrections. Types 168 default/224 config, SPU cuda,gguf 380, admin 498/37 ignored and harness 1,694/18 ignored pass; 48 behavior probes plus manifest/reporting controls fail and exact restores pass. Production has no compatible compiled adapter and cannot return Ready. Worker wiring and qualified artifacts/limits remain owed. |
-| code/state-place-stop-returns | Returns exact cancelled reload custody and settles completed native marks after turn-scoped Stop. Nine actual-owner tests, harness 1,703/18 ignored, trace 160 and 14 compiled protective failures with restored passes. #269 fix rows 1-2 addressed for review; worker composition, remaining review rows and qualification remain owed. |
+| #273 code/state-place-stop-returns | Returns exact cancelled reload custody and settles completed native marks after turn-scoped Stop. Nine actual-owner tests, harness 1,703/18 ignored, trace 160 and 14 compiled protective failures with restored passes. #269 fix rows 1-2 addressed for review; worker composition, remaining review rows and qualification remain owed. |
+| code/state-owner-custody-review | Combined #270/#271 custody followups: separate held/fatal originals, exact release withdrawal, shared pair-proof scan and typed completed Boot cleanup through state retirement. Harness 1,721/18 ignored and trace 160 pass; final repair/lint/fmt checks pass after an equivalent condition collapse. All 32 compiled protective failures and restored controls pass, with a separate typed-carrier pin. Full lifecycle composition and qualification remain owed. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
@@ -60,6 +61,16 @@ row 1 within its dormant scope. The Planner undrafted it. Its five batch rows
 remain tracked: complete failed-Enter restoration order, typed successful Boot
 evidence, shared identity checks, single-match extraction and named test fields.
 The restoration-order duty must be resolved before full failed-Enter composition.
+The owner-custody-review followup addresses the #270/#271 batch for review,
+retaining their complete row dispositions and defensive/redundant probe limits.
+Its cleanup-return changes do not supply the full failed-Enter composer.
+
+#272's Planner grade at 044d1049 has zero fix rows and reproduces its scoped
+gates; the Planner undrafted it. Its eleven followups remain tracked, including
+two filed edge cases and three distinct test gaps: pending-reply wait
+writability, orderly Idle process exit and backend destruction before grammar
+inputs. R1/R7 are redundant guards. Its shared ModelBinding decoder also narrows
+live admin TOML parsing by rejecting positional arrays, now named in its record.
 
 The Planner graded #255 at b26420e5 with no fix-bucket findings and reproduced
 its gates and 17 protective mutations. Its TRACE-PLACEMENT claim is limited to

@@ -522,7 +522,7 @@ fn inspection_excludes_read_input_author_and_freshness_until_final_take() {
         RunFailure::InspectionOwned
     );
     assert_eq!(
-        member.run.context.refused_author().unwrap().kind,
+        member.run.context.held_author().unwrap().kind,
         Kind::TurnStarted
     );
     assert_eq!(

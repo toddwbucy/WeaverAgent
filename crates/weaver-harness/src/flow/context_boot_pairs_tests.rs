@@ -618,7 +618,7 @@ fn boot_pairs_owns_read_author_and_waits_until_completion_is_taken() {
             .unwrap_err(),
         RunFailure::BootPairsOwned
     );
-    assert!(run.context.refused_author().is_some());
+    assert!(run.context.held_author().is_some());
     for active_read in [false, true] {
         if active_read {
             fx.until_held(Hold::Release(1));

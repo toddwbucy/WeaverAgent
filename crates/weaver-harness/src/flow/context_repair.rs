@@ -194,6 +194,36 @@ enum Accounting {
     CancelOriginal,
 }
 
+#[derive(Clone, Copy)]
+enum ProofPhase {
+    BeforeIntake,
+    AfterAccounting,
+}
+
+/// A pending prefix never hides a later ledger error. Only pre-intake absence
+/// is pending; a finished accounting owner owes every exact terminal proof.
+fn scan_pair_proofs<'a>(
+    proofs: impl Iterator<
+        Item = Result<Option<&'a super::pairs::CompletedPair>, super::pairs::PairError>,
+    >,
+    phase: ProofPhase,
+) -> Result<Option<Vec<&'a super::pairs::CompletedPair>>, super::pairs::PairError> {
+    use super::pairs::PairError;
+    let mut complete = Vec::new();
+    let mut pending = false;
+    for proof in proofs {
+        match proof {
+            Ok(Some(proof)) => complete.push(proof),
+            Ok(None) | Err(PairError::UnknownCall) if matches!(phase, ProofPhase::BeforeIntake) => {
+                pending = true;
+            }
+            Ok(None) => return Err(PairError::WrongPhase),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok((!pending).then_some(complete))
+}
+
 pub(super) struct RepairTransaction {
     ledger: RepairLedger,
     certificate: TemplateCertificate,
@@ -227,6 +257,24 @@ pub(super) struct RepairTransaction {
 }
 
 impl RepairTransaction {
+    fn settle_refused_proofs(
+        &mut self,
+        proofs: &[&super::pairs::CompletedPair],
+    ) -> Result<(), RepairError> {
+        if let Some(correction) = &self.correction {
+            super::repair::validate_refused_accounted(
+                correction
+                    .requests()
+                    .iter()
+                    .map(|request| request.opening()),
+                proofs,
+                self.cancel,
+            )?;
+        }
+        self.refused_pairs_settled = true;
+        Ok(())
+    }
+
     fn take_refusal_evidence(&mut self) -> Option<RepairRefusalEvidence> {
         self.refusal_source.as_ref()?;
         if self.rejection.is_some() {
@@ -485,6 +533,21 @@ impl RecordingContext {
 
     // Defensive loan fixtures use the ledger's actual transfers, never set its
     // private loan bits or manufacture an account/correction capability.
+    #[cfg(test)]
+    pub(super) fn settle_refused_proofs_for_test(
+        &mut self,
+        proofs: &[&super::pairs::CompletedPair],
+    ) -> Result<(), RepairError> {
+        self.repair.as_mut().unwrap().settle_refused_proofs(proofs)
+    }
+
+    #[cfg(test)]
+    pub(super) fn repair_retained_custody_for_test(
+        &self,
+    ) -> (Option<&RepairAccount>, Option<&OriginalRequests>) {
+        let work = self.repair.as_ref().unwrap();
+        (work.account.as_ref(), work.correction.as_ref())
+    }
     #[cfg(test)]
     pub(super) fn repair_refused_pairs_settled_for_test(&self) -> bool {
         self.repair.as_ref().unwrap().refused_pairs_settled
@@ -1312,14 +1375,11 @@ impl RecordingContext {
         // CompletedPair capabilities remain in the pair owner. The repair owner
         // checks exact identities and causes before accepting its custody back.
         let calls = self.repair.as_ref().unwrap().calls.clone();
-        let proofs = calls
-            .iter()
-            .map(|call| {
-                self.pairs
-                    .completed(call)
-                    .and_then(|proof| proof.ok_or(super::pairs::PairError::WrongPhase))
-            })
-            .collect::<Result<Vec<_>, _>>();
+        let proofs = scan_pair_proofs(
+            calls.iter().map(|call| self.pairs.completed(call)),
+            ProofPhase::AfterAccounting,
+        )
+        .and_then(|proofs| proofs.ok_or(super::pairs::PairError::WrongPhase));
         let proofs = match proofs {
             Ok(proofs) => proofs,
             Err(error) => {
@@ -1357,18 +1417,10 @@ impl RecordingContext {
                 Ok(())
             }
             Accounting::RefusedCorrection => {
-                let correction = correction.unwrap();
-                let checked = super::repair::validate_refused_accounted(
-                    correction
-                        .requests()
-                        .iter()
-                        .map(|request| request.opening()),
-                    &proofs,
-                    work.cancel,
-                );
-                work.correction = Some(correction);
-                work.refused_pairs_settled = checked.is_ok();
-                checked
+                // Restore the complete original before validating its proofs;
+                // even a real validation error must retain correction custody.
+                work.correction = correction;
+                work.settle_refused_proofs(&proofs)
             }
             Accounting::CancelOriginal => {
                 work.account = account;
@@ -1516,90 +1568,44 @@ impl RecordingContext {
         Ok(result)
     }
 
-    fn repair_requests_need_accounting<'a>(
-        &self,
-        calls: impl Iterator<Item = &'a CallId>,
-    ) -> Result<bool, super::pairs::PairError> {
-        let mut pending = false;
-        for call in calls {
-            match self.pairs.completed(call) {
-                Ok(proof) => pending |= proof.is_none(),
-                // Before intake this call is legitimately not in the pair owner.
-                Err(super::pairs::PairError::UnknownCall) => pending = true,
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(pending)
-    }
-
     fn begin_pending_correction_accounting(
         &mut self,
         kind: Accounting,
         io: &mut impl PumpIo,
     ) -> Result<bool, RunFailure> {
-        let Some(correction) = self.repair.as_ref().unwrap().correction.as_ref() else {
-            return Ok(false);
+        let correction = self.repair.as_ref().unwrap().correction.as_ref();
+        let scanned = scan_pair_proofs(
+            correction
+                .into_iter()
+                .flat_map(|correction| correction.requests())
+                .map(|request| self.pairs.completed(&request.opening().call_id)),
+            ProofPhase::BeforeIntake,
+        );
+        let proofs = match scanned {
+            Ok(proofs) => proofs,
+            Err(error) => {
+                return Err(self.pair_fault(io, format!("correction pair proof: {error:?}")));
+            }
         };
-        let pending = self
-            .repair_requests_need_accounting(
-                correction
-                    .requests()
-                    .iter()
-                    .map(|request| &request.opening().call_id),
-            )
-            .map_err(|error| self.pair_fault(io, format!("correction pair proof: {error:?}")))?;
-        if pending {
-            let work = self.repair.as_mut().unwrap();
-            work.calls = work
-                .correction
-                .as_ref()
-                .unwrap()
-                .requests()
-                .iter()
-                .map(|request| request.opening().call_id.clone())
-                .collect();
-            work.accounting = Some(kind);
+        let work = self.repair.as_mut().unwrap();
+        if let Some(proofs) = proofs {
+            if kind == Accounting::RefusedCorrection {
+                work.settle_refused_proofs(&proofs).map_err(|error| {
+                    self.repair_fault(io, format!("refused correction pair proof: {error:?}"))
+                })?;
+            }
+            return Ok(false);
         }
-        Ok(pending)
-    }
-
-    fn settle_refused_correction_proofs(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
-        let work = self.repair.as_ref().unwrap();
-        if work.refused_pairs_settled {
-            return Ok(());
-        }
-        if let Some(correction) = &work.correction {
-            let proofs = correction
-                .requests()
-                .iter()
-                .map(|request| {
-                    self.pairs
-                        .completed(&request.opening().call_id)
-                        .and_then(|proof| proof.ok_or(super::pairs::PairError::WrongPhase))
-                })
-                .collect::<Result<Vec<_>, _>>();
-            let proofs = match proofs {
-                Ok(proofs) => proofs,
-                Err(error) => {
-                    return Err(
-                        self.pair_fault(io, format!("refused correction pair proof: {error:?}"))
-                    );
-                }
-            };
-            let checked = super::repair::validate_refused_accounted(
-                correction
-                    .requests()
-                    .iter()
-                    .map(|request| request.opening()),
-                &proofs,
-                work.cancel,
-            );
-            checked.map_err(|error| {
-                self.repair_fault(io, format!("refused correction pair proof: {error:?}"))
-            })?;
-        }
-        self.repair.as_mut().unwrap().refused_pairs_settled = true;
-        Ok(())
+        work.calls = work
+            .correction
+            .as_ref()
+            .expect("pending correction calls")
+            .requests()
+            .iter()
+            .map(|request| request.opening().call_id.clone())
+            .collect();
+        work.accounting = Some(kind);
+        Ok(true)
     }
 
     /// Settle the same admitted refusal records and forbidden correction pairs
@@ -1650,11 +1656,10 @@ impl RecordingContext {
             work.account = Some(account);
             work.correction = pending;
         }
-        if !self.repair.as_ref().unwrap().refused_pairs_settled {
-            if self.begin_pending_correction_accounting(Accounting::RefusedCorrection, ports.io)? {
-                return Ok(RepairProgress::Progress);
-            }
-            self.settle_refused_correction_proofs(ports.io)?;
+        if !self.repair.as_ref().unwrap().refused_pairs_settled
+            && self.begin_pending_correction_accounting(Accounting::RefusedCorrection, ports.io)?
+        {
+            return Ok(RepairProgress::Progress);
         }
         // One retirement point for both initially debt-free refusals and the
         // same refusal after backpressured records or pair accounting.
@@ -1827,21 +1832,25 @@ impl RecordingContext {
         if self.begin_pending_correction_accounting(Accounting::CancelCorrection, ports.io)? {
             return Ok(RepairProgress::Progress);
         }
-        let unsettled = self
-            .repair_requests_need_accounting(
-                self.repair
-                    .as_ref()
-                    .unwrap()
-                    .account
-                    .as_ref()
-                    .unwrap()
-                    .requests()
-                    .iter()
-                    .map(|request| &request.call_id),
-            )
-            .map_err(|error| {
-                self.pair_fault(ports.io, format!("cancelled repair pair proof: {error:?}"))
-            })?;
+        let unsettled = match scan_pair_proofs(
+            self.repair
+                .as_ref()
+                .unwrap()
+                .account
+                .as_ref()
+                .unwrap()
+                .requests()
+                .iter()
+                .map(|request| self.pairs.completed(&request.call_id)),
+            ProofPhase::BeforeIntake,
+        ) {
+            Ok(proofs) => proofs.is_none(),
+            Err(error) => {
+                return Err(
+                    self.pair_fault(ports.io, format!("cancelled repair pair proof: {error:?}"))
+                );
+            }
+        };
         if unsettled {
             let work = self.repair.as_mut().unwrap();
             work.calls = work
@@ -1898,5 +1907,51 @@ impl RecordingContext {
             HaltPoint::Barrier,
             detail,
         )
+    }
+}
+
+#[cfg(test)]
+mod proof_scan_tests {
+    use super::super::pairs::PairError;
+    use super::*;
+
+    #[test]
+    fn repair_proof_scan_preserves_phase_and_later_errors_after_pending_prefix() {
+        // The iterator is a projection of ledger lookups, not fabricated pair
+        // capabilities. A mixed pending/error prefix is a defensive scan probe;
+        // the actual frozen-owner custody fixture separately exercises routing.
+        for pending in [Ok(None), Err(PairError::UnknownCall)] {
+            assert!(matches!(
+                scan_pair_proofs(
+                    [pending, Err(PairError::Frozen)].into_iter(),
+                    ProofPhase::BeforeIntake
+                ),
+                Err(PairError::Frozen)
+            ));
+        }
+        for absence in [Ok(None), Err(PairError::UnknownCall)] {
+            assert!(
+                scan_pair_proofs([absence].into_iter(), ProofPhase::BeforeIntake)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        assert!(matches!(
+            scan_pair_proofs([Ok(None)].into_iter(), ProofPhase::AfterAccounting),
+            Err(PairError::WrongPhase)
+        ));
+        assert!(matches!(
+            scan_pair_proofs(
+                [Err(PairError::UnknownCall)].into_iter(),
+                ProofPhase::AfterAccounting
+            ),
+            Err(PairError::UnknownCall)
+        ));
+        assert!(
+            scan_pair_proofs(std::iter::empty(), ProofPhase::AfterAccounting)
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
     }
 }

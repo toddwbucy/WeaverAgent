@@ -818,6 +818,12 @@ fn repair_followup_defensive_frozen_pair_owner_preserves_its_exact_error_before_
         assert!(fx.input.records(Kind::ToolCallStarted).is_empty());
         assert!(fx.input.records(Kind::ToolCallCompleted).is_empty());
         assert_eq!(fx.input.run.context.failure(), Some(&failure));
+        let (account, correction) = fx.input.run.context.repair_retained_custody_for_test();
+        let account = account.expect("failure retains the actual original account");
+        let correction = correction.expect("failure retains the actual correction");
+        assert_eq!(correction.requests().len(), 1);
+        assert_ne!(account.source(), correction.generation().source());
+        assert!(!fx.input.run.context.repair_refused_pairs_settled_for_test());
     }
 }
 
@@ -870,4 +876,70 @@ fn repair_followup_refusal_readiness_reuses_its_settled_terminal_proof() {
         .unwrap();
     assert_eq!(retained.pending().unwrap().requests().len(), 1);
     assert!(fx.input.run.context.failure().is_none());
+}
+
+#[test]
+fn repair_custody_shared_validation_rejects_foreign_actual_terminal_without_losing_originals() {
+    let (foreign, call) = completed_cause_fixture(s::NonDispatchCause::RepairExhausted);
+    let wrong = foreign
+        .input
+        .run
+        .context
+        .pairs
+        .completed(&call)
+        .unwrap()
+        .unwrap();
+    let mut fx = refused_with_correction();
+    fx.input
+        .run
+        .context
+        .stage_repair_test_refusal(&mut fx.input.run.clock);
+    let mut ready = false;
+    for _ in 0..512 {
+        fx.step(true);
+        if fx
+            .input
+            .run
+            .context
+            .repair_retained_custody_for_test()
+            .1
+            .is_some()
+        {
+            ready = true;
+            break;
+        }
+    }
+    assert!(
+        ready,
+        "refusal must retain the actual correction before pair intake"
+    );
+    assert!(!fx.input.run.context.repair_refused_pairs_settled_for_test());
+    let (account, correction) = fx.input.run.context.repair_retained_custody_for_test();
+    let original_source = account.unwrap().source().clone();
+    let correction_source = correction.unwrap().generation().source().clone();
+    let opening = correction.unwrap().requests()[0].opening().clone();
+    // Borrow a real completed capability from another owner. Public accounting
+    // cannot supply this composition; it isolates the shared validation gate.
+    assert_eq!(
+        fx.input
+            .run
+            .context
+            .settle_refused_proofs_for_test(&[wrong]),
+        Err(RepairError::WrongAccounting)
+    );
+    assert!(!fx.input.run.context.repair_refused_pairs_settled_for_test());
+    let (account, correction) = fx.input.run.context.repair_retained_custody_for_test();
+    assert_eq!(account.unwrap().source(), &original_source);
+    assert_eq!(
+        correction.unwrap().generation().source(),
+        &correction_source
+    );
+    assert_eq!(correction.unwrap().requests()[0].opening(), &opening);
+    assert!(fx.input.run.context.failure().is_none());
+    let refused = finish_refused(&mut fx);
+    assert_eq!(refused.account().source(), &original_source);
+    assert_eq!(
+        refused.pending().unwrap().generation().source(),
+        &correction_source
+    );
 }

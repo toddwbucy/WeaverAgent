@@ -862,7 +862,7 @@ fn place_extracted_grant_stop_retains_refused_authority_until_original_turn_clos
                 run.author(early.clone()).unwrap_err(),
                 RunFailure::PlaceOwned
             );
-            assert_eq!(run.context.refused_author().unwrap().turn, early.turn);
+            assert_eq!(run.context.held_author().unwrap().turn, early.turn);
             assert_eq!(run.context.open_turn.as_ref().unwrap().0, "extracted-grant");
             assert_eq!(
                 run.context

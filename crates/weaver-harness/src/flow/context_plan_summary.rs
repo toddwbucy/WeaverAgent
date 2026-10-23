@@ -28,13 +28,13 @@ pub(in crate::flow) enum PlanSummaryProgress {
 }
 
 #[derive(Debug)]
-enum Prerequisite {
+pub(super) enum Prerequisite {
     Boot(RepairedBootPairs),
     Effect(FilingCompletion),
 }
 #[derive(Debug)]
-pub(super) struct PlanSummaryTransaction {
-    prerequisite: Prerequisite,
+pub(super) struct PlanSummaryTransaction<P = Prerequisite, R = Option<Arc<CommittedPlanSummary>>> {
+    prerequisite: P,
     key: PumpDeadline,
     bound: AbsoluteBound,
     driving: bool,
@@ -42,7 +42,7 @@ pub(super) struct PlanSummaryTransaction {
     cancelled: bool,
     complete: bool,
     read_settled: bool,
-    recorded: Option<Arc<CommittedPlanSummary>>,
+    recorded: R,
     rejected: Option<RecordedRead>,
     refusal: Option<ReadFailure>,
     account_deadline: u64,
@@ -74,52 +74,134 @@ impl PlanSummaryTransaction {
     fn effect(&self) -> bool {
         matches!(self.prerequisite, Prerequisite::Effect(_))
     }
+}
 
-    #[cfg(test)]
-    pub(super) fn disposition_for_test(&self) -> (bool, bool, PumpDeadline, AbsoluteBound, u64) {
+/// All original rollback fields move exhaustively; the conversion changes only
+/// the static evidence types, never an identity, disposition, clock or read.
+impl<P, R> PlanSummaryTransaction<P, R> {
+    fn split_evidence(self) -> (P, R, PlanSummaryTransaction<(), ()>) {
+        let Self {
+            prerequisite,
+            recorded,
+            key,
+            bound,
+            driving,
+            started,
+            cancelled,
+            complete,
+            read_settled,
+            rejected,
+            refusal,
+            account_deadline,
+            account_settled,
+            incomplete,
+            stopped_read,
+        } = self;
         (
-            self.complete,
-            self.cancelled,
-            self.key,
-            self.bound,
-            self.account_deadline,
+            prerequisite,
+            recorded,
+            PlanSummaryTransaction {
+                prerequisite: (),
+                recorded: (),
+                key,
+                bound,
+                driving,
+                started,
+                cancelled,
+                complete,
+                read_settled,
+                rejected,
+                refusal,
+                account_deadline,
+                account_settled,
+                incomplete,
+                stopped_read,
+            },
         )
     }
+    #[cfg(test)]
+    pub(super) fn disposition_for_test(&self) -> PlanSummaryDisposition {
+        PlanSummaryDisposition {
+            complete: self.complete,
+            cancelled: self.cancelled,
+            key: self.key,
+            bound: self.bound,
+            account_deadline: self.account_deadline,
+        }
+    }
+}
+impl PlanSummaryTransaction<(), ()> {
+    fn with_evidence<P, R>(self, prerequisite: P, recorded: R) -> PlanSummaryTransaction<P, R> {
+        let Self {
+            prerequisite: (),
+            recorded: (),
+            key,
+            bound,
+            driving,
+            started,
+            cancelled,
+            complete,
+            read_settled,
+            rejected,
+            refusal,
+            account_deadline,
+            account_settled,
+            incomplete,
+            stopped_read,
+        } = self;
+        PlanSummaryTransaction {
+            prerequisite,
+            recorded,
+            key,
+            bound,
+            driving,
+            started,
+            cancelled,
+            complete,
+            read_settled,
+            rejected,
+            refusal,
+            account_deadline,
+            account_settled,
+            incomplete,
+            stopped_read,
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PlanSummaryDisposition {
+    pub complete: bool,
+    pub cancelled: bool,
+    pub key: PumpDeadline,
+    pub bound: AbsoluteBound,
+    pub account_deadline: u64,
 }
 
 #[derive(Debug)]
 pub(in crate::flow) struct BootPlanSummary {
-    // Ordinary extraction transfers the complete original owner, including its
-    // rollback seal and frozen account bound. No scalar reconstruction can
-    // recover that custody after Stop or another failed Enter prerequisite.
-    work: Box<PlanSummaryTransaction>,
+    // Successful Boot carries statically required repair/read evidence beside
+    // every unchanged rollback field. The nested repair Box and read Arc retain
+    // their original allocations through this safe exhaustive move.
+    work: Box<PlanSummaryTransaction<RepairedBootPairs, Arc<CommittedPlanSummary>>>,
 }
 impl BootPlanSummary {
     pub(in crate::flow) fn repaired(&self) -> &RepairedBootPairs {
-        match &self.work.prerequisite {
-            Prerequisite::Boot(repaired) => repaired,
-            Prerequisite::Effect(_) => unreachable!("only boot extraction constructs this proof"),
-        }
+        &self.work.prerequisite
     }
     pub(in crate::flow) fn read(&self) -> &RecordedRead {
-        self.work
-            .recorded
-            .as_ref()
-            .expect("successful boot read")
-            .read()
+        self.work.recorded.read()
     }
     pub(in crate::flow) fn summary(&self) -> Option<&PlanSummary> {
-        self.work
-            .recorded
-            .as_ref()
-            .expect("successful boot read")
-            .summary()
+        self.work.recorded.summary()
     }
     #[cfg(test)]
-    pub(super) fn disposition_for_test(&self) -> (bool, bool, PumpDeadline, AbsoluteBound, u64) {
+    pub(super) fn disposition_for_test(&self) -> PlanSummaryDisposition {
         self.work.disposition_for_test()
     }
 }
+
 #[derive(Debug)]
 pub(in crate::flow) struct EffectPlanSummary {
     filing: FilingCompletion,
@@ -142,7 +224,7 @@ pub(in crate::flow) struct PlanSummaryAccount {
 }
 impl PlanSummaryAccount {
     #[cfg(test)]
-    pub(super) fn disposition_for_test(&self) -> (bool, bool, PumpDeadline, AbsoluteBound, u64) {
+    pub(super) fn disposition_for_test(&self) -> PlanSummaryDisposition {
         self.work.disposition_for_test()
     }
 
@@ -397,7 +479,7 @@ impl RecordingContext {
         }
     }
 
-    fn plan_summary_admission_busy(&self, key: PumpDeadline) -> bool {
+    fn plan_summary_owner_busy(&self, key: PumpDeadline) -> bool {
         // An effect refresh retains its own Decision or Cut. A separate Cut
         // may also bound an already-owed effect while its reload drains. Other
         // waits and owners still exclude admission; boot requires no open turn.
@@ -433,8 +515,15 @@ impl RecordingContext {
             || self.flow.pending_control().is_some()
             || self.flow.pending_check().is_some()
             || self.flow.operation_completion().is_some()
-            || !self.flow.state().outstanding().is_empty()
-            || self.flow.state().held_measurement().is_some()
+            || self.flow.standing_state().is_some_and(|state| {
+                !state.outstanding().is_empty() || state.held_measurement().is_some()
+            })
+    }
+
+    fn plan_summary_admission_busy(&self, key: PumpDeadline) -> bool {
+        let drains_owed_effect = matches!(key, PumpDeadline::Decision | PumpDeadline::Cut)
+            && self.reload_drain_bound().is_some();
+        self.plan_summary_owner_busy(key)
             || [
                 PumpDeadline::Decision,
                 PumpDeadline::Cut,
@@ -446,6 +535,18 @@ impl RecordingContext {
                 other != key
                     && !(other == PumpDeadline::Cut && drains_owed_effect)
                     && self.deadlines.get(other).is_some()
+            })
+    }
+
+    pub(in crate::flow) fn boot_proof_current(&self, repaired: &RepairedBootPairs) -> bool {
+        repaired.belongs_to(self)
+            && repaired.checked_open().is_some_and(|open| {
+                Arc::ptr_eq(open.origin(), &self.read_origin)
+                    && open.run() == self.barrier.run()
+                    && self.boot_journal.is_some()
+                    && self.boot_head.as_ref().is_some_and(|head| {
+                        head.recall_sequence() == open.head() && head.enter_bound() == open.enter()
+                    })
             })
     }
 
@@ -469,18 +570,11 @@ impl RecordingContext {
             Some(PlanSummaryBeginRefusal::WrongPhase)
         } else if self.plan_cache.boot_started {
             Some(PlanSummaryBeginRefusal::AlreadyStarted)
-        } else if !repaired.belongs_to(self)
-            || repaired.checked_open().is_none()
-            || repaired.checked_open().is_some_and(|proof| {
-                proof.run() != self.barrier.run()
-                    || self.boot_journal.is_none()
-                    || self.boot_enter_cancelled
-                    || self
-                        .boot_head
-                        .as_ref()
-                        .is_none_or(|head| head.recall_sequence() != proof.head())
-                    || self.deadlines.get(PumpDeadline::Enter) != Some(proof.enter())
-            })
+        } else if !self.boot_proof_current(&repaired)
+            || self.boot_enter_cancelled
+            || repaired
+                .checked_open()
+                .is_some_and(|open| self.deadlines.get(PumpDeadline::Enter) != Some(open.enter()))
         {
             Some(PlanSummaryBeginRefusal::WrongProof)
         } else if self.plan_summary_admission_busy(PumpDeadline::Enter)
@@ -707,55 +801,67 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<PlanSummaryCompletion>, RunFailure> {
         self.live(io)?;
-        if self.plan_summary.as_ref().is_none_or(|work| !work.complete) {
+        let Some(work) = self.plan_summary.take() else {
+            return Ok(None);
+        };
+        if !work.complete {
+            self.plan_summary = Some(work);
             return Ok(None);
         }
-        if self.plan_summary.as_ref().is_some_and(|work| {
-            !work.effect()
-                && (work.cancelled
-                    || work.refusal.is_some()
+        let (prerequisite, recorded, mut rollback) = work.split_evidence();
+        match prerequisite {
+            Prerequisite::Boot(repaired) => {
+                if rollback.cancelled
+                    || rollback.refusal.is_some()
                     || self.boot_enter_cancelled
-                    || self.plan_cache.unavailable == Some(PlanSummaryUnavailable::Revoked))
-        }) {
-            // A completed read stays successful evidence after Stop, but Boot
-            // cannot transfer Enter readiness or strand its rollback seal. The
-            // stopped account retains that same disposition in Releasing.
-            return Err(RunFailure::PlanSummaryOwned);
+                    || self.plan_cache.unavailable == Some(PlanSummaryUnavailable::Revoked)
+                {
+                    self.plan_summary =
+                        Some(rollback.with_evidence(Prerequisite::Boot(repaired), recorded));
+                    return Err(RunFailure::PlanSummaryOwned);
+                }
+                let Some(recorded) = recorded else {
+                    self.plan_summary =
+                        Some(rollback.with_evidence(Prerequisite::Boot(repaired), None));
+                    return Err(
+                        self.plan_summary_fault(io, "completed Boot lost its actual Recorded read")
+                    );
+                };
+                // Freeze the same current minima before transferring the owner.
+                self.freeze_taken_plan_summary_bound(&mut rollback);
+                Ok(Some(PlanSummaryCompletion::Boot(BootPlanSummary {
+                    work: Box::new(rollback.with_evidence(repaired, recorded)),
+                })))
+            }
+            Prerequisite::Effect(filing) => {
+                if rollback.cancelled || rollback.refusal.is_some() {
+                    let cancelled = rollback.cancelled;
+                    if cancelled {
+                        self.plan_cache.required = None;
+                    }
+                    let account = PlanSummaryAccount {
+                        work: Box::new(
+                            rollback.with_evidence(Prerequisite::Effect(filing), recorded),
+                        ),
+                    };
+                    return Ok(Some(if cancelled {
+                        PlanSummaryCompletion::Cancelled(account)
+                    } else {
+                        PlanSummaryCompletion::Refused(account)
+                    }));
+                }
+                let Some(committed) = recorded else {
+                    self.plan_summary =
+                        Some(rollback.with_evidence(Prerequisite::Effect(filing), None));
+                    return Err(self
+                        .plan_summary_fault(io, "completed effect lost its actual Recorded read"));
+                };
+                Ok(Some(PlanSummaryCompletion::Effect(EffectPlanSummary {
+                    filing,
+                    committed,
+                })))
+            }
         }
-        if self
-            .plan_summary
-            .as_ref()
-            .is_some_and(|work| !work.effect())
-        {
-            // A Leave can be held before normal Boot extraction. Its original
-            // minimum travels with the proof even if that wait later retires.
-            self.freeze_plan_summary_account_bound();
-        }
-        let work = self.plan_summary.take().unwrap();
-        if work.cancelled {
-            self.plan_cache.required = None;
-            return Ok(Some(PlanSummaryCompletion::Cancelled(PlanSummaryAccount {
-                work: Box::new(work),
-            })));
-        }
-        if work.refusal.is_some() {
-            return Ok(Some(PlanSummaryCompletion::Refused(PlanSummaryAccount {
-                work: Box::new(work),
-            })));
-        }
-        if !work.effect() {
-            return Ok(Some(PlanSummaryCompletion::Boot(BootPlanSummary {
-                work: Box::new(work),
-            })));
-        }
-        let committed = work.recorded.expect("complete successful summary proof");
-        let Prerequisite::Effect(filing) = work.prerequisite else {
-            unreachable!("boot owner transferred above");
-        };
-        Ok(Some(PlanSummaryCompletion::Effect(EffectPlanSummary {
-            filing,
-            committed,
-        })))
     }
 
     /// Return the exact previously extracted Boot owner for cleanup only. This
@@ -767,35 +873,40 @@ impl RecordingContext {
         boot: BootPlanSummary,
     ) -> Result<(), PlanSummaryBeginError<BootPlanSummary>> {
         let work = &boot.work;
-        let valid = boot.repaired().belongs_to(self)
+        let cleanup = matches!(
+            self.phase,
+            RecordingPhase::Failed | RecordingPhase::Releasing
+        );
+        let registered_enter = match self.deadlines.get(PumpDeadline::Enter) {
+            Some(current) => current == work.bound,
+            None => cleanup && self.retired_enter == Some(work.bound),
+        };
+        let valid = self.boot_proof_current(boot.repaired())
             && boot.read().belongs_to(self)
             && self.plan_cache.boot_started
-            && self.plan_cache.committed.as_ref().is_some_and(|cached| {
-                Arc::ptr_eq(
-                    cached,
-                    work.recorded.as_ref().expect("successful boot read"),
-                )
-            })
+            && self
+                .plan_cache
+                .committed
+                .as_ref()
+                .is_some_and(|cached| Arc::ptr_eq(cached, &work.recorded))
             && boot.repaired().checked_open().is_some_and(|open| {
-                Arc::ptr_eq(open.origin(), &self.read_origin)
-                    && open.run() == self.barrier.run()
-                    && self.boot_journal.is_some()
-                    && self
-                        .boot_head
-                        .as_ref()
-                        .is_some_and(|head| head.recall_sequence() == open.head())
-                    && work.key == PumpDeadline::Enter
-                    && work.bound == open.enter()
-                    && self.deadlines.get(PumpDeadline::Enter) == Some(work.bound)
+                work.key == PumpDeadline::Enter && work.bound == open.enter() && registered_enter
             });
-        let refusal = if !matches!(self.phase, RecordingPhase::Entered | RecordingPhase::Failed)
-            || self.flow.standing_state().is_none()
+        let refusal = if !matches!(
+            self.phase,
+            RecordingPhase::Entered | RecordingPhase::Failed | RecordingPhase::Releasing
+        ) || (!cleanup && self.flow.standing_state().is_none())
         {
             Some(PlanSummaryBeginRefusal::WrongPhase)
         } else if !valid {
             Some(PlanSummaryBeginRefusal::WrongProof)
-        } else if self.plan_summary_admission_busy(PumpDeadline::Enter)
+        } else if self.place_engine.is_some()
             || self.plan_cache.required.is_some()
+            || if cleanup {
+                self.plan_summary_owner_busy(PumpDeadline::Enter)
+            } else {
+                self.plan_summary_admission_busy(PumpDeadline::Enter)
+            }
         {
             Some(PlanSummaryBeginRefusal::Busy)
         } else {
@@ -808,7 +919,9 @@ impl RecordingContext {
                 failure: self.failure.clone(),
             });
         }
-        self.plan_summary = Some(*boot.work);
+        let (repaired, recorded, rollback) = (*boot.work).split_evidence();
+        self.plan_summary =
+            Some(rollback.with_evidence(Prerequisite::Boot(repaired), Some(recorded)));
         self.plan_cache.revoke();
         // take_stopped_plan_summary does not sample a clock or freeze a bound;
         // retain the existing Leave/halt minimum before exposing that path.
@@ -916,7 +1029,7 @@ impl RecordingContext {
         // The original bounds remain in the sealed account. Only disposal has
         // finished; no read or success can obtain time from the Leave window.
         self.deadlines.disarm(PumpDeadline::StateControl);
-        self.deadlines.disarm(PumpDeadline::Enter);
+        self.disarm_wait(PumpDeadline::Enter);
         Ok(())
     }
 
@@ -952,7 +1065,7 @@ impl RecordingContext {
                     && read.plan_ticket() == self.barrier.pending_author().map(|held| held.ticket)
             })
     }
-    pub(super) fn freeze_plan_summary_account_bound(&mut self) {
+    fn plan_summary_account_minimum(&self) -> Option<u64> {
         let read = self
             .read
             .as_ref()
@@ -962,10 +1075,19 @@ impl RecordingContext {
             .get(PumpDeadline::Leave)
             .map(AbsoluteBound::deadline_ns);
         let halt = self.flow.halt().and_then(|halt| halt.deadline().ok());
-        if let Some(work) = &mut self.plan_summary {
-            for bound in read.into_iter().chain(leave).chain(halt) {
-                work.account_deadline = work.account_deadline.min(bound);
-            }
+        read.into_iter().chain(leave).chain(halt).min()
+    }
+    fn freeze_taken_plan_summary_bound<P, R>(&self, work: &mut PlanSummaryTransaction<P, R>) {
+        if let Some(bound) = self.plan_summary_account_minimum() {
+            work.account_deadline = work.account_deadline.min(bound);
+        }
+    }
+    pub(super) fn freeze_plan_summary_account_bound(&mut self) {
+        let minimum = self.plan_summary_account_minimum();
+        if let Some(work) = &mut self.plan_summary
+            && let Some(bound) = minimum
+        {
+            work.account_deadline = work.account_deadline.min(bound);
         }
     }
     fn plan_summary_account_clock(&mut self, io: &mut impl PumpIo) -> bool {
@@ -1170,3 +1292,10 @@ impl RecordingContext {
         )
     }
 }
+
+// A successful Boot's prerequisite and recorded read are static fields. These
+// pins fail to compile if either becomes an enum/Option requiring a runtime arm.
+#[cfg(test)]
+const _: fn(&BootPlanSummary) -> &RepairedBootPairs = |proof| &proof.work.prerequisite;
+#[cfg(test)]
+const _: fn(&BootPlanSummary) -> &Arc<CommittedPlanSummary> = |proof| &proof.work.recorded;
