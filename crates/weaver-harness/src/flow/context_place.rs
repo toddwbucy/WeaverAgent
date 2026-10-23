@@ -177,14 +177,17 @@ impl PlaceAccount {
         }
         .or_else(|| self.measure.as_ref().and_then(|m| m.raw_bytes()))
     }
+    fn can_return_inputs(&self) -> bool {
+        self.phase == RecordingPhase::Entered
+    }
     pub(in crate::flow) fn take_staged(&mut self) -> Option<Staged> {
+        if !self.can_return_inputs() {
+            return None;
+        }
         match &mut self.work {
-            AccountWork::Place(w) => w.staged.take(),
+            AccountWork::Place(w) if w.done && w.incomplete.is_none() => w.staged.take(),
             AccountWork::Reload(w)
-                if matches!(
-                    self.phase,
-                    RecordingPhase::Entered | RecordingPhase::Releasing
-                ) && w.done
+                if w.done
                     && w.incomplete.is_none()
                     && w.staged
                         .as_ref()
@@ -192,7 +195,12 @@ impl PlaceAccount {
             {
                 w.staged.take()
             }
-            AccountWork::Generation(w) if w.confirmed.is_none() && w.reservation.is_none() => {
+            AccountWork::Generation(w)
+                if w.done
+                    && w.incomplete.is_none()
+                    && w.confirmed.is_none()
+                    && w.reservation.is_none() =>
+            {
                 w.grant.as_mut().and_then(|g| g.staged.take())
             }
             _ => None,
@@ -211,15 +219,15 @@ impl PlaceAccount {
         }
     }
     pub(in crate::flow) fn take_reload_inputs(&mut self) -> Option<ReturnedReloadInputs> {
+        if !self.can_return_inputs() {
+            return None;
+        }
         let AccountWork::Reload(work) = &mut self.work else {
             return None;
         };
         // A confirmed cut owns Staged, even after that capability is taken.
         // Failed/incomplete exchange custody remains trace-only.
-        if !matches!(
-            self.phase,
-            RecordingPhase::Entered | RecordingPhase::Releasing
-        ) || !work.done
+        if !work.done
             || work.cut_confirmed
             || work.incomplete.is_some()
             || work.prefix.is_none()
@@ -237,6 +245,9 @@ impl PlaceAccount {
     pub(in crate::flow) fn take_unplaced_selection(
         &mut self,
     ) -> Option<Vec<crate::flow::material::SelectedUnit>> {
+        if !self.can_return_inputs() {
+            return None;
+        }
         let AccountWork::Place(work) = &mut self.work else {
             return None;
         };
@@ -467,7 +478,7 @@ impl RecordingContext {
         } else {
             vec![]
         };
-        let native = NativeScopes::from_boot(&boot);
+        let native = Arc::new(NativeScopes::from_boot(&boot));
         self.place_engine = Some(PlaceEngine {
             native,
             boot,
@@ -1046,7 +1057,7 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<PlacementCompletion>, RunFailure> {
         self.live(io)?;
-        if !self.place.as_ref().is_some_and(|w| w.done) {
+        if self.phase != RecordingPhase::Entered || !self.place.as_ref().is_some_and(|w| w.done) {
             return Ok(None);
         }
         self.consume_place_completion()?;
@@ -1385,5 +1396,32 @@ fn cut_mirror(cut: &CutReference) -> t::CutReference {
             run: cut.occurrence_id.run.clone(),
             ordinal: cut.occurrence_id.ordinal.0.into(),
         },
+    }
+}
+
+#[cfg(test)]
+impl RecordingContext {
+    /// Defensive consumer-corruption probes start with a genuinely completed cut.
+    /// No fixture can manufacture a Staged, receipt, completion or phase here.
+    pub(super) fn review_mark_completed_reload_incomplete(&mut self) {
+        let work = self.reload.as_mut().expect("actual reload");
+        assert!(work.done && work.incomplete.is_none());
+        assert!(
+            work.staged
+                .as_ref()
+                .is_some_and(|staged| staged.recorded.is_some())
+        );
+        work.incomplete = Some("defensive completed-account interruption".into());
+    }
+
+    pub(super) fn review_remove_completed_reload_record(&mut self) -> Sequence {
+        let work = self.reload.as_mut().expect("actual reload");
+        assert!(work.done && work.incomplete.is_none());
+        work.staged
+            .as_mut()
+            .expect("actual confirmed cut")
+            .recorded
+            .take()
+            .expect("actual Recorded")
     }
 }

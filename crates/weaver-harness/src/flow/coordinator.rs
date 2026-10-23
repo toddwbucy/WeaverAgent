@@ -1064,6 +1064,24 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.ledger.release_source_lease(lease)
     }
 
+    #[cfg(test)]
+    pub(super) fn review_set_taken_source_status(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+        status: super::ledger::LeaseSlotStatus,
+    ) {
+        self.ledger
+            .review_set_taken_source_status(lease, source, status);
+    }
+
+    pub(super) fn release_source_leases(
+        &mut self,
+        leases: &[&SourceLease],
+    ) -> Result<(), super::ledger::LedgerError> {
+        self.ledger.release_source_leases(leases)
+    }
+
     /// Reserve the only consumer before its original author is submitted.
     /// This is not a source lookup or a way to recover a disposed receipt.
     pub(super) fn reserve_filing_receipts(
