@@ -747,6 +747,10 @@ impl RecordBarrier {
     pub(super) fn set_place_owed(&mut self, owed: bool) {
         self.place_owed = owed;
     }
+    #[cfg(test)]
+    pub(super) fn place_owed_for_test(&self) -> bool {
+        self.place_owed
+    }
     // Match context admission's precedence if defensive debt flags overlap.
     fn owed_author(&self) -> Option<OwedAuthor> {
         if self.place_owed {
