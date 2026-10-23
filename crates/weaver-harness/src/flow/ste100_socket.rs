@@ -52,7 +52,37 @@ pub(crate) struct SocketPort {
     failure: Option<PortFailure>,
 }
 
+/// A closed endpoint's original admission/request/framing evidence. No port
+/// trait is implemented, so it cannot regain classifier or transport authority.
+pub(super) struct RetiredSocketPort {
+    _channel: Channel<()>,
+    _scheme: SchemeDeclaration,
+    _instruction: Ste100Instruction,
+    _phase: Phase,
+    _outstanding: Option<Ste100Request>,
+    _failure: Option<PortFailure>,
+}
+
 impl SocketPort {
+    pub(super) fn retire_failed(self) -> RetiredSocketPort {
+        let Self {
+            channel,
+            scheme,
+            instruction,
+            phase,
+            outstanding,
+            failure,
+        } = self;
+        RetiredSocketPort {
+            _channel: channel.retire_failed(),
+            _scheme: scheme,
+            _instruction: instruction,
+            _phase: phase,
+            _outstanding: outstanding,
+            _failure: failure,
+        }
+    }
+
     /// `bootstrap.scheme_text` and `scheme` must come from the same judged
     /// inventory. This port does not receive filesystem or digest authority.
     pub(crate) fn starting(

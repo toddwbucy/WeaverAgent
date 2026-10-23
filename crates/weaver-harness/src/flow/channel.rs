@@ -215,8 +215,8 @@ struct Capture {
 }
 
 /// A single fd, writer, read cursor and held answer. It is deliberately not Clone.
-pub(super) struct StateChannel {
-    stream: UnixStream,
+pub(super) struct StateChannel<S = UnixStream> {
+    stream: S,
     session: String,
     run: String,
     next_request: Option<u64>,
@@ -237,7 +237,60 @@ pub(super) struct StateChannel {
     interrupt_next_release: bool,
 }
 
+impl<S> StateChannel<S> {
+    /// Read-only frozen framing evidence; no descriptor is required or restored.
+    pub(super) fn retained_received_bytes(&self) -> &[u8] {
+        &self.received
+    }
+}
+
 impl StateChannel {
+    /// Consume the descriptor while moving every original request, answer and
+    /// partial buffer into a carrier with no transport or live methods.
+    pub(super) fn retire_failed(self) -> StateChannel<()> {
+        let Self {
+            stream,
+            session,
+            run,
+            next_request,
+            next_operation,
+            opened,
+            opened_scheme,
+            exchanges,
+            received,
+            received_ns,
+            held,
+            capture,
+            failure,
+            receive_interrupted,
+            send_interrupted,
+            terminal_interrupted,
+            #[cfg(test)]
+            interrupt_next_release,
+        } = self;
+        drop(stream);
+        StateChannel {
+            stream: (),
+            session,
+            run,
+            next_request,
+            next_operation,
+            opened,
+            opened_scheme,
+            exchanges,
+            received,
+            received_ns,
+            held,
+            capture,
+            failure,
+            receive_interrupted,
+            send_interrupted,
+            terminal_interrupted,
+            #[cfg(test)]
+            interrupt_next_release,
+        }
+    }
+
     pub(super) fn new(stream: UnixStream, session: String, run: String) -> io::Result<Self> {
         if session.is_empty() || run.is_empty() {
             return Err(io::Error::new(

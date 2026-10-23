@@ -257,6 +257,16 @@ impl OwedPlanRecall {
 }
 
 impl RecordingContext {
+    pub(super) fn boot_summary_proof_extracted(&self) -> bool {
+        self.plan_cache.boot_started
+            && self.plan_cache.committed.is_some()
+            && self.plan_summary.is_none()
+    }
+
+    pub(super) fn plan_summary_is_boot_cleanup(&self) -> bool {
+        self.plan_summary.as_ref().is_none_or(|work| !work.effect())
+    }
+
     pub(super) fn plan_summary_blocks_external(&self) -> bool {
         self.plan_summary
             .as_ref()

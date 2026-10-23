@@ -179,6 +179,13 @@ impl std::fmt::Debug for BootPairsTransaction {
     }
 }
 
+impl BootPairsTransaction {
+    pub(super) fn actual_boot_owner(&self, context: &RecordingContext) -> bool {
+        std::sync::Arc::ptr_eq(&self.prior.origin, &context.read_origin)
+            && self.prior.checked.is_some()
+    }
+}
+
 impl RecordingContext {
     pub(super) fn boot_pairs_blocks_external(&self) -> bool {
         self.boot_pairs.as_ref().is_some_and(|work| !work.driving)

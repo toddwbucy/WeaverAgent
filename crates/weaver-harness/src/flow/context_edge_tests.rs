@@ -314,7 +314,7 @@ fn an_unreturned_recorded_result_blocks_a_second_author() {
     );
 }
 
-fn classifier_fixture() -> (s::Ste100Bootstrap, s::SchemeDeclaration, s::Ste100Ready) {
+pub(super) fn classifier_fixture() -> (s::Ste100Bootstrap, s::SchemeDeclaration, s::Ste100Ready) {
     let seed: s::SeedRequest = s::decode_strict(include_str!("fixtures/seed.json")).unwrap();
     let scheme = s::SchemeDeclaration {
         artifact_sha256: s::Digest::new(seed.scheme_id.strip_prefix("ste100:").unwrap()).unwrap(),
@@ -358,7 +358,7 @@ fn classifier_fixture() -> (s::Ste100Bootstrap, s::SchemeDeclaration, s::Ste100R
     )
 }
 
-fn activate_classifier_duty(fx: &mut Fixture, bootstrap: &s::Ste100Bootstrap) {
+pub(super) fn activate_classifier_duty(fx: &mut Fixture, bootstrap: &s::Ste100Bootstrap) {
     fx.opened();
     let mut authored = fx.load_event();
     let Some(Payload::Elections(load)) = &mut authored.payload else {

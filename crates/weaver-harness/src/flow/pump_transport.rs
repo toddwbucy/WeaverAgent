@@ -331,8 +331,8 @@ struct Series {
 
 /// One owner for an existing typed seam. The public aliases below fix the
 /// codec and wire election, so callers cannot supply a different framing rule.
-pub(super) struct PacketPort<T> {
-    end: OwnedFd,
+pub(super) struct PacketPort<T, E = OwnedFd> {
+    end: E,
     identity: PortIdentity,
     wire: Wire,
     decode: fn(&[u8]) -> Result<T, Failure>,
@@ -388,6 +388,10 @@ impl ReceivedOrgan {
 }
 
 impl OrganPort {
+    pub(super) fn port_identity(&self) -> PortIdentity {
+        self.identity.clone()
+    }
+
     pub(super) fn from_channel(channel: OrganChannel) -> Result<Self, Failure> {
         Self::from_owned(channel.into_fd())
     }
@@ -1003,6 +1007,46 @@ impl LabelPort {
 }
 
 impl<T> PacketPort<T> {
+    /// Consume only the fd. The original sent/partial/held/failure evidence
+    /// remains move-owned in a carrier with no transport methods.
+    pub(super) fn retire_failed(self) -> PacketPort<T, ()> {
+        let Self {
+            end,
+            identity,
+            wire,
+            decode,
+            outgoing,
+            series,
+            received_wire,
+            received_reservation,
+            held,
+            decode_reservation,
+            failure,
+            receive_interrupted,
+            send_interrupted,
+            generation_send_held,
+            zero_received,
+        } = self;
+        drop(end);
+        PacketPort {
+            end: (),
+            identity,
+            wire,
+            decode,
+            outgoing,
+            series,
+            received_wire,
+            received_reservation,
+            held,
+            decode_reservation,
+            failure,
+            receive_interrupted,
+            send_interrupted,
+            generation_send_held,
+            zero_received,
+        }
+    }
+
     fn new(
         end: OwnedFd,
         wire: Wire,

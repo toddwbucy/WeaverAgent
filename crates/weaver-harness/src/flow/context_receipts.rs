@@ -99,6 +99,10 @@ pub(super) struct FilingTransaction {
 }
 
 impl FilingTransaction {
+    pub(super) fn is_boot_cleanup_filing(&self) -> bool {
+        self.owner == FilingOwner::BootPairs
+    }
+
     pub(super) fn cancelled(&self) -> bool {
         self.cancelled
     }

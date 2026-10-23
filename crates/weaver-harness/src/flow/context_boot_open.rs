@@ -1170,6 +1170,12 @@ impl RecordingContext {
             }
         }
     }
+    pub(super) fn boot_open_grant_transferred(&self) -> bool {
+        self.boot_open
+            .as_ref()
+            .is_some_and(|owner| owner.grant_taken)
+    }
+
     pub(super) fn boot_open_revoked(&self) -> bool {
         self.boot_open
             .as_ref()

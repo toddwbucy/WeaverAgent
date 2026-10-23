@@ -171,6 +171,8 @@ pub(crate) struct RecordingContext {
     last_author_sequence: Option<Sequence>,
     author_turn: Option<(Kind, Option<weaver_trace::TurnRef>)>,
     open_turn: Option<weaver_trace::TurnRef>,
+    ever_started_turn: bool,
+    failed_enter_resources_issued: bool,
     /// A caller's source remains owned if refusal happens before a ticket.
     /// It is distinct from the recorder's first pending author.
     // First fatal original is immutable; retryable holds have separate custody.
@@ -302,6 +304,8 @@ impl RecordingContext {
             last_author_sequence: None,
             author_turn: None,
             open_turn: None,
+            ever_started_turn: false,
+            failed_enter_resources_issued: false,
             refused_author: None,
             held_author: None,
             waiting_content: None,
@@ -1193,6 +1197,7 @@ impl RecordingContext {
                     }
                     if let Some((kind, turn)) = self.author_turn.take() {
                         if kind == Kind::TurnStarted {
+                            self.ever_started_turn = true;
                             self.open_turn = turn;
                         } else if kind == Kind::TurnClosed && self.open_turn == turn {
                             self.place_turn_stopped = false;
@@ -2038,4 +2043,12 @@ pub(in crate::flow) use place_driver::{
     NativeMarkCompletion, NativeMarkTransaction, NativePosition, NativeScopes, PlaceAccount,
     PlaceBeginError, PlaceInstallError, PlaceProgress, PlacementCompletion, ReloadCompletion,
     ReloadProgress,
+};
+
+#[path = "context_failed_enter.rs"]
+mod failed_enter_driver;
+#[allow(unused_imports)] // Dormant failed Enter process composition.
+pub(super) use failed_enter_driver::{
+    FailedEnterCleanup, FailedEnterFinished, FailedEnterProgress, FailedEnterRefusal,
+    FailedEnterRejected, FailedEnterResources,
 };

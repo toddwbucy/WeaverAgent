@@ -3724,7 +3724,78 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     }
 }
 
+/// Retained failed transport evidence has no descriptors or live port methods.
+pub(super) struct FailedFlowResources {
+    pub(super) state: Option<StateChannel<()>>,
+    _classifier: Option<Classifier<super::ste100_socket::RetiredSocketPort>>,
+    _starting_classifier: Option<super::ste100_socket::RetiredSocketPort>,
+    _stopped_plan_read: Option<StoppedPlanRead<StateChannel<()>>>,
+}
+
+impl FailedFlowResources {
+    #[cfg(test)]
+    pub(super) fn has_stopped_plan_read(&self) -> bool {
+        self._stopped_plan_read.is_some()
+    }
+}
+
 impl FlowCoordinator<super::ste100_socket::SocketPort> {
+    #[cfg(test)]
+    pub(super) fn has_stopped_plan_read_transport(&self) -> bool {
+        self.stopped_plan_read.is_some()
+    }
+
+    pub(super) fn failed_cleanup_state_stood(&self) -> bool {
+        self.state.is_some() || self.state_retired || self.stopped_plan_read.is_some()
+    }
+    pub(super) fn failed_cleanup_state_failed(&self) -> bool {
+        self.state
+            .as_ref()
+            .is_some_and(|state| state.failure().is_some())
+            || self.stopped_plan_read.as_ref().is_some_and(|owner| {
+                owner._state.failure().is_some() || owner.close_error.is_some()
+            })
+    }
+
+    pub(super) fn preinput_failed_owner(&self) -> bool {
+        self.phase == CoordinatorPhase::Failed
+            && self.halt.is_some()
+            && self.last_input_id == 0
+            && self.input_account.is_none()
+            && self.reuse.is_none()
+            && self.capture.is_none()
+            && self.output_checks.is_none()
+            && self.output_receipts.is_none()
+            && self.instruction_check.is_none()
+            && self.repair_measurement.is_none()
+    }
+
+    /// Only a failed context's consuming cleanup calls this after freezing its
+    /// account. Frozen ledgers/completions remain here; no empty-ledger fiction.
+    pub(super) fn retire_failed_ports(&mut self) -> Option<FailedFlowResources> {
+        if !self.preinput_failed_owner() {
+            return None;
+        }
+        let retired = FailedFlowResources {
+            state: self.state.take().map(StateChannel::retire_failed),
+            _stopped_plan_read: self
+                .stopped_plan_read
+                .take()
+                .map(|owner| (*owner).retire_failed()),
+            _classifier: self
+                .classifier
+                .take()
+                .map(|owner| owner.retire_into(super::ste100_socket::SocketPort::retire_failed)),
+            _starting_classifier: self
+                .starting_classifier
+                .take()
+                .map(super::ste100_socket::SocketPort::retire_failed),
+        };
+        self.state_retired = true;
+        self.classifier_retired = true;
+        Some(retired)
+    }
+
     pub(super) fn begin_classifier_admission(
         &mut self,
         cx: &mut FlowRecording<'_>,
@@ -4134,8 +4205,8 @@ mod capture_tests;
 
 /// Retired evidence, never a second stream reader. Fields stay owned through
 /// ordinary failed-Enter unload and cannot return to the active coordinator.
-struct StoppedPlanRead {
-    _state: StateChannel,
+struct StoppedPlanRead<S = StateChannel> {
+    _state: S,
     _operation: Option<(StateControl, Option<TurnRef>)>,
     _completion: Option<OperationCompletion>,
     _pending_record: Option<PendingRecord>,
@@ -4143,6 +4214,31 @@ struct StoppedPlanRead {
     _release_timing: Option<(u64, u64)>,
     _record: super::recording::StoppedReadRecord,
     close_error: Option<String>,
+}
+
+impl StoppedPlanRead {
+    fn retire_failed(self) -> StoppedPlanRead<StateChannel<()>> {
+        let Self {
+            _state,
+            _operation,
+            _completion,
+            _pending_record,
+            _recorded_ns,
+            _release_timing,
+            _record,
+            close_error,
+        } = self;
+        StoppedPlanRead {
+            _state: _state.retire_failed(),
+            _operation,
+            _completion,
+            _pending_record,
+            _recorded_ns,
+            _release_timing,
+            _record,
+            close_error,
+        }
+    }
 }
 
 impl<P: Ste100Port> FlowCoordinator<P> {

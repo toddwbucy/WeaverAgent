@@ -2159,3 +2159,6 @@ use review_followup_tests::SummaryReadyClock;
 
 #[path = "context_place_tests.rs"]
 mod place_tests;
+
+#[path = "context_failed_enter_boot_tests.rs"]
+mod failed_enter_tests;
