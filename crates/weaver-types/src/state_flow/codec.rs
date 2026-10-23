@@ -89,6 +89,32 @@ where
     deserializer.deserialize_map(Object(std::marker::PhantomData))
 }
 
+// One field list defines the public carrier and its private closed map decoder.
+// The private helper cannot expose a second public deserialization entry point.
+macro_rules! closed_object {
+    ($(#[$attribute:meta])* $visibility:vis struct $name:ident {
+        $($(#[$field_attribute:meta])* $field_visibility:vis $field:ident: $kind:ty),* $(,)?
+    }) => {
+        $(#[$attribute])*
+        $visibility struct $name {
+            $($(#[$field_attribute])* $field_visibility $field: $kind,)*
+        }
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Fields {
+                    $($(#[$field_attribute])* $field: $kind,)*
+                }
+                let Fields { $($field,)* } =
+                    $crate::state_flow::codec::deserialize_object(deserializer)?;
+                Ok(Self { $($field,)* })
+            }
+        }
+    };
+}
+pub(super) use closed_object;
+
 struct UniqueJson;
 
 impl<'de> Deserialize<'de> for UniqueJson {

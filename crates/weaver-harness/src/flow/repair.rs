@@ -461,9 +461,11 @@ impl RepairLedger {
     pub(super) fn original(&self) -> Option<&OriginalRequests> {
         self.account.as_ref().map(|account| &account.original)
     }
+    #[cfg(test)]
     pub(super) fn associations(&self) -> &[RepairAssociationRefusal] {
         &self.associations
     }
+    #[cfg(test)]
     pub(super) fn original_refusals(&self) -> &[AssociationRefusal] {
         self.account
             .as_ref()
@@ -752,15 +754,59 @@ impl RepairLedger {
         Ok(self.failed_attempt())
     }
 
+    /// The original checked requests and repaired associations are the only
+    /// authority for this frontier; no caller supplies a refusal or final flag.
+    pub(super) fn next_association_refusal(&self) -> Option<(usize, RefusalRecord)> {
+        let account = self.account.as_ref()?;
+        let index = account.association_refusals.len();
+        let refusal = account
+            .original
+            .refusals()
+            .iter()
+            .filter_map(|refusal| {
+                let AssociationRefusal::External {
+                    source,
+                    case,
+                    detail,
+                    ..
+                } = refusal
+                else {
+                    return None;
+                };
+                Some(RefusalRecord::ProtocolRepair {
+                    source_id: source.clone(),
+                    case: *case,
+                    detail: (*detail).into(),
+                })
+            })
+            .chain(
+                self.associations
+                    .iter()
+                    .map(|refusal| RefusalRecord::ProtocolRepair {
+                        source_id: refusal.source().clone(),
+                        case: refusal.case(),
+                        detail: "repaired external send requires exactly one non-recall statement"
+                            .into(),
+                    }),
+            )
+            .nth(index)?;
+        Some((index, refusal))
+    }
+
     pub(super) fn recorded_association_refusal(
         &mut self,
-        refusal: RefusalRecord,
+        expected_index: usize,
         source: SourcePosition,
-        last: bool,
     ) -> Result<(), RepairError> {
         let cancelled = self.stage == Stage::Cancelled;
         if !cancelled {
             self.require(Stage::Association)?;
+        }
+        let (index, refusal) = self
+            .next_association_refusal()
+            .ok_or(RepairError::WrongPhase)?;
+        if index != expected_index {
+            return Err(RepairError::WrongAccounting);
         }
         self.record(source.clone())?;
         self.account
@@ -768,7 +814,7 @@ impl RepairLedger {
             .unwrap()
             .association_refusals
             .push(RecordedAssociationRefusal { refusal, source });
-        if last {
+        if self.next_association_refusal().is_none() {
             self.association_recorded = true;
             self.original_refusals_recorded = true;
             if !cancelled {
@@ -1069,7 +1115,7 @@ fn append_statements(
     Ok(())
 }
 
-fn validate_accounted<'a>(
+pub(super) fn validate_accounted<'a>(
     requests: impl Iterator<Item = &'a PairStarted>,
     completed: &[&CompletedPair],
     cause: NonDispatchCause,

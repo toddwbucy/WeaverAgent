@@ -696,13 +696,7 @@ impl RecordingContext {
                 let wall = wall_ms().map_err(|detail| self.boot_trace_fault(io, detail))?;
                 let permit = OwedBootAuthor {
                     event: self
-                        .boot_open
-                        .as_mut()
-                        .unwrap()
-                        .author
-                        .as_mut()
-                        .unwrap()
-                        .event
+                        .boot_author_event_mut()
                         .take()
                         .expect("unsubmitted boot event"),
                 };
@@ -710,13 +704,7 @@ impl RecordingContext {
                     self.barrier
                         .queue_boot_open_account(permit, &self.author, self.last_ns, wall)
                 {
-                    self.boot_open
-                        .as_mut()
-                        .unwrap()
-                        .author
-                        .as_mut()
-                        .unwrap()
-                        .event = Some(error.event);
+                    *self.boot_author_event_mut() = Some(error.event);
                     return Err(self.boot_trace_fault(io, error.detail));
                 }
                 self.retain_boot_author_ticket();
@@ -736,13 +724,7 @@ impl RecordingContext {
             } else {
                 let wall = wall_ms().map_err(|detail| self.boot_trace_fault(io, detail))?;
                 let event = self
-                    .boot_open
-                    .as_mut()
-                    .unwrap()
-                    .author
-                    .as_mut()
-                    .unwrap()
-                    .event
+                    .boot_author_event_mut()
                     .take()
                     .expect("unsubmitted boot event");
                 self.barrier.submit_authored_with_clock(
@@ -774,13 +756,7 @@ impl RecordingContext {
                     return Err(self.record_failed(io));
                 }
                 RecordProgress::BusyAuthored { event, .. } => {
-                    self.boot_open
-                        .as_mut()
-                        .unwrap()
-                        .author
-                        .as_mut()
-                        .unwrap()
-                        .event = Some(event);
+                    *self.boot_author_event_mut() = Some(event);
                     return Err(self.boot_open_fault(io, "boot author admission refused"));
                 }
                 _ => {
@@ -792,6 +768,17 @@ impl RecordingContext {
         }
         Ok(())
     }
+    fn boot_author_event_mut(&mut self) -> &mut Option<AuthoredEvent> {
+        &mut self
+            .boot_open
+            .as_mut()
+            .expect("boot author owns this event")
+            .author
+            .as_mut()
+            .expect("boot author owns this event")
+            .event
+    }
+
     fn retain_boot_author_ticket(&mut self) {
         let held = self
             .barrier
