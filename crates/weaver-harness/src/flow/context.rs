@@ -1522,6 +1522,21 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<PumpStep, RunFailure> {
+        self.pump_with_wait(ports, true)
+    }
+
+    fn observe_ready<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<PumpStep, RunFailure> {
+        self.pump_with_wait(ports, false)
+    }
+
+    fn pump_with_wait<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+        wait: bool,
+    ) -> Result<PumpStep, RunFailure> {
         if let Some(decode) = ports.decode.as_deref() {
             self.check_measure_port(decode)?;
             self.check_boot_open_port(decode)?;
@@ -1574,7 +1589,7 @@ impl RecordingContext {
         } else {
             None
         };
-        let step = self.pump.step(
+        let step = self.pump.step_with_wait(
             ports,
             Some(&mut self.flow),
             &mut FlowRecording {
@@ -1584,6 +1599,7 @@ impl RecordingContext {
                 author: &self.author,
             },
             &self.deadlines,
+            wait,
         );
         // Restore before every fallible continuation, including a failed step.
         if let Some(previous) = previous_generation_hold {

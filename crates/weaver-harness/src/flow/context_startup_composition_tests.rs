@@ -83,11 +83,30 @@ fn startup_composition_child() {
                     assert_eq!(message.tag, Tag::Request);
                     let request: s::Ste100Request =
                         serde_json::from_slice(&message.payload).unwrap();
-                    let reply = s::Ste100Reply {
-                        request_id: request.request_id,
-                        target: request.target,
-                        scheme_id: request.scheme_id,
-                        result: s::Ste100Result::Accepted { bindings: vec![] },
+                    let reply = if let s::Ste100Target::Input { .. } = request.target {
+                        assert!(mode.starts_with("input-"), "unexpected input check");
+                        if mode == "input-check-eof" {
+                            return;
+                        }
+                        if mode == "input-silent" {
+                            continue;
+                        }
+                        let mut reply = super::super::input_tests::accepted(&request);
+                        if mode == "input-language" {
+                            reply.result = s::Ste100Result::NotSte100 {
+                                code: s::Ste100DefectCode::NonSte100,
+                                detail: "fixture refusal".into(),
+                                spans: vec![],
+                            };
+                        }
+                        reply
+                    } else {
+                        s::Ste100Reply {
+                            request_id: request.request_id,
+                            target: request.target,
+                            scheme_id: request.scheme_id,
+                            result: s::Ste100Result::Accepted { bindings: vec![] },
+                        }
                     };
                     channel
                         .begin_send(Tag::Reply, message.id, serde_json::to_vec(&reply).unwrap())

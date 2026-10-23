@@ -1,8 +1,30 @@
 //! Replacement startup at the developer loop boundary. The active worker does
 //! not select this path until serving, teardown and qualification are joined.
 use weaver_harness::{
-    FoundationEnter, FoundationEnterProgress, FoundationProgram, FoundationRun, FoundationServing,
+    FoundationEnter, FoundationEnterProgress, FoundationInput, FoundationInputProgress,
+    FoundationInputResult, FoundationProgram, FoundationRun, FoundationServing,
 };
+use weaver_types::TurnKey;
+
+/// Drive a single gate request through the actual serving ports. The loop owns
+/// the proposed turn identity; it is used only after recorded input acceptance.
+/// A pending management or failed arm returns all custody for its next owner.
+pub fn input(
+    serving: FoundationServing<'_>,
+    turn: TurnKey,
+) -> Result<FoundationInputResult<'_>, Box<FoundationInput<'_>>> {
+    let mut owner = serving.input();
+    while owner.progress() == FoundationInputProgress::Pending {
+        owner.advance();
+    }
+    if owner.progress() == FoundationInputProgress::Accepted {
+        owner.start_turn(turn).expect("checked acceptance");
+        while owner.progress() == FoundationInputProgress::Pending {
+            owner.advance();
+        }
+    }
+    owner.finish()
+}
 
 /// Begin with the run that actually adopted root's Enter. The worker retains
 /// that outer run for the complete lifetime of the returned startup/serving seat.

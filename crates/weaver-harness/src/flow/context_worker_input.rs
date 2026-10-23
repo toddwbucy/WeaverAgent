@@ -1,0 +1,432 @@
+//! Actual gate intake joined to the entered worker's one recording context.
+//! The loop chooses a turn only after checked acceptance. No caller can mint a
+//! gate source, a send receipt, an accepted token or a selected content copy.
+use super::super::{InputProgress, RunFailure, SeatedInput};
+use super::FoundationServing;
+use crate::flow::author::{AuthoredEvent, AuthoredSource};
+use crate::flow::clock::{MonotonicIo, PumpIo};
+use crate::flow::input::AcceptedInput;
+use crate::flow::pump::{LifecyclePorts, PumpPorts, PumpSource};
+use crate::flow::pump_transport::{OrganSend, ReceivedOrgan, TrackedStage};
+use crate::flow::report::{FlowHaltReason, HaltPoint};
+use weaver_trace::{Subsystem, TurnRef, serving};
+use weaver_types::{Opener, OrganEnvelope, Payload, Position, TurnKey};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoundationInputProgress {
+    Pending,
+    Accepted,
+    Turn,
+    Refused,
+    /// The actual root connection is retained for management judgment. Mere
+    /// acceptance is not a Leave and does not revoke input or grant cleanup.
+    ManagementPending,
+    Stopped,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    Waiting,
+    Checking,
+    Accepted,
+    Source,
+    Closing,
+    Refused,
+    Turn,
+    Stopped,
+}
+
+/// Owns the serving resources and original input through checking, trace waits,
+/// an actual unnamed close, or source authoring. A stopped owner remains owed
+/// to lifecycle teardown; dropping it is not completed cleanup.
+///
+/// ```compile_fail,E0507
+/// fn steal(owner: &mut Box<weaver_harness::FoundationInput<'_>>) {
+///     let _ = owner.finish();
+/// }
+/// ```
+pub struct FoundationInput<'a> {
+    serving: FoundationServing<'a>,
+    stage: Stage,
+    received: Option<ReceivedOrgan>,
+    token: Option<AcceptedInput>,
+    turn: Option<TurnKey>,
+    seated: Option<SeatedInput>,
+    close: Option<OrganEnvelope>,
+    send: Option<OrganSend>,
+    report: Option<(ReceivedOrgan, Subsystem)>,
+    report_started: bool,
+    failure: Option<RunFailure>,
+}
+
+impl<'a> FoundationServing<'a> {
+    /// Consume the unique serving seat. Frames behind this owner remain queued
+    /// without an input ID or a new gate deadline.
+    pub fn input(self) -> Box<FoundationInput<'a>> {
+        Box::new(FoundationInput {
+            serving: self,
+            stage: Stage::Waiting,
+            received: None,
+            token: None,
+            turn: None,
+            seated: None,
+            close: None,
+            send: None,
+            report: None,
+            report_started: false,
+            failure: None,
+        })
+    }
+}
+
+impl<'a> FoundationInput<'a> {
+    pub fn progress(&self) -> FoundationInputProgress {
+        if self.stage == Stage::Stopped {
+            return FoundationInputProgress::Stopped;
+        }
+        if self.serving.owner.listener.held().is_some() {
+            return FoundationInputProgress::ManagementPending;
+        }
+        match self.stage {
+            Stage::Accepted => FoundationInputProgress::Accepted,
+            Stage::Turn => FoundationInputProgress::Turn,
+            Stage::Refused => FoundationInputProgress::Refused,
+            _ => FoundationInputProgress::Pending,
+        }
+    }
+
+    pub fn detail(&self) -> Option<String> {
+        self.failure.as_ref().map(|failure| format!("{failure:?}"))
+    }
+
+    pub fn advance(&mut self) -> FoundationInputProgress {
+        self.advance_with_io(&mut MonotonicIo)
+    }
+
+    fn advance_with_io(&mut self, io: &mut impl PumpIo) -> FoundationInputProgress {
+        if self.progress() != FoundationInputProgress::Pending {
+            return self.progress();
+        }
+        let result = self.observe(io).and_then(|()| {
+            if self.serving.owner.listener.held().is_some() {
+                Ok(())
+            } else {
+                self.step(io)
+            }
+        });
+        if let Err(failure) = result {
+            // The common pump reports external transport failure without
+            // electing the enclosing owner's disposition. This owner stops
+            // serving and revokes input before handing custody to teardown.
+            if matches!(failure, RunFailure::Transport { .. }) {
+                self.serving.owner.context.fail(
+                    io,
+                    FlowHaltReason::ProtocolFailed,
+                    HaltPoint::Barrier,
+                    format!("serving input transport: {failure:?}"),
+                );
+            }
+            self.failure = Some(failure);
+            self.stage = Stage::Stopped;
+        }
+        self.progress()
+    }
+
+    /// Workflow policy supplies the turn identity only after accepted input is
+    /// available. This neither authors a turn nor grants an unchecked message.
+    pub fn start_turn(&mut self, turn: TurnKey) -> Result<(), TurnKey> {
+        if self.progress() != FoundationInputProgress::Accepted {
+            return Err(turn);
+        }
+        self.turn = Some(turn);
+        self.stage = Stage::Source;
+        Ok(())
+    }
+
+    fn observe(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        // The sole pump observes actual ready transports without waiting or
+        // altering a deadline before source authoring or response completion.
+        let owner = &mut self.serving.owner;
+        owner.context.observe_ready(&mut PumpPorts {
+            lifecycle: LifecyclePorts {
+                listener: Some(&mut owner.listener),
+                residency: Some(owner.resident.residency),
+                ..Default::default()
+            },
+            gate: Some(&mut owner.gate),
+            decode: Some(owner.decode),
+            label: None,
+            io,
+        })?;
+        Ok(())
+    }
+
+    fn step(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        let owner = &mut self.serving.owner;
+        owner.context.live(io)?;
+        let mut ports = PumpPorts {
+            lifecycle: LifecyclePorts {
+                listener: Some(&mut owner.listener),
+                residency: Some(owner.resident.residency),
+                ..Default::default()
+            },
+            gate: Some(&mut owner.gate),
+            decode: Some(owner.decode),
+            label: None,
+            io,
+        };
+        if self.report.is_some() {
+            if self.report_started {
+                owner.context.resume_author_and_wait(&mut ports)?;
+            } else {
+                let (received, subsystem) = self.report.as_ref().unwrap();
+                let Payload::Fault(report) = &received.envelope().payload else {
+                    unreachable!()
+                };
+                let payload = serde_json::value::to_raw_value(report)
+                    .expect("a received fault is serializable");
+                self.report_started = true;
+                owner.context.author_and_wait(
+                    &mut ports,
+                    AuthoredEvent {
+                        kind: serving::Kind::Fault,
+                        subsystem: *subsystem,
+                        turn: None,
+                        source: AuthoredSource::Runtime,
+                        causal_parent: None,
+                        payload: Some(serving::Payload::Fault(payload)),
+                    },
+                )?;
+            }
+            self.report = None;
+            self.report_started = false;
+            return Ok(());
+        }
+        match self.stage {
+            Stage::Waiting => {
+                owner.context.reduce_flow(ports.io)?;
+                // Residency announcements remain on their actual seam. They
+                // are opaque trace facts, not invented management decisions.
+                if let Some(received) = ports
+                    .lifecycle
+                    .residency
+                    .as_deref_mut()
+                    .unwrap()
+                    .take_received()
+                    .map_err(|failure| RunFailure::Transport {
+                        source: PumpSource::Residency,
+                        failure,
+                    })?
+                {
+                    self.report = Some((received, Subsystem::Spu));
+                    let (received, _) = self.report.as_ref().unwrap();
+                    if received.envelope().exchange.opener != Opener::Spu
+                        || !matches!(received.envelope().payload, Payload::Fault(_))
+                    {
+                        return Err(owner.context.fail(
+                            ports.io,
+                            FlowHaltReason::ProtocolFailed,
+                            HaltPoint::Barrier,
+                            "unexpected serving residency reply",
+                        ));
+                    }
+                    return Ok(());
+                }
+                if self.received.is_none() {
+                    self.received =
+                        ports
+                            .gate
+                            .as_deref_mut()
+                            .unwrap()
+                            .take_received()
+                            .map_err(|failure| RunFailure::Transport {
+                                source: PumpSource::Gate,
+                                failure,
+                            })?;
+                }
+                let Some(received) = self.received.as_ref() else {
+                    owner.context.pump_once(&mut ports)?;
+                    return Ok(());
+                };
+                let envelope = received.envelope();
+                if !received.belongs_to(ports.gate.as_deref().unwrap())
+                    || envelope.exchange.opener != Opener::Gate
+                {
+                    return Err(owner.context.fail(
+                        ports.io,
+                        FlowHaltReason::ProtocolFailed,
+                        HaltPoint::Barrier,
+                        "input did not open on the standing gate",
+                    ));
+                }
+                if let Payload::Fault(_) = &envelope.payload {
+                    self.report = Some((self.received.take().unwrap(), Subsystem::Gate));
+                    return Ok(());
+                }
+                let Payload::Frame(frame) = &envelope.payload else {
+                    return Err(owner.context.fail(
+                        ports.io,
+                        FlowHaltReason::ProtocolFailed,
+                        HaltPoint::Barrier,
+                        "unexpected gate payload at input intake",
+                    ));
+                };
+                if envelope.position != Position::Open
+                    || self
+                        .serving
+                        .gate_exchanges
+                        .contains(&envelope.exchange.ordinal)
+                {
+                    return Err(owner.context.fail(
+                        ports.io,
+                        FlowHaltReason::ProtocolFailed,
+                        HaltPoint::Barrier,
+                        "gate frame is not a fresh opening exchange",
+                    ));
+                }
+                match owner.context.begin_input(frame.clone(), ports.io) {
+                    Ok(()) => {
+                        self.serving
+                            .gate_exchanges
+                            .insert(envelope.exchange.ordinal);
+                        self.stage = Stage::Checking;
+                    }
+                    Err(error) => {
+                        // begin_input returns the unchanged frame. Its received
+                        // envelope is still retained here, including raw bytes.
+                        debug_assert_eq!(&error.frame, frame);
+                        if let Some(failure) = error.failure {
+                            return Err(failure);
+                        }
+                        owner.context.pump_once(&mut ports)?;
+                    }
+                }
+            }
+            Stage::Checking => match owner.context.advance_input(&mut ports)? {
+                InputProgress::Accepted => {
+                    self.token = owner.context.take_accepted_input(ports.io)?;
+                    if self.token.is_some() {
+                        self.stage = Stage::Accepted;
+                    }
+                }
+                InputProgress::CloseReady => {
+                    self.close = Some(OrganEnvelope {
+                        exchange: self.received.as_ref().unwrap().envelope().exchange.clone(),
+                        position: Position::Close,
+                        payload: Payload::Frame(owner.context.input_close().expect("owed close")),
+                    });
+                    self.stage = Stage::Closing;
+                }
+                InputProgress::Pending => {
+                    owner.context.pump_once(&mut ports)?;
+                }
+                InputProgress::Progress => {}
+                _ => {
+                    return Err(owner.context.fail(
+                        ports.io,
+                        FlowHaltReason::ProtocolFailed,
+                        HaltPoint::Barrier,
+                        "input lost its active check",
+                    ));
+                }
+            },
+            Stage::Source => {
+                let result = if let Some(token) = self.token.take() {
+                    let turn = TurnRef(self.turn.as_ref().expect("loop supplied turn").0.clone());
+                    match owner.context.consume_input(token, turn, &mut ports) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            self.token = error.token;
+                            return Err(error.failure);
+                        }
+                    }
+                } else {
+                    owner.context.resume_input_turn(&mut ports)?
+                };
+                if let Some(seated) = result {
+                    self.seated = Some(seated);
+                    self.stage = Stage::Turn;
+                } else {
+                    owner.context.pump_once(&mut ports)?;
+                }
+            }
+            Stage::Closing => {
+                if let Some(close) = self.close.take() {
+                    match ports.gate.as_deref_mut().unwrap().stage_tracked(close) {
+                        Ok(TrackedStage::Queued(send)) => self.send = Some(send),
+                        Ok(TrackedStage::Busy(close)) => self.close = Some(close),
+                        Err(error) => {
+                            self.close = Some(error.input);
+                            return Err(RunFailure::Transport {
+                                source: PumpSource::Gate,
+                                failure: error.failure,
+                            });
+                        }
+                    }
+                }
+                if self.send.as_ref().is_some_and(|send| send.sent()) {
+                    owner.context.input_response_sent(ports.io)?;
+                    owner.context.finish_input(ports.io)?;
+                    self.stage = Stage::Refused;
+                } else {
+                    owner.context.pump_once(&mut ports)?;
+                }
+            }
+            _ => unreachable!("only pending stages advance"),
+        }
+        Ok(())
+    }
+
+    /// Only whole refusal delivery or Recorded checked source authoring grants
+    /// a result. Every other attempt returns the full original owner.
+    pub fn finish(mut self: Box<Self>) -> Result<FoundationInputResult<'a>, Box<Self>> {
+        match self.progress() {
+            FoundationInputProgress::Refused => Ok(FoundationInputResult::Refused(self.serving)),
+            FoundationInputProgress::Turn => {
+                Ok(FoundationInputResult::Turn(Box::new(FoundationTurn {
+                    serving: self.serving,
+                    received: self.received.take().expect("original gate exchange"),
+                    input: self.seated.take().expect("recorded source"),
+                })))
+            }
+            _ => Err(self),
+        }
+    }
+}
+
+pub enum FoundationInputResult<'a> {
+    Refused(FoundationServing<'a>),
+    Turn(Box<FoundationTurn<'a>>),
+}
+
+/// Actual checked source and the still-open gate exchange, beside the original
+/// serving resources. There is no constructor, Clone or raw author access.
+///
+/// ```compile_fail,E0616
+/// fn raw(turn: weaver_harness::FoundationTurn<'_>) { let _ = turn.serving; }
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn cloned<T: Clone>() {}
+/// cloned::<weaver_harness::FoundationTurn<'static>>();
+/// ```
+pub struct FoundationTurn<'a> {
+    serving: FoundationServing<'a>,
+    received: ReceivedOrgan,
+    input: SeatedInput,
+}
+impl FoundationTurn<'_> {
+    pub fn message(&self) -> &weaver_traits::Message {
+        &self.input.message
+    }
+    pub fn source(&self) -> &weaver_types::state_flow::SourceBlockId {
+        &self.input.source
+    }
+    pub fn turn(&self) -> TurnKey {
+        TurnKey(self.input.turn.0.clone())
+    }
+}
+
+#[cfg(test)]
+#[path = "context_worker_input_tests.rs"]
+pub(super) mod tests;

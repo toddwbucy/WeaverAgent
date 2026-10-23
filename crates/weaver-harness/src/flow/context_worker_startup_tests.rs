@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use weaver_types::state_flow as s;
 
 #[path = "../bin/worker/dev_loop/foundation.rs"]
-mod worker;
+pub(super) mod worker;
 
 struct Files(PathBuf);
 impl Files {
@@ -35,7 +35,8 @@ impl Files {
         std::fs::write(
             &path,
             format!(
-                "#!/bin/sh\nexport {}={}\nexec {} --exact {} --nocapture\n",
+                "#!/bin/sh\nexport WEAVER_WORKER_INPUT_ROOT={}\nexport {}={}\nexec {} --exact {} --nocapture\n",
+                quote(self.0.to_str().unwrap()),
                 variable,
                 quote(mode),
                 quote(std::env::current_exe().unwrap().to_str().unwrap()),
@@ -52,7 +53,9 @@ impl Files {
                 classify: Some(self.child(
                     "checker",
                     "WEAVER_STARTUP_COMPOSITION_CHILD",
-                    if mode == "classifier-refusal" {
+                    if mode.starts_with("input-") {
+                        mode
+                    } else if mode == "classifier-refusal" {
                         "refuse"
                     } else {
                         "ready"
@@ -72,12 +75,18 @@ impl Files {
                 gate: self.child(
                     "gate",
                     "WEAVER_GATE_STARTUP_CHILD",
-                    if mode == "gate-refusal" {
+                    if mode.starts_with("input-") {
+                        mode
+                    } else if mode == "gate-refusal" {
                         "refuse"
                     } else {
                         "ready"
                     },
-                    "flow::context::boot_composition::gate_startup::tests::gate_startup_child",
+                    if mode.starts_with("input-") {
+                        "flow::context::worker_startup::input::tests::worker_input_gate_child"
+                    } else {
+                        "flow::context::boot_composition::gate_startup::tests::gate_startup_child"
+                    },
                 ),
             },
             parameters: OrganParameters {
@@ -159,7 +168,7 @@ fn refuse_unprivileged(admission: &mut FoundationAdmission, path: &std::path::Pa
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 
-fn reap(child: &mut OwnedChild) {
+pub(super) fn reap(child: &mut OwnedChild) {
     child.stop_at_cap();
     let limit = Instant::now() + Duration::from_secs(3);
     while child.poll() == ChildState::Running && Instant::now() < limit {
@@ -195,7 +204,7 @@ impl Drop for ServingGuard<'_> {
     }
 }
 
-struct Member {
+pub(super) struct Member {
     peer: UnixStream,
     bytes: Vec<u8>,
     seed: String,
@@ -203,7 +212,7 @@ struct Member {
     requests: Vec<String>,
 }
 impl Member {
-    fn step(&mut self, now: u64, mode: &str) {
+    pub(super) fn step(&mut self, now: u64, mode: &str) {
         let mut part = [0; 65536];
         match self.peer.read(&mut part) {
             Ok(n) => self.bytes.extend_from_slice(&part[..n]),
@@ -336,11 +345,18 @@ fn circuit(mode: &str) {
     let (bootstrap, scheme, _) = classifier_fixture();
     let mut config = super::super::tests::config();
     config.scheme = scheme;
+    if mode.starts_with("input-worker") {
+        // The ordinary fixture's 1 ms bound is for paired fake I/O. This real
+        // socket/clock circuit declares its own ample, unqualified test budget.
+        config.gate_wait.elapsed_ns = 5_000_000_000.into();
+        config.observation_interval.elapsed_ns = 100_000_000.into();
+    }
     let fixture = Fixture::new(config.clone());
     let event = fixture.load_event();
-    let Some(weaver_trace::serving::Payload::Elections(load)) = event.payload else {
+    let Some(weaver_trace::serving::Payload::Elections(mut load)) = event.payload else {
         panic!()
     };
+    load.state_flow.gate_wait.elapsed_ns = config.gate_wait.elapsed_ns.0.into();
     let envelope = super::super::startup_composition::tests::entered_tests::envelope(
         &config,
         &load,
@@ -384,7 +400,7 @@ fn circuit(mode: &str) {
     assert_eq!(admission.received.as_ref().unwrap().wire(), bytes);
     assert_eq!(admission.advance(), FoundationAdmissionProgress::Received);
     let mut clock = FakePumpIo::new(100);
-    let adopted = if mode == "worker" {
+    let adopted = if mode == "worker" || mode.starts_with("input-worker") {
         admission.adopt(5_000_000_000)
     } else {
         admission.adopt_with_io(1_000_000_000, &mut clock)
@@ -421,7 +437,7 @@ fn circuit(mode: &str) {
         .unwrap();
     assert_eq!(
         bound.deadline_ns() - bound.began_ns(),
-        if mode == "worker" {
+        if mode == "worker" || mode.starts_with("input-worker") {
             5_000_000_000
         } else {
             1_000_000_000
@@ -435,7 +451,7 @@ fn circuit(mode: &str) {
         ordinal: 0,
         requests: vec![],
     };
-    if mode == "worker" {
+    if mode == "worker" || mode.starts_with("input-worker") {
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = done.clone();
         let responder = std::thread::spawn(move || {
@@ -451,13 +467,27 @@ fn circuit(mode: &str) {
         done.store(true, std::sync::atomic::Ordering::SeqCst);
         member = responder.join().unwrap();
         let mut serving = match result {
-            Ok(serving) => ServingGuard(serving),
+            Ok(serving) => serving,
             Err(owner) => {
                 let guard = EnterGuard(Some(owner));
                 panic!("worker refused: {:?}", guard.0.as_ref().unwrap().detail());
             }
         };
-        assert_serving(&mut serving.0, &peer, &bytes, &member, bound);
+        assert_serving(&mut serving, &peer, &bytes, &member, bound);
+        if mode.starts_with("input-worker") {
+            drop(peer);
+            super::input::tests::exercise(
+                serving,
+                &mut member,
+                &mut reader,
+                &mut clock,
+                &path,
+                &files.0,
+                mode,
+            );
+        } else {
+            let _guard = ServingGuard(serving);
+        }
         return;
     }
     let mut guard = EnterGuard(Some(run.0.begin(program).unwrap()));
@@ -512,7 +542,8 @@ fn circuit(mode: &str) {
     let successful = matches!(
         mode,
         "ready" | "missing-checker" | "bad-checker-path" | "unprivileged"
-    ) || mode.starts_with("management-");
+    ) || mode.starts_with("management-")
+        || mode.starts_with("input-");
     if successful {
         assert_eq!(
             owner.progress(),
@@ -520,8 +551,22 @@ fn circuit(mode: &str) {
             "{:?}",
             owner.detail()
         );
-        let mut serving = ServingGuard(guard.0.take().unwrap().finish().ok().unwrap());
-        assert_serving(&mut serving.0, &peer, &bytes, &member, bound);
+        let mut serving = guard.0.take().unwrap().finish().ok().unwrap();
+        assert_serving(&mut serving, &peer, &bytes, &member, bound);
+        if mode.starts_with("input-") {
+            drop(peer); // Normal admin departure does not revoke serving.
+            super::input::tests::exercise(
+                serving,
+                &mut member,
+                &mut reader,
+                &mut clock,
+                &path,
+                &files.0,
+                mode,
+            );
+            return;
+        }
+        let mut serving = ServingGuard(serving);
         if let Some(management) = management {
             // The pump serializes lifecycle peers. No second receiver ran while
             // original Enter owned the primary slot, even during gate Raise.
@@ -724,3 +769,35 @@ scenario!(
     worker_startup_composition_bad_checker_retains_enter,
     "bad-checker-path"
 );
+
+scenario!(worker_input_composition_accepted, "input-accepted");
+scenario!(worker_input_composition_external, "input-external");
+scenario!(worker_input_composition_malformed, "input-malformed");
+scenario!(worker_input_composition_role, "input-role");
+scenario!(worker_input_composition_no_dialer, "input-no-dialer");
+scenario!(worker_input_composition_language_refusal, "input-language");
+scenario!(worker_input_composition_send_pressure, "input-pressure");
+scenario!(worker_input_composition_queued_frame, "input-queued");
+scenario!(worker_input_composition_wrong_position, "input-position");
+scenario!(worker_input_composition_wrong_opener, "input-opener");
+scenario!(
+    worker_input_composition_duplicate_exchange,
+    "input-duplicate"
+);
+scenario!(worker_input_composition_expiry, "input-silent");
+scenario!(worker_input_composition_checker_eof, "input-check-eof");
+scenario!(worker_input_composition_management, "input-management");
+scenario!(worker_input_composition_fault_before_input, "input-fault");
+scenario!(worker_input_composition_actual_dev_loop, "input-worker");
+
+scenario!(
+    worker_input_composition_eof_before_source,
+    "input-source-eof"
+);
+
+scenario!(
+    worker_input_composition_actual_dev_loop_accepted,
+    "input-worker-accepted"
+);
+
+scenario!(worker_input_composition_refused_then_next, "input-two");

@@ -647,9 +647,23 @@ impl CommonPump {
     pub(super) fn step<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
+        coordinator: Option<&mut FlowCoordinator<SocketPort>>,
+        cx: &mut FlowRecording<'_>,
+        deadlines: &DeadlineRegistry<PumpDeadline>,
+    ) -> Result<PumpStep, PumpFailure> {
+        self.step_with_wait(ports, coordinator, cx, deadlines, true)
+    }
+
+    /// The same bounded observation and transport work, with an optional wait
+    /// when nothing is ready. A local decision may observe without inventing a
+    /// protocol deadline or substituting a clock/wait provider.
+    pub(super) fn step_with_wait<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
         mut coordinator: Option<&mut FlowCoordinator<SocketPort>>,
         cx: &mut FlowRecording<'_>,
         deadlines: &DeadlineRegistry<PumpDeadline>,
+        wait: bool,
     ) -> Result<PumpStep, PumpFailure> {
         if let Some(expired) = self.deadline(ports.io, deadlines)? {
             return Ok(expired);
@@ -708,6 +722,13 @@ impl CommonPump {
                 .transpose()
                 .map_err(PumpFailure::Flow)?
                 .flatten();
+            if !wait {
+                return Ok(if observation.is_some_and(|tick| self.previous >= tick) {
+                    PumpStep::Observation
+                } else {
+                    PumpStep::Idle
+                });
+            }
             let wake = deadlines.nearest().into_iter().chain(observation).min();
             let mut interests = Vec::new();
             let mut sources = Vec::new();
