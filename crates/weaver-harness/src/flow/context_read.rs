@@ -307,7 +307,19 @@ impl RecordingContext {
             }
             _ => None,
         };
-        if self.plan_summary_blocks_external()
+        let summary_owns_cut = matches!(purpose, ReadPurpose::PlanSummary)
+            && self.plan_summary_owns_read_wait(PumpDeadline::Cut);
+        let summary_owns_effect_wait = matches!(purpose, ReadPurpose::PlanSummary)
+            && [PumpDeadline::Decision, PumpDeadline::Cut]
+                .into_iter()
+                .any(|key| self.plan_summary_owns_read_wait(key));
+        let cut_drain_bound = self.reload_drain_bound().filter(|_| {
+            summary_owns_effect_wait
+                || (matches!(purpose, ReadPurpose::Marks) && self.marks.is_some())
+                || inward.is_some()
+        });
+        if (self.place_blocks_external() && cut_drain_bound.is_none())
+            || self.plan_summary_blocks_external()
             || (matches!(purpose, ReadPurpose::PlanSummary) && !self.plan_summary_read_allowed())
             || (self.boot_pairs.is_some() && !matches!(purpose, ReadPurpose::BootPairs))
             || (matches!(purpose, ReadPurpose::BootPairs) && !self.boot_pairs_read_allowed())
@@ -340,8 +352,8 @@ impl RecordingContext {
             || self.flow.state().held_measurement().is_some()
             || self.deadlines.get(PumpDeadline::Gate).is_some()
             || (self.deadlines.get(PumpDeadline::Cut).is_some()
-                && !(matches!(purpose, ReadPurpose::PlanSummary)
-                    && self.plan_summary_owns_read_wait(PumpDeadline::Cut)))
+                && !summary_owns_cut
+                && cut_drain_bound.is_none())
             || self.deadlines.get(PumpDeadline::StateControl).is_some()
         {
             return Err(ReadBeginError {
@@ -366,6 +378,9 @@ impl RecordingContext {
                 if let Some(bound) = self.deadlines.get(key) {
                     end = end.min(bound.deadline_ns());
                 }
+            }
+            if let Some(cut_bound) = cut_drain_bound {
+                end = end.min(cut_bound.deadline_ns());
             }
             if matches!(purpose, ReadPurpose::PlanSummary) {
                 end = end.min(

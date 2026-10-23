@@ -245,6 +245,7 @@ impl RecordingContext {
             Some(BootPairsBeginRefusal::WrongOpen)
         } else if self.boot_open_blocks_external()
             || self.plan_summary_blocks_external()
+            || self.place_blocks_external()
             || self.boot_begin_busy()
         {
             Some(BootPairsBeginRefusal::Busy)

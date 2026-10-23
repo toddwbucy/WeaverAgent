@@ -365,10 +365,13 @@ impl RecordingContext {
     }
 
     fn plan_summary_admission_busy(&self, key: PumpDeadline) -> bool {
-        // Unlike boot Open, an effect refresh may own an open turn and borrow
-        // its existing Decision or Cut. It may not overlap other waits, template
-        // work, measurements or content owners. Boot still requires no open turn.
-        self.plan_summary.is_some()
+        // An effect refresh retains its own Decision or Cut. A separate Cut
+        // may also bound an already-owed effect while its reload drains. Other
+        // waits and owners still exclude admission; boot requires no open turn.
+        let drains_owed_effect = matches!(key, PumpDeadline::Decision | PumpDeadline::Cut)
+            && self.reload_drain_bound().is_some();
+        (self.place_blocks_external() && !drains_owed_effect)
+            || self.plan_summary.is_some()
             || (key == PumpDeadline::Enter && self.open_turn.is_some())
             || self.filing.is_some()
             || self.output.is_some()
@@ -406,7 +409,11 @@ impl RecordingContext {
                 PumpDeadline::StateControl,
             ]
             .into_iter()
-            .any(|other| other != key && self.deadlines.get(other).is_some())
+            .any(|other| {
+                other != key
+                    && !(other == PumpDeadline::Cut && drains_owed_effect)
+                    && self.deadlines.get(other).is_some()
+            })
     }
 
     #[allow(clippy::result_large_err)]

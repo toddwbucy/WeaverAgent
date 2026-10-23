@@ -686,21 +686,21 @@ impl CommonPump {
         }
         self.cursor = (self.cursor + 1) % ROTATING.len();
         for source in order {
-            // Yield the first Open byte only for the same held cancellation
-            // that the boot owner observes. Unrelated lifecycle traffic keeps
-            // its original completion and cannot suppress the decode send.
+            // Withhold only the first Open/placement write for the same held
+            // cancellation that the owner observes. Keep receive and terminal
+            // observation on the sole socket owner, including a final packet
+            // before HUP. Unrelated lifecycle traffic cannot suppress the send.
             if source == PumpSource::Decode
-                && ports
-                    .decode
-                    .as_deref()
-                    .is_some_and(DecodePort::open_not_started)
+                && ports.decode.as_deref().is_some_and(|decode| {
+                    decode.open_not_started() || decode.placement_not_started()
+                })
                 && ports
                     .lifecycle
                     .peer
                     .as_deref()
                     .is_some_and(|peer| peer.cancels_boot_open())
             {
-                continue;
+                ready[source as usize].remove(PollFlags::POLLOUT);
             }
             if let Some(expired) = self.deadline(ports.io, deadlines)? {
                 return Ok(expired);

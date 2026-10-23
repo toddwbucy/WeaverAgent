@@ -1488,6 +1488,28 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         Ok(())
     }
 
+    pub(super) fn begin_place_releasing(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        permit: &super::context::place_driver::PlaceReleasePermit,
+    ) -> Result<(), FlowFailure> {
+        self.require_active(cx)?;
+        if self.capture.is_some()
+            || !self.settled_except_author(cx)
+            || !permit.matches(cx.barrier)
+            || !self.state().can_begin_filing()
+            || self
+                .classifier
+                .as_ref()
+                .is_some_and(|owner| owner.state() != ClassifierState::Idle)
+            || self.starting_classifier.is_some()
+        {
+            return Err(self.fail(cx, "barrier", "place release retains foreign work"));
+        }
+        self.phase = CoordinatorPhase::Releasing;
+        Ok(())
+    }
+
     /// The sealed boot summary rollback may retire an expired read without
     /// inventing a Release or losing any locally held transport/record evidence.
     pub(super) fn begin_plan_read_rollback(
@@ -4106,4 +4128,41 @@ struct StoppedPlanRead {
     _release_timing: Option<(u64, u64)>,
     _record: super::recording::StoppedReadRecord,
     close_error: Option<String>,
+}
+
+impl<P: Ste100Port> FlowCoordinator<P> {
+    pub(super) fn split_pending_output_text(
+        &mut self,
+        index: u64,
+    ) -> Result<(SourceBlockId, SourceLease), &'static str> {
+        let checks = self
+            .output_checks
+            .as_ref()
+            .ok_or("no original output owner")?;
+        if checks.is_cancelled() {
+            return Err("output is cancelled");
+        }
+        let source = checks.source().ok_or("output is not Recorded")?;
+        if !matches!(checks.original().message.content.get(index as usize),Some(weaver_traits::ContentBlock::Text{text}) if !text.is_empty())
+        {
+            return Err("output index is not complete Text");
+        }
+        let block = SourceBlockId {
+            block: index.into(),
+            ..source.block_id.clone()
+        };
+        let lease = self
+            .output_receipts
+            .as_ref()
+            .and_then(|r| r.lease.as_ref())
+            .ok_or("output intake is not installed")?;
+        if !self.ledger.owned_pending_text(lease, &block) {
+            return Err("output source has no pending selected Text");
+        }
+        let split = self
+            .ledger
+            .split_source_lease(lease, &block)
+            .map_err(|_| "output slot cannot transfer")?;
+        Ok((block, split))
+    }
 }

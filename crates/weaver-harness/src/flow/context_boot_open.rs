@@ -1183,6 +1183,8 @@ impl RecordingContext {
             self.phase,
             RecordingPhase::Releasing | RecordingPhase::Failed
         ) || !self.boot_open_account_settled()
+            || self.place_owed()
+            || self.check_place_port(&decode).is_err()
             || self.check_boot_open_port(&decode).is_err()
         {
             return Err(decode);

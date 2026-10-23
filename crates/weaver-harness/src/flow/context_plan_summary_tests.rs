@@ -2156,3 +2156,6 @@ mod release_integration_tests;
 #[path = "context_plan_summary_review_tests.rs"]
 mod review_followup_tests;
 use review_followup_tests::SummaryReadyClock;
+
+#[path = "context_place_tests.rs"]
+mod place_tests;

@@ -202,6 +202,18 @@ impl SourceLeases {
             .ok_or(LedgerError("source is outside this lease"))
     }
 
+    /// The immutable terminal slot retains its original whole Text even after
+    /// the live ledger entry has released its charge. Taken/released slots are
+    /// never accepted as another consumer's input.
+    pub(super) fn retained_whole_text(&self, lease: &SourceLease, source: &SourceBlockId) -> bool {
+        self.registration(lease).ok().and_then(|r|r.slots.iter().find(|s|s.source==*source))
+            .filter(|slot|slot.status==LeaseSlotStatus::Ready)
+            .and_then(|slot|slot.disposition.as_ref()).is_some_and(|d|match d{
+                SourceDisposition::Committed(source)=>matches!(source.file(),super::LedgerFile::Statement(file) if !file.text.is_empty()),
+                SourceDisposition::CorrectlyRejected(source)=>!source.file().text.is_empty(),
+            })
+    }
+
     pub(super) fn slot_available(&self, key: LeaseSlotKey) -> bool {
         self.registrations
             .iter()
@@ -287,6 +299,52 @@ impl SourceLeases {
             .unwrap();
         self.registrations.remove(index);
         Ok(())
+    }
+}
+
+impl SourceLeases {
+    /// Transfer an existing slot; neither register a copied ID nor duplicate custody.
+    pub(super) fn split(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<SourceLease, LedgerError> {
+        let registration = self.registration(lease)?;
+        let index = registration
+            .slots
+            .iter()
+            .position(|slot| {
+                slot.source == *source
+                    && matches!(
+                        slot.status,
+                        LeaseSlotStatus::Pending | LeaseSlotStatus::Ready
+                    )
+            })
+            .ok_or(LedgerError("source slot is not transferable"))?;
+        let id = self
+            .next_id
+            .ok_or(LedgerError("source lease identity exhausted"))?;
+        self.registrations
+            .try_reserve(1)
+            .map_err(|_| LedgerError("source lease allocation failed"))?;
+        let mut slots = Vec::new();
+        slots
+            .try_reserve_exact(1)
+            .map_err(|_| LedgerError("source slot allocation failed"))?;
+        let slot = self.registration_mut(lease)?.slots.remove(index);
+        slots.push(slot);
+        let life = Arc::new(());
+        self.registrations.push(Registration {
+            id,
+            life: Arc::downgrade(&life),
+            slots,
+        });
+        self.next_id = id.checked_add(1);
+        Ok(SourceLease {
+            identity: self.identity.clone(),
+            id,
+            _life: life,
+        })
     }
 }
 

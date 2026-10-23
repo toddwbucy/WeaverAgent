@@ -67,6 +67,7 @@ pub(super) enum RunFailure {
     BootPairsOwned,
     BootOpenOwned,
     PlanSummaryOwned,
+    PlaceOwned,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -122,6 +123,18 @@ pub(crate) struct RecordingContext {
     member_capture: Option<capture_driver::MemberCapture>,
     freshness: Option<freshness_driver::FreshnessTransaction>,
     read: Option<read_driver::ReadTransaction>,
+    place_engine: Option<super::place::PlaceEngine>,
+    place_turn_stopped: bool,
+    place_leaving: bool,
+    place_revoked_grant: Option<std::sync::Arc<()>>,
+    place: Option<place_driver::PlaceTransaction>,
+    generation: Option<place_driver::GenerationTransaction>,
+    reload: Option<place_driver::ReloadTransaction>,
+    place_instructions: Vec<FilingCompletion>,
+    place_stopped_measure: Option<measure_driver::StoppedPlaceMeasure>,
+    native_marks: Option<NativeMarkTransaction>,
+    place_notice: Option<place_driver::PlaceNotice>,
+    place_close: Option<weaver_types::TurnFrame>,
     plan_cache: super::plan::PlanSummaryCache,
     plan_summary: Option<plan_summary_driver::PlanSummaryTransaction>,
     inspection: Option<inspection_driver::InspectionTransaction>,
@@ -239,6 +252,18 @@ impl RecordingContext {
             member_capture: None,
             freshness: None,
             read: None,
+            place_engine: None,
+            place_turn_stopped: false,
+            place_leaving: false,
+            place_revoked_grant: None,
+            place: None,
+            generation: None,
+            reload: None,
+            place_instructions: vec![],
+            place_stopped_measure: None,
+            native_marks: None,
+            place_close: None,
+            place_notice: None,
             plan_cache: super::plan::PlanSummaryCache::default(),
             plan_summary: None,
             inspection: None,
@@ -438,6 +463,9 @@ impl RecordingContext {
         self.live(io)?;
         // A template result belongs to its ordered transcript, never a second
         // operation consumer. Correct rejection keeps that boundary closed.
+        if self.place_blocks_external() {
+            return Err(RunFailure::PlaceOwned);
+        }
         if self.plan_summary_blocks_external() {
             return Err(RunFailure::PlanSummaryOwned);
         }
@@ -484,6 +512,9 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
+        if self.place_owed() {
+            return Err(RunFailure::PlaceOwned);
+        }
         let result = self.flow.retire_refused_classifier(&mut FlowRecording {
             barrier: &mut self.barrier,
             inbox: &mut self.inbox,
@@ -514,6 +545,7 @@ impl RecordingContext {
 
     pub(super) fn complete_wait(&mut self, key: PumpDeadline) -> Option<AbsoluteBound> {
         self.freeze_plan_summary_account_bound();
+        self.freeze_place_account_bound();
         if self.failure.is_some()
             || self.phase == RecordingPhase::Closed
             || self.filing_wait_still_owned(key)
@@ -522,6 +554,7 @@ impl RecordingContext {
             || self.repair_wait_still_owned(key)
             || self.read_wait_still_owned(key)
             || self.plan_summary_wait_owned(key)
+            || self.place_wait_owned(key)
             || self.inspection_wait_still_owned(key)
             || self.measure_wait_still_owned(key)
             || (key == PumpDeadline::Decision && self.marks.is_some())
@@ -547,7 +580,8 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
-        if self.boot_open_blocks_external()
+        if self.place_owed()
+            || self.boot_open_blocks_external()
             || self.plan_summary.is_some()
             || self.output.is_some()
             || self.repair.is_some()
@@ -641,6 +675,9 @@ impl RecordingContext {
 
     pub(super) fn retire_state(&mut self, io: &mut impl PumpIo) -> Result<Advance, RunFailure> {
         self.live(io)?;
+        if self.place_owed() {
+            return Err(RunFailure::PlaceOwned);
+        }
         let result = self.flow.retire_state(
             &mut FlowRecording {
                 barrier: &mut self.barrier,
@@ -658,6 +695,9 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Advance, RunFailure> {
         self.live(io)?;
+        if self.place_owed() {
+            return Err(RunFailure::PlaceOwned);
+        }
         let result = self.flow.retire_classifier(&mut FlowRecording {
             barrier: &mut self.barrier,
             inbox: &mut self.inbox,
@@ -738,6 +778,12 @@ impl RecordingContext {
                 return Err(failure);
             }
         };
+        if self.place_blocks_external()
+            || (self.place_admission_stopped() && event.kind == Kind::TurnStarted)
+        {
+            self.retain_refused(event);
+            return Err(RunFailure::PlaceOwned);
+        }
         if (self.plan_summary_blocks_external() && !self.plan_summary_allows_turn_close(&event))
             || (receipt_driver::is_plan_effect_event(&event) && !self.plan_effect_inflight())
         {
@@ -919,6 +965,9 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
         self.live(ports.io)?;
+        if self.place_blocks_external() {
+            return Err(RunFailure::PlaceOwned);
+        }
         if self.plan_summary_blocks_external()
             && !self
                 .barrier
@@ -1003,6 +1052,8 @@ impl RecordingContext {
             } = &progress
             {
                 self.retain_release_recorded(*sequence);
+                self.bind_place_measure_author(*sequence);
+                self.bind_place_author(*sequence)?;
                 self.bind_marks_author(*sequence, ports.io)?;
                 self.bind_repair_author(*sequence, ports.io)?;
                 self.bind_pair_author(*sequence, ports.io)?;
@@ -1018,6 +1069,7 @@ impl RecordingContext {
                         if kind == Kind::TurnStarted {
                             self.open_turn = turn;
                         } else if kind == Kind::TurnClosed && self.open_turn == turn {
+                            self.place_turn_stopped = false;
                             self.open_turn = None;
                         }
                     }
@@ -1153,6 +1205,7 @@ impl RecordingContext {
         if let Some(decode) = ports.decode.as_deref() {
             self.check_measure_port(decode)?;
             self.check_boot_open_port(decode)?;
+            self.check_place_port(decode)?;
         }
         self.live(ports.io)?;
         if self.phase == RecordingPhase::Preflight
@@ -1170,6 +1223,7 @@ impl RecordingContext {
         }
         self.observe_boot_lifecycle(&ports.lifecycle);
         self.observe_plan_summary_lifecycle(&ports.lifecycle);
+        self.observe_place_lifecycle(&ports.lifecycle);
         if ports.decode.is_some() && self.boot_open_revoked() {
             return Err(RunFailure::BootOpenOwned);
         }
@@ -1181,17 +1235,22 @@ impl RecordingContext {
         {
             self.boot_open_live(ports.io)?;
         }
-        // An unsent generation is deferred without starving the state and
-        // lifecycle traffic that can settle the summary obligation. Restore the
-        // caller's exact port before inspecting the pump outcome, even on error.
-        // A started exchange or Cancel remains present and continues to drain.
-        let deferred_decode = if self.plan_summary_blocks_generation()
+        // Hold only this wholly unsent generation's write leg. The same socket
+        // stays in the sole pump for receive, terminal readiness and standing
+        // failure while required summary traffic advances.
+        let defer_generation = self.plan_summary_blocks_generation()
             && ports
                 .decode
                 .as_deref()
-                .is_some_and(|decode| decode.generation_not_started())
-        {
-            ports.decode.take()
+                .is_some_and(|decode| decode.generation_not_started());
+        if !defer_generation {
+            self.place_first_send(ports.decode.as_deref(), ports.io)?;
+        }
+        let previous_generation_hold = if defer_generation {
+            ports
+                .decode
+                .as_deref_mut()
+                .map(|decode| decode.replace_generation_send_hold(true))
         } else {
             None
         };
@@ -1206,11 +1265,17 @@ impl RecordingContext {
             },
             &self.deadlines,
         );
-        if let Some(decode) = deferred_decode {
-            ports.decode = Some(decode);
+        // Restore before every fallible continuation, including a failed step.
+        if let Some(previous) = previous_generation_hold {
+            ports
+                .decode
+                .as_deref_mut()
+                .expect("the common pump retains its decode owner")
+                .replace_generation_send_hold(previous);
         }
         self.observe_boot_lifecycle(&ports.lifecycle);
         self.observe_plan_summary_lifecycle(&ports.lifecycle);
+        self.observe_place_lifecycle(&ports.lifecycle);
         let sent = self.reconcile_pair_send(ports.io)?;
         match step {
             Ok(PumpStep::Deadline {
@@ -1230,6 +1295,13 @@ impl RecordingContext {
                         self.retain_measure_transport_evidence(decode);
                     }
                     Err(self.measure_fault(ports.io, format!("decode transport: {failure:?}")))
+                } else if source == PumpSource::Decode
+                    && (self.generation.is_some() || self.reload.is_some())
+                {
+                    if let Some(decode) = ports.decode.as_deref_mut() {
+                        self.retain_place_wire(decode);
+                    }
+                    Err(self.place_fault(ports.io, format!("decode transport: {failure:?}")))
                 } else {
                     Err(RunFailure::Transport { source, failure })
                 }
@@ -1529,6 +1601,7 @@ impl RecordingContext {
         // Revoke before sampling or reporting. A broken clock cannot grant work.
         self.observe_plan_effect_receipts();
         self.plan_cache.fail();
+        self.revoke_place();
         self.input.halt();
         self.pairs.freeze();
         self.freeze_repair();
@@ -1564,6 +1637,7 @@ impl RecordingContext {
         );
         self.freeze_boot_account_bound();
         self.freeze_plan_summary_account_bound();
+        self.freeze_place_account_bound();
         if self
             .read
             .as_ref()
@@ -1803,3 +1877,13 @@ pub(super) use inspection_driver::{
 
 #[path = "context_release.rs"]
 pub(in crate::flow) mod release_driver;
+
+#[path = "context_place.rs"]
+pub(in crate::flow) mod place_driver;
+#[allow(unused_imports)] // These private errors are consumed by the future loop composition.
+pub(in crate::flow) use place_driver::{
+    CheckedCut, GenerationCompletion, GenerationProgress, NativeMarkBeginError,
+    NativeMarkCompletion, NativeMarkTransaction, NativePosition, NativeScopes, PlaceAccount,
+    PlaceBeginError, PlaceInstallError, PlaceProgress, PlacementCompletion, ReloadCompletion,
+    ReloadProgress,
+};

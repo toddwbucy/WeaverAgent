@@ -176,6 +176,8 @@ enum AuthorPurpose {
 
 struct MeasureAuthor {
     purpose: AuthorPurpose,
+    ticket: Option<u64>,
+    sequence: Option<Sequence>,
 }
 
 pub(super) struct MeasureTransaction {
@@ -303,6 +305,7 @@ impl RecordingContext {
             || self.boot_pairs.is_some()
             || self.boot_open_blocks_external()
             || self.plan_summary_blocks_external()
+            || self.place_blocks_external()
             || self.measure.is_some()
             || self.output.is_some()
             || self.filing.is_some()
@@ -554,7 +557,11 @@ impl RecordingContext {
 
     fn stage_measure_author(&mut self, purpose: AuthorPurpose, kind: Kind, payload: Payload) {
         let owner = self.measure.as_mut().expect("measurement owns its author");
-        owner.author = Some(MeasureAuthor { purpose });
+        owner.author = Some(MeasureAuthor {
+            purpose,
+            ticket: None,
+            sequence: None,
+        });
         self.waiting_content = Some(AuthoredEvent {
             kind,
             subsystem: if purpose == AuthorPurpose::PlacementRefusal {
@@ -606,7 +613,44 @@ impl RecordingContext {
             .as_ref()
             .unwrap()
             .purpose;
-        let sequence = self.resume_owned_author_and_wait(ports)?;
+        let sequence = if let Some(sequence) = self
+            .measure
+            .as_ref()
+            .unwrap()
+            .author
+            .as_ref()
+            .unwrap()
+            .sequence
+        {
+            if self.completed_author == Some(sequence) {
+                self.completed_author = None;
+            }
+            sequence
+        } else {
+            if let Some(ticket) = self
+                .measure
+                .as_ref()
+                .unwrap()
+                .author
+                .as_ref()
+                .unwrap()
+                .ticket
+                && self.barrier.pending_author().map(|a| a.ticket) != Some(ticket)
+            {
+                return Err(self.measure_fault(ports.io, "measurement author ticket changed"));
+            }
+            let result = self.resume_owned_author_and_wait(ports);
+            if let Some(ticket) = self.barrier.pending_author().map(|a| a.ticket) {
+                self.measure
+                    .as_mut()
+                    .unwrap()
+                    .author
+                    .as_mut()
+                    .unwrap()
+                    .ticket = Some(ticket);
+            }
+            result?
+        };
         self.measure_wait_matches(ports.io)?;
         // The shared author has transferred this sequence. Save the next
         // measurement state before a lifecycle check can yield, so resumption
@@ -886,5 +930,251 @@ impl RecordingContext {
             HaltPoint::Barrier,
             detail,
         )
+    }
+}
+
+/// Stopped measurement custody exposes evidence only, never measured success.
+pub(super) struct StoppedPlaceMeasure {
+    owner: MeasureTransaction,
+}
+impl std::fmt::Debug for StoppedPlaceMeasure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoppedPlaceMeasure")
+            .field("request", &self.owner.request)
+            .field("received", &self.owner.received)
+            .finish_non_exhaustive()
+    }
+}
+impl StoppedPlaceMeasure {
+    pub(super) fn raw_bytes(&self) -> Option<&[u8]> {
+        self.owner
+            .received
+            .as_ref()
+            .map(ReceivedDecode::raw_bytes)
+            .or(self.owner.failed_wire.as_deref())
+    }
+}
+impl RecordingContext {
+    pub(super) fn take_stopped_place_measure(&mut self) -> Option<StoppedPlaceMeasure> {
+        let mut owner = self.measure.take()?;
+        owner.cancelled = true;
+        owner.frozen = true;
+        owner.reservation.take();
+        Some(StoppedPlaceMeasure { owner })
+    }
+    pub(super) fn advance_stopped_place_measure(
+        &mut self,
+        decode: &mut DecodePort,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        self.check_measure_port(decode)?;
+        if self.has_owed_measure_refusal() {
+            self.failed_measure_refusal_progress(io)?;
+            if self.has_owed_measure_refusal() {
+                return Ok(false);
+            }
+        }
+        let Some(owner) = self.measure.as_mut() else {
+            return Ok(true);
+        };
+        owner.cancelled = true;
+        let Some(r) = owner.reservation.as_ref() else {
+            return Ok(true);
+        };
+        if !r.sent() && !decode.send_started() {
+            let r = owner.reservation.take().unwrap();
+            match decode.withdraw_unsent(r) {
+                Ok(()) => return Ok(true),
+                Err(e) => {
+                    owner.reservation = Some(e.reservation);
+                    return Err(RunFailure::MeasureOwned);
+                }
+            }
+        }
+        if owner.received.is_none() {
+            self.pump
+                .stopped_decode_step(decode)
+                .map_err(|failure| RunFailure::Transport {
+                    source: PumpSource::Decode,
+                    failure,
+                })?;
+            let r = self.measure.as_ref().unwrap().reservation.as_ref().unwrap();
+            if let Some(received) =
+                decode
+                    .take_reserved(r)
+                    .map_err(|failure| RunFailure::Transport {
+                        source: PumpSource::Decode,
+                        failure,
+                    })?
+            {
+                let valid = received.matches(r)
+                    && received.after_send()
+                    && r.sent()
+                    && !decode.reservation_invalid(r);
+                self.measure.as_mut().unwrap().received = Some(received);
+                if !valid {
+                    return Err(RunFailure::MeasureOwned);
+                }
+            }
+        }
+        if !self.place_account_clock(io) {
+            return Err(RunFailure::MeasureOwned);
+        }
+        let owner = self.measure.as_ref().unwrap();
+        if owner.received.is_none() {
+            return Ok(false);
+        }
+        if owner.author.is_none() && owner.facts.is_none() && owner.decode_source.is_none() {
+            match owner.received.as_ref().unwrap().reply() {
+                DecodeReply::Answer(TokenAnswer::DeltaMeasured {
+                    resident,
+                    prefix_tokens,
+                    keep,
+                    input_tokens,
+                    capacity,
+                }) => {
+                    let facts = MeasureFacts {
+                        resident: *resident,
+                        prefix_tokens: *prefix_tokens,
+                        keep: *keep,
+                        input_tokens: *input_tokens,
+                        capacity: *capacity,
+                    };
+                    let request = &owner.request;
+                    let expected = request
+                        .position
+                        .prefix_tokens
+                        .max(request.keep.min(request.position.resident));
+                    if facts.resident != request.position.resident
+                        || facts.prefix_tokens != request.position.prefix_tokens
+                        || facts.capacity != request.position.capacity
+                        || facts.keep != expected
+                    {
+                        return Err(self.measure_fault(
+                            io,
+                            "stopped measurement differs from its original journal position",
+                        ));
+                    }
+                    self.measure.as_mut().unwrap().facts = Some(facts);
+                }
+                DecodeReply::Refusal(refusal) => {
+                    let fatal = *refusal != TokenRefusal::MalformedDelta;
+                    let record = RefusalRecord::Decode {
+                        asked: TokenAsk::MeasureDelta {
+                            keep: owner.request.keep,
+                        },
+                        refusal: refusal.clone(),
+                    };
+                    let payload = serde_json::value::to_raw_value(&record)
+                        .map_err(|e| self.measure_fault(io, e.to_string()))?;
+                    if fatal {
+                        let _ = self.measure_fault(
+                            io,
+                            "SPU refused stopped measurement outside its admitted render case",
+                        );
+                    } else {
+                        self.measure.as_mut().unwrap().refusal = Some(PlacementCode::InvalidSpan);
+                    }
+                    self.stage_measure_author(
+                        AuthorPurpose::DecodeRefusal,
+                        Kind::Refusal,
+                        Payload::Refusal(payload),
+                    );
+                    return Ok(false);
+                }
+                _ => {
+                    return Err(self
+                        .measure_fault(io, "stopped measurement received an unexpected terminal"));
+                }
+            }
+        }
+        let owner = self.measure.as_ref().unwrap();
+        if let Some(author) = owner.author.as_ref() {
+            let (purpose, ticket, sequence) = (author.purpose, author.ticket, author.sequence);
+            let sequence = if let Some(sequence) = sequence {
+                Some(sequence)
+            } else {
+                if let Some(ticket) = ticket {
+                    if self.barrier.pending_author().map(|a| a.ticket) != Some(ticket) {
+                        return Err(RunFailure::MeasureOwned);
+                    }
+                } else {
+                    if self.barrier.pending().is_some() {
+                        return Ok(false);
+                    }
+                    let event = self
+                        .waiting_content
+                        .take()
+                        .ok_or(RunFailure::MeasureOwned)?;
+                    if let Err(e) = self.barrier.queue_trace_only_authored(
+                        event,
+                        &self.author,
+                        self.last_ns,
+                        wall_ms().map_err(|_| RunFailure::MeasureOwned)?,
+                    ) {
+                        self.waiting_content = Some(e.event);
+                        return Err(RunFailure::MeasureOwned);
+                    }
+                    self.measure
+                        .as_mut()
+                        .unwrap()
+                        .author
+                        .as_mut()
+                        .unwrap()
+                        .ticket = self.barrier.pending_author().map(|a| a.ticket);
+                }
+                self.barrier
+                    .resume_trace_only()
+                    .map_err(|_| RunFailure::MeasureOwned)?
+            };
+            let Some(sequence) = sequence else {
+                return Ok(false);
+            };
+            if self.completed_author == Some(sequence) {
+                self.completed_author = None;
+            }
+            let owner = self.measure.as_mut().unwrap();
+            owner.author = None;
+            match purpose {
+                AuthorPurpose::DecodeRefusal => {
+                    owner.decode_source = Some(sequence);
+                    if owner.refusal.is_some() {
+                        self.stage_measure_placement_refusal(io)?;
+                        return Ok(false);
+                    }
+                }
+                AuthorPurpose::PlacementRefusal => owner.placement_source = Some(sequence),
+                AuthorPurpose::Fault => return Err(RunFailure::MeasureOwned),
+            }
+        }
+        let r = self.measure.as_mut().unwrap().reservation.take().unwrap();
+        match decode.finish_reserved(r) {
+            Ok(()) => Ok(true),
+            Err(e) => {
+                self.measure.as_mut().unwrap().reservation = Some(e.reservation);
+                Err(RunFailure::MeasureOwned)
+            }
+        }
+    }
+}
+
+impl RecordingContext {
+    pub(super) fn bind_place_measure_author(&mut self, sequence: Sequence) {
+        if let Some(author) = self.measure.as_mut().and_then(|w| w.author.as_mut())
+            && self.waiting_content.is_none()
+            && author.sequence.is_none()
+        {
+            author.sequence = Some(sequence)
+        }
+    }
+    pub(super) fn place_measure_author_ticket(&self) -> Option<u64> {
+        self.measure
+            .as_ref()
+            .and_then(|w| w.author.as_ref())
+            .and_then(|a| a.ticket)
+    }
+    pub(super) fn place_measure_owns_author(&self) -> bool {
+        (self.place.is_some() || self.reload.is_some())
+            && self.measure.as_ref().is_some_and(|w| w.author.is_some())
     }
 }

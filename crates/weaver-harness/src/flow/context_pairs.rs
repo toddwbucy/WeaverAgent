@@ -197,6 +197,7 @@ impl RecordingContext {
             || self.inspection.is_some()
             || self.boot_open_blocks_external()
             || self.plan_summary_blocks_external()
+            || self.place_blocks_external()
             || self.measure_blocks_external()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
@@ -564,6 +565,17 @@ impl RecordingContext {
             self.pair_work.as_mut().unwrap().refused_receipt =
                 Some(SourceDisposition::Committed(receipt));
             return Err(self.pair_fault(io, format!("pair receipt mismatch: {error:?}")));
+        }
+        if !terminal && self.place_engine.is_some() {
+            let call = &self.pair_work.as_ref().unwrap().leg.as_ref().unwrap().call;
+            if let Some((started, opening, original)) = self.pairs.opening_for_material(call) {
+                let result = self
+                    .boot_journal
+                    .as_mut()
+                    .unwrap()
+                    .annotate_pair(started, opening, original);
+                result.map_err(|e| self.pair_fault(io, format!("request coverage: {e:?}")))?;
+            }
         }
         self.pair_work.as_mut().unwrap().leg = None;
         if terminal && self.pairs.has_effective() && !self.pairs.is_complete() {

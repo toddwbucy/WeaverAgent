@@ -220,6 +220,7 @@ pub(super) struct RecordBarrier {
     author_identity: Arc<()>,
     pending_release: Option<ReleaseTicket>,
     boot_open_owed: bool,
+    place_owed: bool,
     next_ticket: Option<u64>,
     admitted_before_failure: Option<Sequence>,
     last_trace_only_sequence: Option<Sequence>,
@@ -247,6 +248,7 @@ impl RecordBarrier {
             author_identity: Arc::new(()),
             pending_release: None,
             boot_open_owed: false,
+            place_owed: false,
             next_ticket: Some(0),
             admitted_before_failure: None,
             last_trace_only_sequence: None,
@@ -344,7 +346,7 @@ impl RecordBarrier {
         now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
         if let Some(scope) = release {
-            if self.boot_open_owed {
+            if self.boot_open_owed || self.place_owed {
                 return RecordProgress::BusyAuthored { event, purpose };
             }
             if !scope.allows(&self.author_identity)
@@ -360,7 +362,7 @@ impl RecordBarrier {
         }
         // Unload is held by the owed boot account, not by a competing author.
         // Return its original intact without poisoning the still-live barrier.
-        if event.kind == Kind::Unload && self.boot_open_owed {
+        if event.kind == Kind::Unload && (self.boot_open_owed || self.place_owed) {
             return RecordProgress::BusyAuthored { event, purpose };
         }
         if self.pending.is_some() || self.pending_author.is_some() {
@@ -426,7 +428,7 @@ impl RecordBarrier {
         budget: &mut RetentionBudget,
         now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
-        if event.envelope.kind == Kind::Unload && self.boot_open_owed {
+        if event.envelope.kind == Kind::Unload && (self.boot_open_owed || self.place_owed) {
             return RecordProgress::Busy { event, purpose };
         }
         // Busy returns ownership before admission. Observation progress remains
@@ -517,6 +519,7 @@ impl RecordBarrier {
         let released = match (&self.pending_release, release) {
             (Some(ticket), Some(scope)) => {
                 !self.boot_open_owed
+                    && !self.place_owed
                     && ticket.matches(
                         scope,
                         &self.author_identity,
@@ -653,6 +656,9 @@ impl RecordBarrier {
     pub(super) fn failure(&self) -> Option<&RecordFailure> {
         self.failure.as_ref()
     }
+    pub(super) fn set_place_owed(&mut self, owed: bool) {
+        self.place_owed = owed;
+    }
     pub(super) fn set_boot_open_owed(&mut self, owed: bool) {
         self.boot_open_owed = owed;
     }
@@ -715,7 +721,7 @@ impl RecordBarrier {
         raw_ns: u64,
         wall_ms: u64,
     ) -> Result<Sequence, String> {
-        if event.kind == Kind::Unload && self.boot_open_owed {
+        if event.kind == Kind::Unload && (self.boot_open_owed || self.place_owed) {
             return Err("boot Open account must settle before unload".into());
         }
         author
@@ -985,4 +991,47 @@ mod tests;
 pub(super) struct StoppedReadRecord {
     _pending: Option<(Event, RecordPurpose)>,
     _author: Option<AuthorTicket>,
+}
+
+impl RecordBarrier {
+    #[allow(clippy::result_large_err)]
+    pub(super) fn queue_place_account(
+        &mut self,
+        permit: super::context::place_driver::OwedPlaceAuthor,
+        author: &ServingAuthor,
+        raw_ns: u64,
+        wall_ms: u64,
+    ) -> Result<(), TerminalAuthorFailure> {
+        let event = permit.into_event();
+        if !self.place_owed
+            || !self.recorder.tap_stopped()
+            || self.recorder.is_closed()
+            || self.pending.is_some()
+            || self.pending_author.is_some()
+        {
+            return Err(TerminalAuthorFailure {
+                event,
+                detail: "place account requires its stopped empty author slot".into(),
+            });
+        }
+        let Some(ticket) = self.next_ticket else {
+            return Err(TerminalAuthorFailure {
+                event,
+                detail: "author ticket overflow".into(),
+            });
+        };
+        let prepared = match author.prepare(&event, raw_ns, wall_ms) {
+            Ok(p) => p,
+            Err(error) => {
+                return Err(TerminalAuthorFailure {
+                    event,
+                    detail: format!("place account author: {error:?}"),
+                });
+            }
+        };
+        self.next_ticket = ticket.checked_add(1);
+        self.pending_author = Some(AuthorTicket { ticket, event });
+        self.pending = Some((prepared, RecordPurpose::Observation));
+        Ok(())
+    }
 }

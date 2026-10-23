@@ -775,6 +775,26 @@ impl Ledger {
         })
     }
 
+    pub(super) fn split_source_lease(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<SourceLease, LedgerError> {
+        self.source_leases.split(lease, source)
+    }
+
+    pub(super) fn owned_pending_text(&self, lease: &SourceLease, source: &SourceBlockId) -> bool {
+        (self
+            .source_leases
+            .status(lease, source)
+            .is_ok_and(|status| status == LeaseSlotStatus::Pending)
+            && self.entries.iter().any(|entry| {
+                entry.file.source() == source
+                    && matches!(&entry.file,LedgerFile::Statement(file) if !file.text.is_empty())
+            }))
+            || self.source_leases.retained_whole_text(lease, source)
+    }
+
     pub(super) fn barrier(&self, sources: &[SourceBlockId]) -> Result<bool, LedgerError> {
         self.live()?;
         let mut complete = true;

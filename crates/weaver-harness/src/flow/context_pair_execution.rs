@@ -405,6 +405,7 @@ impl RecordingContext {
             || self.output.is_some()
             || self.boot_open_blocks_external()
             || self.plan_summary_blocks_external()
+            || self.place_blocks_external()
             || self.measure_blocks_external()
         {
             return Err(RunFailure::PairOwned);

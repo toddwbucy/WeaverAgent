@@ -1,0 +1,1180 @@
+//! Complete dormant place/engine ownership. Runtime composition remains held.
+use super::*;
+use crate::channel::DecodeReply;
+use crate::flow::author::AuthoredSource;
+use crate::flow::place::*;
+use crate::flow::pump_transport::{
+    DecodePort, DecodeReservation, DecodeStage, ReceivedDecode, Stage,
+};
+use std::collections::VecDeque;
+use std::sync::Arc;
+use weaver_trace::serving::payloads as t;
+use weaver_trace::{Subsystem, TurnRef};
+use weaver_traits::{Message, Role};
+use weaver_types::state_flow::{
+    CutMethod, CutReference, DecimalU64, PlacementCode, PlacementContext, SourceBlockId,
+};
+use weaver_types::{RefusalRecord, TokenAnswer, TokenAsk, TokenDirective, TokenRefusal, TurnKey};
+
+#[path = "context_place_generation.rs"]
+mod generation;
+#[path = "context_place_reload.rs"]
+mod reload;
+pub(in crate::flow) use reload::CheckedCut;
+#[path = "context_place_marks.rs"]
+mod marks;
+pub(in crate::flow) use marks::{
+    NativeMarkBeginError, NativeMarkCompletion, NativeMarkTransaction, NativePosition, NativeScopes,
+};
+#[path = "context_place_account.rs"]
+mod account;
+#[path = "context_place_refusal.rs"]
+mod refusal;
+pub(in crate::flow) use account::{OwedPlaceAuthor, PlaceReleasePermit};
+pub(in crate::flow) use refusal::PlaceNotice;
+
+#[derive(Debug)]
+pub(in crate::flow) struct PlaceInstallError {
+    pub prerequisite: BootPlanSummary,
+    pub refusal: PlaceError,
+    pub failure: Option<RunFailure>,
+}
+#[derive(Debug)]
+pub(in crate::flow) struct PlaceBeginError<T = PlaceRequest> {
+    pub input: T,
+    pub refusal: PlaceError,
+    pub failure: Option<RunFailure>,
+    pub staged: Option<Staged>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::flow) enum PlaceProgress {
+    Progress,
+    Pending,
+    Complete,
+}
+pub(in crate::flow) type GenerationProgress = PlaceProgress;
+pub(in crate::flow) type ReloadProgress = PlaceProgress;
+#[derive(Debug)]
+pub(in crate::flow) enum PlacementCompletion {
+    Granted(PlacementGrant),
+    Refused(PlaceRefused),
+    Cancelled(PlaceAccount),
+}
+#[derive(Debug)]
+pub(in crate::flow) enum GenerationCompletion {
+    Generated(Box<ConfirmedGeneration>),
+    Refused(PlaceAccount),
+    Cancelled(PlaceAccount),
+}
+#[derive(Debug)]
+pub(in crate::flow) enum ReloadCompletion {
+    Staged(Staged),
+    Refused(PlaceAccount),
+    Cancelled(PlaceAccount),
+}
+#[derive(Debug)]
+pub(in crate::flow) struct PlaceAccount {
+    work: AccountWork,
+    measure: Option<measure_driver::StoppedPlaceMeasure>,
+}
+#[derive(Debug)]
+enum AccountWork {
+    Place(Box<PlaceTransaction>),
+    Generation(Box<GenerationTransaction>),
+    Reload(Box<ReloadTransaction>),
+    Native(Box<NativeMarkTransaction>),
+    Notice(Box<PlaceNotice>),
+}
+impl PlaceAccount {
+    pub(in crate::flow) fn recorded_sequences(&self) -> &[Sequence] {
+        match &self.work {
+            AccountWork::Place(w) => &w.recorded_authors,
+            AccountWork::Generation(w) => &w.recorded_authors,
+            AccountWork::Reload(w) => &w.recorded_authors,
+            AccountWork::Notice(w) => &w.recorded_authors,
+            AccountWork::Native(_) => self.native_recorded_sequences(),
+        }
+    }
+    pub(in crate::flow) fn confirmed_generation(&self) -> Option<&ConfirmedGeneration> {
+        match &self.work {
+            AccountWork::Generation(w) => w.confirmed.as_ref(),
+            _ => None,
+        }
+    }
+    pub(in crate::flow) fn staged_evidence(&self) -> Option<&Staged> {
+        match &self.work {
+            AccountWork::Reload(w) => w.staged.as_ref(),
+            AccountWork::Place(w) => w.staged.as_ref(),
+            AccountWork::Generation(w) => w.grant.as_ref().and_then(|g| g.staged.as_ref()),
+            _ => None,
+        }
+    }
+    pub(in crate::flow) fn raw_bytes(&self) -> Option<&[u8]> {
+        match &self.work {
+            AccountWork::Place(w) => w.measurement.as_ref().map(MeasureCompletion::raw_bytes),
+            AccountWork::Generation(w) => w
+                .terminal
+                .as_ref()
+                .map(ReceivedDecode::raw_bytes)
+                .or_else(|| w.confirmed.as_ref().map(ConfirmedGeneration::raw_bytes))
+                .or(w.failed_wire.as_deref()),
+            AccountWork::Reload(w) => w
+                .received
+                .as_ref()
+                .map(ReceivedDecode::raw_bytes)
+                .or(w.failed_wire.as_deref()),
+            AccountWork::Native(_) | AccountWork::Notice(_) => None,
+        }
+        .or_else(|| self.measure.as_ref().and_then(|m| m.raw_bytes()))
+    }
+    pub(in crate::flow) fn take_staged(&mut self) -> Option<Staged> {
+        match &mut self.work {
+            AccountWork::Place(w) => w.staged.take(),
+            AccountWork::Generation(w) if w.confirmed.is_none() && w.reservation.is_none() => {
+                w.grant.as_mut().and_then(|g| g.staged.take())
+            }
+            _ => None,
+        }
+    }
+    pub(in crate::flow) fn take_unplaced_selection(
+        &mut self,
+    ) -> Option<Vec<crate::flow::material::SelectedUnit>> {
+        let AccountWork::Place(work) = &mut self.work else {
+            return None;
+        };
+        if work.incomplete.is_some() {
+            return None;
+        }
+        work.pending.take();
+        if work.selected_count > work.units.len() {
+            return None;
+        }
+        let start = work.units.len() - work.selected_count;
+        if work.units[start..]
+            .iter()
+            .any(|u| Arc::strong_count(u) != 1)
+        {
+            return None;
+        }
+        work.selected_count = 0;
+        Some(
+            work.units
+                .split_off(start)
+                .into_iter()
+                .map(|u| Arc::try_unwrap(u).expect("exclusive retained selection"))
+                .collect(),
+        )
+    }
+    pub(in crate::flow) fn incomplete(&self) -> Option<&str> {
+        match &self.work {
+            AccountWork::Place(w) => w.incomplete.as_deref(),
+            AccountWork::Generation(w) => w.incomplete.as_deref(),
+            AccountWork::Reload(w) => w.incomplete.as_deref(),
+            AccountWork::Native(w) => w.incomplete.as_deref(),
+            AccountWork::Notice(w) => w.incomplete.as_deref(),
+        }
+    }
+    pub(in crate::flow) fn reload_refusal(&self) -> Option<(ReloadCode, &str)> {
+        match &self.work {
+            AccountWork::Reload(w) => Some((w.reload_code?, w.reload_detail.as_deref()?)),
+            _ => None,
+        }
+    }
+    pub(in crate::flow) fn refusal(&self) -> Option<&TokenRefusal> {
+        match &self.work {
+            AccountWork::Generation(w) => w.terminal.as_ref(),
+            AccountWork::Reload(w) => w.received.as_ref(),
+            _ => None,
+        }
+        .and_then(|r| match r.reply() {
+            DecodeReply::Refusal(r) => Some(r),
+            _ => None,
+        })
+    }
+}
+#[derive(Debug)]
+struct PlaceAuthor {
+    event: Option<AuthoredEvent>,
+    ticket: Option<u64>,
+    sequence: Option<Sequence>,
+    kind: Kind,
+    turn: Option<TurnRef>,
+}
+impl PlaceAuthor {
+    fn new(event: AuthoredEvent) -> Self {
+        Self {
+            kind: event.kind,
+            turn: event.turn.clone(),
+            event: Some(event),
+            ticket: None,
+            sequence: None,
+        }
+    }
+}
+#[derive(Debug)]
+pub(super) struct PlaceTransaction {
+    request: PlaceRequest,
+    units: Vec<Arc<crate::flow::material::SelectedUnit>>,
+    pending: Option<crate::flow::journal::PendingAppend>,
+    delta: Vec<Message>,
+    measurement: Option<MeasureCompletion>,
+    facts: Option<MeasureFacts>,
+    author: Option<PlaceAuthor>,
+    recorded_authors: Vec<Sequence>,
+    bound: AbsoluteBound,
+    recorded: Option<Sequence>,
+    driving: bool,
+    cancelled: bool,
+    done: bool,
+    refusal: Option<PlaceRefused>,
+    staged: Option<Staged>,
+    incomplete: Option<String>,
+    started_ns: u64,
+    close_pending: bool,
+    account_deadline: Option<u64>,
+    selected_count: usize,
+}
+#[derive(Debug)]
+pub(super) struct GenerationTransaction {
+    grant: Option<PlacementGrant>,
+    native_admission: Option<NativeScopes>,
+    reservation: Option<DecodeReservation>,
+    terminal: Option<ReceivedDecode>,
+    failed_wire: Option<Vec<u8>>,
+    intermediates: Vec<ReceivedDecode>,
+    authors: VecDeque<AuthoredEvent>,
+    author: Option<PlaceAuthor>,
+    recorded_authors: Vec<Sequence>,
+    confirmed: Option<ConfirmedGeneration>,
+    cancelled: bool,
+    cancel_sent: bool,
+    driving: bool,
+    done: bool,
+    output_started: bool,
+    output_done: bool,
+    output_cancelled: Option<crate::flow::coordinator::OutputCancellation>,
+    incomplete: Option<String>,
+    account_deadline: Option<u64>,
+}
+#[derive(Debug)]
+pub(super) struct ReloadTransaction {
+    prefix: PreparedPrefix,
+    tail: ReloadTail,
+    units: Vec<Arc<crate::flow::material::SelectedUnit>>,
+    frozen_sources: Vec<SourceBlockId>,
+    bound: Option<AbsoluteBound>,
+    measurement: Option<MeasureCompletion>,
+    reservation: Option<DecodeReservation>,
+    received: Option<ReceivedDecode>,
+    failed_wire: Option<Vec<u8>>,
+    authors: VecDeque<AuthoredEvent>,
+    author: Option<PlaceAuthor>,
+    recorded_authors: Vec<Sequence>,
+    staged: Option<Staged>,
+    driving: bool,
+    cancelled: bool,
+    done: bool,
+    incomplete: Option<String>,
+    refused: bool,
+    rejected: Option<crate::flow::ledger::SourceDisposition>,
+    reload_code: Option<ReloadCode>,
+    reload_detail: Option<String>,
+    started_ns: Option<u64>,
+    account_deadline: Option<u64>,
+}
+
+impl RecordingContext {
+    pub(in crate::flow) fn install_place(
+        &mut self,
+        boot: BootPlanSummary,
+        io: &mut impl PumpIo,
+    ) -> Result<(), PlaceInstallError> {
+        let failure = self.live(io).err();
+        let valid = boot.repaired().belongs_to(self)
+            && boot.repaired().checked_open().is_some()
+            && self.boot_journal.is_some()
+            && self.committed_plan_summary().is_ok()
+            && self.place_engine.is_none()
+            && self.load_duty.is_some()
+            && !self.place_admission_stopped()
+            && !self.boot_enter_cancelled
+            && self.phase == RecordingPhase::Entered;
+        if failure.is_some() || !valid {
+            return Err(PlaceInstallError {
+                prerequisite: boot,
+                refusal: PlaceError::WrongProof,
+                failure,
+            });
+        }
+        let schemas = if self.load_duty.as_ref().unwrap().tools.sh.is_some() {
+            vec![crate::tools::shell_schema().to_owned()]
+        } else {
+            vec![]
+        };
+        let native = NativeScopes::from_boot(&boot);
+        self.place_engine = Some(PlaceEngine {
+            native,
+            boot,
+            schemas,
+            outstanding: None,
+            staged: None,
+        });
+        Ok(())
+    }
+    pub(in crate::flow) fn hold_place_return(
+        &self,
+        call: &weaver_types::state_flow::CallId,
+    ) -> Result<crate::flow::material::SelectedUnit, PlaceError> {
+        if self.place_engine.is_none() {
+            return Err(PlaceError::WrongProof);
+        }
+        let pair = self
+            .pairs
+            .closed_for_material(call)
+            .ok_or(PlaceError::WrongProof)?;
+        Ok(crate::flow::material::from_completed_pair(
+            self.read_origin.clone(),
+            pair,
+        ))
+    }
+    pub(in crate::flow) fn loaded_place_schemas(&self) -> Option<&[String]> {
+        self.place_engine
+            .as_ref()
+            .map(|engine| engine.schemas.as_slice())
+    }
+    pub(in crate::flow) fn prepare_prefix(
+        &mut self,
+        cut: Option<CutReference>,
+        method: CutMethod,
+        io: &mut impl PumpIo,
+    ) -> Result<PreparedPrefix, PlaceError> {
+        self.live(io).map_err(|_| PlaceError::WrongPhase)?;
+        if self.place_admission_stopped() || self.phase != RecordingPhase::Entered {
+            return Err(PlaceError::WrongPhase);
+        }
+        if self.place_engine.is_none() {
+            return Err(PlaceError::WrongProof);
+        }
+        if self.place_blocks_external() || self.place_engine.as_ref().unwrap().staged.is_some() {
+            return Err(PlaceError::Busy);
+        }
+        let journal = self.boot_journal.as_ref().ok_or(PlaceError::WrongProof)?;
+        let assembly = journal.next_assembly().into();
+        match journal.prepare(cut, method) {
+            Ok(p) => Ok(p),
+            Err(_) => {
+                self.queue_place_refusal(
+                    assembly,
+                    PlacementCode::InvalidCut,
+                    "cut address is not an active occurrence",
+                )?;
+                Err(PlaceError::InvalidPrefix)
+            }
+        }
+    }
+    pub(super) fn place_blocks_external(&self) -> bool {
+        self.place_notice.is_some()
+            || self.place_close.is_some()
+            || self.native_marks.is_some()
+            || self.place.as_ref().is_some_and(|w| !w.driving)
+            || self.generation.as_ref().is_some_and(|w| !w.driving)
+            || self
+                .reload
+                .as_ref()
+                .is_some_and(|w| w.bound.is_some() && !w.driving)
+            || (self.place.is_none()
+                && self.generation.is_none()
+                && self
+                    .place_engine
+                    .as_ref()
+                    .is_some_and(|e| e.outstanding.is_some()))
+    }
+    pub(super) fn place_wait_owned(&self, key: PumpDeadline) -> bool {
+        self.place_notice
+            .as_ref()
+            .is_some_and(|w| w.key == key && !w.done)
+            || self
+                .native_marks
+                .as_ref()
+                .is_some_and(|w| w.key == key && !w.done)
+            || (key == PumpDeadline::Leave && self.place_owed())
+            || (key == PumpDeadline::Decision && self.place.is_some())
+            || (key == PumpDeadline::Cut && self.reload.as_ref().is_some_and(|w| w.bound.is_some()))
+            || (key == PumpDeadline::Decision
+                && self.generation.as_ref().is_some_and(|w| w.output_started))
+    }
+    pub(super) fn reload_draining(&self) -> bool {
+        self.reload.as_ref().is_some_and(|w| {
+            w.bound.is_some()
+                && !w.cancelled
+                && !w.done
+                && !w.refused
+                && w.author.is_none()
+                && w.authors.is_empty()
+                && w.measurement.is_none()
+                && w.reservation.is_none()
+                && w.staged.is_none()
+        })
+    }
+    /// Borrowing an owed drain requires this reload's unchanged original Cut.
+    pub(super) fn reload_drain_bound(&self) -> Option<AbsoluteBound> {
+        if !self.reload_draining() {
+            return None;
+        }
+        let bound = self.reload.as_ref()?.bound?;
+        (self.deadlines.get(PumpDeadline::Cut) == Some(bound)).then_some(bound)
+    }
+    fn place_busy(&self) -> bool {
+        self.place_busy_except_reload() || self.reload.as_ref().is_some_and(|w| w.bound.is_some())
+    }
+    fn place_busy_except_reload(&self) -> bool {
+        self.place_notice.is_some()
+            || self.native_marks.is_some()
+            || self.place_close.is_some()
+            || self.place.is_some()
+            || self.generation.is_some()
+            || self.measure.is_some()
+            || self.output.is_some()
+            || self.filing.is_some()
+            || self.pair_work.is_some()
+            || self.read.is_some()
+            || self.inspection.is_some()
+            || self.marks.is_some()
+            || self.member_capture.is_some()
+            || self.freshness.is_some()
+            || self.repair_blocks_external()
+            || self.plan_summary_blocks_external()
+            || self.boot_open_blocks_external()
+            || self.input.snapshot().is_some()
+            || self.input_turn.is_some()
+            || self.input_author.is_some()
+            || self.waiting_content.is_some()
+            || self.completed_author.is_some()
+            || self.barrier.pending().is_some()
+            || self.barrier.pending_author().is_some()
+            || self.flow.has_pending_record()
+    }
+    pub(super) fn place_fault(
+        &mut self,
+        io: &mut impl PumpIo,
+        detail: impl Into<String>,
+    ) -> RunFailure {
+        self.fail(
+            io,
+            FlowHaltReason::ProtocolFailed,
+            HaltPoint::Barrier,
+            detail,
+        )
+    }
+    /// Sort's read-only adapter validates the current private prefix and exact
+    /// immutable material; it burns no assembly or message IDs and grants no send.
+    pub(in crate::flow) fn begin_place_measurement(
+        &mut self,
+        prefix: &PreparedPrefix,
+        units: &[crate::flow::material::SelectedUnit],
+        schemas: &[String],
+        wait: PumpDeadline,
+        decode: &mut DecodePort,
+        io: &mut impl PumpIo,
+    ) -> Result<(), PlaceError> {
+        self.live(io).map_err(|_| PlaceError::WrongPhase)?;
+        if self.place_admission_stopped() || self.phase != RecordingPhase::Entered {
+            return Err(PlaceError::WrongPhase);
+        }
+        self.check_place_port(decode)
+            .map_err(|_| PlaceError::WrongProof)?;
+        if self.place_busy()
+            || self
+                .place_engine
+                .as_ref()
+                .is_some_and(|e| e.outstanding.is_some() || e.staged.is_some())
+        {
+            return Err(PlaceError::Busy);
+        }
+        let engine = self.place_engine.as_ref().ok_or(PlaceError::WrongProof)?;
+        let journal = self.boot_journal.as_ref().ok_or(PlaceError::WrongProof)?;
+        if journal.check_projection(&prefix.projection).is_err() {
+            return Err(PlaceError::Stale);
+        }
+        if schemas != engine.schemas || units.iter().any(|u| !u.belongs_to(self)) {
+            return Err(PlaceError::InvalidUnits);
+        }
+        journal
+            .validate_selection(&prefix.projection, units.iter())
+            .map_err(|_| PlaceError::InvalidUnits)?;
+        let mut delta = prefix.rebuild();
+        for unit in units {
+            delta.extend(unit.messages().iter().cloned());
+        }
+        let request = MeasureRequest {
+            assembly_id: prefix.assembly,
+            revision: prefix.revision(),
+            keep: prefix.n(),
+            delta,
+            tool_schemas: schemas.to_vec(),
+            turn: self.open_turn.clone(),
+            position: MeasurePosition {
+                resident: journal.resident(),
+                prefix_tokens: journal.prefix_tokens(),
+                capacity: journal.capacity(),
+            },
+        };
+        self.begin_measurement(request, wait, decode, io)
+            .map_err(|e| {
+                if e.failure.is_some() {
+                    PlaceError::WrongPhase
+                } else {
+                    PlaceError::Busy
+                }
+            })
+    }
+    pub(in crate::flow) fn take_place_measurement(
+        &mut self,
+        decode: &mut DecodePort,
+        io: &mut impl PumpIo,
+    ) -> Result<Option<MeasureCompletion>, RunFailure> {
+        self.check_place_port(decode)?;
+        let revision = self
+            .boot_journal
+            .as_ref()
+            .ok_or(RunFailure::PlaceOwned)?
+            .revision()
+            .into();
+        self.take_measurement(revision, decode, io)
+    }
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn begin_place(
+        &mut self,
+        request: PlaceRequest,
+        decode: &mut DecodePort,
+        io: &mut impl PumpIo,
+    ) -> Result<(), PlaceBeginError> {
+        self.begin_place_inner(request, None, decode, io)
+    }
+    #[allow(clippy::result_large_err)] // Refusal returns the exact owned request and carry.
+    fn begin_place_inner(
+        &mut self,
+        mut request: PlaceRequest,
+        staged: Option<Staged>,
+        decode: &mut DecodePort,
+        io: &mut impl PumpIo,
+    ) -> Result<(), PlaceBeginError> {
+        let failure = self
+            .live(io)
+            .err()
+            .or_else(|| self.check_place_port(decode).err());
+        let refusal = if failure.is_some()
+            || self.place_admission_stopped()
+            || self.phase != RecordingPhase::Entered
+        {
+            Some(PlaceError::WrongPhase)
+        } else if self.place_busy()
+            || self.place_engine.as_ref().is_some_and(|e| {
+                e.outstanding.is_some() || (e.staged.is_some() && staged.is_none())
+            })
+        {
+            Some(PlaceError::Busy)
+        } else if self.place_engine.is_none() || !self.native_place_cache_ready() {
+            Some(PlaceError::WrongProof)
+        } else if self.open_turn.is_none() || self.deadlines.get(PumpDeadline::Decision).is_none() {
+            Some(PlaceError::MissingWait)
+        } else if request.context.label.is_empty()
+            || request.tool_schemas != self.place_engine.as_ref().unwrap().schemas
+            || !self.place_instruction_valid(&request.context)
+        {
+            Some(PlaceError::InvalidContext)
+        } else if request.prefix.cut.is_some()
+            || self
+                .boot_journal
+                .as_ref()
+                .unwrap()
+                .check_projection(&request.prefix.projection)
+                .is_err()
+        {
+            Some(PlaceError::InvalidPrefix)
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            if failure.is_none() && refusal == PlaceError::InvalidPrefix {
+                let _ = self.queue_place_refusal(
+                    request.prefix.assembly,
+                    PlacementCode::StalePosition,
+                    "placement prefix no longer names the current journal",
+                );
+            }
+            return Err(PlaceBeginError {
+                input: request,
+                refusal,
+                failure,
+                staged,
+            });
+        }
+        let bound = self.deadlines.get(PumpDeadline::Decision).unwrap();
+        let selected_count = request.selection.len();
+        let mut units: Vec<_> = std::mem::take(&mut request.selection)
+            .into_iter()
+            .map(Arc::new)
+            .collect();
+        if let Some(held) = &staged {
+            let mut ordered = held.units.clone();
+            ordered.append(&mut units);
+            units = ordered;
+        }
+        let pending = match self
+            .boot_journal
+            .as_mut()
+            .unwrap()
+            .reserve(&request.prefix.projection, &units)
+        {
+            Ok(p) => p,
+            Err(error) => {
+                let code = if error == crate::flow::journal::JournalError::InvalidPair {
+                    PlacementCode::InvalidPair
+                } else {
+                    PlacementCode::InvalidSpan
+                };
+                let _ = self.queue_place_refusal(
+                    request.prefix.assembly,
+                    code,
+                    "selected material cannot be placed at this prefix",
+                );
+                request.selection = units
+                    .split_off(units.len() - selected_count)
+                    .into_iter()
+                    .map(|u| Arc::try_unwrap(u).expect("new request owns its units"))
+                    .collect();
+                return Err(PlaceBeginError {
+                    input: request,
+                    refusal: PlaceError::InvalidUnits,
+                    failure: None,
+                    staged,
+                });
+            }
+        };
+        let delta = pending.delta();
+        let position = MeasurePosition {
+            resident: self.boot_journal.as_ref().unwrap().resident(),
+            prefix_tokens: self.boot_journal.as_ref().unwrap().prefix_tokens(),
+            capacity: self.boot_journal.as_ref().unwrap().capacity(),
+        };
+        let measure = MeasureRequest {
+            assembly_id: pending.assembly().into(),
+            revision: request.prefix.revision(),
+            keep: request.prefix.n(),
+            delta: delta.clone(),
+            tool_schemas: request.tool_schemas.clone(),
+            turn: self.open_turn.clone(),
+            position,
+        };
+        self.barrier.set_place_owed(true);
+        self.place = Some(PlaceTransaction {
+            request,
+            units,
+            pending: Some(pending),
+            delta,
+            measurement: None,
+            facts: None,
+            author: None,
+            recorded_authors: vec![],
+            bound,
+            recorded: None,
+            driving: true,
+            cancelled: false,
+            done: false,
+            refusal: None,
+            staged,
+            incomplete: None,
+            started_ns: self.last_ns,
+            close_pending: false,
+            account_deadline: None,
+            selected_count,
+        });
+        let result = self.begin_measurement(measure, PumpDeadline::Decision, decode, io);
+        self.place.as_mut().unwrap().driving = false;
+        if let Err(error) = result {
+            let mut work = self.place.take().unwrap();
+            let _ = self
+                .boot_journal
+                .as_mut()
+                .unwrap()
+                .cancel(work.pending.as_ref().unwrap());
+            work.pending.take();
+            let mut input = work.request;
+            input.selection = work
+                .units
+                .split_off(work.units.len() - selected_count)
+                .into_iter()
+                .map(|u| Arc::try_unwrap(u).expect("new request units remain exclusive"))
+                .collect();
+            self.barrier.set_place_owed(self.place_owed());
+            return Err(PlaceBeginError {
+                input,
+                refusal: PlaceError::Busy,
+                failure: error.failure,
+                staged: work.staged,
+            });
+        }
+        Ok(())
+    }
+    pub(in crate::flow) fn advance_place<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<PlaceProgress, RunFailure> {
+        self.live(ports.io)?;
+        let Some(work) = self.place.as_ref() else {
+            return Err(RunFailure::PlaceOwned);
+        };
+        if self.deadlines.get(PumpDeadline::Decision) != Some(work.bound) {
+            return Err(self.place_fault(ports.io, "placement lost its original Decision bound"));
+        }
+        if work.done {
+            return Ok(PlaceProgress::Complete);
+        }
+        if work.measurement.is_none() {
+            self.place.as_mut().unwrap().driving = true;
+            let result = (|| {
+                self.advance_measurement(ports)?;
+                let revision = self.boot_journal.as_ref().unwrap().revision().into();
+                self.take_measurement(
+                    revision,
+                    ports.decode.as_deref_mut().ok_or(RunFailure::PlaceOwned)?,
+                    ports.io,
+                )
+            })();
+            self.place.as_mut().unwrap().driving = false;
+            let Some(measured) = result? else {
+                return Ok(PlaceProgress::Pending);
+            };
+            let work = self.place.as_mut().unwrap();
+            work.facts = match &measured {
+                MeasureCompletion::Measured(m) => Some(*m.facts()),
+                _ => None,
+            };
+            work.measurement = Some(measured);
+            if work.cancelled || matches!(work.measurement, Some(MeasureCompletion::Cancelled(_))) {
+                work.cancelled = true;
+                work.done = true;
+                return Ok(PlaceProgress::Complete);
+            }
+            if let Some(MeasureCompletion::Refused(refused)) = &work.measurement {
+                work.refusal = Some(PlaceRefused {
+                    assembly_id: work.request.prefix.assembly,
+                    code: refused.code(),
+                    detail: "decode measurement refused".into(),
+                    account: None,
+                });
+                work.author = Some(PlaceAuthor::new(place_event(
+                    Kind::TurnClosed,
+                    AuthoredSource::Runtime,
+                    Payload::TurnClosed(weaver_trace::TurnClose::Stopped {
+                        reason: weaver_trace::StopReason::Refused,
+                        cause: None,
+                    }),
+                    self.open_turn.clone(),
+                    None,
+                )));
+                return Ok(PlaceProgress::Progress);
+            }
+            let facts = work.facts.unwrap();
+            let limits = self.place_engine.as_ref().unwrap().limits();
+            let event = if let Err(code) = crate::flow::place::fit(&facts, limits) {
+                let refusal = PlaceRefused {
+                    assembly_id: work.request.prefix.assembly,
+                    code,
+                    detail: "measured argument exceeds declared placement budget".into(),
+                    account: None,
+                };
+                let record = RefusalRecord::Placement {
+                    assembly_id: refusal.assembly_id,
+                    code,
+                    detail: refusal.detail.clone(),
+                };
+                work.close_pending = true;
+                work.refusal = Some(refusal);
+                place_event(
+                    Kind::Refusal,
+                    AuthoredSource::Runtime,
+                    Payload::Refusal(serde_json::value::to_raw_value(&record).map_err(|e| {
+                        RunFailure::Flow {
+                            reason: FlowHaltReason::ProtocolFailed,
+                            point: HaltPoint::Barrier,
+                            detail: e.to_string(),
+                        }
+                    })?),
+                    self.open_turn.clone(),
+                    None,
+                )
+            } else {
+                let record = placement_record(work, limits, self.last_ns);
+                place_event(
+                    Kind::StatePlacement,
+                    AuthoredSource::Loop,
+                    Payload::Placement(Box::new(record)),
+                    self.open_turn.clone(),
+                    Some(
+                        self.place_engine
+                            .as_ref()
+                            .unwrap()
+                            .boot
+                            .repaired()
+                            .checked_open()
+                            .unwrap()
+                            .head(),
+                    ),
+                )
+            };
+            self.place.as_mut().unwrap().author = Some(PlaceAuthor::new(event));
+        }
+        if self
+            .place
+            .as_ref()
+            .unwrap()
+            .author
+            .as_ref()
+            .is_some_and(|a| a.sequence.is_some())
+        {
+            self.consume_place_completion()?;
+            if self.place.as_ref().unwrap().close_pending {
+                let work = self.place.as_mut().unwrap();
+                work.close_pending = false;
+                work.author = Some(PlaceAuthor::new(place_event(
+                    Kind::TurnClosed,
+                    AuthoredSource::Runtime,
+                    Payload::TurnClosed(weaver_trace::TurnClose::Stopped {
+                        reason: weaver_trace::StopReason::Refused,
+                        cause: None,
+                    }),
+                    self.open_turn.clone(),
+                    None,
+                )));
+            } else {
+                self.place.as_mut().unwrap().done = true;
+                return Ok(PlaceProgress::Complete);
+            }
+        }
+        self.advance_place_author(ports)?;
+        Ok(if self.place.as_ref().unwrap().done {
+            PlaceProgress::Complete
+        } else {
+            PlaceProgress::Pending
+        })
+    }
+    pub(in crate::flow) fn take_placement(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<Option<PlacementCompletion>, RunFailure> {
+        self.live(io)?;
+        if !self.place.as_ref().is_some_and(|w| w.done) {
+            return Ok(None);
+        }
+        self.consume_place_completion()?;
+        let mut work = self.place.take().unwrap();
+        if work.cancelled || work.refusal.is_some() {
+            if let Some(pending) = &work.pending {
+                self.boot_journal
+                    .as_mut()
+                    .unwrap()
+                    .cancel(pending)
+                    .map_err(|e| self.place_fault(io, format!("cancel placement: {e:?}")))?;
+            }
+            self.deadlines.disarm(PumpDeadline::Decision);
+            self.barrier.set_place_owed(self.place_owed());
+            return Ok(Some(if let Some(mut refusal) = work.refusal.take() {
+                refusal.account = Some(PlaceAccount {
+                    work: AccountWork::Place(Box::new(work)),
+                    measure: None,
+                });
+                PlacementCompletion::Refused(refusal)
+            } else {
+                PlacementCompletion::Cancelled(PlaceAccount {
+                    work: AccountWork::Place(Box::new(work)),
+                    measure: None,
+                })
+            }));
+        }
+        let identity = Arc::new(());
+        self.place_engine.as_mut().unwrap().outstanding = Some(identity.clone());
+        let grant = PlacementGrant {
+            identity,
+            origin: self.read_origin.clone(),
+            pending: work.pending.take().unwrap(),
+            delta: work.delta,
+            units: work.units,
+            schemas: work.request.tool_schemas,
+            facts: work.facts.unwrap(),
+            recorded: work.recorded.expect("Recorded placement"),
+            turn: self.open_turn.clone().ok_or(RunFailure::PlaceOwned)?,
+            staged: work.staged,
+        };
+        self.deadlines.disarm(PumpDeadline::Decision);
+        Ok(Some(PlacementCompletion::Granted(grant)))
+    }
+    pub(in crate::flow) fn cancel_place(
+        &mut self,
+        _decode: &mut DecodePort,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        if let Some(work) = self.place.as_mut() {
+            work.cancelled = true;
+            work.driving = true;
+        } else {
+            return Err(RunFailure::PlaceOwned);
+        };
+        let result = if self.measure.is_some() {
+            self.cancel_measurement(io)
+        } else {
+            Ok(())
+        };
+        self.place.as_mut().unwrap().driving = false;
+        result
+    }
+    fn place_response_ready(&self) -> bool {
+        self.phase == RecordingPhase::Entered
+            && self.failure.is_none()
+            && self.place.as_ref().is_none_or(|w| w.done)
+            && self.reload.as_ref().is_none_or(|w| w.done)
+            && self.generation.as_ref().is_none_or(|w| w.done)
+            && self.native_marks.as_ref().is_none_or(|w| w.done)
+            && self.place_notice.as_ref().is_none_or(|w| w.done)
+    }
+    pub(in crate::flow) fn place_close(&self) -> Option<&weaver_types::TurnFrame> {
+        if self.place_response_ready() {
+            self.place_close.as_ref()
+        } else {
+            None
+        }
+    }
+    pub(in crate::flow) fn place_response_sent(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        self.live(io)?;
+        if !self.place_response_ready() || self.place_close.take().is_none() {
+            return Err(RunFailure::PlaceOwned);
+        }
+        Ok(())
+    }
+    fn place_instruction_valid(&self, context: &PlacementContext) -> bool {
+        let Some(source) = &context.instruction else {
+            return true;
+        };
+        self.place_instructions.iter().any(|proof|proof.belongs_to(self)&&proof.receipts().dispositions().any(|d|match d {
+            crate::flow::ledger::SourceDisposition::Committed(c)=>matches!(c.file(),crate::flow::ledger::LedgerFile::Statement(file) if &file.block_id==source && file.source.kind=="loop.instruction" && file.source.origin=="loop"),_=>false}))
+    }
+    pub(in crate::flow) fn retain_place_instruction(
+        &mut self,
+        proof: FilingCompletion,
+    ) -> Result<(), FilingCompletion> {
+        if !proof.belongs_to(self)||proof.receipts().dispositions().all(|d|!matches!(d,crate::flow::ledger::SourceDisposition::Committed(c) if matches!(c.file(),crate::flow::ledger::LedgerFile::Statement(f) if f.source.kind=="loop.instruction"&&f.source.origin=="loop"))){return Err(proof)}
+        self.place_instructions.push(proof);
+        Ok(())
+    }
+    fn active_place_author(&self) -> Option<&PlaceAuthor> {
+        self.place
+            .as_ref()
+            .and_then(|w| w.author.as_ref())
+            .or_else(|| self.generation.as_ref().and_then(|w| w.author.as_ref()))
+            .or_else(|| self.reload.as_ref().and_then(|w| w.author.as_ref()))
+            .or_else(|| self.native_marks.as_ref().and_then(|w| w.author.as_ref()))
+            .or_else(|| self.place_notice.as_ref().and_then(|w| w.author.as_ref()))
+    }
+    fn active_place_author_mut(&mut self) -> Option<&mut PlaceAuthor> {
+        if let Some(w) = &mut self.place
+            && w.author.is_some()
+        {
+            return w.author.as_mut();
+        }
+        if let Some(w) = &mut self.generation
+            && w.author.is_some()
+        {
+            return w.author.as_mut();
+        }
+        if let Some(w) = &mut self.reload
+            && w.author.is_some()
+        {
+            return w.author.as_mut();
+        }
+        if let Some(w) = &mut self.native_marks
+            && w.author.is_some()
+        {
+            return w.author.as_mut();
+        }
+        self.place_notice.as_mut().and_then(|w| w.author.as_mut())
+    }
+    pub(super) fn place_owns_pending_author(&self) -> bool {
+        self.active_place_author()
+            .is_some_and(|a| a.sequence.is_none() && (a.ticket.is_some() || a.event.is_none()))
+    }
+    pub(super) fn bind_place_author(&mut self, sequence: Sequence) -> Result<(), RunFailure> {
+        let closing = self
+            .active_place_author()
+            .filter(|a| a.event.is_none() && a.kind == Kind::TurnClosed)
+            .and_then(|a| a.turn.clone());
+        if closing.is_some() && self.open_turn == closing {
+            self.open_turn = None;
+            self.place_turn_stopped = false;
+        }
+
+        if let Some(author) = self.active_place_author_mut()
+            && author.event.is_none()
+            && author.sequence.is_none()
+        {
+            author.sequence = Some(sequence);
+        }
+        macro_rules! retain {
+            ($work:expr) => {
+                if let Some(work) = $work.as_mut() {
+                    if work
+                        .author
+                        .as_ref()
+                        .is_some_and(|a| a.sequence == Some(sequence))
+                        && !work.recorded_authors.contains(&sequence)
+                    {
+                        work.recorded_authors.push(sequence);
+                    }
+                }
+            };
+        }
+        retain!(self.place);
+        retain!(self.generation);
+        retain!(self.reload);
+        retain!(self.place_notice);
+        if let Some(work) = self.place.as_mut()
+            && work
+                .author
+                .as_ref()
+                .is_some_and(|a| a.sequence == Some(sequence))
+        {
+            if work.refusal.is_none() {
+                work.recorded = Some(sequence);
+            }
+            work.done = !work.close_pending;
+            if work.done
+                && let Some(refusal) = &work.refusal
+            {
+                let run = self
+                    .place_engine
+                    .as_ref()
+                    .unwrap()
+                    .boot
+                    .repaired()
+                    .checked_open()
+                    .unwrap()
+                    .run();
+                let frame = if let Some(turn) = work.author.as_ref().and_then(|a| a.turn.as_ref()) {
+                    serde_json::json!({"kind":"stopped","reason":refusal.detail,"run":run,"turn":turn.0})
+                } else {
+                    serde_json::json!({"kind":"refused","reason":refusal.detail})
+                };
+                self.place_close =
+                    Some(weaver_types::TurnFrame::carry(frame.to_string().as_bytes()));
+            }
+        }
+        Ok(())
+    }
+    fn consume_place_completion(&mut self) -> Result<(), RunFailure> {
+        if let Some(sequence) = self.completed_author {
+            if self.active_place_author().and_then(|a| a.sequence) != Some(sequence) {
+                return Err(RunFailure::PlaceOwned);
+            }
+            self.completed_author = None;
+        }
+        Ok(())
+    }
+    fn advance_place_author<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<(), RunFailure> {
+        let Some(author) = self.active_place_author() else {
+            return Ok(());
+        };
+        if author.sequence.is_some() {
+            self.consume_place_completion()?;
+            return Ok(());
+        }
+        if let Some(ticket) = author.ticket
+            && self.barrier.pending_author().map(|a| a.ticket) != Some(ticket)
+        {
+            return Err(self.place_fault(ports.io, "placement author ticket was replaced"));
+        }
+        if let Some(event) = self.active_place_author_mut().unwrap().event.take() {
+            self.waiting_content = Some(event);
+        }
+        let result = self.resume_owned_author_and_wait(ports);
+        if let Some(ticket) = self.barrier.pending_author().map(|a| a.ticket) {
+            self.active_place_author_mut().unwrap().ticket = Some(ticket);
+        }
+        if let Ok(sequence) = result {
+            self.bind_place_author(sequence)?;
+        }
+        result.map(|_| ())
+    }
+}
+fn place_event(
+    kind: Kind,
+    source: AuthoredSource,
+    payload: Payload,
+    turn: Option<TurnRef>,
+    parent: Option<Sequence>,
+) -> AuthoredEvent {
+    AuthoredEvent {
+        kind,
+        subsystem: Subsystem::Harness,
+        turn,
+        source,
+        causal_parent: parent,
+        payload: Some(payload),
+    }
+}
+fn placement_record(
+    work: &PlaceTransaction,
+    limits: (u64, u64, u64, u64),
+    now: u64,
+) -> t::PlacementRecord {
+    let facts = work.facts.unwrap();
+    let pending = work.pending.as_ref().unwrap();
+    t::PlacementRecord {
+        assembly_id: pending.assembly().into(),
+        phase: t::PlacementPhase::Append,
+        context: Some(t::PlacementContext {
+            label: work.request.context.label.clone(),
+            instruction: work
+                .request
+                .context
+                .instruction
+                .as_ref()
+                .map(crate::flow::mirror::source),
+        }),
+        cut: work.request.prefix.cut.as_ref().map(cut_mirror),
+        method: work.request.prefix.method.map(method_mirror),
+        n: facts.keep,
+        prefix_tokens: facts.prefix_tokens,
+        resident_before: facts.resident,
+        input_tokens: facts.input_tokens,
+        capacity: facts.capacity,
+        generation_limit: limits.2,
+        terminal_tokens: limits.3,
+        unit_map: pending.map(&work.units),
+        message_ids: pending.ids(),
+        assistant_message_id: Some(pending.assistant_id().0.into()),
+        recomputed_messages: (pending.recomputed() as u64).into(),
+        wait_ns: now.saturating_sub(work.started_ns).into(),
+        open_evidence: None,
+    }
+}
+fn method_mirror(method: CutMethod) -> t::CutMethod {
+    match method {
+        CutMethod::Flush => t::CutMethod::Flush,
+        CutMethod::Elide => t::CutMethod::Elide,
+    }
+}
+fn cut_mirror(cut: &CutReference) -> t::CutReference {
+    t::CutReference {
+        span: crate::flow::mirror::span_ref(&cut.span),
+        occurrence_id: t::MarkOccurrenceId {
+            run: cut.occurrence_id.run.clone(),
+            ordinal: cut.occurrence_id.ordinal.0.into(),
+        },
+    }
+}
