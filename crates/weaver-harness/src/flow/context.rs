@@ -65,6 +65,7 @@ pub(super) enum RunFailure {
     InspectionOwned,
     /// Dormant boot repair retains its reads, terminal authors and receipts.
     BootPairsOwned,
+    BootOpenOwned,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -87,6 +88,7 @@ pub(super) enum HaltAccountFailure {
 }
 
 struct LoadDuty {
+    placement: serving::payloads::PlacementConfig,
     scheme_text: String,
     instruction: serving::payloads::Ste100Instruction,
     persistence: serving::payloads::PersistenceConfig,
@@ -126,6 +128,9 @@ pub(crate) struct RecordingContext {
     content_read_started: bool,
     boot_read_started: bool,
     boot_head: Option<read_driver::BootHead>,
+    boot_open: Option<boot_open_driver::BootOpenTransaction>,
+    boot_enter_cancelled: bool,
+    boot_journal: Option<super::journal::Journal>,
     boot_pairs_started: bool,
     boot_pairs: Option<boot_pair_driver::BootPairsTransaction>,
     measure: Option<measure_driver::MeasureTransaction>,
@@ -236,6 +241,9 @@ impl RecordingContext {
             content_read_started: false,
             boot_read_started: false,
             boot_head: None,
+            boot_open: None,
+            boot_enter_cancelled: false,
+            boot_journal: None,
             boot_pairs_started: false,
             boot_pairs: None,
             measure: None,
@@ -423,6 +431,9 @@ impl RecordingContext {
         self.live(io)?;
         // A template result belongs to its ordered transcript, never a second
         // operation consumer. Correct rejection keeps that boundary closed.
+        if self.boot_open_blocks_external() {
+            return Err(RunFailure::BootOpenOwned);
+        }
         if self.boot_pairs.is_some() {
             return Err(RunFailure::BootPairsOwned);
         }
@@ -504,6 +515,8 @@ impl RecordingContext {
             || (key == PumpDeadline::Decision && self.marks.is_some())
             || self.freshness_wait_still_owned(key)
             || self.boot_pairs_wait_owned(key)
+            || (key == PumpDeadline::Enter && self.boot_open_blocks_external())
+            || (key == PumpDeadline::Leave && !self.boot_open_account_settled())
             || (key == PumpDeadline::Enter
                 && self.phase == RecordingPhase::Entered
                 && self
@@ -522,7 +535,8 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
-        if self.output.is_some()
+        if self.boot_open_blocks_external()
+            || self.output.is_some()
             || self.repair.is_some()
             || self.pair_work.is_some()
             || self.filing.is_some()
@@ -711,6 +725,10 @@ impl RecordingContext {
                 return Err(failure);
             }
         };
+        if self.boot_open_blocks_external() {
+            self.retain_refused(event);
+            return Err(RunFailure::BootOpenOwned);
+        }
         if self.boot_pairs_blocks_external() {
             self.retain_refused(event);
             return Err(RunFailure::BootPairsOwned);
@@ -850,6 +868,7 @@ impl RecordingContext {
             // Only Recorded load can advance the phase and permit admission.
             // Keep its precise duty even across a trace-capacity interruption.
             self.load_duty = Some(LoadDuty {
+                placement: load.state_flow.placement.clone(),
                 scheme_text: load.ste100_scheme.clone(),
                 instruction: load.state_flow.ste100.clone(),
                 persistence: load.state_flow.persistence.clone(),
@@ -889,6 +908,9 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
         self.live(ports.io)?;
+        if self.boot_open_blocks_external() {
+            return Err(RunFailure::BootOpenOwned);
+        }
         if self.boot_pairs_blocks_external() {
             return Err(RunFailure::BootPairsOwned);
         }
@@ -1117,6 +1139,7 @@ impl RecordingContext {
     ) -> Result<PumpStep, RunFailure> {
         if let Some(decode) = ports.decode.as_deref() {
             self.check_measure_port(decode)?;
+            self.check_boot_open_port(decode)?;
         }
         self.live(ports.io)?;
         if self.phase == RecordingPhase::Preflight
@@ -1132,6 +1155,18 @@ impl RecordingContext {
                 "preflight pump received a serving port before load",
             ));
         }
+        self.observe_boot_lifecycle(&ports.lifecycle);
+        if ports.decode.is_some() && self.boot_open_revoked() {
+            return Err(RunFailure::BootOpenOwned);
+        }
+        if ports
+            .decode
+            .as_deref()
+            .is_some_and(|decode| decode.open_not_started())
+            && self.boot_open.is_some()
+        {
+            self.boot_open_live(ports.io)?;
+        }
         let step = self.pump.step(
             ports,
             Some(&mut self.flow),
@@ -1143,6 +1178,7 @@ impl RecordingContext {
             },
             &self.deadlines,
         );
+        self.observe_boot_lifecycle(&ports.lifecycle);
         let sent = self.reconcile_pair_send(ports.io)?;
         match step {
             Ok(PumpStep::Deadline {
@@ -1444,6 +1480,9 @@ impl RecordingContext {
             point,
             detail: detail.clone(),
         };
+        if let Some(owner) = &mut self.boot_open {
+            owner.revoke();
+        }
         // Revoke before sampling or reporting. A broken clock cannot grant work.
         self.input.halt();
         self.pairs.freeze();
@@ -1478,6 +1517,7 @@ impl RecordingContext {
                 author: &self.author,
             },
         );
+        self.freeze_boot_account_bound();
         if self
             .read
             .as_ref()
@@ -1639,6 +1679,13 @@ mod marks_tests;
 
 #[path = "context_material.rs"]
 mod material_driver;
+
+#[path = "context_boot_open.rs"]
+pub(super) mod boot_open_driver;
+#[allow(unused_imports)]
+pub(in crate::flow) use boot_open_driver::{
+    BootOpenBeginError, BootOpenBeginRefusal, BootOpenProgress, CheckedBootOpen,
+};
 
 #[path = "context_boot_pairs.rs"]
 mod boot_pair_driver;

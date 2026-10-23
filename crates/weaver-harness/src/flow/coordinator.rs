@@ -1390,6 +1390,10 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     }
 
     fn settled_obligations(&self, cx: &FlowRecording<'_>) -> bool {
+        self.settled_except_author(cx) && cx.barrier.pending().is_none()
+    }
+
+    fn settled_except_author(&self, cx: &FlowRecording<'_>) -> bool {
         self.receipt_reservation.is_none()
             && self.output_checks.is_none()
             && self.instruction_check.is_none()
@@ -1407,7 +1411,6 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             && self.state_operation.is_none()
             && self.check_operation.is_none()
             && self.admission_completion.is_none()
-            && cx.barrier.pending().is_none()
     }
 
     pub(super) fn unused_open(&self) -> Option<&UnusedOpen> {
@@ -1456,6 +1459,30 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.open_pending = false;
         self.phase = CoordinatorPhase::Releasing;
         Ok(Advance::Progress)
+    }
+
+    /// Active boot has no content work; only its sealed ordinary account may
+    /// remain pending across this failed-enter release transition.
+    pub(super) fn begin_boot_releasing(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        permit: &super::context::boot_open_driver::BootReleasePermit,
+    ) -> Result<(), FlowFailure> {
+        self.require_active(cx)?;
+        if self.capture.is_some()
+            || !self.settled_except_author(cx)
+            || !permit.matches(cx.barrier)
+            || !self.state().can_begin_filing()
+            || self
+                .classifier
+                .as_ref()
+                .is_some_and(|owner| owner.state() != ClassifierState::Idle)
+            || self.starting_classifier.is_some()
+        {
+            return Err(self.fail(cx, "barrier", "boot release retains foreign work"));
+        }
+        self.phase = CoordinatorPhase::Releasing;
+        Ok(())
     }
 
     pub(super) fn begin_releasing(

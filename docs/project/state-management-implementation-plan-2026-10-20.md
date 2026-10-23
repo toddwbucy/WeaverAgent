@@ -27,10 +27,18 @@ The next drafts stack from this baseline, each on its preceding carrier:
 | --- | --- |
 | #255 code/state-open-evidence-carrier | Paired Opened evidence, strict harness/diagnostic checks and opaque trace placement payload. Published draft b26420e5. Full boot owner, recorded placement and fit remain owed. |
 | #256 code/state-plan-summary-carrier | Required digest and complete last SourcePosition across state, harness and image consumers. Published draft ddebb53c. Boot/effect cache coordinator remains owed. |
-| code/state-malformed-recall-owner | Identity-bearing refusal before an inward pair, with Recorded custody and no model feedback. Complete inward boot/repair and serving selection remain owed. |
+| #257 code/state-malformed-recall-owner | Identity-bearing refusal before an inward pair, with Recorded custody and no model feedback. Published draft ee7488e6. Complete inward boot/repair and serving selection remain owed. |
+| code/state-boot-open-owner | Exact reserved Open from real BootHead, Recorded placement, checked fit/LIVE, private journal initialization and bounded stopped accounting. Worker boot composition, place/generation and qualified cutover remain owed. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
+
+The Planner graded #255 at b26420e5 with no fix-bucket findings and reproduced
+its gates and 17 protective mutations. Its TRACE-PLACEMENT claim is limited to
+boot plus the two new nonboot checks, not every existing Cut/Append field.
+The boot owner retains valid raw JSON unchanged; recorder encoding failures
+grant no readiness. Remaining allocation and diagnostic/codec consistency work
+from that review is tracked in #146. No draft is a completed landing.
 
 The foundation, trace and additive harness roots reached main on 2026-10-21.
 The operator merged #215 at a42d1f02, #189 at 4edf1513, #192 at aec3dcc2 and

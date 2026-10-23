@@ -403,6 +403,7 @@ impl RecordingContext {
             || self.pairs.pending_rejection().is_none()
             || self.repair_blocks_external()
             || self.output.is_some()
+            || self.boot_open_blocks_external()
             || self.measure_blocks_external()
         {
             return Err(RunFailure::PairOwned);

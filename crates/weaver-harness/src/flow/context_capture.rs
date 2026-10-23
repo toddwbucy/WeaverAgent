@@ -73,6 +73,9 @@ impl RecordingContext {
         if self.templates_block_content() {
             return Err(RunFailure::TemplateBlocked);
         }
+        if self.boot_open_blocks_external() {
+            return Err(RunFailure::BootOpenOwned);
+        }
         if self.measure_blocks_external() {
             return Err(RunFailure::MeasureOwned);
         }

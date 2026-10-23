@@ -1,6 +1,6 @@
-//! Private journal arithmetic, without a production initializer or live grants.
-//! Boot/Open, terminal correlation and recorded mark/source authority are owed.
-//! Only tests can currently construct the journal or the confirmation inputs.
+//! Private journal arithmetic initialized by the dormant checked boot owner.
+//! Complete placement/generation ownership and runtime activation remain separate;
+//! test confirmation inputs do not provide those production grants.
 
 use std::sync::Arc;
 
@@ -26,6 +26,18 @@ pub(super) enum JournalError {
     Exhausted,
 }
 type Result<T> = std::result::Result<T, JournalError>;
+
+#[cfg(test)]
+pub(super) type BootSnapshot = (
+    u64,
+    u64,
+    u64,
+    u64,
+    u64,
+    u64,
+    usize,
+    Vec<(u64, SpanRef, ArgumentCursor)>,
+);
 
 #[derive(Debug)]
 pub(super) struct Journal {
@@ -110,6 +122,50 @@ struct ConfirmedSources {
 }
 
 impl Journal {
+    /// Only the checked boot transaction can construct this prerequisite. The
+    /// logical message layout excludes the separately seated system prefix.
+    pub(super) fn from_boot(proof: &super::context::CheckedBootOpen) -> Self {
+        Self {
+            identity: Arc::new(()),
+            origin: proof.origin().clone(),
+            run: proof.run().to_owned(),
+            revision: 0,
+            next_message: 1,
+            next_assembly: 1,
+            next_mark: 1,
+            prefix: proof.prefix(),
+            resident: proof.prefix(),
+            capacity: proof.capacity(),
+            layout: vec![],
+            boundaries: vec![],
+            pairs: vec![],
+            marks: vec![Mark {
+                ordinal: 0,
+                span: proof.span().clone(),
+                end: ArgumentCursor::Head {},
+            }],
+            pending: None,
+            rebuild_pending: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn boot_snapshot(&self) -> BootSnapshot {
+        (
+            self.prefix,
+            self.resident,
+            self.capacity,
+            self.next_message,
+            self.next_assembly,
+            self.next_mark,
+            self.layout.len(),
+            self.marks
+                .iter()
+                .map(|mark| (mark.ordinal, mark.span.clone(), mark.end.clone()))
+                .collect(),
+        )
+    }
+
     fn next_revision(&self) -> Result<u64> {
         self.revision.checked_add(1).ok_or(JournalError::Exhausted)
     }

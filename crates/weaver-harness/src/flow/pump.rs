@@ -671,6 +671,22 @@ impl CommonPump {
         }
         self.cursor = (self.cursor + 1) % ROTATING.len();
         for source in order {
+            // Let the lifecycle owner reduce a newly held directive before the
+            // boot reservation can send its first byte. This is transport yield,
+            // not classification of Observe/Stop/Leave by the pump.
+            if source == PumpSource::Decode
+                && ports
+                    .decode
+                    .as_deref()
+                    .is_some_and(DecodePort::open_not_started)
+                && ports
+                    .lifecycle
+                    .peer
+                    .as_deref()
+                    .is_some_and(|peer| peer.held().is_some())
+            {
+                continue;
+            }
             if let Some(expired) = self.deadline(ports.io, deadlines)? {
                 return Ok(expired);
             }
@@ -691,6 +707,22 @@ impl CommonPump {
         Ok(PumpStep::Progress {
             sources: progressed,
         })
+    }
+
+    /// One nonblocking transport unit for an already-owned stopped Open. Policy,
+    /// source identity and the earlier enter/teardown bound remain with its owner.
+    pub(super) fn stopped_decode_step(
+        &mut self,
+        decode: &mut DecodePort,
+    ) -> Result<(), super::pump_transport::Failure> {
+        let send = self.send_next[PumpSource::Decode as usize] && decode.send_pending();
+        self.send_next[PumpSource::Decode as usize] = !send;
+        if send {
+            decode.try_send()?;
+        } else if decode.held().is_none() {
+            decode.try_receive()?;
+        }
+        Ok(())
     }
 
     fn unit<I: PumpIo>(

@@ -113,6 +113,7 @@ impl RecordingContext {
             || self.member_capture.is_some()
             || self.read.is_some()
             || self.inspection.is_some()
+            || self.boot_open_blocks_external()
             || self.measure.is_some()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()

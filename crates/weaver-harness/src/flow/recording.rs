@@ -214,6 +214,7 @@ pub(super) struct RecordBarrier {
     run: String,
     pending: Option<(Event, RecordPurpose)>,
     pending_author: Option<AuthorTicket>,
+    boot_open_owed: bool,
     next_ticket: Option<u64>,
     admitted_before_failure: Option<Sequence>,
     last_trace_only_sequence: Option<Sequence>,
@@ -238,6 +239,7 @@ impl RecordBarrier {
             run,
             pending: None,
             pending_author: None,
+            boot_open_owed: false,
             next_ticket: Some(0),
             admitted_before_failure: None,
             last_trace_only_sequence: None,
@@ -295,7 +297,10 @@ impl RecordBarrier {
         budget: &mut RetentionBudget,
         now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
-        if self.pending.is_some() || self.pending_author.is_some() {
+        if (event.kind == Kind::Unload && self.boot_open_owed)
+            || self.pending.is_some()
+            || self.pending_author.is_some()
+        {
             self.remember_failure(
                 RecordFailure::Protocol("second author while a ticket is pending".into()),
                 budget,
@@ -357,6 +362,9 @@ impl RecordBarrier {
         budget: &mut RetentionBudget,
         now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
+        if event.envelope.kind == Kind::Unload && self.boot_open_owed {
+            return RecordProgress::Busy { event, purpose };
+        }
         // Busy returns ownership before admission. Observation progress remains
         // possible while a whole selected copy waits for its source allowance.
         if self.failure.is_none()
@@ -462,6 +470,11 @@ impl RecordBarrier {
                     }
                     TapOutcome::HeadUntapped if !self.recorder.is_active() => {}
                     TapOutcome::Stopped if self.recorder.is_preflight_shutdown() => {}
+                    TapOutcome::Stopped
+                        if recorded_event.envelope.kind == Kind::Unload
+                            && matches!(purpose, RecordPurpose::Observation)
+                            && !self.boot_open_owed
+                            && self.recorder.is_closed() => {}
                     TapOutcome::Stopped | TapOutcome::HeadUntapped => {
                         return self.fail(
                             RecordFailure::Protocol("ordinary record has no live tap".into()),
@@ -534,6 +547,14 @@ impl RecordBarrier {
     pub(super) fn failure(&self) -> Option<&RecordFailure> {
         self.failure.as_ref()
     }
+    pub(super) fn set_boot_open_owed(&mut self, owed: bool) {
+        self.boot_open_owed = owed;
+    }
+
+    pub(super) fn boot_open_owed(&self) -> bool {
+        self.boot_open_owed
+    }
+
     pub(super) fn stop_for_flow_failure(&mut self) {
         self.recorder.stop_tap();
     }
@@ -575,6 +596,9 @@ impl RecordBarrier {
         raw_ns: u64,
         wall_ms: u64,
     ) -> Result<Sequence, String> {
+        if event.kind == Kind::Unload && self.boot_open_owed {
+            return Err("boot Open account must settle before unload".into());
+        }
         author
             .prepare(event, raw_ns, wall_ms)
             .map_err(|e| format!("terminal author: {e:?}"))
@@ -629,6 +653,50 @@ impl RecordBarrier {
         self.pending_author = Some(AuthorTicket { ticket, event });
         self.pending = Some((prepared, RecordPurpose::Observation));
         Ok(())
+    }
+
+    pub(super) fn queue_boot_open_account(
+        &mut self,
+        permit: &super::context::boot_open_driver::OwedBootAuthor,
+        author: &ServingAuthor,
+        raw_ns: u64,
+        wall_ms: u64,
+    ) -> Result<(), String> {
+        if !self.boot_open_owed
+            || !self.recorder.tap_stopped()
+            || self.recorder.is_closed()
+            || self.pending.is_some()
+            || self.pending_author.is_some()
+        {
+            return Err("boot account requires its stopped, empty ordinary slot".into());
+        }
+        let event = permit.event();
+        let ticket = self.next_ticket.ok_or("author ticket overflow")?;
+        let prepared = author
+            .prepare(event, raw_ns, wall_ms)
+            .map_err(|error| format!("boot account author: {error:?}"))?;
+        self.next_ticket = ticket.checked_add(1);
+        self.pending_author = Some(AuthorTicket {
+            ticket,
+            event: event.clone(),
+        });
+        self.pending = Some((prepared, RecordPurpose::Observation));
+        Ok(())
+    }
+
+    /// Release this owner's unadmitted ticket on bounded incomplete teardown.
+    pub(super) fn abandon_boot_author(&mut self, ticket: u64) -> bool {
+        if self
+            .pending_author
+            .as_ref()
+            .is_some_and(|held| held.ticket == ticket)
+        {
+            self.pending = None;
+            self.pending_author = None;
+            true
+        } else {
+            false
+        }
     }
 
     /// An ordinary event already owed to the trace may land after the halt.

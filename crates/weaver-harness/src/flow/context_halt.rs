@@ -128,6 +128,10 @@ impl RecordingContext {
                     HaltTraceProgress::Unavailable
                 }
             }
+        } else if self.boot_owns_pending_author() {
+            // Its dedicated bounded driver must retain Recorded and the next
+            // boot continuation before any fallible clock/lifecycle hook.
+            HaltTraceProgress::Pending
         } else if self.barrier.pending().is_some() {
             match self.barrier.resume_trace_only() {
                 Ok(Some(sequence)) => HaltTraceProgress::TraceRecorded(sequence),

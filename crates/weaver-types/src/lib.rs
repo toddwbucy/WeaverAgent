@@ -70,6 +70,7 @@
 //! }
 //! fn refusal_name(r: &LifecycleRefusal) -> &'static str {
 //!     match r {
+//!         LifecycleRefusal::StatePersistenceInvalid { .. } => "state_persistence_invalid",
 //!         LifecycleRefusal::Unauthorized => "unauthorized",
 //!         LifecycleRefusal::Malformed => "malformed",
 //!         LifecycleRefusal::NoSuchAgent => "no_such_agent",

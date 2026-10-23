@@ -105,6 +105,7 @@ impl RecordingContext {
             || self.member_capture.is_some()
             || self.read.is_some()
             || self.inspection.is_some()
+            || self.boot_open_blocks_external()
             || self.measure_blocks_external()
             || self.open_turn.is_some()
             || self.barrier.pending().is_some()

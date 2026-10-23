@@ -1,6 +1,6 @@
-//! Dormant BOOT-REPAIR mechanics. The prior-Open prerequisite has no production
-//! constructor until the checked Open owner exists. Completion certifies only
-//! this repair and its empty recheck, never lifecycle Enter or user-gate readiness.
+//! Dormant BOOT-REPAIR mechanics consuming the checked Open owner's actual proof.
+//! Completion certifies this repair and its empty recheck, never lifecycle Enter
+//! or user-gate readiness.
 
 use super::*;
 use crate::flow::author::AuthoredSource;
@@ -13,16 +13,25 @@ use weaver_types::state_flow::{
     StateFrame, TerminalPairFate,
 };
 
-/// Intentionally no production constructor, public fields or conversion. The
-/// future checked Open owner must retain its actual proof when licensing this.
+/// The consuming conversion retains the checked Open owner's actual proof.
+/// No scalar constructor or public fields can fabricate the prerequisite.
 #[derive(Debug)]
 pub(in crate::flow) struct PriorBootOpen {
     origin: std::sync::Arc<()>,
     head: Sequence,
     enter: AbsoluteBound,
+    checked: Option<CheckedBootOpen>,
 }
 
 impl PriorBootOpen {
+    pub(in crate::flow) fn from_checked(proof: CheckedBootOpen) -> Self {
+        Self {
+            origin: proof.origin().clone(),
+            head: proof.head(),
+            enter: proof.enter(),
+            checked: Some(proof),
+        }
+    }
     #[cfg(test)]
     pub(super) fn assume_checked_open_for_test(context: &RecordingContext) -> Self {
         // Explicit missing-integration assumption for mechanics tests. The real
@@ -32,6 +41,7 @@ impl PriorBootOpen {
             origin: context.read_origin.clone(),
             head: head.recall_sequence(),
             enter: head.enter_bound(),
+            checked: None,
         }
     }
 }
@@ -242,6 +252,7 @@ impl RecordingContext {
             || self.read.is_some()
             || self.marks.is_some()
             || self.freshness.is_some()
+            || self.boot_open_blocks_external()
             || self.measure.is_some()
             || self.member_capture.is_some()
             || self.templates_block_content()

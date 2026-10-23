@@ -108,6 +108,9 @@ pub(super) enum Stage<T> {
 pub(super) struct PortIdentity(Arc<()>);
 
 impl PortIdentity {
+    pub(super) fn matches_decode(&self, port: &DecodePort) -> bool {
+        Arc::ptr_eq(&self.0, &port.identity.0)
+    }
     pub(super) fn matches(&self, port: &OrganPort) -> bool {
         Arc::ptr_eq(&self.0, &port.identity.0)
     }
@@ -172,8 +175,15 @@ pub(super) enum TrackedStage {
     Busy(OrganEnvelope),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecodeRequestKind {
+    Measurement,
+    Open,
+}
+
 #[derive(Debug)]
 struct DecodeReservationState {
+    kind: DecodeRequestKind,
     sent: AtomicBool,
     terminal_taken: AtomicBool,
     invalid_reply: AtomicBool,
@@ -488,6 +498,9 @@ impl OrganPort {
 }
 
 impl DecodePort {
+    pub(super) fn port_identity(&self) -> PortIdentity {
+        self.identity.clone()
+    }
     pub(super) fn from_channel(channel: DecodeChannel) -> Result<Self, Failure> {
         Self::from_owned(channel.into_fd())
     }
@@ -519,18 +532,24 @@ impl DecodePort {
 
     /// Reserve and stage atomically. Existing buffered work belongs to its
     /// earlier caller and cannot become this exchange's evidence. The engine
-    /// must first settle earlier nonmeasurement exchanges. This transport
-    /// does not certify their generation/cancellation protocol or quiescence.
-    /// Every measurement itself enters only through this reserved interface.
+    /// must first settle earlier exchanges. This transport does not certify their
+    /// generation/cancellation protocol or quiescence. Measurement and the dormant
+    /// boot Open owner both use this interface; existing serving Open stays held
+    /// for the coupled runtime migration.
     #[allow(clippy::result_large_err)] // Refusal preserves the original owned proposal.
     pub(super) fn stage_reserved(
         &mut self,
         input: TokenDirective,
     ) -> Result<DecodeStage, StageFailure<TokenDirective>> {
-        if !matches!(input, TokenDirective::MeasureDelta { .. }) {
+        if !matches!(
+            input,
+            TokenDirective::MeasureDelta { .. } | TokenDirective::Open { .. }
+        ) {
             return Err(StageFailure {
                 input,
-                failure: Failure::invalid("only measurement has a reserved decode owner"),
+                failure: Failure::invalid(
+                    "only measurement or boot Open has a reserved decode owner",
+                ),
             });
         }
         if let Err(failure) = self.live() {
@@ -548,10 +567,16 @@ impl DecodePort {
         {
             return Ok(DecodeStage::Busy(input));
         }
+        let kind = if matches!(input, TokenDirective::Open { .. }) {
+            DecodeRequestKind::Open
+        } else {
+            DecodeRequestKind::Measurement
+        };
         match self.stage_encoded(input, serde_json::to_vec)? {
             Stage::Busy(input) => Ok(DecodeStage::Busy(input)),
             Stage::Queued => {
                 let state = Arc::new(DecodeReservationState {
+                    kind,
                     sent: AtomicBool::new(false),
                     terminal_taken: AtomicBool::new(false),
                     invalid_reply: AtomicBool::new(false),
@@ -570,6 +595,49 @@ impl DecodePort {
                 }))
             }
         }
+    }
+
+    /// A queued boot request is held behind lifecycle reduction before its first byte.
+    pub(super) fn open_not_started(&self) -> bool {
+        self.decode_reservation
+            .as_ref()
+            .is_some_and(|state| state.kind == DecodeRequestKind::Open)
+            && self
+                .outgoing
+                .as_ref()
+                .is_some_and(|out| out.offset == 0 && !out.preamble_sent)
+    }
+
+    /// Cancellation may withdraw only a request for which no byte or preamble left.
+    pub(super) fn withdraw_unsent(
+        &mut self,
+        reservation: DecodeReservation,
+    ) -> Result<(), DecodeFinishError> {
+        let failure = self.check_reservation(&reservation).err().or_else(|| {
+            (!self
+                .outgoing
+                .as_ref()
+                .is_some_and(|out| out.offset == 0 && !out.preamble_sent)
+                || reservation.sent()
+                || self.held.is_some()
+                || self.series.is_some()
+                || self.received_wire.is_some()
+                || self.received_reservation.is_some()
+                || self.receive_interrupted
+                || self.zero_received)
+                .then(|| Failure::invalid("decode request is not wholly unsent"))
+        });
+        if let Some(failure) = failure {
+            return Err(DecodeFinishError {
+                reservation,
+                failure,
+            });
+        }
+        self.outgoing = None;
+        self.send_interrupted = false;
+        reservation.state.finished.store(true, Ordering::Release);
+        self.decode_reservation = None;
+        Ok(())
     }
 
     fn check_reservation(&self, reservation: &DecodeReservation) -> Result<(), Failure> {
@@ -613,10 +681,21 @@ impl DecodePort {
                 .expect("complete decode reply retains its bytes");
             match &reply {
                 DecodeReply::Answer(TokenAnswer::Fault(_)) => {}
-                DecodeReply::Answer(TokenAnswer::DeltaMeasured { .. })
-                | DecodeReply::Refusal(_)
+                reply
                     if receipt.after_send
-                        && !reservation.state.terminal_taken.load(Ordering::Acquire) =>
+                        && !reservation.state.terminal_taken.load(Ordering::Acquire)
+                        && matches!(
+                            (reservation.state.kind, reply),
+                            (_, DecodeReply::Refusal(_))
+                                | (
+                                    DecodeRequestKind::Measurement,
+                                    DecodeReply::Answer(TokenAnswer::DeltaMeasured { .. })
+                                )
+                                | (
+                                    DecodeRequestKind::Open,
+                                    DecodeReply::Answer(TokenAnswer::Opened(_))
+                                )
+                        ) =>
                 {
                     reservation
                         .state

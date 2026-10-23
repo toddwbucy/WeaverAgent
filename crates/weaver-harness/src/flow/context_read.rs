@@ -235,6 +235,7 @@ impl RecordingContext {
             || (self.marks.is_some() && !matches!(purpose, ReadPurpose::Marks))
             || self.read.is_some()
             || self.inspection.is_some()
+            || self.boot_open_blocks_external()
             || self.measure_blocks_external()
             || self.member_capture.is_some()
             || self.freshness.is_some()
