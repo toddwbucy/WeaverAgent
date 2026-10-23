@@ -2,15 +2,11 @@
 
 **Status:** MERGED.
 
-**Landing PR:** Pending for this proposal; prior merged revision #235.
+**Landing PR:** #282.
 
 **Version:** 0.16 **Date filed:** 2026-10-23 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
-
-The EnterWindow amendment remains proposed until operator ruling, review and merge.
-This header states the landing state required by Working Process section 2; it does
-not authorize pre-merge implementation. Prior merged clauses remain authority on main.
 
 Amend Spec 3.0, 4, 6, 9 and 10 in the combined flow/store/seed unit. Admin still runs
 per verb, links no interior crate, creates inherited channels, and owns root
@@ -111,14 +107,15 @@ opened. Admin verifies configuration before spawn. The worker confirms enter onl
 template checks, boot read, placement and any required pair-load repair and committed
 plan-summary read. [PERSIST-3, PERSIST-6, SEAM-1]
 
-**ADMIN-ENTER-WINDOW (proposed).** For the replacement Serving load, admit the load
-request and root configuration first, then sample began_ns once immediately before the
-first load-specific preparation. This point precedes run-directory preparation,
-invocation/run-lock acquisition, inventory and artifact selection, channel creation,
-child start and Enter carry. Root argument/configuration admission precedes the window;
-all subsequent load preparation and waits spend it. In the current source this is
-before dispatch's load-specific prepare_run_directory, not entry to load after that
-preparation or the later Enter send. [CLASS-8, PERSIST-6, GATE-1]
+**ADMIN-ENTER-WINDOW.** For a replacement Serving Load request only, admit the
+request and root configuration first, then sample began_ns once in dispatch after
+admissible and immediately before prepare_run_directory. That preparation is shared
+by every verb; only Load samples this Enter anchor there. The point precedes
+run-directory preparation, invocation/run-lock acquisition, inventory and artifact
+selection, channel creation, child start and Enter carry. Root argument/configuration
+admission precedes the window; all subsequent load preparation and waits spend it.
+Entry to load after that shared preparation, or the later Enter send, is too late
+for this anchor. [CLASS-8, PERSIST-6, GATE-1]
 
 Keep load-bound-seconds positive and root-owned. Convert it to nanoseconds with checked
 multiplication and compute deadline_ns = began_ns + budget_ns with checked addition.
@@ -471,10 +468,6 @@ who owns the leave or its clock. [CLASS-8, CLASS-9, PERSIST-4, FLOW-4, R3]
 
 ## 8. Open elections
 
-The paired EnterWindow carrier and the exact pre-preparation anchor above remain
-operator-pending. This text is a [proposal][enter-window-proposal], not permission to
-change the active Serving load or Diagnostic deadlines before review and merge.
-
 Production classifier certificate production/verification is not supplied here. The
 separate prompt document is owed. Pair-load closure uses Spec 05's joined boot-repair
 contract. The measured memory qualification of capture/read copies and file bounds
@@ -484,6 +477,3 @@ still awaits review and approval.
 
 [cutover]:
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
-
-[enter-window-proposal]:
-../../project/state-management-enter-window-proposal-2026-10-23.md

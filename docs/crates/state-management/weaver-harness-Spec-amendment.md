@@ -2,15 +2,11 @@
 
 **Status:** MERGED.
 
-**Landing PR:** Pending for this proposal; prior merged revision #244.
+**Landing PR:** #282.
 
 **Version:** 0.30 **Date filed:** 2026-10-23 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
-
-The EnterWindow amendment remains proposed until operator ruling, review and merge.
-This header states the landing state required by Working Process section 2; it does
-not authorize pre-merge implementation. Prior merged clauses remain authority on main.
 
 Replacement text for harness Spec 2, 3, 4, 6, and 7, with instruments for section 8.
 This unit includes the store/read and seed/boot clauses. Its classifier near side is
@@ -507,11 +503,11 @@ async runtime is introduced. [CLASS-6, CLASS-8, FLOW-4]
 give that same origin to Author and the pump. Record clock_source and origin_ns once in
 load under Spec 09's CLOCK. Envelope monotonic_ns remains elapsed from that origin.
 Cross-process observations use raw readings of the same Linux clock, never serialized
-Rust Instant values. Under the proposed HARNESS-ENTER-WINDOW, the inherited admin load
-budget starts at ADMIN-ENTER-WINDOW's load act and its original EnterWindow crosses
-Enter. Each stage uses only the time remaining before that same deadline. Gate wait
-starts at check intake. Cut wait
-starts at the between-turn filing barrier, after the preceding turn closed and before
+Rust Instant values. Under HARNESS-ENTER-WINDOW, the inherited admin load budget
+starts at ADMIN-ENTER-WINDOW's exact dispatch anchor and its original EnterWindow
+crosses Enter. Each stage uses only the time remaining before that same deadline.
+Gate wait starts at check intake. Cut wait starts at the between-turn filing barrier,
+after the preceding turn closed and before
 any decode work for the next turn. decision_wait comes from state_management.ste100 and
 starts when an output check, required send/terminal receipt or an ordinary placement
 measurement blocks the next decision. It ends only when that barrier's disposition is
@@ -529,7 +525,7 @@ clock and returns scheduled readiness or Timeout together. A fake clock never at
 to wake a real poll. Also exercise the real poll with a short test-only deadline and an
 outer test watchdog. [CLASS-8]
 
-**HARNESS-ENTER-WINDOW (proposed).** The replacement Serving receiver retains the
+**HARNESS-ENTER-WINDOW.** The replacement Serving receiver retains the
 required original EnterWindow and its existing exchange and descriptor custody. Sample
 received_ns from the common raw clock after the complete packet/descriptor receive and
 before JSON decoding. Structural/encoding violations of TYPES-ENTER-WINDOW follow the
@@ -570,7 +566,24 @@ never rewrites Enter to that allowance or admits a late Ready. Any already owed
 account is retained or settled under its existing applicable bound and disposition,
 not silently discarded to make expiry look complete. [CLASS-8, FLOW-3, FLOW-5]
 
-| Proposed claim | Required later instrument | Protective change that must fail |
+The existing harness Spec's rollback-Leave rule applies even if the worker sent
+Ready before the deadline and admin received it at or after the deadline. Admin's
+late-answer refusal does not turn that Ready into an accepted load. Once the actual
+forced Leave with rollback true is accepted, the worker follows rollback by the
+directive, regardless of its own entered position or earlier Ready send. No new
+ordinary work is admitted after that acceptance; retain and unwind actual owed work,
+run no wind-down, take no save point, and release only what stood. Where a load
+bracket stands, its existing terminal rules apply with the load's cause. The accepted
+Leave supplies its existing cleanup allowance, never a new Enter window.
+[FLOW-3, FLOW-5, PERSIST-6]
+
+| Enter observation and worker position | Event | Required disposition |
+| --- | --- | --- |
+| Before load; original window expired | Current time reaches the retained deadline | No load or substitute refusal; retain and close actual unadmitted resources under existing before-load rollback. |
+| Load bracket stands; boot has not answered Ready | Original window expires | Keep the same entered context and owed work for explicit rollback; no new ordinary boot work or Ready. |
+| Ready was sent before the cap; worker is Entered; admin receives it late | Actual forced Leave with rollback true is accepted | Follow the existing any-position rollback rule; no new ordinary work after acceptance, no wind-down or save point, and no renewal of Enter. |
+
+| Claim | Required instrument | Protective change that must fail |
 | --- | --- | --- |
 | TYPES/ADMIN/HARNESS-ENTER-WINDOW | Canonical closed carrier and real seqpacket/process fixture with original admin anchor, delayed preparation/carry/parse and actual descriptor ownership | Default a missing window, re-add sampled remaining time at receive, restart at trace origin or lose transferred descriptors |
 | Original expiry | Exact-deadline receive, before first work byte, after owner admission and late Ready controls, with actual rollback/account custody | Treat expiry as malformed or boot_failed, accept late Ready, renew the cap or fake completed cleanup |
@@ -1617,10 +1630,6 @@ PLACE-4, R20-12]
 
 ## 10. Open elections and dependencies
 
-The [EnterWindow proposal][enter-window-proposal] is operator-pending. Its required
-Serving field, exact admin anchor and distinct malformed/expired paths must be reviewed
-and merged together before code. It activates no dormant owner or replacement service.
-
 Spec 02 owns production classifier transport, template proof and repair. Spec 05 owns
 tool association, terminal metadata and R4 open-pair closure. Their production artifacts
 and measured values remain required before first-release deployment. Marks, renderer and
@@ -1634,6 +1643,3 @@ state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 
 [recall-shape]:
 weaver-trace-Spec-amendment.md#61-serving-recall-representation
-
-[enter-window-proposal]:
-../../project/state-management-enter-window-proposal-2026-10-23.md

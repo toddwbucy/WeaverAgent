@@ -2,15 +2,11 @@
 
 **Status:** MERGED.
 
-**Landing PR:** Pending for this proposal; prior merged revision #244.
+**Landing PR:** #282.
 
 **Version:** 0.30 **Date filed:** 2026-10-23 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
-
-The EnterWindow amendment remains proposed until operator ruling, review and merge.
-This header states the landing state required by Working Process section 2; it does
-not authorize pre-merge implementation. Prior merged clauses remain authority on main.
 
 Amend sections 2 and 4 and add the instruments below to section 5. The baseline has
 AgentConfig.state_election, StateElection, and EnterPayload.state_election. It has no
@@ -190,8 +186,9 @@ binding-kind distinction at inventory. [PERSIST-5, SCOPE-1, October 18 R8]
 
 **TYPES-ENTER.** Remove the top-level EnterPayload.state_election. Add
 `state_management: StateManagementConfig`, `start: StartIdentity`, `ste100_scheme:
-String` and `enter_window: EnterWindow` to `EnterBinding::Serving`, and `state_election: StateElection` to
-`EnterBinding::Diagnostic`. Keep the remaining binding fields. Remove
+String` and `enter_window: EnterWindow` to `EnterBinding::Serving`, and
+`state_election: StateElection` to `EnterBinding::Diagnostic`. Keep the remaining
+binding fields. Remove
 LoadFacts.state_election and add LoadFacts.state: LoadedStateFacts. LoadedStateFacts is
 externally tagged Serving {state_management, start, ste100_scheme, ste100_binary_sha256}
 or Diagnostic {state_election}, with the same types as EnterBinding. Keep state_store
@@ -204,7 +201,7 @@ the root-judged executable digest in the existing binary facts, copied into
 LoadedStateFacts for show. It is not the model-manifest digest or scheme digest. Spec
 02's CUSTODY governs all three identities. [CLASS-2, FLOW-3]
 
-**TYPES-ENTER-WINDOW (proposed).** Add state_flow::EnterWindow with exactly
+**TYPES-ENTER-WINDOW.** Add state_flow::EnterWindow with exactly
 {began_ns:DecimalU64,deadline_ns:DecimalU64}. Both fields are raw readings of the same
 Linux CLOCK_MONOTONIC domain under Spec 09 CLOCK, and began_ns < deadline_ns. The
 interval is positive; an absolute began_ns of zero is not invalid by itself. Require
@@ -222,7 +219,7 @@ existing envelope bound still includes its encoded bytes. No Rust Instant, wall-
 translation, time-namespace translation or cross-host deadline is a valid carrier.
 ADMIN-ENTER-WINDOW owns its sole producer and HARNESS-ENTER-WINDOW owns receipt and
 expiry. Both retain the original two values; an existing retry does not earn another
-budget. This proposal adds no permission to retry. [CLASS-8, FLOW-3, SEAM-2]
+budget. This carrier adds no permission to retry. [CLASS-8, FLOW-3, SEAM-2]
 
 The harness converts StateManagementConfig.flow, .persistence, .reads, .ste100, .tools
 and .placement into trace::FlowDeclarationRecord. Its verified start becomes
@@ -1073,11 +1070,6 @@ facts. UnitOccurrenceId cannot stand in for MarkOccurrenceId. [MARK-6, PLACE-5]
 
 ## 7. Open elections
 
-The EnterWindow field, exact load-act anchor and malformed/expired handling above are
-proposed together with ADMIN-ENTER-WINDOW and HARNESS-ENTER-WINDOW. They require the
-operator's ruling, review and merge before implementation; see the
-[concrete proposal][enter-window-proposal]. No unmerged carrier authorizes cutover.
-
 Measured values are gate-wait.elapsed-ns and cut-wait.elapsed-ns. Their measurement
 method is in the harness amendment. Schema and control vocabulary expansions are named
 dependencies, not an open map for a coder to fill. The scheme declaration is defined
@@ -1090,6 +1082,3 @@ state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 [canonical]: ../weaver-trace/weaver-trace-Spec.md#2-canonical-form
 [empty-correction-ruling]:
 https://github.com/toddwbucy/WeaverAgent/pull/213#issuecomment-6330669954
-
-[enter-window-proposal]:
-../../project/state-management-enter-window-proposal-2026-10-23.md

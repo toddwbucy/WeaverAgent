@@ -24,13 +24,14 @@ Require `enter_window: EnterWindow` in the replacement `EnterBinding::Serving`:
 EnterWindow { began_ns: DecimalU64, deadline_ns: DecimalU64 }
 ```
 
-These are readings of the same Linux CLOCK_MONOTONIC domain. Admin samples `began_ns`
-once after admitting the load request and root configuration, immediately before the
-first load-specific preparation. The point precedes run-directory preparation and
-invocation/run-lock acquisition, as well as inventory, artifact selection, channels,
-child start and Enter carry. In the current dispatcher it precedes
-`prepare_run_directory`; entry to `load()` or the send is too late for this proposed
-boundary. Root argument/configuration admission remains outside the window.
+These are readings of the same Linux CLOCK_MONOTONIC domain. Only a replacement
+Serving Load request samples `began_ns`: once in dispatch after `admissible`,
+immediately before `prepare_run_directory`. Every verb shares that preparation;
+only Load samples this Enter anchor there. The point precedes run-directory
+preparation, invocation/run-lock acquisition, inventory, artifact selection,
+channels, child start and Enter carry. Entry to `load()` or the send is too late
+for this proposed boundary. Root argument/configuration admission remains outside
+the window.
 
 Admin converts its positive root `load-bound-seconds` to nanoseconds with checked
 multiplication, then checked-adds that budget to `began_ns`. An unrepresentable
@@ -77,6 +78,49 @@ and cause. It does not extend Enter, authorize a late Ready or discard earlier o
 facts. The proposal supplies no new retry permission, lifecycle code, timeout grace,
 refusal trace kind or successful serving/qualification claim.
 
+## Late Ready and the existing rollback rule
+
+The merged harness Spec already names the case where Ready reaches admin after
+its Enter deadline while the worker is Entered. Its rollback-Leave clause says
+that rollback true, not the worker's position, selects the unwind: release what
+stood, no wind-down or save point, and the load's cause on any owed terminal
+bracket. The EnterWindow amendment now includes that exact state-table row.
+Once the actual rollback Leave is accepted, admit no new ordinary work and
+preserve actual owed evidence under the existing cleanup authority. This is
+not a new acknowledgement, grace period or Enter extension.
+
+The row does not promise that no serving work can occur between a local Ready
+send and receipt of rollback. Ready has no admin-accepted acknowledgement, and
+the gate can already stand; external gate input does not acquire the admin
+invocation lock. A stronger pre-rollback no-input guarantee would require a
+separate activation choice: for example a paired positive-acknowledgement
+handshake that keeps admission closed, with its own states and failure paths.
+That protocol is not elected here. Retain the current any-position rollback
+semantics and test the race with actual admitted resources; do not infer the
+stronger guarantee from timing-carrier fields. The pending timing question is
+unchanged.
+
+## Landing form and review dispositions
+
+The three owning Specs now use the prospective landing form: Landing PR #282,
+normative clause names and no proposal-only banners or open-election notes for
+these clauses. This project document retains the alternatives and the pending
+operator ruling, review and merge. An unmerged draft remains no implementation
+authority; the MERGED header describes the eventual landing state only.
+
+Both #276 and #282 currently propose harness amendment version 0.30 from main
+version 0.29. Sequence the landings: the first may use 0.30; the second must
+incorporate the first's merged clauses and advance to 0.31. No order or merge
+is claimed by this document. Keep the pending EnterWindow election separate
+from #276's AuthorFailure/held-boundary election.
+
+The Date filed convention remains open. First filing was 2026-10-21; these
+revision headers currently say 2026-10-23. No convention is chosen by this
+source-only revision. The original draft's separate EnterWindow and SaveWindow
+domain types remain the recommendation. Sharing a private validation helper
+could avoid rule duplication without allowing the wrong domain type; this
+optional implementation detail is not a new timing election or code change.
+
 ## Alternatives for the operator
 
 | Alternative | Consequence |
@@ -107,9 +151,10 @@ census duty.
 Required instruments include closed/canonical wire cases and whole-envelope exact/one
 byte over cases; real seqpacket/process fixtures with preparation/carry/queue/parse
 and constructor delays; original descriptor and child custody; exact-deadline expiry
-before first state/Open byte and after owner admission; late Ready and readable-at-cap
-rejection; real bounded poll and EINTR under an outer watchdog; and unchanged
-historical trace/Diagnostic fixtures. Protective changes must catch rebasing the
+before first state/Open byte and after owner admission; late Ready, actual rollback
+Leave after the worker has sent Ready, and readable-at-cap rejection; real bounded
+poll and EINTR under an outer watchdog; and unchanged historical trace/Diagnostic
+fixtures. Protective changes must catch rebasing the
 original deadline, defaulting a missing window, renewing after a partial result,
 accepting late Ready, losing received descriptors or inventing completed rollback.
 Arithmetic-only tests cannot establish process timing or cleanup.
