@@ -21,6 +21,8 @@ pub enum FoundationInputProgress {
     Accepted,
     Turn,
     Refused,
+    /// The stopped turn's world close has been completely carried.
+    Aborted,
     /// The actual root connection is retained for management judgment. Mere
     /// acceptance is not a Leave and does not revoke input or grant cleanup.
     ManagementPending,
@@ -35,12 +37,13 @@ enum Stage {
     Source,
     Closing,
     Refused,
+    Aborted,
     Turn,
     Stopped,
 }
 
 /// Owns the serving resources and original input through checking, trace waits,
-/// an actual unnamed close, or source authoring. A stopped owner remains owed
+/// an actual world close, or source authoring. A stopped owner remains owed
 /// to lifecycle teardown; dropping it is not completed cleanup.
 ///
 /// ```compile_fail,E0507
@@ -94,6 +97,7 @@ impl<'a> FoundationInput<'a> {
             Stage::Accepted => FoundationInputProgress::Accepted,
             Stage::Turn => FoundationInputProgress::Turn,
             Stage::Refused => FoundationInputProgress::Refused,
+            Stage::Aborted => FoundationInputProgress::Aborted,
             _ => FoundationInputProgress::Pending,
         }
     }
@@ -383,11 +387,12 @@ impl<'a> FoundationInput<'a> {
         Ok(())
     }
 
-    /// Only whole refusal delivery or Recorded checked source authoring grants
+    /// Only whole world-close delivery or Recorded checked source authoring grants
     /// a result. Every other attempt returns the full original owner.
     pub fn finish(mut self: Box<Self>) -> Result<FoundationInputResult<'a>, Box<Self>> {
         match self.progress() {
             FoundationInputProgress::Refused => Ok(FoundationInputResult::Refused(self.serving)),
+            FoundationInputProgress::Aborted => Ok(FoundationInputResult::Aborted(self.serving)),
             FoundationInputProgress::Turn => {
                 Ok(FoundationInputResult::Turn(Box::new(FoundationTurn {
                     serving: self.serving,
@@ -402,6 +407,7 @@ impl<'a> FoundationInput<'a> {
 
 pub enum FoundationInputResult<'a> {
     Refused(FoundationServing<'a>),
+    Aborted(FoundationServing<'a>),
     Turn(Box<FoundationTurn<'a>>),
 }
 
@@ -421,7 +427,26 @@ pub struct FoundationTurn<'a> {
     received: ReceivedOrgan,
     input: SeatedInput,
 }
-impl FoundationTurn<'_> {
+impl<'a> FoundationTurn<'a> {
+    /// Return this still-owned checked source to the common service pump. Its
+    /// original gate request and source remain intact; no input token, event or
+    /// turn identity is minted again. The loop can hear management before it
+    /// transfers this turn to a subsequent operation owner.
+    pub fn into_service(self: Box<Self>) -> Box<FoundationInput<'a>> {
+        Box::new(FoundationInput {
+            turn: Some(TurnKey(self.input.turn.0.clone())),
+            serving: self.serving,
+            stage: Stage::Turn,
+            received: Some(self.received),
+            token: None,
+            seated: Some(self.input),
+            close: None,
+            send: None,
+            report: None,
+            report_started: false,
+            failure: None,
+        })
+    }
     pub fn message(&self) -> &weaver_traits::Message {
         &self.input.message
     }

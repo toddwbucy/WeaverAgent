@@ -6,10 +6,10 @@ use weaver_harness::{
 };
 use weaver_types::TurnKey;
 
-/// Service Observe on the actual held root connection, then resume the same
+/// Service the actual held root connection, then resume the same
 /// input. Without a pending connection it returns the input unchanged. Other
 /// lifecycle directives retain their complete management owner.
-pub fn observe(
+pub fn management(
     input: Box<FoundationInput<'_>>,
 ) -> Result<Box<FoundationInput<'_>>, Box<weaver_harness::FoundationManagement<'_>>> {
     let mut owner = match input.management() {

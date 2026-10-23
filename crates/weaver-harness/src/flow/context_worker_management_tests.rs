@@ -13,9 +13,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use weaver_types::{Cause, ExchangeId};
 
-struct Guard<'a> {
-    input: Option<Box<FoundationInput<'a>>>,
-    management: Option<Box<FoundationManagement<'a>>>,
+pub(super) struct Guard<'a> {
+    pub(super) input: Option<Box<FoundationInput<'a>>>,
+    pub(super) management: Option<Box<FoundationManagement<'a>>>,
 }
 impl Drop for Guard<'_> {
     fn drop(&mut self) {
@@ -28,7 +28,7 @@ impl Drop for Guard<'_> {
         }
     }
 }
-fn dial(path: &Path) -> OwnedFd {
+pub(super) fn dial(path: &Path) -> OwnedFd {
     let fd = socket(
         AddressFamily::Unix,
         SockType::SeqPacket,
@@ -39,7 +39,7 @@ fn dial(path: &Path) -> OwnedFd {
     connect(fd.as_raw_fd(), &UnixAddr::new(path).unwrap()).unwrap();
     fd
 }
-fn read_packet(fd: &OwnedFd) -> Option<Vec<u8>> {
+pub(super) fn read_packet(fd: &OwnedFd) -> Option<Vec<u8>> {
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
     match recv(fd.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
         Ok(n) if n > 0 => {
@@ -50,7 +50,7 @@ fn read_packet(fd: &OwnedFd) -> Option<Vec<u8>> {
         Err(e) => panic!("{e}"),
     }
 }
-fn trace(reader: &mut UnixStream) -> Vec<serde_json::Value> {
+pub(super) fn trace(reader: &mut UnixStream) -> Vec<serde_json::Value> {
     reader.set_nonblocking(true).unwrap();
     let mut bytes = vec![];
     let end = Instant::now() + Duration::from_millis(40);
@@ -152,7 +152,11 @@ pub(in super::super::super) fn exercise(
     }
     let stage = guard.input.as_ref().unwrap().stage;
     // A premature workflow call must return custody rather than panic/drop it.
-    guard.input = Some(worker::observe(guard.input.take().unwrap()).ok().unwrap());
+    guard.input = Some(
+        worker::management(guard.input.take().unwrap())
+            .ok()
+            .unwrap(),
+    );
     assert!(guard.input.as_ref().unwrap().stage == stage);
     let deadline = guard
         .input
@@ -298,7 +302,7 @@ pub(in super::super::super) fn exercise(
                     std::thread::sleep(Duration::from_millis(1));
                 }
             });
-            let result = worker::observe(guard.input.take().unwrap());
+            let result = worker::management(guard.input.take().unwrap());
             done.store(true, std::sync::atomic::Ordering::SeqCst);
             responder.join().unwrap();
             result
@@ -380,11 +384,23 @@ pub(in super::super::super) fn exercise(
             );
             return;
         }
-        if ["leave", "stop", "save"].iter().any(|s| mode.ends_with(s)) {
+        if ["leave", "save"].iter().any(|s| mode.ends_with(s)) {
             assert_eq!(m.progress(), FoundationManagementProgress::DirectivePending);
             assert_eq!(m.peer.held().unwrap().envelope.exchange.ordinal, 73);
             assert!(m.message.is_none() && m.send.is_none());
             assert!(read_packet(peer.as_ref().unwrap()).is_none());
+            return;
+        }
+        if mode.ends_with("stop") {
+            assert_eq!(m.progress(), FoundationManagementProgress::Answered);
+            assert!(m.stop.is_none());
+            let bytes = read_packet(peer.as_ref().unwrap()).unwrap();
+            let answer: OrganEnvelope = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(answer.exchange.ordinal, 73);
+            assert_eq!(answer.payload, Payload::Answer(LifecycleAnswer::AtRest));
+            assert!(trace(reader).is_empty());
+            guard.input = Some(guard.management.take().unwrap().finish().ok().unwrap());
+            assert!(guard.input.as_ref().unwrap().stage == stage);
             return;
         }
         let dropped = ["opener", "position", "handles", "bad", "eof"]

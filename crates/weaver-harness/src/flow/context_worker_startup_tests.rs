@@ -315,6 +315,14 @@ impl Member {
                         observation,
                     }
                 }
+                s::StateFrame::File { common, filing } => {
+                    self.requests.push("file".into());
+                    s::StateFrame::Filed {
+                        common: common.clone(),
+                        block_id: filing.block_id.clone(),
+                        observation,
+                    }
+                }
                 _ => panic!("unexpected request {request:?}"),
             };
             self.peer
@@ -476,6 +484,18 @@ fn circuit(mode: &str) {
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-worker") {
             drop(peer);
+            if mode.contains("stop-") {
+                super::input::management::stop::tests::exercise(
+                    serving,
+                    &mut member,
+                    &mut reader,
+                    &mut clock,
+                    &path,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
             if mode.contains("observe") {
                 super::input::management::tests::exercise(
                     serving,
@@ -567,6 +587,18 @@ fn circuit(mode: &str) {
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-") {
             drop(peer); // Normal admin departure does not revoke serving.
+            if mode.contains("stop-") {
+                super::input::management::stop::tests::exercise(
+                    serving,
+                    &mut member,
+                    &mut reader,
+                    &mut clock,
+                    &path,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
             if mode.contains("observe") {
                 super::input::management::tests::exercise(
                     serving,
@@ -861,7 +893,7 @@ scenario!(
 );
 
 scenario!(
-    worker_observe_composition_stop_retained,
+    worker_observe_composition_stop_at_rest,
     "input-observe-stop"
 );
 
@@ -883,3 +915,51 @@ scenario!(
     worker_observe_composition_actual_admin_and_dev_loop,
     "input-worker-observe"
 );
+
+scenario!(worker_stop_composition_waiting, "input-stop-waiting");
+
+scenario!(worker_stop_composition_checking, "input-stop-checking");
+
+scenario!(worker_stop_composition_accepted, "input-stop-accepted");
+
+scenario!(worker_stop_composition_source, "input-stop-source");
+
+scenario!(worker_stop_composition_active, "input-stop-active");
+
+scenario!(worker_stop_composition_transfer, "input-stop-transfer");
+
+scenario!(
+    worker_stop_composition_gate_pressure,
+    "input-stop-gate-pressure"
+);
+
+scenario!(
+    worker_stop_composition_admin_pressure,
+    "input-stop-admin-pressure"
+);
+
+scenario!(worker_stop_composition_early_eof, "input-stop-early-eof");
+
+scenario!(
+    worker_stop_composition_accepted_eof,
+    "input-stop-accepted-eof"
+);
+
+scenario!(worker_stop_composition_gate_eof, "input-stop-gate-eof");
+
+scenario!(
+    worker_stop_composition_trace_failure,
+    "input-stop-trace-failure"
+);
+
+scenario!(worker_stop_composition_next, "input-stop-next");
+
+scenario!(
+    worker_stop_composition_actual_admin_and_worker,
+    "input-worker-stop-active"
+);
+scenario!(
+    worker_stop_composition_trace_pressure,
+    "input-stop-trace-pressure"
+);
+scenario!(worker_stop_composition_trace_eof, "input-stop-trace-eof");
