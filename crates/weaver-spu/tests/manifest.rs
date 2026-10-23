@@ -116,7 +116,18 @@ const VOCAB_PREFIX: &str = "WEAVER_VOCAB_";
 /// would put a parser in the dependency set of a crate whose Spec section 1.1
 /// argues every dependency it takes.
 fn read_target(path: &Path) -> (BTreeSet<String>, BTreeSet<String>) {
-    let source = fs::read_to_string(path).expect("the source reads");
+    let mut source = fs::read_to_string(path).expect("the source reads");
+    if path.file_name().is_some_and(|name| name == "entry.rs") {
+        // These modules compile in the entry target, so section 1.2's entry
+        // row must account for their fixture reads and feature gates too.
+        for child in ["entry/ste100.rs", "common/ste100_fixture.rs"] {
+            source.push('\n');
+            source.push_str(
+                &fs::read_to_string(path.parent().unwrap().join(child))
+                    .expect("the entry child source reads"),
+            );
+        }
+    }
     let bytes = source.as_bytes();
 
     let mut fixtures = BTreeSet::new();
@@ -154,7 +165,7 @@ fn read_target(path: &Path) -> (BTreeSet<String>, BTreeSet<String>) {
     // writes `cuda, gguf` and `two_card.rs` writes `gguf, cuda`, and a string
     // comparison would call that a difference.
     let mut gate = BTreeSet::new();
-    if let Some(line) = source.lines().find(|l| l.starts_with("#![cfg(")) {
+    for line in source.lines().filter(|line| line.starts_with("#![cfg(")) {
         let mut at = 0;
         while let Some(offset) = line[at..].find("feature = \"") {
             let start = at + offset + "feature = \"".len();
@@ -336,4 +347,52 @@ fn ste100_binary_set() {
             .lines()
             .any(|line| line.trim() == "path = \"src/lib.rs\"")
     );
+}
+
+struct NestedEntrySources(std::path::PathBuf);
+impl NestedEntrySources {
+    fn new(entry: &str, fixture: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "weaver-spu-manifest-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        fs::create_dir_all(root.join("entry")).unwrap();
+        fs::create_dir_all(root.join("common")).unwrap();
+        fs::write(root.join("entry.rs"), "// entry target\n").unwrap();
+        fs::write(root.join("entry/ste100.rs"), entry).unwrap();
+        fs::write(root.join("common/ste100_fixture.rs"), fixture).unwrap();
+        Self(root)
+    }
+}
+impl Drop for NestedEntrySources {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn entry_manifest_includes_fixture_reads_from_both_nested_sources() {
+    let files = NestedEntrySources::new(
+        "const MODEL: &str = \"WEAVER_ENTRY_MODEL\";\n",
+        "const CORPUS: &str = \"WEAVER_ENTRY_CORPUS\";\n",
+    );
+    let (fixtures, gates) = read_target(&files.0.join("entry.rs"));
+    assert_eq!(
+        fixtures,
+        BTreeSet::from(["WEAVER_ENTRY_MODEL".into(), "WEAVER_ENTRY_CORPUS".into()])
+    );
+    assert!(gates.is_empty());
+}
+
+#[test]
+fn entry_manifest_includes_each_nested_source_feature_gate() {
+    let files = NestedEntrySources::new(
+        "#![cfg(feature = \"cuda\")]\n",
+        "#![cfg(feature = \"gguf\")]\n",
+    );
+    let (fixtures, gates) = read_target(&files.0.join("entry.rs"));
+    assert!(fixtures.is_empty());
+    assert_eq!(gates, BTreeSet::from(["cuda".into(), "gguf".into()]));
 }

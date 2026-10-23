@@ -115,23 +115,19 @@ impl<B> RetainedBackend<B> {
 ///
 /// ```compile_fail
 /// use weaver_spu::ste100::admission::ValidatedBootstrap;
-/// use weaver_types::state_flow::{DecimalU64, Ste100Bootstrap};
+/// use weaver_types::state_flow::Ste100Bootstrap;
 /// fn forge(bootstrap: Ste100Bootstrap) -> ValidatedBootstrap {
-///     ValidatedBootstrap { bootstrap, launch_limit: DecimalU64(1) }
+///     ValidatedBootstrap { bootstrap }
 /// }
 /// ```
 #[derive(Debug, PartialEq)]
 pub struct ValidatedBootstrap {
     bootstrap: Ste100Bootstrap,
-    launch_limit: DecimalU64,
 }
 
 impl ValidatedBootstrap {
     pub fn bootstrap(&self) -> &Ste100Bootstrap {
         &self.bootstrap
-    }
-    pub fn launch_limit(&self) -> DecimalU64 {
-        self.launch_limit
     }
 }
 
@@ -164,6 +160,8 @@ pub struct VerifiedArtifacts {
     manifest: Ste100ModelManifest,
     grammar: Vec<u8>,
     conditions: Vec<u8>,
+    #[cfg(test)]
+    grammar_lifetime: Arc<()>,
 }
 
 impl VerifiedArtifacts {
@@ -189,6 +187,12 @@ impl VerifiedArtifacts {
 
     pub fn conditions(&self) -> &[u8] {
         &self.conditions
+    }
+
+    /// Test-only ownership witness; it exposes no grammar bytes or admission authority.
+    #[cfg(test)]
+    pub(super) fn grammar_lifetime(&self) -> std::sync::Weak<()> {
+        Arc::downgrade(&self.grammar_lifetime)
     }
 }
 
@@ -234,6 +238,12 @@ pub trait AdapterAdmission: SealedAdapter {
     type Backend;
 
     fn kind(&self) -> AdapterKind;
+
+    /// Static absence of an implementation can refuse before artifact acquisition.
+    /// This does not certify compatibility or replace actual adapter admission.
+    fn is_available(&self) -> bool {
+        true
+    }
 
     fn admit(
         &self,
@@ -341,10 +351,7 @@ pub fn validate_bootstrap(
     bootstrap
         .validate(launch_limit)
         .map_err(|error| refused(Ste100AdmissionCode::InvalidInstruction, error.to_string()))?;
-    Ok(ValidatedBootstrap {
-        bootstrap,
-        launch_limit,
-    })
+    Ok(ValidatedBootstrap { bootstrap })
 }
 
 /// Exercise a production adapter with supplied bytes in test builds only.
@@ -443,6 +450,12 @@ fn admit_validated_path<A: AdapterAdmission>(
     fixture: bool,
 ) -> Result<Admitted<A::Backend>, Ste100AdmissionRefused> {
     let scheme = verify_scheme(bootstrap.bootstrap, fixture)?;
+    if !adapter.is_available() {
+        return Err(refused(
+            Ste100AdmissionCode::UnsupportedArtifact,
+            "no compatible STE100 adapter is compiled into this executable",
+        ));
+    }
     // The opaque owner checked this exact immutable instruction. Cheap scheme
     // checks precede filesystem access; compatibility precedes named input reads.
     let acquired = super::artifacts::AcquiredArtifacts::acquire_compatible(
@@ -536,6 +549,8 @@ impl VerifiedScheme {
             manifest,
             grammar: self.grammar,
             conditions: self.conditions,
+            #[cfg(test)]
+            grammar_lifetime: Arc::new(()),
         }
     }
 }
@@ -561,13 +576,9 @@ fn verify_scheme(
     let (grammar, conditions) = scheme
         .validate_and_decode(&declaration.artifact_sha256, &declaration)
         .map_err(|error| refused(Ste100AdmissionCode::InvalidGrammar, error.to_string()))?;
-    if sha256(&grammar) != scheme.grammar.sha256 || sha256(&conditions) != scheme.conditions.sha256
-    {
-        return Err(refused(
-            Ste100AdmissionCode::InvalidGrammar,
-            "grammar blob digest mismatch",
-        ));
-    }
+    scheme
+        .verify_decoded_blobs(&grammar, &conditions, sha256)
+        .map_err(|error| refused(Ste100AdmissionCode::InvalidGrammar, error.to_string()))?;
     if !fixture
         && [
             scheme.reference.edition.as_str(),
