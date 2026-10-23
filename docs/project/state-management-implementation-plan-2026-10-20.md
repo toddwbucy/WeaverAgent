@@ -39,14 +39,17 @@ The next drafts stack from this baseline, each on its preceding carrier:
 | #269 code/state-placement-owner | Dormant measured placement, generation confirmation, native marks, queued Cut and Staged carry; decoder-health and extracted-Boot cancellation guards. Harness 1,668/18 ignored, trace 160, 67 protective controls and required lint/fmt/lock pass. Production admission, lifecycle/selection and qualification remain owed. |
 | #270 code/state-release-repair-review | #265/#266 review consistency: exact release-mark/original custody, typed boot/placement debt, monotone refused-pair causes, exact errors and retained settled proofs. Harness 1,678/18 ignored, trace 160, 19 protective controls, one separate non-Clone pin and required lint/fmt/lock pass; no #263 counting change or serving activation. |
 | #271 code/state-boot-rollback-custody | Completed Boot evidence remains truthful after revocation; extracted pre-install proof returns its original owner for bounded rollback. Harness 1,694/18 ignored, trace 160, 19 protective controls, a separate installed-borrow type pin and required lint/fmt/lock pass. Full boot/lifecycle composition and qualified cutover remain owed. |
-| code/state-ste100-runtime | Separate dormant duty process, retained backend/input ownership, bounded reactor handoffs and artifact/codec review corrections. Types 168 default/224 config, SPU cuda,gguf 380, admin 498/37 ignored and harness 1,694/18 ignored pass; 48 behavior probes plus manifest/reporting controls fail and exact restores pass. Production has no compatible compiled adapter and cannot return Ready. Worker wiring and qualified artifacts/limits remain owed. |
+| #272 code/state-ste100-runtime | Separate dormant duty process, retained backend/input ownership, bounded reactor handoffs and artifact/codec review corrections. Types 168 default/224 config, SPU cuda,gguf 380, admin 498/37 ignored and harness 1,694/18 ignored pass; 48 behavior probes plus manifest/reporting controls fail and exact restores pass. Production has no compatible compiled adapter and cannot return Ready. Worker wiring and qualified artifacts/limits remain owed. |
+| code/state-place-stop-returns | Returns exact cancelled reload custody and settles completed native marks after turn-scoped Stop. Nine actual-owner tests, harness 1,703/18 ignored, trace 160 and 14 compiled protective failures with restored passes. #269 fix rows 1-2 addressed for review; worker composition, remaining review rows and qualification remain owed. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
 
 #269 Planner review 5624951821 found two fix rows: cancelled reload can strand
 Staged or returned inputs, and cancelled native marks can block later turn work.
-Both remain open in a separate followup, along with its batch and filed rows.
+The place-stop-returns followup addresses both for review above exact #272
+044d1049. The original #269 head is unchanged and retains its grade until the
+followup is reviewed and joined. Its batch and filed rows remain tracked.
 #270 review 5625064169 has zero fix rows and its Codex code review is complete
 without findings at 51a54907; the Planner undrafted it. Its seven batch rows
 remain tracked, and it still depends on #269. The boot rollback slice answers

@@ -72,6 +72,37 @@ pub(in crate::flow) enum ReloadCompletion {
     Refused(PlaceAccount),
     Cancelled(PlaceAccount),
 }
+/// Original no-mutation inputs and the already-filed prefix of their tail.
+/// A rejection stays explicit; conversion never retries a rejected source.
+#[derive(Debug)]
+pub(in crate::flow) struct ReturnedReloadInputs {
+    pub prefix: PreparedPrefix,
+    pub original_tail: ReloadTail,
+    pub resolved: Vec<Arc<crate::flow::material::SelectedUnit>>,
+    pub rejected: Option<crate::flow::ledger::SourceDisposition>,
+}
+impl ReturnedReloadInputs {
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn into_retry(self) -> Result<(PreparedPrefix, ReloadTail), Self> {
+        if self.rejected.is_some() {
+            return Err(self);
+        }
+        let Self {
+            prefix,
+            mut original_tail,
+            resolved,
+            rejected: _,
+        } = self;
+        for (index, unit) in resolved.into_iter().enumerate() {
+            let original =
+                std::mem::replace(&mut original_tail.items[index], ReloadItem::Held(unit));
+            if let ReloadItem::Pending(pending) = original {
+                original_tail.filed_sources.push((index, pending));
+            }
+        }
+        Ok((prefix, original_tail))
+    }
+}
 #[derive(Debug)]
 pub(in crate::flow) struct PlaceAccount {
     work: AccountWork,
@@ -130,11 +161,41 @@ impl PlaceAccount {
     pub(in crate::flow) fn take_staged(&mut self) -> Option<Staged> {
         match &mut self.work {
             AccountWork::Place(w) => w.staged.take(),
+            AccountWork::Reload(w)
+                if w.done
+                    && w.incomplete.is_none()
+                    && w.staged
+                        .as_ref()
+                        .is_some_and(|staged| staged.recorded.is_some()) =>
+            {
+                w.staged.take()
+            }
             AccountWork::Generation(w) if w.confirmed.is_none() && w.reservation.is_none() => {
                 w.grant.as_mut().and_then(|g| g.staged.take())
             }
             _ => None,
         }
+    }
+    pub(in crate::flow) fn take_reload_inputs(&mut self) -> Option<ReturnedReloadInputs> {
+        let AccountWork::Reload(work) = &mut self.work else {
+            return None;
+        };
+        // A confirmed cut owns Staged, even after that capability is taken.
+        // Failed/incomplete exchange custody remains trace-only.
+        if !work.done
+            || work.cut_confirmed
+            || work.incomplete.is_some()
+            || work.prefix.is_none()
+            || work.tail.is_none()
+        {
+            return None;
+        }
+        Some(ReturnedReloadInputs {
+            prefix: work.prefix.take().unwrap(),
+            original_tail: work.tail.take().unwrap(),
+            resolved: std::mem::take(&mut work.units),
+            rejected: work.rejected.take(),
+        })
     }
     pub(in crate::flow) fn take_unplaced_selection(
         &mut self,
@@ -258,8 +319,9 @@ pub(super) struct GenerationTransaction {
 }
 #[derive(Debug)]
 pub(super) struct ReloadTransaction {
-    prefix: PreparedPrefix,
-    tail: ReloadTail,
+    // Taken only from a settled no-mutation account; live work retains both.
+    prefix: Option<PreparedPrefix>,
+    tail: Option<ReloadTail>,
     units: Vec<Arc<crate::flow::material::SelectedUnit>>,
     frozen_sources: Vec<SourceBlockId>,
     bound: Option<AbsoluteBound>,
@@ -271,6 +333,7 @@ pub(super) struct ReloadTransaction {
     author: Option<PlaceAuthor>,
     recorded_authors: Vec<Sequence>,
     staged: Option<Staged>,
+    cut_confirmed: bool,
     driving: bool,
     cancelled: bool,
     done: bool,

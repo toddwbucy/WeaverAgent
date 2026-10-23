@@ -431,8 +431,12 @@ impl RecordingContext {
             return Ok(PlaceProgress::Progress);
         }
         let work = self.native_marks.as_mut().unwrap();
-        if !work.cancelled {
-            self.place_engine.as_mut().unwrap().native = work.next.take().unwrap();
+        // All admitted positions now have their actual Recorded receipts. Stop
+        // revokes continuation, not these committed facts. Preserve the original
+        // proposal until extraction (Stop may arrive after completion), while
+        // publishing the same scope proof. Teardown uses its trace-only path.
+        if self.phase == RecordingPhase::Entered {
+            self.place_engine.as_mut().unwrap().native = work.next.as_ref().unwrap().clone();
         }
         work.done = true;
         Ok(PlaceProgress::Complete)
@@ -521,6 +525,33 @@ impl RecordingContext {
             prerequisite: work.prerequisite,
             positions: work.registered,
             recorded: work.recorded,
+        }))
+    }
+
+    /// A settled cancellation can leave Entered without resetting its original
+    /// wait or granting another turn. Failed/Releasing keep their account path.
+    pub(in crate::flow) fn take_cancelled_place_marks(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<Option<PlaceAccount>, RunFailure> {
+        self.live(io)?;
+        if self.phase != RecordingPhase::Entered
+            || !self.native_marks.as_ref().is_some_and(|work| {
+                work.done
+                    && work.cancelled
+                    && work.incomplete.is_none()
+                    && work.author.is_none()
+                    && work.positions.is_empty()
+                    && work.registered.len() == work.recorded.len()
+            })
+        {
+            return Ok(None);
+        }
+        let work = self.native_marks.take().unwrap();
+        self.barrier.set_place_owed(self.place_owed());
+        Ok(Some(PlaceAccount {
+            work: AccountWork::Native(Box::new(work)),
+            measure: None,
         }))
     }
 
@@ -726,6 +757,12 @@ impl PlaceAccount {
     pub(in crate::flow) fn native_prerequisite(&self) -> Option<&EffectPlanSummary> {
         match &self.work {
             AccountWork::Native(work) => Some(&work.prerequisite),
+            _ => None,
+        }
+    }
+    pub(in crate::flow) fn native_proposal(&self) -> Option<&NativeScopes> {
+        match &self.work {
+            AccountWork::Native(work) => work.next.as_ref(),
             _ => None,
         }
     }

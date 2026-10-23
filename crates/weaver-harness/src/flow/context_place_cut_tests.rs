@@ -724,7 +724,7 @@ fn place_pending_output_lease_preserves_preclassification_acceptance_and_correct
         }
         fx.close_turn();
         if reject {
-            let ReloadCompletion::Refused(account) = fx.finish_reload() else {
+            let ReloadCompletion::Refused(mut account) = fx.finish_reload() else {
                 panic!("correctly rejected pending Text must refuse reload");
             };
             assert_eq!(
@@ -735,6 +735,26 @@ fn place_pending_output_lease_preserves_preclassification_acceptance_and_correct
             assert!(receive(fx.peer.as_fd()).is_none());
             assert_eq!(fx.records(Kind::Flush).len(), 0);
             assert!(fx.summary.files.is_empty());
+            let inputs = account
+                .take_reload_inputs()
+                .expect("rejection returns original input custody");
+            assert!(matches!(
+                inputs.rejected.as_ref(),
+                Some(crate::flow::ledger::SourceDisposition::CorrectlyRejected(_))
+            ));
+            assert!(
+                inputs.resolved.is_empty(),
+                "rejected Text never becomes a held selected unit"
+            );
+            assert!(matches!(
+                &inputs.original_tail.items[0],
+                ReloadItem::Pending(_)
+            ));
+            let rejected = inputs
+                .into_retry()
+                .expect_err("retry cannot silently accept or drop rejected Text");
+            assert!(rejected.rejected.is_some());
+            assert!(account.take_reload_inputs().is_none());
         } else {
             if !queue_after_terminal {
                 for _ in 0..4 {
@@ -813,3 +833,6 @@ fn place_queued_unmarked_prefix_keeps_original_endpoint_instead_of_later_current
     assert_eq!(fx.journal().1, earlier_resident);
     assert_eq!(fx.journal().6, earlier_messages);
 }
+
+#[path = "context_place_reload_return_tests.rs"]
+mod return_review_tests;

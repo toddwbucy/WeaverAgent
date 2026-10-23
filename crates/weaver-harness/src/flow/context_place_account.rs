@@ -128,7 +128,7 @@ impl RecordingContext {
                     .boot_journal
                     .as_ref()
                     .unwrap()
-                    .check_projection(&w.prefix.projection)
+                    .check_projection(&w.prefix.as_ref().unwrap().projection)
                     .is_err()
             {
                 return Err(RunFailure::PlaceOwned);
@@ -608,7 +608,15 @@ impl RecordingContext {
                         && received.after_send()
                         && r.sent()
                         && !decode.reservation_invalid(r);
-                    let method = self.reload.as_ref().unwrap().prefix.method.unwrap();
+                    let method = self
+                        .reload
+                        .as_ref()
+                        .unwrap()
+                        .prefix
+                        .as_ref()
+                        .unwrap()
+                        .method
+                        .unwrap();
                     let counts = match (method, received.reply()) {
                         (
                             CutMethod::Flush,

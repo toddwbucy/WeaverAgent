@@ -108,8 +108,8 @@ impl RecordingContext {
         }
         self.barrier.set_place_owed(true);
         self.reload = Some(ReloadTransaction {
-            prefix,
-            tail,
+            prefix: Some(prefix),
+            tail: Some(tail),
             units: vec![],
             frozen_sources: vec![],
             bound: None,
@@ -121,6 +121,7 @@ impl RecordingContext {
             author: None,
             recorded_authors: vec![],
             staged: None,
+            cut_confirmed: false,
             driving: false,
             cancelled: false,
             done: false,
@@ -186,9 +187,9 @@ impl RecordingContext {
                 .boot_journal
                 .as_ref()
                 .unwrap()
-                .reprepare_queued(&self.reload.as_ref().unwrap().prefix)
+                .reprepare_queued(self.reload.as_ref().unwrap().prefix.as_ref().unwrap())
             {
-                Ok(fresh) => self.reload.as_mut().unwrap().prefix = fresh,
+                Ok(fresh) => self.reload.as_mut().unwrap().prefix = Some(fresh),
                 Err(_) => {
                     self.refuse_reload_placement(
                         PlacementCode::InvalidCut,
@@ -288,7 +289,7 @@ impl RecordingContext {
             }
             let work = self.reload.as_ref().unwrap();
             let reply = work.received.as_ref().unwrap().reply();
-            let counts = match (work.prefix.method.unwrap(), reply) {
+            let counts = match (work.prefix.as_ref().unwrap().method.unwrap(), reply) {
                 (
                     CutMethod::Flush,
                     DecodeReply::Answer(TokenAnswer::Flushed {
@@ -399,9 +400,9 @@ impl RecordingContext {
                     .boot_journal
                     .as_ref()
                     .unwrap()
-                    .refresh_drained_prefix(&self.reload.as_ref().unwrap().prefix)
+                    .refresh_drained_prefix(self.reload.as_ref().unwrap().prefix.as_ref().unwrap())
                 {
-                    Ok(fresh) => self.reload.as_mut().unwrap().prefix = fresh,
+                    Ok(fresh) => self.reload.as_mut().unwrap().prefix = Some(fresh),
                     Err(_) => {
                         self.refuse_reload_placement(
                             PlacementCode::StalePosition,
@@ -415,7 +416,10 @@ impl RecordingContext {
                 let work = self.reload.as_ref().unwrap();
                 let journal = self.boot_journal.as_ref().unwrap();
                 if journal
-                    .validate_selection(&work.prefix.projection, work.units.iter().map(Arc::as_ref))
+                    .validate_selection(
+                        &work.prefix.as_ref().unwrap().projection,
+                        work.units.iter().map(Arc::as_ref),
+                    )
                     .is_err()
                 {
                     self.refuse_reload_placement(
@@ -426,14 +430,14 @@ impl RecordingContext {
                     )?;
                     return Ok(PlaceProgress::Progress);
                 }
-                let mut delta = work.prefix.rebuild();
+                let mut delta = work.prefix.as_ref().unwrap().rebuild();
                 for unit in &work.units {
                     delta.extend(unit.messages().iter().cloned());
                 }
                 let request = MeasureRequest {
-                    assembly_id: work.prefix.assembly,
-                    revision: work.prefix.revision(),
-                    keep: work.prefix.n(),
+                    assembly_id: work.prefix.as_ref().unwrap().assembly,
+                    revision: work.prefix.as_ref().unwrap().revision(),
+                    keep: work.prefix.as_ref().unwrap().n(),
                     delta,
                     tool_schemas: self.place_engine.as_ref().unwrap().schemas.clone(),
                     turn: None,
@@ -501,7 +505,7 @@ impl RecordingContext {
             .boot_journal
             .as_ref()
             .unwrap()
-            .check_projection(&work.prefix.projection)
+            .check_projection(&work.prefix.as_ref().unwrap().projection)
             .is_err()
         {
             self.refuse_reload_placement(
@@ -512,7 +516,7 @@ impl RecordingContext {
             )?;
             return Ok(PlaceProgress::Progress);
         }
-        let directive = match work.prefix.method.unwrap() {
+        let directive = match work.prefix.as_ref().unwrap().method.unwrap() {
             CutMethod::Flush => TokenDirective::Flush { keep: facts.keep },
             CutMethod::Elide if facts.keep == facts.resident => {
                 self.confirm_reload_cut(facts.resident, facts.keep, false, ports.io)?;
@@ -541,13 +545,13 @@ impl RecordingContext {
             return Err(RunFailure::PlaceOwned);
         };
         let fatal = matches!(refusal, TokenRefusal::NotOpen | TokenRefusal::OutOfOrder);
-        let asked = match work.prefix.method.unwrap() {
+        let asked = match work.prefix.as_ref().unwrap().method.unwrap() {
             CutMethod::Flush => TokenAsk::Flush {
-                keep: work.prefix.n(),
+                keep: work.prefix.as_ref().unwrap().n(),
             },
             CutMethod::Elide => TokenAsk::Elide {
-                from: work.prefix.n(),
-                to: work.prefix.resident_before(),
+                from: work.prefix.as_ref().unwrap().n(),
+                to: work.prefix.as_ref().unwrap().resident_before(),
             },
         };
         let record = RefusalRecord::Decode {
@@ -584,7 +588,7 @@ impl RecordingContext {
         work.reload_code = Some(reload_code);
         work.reload_detail = Some(detail.into());
         let record = RefusalRecord::Placement {
-            assembly_id: work.prefix.assembly,
+            assembly_id: work.prefix.as_ref().unwrap().assembly,
             code,
             detail: detail.into(),
         };
@@ -606,11 +610,11 @@ impl RecordingContext {
     }
     fn reload_tail_ready(&mut self, io: &mut impl PumpIo) -> Result<bool, RunFailure> {
         let work = self.reload.as_mut().unwrap();
-        for index in 0..work.tail.items.len() {
+        for index in 0..work.tail.as_ref().unwrap().items.len() {
             if index < work.units.len() {
                 continue;
             }
-            match &work.tail.items[index] {
+            match &work.tail.as_ref().unwrap().items[index] {
                 ReloadItem::Held(unit) => work.units.push(unit.clone()),
                 ReloadItem::Pending(pending) => {
                     let status = self
@@ -671,7 +675,7 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         let work = self.reload.as_ref().unwrap();
-        let method = work.prefix.method.unwrap();
+        let method = work.prefix.as_ref().unwrap().method.unwrap();
         let actual = if mutated {
             work.received
                 .as_ref()
@@ -698,8 +702,8 @@ impl RecordingContext {
         let measured = matches!(work.measurement.as_ref(),Some(MeasureCompletion::Measured(m)) if m.facts().resident==before&&m.facts().keep==after);
         if !actual
             || !measured
-            || before != work.prefix.resident_before()
-            || after != work.prefix.n()
+            || before != work.prefix.as_ref().unwrap().resident_before()
+            || after != work.prefix.as_ref().unwrap().n()
         {
             return Err(self.place_fault(
                 io,
@@ -707,7 +711,7 @@ impl RecordingContext {
             ));
         }
         let checked = CheckedCut {
-            prefix: &work.prefix,
+            prefix: work.prefix.as_ref().unwrap(),
             before,
             after,
         };
@@ -726,17 +730,18 @@ impl RecordingContext {
         };
         let facts = *measured.facts();
         let identity = Arc::new(());
-        let method = work.prefix.method.unwrap();
+        let method = work.prefix.as_ref().unwrap().method.unwrap();
         work.staged = Some(Staged {
             identity: identity.clone(),
             origin: self.read_origin.clone(),
-            assembly: work.prefix.assembly,
+            assembly: work.prefix.as_ref().unwrap().assembly,
             units: work.units.clone(),
             measured: facts,
             resident_after: after,
             recorded: None,
             method,
         });
+        work.cut_confirmed = true;
         self.place_engine.as_mut().unwrap().staged = Some(identity);
         if mutated {
             let (kind, payload) = match method {
@@ -767,10 +772,10 @@ impl RecordingContext {
         }
         let limits = self.place_engine.as_ref().unwrap().limits();
         let record = t::PlacementRecord {
-            assembly_id: work.prefix.assembly.0.into(),
+            assembly_id: work.prefix.as_ref().unwrap().assembly.0.into(),
             phase: t::PlacementPhase::Cut,
             context: None,
-            cut: work.prefix.cut.as_ref().map(cut_mirror),
+            cut: work.prefix.as_ref().unwrap().cut.as_ref().map(cut_mirror),
             method: Some(method_mirror(method)),
             n: after,
             prefix_tokens: facts.prefix_tokens,
@@ -782,7 +787,7 @@ impl RecordingContext {
             unit_map: vec![],
             message_ids: vec![],
             assistant_message_id: None,
-            recomputed_messages: (work.prefix.rebuild().len() as u64).into(),
+            recomputed_messages: (work.prefix.as_ref().unwrap().rebuild().len() as u64).into(),
             wait_ns: self.last_ns.saturating_sub(work.started_ns.unwrap()).into(),
             open_evidence: None,
         };
