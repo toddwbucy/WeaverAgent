@@ -187,6 +187,9 @@ impl LifecycleListener {
         self.accepted_ns = None;
         Some((peer, at))
     }
+    pub(super) fn gate_socket(&self) -> std::path::PathBuf {
+        self.listener.gate_socket()
+    }
     pub(super) fn unlink(&self) {
         self.listener.unlink();
     }

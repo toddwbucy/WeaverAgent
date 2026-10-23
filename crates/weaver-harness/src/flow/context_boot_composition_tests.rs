@@ -299,6 +299,18 @@ fn circuit_with_fixture(
                 assert_eq!(completed.context.origin_ns(), origin);
                 assert!(completed.decode.held().is_none());
                 assert!(completed.context.input.snapshot().is_none());
+                if let Ok(mode) = std::env::var("WEAVER_GATE_STARTUP_DRIVER") {
+                    assert!(
+                        actual_child && actual_spu,
+                        "gate instrument uses actual prior forks"
+                    );
+                    super::gate_startup::tests::drive(
+                        completed,
+                        &mut fx.input.run.clock,
+                        actual_residency.as_deref_mut(),
+                        &mode,
+                    );
+                }
             }
             return;
         }

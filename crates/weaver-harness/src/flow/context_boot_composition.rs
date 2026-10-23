@@ -368,3 +368,6 @@ impl<'a> BootComposition<'a> {
 #[cfg(test)]
 #[path = "context_boot_composition_tests.rs"]
 pub(super) mod tests;
+
+#[path = "context_gate_startup.rs"]
+pub(in crate::flow) mod gate_startup;

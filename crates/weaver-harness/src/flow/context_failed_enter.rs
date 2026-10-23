@@ -20,7 +20,7 @@ use weaver_types::{
 #[path = "failed_enter_process.rs"]
 mod process;
 pub(in crate::flow) use process::ChildState;
-use process::OwnedChild;
+pub(in crate::flow::context) use process::OwnedChild;
 
 /// Created by this context, then populated only by actual fork producers.
 /// There is no PID/descriptor adoption constructor for a fabricated child.
