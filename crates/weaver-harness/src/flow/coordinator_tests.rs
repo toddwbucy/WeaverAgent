@@ -2379,7 +2379,7 @@ fn held_classifier_admission(
         scheme_text: seed.ste100_scheme,
         instruction: s::Ste100Instruction {
             model_binding: weaver_types::ModelBinding {
-                artifact: weaver_types::ArtifactRef("synthetic-admission-fixture".into()),
+                artifact: weaver_types::ArtifactRef("/synthetic/admission-manifest.json".into()),
                 devices: vec![weaver_types::DeviceOrdinal(0)],
             },
             model_artifact_sha256: seed.checker_artifact_sha256,

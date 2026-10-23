@@ -36,9 +36,9 @@ impl Ste100Instruction {
         if self.instances == 0 || self.measurement_ref.is_empty() {
             return Err(ValidationError("invalid STE100 instances or measurement"));
         }
+        Self::validate_artifact_locator(&self.model_binding.artifact.0)?;
         let mut devices = BTreeSet::new();
-        if self.model_binding.artifact.0.is_empty()
-            || self.model_binding.devices.is_empty()
+        if self.model_binding.devices.is_empty()
             || self
                 .model_binding
                 .devices
@@ -49,6 +49,17 @@ impl Ste100Instruction {
         }
         self.repair_cap.validate()?;
         self.decision_wait.validate()
+    }
+
+    /// Syntax only: the SPU resolves and pins the exact manifest as the agent uid.
+    /// In particular, parent components and symlinked ancestors are not normalized.
+    pub(crate) fn validate_artifact_locator(locator: &str) -> Result<(), ValidationError> {
+        if locator.contains('\0') || !std::path::Path::new(locator).is_absolute() {
+            return Err(ValidationError(
+                "STE100 artifact must be an absolute manifest pathname",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -563,8 +574,7 @@ fn base64_digit(byte: u8) -> Result<u8, ValidationError> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Ste100ModelManifest {
     pub format: String,
     pub checker_abi: String,
@@ -576,19 +586,79 @@ pub struct Ste100ModelManifest {
     pub labels: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+impl<'de> Deserialize<'de> for Ste100ModelManifest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            format: String,
+            checker_abi: String,
+            encoder: EncoderArtifact,
+            tokenizer: ArtifactFile,
+            span_head: ArtifactFile,
+            alignment: String,
+            max_sentence_tokens: u32,
+            labels: Vec<String>,
+        }
+        let fields: Fields = super::codec::deserialize_object(deserializer)?;
+        Ok(Self {
+            format: fields.format,
+            checker_abi: fields.checker_abi,
+            encoder: fields.encoder,
+            tokenizer: fields.tokenizer,
+            span_head: fields.span_head,
+            alignment: fields.alignment,
+            max_sentence_tokens: fields.max_sentence_tokens,
+            labels: fields.labels,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EncoderArtifact {
     pub family: String,
     pub config: ArtifactFile,
     pub weights: Vec<ArtifactFile>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+impl<'de> Deserialize<'de> for EncoderArtifact {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            family: String,
+            config: ArtifactFile,
+            weights: Vec<ArtifactFile>,
+        }
+        let fields: Fields = super::codec::deserialize_object(deserializer)?;
+        Ok(Self {
+            family: fields.family,
+            config: fields.config,
+            weights: fields.weights,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ArtifactFile {
     pub name: String,
     pub sha256: Digest,
+}
+
+impl<'de> Deserialize<'de> for ArtifactFile {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            name: String,
+            sha256: Digest,
+        }
+        let fields: Fields = super::codec::deserialize_object(deserializer)?;
+        Ok(Self {
+            name: fields.name,
+            sha256: fields.sha256,
+        })
+    }
 }
 
 impl ArtifactFile {
@@ -655,6 +725,155 @@ mod tests {
                 r#"{"elapsed_ns":"1","measurement_ref":"fixture"}"#,
             )
             .unwrap(),
+        }
+    }
+
+    #[test]
+    fn ste100_instruction_requires_an_absolute_manifest_locator_without_rewriting_it() {
+        for locator in [
+            "/models/checker",
+            "/models/checker-manifest.json",
+            "/models/linked-parent/../checker.json",
+            "/models/./checker.json",
+            "/models//checker.json",
+            "/models/a manifest.json",
+        ] {
+            let mut instruction = instruction();
+            instruction.model_binding.artifact.0 = locator.into();
+            let wire = serde_json::to_string(&instruction).unwrap();
+            let decoded: Ste100Instruction = super::super::decode_strict(&wire).unwrap();
+            assert!(decoded.validate().is_ok(), "{locator:?}");
+            assert_eq!(decoded.model_binding.artifact.0, locator);
+            let bootstrap = Ste100Bootstrap {
+                protocol: STE100_PROTOCOL.into(),
+                scheme_text: "{}".into(),
+                instruction: decoded,
+            };
+            assert!(bootstrap.validate(DecimalU64(65536)).is_ok());
+        }
+        for locator in [
+            "",
+            "checker.json",
+            "./checker.json",
+            "../checker.json",
+            "~/checker.json",
+            " /models/checker.json",
+            "C:\\models\\checker.json",
+            "/models/checker\0.json",
+        ] {
+            let mut instruction = instruction();
+            instruction.model_binding.artifact.0 = locator.into();
+            assert!(instruction.validate().is_err(), "{locator:?}");
+            // The independently supplied bootstrap uses the same syntax check.
+            let bootstrap = Ste100Bootstrap {
+                protocol: STE100_PROTOCOL.into(),
+                scheme_text: "{}".into(),
+                instruction,
+            };
+            let wire = serde_json::to_string(&bootstrap).unwrap();
+            let decoded: Ste100Bootstrap = super::super::decode_strict(&wire).unwrap();
+            assert!(decoded.validate(DecimalU64(65536)).is_err(), "{locator:?}");
+        }
+    }
+
+    fn manifest_wire() -> serde_json::Value {
+        let file = |name| serde_json::json!({"name": name, "sha256": "0".repeat(64)});
+        serde_json::json!({
+            "format": "ste100-model/1",
+            "checker_abi": "ste100-span/1",
+            "encoder": {
+                "family": "fixture",
+                "config": file("config.json"),
+                "weights": [file("weights/one"), file("weights/two")],
+            },
+            "tokenizer": file("tokenizer.json"),
+            "span_head": file("span-head"),
+            "alignment": "fixture",
+            "max_sentence_tokens": 10,
+            "labels": ["O", "B-VERB", "I-VERB", "B-NOUN", "I-NOUN", "B-COND", "I-COND"],
+        })
+    }
+
+    fn rejects_manifest_wire<T: serde::de::DeserializeOwned>(wire: &str) {
+        assert!(serde_json::from_str::<T>(wire).is_err(), "{wire}");
+        assert!(super::super::decode_strict::<T>(wire).is_err(), "{wire}");
+        let mut decoder = serde_json::Deserializer::from_str(wire);
+        assert!(T::deserialize(&mut decoder).is_err(), "{wire}");
+    }
+
+    #[test]
+    fn manifest_and_every_nested_object_reject_sequence_aliases_and_open_fields() {
+        let canonical = manifest_wire();
+        let manifest: Ste100ModelManifest = serde_json::from_value(canonical.clone()).unwrap();
+        assert!(manifest.validate().is_ok());
+        assert_eq!(serde_json::to_value(&manifest).unwrap(), canonical);
+        // The key orders below are the specified carriers, independent of serde.
+        let manifest_fields = [
+            "format",
+            "checker_abi",
+            "encoder",
+            "tokenizer",
+            "span_head",
+            "alignment",
+            "max_sentence_tokens",
+            "labels",
+        ];
+        let encoder_fields = ["family", "config", "weights"];
+        let file_fields = ["name", "sha256"];
+        for (pointer, fields) in [
+            ("", manifest_fields.as_slice()),
+            ("/encoder", encoder_fields.as_slice()),
+            ("/encoder/config", file_fields.as_slice()),
+            ("/encoder/weights/0", file_fields.as_slice()),
+            ("/encoder/weights/1", file_fields.as_slice()),
+            ("/tokenizer", file_fields.as_slice()),
+            ("/span_head", file_fields.as_slice()),
+        ] {
+            let object = canonical.pointer(pointer).unwrap();
+            let sequence = serde_json::Value::Array(
+                fields.iter().map(|field| object[*field].clone()).collect(),
+            );
+            let mut variants = vec![
+                sequence,
+                serde_json::Value::Null,
+                serde_json::json!("object"),
+            ];
+            let mut extra = object.clone();
+            extra["unlicensed"] = serde_json::json!(true);
+            variants.push(extra);
+            for field in fields {
+                let mut missing = object.clone();
+                missing.as_object_mut().unwrap().remove(*field);
+                variants.push(missing);
+                let mut null = object.clone();
+                null[*field] = serde_json::Value::Null;
+                variants.push(null);
+            }
+            for variant in variants {
+                let raw = variant.to_string();
+                match pointer {
+                    "" => rejects_manifest_wire::<Ste100ModelManifest>(&raw),
+                    "/encoder" => rejects_manifest_wire::<EncoderArtifact>(&raw),
+                    _ => rejects_manifest_wire::<ArtifactFile>(&raw),
+                }
+                let mut nested = canonical.clone();
+                *nested.pointer_mut(pointer).unwrap() = variant;
+                rejects_manifest_wire::<Ste100ModelManifest>(&nested.to_string());
+            }
+            // Build duplicates as raw JSON: Value would discard the evidence.
+            for field in fields {
+                let original = object.to_string();
+                let duplicate = format!("{{\"{field}\":{},{}", object[*field], &original[1..]);
+                match pointer {
+                    "" => rejects_manifest_wire::<Ste100ModelManifest>(&duplicate),
+                    "/encoder" => rejects_manifest_wire::<EncoderArtifact>(&duplicate),
+                    _ => rejects_manifest_wire::<ArtifactFile>(&duplicate),
+                }
+                let outer = canonical.to_string();
+                assert_eq!(outer.matches(&original).count(), 1, "{pointer}");
+                let nested = outer.replacen(&original, &duplicate, 1);
+                rejects_manifest_wire::<Ste100ModelManifest>(&nested);
+            }
         }
     }
 

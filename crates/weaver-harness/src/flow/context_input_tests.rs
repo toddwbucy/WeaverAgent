@@ -48,7 +48,7 @@ fn duty() -> (s::Ste100Bootstrap, s::SchemeDeclaration, s::Ste100Ready) {
     };
     let instruction = s::Ste100Instruction {
         model_binding: ModelBinding {
-            artifact: ArtifactRef("synthetic-input-transaction-fixture".into()),
+            artifact: ArtifactRef("/synthetic/input-transaction-manifest.json".into()),
             devices: vec![DeviceOrdinal(0)],
         },
         model_artifact_sha256: seed.checker_artifact_sha256,

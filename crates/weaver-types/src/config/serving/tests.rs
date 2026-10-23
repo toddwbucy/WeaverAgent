@@ -49,7 +49,7 @@ state-management.persistence.snapshot-wait.elapsed-ns = "120000000000"
 state-management.persistence.snapshot-wait.measurement-ref = "initial-merged-120s"
 state-management.reads.max-result-bytes = "18"
 state-management.reads.measurement-ref = "fixture-read"
-state-management.ste100.model-binding.artifact = "ste100-fixture"
+state-management.ste100.model-binding.artifact = "/synthetic/ste100-manifest.json"
 state-management.ste100.model-binding.devices = [3, 4]
 state-management.ste100.model-artifact-sha256 = "@C@"
 state-management.ste100.instances = 2
@@ -266,6 +266,48 @@ fn decimal_bounds_native_values_and_model_bindings_are_attributed() {
             .0,
         u64::MAX
     );
+}
+
+#[test]
+fn ste100_manifest_locator_has_exact_field_attribution_and_preserves_legacy_bindings() {
+    let key = "state-management.ste100.model-binding.artifact";
+    for locator in [
+        "",
+        "checker.json",
+        "./checker.json",
+        "../checker.json",
+        "~/checker.json",
+        " /models/checker.json",
+        "C:\\models\\checker.json",
+        "/models/checker\0.json",
+    ] {
+        // JSON string escaping is also valid for these TOML basic strings.
+        let value = serde_json::to_string(locator).unwrap();
+        let source = replace(&full(), key, &value);
+        assert_bad(&source, key);
+        let error = parse_serving_declaration(&source).unwrap_err();
+        assert_eq!(error.kind, ConfigErrorKind::BadValue, "{locator:?}");
+        assert_eq!(error.field, Some(FieldName(key.into())), "{locator:?}");
+    }
+    for locator in [
+        "/models/checker",
+        "/models/checker-manifest.json",
+        "/models/linked-parent/../checker.json",
+        "/models/./checker.json",
+        "/models//checker.json",
+        "/models/a manifest.json",
+    ] {
+        let value = serde_json::to_string(locator).unwrap();
+        let source = replace(&full(), key, &value);
+        let parsed = parse_serving_declaration(&source).unwrap();
+        assert_eq!(
+            parsed.state_management().ste100.model_binding.artifact.0,
+            locator
+        );
+        // The exact legacy parser result retains its relative decoder and label
+        // bindings; the new requirement belongs only to the STE100 instruction.
+        assert_eq!(parsed.agent(), &super::super::parse(COMMON).unwrap());
+    }
 }
 
 #[test]

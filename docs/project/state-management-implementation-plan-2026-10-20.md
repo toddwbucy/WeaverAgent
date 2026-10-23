@@ -25,10 +25,11 @@ The next drafts stack from this baseline, each on its preceding carrier:
 
 | Branch | Scoped implementation and remaining boundary |
 | --- | --- |
-| #255 code/state-open-evidence-carrier | Paired Opened evidence, strict harness/diagnostic checks and opaque trace placement payload. Published draft b26420e5. Full boot owner, recorded placement and fit remain owed. |
+| #255 code/state-open-evidence-carrier | Paired Opened evidence, strict harness/diagnostic checks and opaque trace placement payload. Published b26420e5; the dormant boot owner is in #258. Active worker composition remains owed. |
 | #256 code/state-plan-summary-carrier | Required digest and complete last SourcePosition across state, harness and image consumers. Published draft ddebb53c. Boot/effect cache coordinator remains owed. |
 | #257 code/state-malformed-recall-owner | Identity-bearing refusal before an inward pair, with Recorded custody and no model feedback. Published draft ee7488e6. Complete inward boot/repair and serving selection remain owed. |
-| code/state-boot-open-owner | Exact reserved Open from real BootHead, Recorded placement, checked fit/LIVE, private journal initialization and bounded stopped accounting. Worker boot composition, place/generation and qualified cutover remain owed. |
+| #258 code/state-boot-open-owner | Exact reserved Open from real BootHead, Recorded placement, checked fit/LIVE, private journal initialization and bounded stopped accounting. Published 066d51a3; Planner undrafted after its scoped grade. Review followups and worker boot composition, place/generation and qualified cutover remain owed. |
+| code/state-ste100-artifact-owner | Exact absolute manifest acquisition, confined named regular files, checked retained bytes and sealed production admission entry. Production adapters, lifecycle composition and language qualification remain owed. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
@@ -39,6 +40,35 @@ boot plus the two new nonboot checks, not every existing Cut/Append field.
 The boot owner retains valid raw JSON unchanged; recorder encoding failures
 grant no readiness. Remaining allocation and diagnostic/codec consistency work
 from that review is tracked in #146. No draft is a completed landing.
+
+#258's author gates passed 1,500 harness tests with 18 inherited ignored cases,
+types 140 default and 195 config, state 218 with eight inherited ignored cases,
+trace 160, both affected lint gates, formatting and lock. All 21 protective
+mutations compiled and failed after two cancellation fixtures were strengthened
+with actual live progress controls. The exact tested tree and evidence are
+published; this author evidence is not production qualification.
+
+The Planner found no fix-bucket rows in #256, #257 and #258 and undrafted them
+for review. Their batch follow-ups remain tracked in #146 until separately
+implemented and reviewed. The operator alone requests paid CodeRabbit reviews;
+Codex must not trigger them. All new PRs are submitted as drafts.
+
+#258's grade 5622585660 identifies two dormant failed-account edges, six distinct
+surviving behavioral probes and two redundant/tautological guards. These are
+assigned to the next review-followup slice. Its stopped-tap release composition
+must be proved before activation. Zero effective generation remains valid under
+the merged rules; a separate foundation-boot fit proposal needs operator ruling,
+review and merge before implementation. No follow-up is implied by the initial
+scoped grade or by the original 21 author mutations.
+
+The STE100 artifact owner's author gates pass 336 full SPU cuda,gguf tests,
+498 admin tests with 37 inherited ignored instruments, 1,500 harness tests with
+18 inherited ignored instruments, and types 142 default/198 config. All 24
+compiled protective mutations fail with restored controls passing. Changed-crate
+lint, formatting and lock pass. Its acquisition and retained-input proofs do not
+supply the production language artifacts, adapter or lifecycle composition.
+#258's current-head Codex code review is complete without findings; its Planner
+batch findings still travel in the separate review-followup slice.
 
 The foundation, trace and additive harness roots reached main on 2026-10-21.
 The operator merged #215 at a42d1f02, #189 at 4edf1513, #192 at aec3dcc2 and

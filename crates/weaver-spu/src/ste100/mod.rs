@@ -6,6 +6,7 @@
 //! qualifies an artifact or substitutes the sequence-label scorer for a binder.
 
 pub mod admission;
+pub mod artifacts;
 pub mod binder;
 pub mod channel;
 pub mod dispatcher;

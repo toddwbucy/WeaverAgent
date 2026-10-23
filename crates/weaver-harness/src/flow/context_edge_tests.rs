@@ -323,7 +323,7 @@ fn classifier_fixture() -> (s::Ste100Bootstrap, s::SchemeDeclaration, s::Ste100R
     };
     let instruction = s::Ste100Instruction {
         model_binding: ModelBinding {
-            artifact: ArtifactRef("synthetic-context-fixture".into()),
+            artifact: ArtifactRef("/synthetic/context-manifest.json".into()),
             devices: vec![DeviceOrdinal(0)],
         },
         model_artifact_sha256: seed.checker_artifact_sha256,

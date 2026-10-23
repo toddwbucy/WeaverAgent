@@ -1,20 +1,23 @@
 //! Byte identity and compatibility admission for the separate STE100 duty.
 //!
-//! The caller supplies already acquired bytes. This module chooses no manifest
-//! filename, opens no path, and makes no filesystem-custody or qualification claim.
+//! The declared-path entry acquires protected inputs through the artifact owner.
+//! Supplied-byte admission exists only in test builds; production proof requires
+//! acquisition of the declared path.
 //! A compiled adapter must still load the model and compile both grammars before
 //! admission can produce Ready. Fixture adapters exist only in test builds.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use sha2::{Digest as _, Sha256};
 use weaver_types::state_flow::{
     ArtifactFile, DecimalU64, Digest, STE100_PROTOCOL, SchemeDeclaration, Ste100AdmissionCode,
-    Ste100AdmissionRefused, Ste100Bootstrap, Ste100ModelManifest, Ste100Ready, Ste100Scheme,
-    decode_strict,
+    Ste100AdmissionRefused, Ste100Bootstrap, Ste100Instruction, Ste100ModelManifest, Ste100Ready,
+    Ste100Scheme, decode_strict,
 };
 
 /// An immutable file supplied by the artifact owner, under its artifact-relative name.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub struct ArtifactBytes<'a> {
     pub name: &'a str,
@@ -23,8 +26,10 @@ pub struct ArtifactBytes<'a> {
 
 /// Exact manifest bytes and the files made available by their custody owner.
 ///
-/// Supplying these bytes does not prove their filesystem origin. The eventual
-/// acquisition layer must pin the files and prevent symlink escape itself.
+/// Supplying these bytes does not prove their filesystem origin. Production
+/// bootstrap uses admit_from_path and its confined acquisition owner. This
+/// supplied-byte representation is absent from production builds.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub struct SuppliedArtifacts<'a> {
     pub manifest: &'a [u8],
@@ -33,13 +38,56 @@ pub struct SuppliedArtifacts<'a> {
 
 /// Only manifest-referenced files whose complete bytes matched their declared digest.
 #[derive(Debug)]
-pub struct VerifiedFiles<'a> {
-    files: BTreeMap<&'a str, &'a [u8]>,
+pub struct VerifiedFiles {
+    pub(super) files: BTreeMap<String, Arc<[u8]>>,
 }
 
-impl VerifiedFiles<'_> {
+impl VerifiedFiles {
     pub fn get(&self, name: &str) -> Option<&[u8]> {
-        self.files.get(name).copied()
+        self.files.get(name).map(AsRef::as_ref)
+    }
+
+    /// Retain the same checked immutable bytes for a deferred adapter read.
+    pub fn retain(&self, name: &str) -> Option<Arc<[u8]>> {
+        self.files.get(name).cloned()
+    }
+}
+
+/// Keep the admitted inputs with the backend until its last read and drop.
+/// No public operation extracts or mutably exposes the bare backend. Concrete
+/// adapter operations remain an O02-2 integration duty on this retained owner.
+///
+/// ```compile_fail
+/// use weaver_spu::ste100::admission::RetainedBackend;
+/// fn escape<B: Default>(owner: &mut RetainedBackend<B>) -> B {
+///     std::mem::take(owner.backend_mut())
+/// }
+/// ```
+/// ```compile_fail
+/// use weaver_spu::ste100::admission::RetainedBackend;
+/// fn escape<B: Clone>(owner: &RetainedBackend<B>) -> B {
+///     owner.backend().clone()
+/// }
+/// ```
+#[derive(Debug)]
+pub struct RetainedBackend<B> {
+    // Drop the backend first: its destructor may still read admitted inputs.
+    #[allow(dead_code)] // Concrete adapter operations remain O02-2; custody already owns it.
+    backend: B,
+    files: VerifiedFiles,
+    manifest: Arc<[u8]>,
+}
+
+impl<B> RetainedBackend<B> {
+    #[cfg(test)]
+    pub(super) fn backend(&self) -> &B {
+        &self.backend
+    }
+    pub fn files(&self) -> &VerifiedFiles {
+        &self.files
+    }
+    pub fn manifest_bytes(&self) -> &[u8] {
+        &self.manifest
     }
 }
 
@@ -114,7 +162,7 @@ pub enum AdapterKind {
 /// impl AdapterAdmission for Unchecked {
 ///     type Backend = ();
 ///     fn kind(&self) -> AdapterKind { AdapterKind::Production }
-///     fn admit(&self, _: &VerifiedArtifacts, _: &VerifiedFiles<'_>)
+///     fn admit(&self, _: &VerifiedArtifacts, _: &VerifiedFiles)
 ///         -> Result<(), Ste100AdmissionRefused> { Ok(()) }
 /// }
 /// ```
@@ -126,7 +174,7 @@ pub trait AdapterAdmission: SealedAdapter {
     fn admit(
         &self,
         artifacts: &VerifiedArtifacts,
-        files: &VerifiedFiles<'_>,
+        files: &VerifiedFiles,
     ) -> Result<Self::Backend, Ste100AdmissionRefused>;
 }
 
@@ -143,7 +191,7 @@ pub trait AdapterAdmission: SealedAdapter {
 pub struct Admitted<B> {
     artifacts: VerifiedArtifacts,
     ready: Ste100Ready,
-    backend: B,
+    backend: RetainedBackend<B>,
 }
 
 impl<B> Admitted<B> {
@@ -167,7 +215,7 @@ impl<B> Admitted<B> {
         self.artifacts.manifest()
     }
 
-    pub fn into_backend(self) -> B {
+    pub fn into_backend(self) -> RetainedBackend<B> {
         self.backend
     }
 }
@@ -217,7 +265,8 @@ pub fn validate_bootstrap(
 ///
 /// No production adapter factory is elected here. Unsupported grammar or model
 /// formats remain admission refusals, never a fallback to synthetic checking.
-pub fn admit<A: AdapterAdmission>(
+#[cfg(test)]
+pub(super) fn admit<A: AdapterAdmission>(
     launch_limit: DecimalU64,
     bootstrap_bytes: &[u8],
     supplied: SuppliedArtifacts<'_>,
@@ -249,6 +298,7 @@ pub(super) fn admit_fixture<A: AdapterAdmission>(
     admit_checked(launch_limit, bootstrap_bytes, supplied, adapter, true)
 }
 
+#[cfg(test)]
 fn admit_checked<A: AdapterAdmission>(
     launch_limit: DecimalU64,
     bootstrap_bytes: &[u8],
@@ -257,7 +307,77 @@ fn admit_checked<A: AdapterAdmission>(
     fixture: bool,
 ) -> Result<Admitted<A::Backend>, Ste100AdmissionRefused> {
     let bootstrap = validate_bootstrap(launch_limit, bootstrap_bytes)?;
-    let (artifacts, files) = verify_artifacts(bootstrap, supplied)?;
+    let manifest_bytes: Arc<[u8]> = Arc::from(supplied.manifest);
+    let manifest = verify_manifest(&bootstrap.instruction, &manifest_bytes)?;
+    let files = verify_files(&manifest, supplied.files)?;
+    let artifacts = verify_artifacts(bootstrap, manifest)?;
+    finish_admission(artifacts, files, manifest_bytes, adapter, fixture)
+}
+
+/// Acquire the exact declared manifest and every confined named input as the
+/// current process identity. No compiled adapter is selected by this helper.
+/// The supplied-byte route is absent from production:
+///
+/// ```compile_fail
+/// use weaver_spu::ste100::admission::{admit, SuppliedArtifacts};
+/// ```
+/// Acquisition alone never produces Ready, and fixture adapters stay forbidden.
+pub fn admit_from_path<A: AdapterAdmission>(
+    launch_limit: DecimalU64,
+    bootstrap_bytes: &[u8],
+    adapter: &A,
+) -> Result<Admitted<A::Backend>, Ste100AdmissionRefused> {
+    let bootstrap = validate_bootstrap(launch_limit, bootstrap_bytes)?;
+    if adapter.kind() != AdapterKind::Production {
+        return Err(refused(
+            Ste100AdmissionCode::UnsupportedArtifact,
+            "a test adapter cannot produce production readiness",
+        ));
+    }
+    let acquired = super::artifacts::AcquiredArtifacts::acquire(&bootstrap.instruction)?;
+    admit_acquired(bootstrap, acquired, adapter, false)
+}
+
+#[cfg(test)]
+pub(super) fn admit_acquired_fixture<A: AdapterAdmission>(
+    bootstrap: Ste100Bootstrap,
+    acquired: super::artifacts::AcquiredArtifacts,
+    adapter: &A,
+) -> Result<Admitted<A::Backend>, Ste100AdmissionRefused> {
+    if adapter.kind() != AdapterKind::TestOnly {
+        return Err(refused(
+            Ste100AdmissionCode::UnsupportedArtifact,
+            "the fixture constructor requires a test-only adapter",
+        ));
+    }
+    admit_acquired(bootstrap, acquired, adapter, true)
+}
+
+fn admit_acquired<A: AdapterAdmission>(
+    bootstrap: Ste100Bootstrap,
+    acquired: super::artifacts::AcquiredArtifacts,
+    adapter: &A,
+    fixture: bool,
+) -> Result<Admitted<A::Backend>, Ste100AdmissionRefused> {
+    // Recheck the exact held bytes against this bootstrap, never another path.
+    let manifest = verify_manifest(&bootstrap.instruction, &acquired.manifest_bytes)?;
+    let artifacts = verify_artifacts(bootstrap, manifest)?;
+    finish_admission(
+        artifacts,
+        acquired.files,
+        acquired.manifest_bytes,
+        adapter,
+        fixture,
+    )
+}
+
+fn finish_admission<A: AdapterAdmission>(
+    artifacts: VerifiedArtifacts,
+    files: VerifiedFiles,
+    manifest_bytes: Arc<[u8]>,
+    adapter: &A,
+    fixture: bool,
+) -> Result<Admitted<A::Backend>, Ste100AdmissionRefused> {
     if !fixture && fixture_artifact(&artifacts) {
         return Err(refused(
             Ste100AdmissionCode::UnsupportedArtifact,
@@ -289,14 +409,18 @@ fn admit_checked<A: AdapterAdmission>(
     Ok(Admitted {
         artifacts,
         ready,
-        backend,
+        backend: RetainedBackend {
+            backend,
+            files,
+            manifest: manifest_bytes,
+        },
     })
 }
 
-fn verify_artifacts<'a>(
+fn verify_artifacts(
     bootstrap: Ste100Bootstrap,
-    supplied: SuppliedArtifacts<'a>,
-) -> Result<(VerifiedArtifacts, VerifiedFiles<'a>), Ste100AdmissionRefused> {
+    manifest: Ste100ModelManifest,
+) -> Result<VerifiedArtifacts, Ste100AdmissionRefused> {
     let scheme_hash = sha256(bootstrap.scheme_text.as_bytes());
     let scheme: Ste100Scheme = decode_strict(&bootstrap.scheme_text).map_err(|error| {
         refused(
@@ -326,51 +450,52 @@ fn verify_artifacts<'a>(
         .decode()
         .map_err(|error| refused(Ste100AdmissionCode::InvalidGrammar, error.to_string()))?;
 
-    if sha256(supplied.manifest) != bootstrap.instruction.model_artifact_sha256 {
-        return Err(refused(
-            Ste100AdmissionCode::UnsupportedArtifact,
-            "model manifest digest differs from the loaded instruction",
-        ));
-    }
-    let text = std::str::from_utf8(supplied.manifest).map_err(|_| {
-        refused(
-            Ste100AdmissionCode::UnsupportedArtifact,
-            "model manifest is not UTF-8 JSON",
-        )
-    })?;
-    let manifest: Ste100ModelManifest = decode_strict(text).map_err(|error| {
-        refused(
-            Ste100AdmissionCode::UnsupportedArtifact,
-            format!("invalid model manifest: {error}"),
-        )
-    })?;
-    manifest
-        .validate()
-        .map_err(|error| refused(Ste100AdmissionCode::UnsupportedArtifact, error.to_string()))?;
     if scheme.qualification.checker_abi != manifest.checker_abi {
         return Err(refused(
             Ste100AdmissionCode::SchemeMismatch,
             "scheme and model checker ABIs differ",
         ));
     }
-    let files = verify_files(&manifest, supplied.files)?;
-    Ok((
-        VerifiedArtifacts {
-            bootstrap,
-            scheme,
-            declaration,
-            manifest,
-            grammar,
-            conditions,
-        },
-        files,
-    ))
+    Ok(VerifiedArtifacts {
+        bootstrap,
+        scheme,
+        declaration,
+        manifest,
+        grammar,
+        conditions,
+    })
 }
 
-fn verify_files<'a>(
+pub(super) fn verify_manifest(
+    instruction: &Ste100Instruction,
+    bytes: &[u8],
+) -> Result<Ste100ModelManifest, Ste100AdmissionRefused> {
+    let fail = |detail: String| {
+        refused(
+            Ste100AdmissionCode::UnsupportedArtifact,
+            format!(
+                "manifest {}: {detail}",
+                instruction.model_binding.artifact.0
+            ),
+        )
+    };
+    if sha256(bytes) != instruction.model_artifact_sha256 {
+        return Err(fail("digest differs from the loaded instruction".into()));
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| fail("not UTF-8 JSON".into()))?;
+    let manifest: Ste100ModelManifest =
+        decode_strict(text).map_err(|error| fail(format!("invalid model manifest: {error}")))?;
+    manifest
+        .validate()
+        .map_err(|error| fail(error.to_string()))?;
+    Ok(manifest)
+}
+
+#[cfg(test)]
+fn verify_files(
     manifest: &Ste100ModelManifest,
-    supplied: &'a [ArtifactBytes<'a>],
-) -> Result<VerifiedFiles<'a>, Ste100AdmissionRefused> {
+    supplied: &[ArtifactBytes<'_>],
+) -> Result<VerifiedFiles, Ste100AdmissionRefused> {
     let mut inventory = BTreeMap::new();
     for file in supplied {
         if inventory.insert(file.name, file.bytes).is_some() {
@@ -390,26 +515,35 @@ fn verify_files<'a>(
     Ok(VerifiedFiles { files })
 }
 
-fn verify_file<'a>(
+#[cfg(test)]
+fn verify_file(
     reference: &ArtifactFile,
-    inventory: &BTreeMap<&'a str, &'a [u8]>,
-    files: &mut BTreeMap<&'a str, &'a [u8]>,
+    inventory: &BTreeMap<&str, &[u8]>,
+    files: &mut BTreeMap<String, Arc<[u8]>>,
 ) -> Result<(), Ste100AdmissionRefused> {
-    let (name, bytes) = inventory
-        .get_key_value(reference.name.as_str())
-        .ok_or_else(|| {
+    if !files.contains_key(&reference.name) {
+        let bytes = inventory.get(reference.name.as_str()).ok_or_else(|| {
             refused(
                 Ste100AdmissionCode::UnsupportedArtifact,
                 format!("manifest file is absent: {}", reference.name),
             )
         })?;
+        files.insert(reference.name.clone(), Arc::from(*bytes));
+    }
+    // Hash the retained owner, including every digest of a repeated reference.
+    verify_file_digest(reference, &files[&reference.name])
+}
+
+pub(super) fn verify_file_digest(
+    reference: &ArtifactFile,
+    bytes: &[u8],
+) -> Result<(), Ste100AdmissionRefused> {
     if sha256(bytes) != reference.sha256 {
         return Err(refused(
             Ste100AdmissionCode::UnsupportedArtifact,
             format!("manifest file digest differs: {}", reference.name),
         ));
     }
-    files.insert(*name, *bytes);
     Ok(())
 }
 
@@ -549,7 +683,7 @@ mod tests {
                 scheme_text: serde_json::to_string(&scheme).unwrap(),
                 instruction: Ste100Instruction {
                     model_binding: ModelBinding {
-                        artifact: ArtifactRef("supplied-bytes-only".into()),
+                        artifact: ArtifactRef("/synthetic/supplied-bytes-only.json".into()),
                         devices: vec![DeviceOrdinal(0)],
                     },
                     model_artifact_sha256: sha256(&manifest),
@@ -631,7 +765,7 @@ mod tests {
         fn admit(
             &self,
             artifacts: &VerifiedArtifacts,
-            files: &VerifiedFiles<'_>,
+            files: &VerifiedFiles,
         ) -> Result<(), Ste100AdmissionRefused> {
             self.calls.set(self.calls.get() + 1);
             assert_eq!(artifacts.grammar(), b"a");
@@ -877,7 +1011,7 @@ mod tests {
         fn admit(
             &self,
             _: &VerifiedArtifacts,
-            _: &VerifiedFiles<'_>,
+            _: &VerifiedFiles,
         ) -> Result<(), Ste100AdmissionRefused> {
             self.calls.set(self.calls.get() + 1);
             Err(refused(
