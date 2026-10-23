@@ -2,11 +2,15 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #235
+**Landing PR:** Pending for this proposal; prior merged revision #235.
 
-**Version:** 0.15 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
+**Version:** 0.16 **Date filed:** 2026-10-23 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
+
+The EnterWindow amendment remains proposed until operator ruling, review and merge.
+This header states the landing state required by Working Process section 2; it does
+not authorize pre-merge implementation. Prior merged clauses remain authority on main.
 
 Amend Spec 3.0, 4, 6, 9 and 10 in the combined flow/store/seed unit. Admin still runs
 per verb, links no interior crate, creates inherited channels, and owns root
@@ -107,10 +111,44 @@ opened. Admin verifies configuration before spawn. The worker confirms enter onl
 template checks, boot read, placement and any required pair-load repair and committed
 plan-summary read. [PERSIST-3, PERSIST-6, SEAM-1]
 
-Keep the existing load-bound-seconds budget and its start anchor. Opening, template
-checking, reading the prompt and opening decoder/gate share its remaining duration. No
-stage grants another full budget. Failure rolls back the same process set and never
-reports loaded. [CLASS-8, PERSIST-6, GATE-1]
+**ADMIN-ENTER-WINDOW (proposed).** For the replacement Serving load, admit the load
+request and root configuration first, then sample began_ns once immediately before the
+first load-specific preparation. This point precedes run-directory preparation,
+invocation/run-lock acquisition, inventory and artifact selection, channel creation,
+child start and Enter carry. Root argument/configuration admission precedes the window;
+all subsequent load preparation and waits spend it. In the current source this is
+before dispatch's load-specific prepare_run_directory, not entry to load after that
+preparation or the later Enter send. [CLASS-8, PERSIST-6, GATE-1]
+
+Keep load-bound-seconds positive and root-owned. Convert it to nanoseconds with checked
+multiplication and compute deadline_ns = began_ns + budget_ns with checked addition.
+If that interval cannot be represented, return ConfigInvalid attributed to
+load-bound-seconds before Enter is sent. No saturated deadline, declaration override
+or caller-supplied window is accepted. Carry that exact EnterWindow in the required
+Serving binding. The existing launch preserves the common Linux CLOCK_MONOTONIC domain;
+a different time namespace or remote clock is outside this carrier's contract.
+[CLASS-8, FLOW-3, SEAM-2]
+
+Admin retains that same deadline through encoding, descriptor carry, socket pressure,
+worker scheduling and the answer. Bound those operations by the original deadline;
+check it before and after each work unit and after receipt/decode before accepting the
+matching Ready. A readable socket or a completed send is not a timely Enter answer.
+At now >= deadline_ns the load is expired: admit no further ordinary load work or late
+Ready, report the existing unanswered-load NoResidency outcome unless an actual
+failure already determines the result, and run the existing rollback of what this
+invocation stood. That local timeout is not a fabricated peer refusal. A rollback
+containment failure retains its existing precedence over the load's refusal.
+[CLASS-8, PERSIST-6, FLOW-3]
+
+Opening, template checking, prompt reads and decoder/gate boot all share this remaining
+time. Any duration needed by a local primitive is derived from the original deadline
+at that operation's current observation; the duration is not re-added to a later clock
+sample. The worker receives the original window, never only a sampled remaining value.
+No stage, partial result, carry retry or parse grants a fresh budget. Later explicit
+rollback Leave retains its existing independent cleanup allowance and cause; it does
+not extend Enter or permit loaded/Ready. Existing component failure and escalation
+remain distinct from ordinary budget expiry. A failed clock observation cannot mint a
+window or imply successful cleanup. [CLASS-8, PERSIST-6, GATE-1]
 
 ## 2. Seed and rebind, destinations sections 4, 6 and 9
 
@@ -433,6 +471,10 @@ who owns the leave or its clock. [CLASS-8, CLASS-9, PERSIST-4, FLOW-4, R3]
 
 ## 8. Open elections
 
+The paired EnterWindow carrier and the exact pre-preparation anchor above remain
+operator-pending. This text is a [proposal][enter-window-proposal], not permission to
+change the active Serving load or Diagnostic deadlines before review and merge.
+
 Production classifier certificate production/verification is not supplied here. The
 separate prompt document is owed. Pair-load closure uses Spec 05's joined boot-repair
 contract. The measured memory qualification of capture/read copies and file bounds
@@ -442,3 +484,6 @@ still awaits review and approval.
 
 [cutover]:
 state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
+
+[enter-window-proposal]:
+../../project/state-management-enter-window-proposal-2026-10-23.md
