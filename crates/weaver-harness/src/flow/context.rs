@@ -1170,14 +1170,6 @@ impl RecordingContext {
         }
         self.observe_boot_lifecycle(&ports.lifecycle);
         self.observe_plan_summary_lifecycle(&ports.lifecycle);
-        if self.plan_summary_blocks_generation()
-            && ports
-                .decode
-                .as_deref()
-                .is_some_and(|decode| decode.generation_not_started())
-        {
-            return Err(RunFailure::PlanSummaryOwned);
-        }
         if ports.decode.is_some() && self.boot_open_revoked() {
             return Err(RunFailure::BootOpenOwned);
         }
@@ -1189,6 +1181,20 @@ impl RecordingContext {
         {
             self.boot_open_live(ports.io)?;
         }
+        // An unsent generation is deferred without starving the state and
+        // lifecycle traffic that can settle the summary obligation. Restore the
+        // caller's exact port before inspecting the pump outcome, even on error.
+        // A started exchange or Cancel remains present and continues to drain.
+        let deferred_decode = if self.plan_summary_blocks_generation()
+            && ports
+                .decode
+                .as_deref()
+                .is_some_and(|decode| decode.generation_not_started())
+        {
+            ports.decode.take()
+        } else {
+            None
+        };
         let step = self.pump.step(
             ports,
             Some(&mut self.flow),
@@ -1200,6 +1206,9 @@ impl RecordingContext {
             },
             &self.deadlines,
         );
+        if let Some(decode) = deferred_decode {
+            ports.decode = Some(decode);
+        }
         self.observe_boot_lifecycle(&ports.lifecycle);
         self.observe_plan_summary_lifecycle(&ports.lifecycle);
         let sent = self.reconcile_pair_send(ports.io)?;

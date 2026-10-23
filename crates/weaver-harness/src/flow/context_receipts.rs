@@ -196,7 +196,12 @@ impl RecordingContext {
                 failure: None,
             });
         }
-        if (self.boot_pairs.is_some() && owner != FilingOwner::BootPairs)
+        // Boot must establish even the committed-null summary before a plan
+        // effect can create a refresh duty. Return the unchanged event before
+        // reserving a receipt subscription or admitting any author input.
+        let plan_effect = is_plan_effect_event(&event);
+        if (plan_effect && (!self.plan_cache.boot_started || self.plan_cache.committed.is_none()))
+            || (self.boot_pairs.is_some() && owner != FilingOwner::BootPairs)
             || (owner == FilingOwner::BootPairs && !self.boot_pairs_filing_allowed())
             || self.output.is_some()
             || self.freshness.is_some()
@@ -243,7 +248,7 @@ impl RecordingContext {
         }
         self.filing = Some(FilingTransaction {
             receipt_identity: std::sync::Arc::new(()),
-            plan_effect: is_plan_effect_event(&event),
+            plan_effect,
             outbound: None,
             owner,
             key,
@@ -583,6 +588,9 @@ impl RecordingContext {
         event
     }
 
+    /// Stop/Leave cancellation is terminal, including an unstarted effect whose
+    /// event is returned unchanged. This is not a retry/withdraw operation: a
+    /// future non-terminal withdrawal must preserve an unchanged committed cache.
     pub(in crate::flow) fn cancel_filing(&mut self) {
         let Some(owner) = self.filing.as_mut() else {
             return;

@@ -339,7 +339,9 @@ impl RecordingContext {
             || !self.flow.state().outstanding().is_empty()
             || self.flow.state().held_measurement().is_some()
             || self.deadlines.get(PumpDeadline::Gate).is_some()
-            || self.deadlines.get(PumpDeadline::Cut).is_some()
+            || (self.deadlines.get(PumpDeadline::Cut).is_some()
+                && !(matches!(purpose, ReadPurpose::PlanSummary)
+                    && self.plan_summary_owns_read_wait(PumpDeadline::Cut)))
             || self.deadlines.get(PumpDeadline::StateControl).is_some()
         {
             return Err(ReadBeginError {

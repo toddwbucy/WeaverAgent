@@ -51,6 +51,26 @@ pub(super) struct PlanSummaryTransaction {
     stopped_read: Option<Box<read_driver::ReadTransaction>>,
 }
 impl PlanSummaryTransaction {
+    fn new(prerequisite: Prerequisite, key: PumpDeadline, bound: AbsoluteBound) -> Self {
+        Self {
+            prerequisite,
+            key,
+            bound,
+            driving: false,
+            started: false,
+            cancelled: false,
+            complete: false,
+            read_settled: false,
+            recorded: None,
+            rejected: None,
+            refusal: None,
+            account_deadline: bound.deadline_ns(),
+            account_settled: false,
+            incomplete: None,
+            stopped_read: None,
+        }
+    }
+
     fn effect(&self) -> bool {
         matches!(self.prerequisite, Prerequisite::Effect(_))
     }
@@ -209,6 +229,11 @@ impl RecordingContext {
     pub(super) fn plan_summary_read_bound(&self) -> Option<AbsoluteBound> {
         self.plan_summary.as_ref().map(|work| work.bound)
     }
+    pub(super) fn plan_summary_owns_read_wait(&self, key: PumpDeadline) -> bool {
+        self.plan_summary.as_ref().is_some_and(|work| {
+            work.driving && work.key == key && self.deadlines.get(key) == Some(work.bound)
+        })
+    }
     pub(super) fn plan_summary_wait_owned(&self, key: PumpDeadline) -> bool {
         (key == PumpDeadline::Leave
             && (self.plan_summary.is_some() || self.plan_cache.required.is_some()))
@@ -254,9 +279,12 @@ impl RecordingContext {
     /// Called before every live/admission check and before receipt transfer.
     /// Evidence iteration includes cancelled subscriptions and releases no grant.
     pub(super) fn observe_plan_effect_receipts(&mut self) {
-        let Some(filing) = self.filing.as_ref() else {
+        // The author admission guard forbids an effect outside this flagged
+        // owner. Ordinary filings cannot create a plan-summary obligation.
+        if !self.plan_effect_inflight() {
             return;
-        };
+        }
+        let filing = self.filing.as_ref().expect("flagged filing exists");
         let Some(receipts) = self.flow.filing_receipts() else {
             return;
         };
@@ -269,11 +297,6 @@ impl RecordingContext {
                 .then_some(commit)
         });
         let Some(commit) = commits.next() else { return };
-        if !filing.cancelled()
-            && self.plan_cache.unavailable != Some(PlanSummaryUnavailable::Failed)
-        {
-            self.plan_cache.unavailable = Some(PlanSummaryUnavailable::Pending);
-        }
         if commits.next().is_some() {
             self.plan_cache.invalid = Some("one plan-effect filing committed several plan effects");
             return;
@@ -330,14 +353,23 @@ impl RecordingContext {
                     )
             });
         if cancelled {
-            self.plan_summary.as_mut().unwrap().cancelled = true;
+            // Stop revokes future use even after a refresh completed. Its exact
+            // already-completed disposition remains success evidence; it is not
+            // retroactively changed into an unfinished/cancelled transaction.
             self.plan_cache.revoke();
-            self.cancel_plan_summary_read();
+            if !self.plan_summary.as_ref().unwrap().complete {
+                self.plan_summary.as_mut().unwrap().cancelled = true;
+                self.cancel_plan_summary_read();
+            }
         }
     }
 
-    fn plan_summary_admission_busy(&self) -> bool {
+    fn plan_summary_admission_busy(&self, key: PumpDeadline) -> bool {
+        // Unlike boot Open, an effect refresh may own an open turn and borrow
+        // its existing Decision or Cut. It may not overlap other waits, template
+        // work, measurements or content owners. Boot still requires no open turn.
         self.plan_summary.is_some()
+            || (key == PumpDeadline::Enter && self.open_turn.is_some())
             || self.filing.is_some()
             || self.output.is_some()
             || self.read.is_some()
@@ -348,8 +380,10 @@ impl RecordingContext {
             || self.inspection.is_some()
             || self.freshness.is_some()
             || self.member_capture.is_some()
-            || self.measure_blocks_external()
+            || self.measure.is_some()
             || self.boot_open_blocks_external()
+            || self.templates_block_content()
+            || self.template_blocked_author.is_some()
             || self.input.snapshot().is_some()
             || self.input_author.is_some()
             || self.input_turn.is_some()
@@ -364,6 +398,15 @@ impl RecordingContext {
             || self.flow.pending_check().is_some()
             || self.flow.operation_completion().is_some()
             || !self.flow.state().outstanding().is_empty()
+            || self.flow.state().held_measurement().is_some()
+            || [
+                PumpDeadline::Decision,
+                PumpDeadline::Cut,
+                PumpDeadline::Gate,
+                PumpDeadline::StateControl,
+            ]
+            .into_iter()
+            .any(|other| other != key && self.deadlines.get(other).is_some())
     }
 
     #[allow(clippy::result_large_err)]
@@ -400,7 +443,9 @@ impl RecordingContext {
             })
         {
             Some(PlanSummaryBeginRefusal::WrongProof)
-        } else if self.plan_summary_admission_busy() || self.plan_cache.required.is_some() {
+        } else if self.plan_summary_admission_busy(PumpDeadline::Enter)
+            || self.plan_cache.required.is_some()
+        {
             Some(PlanSummaryBeginRefusal::Busy)
         } else {
             None
@@ -415,23 +460,11 @@ impl RecordingContext {
         let bound = repaired.checked_open().unwrap().enter();
         self.plan_cache.boot_started = true;
         self.plan_cache.unavailable = Some(PlanSummaryUnavailable::Pending);
-        self.plan_summary = Some(PlanSummaryTransaction {
-            prerequisite: Prerequisite::Boot(repaired),
-            key: PumpDeadline::Enter,
+        self.plan_summary = Some(PlanSummaryTransaction::new(
+            Prerequisite::Boot(repaired),
+            PumpDeadline::Enter,
             bound,
-            driving: false,
-            started: false,
-            cancelled: false,
-            complete: false,
-            read_settled: false,
-            recorded: None,
-            rejected: None,
-            refusal: None,
-            account_deadline: bound.deadline_ns(),
-            account_settled: false,
-            incomplete: None,
-            stopped_read: None,
-        });
+        ));
         Ok(())
     }
 
@@ -460,7 +493,7 @@ impl RecordingContext {
             Some(PlanSummaryBeginRefusal::WrongPhase)
         } else if !valid {
             Some(PlanSummaryBeginRefusal::WrongProof)
-        } else if self.plan_summary_admission_busy() {
+        } else if self.plan_summary_admission_busy(filing.wait_key()) {
             Some(PlanSummaryBeginRefusal::Busy)
         } else {
             None
@@ -474,23 +507,11 @@ impl RecordingContext {
         }
         let key = filing.wait_key();
         let bound = filing.wait_bound();
-        self.plan_summary = Some(PlanSummaryTransaction {
-            prerequisite: Prerequisite::Effect(filing),
+        self.plan_summary = Some(PlanSummaryTransaction::new(
+            Prerequisite::Effect(filing),
             key,
             bound,
-            driving: false,
-            started: false,
-            cancelled: false,
-            complete: false,
-            read_settled: false,
-            recorded: None,
-            rejected: None,
-            refusal: None,
-            account_deadline: bound.deadline_ns(),
-            account_settled: false,
-            incomplete: None,
-            stopped_read: None,
-        });
+        ));
         Ok(())
     }
 
@@ -632,10 +653,12 @@ impl RecordingContext {
         let Some(work) = self.plan_summary.as_mut() else {
             return Err(RunFailure::PlanSummaryOwned);
         };
-        work.cancelled = true;
         self.plan_cache.revoke();
-        if self.read.is_some() {
-            self.cancel_plan_summary_read();
+        if !work.complete {
+            work.cancelled = true;
+            if self.read.is_some() {
+                self.cancel_plan_summary_read();
+            }
         }
         Ok(())
     }
