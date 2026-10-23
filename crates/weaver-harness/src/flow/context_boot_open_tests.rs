@@ -1615,7 +1615,11 @@ fn boot_open_unload_guards_return_both_originals_without_latching_failure() {
             )
         };
         match progress {
-            RecordProgress::BusyAuthored { event, purpose } if authored => {
+            RecordProgress::BusyAuthored {
+                event,
+                purpose,
+                owed: Some(crate::flow::recording::OwedAuthor::BootOpen),
+            } if authored => {
                 assert_eq!(event.kind, Kind::Unload);
                 assert!(matches!(purpose, RecordPurpose::Observation));
             }

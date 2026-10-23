@@ -3186,7 +3186,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 self.refused_author = Some(RefusedAuthor::Prepared { event, purpose });
                 return Err(self.fail(cx, "author", "flow author was returned busy"));
             }
-            RecordProgress::BusyAuthored { event, purpose } => {
+            RecordProgress::BusyAuthored { event, purpose, .. } => {
                 self.refused_author = Some(RefusedAuthor::Authored { event, purpose });
                 return Err(self.fail(cx, "author", "flow author was returned busy"));
             }

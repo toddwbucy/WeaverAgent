@@ -17,7 +17,7 @@ use super::coordinator::{
 };
 use super::intake::{FlowInbox, RetentionBudget};
 use super::pump::{CommonPump, PumpDeadline, PumpFailure, PumpPorts, PumpSource, PumpStep};
-use super::recording::{RecordBarrier, RecordFailure, RecordProgress, RecordPurpose};
+use super::recording::{OwedAuthor, RecordBarrier, RecordFailure, RecordProgress, RecordPurpose};
 use super::report::{FlowHaltReason, HaltPoint, SecondaryFailure, WaitAtHalt};
 use super::ste100_socket::SocketPort;
 
@@ -1051,20 +1051,28 @@ impl RecordingContext {
                 proof: None,
             } = &progress
             {
-                self.retain_release_recorded(*sequence);
+                if self.release_author.is_some() {
+                    self.retain_recorded_author(*sequence);
+                }
                 self.bind_place_measure_author(*sequence);
                 self.bind_place_author(*sequence)?;
                 self.bind_marks_author(*sequence, ports.io)?;
                 self.bind_repair_author(*sequence, ports.io)?;
                 self.bind_pair_author(*sequence, ports.io)?;
             }
-            self.drain_intake(ports.io)?;
+            // A returned original has no other owner until the BusyAuthored
+            // arm retains it. Intake may fail immediately on the same refusal.
+            if !matches!(&progress, RecordProgress::BusyAuthored { .. }) {
+                self.drain_intake(ports.io)?;
+            }
             match progress {
                 RecordProgress::Recorded {
                     sequence,
                     proof: None,
                 } => {
-                    self.last_author_sequence = Some(sequence);
+                    if self.release_author.is_none() {
+                        self.retain_recorded_author(sequence);
+                    }
                     if let Some((kind, turn)) = self.author_turn.take() {
                         if kind == Kind::TurnStarted {
                             self.open_turn = turn;
@@ -1076,7 +1084,6 @@ impl RecordingContext {
                     if self.phase == RecordingPhase::Preflight {
                         self.phase = RecordingPhase::Entered;
                     }
-                    self.completed_author = Some(sequence);
                     self.bind_filing_author(sequence, ports.io)?;
                     self.bind_output_author(sequence, ports.io)?;
                     self.live(ports.io)?;
@@ -1092,8 +1099,18 @@ impl RecordingContext {
                         return Err(RunFailure::Wait { key, bound });
                     }
                 }
-                RecordProgress::BusyAuthored { event, .. } => {
+                RecordProgress::BusyAuthored { event, owed, .. } => {
                     self.retain_refused(event);
+                    // Preserve the original first, then observe genuine failures
+                    // before returning a nonfatal account hold.
+                    self.drain_intake(ports.io)?;
+                    if let Some(owed) = owed {
+                        self.finish_release_author();
+                        return Err(match owed {
+                            OwedAuthor::BootOpen => RunFailure::BootOpenOwned,
+                            OwedAuthor::Placement => RunFailure::PlaceOwned,
+                        });
+                    }
                     return Err(self.record_failed(ports.io));
                 }
                 RecordProgress::Failed => return Err(self.record_failed(ports.io)),
@@ -1108,6 +1125,14 @@ impl RecordingContext {
             }
             progress = self.resume_context_author(ports.io);
         }
+    }
+
+    /// One writer owns the caller result at its existing completion boundary.
+    /// Release retains it before observers; content owners first bind their proof.
+    fn retain_recorded_author(&mut self, sequence: Sequence) {
+        self.last_author_sequence = Some(sequence);
+        self.completed_author = Some(sequence);
+        self.retain_release_recorded(sequence);
     }
 
     fn author_allowed(&self, event: &AuthoredEvent) -> bool {

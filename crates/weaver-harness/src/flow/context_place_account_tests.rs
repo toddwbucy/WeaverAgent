@@ -296,13 +296,25 @@ fn place_join_owed_account_blocks_release_scope_without_consuming_shutdown_origi
     // Exercise the real context-issued private release scope directly, so the
     // new barrier debt guard is not masked by the outer PlaceOwned admission or
     // the older Unload-only guard. This Refusal has valid shutdown shape.
-    let RecordProgress::BusyAuthored { event, purpose } =
+    let progress =
         run.context
-            .submit_context_author(event, RecordPurpose::Observation, 1, &mut run.clock)
-    else {
-        panic!("owed placement evidence must retain the shutdown original");
-    };
-    assert!(matches!(purpose, RecordPurpose::Observation));
+            .submit_context_author(event, RecordPurpose::Observation, 1, &mut run.clock);
+    assert!(matches!(
+        &progress,
+        RecordProgress::BusyAuthored {
+            purpose: RecordPurpose::Observation,
+            owed: Some(crate::flow::recording::OwedAuthor::Placement),
+            ..
+        }
+    ));
+    assert_eq!(
+        run.context
+            .wait_recorded(&mut ports(&mut run.clock), progress),
+        Err(RunFailure::PlaceOwned)
+    );
+    // The consumer must retain the actual returned original before observing
+    // fallible intake, and retire only this unadmitted shutdown attempt.
+    let event = run.context.refused_author.take().unwrap();
     let Payload::Refusal(returned) = event.payload.as_ref().unwrap() else {
         unreachable!()
     };
@@ -310,11 +322,13 @@ fn place_join_owed_account_blocks_release_scope_without_consuming_shutdown_origi
     assert_eq!(returned.get(), original_text);
     assert_eq!(run.context.last_author_sequence, prior_sequence);
     assert!(run.context.pending_author().is_none());
+    assert!(run.context.barrier.pending().is_none());
     assert!(run.context.barrier.failure().is_none());
+    assert!(run.context.barrier.admitted_before_failure().is_none());
     assert!(run.context.failure().is_none());
-    // The private call returned its event before any ticket existed. Retire that
-    // unadmitted attempt; the actual placement account remains untouched.
-    run.context.finish_release_author();
+    assert!(run.context.release_author.is_none());
+    assert!(run.context.place_owed());
+    assert_eq!(run.context.deadlines.get(PumpDeadline::Leave), Some(leave));
     assert!(fx.records(Kind::Refusal).is_empty());
     let raw = fx.answer(&fx.measured(keep, 3));
     let account = fx.settled_account();

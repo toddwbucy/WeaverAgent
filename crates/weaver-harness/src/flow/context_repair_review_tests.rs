@@ -449,3 +449,425 @@ fn repair_review_stop_during_refused_correction_retains_the_immutable_terminal_p
         assert!(!next.generation().blocks().is_empty());
     }
 }
+
+#[test]
+fn repair_followup_refused_correction_retains_actual_pass_stop_unload_prefixes() {
+    let mut fx = RepairFixture::new();
+    let original = fx.generation(vec![text("bad original")], true);
+    fx.begin(original);
+    let request = fx.restatement(true);
+    let correction = fx.generation(
+        vec![
+            text("Read first."),
+            call(),
+            text("Read second."),
+            call(),
+            text("Read third."),
+            call(),
+        ],
+        true,
+    );
+    let openings = correction
+        .requests()
+        .iter()
+        .map(|request| request.opening().clone())
+        .collect::<Vec<_>>();
+    assert_eq!(openings.len(), 3);
+    let correction_source = correction.generation().source().clone();
+    fx.observe(request.source(), correction);
+    // This future refused-with-correction overlap is deliberately staged; every
+    // pair, terminal admission, member receipt and cancellation below is real.
+    fx.input
+        .run
+        .context
+        .stage_repair_test_refusal(&mut fx.input.run.clock);
+    let bound = fx
+        .input
+        .run
+        .context
+        .deadlines
+        .get(PumpDeadline::Decision)
+        .unwrap();
+    let mut prefixes = Vec::new();
+    for (expected, cause) in [
+        (1, s::NonDispatchCause::Stop),
+        (2, s::NonDispatchCause::Unload),
+    ] {
+        for _ in 0..512 {
+            fx.step(true);
+            if fx.input.records(Kind::ToolCallCompleted).len() == expected {
+                break;
+            }
+        }
+        let records = fx.input.records(Kind::ToolCallCompleted);
+        assert_eq!(records.len(), expected);
+        assert_eq!(
+            fx.input.run.context.deadlines.get(PumpDeadline::Decision),
+            Some(bound)
+        );
+        assert_eq!(&records[..prefixes.len()], prefixes.as_slice());
+        prefixes = records;
+        fx.input
+            .run
+            .context
+            .cancel_repair(cause, &mut fx.input.run.clock)
+            .unwrap();
+    }
+    let retained = cancelled(&mut fx, s::NonDispatchCause::Unload);
+    let pending = retained.pending().unwrap();
+    assert_eq!(pending.generation().source(), &correction_source);
+    assert!(matches!(
+        retained.refusal_evidence(),
+        Some(RepairRefusalEvidence::Instruction { .. })
+    ));
+    let expected = [
+        s::NonDispatchCause::PassPurpose,
+        s::NonDispatchCause::Stop,
+        s::NonDispatchCause::Unload,
+    ];
+    for ((opening, cause), retained_request) in
+        openings.iter().zip(expected).zip(pending.requests())
+    {
+        assert_eq!(retained_request.opening(), opening);
+        let proof = fx
+            .input
+            .run
+            .context
+            .completed_pair(&opening.call_id, &mut fx.input.run.clock)
+            .unwrap()
+            .unwrap();
+        assert_eq!(proof.started(), opening);
+        assert_eq!(
+            proof.ended().reason,
+            Some(s::PairFailure::NotDispatched { cause })
+        );
+    }
+    let records = fx.input.records(Kind::ToolCallCompleted);
+    assert_eq!(records.len(), 3);
+    assert_eq!(&records[..prefixes.len()], prefixes.as_slice());
+    assert!(
+        fx.input
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision)
+            .is_none()
+    );
+    assert!(fx.input.run.context.completed_author.is_none());
+    assert!(fx.input.run.context.failure().is_none());
+}
+
+fn completed_cause_fixture(cause: s::NonDispatchCause) -> (RepairFixture, s::CallId) {
+    let mut fx = RepairFixture::new();
+    let original = fx.generation(vec![text("Read request."), call()], true);
+    let call = original.requests()[0].opening().call_id.clone();
+    fx.input
+        .run
+        .context
+        .begin_not_dispatched(original, cause, &mut fx.input.run.clock)
+        .unwrap();
+    let mut complete = false;
+    for _ in 0..512 {
+        let progress = fx
+            .input
+            .run
+            .context
+            .advance_pairs(&mut ports(&mut fx.input.run.clock))
+            .unwrap();
+        fx.checker();
+        fx.member(true);
+        if progress == PairProgress::Complete {
+            let original = fx
+                .input
+                .run
+                .context
+                .take_pair_accounting(&mut fx.input.run.clock)
+                .unwrap()
+                .unwrap();
+            assert_eq!(original.requests()[0].opening().call_id, call);
+            complete = true;
+            break;
+        }
+    }
+    assert!(complete, "actual pair account must return its original");
+    assert_eq!(fx.input.records(Kind::ToolCallCompleted).len(), 1);
+    (fx, call)
+}
+
+#[test]
+fn repair_followup_defensive_composed_proofs_reject_wrong_cause_and_backward_prefix() {
+    let (pass, pass_call) = completed_cause_fixture(s::NonDispatchCause::PassPurpose);
+    let (stop, stop_call) = completed_cause_fixture(s::NonDispatchCause::Stop);
+    let (unload, unload_call) = completed_cause_fixture(s::NonDispatchCause::Unload);
+    let (wrong, wrong_call) = completed_cause_fixture(s::NonDispatchCause::RepairExhausted);
+    let pass = pass
+        .input
+        .run
+        .context
+        .pairs
+        .completed(&pass_call)
+        .unwrap()
+        .unwrap();
+    let stop = stop
+        .input
+        .run
+        .context
+        .pairs
+        .completed(&stop_call)
+        .unwrap()
+        .unwrap();
+    let unload = unload
+        .input
+        .run
+        .context
+        .pairs
+        .completed(&unload_call)
+        .unwrap()
+        .unwrap();
+    let wrong = wrong
+        .input
+        .run
+        .context
+        .pairs
+        .completed(&wrong_call)
+        .unwrap()
+        .unwrap();
+    // These are actual completed capabilities deliberately composed in orders
+    // that a single public pair owner cannot produce. This is a defensive
+    // validator test, not evidence that normal cancellation can corrupt order.
+    for proofs in [
+        vec![stop, pass],
+        vec![unload, stop],
+        vec![wrong],
+        vec![pass, wrong],
+    ] {
+        assert_eq!(
+            repair::validate_refused_accounted(
+                proofs.iter().map(|p| p.started()),
+                &proofs,
+                Some(s::NonDispatchCause::Unload)
+            ),
+            Err(RepairError::WrongAccounting)
+        );
+    }
+    assert_eq!(
+        repair::validate_refused_accounted(
+            [unload.started()].into_iter(),
+            &[unload],
+            Some(s::NonDispatchCause::Stop)
+        ),
+        Err(RepairError::WrongAccounting)
+    );
+    assert_eq!(
+        repair::validate_refused_accounted([stop.started()].into_iter(), &[stop], None),
+        Err(RepairError::WrongAccounting)
+    );
+    assert_eq!(
+        repair::validate_refused_accounted(
+            [pass.started(), stop.started(), unload.started()].into_iter(),
+            &[pass, stop, unload],
+            Some(s::NonDispatchCause::Unload)
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        repair::validate_refused_accounted([pass.started()].into_iter(), &[], None),
+        Err(RepairError::WrongAccounting)
+    );
+}
+
+fn refused_with_correction() -> RepairFixture {
+    let mut fx = RepairFixture::new();
+    let original = fx.generation(vec![text("bad original")], true);
+    fx.begin(original);
+    let request = fx.restatement(true);
+    let correction = fx.generation(vec![text("Read forbidden."), call()], true);
+    fx.observe(request.source(), correction);
+    fx
+}
+
+fn refusal_failure(fx: &mut RepairFixture) -> RunFailure {
+    for _ in 0..512 {
+        match fx
+            .input
+            .run
+            .context
+            .advance_repair(&mut ports(&mut fx.input.run.clock))
+        {
+            Ok(_) => {
+                fx.checker();
+                fx.member(true);
+            }
+            Err(failure) => return failure,
+        }
+    }
+    panic!("defensive refused state must name its error, not wait for expiry");
+}
+
+#[test]
+fn repair_followup_defensive_refusal_names_an_actual_outstanding_correction_loan() {
+    let mut fx = refused_with_correction();
+    let mut loan = None;
+    for _ in 0..512 {
+        fx.step(true);
+        loan = fx.input.run.context.take_repair_correction_loan_for_test();
+        if loan.is_some() {
+            break;
+        }
+    }
+    let loan = loan.expect("actual protocol refusal must release its correction loan");
+    let source = loan.generation().source().clone();
+    let bound = fx
+        .input
+        .run
+        .context
+        .deadlines
+        .get(PumpDeadline::Decision)
+        .unwrap();
+    // Public repair progress keeps this loan paired with its accounting owner.
+    // Deliberately stage a refusal while the real loan is held by this fixture.
+    fx.input
+        .run
+        .context
+        .stage_repair_test_refusal(&mut fx.input.run.clock);
+    let failure = refusal_failure(&mut fx);
+    assert!(
+        matches!(&failure, RunFailure::Flow { reason: FlowHaltReason::ProtocolFailed, detail, .. }
+        if detail == "refused repair retains loan: OutstandingCorrectionLoan")
+    );
+    assert!(fx.input.run.clock.now().unwrap() < bound.deadline_ns());
+    assert_eq!(loan.generation().source(), &source);
+    assert_eq!(loan.requests().len(), 1);
+    assert_eq!(fx.input.run.context.failure(), Some(&failure));
+    assert!(fx.input.records(Kind::ToolCallStarted).is_empty());
+}
+
+#[test]
+fn repair_followup_defensive_refusal_names_an_actual_outstanding_account_loan() {
+    let mut fx = RepairFixture::new();
+    let original = fx.generation(
+        vec![text("Read request."), call(), text("bad original")],
+        true,
+    );
+    fx.begin(original);
+    for _ in 0..2 {
+        let request = fx.restatement(true);
+        let correction = fx.generation(vec![text("bad correction")], true);
+        fx.observe(request.source(), correction);
+    }
+    let mut loan = None;
+    for _ in 0..512 {
+        fx.step(true);
+        loan = fx.input.run.context.take_repair_account_loan_for_test();
+        if loan.is_some() {
+            break;
+        }
+    }
+    let loan = loan.expect("actual exhaustion record must release its account loan");
+    let source = loan.source().clone();
+    let bound = fx
+        .input
+        .run
+        .context
+        .deadlines
+        .get(PumpDeadline::Decision)
+        .unwrap();
+    // An account loan removes the original from the ledger, so a new refusal
+    // cannot even be authored through the ordinary path. Invoke the private
+    // refusal continuation directly with that real loan held: this is an
+    // unreachable defensive state, not a claimed production interleaving.
+    let failure = fx
+        .input
+        .run
+        .context
+        .advance_refused_repair_for_test(&mut ports(&mut fx.input.run.clock))
+        .unwrap_err();
+    assert!(
+        matches!(&failure, RunFailure::Flow { reason: FlowHaltReason::ProtocolFailed, detail, .. }
+        if detail == "refused repair retains loan: OutstandingAccountLoan")
+    );
+    assert!(fx.input.run.clock.now().unwrap() < bound.deadline_ns());
+    assert_eq!(loan.source(), &source);
+    assert_eq!(loan.requests().len(), 1);
+    assert_eq!(fx.input.run.context.failure(), Some(&failure));
+}
+
+#[test]
+fn repair_followup_defensive_frozen_pair_owner_preserves_its_exact_error_before_intake() {
+    for cancel in [None, Some(s::NonDispatchCause::Stop)] {
+        let mut fx = refused_with_correction();
+        fx.input
+            .run
+            .context
+            .stage_repair_test_refusal(&mut fx.input.run.clock);
+        if let Some(cause) = cancel {
+            fx.input
+                .run
+                .context
+                .cancel_repair(cause, &mut fx.input.run.clock)
+                .unwrap();
+        }
+        // A real halt freezes the entire context first. Deliberately freeze
+        // only its pair owner to test exact internal error propagation.
+        fx.input.run.context.pairs.freeze();
+        let failure = refusal_failure(&mut fx);
+        assert!(
+            matches!(&failure, RunFailure::Flow { reason: FlowHaltReason::ProtocolFailed, detail, .. }
+            if detail == "correction pair proof: Frozen")
+        );
+        assert!(fx.input.records(Kind::ToolCallStarted).is_empty());
+        assert!(fx.input.records(Kind::ToolCallCompleted).is_empty());
+        assert_eq!(fx.input.run.context.failure(), Some(&failure));
+    }
+}
+
+#[test]
+fn repair_followup_refusal_readiness_reuses_its_settled_terminal_proof() {
+    let mut fx = refused_with_correction();
+    fx.input
+        .run
+        .context
+        .stage_repair_test_refusal(&mut fx.input.run.clock);
+    for _ in 0..512 {
+        fx.step(true);
+        if fx.input.run.context.repair_refused_pairs_settled_for_test() {
+            break;
+        }
+    }
+    assert!(fx.input.run.context.repair_refused_pairs_settled_for_test());
+    assert!(
+        fx.input
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision)
+            .is_some()
+    );
+    assert!(
+        fx.input
+            .run
+            .context
+            .take_refused_repair(&mut fx.input.run.clock)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(fx.input.records(Kind::ToolCallCompleted).len(), 1);
+    let terminals = fx.input.records(Kind::ToolCallCompleted);
+    // Terminal capabilities cannot change after completion. This defensive
+    // freeze after validation but before readiness proves the next transition
+    // and later polls do not acquire a fresh pair proof.
+    fx.input.run.context.pairs.freeze();
+    for _ in 0..4 {
+        assert_eq!(fx.step(true), RepairProgress::Refused);
+    }
+    assert_eq!(fx.input.records(Kind::ToolCallCompleted), terminals);
+    let retained = fx
+        .input
+        .run
+        .context
+        .take_refused_repair(&mut fx.input.run.clock)
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained.pending().unwrap().requests().len(), 1);
+    assert!(fx.input.run.context.failure().is_none());
+}

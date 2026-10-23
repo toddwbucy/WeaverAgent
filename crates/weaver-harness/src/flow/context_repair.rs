@@ -151,7 +151,7 @@ impl RepairRefused {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 enum AuthorPurpose {
     Instruction,
     ProtocolRefusal,
@@ -166,6 +166,17 @@ const _: fn(weaver_types::state_flow::RecallRequestRefusal) -> AuthorPurpose =
     AuthorPurpose::RecallRefusal;
 #[cfg(test)]
 const _: fn(usize) -> AuthorPurpose = |index| AuthorPurpose::Association { index };
+
+// Pending author inspection must borrow its potentially large refusal payload.
+#[cfg(test)]
+const _: fn() = || {
+    trait NotClone<M> {
+        fn pin() {}
+    }
+    impl<T: ?Sized> NotClone<()> for T {}
+    impl<T: Clone> NotClone<u8> for T {}
+    let _ = <AuthorPurpose as NotClone<_>>::pin;
+};
 
 struct RepairAuthor {
     purpose: AuthorPurpose,
@@ -204,6 +215,9 @@ pub(super) struct RepairTransaction {
     calls: Vec<CallId>,
     refused: bool,
     refused_ready: bool,
+    // Set only after the exact retained correction's terminal proofs validate.
+    // No new correction can be admitted after the operation refusal records.
+    refused_pairs_settled: bool,
     rejection: Option<crate::flow::coordinator::RecordedInstructionCheck>,
     refusal_record: Option<RefusalRecord>,
     refusal_source: Option<SourcePosition>,
@@ -367,6 +381,7 @@ impl RecordingContext {
             calls: vec![],
             refused: false,
             refused_ready: false,
+            refused_pairs_settled: false,
             rejection: None,
             refusal_record: None,
             refusal_source: None,
@@ -466,6 +481,36 @@ impl RecordingContext {
     #[cfg(test)]
     pub(super) fn repair_recorded_account(&self) -> &RepairAccount {
         self.repair.as_ref().unwrap().ledger.account_for_test()
+    }
+
+    // Defensive loan fixtures use the ledger's actual transfers, never set its
+    // private loan bits or manufacture an account/correction capability.
+    #[cfg(test)]
+    pub(super) fn repair_refused_pairs_settled_for_test(&self) -> bool {
+        self.repair.as_ref().unwrap().refused_pairs_settled
+    }
+    #[cfg(test)]
+    pub(super) fn take_repair_correction_loan_for_test(&mut self) -> Option<OriginalRequests> {
+        self.repair
+            .as_mut()
+            .unwrap()
+            .ledger
+            .take_correction_accounting()
+    }
+    #[cfg(test)]
+    pub(super) fn take_repair_account_loan_for_test(&mut self) -> Option<RepairAccount> {
+        self.repair
+            .as_mut()
+            .unwrap()
+            .ledger
+            .take_exhausted_account()
+    }
+    #[cfg(test)]
+    pub(super) fn advance_refused_repair_for_test<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<RepairProgress, RunFailure> {
+        self.advance_refused_repair(ports)
     }
 
     #[cfg(test)]
@@ -1022,16 +1067,17 @@ impl RecordingContext {
             }
             self.completed_author = None;
         }
-        let purpose = self
-            .repair
-            .as_ref()
-            .unwrap()
-            .author
-            .as_ref()
-            .unwrap()
-            .purpose
-            .clone();
-        if purpose == AuthorPurpose::Instruction {
+        if matches!(
+            &self
+                .repair
+                .as_ref()
+                .unwrap()
+                .author
+                .as_ref()
+                .unwrap()
+                .purpose,
+            AuthorPurpose::Instruction
+        ) {
             self.reduce_flow(ports.io)?;
             let result = self.flow.take_instruction_check(&mut FlowRecording {
                 barrier: &mut self.barrier,
@@ -1095,7 +1141,7 @@ impl RecordingContext {
         }
         let author = self.repair.as_mut().unwrap().author.take().unwrap();
         let source = author.source.expect("actual recorded author");
-        let result = match purpose {
+        let result = match author.purpose {
             AuthorPurpose::Instruction => {
                 let expanded = author.expansion.expect("certified instruction retained");
                 let result = self
@@ -1128,10 +1174,7 @@ impl RecordingContext {
             | AuthorPurpose::EmptyCorrectionRefusal
             | AuthorPurpose::Association { .. } => Ok(()),
             AuthorPurpose::TemplateFault | AuthorPurpose::InstructionRefusal => {
-                let work = self.repair.as_mut().unwrap();
-                work.refused = true;
-                work.refusal_source = Some(source);
-                work.ledger.cancel();
+                // The Recorded hook is the only writer of this refusal fact.
                 return self.advance_refused_repair(ports);
             }
         };
@@ -1271,12 +1314,21 @@ impl RecordingContext {
         let calls = self.repair.as_ref().unwrap().calls.clone();
         let proofs = calls
             .iter()
-            .map(|call| self.pairs.completed(call).ok().flatten())
-            .collect::<Option<Vec<_>>>();
-        let Some(proofs) = proofs else {
-            self.repair.as_mut().unwrap().correction = correction;
-            self.repair.as_mut().unwrap().account = account;
-            return Err(self.repair_fault(ports.io, "finished pair account lacks a terminal proof"));
+            .map(|call| {
+                self.pairs
+                    .completed(call)
+                    .and_then(|proof| proof.ok_or(super::pairs::PairError::WrongPhase))
+            })
+            .collect::<Result<Vec<_>, _>>();
+        let proofs = match proofs {
+            Ok(proofs) => proofs,
+            Err(error) => {
+                self.repair.as_mut().unwrap().correction = correction;
+                self.repair.as_mut().unwrap().account = account;
+                return Err(
+                    self.pair_fault(ports.io, format!("completed repair pair proof: {error:?}"))
+                );
+            }
         };
         let work = self.repair.as_mut().unwrap();
         let result = match kind {
@@ -1306,45 +1358,17 @@ impl RecordingContext {
             }
             Accounting::RefusedCorrection => {
                 let correction = correction.unwrap();
-                let result =
-                    if let Some(cancel) = work.cancel {
-                        // An admitted terminal is immutable. Stop/Unload may own
-                        // only the still-unclaimed suffix of this PassPurpose batch.
-                        correction.requests().iter().zip(&proofs).try_for_each(
-                            |(request, proof)| {
-                                let Some(weaver_types::state_flow::PairFailure::NotDispatched {
-                                    cause,
-                                }) = &proof.ended().reason
-                                else {
-                                    return Err(RepairError::WrongAccounting);
-                                };
-                                let cause = *cause;
-                                if cause != NonDispatchCause::PassPurpose
-                                    && cause != cancel
-                                    && !(cancel == NonDispatchCause::Unload
-                                        && cause == NonDispatchCause::Stop)
-                                {
-                                    return Err(RepairError::WrongAccounting);
-                                }
-                                super::repair::validate_accounted(
-                                    std::iter::once(request.opening()),
-                                    &[*proof],
-                                    cause,
-                                )
-                            },
-                        )
-                    } else {
-                        super::repair::validate_accounted(
-                            correction
-                                .requests()
-                                .iter()
-                                .map(|request| request.opening()),
-                            &proofs,
-                            NonDispatchCause::PassPurpose,
-                        )
-                    };
+                let checked = super::repair::validate_refused_accounted(
+                    correction
+                        .requests()
+                        .iter()
+                        .map(|request| request.opening()),
+                    &proofs,
+                    work.cancel,
+                );
                 work.correction = Some(correction);
-                result
+                work.refused_pairs_settled = checked.is_ok();
+                checked
             }
             Accounting::CancelOriginal => {
                 work.account = account;
@@ -1492,12 +1516,101 @@ impl RecordingContext {
         Ok(result)
     }
 
+    fn repair_requests_need_accounting<'a>(
+        &self,
+        calls: impl Iterator<Item = &'a CallId>,
+    ) -> Result<bool, super::pairs::PairError> {
+        let mut pending = false;
+        for call in calls {
+            match self.pairs.completed(call) {
+                Ok(proof) => pending |= proof.is_none(),
+                // Before intake this call is legitimately not in the pair owner.
+                Err(super::pairs::PairError::UnknownCall) => pending = true,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(pending)
+    }
+
+    fn begin_pending_correction_accounting(
+        &mut self,
+        kind: Accounting,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        let Some(correction) = self.repair.as_ref().unwrap().correction.as_ref() else {
+            return Ok(false);
+        };
+        let pending = self
+            .repair_requests_need_accounting(
+                correction
+                    .requests()
+                    .iter()
+                    .map(|request| &request.opening().call_id),
+            )
+            .map_err(|error| self.pair_fault(io, format!("correction pair proof: {error:?}")))?;
+        if pending {
+            let work = self.repair.as_mut().unwrap();
+            work.calls = work
+                .correction
+                .as_ref()
+                .unwrap()
+                .requests()
+                .iter()
+                .map(|request| request.opening().call_id.clone())
+                .collect();
+            work.accounting = Some(kind);
+        }
+        Ok(pending)
+    }
+
+    fn settle_refused_correction_proofs(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        let work = self.repair.as_ref().unwrap();
+        if work.refused_pairs_settled {
+            return Ok(());
+        }
+        if let Some(correction) = &work.correction {
+            let proofs = correction
+                .requests()
+                .iter()
+                .map(|request| {
+                    self.pairs
+                        .completed(&request.opening().call_id)
+                        .and_then(|proof| proof.ok_or(super::pairs::PairError::WrongPhase))
+                })
+                .collect::<Result<Vec<_>, _>>();
+            let proofs = match proofs {
+                Ok(proofs) => proofs,
+                Err(error) => {
+                    return Err(
+                        self.pair_fault(io, format!("refused correction pair proof: {error:?}"))
+                    );
+                }
+            };
+            let checked = super::repair::validate_refused_accounted(
+                correction
+                    .requests()
+                    .iter()
+                    .map(|request| request.opening()),
+                &proofs,
+                work.cancel,
+            );
+            checked.map_err(|error| {
+                self.repair_fault(io, format!("refused correction pair proof: {error:?}"))
+            })?;
+        }
+        self.repair.as_mut().unwrap().refused_pairs_settled = true;
+        Ok(())
+    }
+
     /// Settle the same admitted refusal records and forbidden correction pairs
     /// under the original wait. Original requests still belong to the caller.
     fn advance_refused_repair<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<RepairProgress, RunFailure> {
+        if self.repair.as_ref().unwrap().refused_ready {
+            return Ok(RepairProgress::Refused);
+        }
         self.repair.as_mut().unwrap().ledger.cancel();
         if self.repair.as_ref().unwrap().author.is_some() {
             return self.advance_repair_author(ports);
@@ -1518,61 +1631,30 @@ impl RecordingContext {
             return self.start_correction_call_refusal(correction, ports.io);
         }
         if self.repair.as_ref().unwrap().account.is_none() {
-            let Some(cancelled) = self.repair.as_mut().unwrap().ledger.take_cancelled() else {
-                return Ok(RepairProgress::Pending);
-            };
+            if let Some(error) = self.repair.as_ref().unwrap().ledger.outstanding_loan() {
+                return Err(
+                    self.repair_fault(ports.io, format!("refused repair retains loan: {error:?}"))
+                );
+            }
+            let cancelled = self
+                .repair
+                .as_mut()
+                .unwrap()
+                .ledger
+                .take_cancelled()
+                .ok_or_else(|| {
+                    self.repair_fault(ports.io, "refused repair lost its original account")
+                })?;
             let (account, pending) = cancelled.into_parts();
             let work = self.repair.as_mut().unwrap();
             work.account = Some(account);
             work.correction = pending;
         }
-        if let Some(correction) = self.repair.as_ref().unwrap().correction.as_ref()
-            && correction.requests().iter().any(|request| {
-                self.pairs
-                    .completed(&request.opening().call_id)
-                    .ok()
-                    .flatten()
-                    .is_none()
-            })
-        {
-            let work = self.repair.as_mut().unwrap();
-            work.calls = work
-                .correction
-                .as_ref()
-                .unwrap()
-                .requests()
-                .iter()
-                .map(|request| request.opening().call_id.clone())
-                .collect();
-            work.accounting = Some(Accounting::RefusedCorrection);
-            return Ok(RepairProgress::Progress);
-        }
-        if let Some(correction) = self.repair.as_ref().unwrap().correction.as_ref() {
-            let completed = correction
-                .requests()
-                .iter()
-                .map(|request| {
-                    self.pairs
-                        .completed(&request.opening().call_id)
-                        .ok()
-                        .flatten()
-                })
-                .collect::<Option<Vec<_>>>()
-                .expect("all required terminal proofs retained");
-            let checked = super::repair::validate_accounted(
-                correction
-                    .requests()
-                    .iter()
-                    .map(|request| request.opening()),
-                &completed,
-                NonDispatchCause::PassPurpose,
-            );
-            checked.map_err(|error| {
-                self.repair_fault(
-                    ports.io,
-                    format!("refused correction pair proof: {error:?}"),
-                )
-            })?;
+        if !self.repair.as_ref().unwrap().refused_pairs_settled {
+            if self.begin_pending_correction_accounting(Accounting::RefusedCorrection, ports.io)? {
+                return Ok(RepairProgress::Progress);
+            }
+            self.settle_refused_correction_proofs(ports.io)?;
         }
         // One retirement point for both initially debt-free refusals and the
         // same refusal after backpressured records or pair accounting.
@@ -1742,46 +1824,24 @@ impl RecordingContext {
                 work.correction = Some(pending);
             }
         }
-        if let Some(correction) = self.repair.as_ref().unwrap().correction.as_ref() {
-            // A pending forbidden pass has not yet entered pair accounting.
-            // Once returned from cancellation accounting, keep it as evidence.
-            let unsettled = correction.requests().iter().any(|request| {
-                self.pairs
-                    .completed(&request.opening().call_id)
-                    .ok()
-                    .flatten()
-                    .is_none()
-            });
-            if unsettled {
-                let work = self.repair.as_mut().unwrap();
-                work.calls = work
-                    .correction
+        if self.begin_pending_correction_accounting(Accounting::CancelCorrection, ports.io)? {
+            return Ok(RepairProgress::Progress);
+        }
+        let unsettled = self
+            .repair_requests_need_accounting(
+                self.repair
+                    .as_ref()
+                    .unwrap()
+                    .account
                     .as_ref()
                     .unwrap()
                     .requests()
                     .iter()
-                    .map(|request| request.opening().call_id.clone())
-                    .collect();
-                work.accounting = Some(Accounting::CancelCorrection);
-                return Ok(RepairProgress::Progress);
-            }
-        }
-        let unsettled = self
-            .repair
-            .as_ref()
-            .unwrap()
-            .account
-            .as_ref()
-            .unwrap()
-            .requests()
-            .iter()
-            .any(|request| {
-                self.pairs
-                    .completed(&request.call_id)
-                    .ok()
-                    .flatten()
-                    .is_none()
-            });
+                    .map(|request| &request.call_id),
+            )
+            .map_err(|error| {
+                self.pair_fault(ports.io, format!("cancelled repair pair proof: {error:?}"))
+            })?;
         if unsettled {
             let work = self.repair.as_mut().unwrap();
             work.calls = work
