@@ -130,7 +130,14 @@ progress path. [FLOW-2, FLOW-3, CLASS-8]
 **HARNESS-RECORD-LIFETIME.** record.rs::RecordingContext owns Author, Record,
 FlowCoordinator, RetentionBudget and the completion slots for one serving run. Its
 method is author_and_wait(&mut self, ports: &mut PumpPorts, event: AuthoredEvent) ->
-Result<Sequence, RunFailure>. PumpPorts borrows the currently standing lifecycle, gate,
+Result<Sequence, AuthorFailure>. AuthorFailure is a move-owned result containing the
+RunFailure and an optional returned original AuthoredEvent. It is not Clone. A returned
+original owns no live recorder ticket and has no trace sequence, and remains the caller's
+custody. An absent returned original means the context retains that exact original in
+an existing author slot, or the original has already reached Recorded; it never means
+the original was discarded. RunFailure retains its existing failure, wait and
+nonfatal admission reasons, not event custody. An already-latched fatal cause remains
+immutable and takes precedence over later admission reasons. PumpPorts borrows the currently standing lifecycle, gate,
 decode and legacy-label transports and PumpIo. Each absent transport is None. The state
 and STE100 transports are the coordinator's. The pump never reads a second handle for
 one transport. Reason: enter authors load before the current Run constructor, and leave
@@ -166,8 +173,9 @@ alone invokes Author::author and Record::resume. Retire author_identity from ser
 with the seeding turn. Existing diagnostic wrappers remain on their diagnostic arm.
 [FLOW-2, FLOW-3, PROMPT-1, STORE-8]
 
-Every ignored-result site in the disposition table must now propagate RunFailure or
-enter the already-latched teardown. Neither a void helper nor an is_ok test can resume a
+Every ignored-result site in the disposition table must propagate its failure reason or
+enter the already-latched teardown while preserving any returned original in its
+caller's owner. Neither a void helper nor an is_ok test can resume a
 decision after failed or pending authoring. Refactor report_pressure to return an
 optional prepared fault, and submit it from the owning context. Set its reported flag
 only after Recorded. Retire record_enter_ask's record-failed-then-author-fault fallback
@@ -183,7 +191,35 @@ author or release a completion into model work. Reduction occurs only after the 
 author completes. Every completion's required trace record must complete before its
 effect, including a ledger transition. Thus a pump-generated observation never competes
 for the single pending Event. A second submit is a caller error, reported as
-protocol_failed without discarding the returned Event. [FLOW-2, FLOW-3, FLOW-4, SORT-4]
+protocol_failed without discarding the returned Event. If the context's held caller
+original or immutable first-fatal original prevents taking another original, return
+that new original in AuthorFailure. Never replace either earlier original, clone an
+event merely to fit an error value, allocate an overflow queue, or invent a ticket.
+Keep the first latched failure unchanged; a later rejected call returns that failure
+with its own untouched original. This return grants neither retry nor continuation.
+[FLOW-2, FLOW-3, FLOW-4, SORT-4]
+
+Ownership transfer and recording admission are separate facts. An original accepted
+into the one pending author keeps its allocated ticket and original wait through
+CapacityPending and resume; no returned original may duplicate that pending owner.
+An early owner hold remains unadmitted and may occupy the context's existing single
+held slot. Its caller takes it unchanged before another attempt. If a resumed pending
+author is withdrawn because an existing account owns admission, return that original
+through the same move-owned result when the held slot is occupied, after releasing
+only that attempt's unadmitted preparation and bookkeeping. A withdrawal assigns no
+trace sequence and renews no wait. Existing mandatory account settlement continues;
+no return permits skipping it. [FLOW-2, FLOW-3, FLOW-4, FLOW-5]
+
+Every caller handles both ownership outcomes explicitly. A returned original goes
+back to that caller's existing event or stopped-evidence owner; a caller may not use
+an error conversion that drops it. Input offered/refusal/turn/message authoring,
+mark-refusal authoring, repair authoring and retained retries preserve their original
+stage and source identities. They mark an attempt started only when the context
+actually takes custody, and never rebuild a returned event from current state.
+After failure, returned custody joins the caller's bounded teardown under the existing
+deadline. It neither enlarges the fixed halt-account schema nor adds a trace record.
+Halt reporting still names only the real pending ticket; an unaccepted original must
+not be represented as a ticketed AuthorAtHalt. [FLOW-2, FLOW-3, FLOW-5, FLOW-6]
 
 The first fatal account uses the trace writer's fault reserve. It may bypass an event
 that has no trace identity, after stopping the tap. Record the pending ticket in the
