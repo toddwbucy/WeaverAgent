@@ -175,6 +175,12 @@ pub(in crate::flow::context) fn drive(
     mut residency: Option<&mut OrganPort>,
     mode: &str,
 ) {
+    let resident_mode = mode.to_owned();
+    let mode = if mode.starts_with("resident-") {
+        "ready"
+    } else {
+        mode
+    };
     let path = std::env::temp_dir().join(format!("weaver-gate-composition-{}", std::process::id()));
     std::fs::create_dir_all(&path).unwrap();
     let coordination = crate::channel::bind_coordination(&path.join("admin.sock")).unwrap();
@@ -201,6 +207,33 @@ pub(in crate::flow::context) fn drive(
         },
         listener,
     )));
+    if resident_mode == "resident-gate-substitute" {
+        let (near, _far) = crate::channel::OrganChannel::pair().unwrap();
+        let mut substitute = OrganPort::from_channel(near).unwrap();
+        let owner = guard.0.as_mut().unwrap();
+        // SAFETY: no fork is allowed by this refusal, and the guard retains custody.
+        assert_eq!(
+            unsafe {
+                owner.advance(
+                    LifecyclePorts {
+                        residency: Some(&mut substitute),
+                        ..Default::default()
+                    },
+                    clock,
+                )
+            },
+            GateStartupStage::Stopped
+        );
+        assert!(owner.child.is_none());
+        let arms = owner
+            .boot
+            .resident
+            .as_ref()
+            .expect("stopped gate retained resident arms");
+        assert!(arms.evidence.reply.belongs_to(arms.residency));
+        assert_eq!(arms.evidence.enter, enter);
+        return;
+    }
     let (admin, far) = crate::channel::OrganChannel::pair().unwrap();
     let mut admin = LifecyclePeer::from_channel(admin).unwrap();
     let start = Instant::now();
@@ -239,6 +272,12 @@ pub(in crate::flow::context) fn drive(
                 .unwrap();
         }
         if owner.stage() == GateStartupStage::Raise {
+            if resident_mode == "resident-spu-eof-gate" && !did_stop {
+                owner.boot.resident.as_mut().unwrap().spu.stop_at_cap();
+                did_stop = true;
+                // Make terminal residency visible before the next common pump.
+                std::thread::sleep(Duration::from_millis(20));
+            }
             if mode == "pressure" && !filled {
                 let mut count = 0;
                 loop {
@@ -319,6 +358,19 @@ pub(in crate::flow::context) fn drive(
         assert!(!before_fork, "the gate was never reached after actual boot");
     }
     let mut owner = guard.0.take().unwrap();
+    if resident_mode == "resident-spu-eof-gate" {
+        assert_eq!(owner.stage(), GateStartupStage::Stopped);
+        assert!(matches!(
+            owner.stop(),
+            Some(GateStartupStop::Run(RunFailure::Transport {
+                source: PumpSource::Residency,
+                ..
+            }))
+        ));
+        assert!(owner.boot.resident.is_some());
+        guard.0 = Some(owner);
+        return;
+    }
     if matches!(mode, "boundary" | "pre-fork-expiry" | "foreign-window") {
         assert_eq!(owner.stage(), GateStartupStage::Stopped);
         assert!(owner.child.is_none());
@@ -390,6 +442,23 @@ pub(in crate::flow::context) fn drive(
         ) {
             Ok(ready) => {
                 assert_ne!(mode, "finish-expiry");
+                let arms = ready
+                    .owner
+                    .boot
+                    .resident
+                    .as_ref()
+                    .expect("raised gate retains actual resident arms");
+                assert!(arms.evidence.reply.belongs_to(arms.residency));
+                assert_eq!(arms.evidence.enter, enter);
+                assert!(arms.request.send().sent());
+                assert_eq!(
+                    arms.spu.state(),
+                    crate::flow::context::failed_enter_driver::ChildState::Running
+                );
+                assert_eq!(
+                    arms.classifier.state(),
+                    crate::flow::context::failed_enter_driver::ChildState::Running
+                );
                 assert_eq!(ready.enter(), enter);
                 assert_eq!(ready.shell_granted(), mode == "shell");
                 assert!(matches!(
@@ -504,3 +573,41 @@ scenario!(
 );
 scenario!(gate_startup_composition_foreign_window, "foreign-window");
 scenario!(gate_startup_composition_send_pressure, "pressure");
+
+scenario!(
+    gate_startup_composition_resident_foreign_context,
+    "resident-foreign-context"
+);
+scenario!(
+    gate_startup_composition_resident_wrong_instruction,
+    "resident-wrong-instruction"
+);
+scenario!(
+    gate_startup_composition_resident_foreign_bound,
+    "resident-foreign-bound"
+);
+scenario!(
+    gate_startup_composition_resident_boot_substitute,
+    "resident-boot-substitute"
+);
+scenario!(
+    gate_startup_composition_resident_boot_window,
+    "resident-boot-window"
+);
+scenario!(
+    gate_startup_composition_resident_stopped_boot,
+    "resident-stopped-boot"
+);
+scenario!(
+    gate_startup_composition_resident_gate_substitute,
+    "resident-gate-substitute"
+);
+
+scenario!(
+    gate_startup_composition_resident_spu_eof_boot,
+    "resident-spu-eof-boot"
+);
+scenario!(
+    gate_startup_composition_resident_spu_eof_gate,
+    "resident-spu-eof-gate"
+);

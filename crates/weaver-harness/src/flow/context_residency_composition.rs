@@ -33,6 +33,8 @@ pub(in crate::flow) enum ResidencyStop {
 }
 
 pub(in crate::flow) struct ResidencyEvidence {
+    pub(in crate::flow::context) origin: std::sync::Arc<()>,
+    pub(in crate::flow::context) enter: AbsoluteBound,
     pub startup: StartupEvidence,
     pub request: ResidencyRequest,
     pub reply: ReceivedOrgan,
@@ -57,6 +59,26 @@ pub(in crate::flow) struct AdmittedStartup<'a> {
 }
 
 impl<'a> AdmittedStartup<'a> {
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn into_boot(
+        self,
+    ) -> Result<super::boot_composition::BootComposition<'a>, Self> {
+        match super::boot_composition::BootComposition::from_residency(
+            self.context,
+            self.resources,
+            self.inventory,
+            self.evidence,
+        ) {
+            Ok(boot) => Ok(boot),
+            Err((context, resources, inventory, evidence)) => Err(Self {
+                context,
+                resources,
+                inventory,
+                evidence,
+            }),
+        }
+    }
+
     pub(in crate::flow) fn into_parts(
         self,
     ) -> (
@@ -333,11 +355,14 @@ impl<'a> ResidencyComposition<'a> {
         if self.stage != ResidencyStage::Complete || !self.check(&lifecycle, io) {
             return Err(self);
         }
+        let origin = self.resources.origin_for_boot();
         Ok(AdmittedStartup {
             context: self.context,
             resources: self.resources,
             inventory: self.inventory,
             evidence: ResidencyEvidence {
+                origin,
+                enter: self.enter.expect("checked original Enter"),
                 startup: self.startup,
                 request: self.request,
                 reply: self.reply.expect("actual Admitted"),

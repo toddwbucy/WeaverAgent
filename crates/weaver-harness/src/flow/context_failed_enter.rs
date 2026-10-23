@@ -30,6 +30,14 @@ pub(in crate::flow) struct FailedEnterResources {
     classifier: Option<OwnedChild>,
 }
 
+pub(in crate::flow::context) struct ResidentBootResources<'a> {
+    pub residency: &'a mut OrganPort,
+    pub spu: &'a mut OwnedChild,
+    pub classifier: &'a mut OwnedChild,
+    pub request: &'a ResidencyRequest,
+    pub evidence: super::residency_composition::ResidencyEvidence,
+}
+
 struct SpuResource {
     child: OwnedChild,
     decode_identity: PortIdentity,
@@ -170,6 +178,58 @@ impl FailedEnterResources {
         context
             .begin_classifier(near, bootstrap, io)
             .map_err(|error| format!("classifier bootstrap: {error:?}"))
+    }
+
+    pub(in crate::flow::context) fn origin_for_boot(&self) -> Arc<()> {
+        Arc::clone(&self.origin)
+    }
+
+    pub(in crate::flow::context) fn can_boot(
+        &self,
+        context: &RecordingContext,
+        evidence: &super::residency_composition::ResidencyEvidence,
+    ) -> bool {
+        self.matches(context)
+            && Arc::ptr_eq(&evidence.origin, &self.origin)
+            && context.deadlines.get(PumpDeadline::Enter) == Some(evidence.enter)
+            && context.phase == RecordingPhase::Entered
+            && context.failure().is_none()
+            && self.original_ports()
+            && self.classifier.is_some()
+            && self.spu.as_ref().is_some_and(|spu| {
+                spu.residency.as_ref().is_some_and(|port| {
+                    evidence.reply.belongs_to(port)
+                        && evidence.reply.envelope().position == Position::Close
+                        && matches!(evidence.reply.envelope().payload,
+                            weaver_types::Payload::Answer(LifecycleAnswer::Admitted))
+                        && spu.residency_request.as_ref().is_some_and(|request| {
+                            request.send.belongs_to(port) && request.send.sent()
+                                && request.send.sent_at().is_some_and(|at|
+                                    at >= evidence.enter.began_ns() && !evidence.enter.expired(at))
+                                && request.send.matches_exchange(&evidence.reply.envelope().exchange)
+                                && matches!(&request.envelope.payload,
+                                    weaver_types::Payload::Directive(LifecycleDirective::Admit { instruction })
+                                        if instruction == &evidence.request.instruction)
+                        })
+                })
+            })
+    }
+
+    pub(in crate::flow::context) fn split_for_boot(
+        &mut self,
+        evidence: super::residency_composition::ResidencyEvidence,
+    ) -> (ResidentBootResources<'_>, &mut DecodePort) {
+        let spu = self.spu.as_mut().expect("checked actual SPU");
+        (
+            ResidentBootResources {
+                residency: spu.residency.as_mut().expect("checked residency"),
+                spu: &mut spu.child,
+                classifier: self.classifier.as_mut().expect("checked classifier"),
+                request: spu.residency_request.as_ref().expect("checked Admit"),
+                evidence,
+            },
+            spu.decode.as_mut().expect("checked decode"),
+        )
     }
 
     pub(super) fn spu_ports_mut(&mut self) -> Option<(&mut OrganPort, &mut DecodePort)> {

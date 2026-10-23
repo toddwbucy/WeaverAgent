@@ -398,6 +398,7 @@ fn circuit(case: Case) {
                                 run,
                                 inventory,
                                 &mut resources,
+                                evidence,
                             );
                             resources.reap_startup_test_children();
                             return;

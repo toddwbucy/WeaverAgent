@@ -177,8 +177,19 @@ impl<'a> GateStartup<'a> {
         if !self.check(&lifecycle, io) {
             return self.stage;
         }
+        if self.boot.resident.is_some() && lifecycle.residency.is_some() {
+            let error = self.protocol(io, "resident gate received a substitute residency port");
+            return self.stopped(GateStartupStop::Run(error));
+        }
+        let mut resident = self.boot.resident.take();
+        let mut lifecycle = lifecycle;
+        if let Some(arms) = resident.as_mut() {
+            lifecycle.residency = Some(&mut *arms.residency);
+        }
         // SAFETY: the caller carries the serving-thread child lifetime contract.
-        if let Err(error) = unsafe { self.step(lifecycle, io) } {
+        let result = unsafe { self.step(lifecycle, io) };
+        self.boot.resident = resident;
+        if let Err(error) = result {
             self.stopped(GateStartupStop::Run(error));
         }
         self.stage
