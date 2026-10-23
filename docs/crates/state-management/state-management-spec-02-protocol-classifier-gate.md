@@ -626,14 +626,14 @@ under the existing cap gives that repair a finite outcome without erasing the so
 After that refusal is recorded, increment failed_corrections once. While repair remains
 live, follow the same below-cap or cap-reached row; after Stop or leave, retain that
 count under CANCELLED-CORRECTION without reopening either continuation. This preserves
-the operator's Recorded refusal boundary. This is an operation refusal, never non_ste100 fabricated
-without a checker result and never component failure. It creates no statement, binding
-or pair. A correction containing a ToolCall or UnrecoveredCall follows correction_call
-instead, even if it contains no Text. A Text block whose text is empty still takes
-OUTPUT-UNIT's normal classifier path and its recorded non_ste100 outcome. This rule
-applies only to a requested correction. An original generation with no Text retains
-the existing OUTPUT-UNIT and DECISION-BARRIER behavior.
-[CLASS-8, CLASS-9, CLASS-10, FLOW-3]
+the operator's Recorded refusal boundary. This is an operation refusal, never non_ste100
+fabricated without a checker result and never component failure. It creates no
+statement, binding or pair. A correction containing a ToolCall or UnrecoveredCall
+follows correction_call instead, even if it contains no Text. A Text block whose text is
+empty still takes OUTPUT-UNIT's normal classifier path and its recorded non_ste100
+outcome. This rule applies only to a requested correction. An original generation with
+no Text retains the existing OUTPUT-UNIT and DECISION-BARRIER behavior. [CLASS-8,
+CLASS-9, CLASS-10, FLOW-3]
 
 Every conforming request in a forbidden correction pass still takes Spec 05's start and
 terminal path, ending not_dispatched/pass_purpose while live. Stop or leave may own the

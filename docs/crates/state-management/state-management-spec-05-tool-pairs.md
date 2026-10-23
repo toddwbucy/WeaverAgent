@@ -164,13 +164,12 @@ Purpose and cancellation checks run after send association and before execution.
 pass_purpose records that the caller supplied a purpose which bars model-requested
 dispatch. The primitive checks that capability and elects no pass schedule. A completed
 repair-cap disposition uses repair_exhausted for the original pass's remaining
-conforming sends. A stop or leave already accepted takes precedence for a terminal
-not yet admitted to its author, using stop or unload. A terminal already admitted,
-including one awaiting its same recorder ticket, keeps its exact cause and source;
-later Stop or Leave changes only the unclaimed suffix. A broken flow permits no
-further filing under FLOW-4. Refusing execution is
-never a reason to lose a known conforming pair. [PAIR-1, CLASS-9, PLAN-1, STRAT-2,
-FLOW-4]
+conforming sends. A stop or leave already accepted takes precedence for a terminal not
+yet admitted to its author, using stop or unload. A terminal already admitted, including
+one awaiting its same recorder ticket, keeps its exact cause and source; later Stop or
+Leave changes only the unclaimed suffix. A broken flow permits no further filing under
+FLOW-4. Refusing execution is never a reason to lose a known conforming pair. [PAIR-1,
+CLASS-9, PLAN-1, STRAT-2, FLOW-4]
 
 **PAIR-MATCH.** A gate answer is eligible only for the one live execution's exact
 ExchangeId, opener, close position and ToolOutcome payload, while its CallId is opened
