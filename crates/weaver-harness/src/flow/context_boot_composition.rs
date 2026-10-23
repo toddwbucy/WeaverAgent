@@ -367,4 +367,4 @@ impl<'a> BootComposition<'a> {
 
 #[cfg(test)]
 #[path = "context_boot_composition_tests.rs"]
-mod tests;
+pub(super) mod tests;

@@ -42,7 +42,24 @@ struct SpuResource {
 }
 
 impl FailedEnterResources {
-    fn matches(&self, context: &RecordingContext) -> bool {
+    #[cfg(test)]
+    pub(super) fn poll_startup_test_children(&mut self) -> bool {
+        self.poll_children()
+    }
+
+    #[cfg(test)]
+    pub(super) fn reap_startup_test_children(&mut self) {
+        self.close_at_cap();
+        for _ in 0..3000 {
+            if self.poll_children() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("startup fixture child was not reaped");
+    }
+
+    pub(super) fn matches(&self, context: &RecordingContext) -> bool {
         Arc::ptr_eq(&self.origin, &context.read_origin)
     }
 

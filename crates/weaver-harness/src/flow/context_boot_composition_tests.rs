@@ -71,7 +71,29 @@ enum Fault {
 }
 
 fn circuit(fault: Fault) {
-    let mut fx = TemplateFixture::new();
+    circuit_with_fixture(fault, TemplateFixture::new(), inventory(), false);
+}
+
+pub(in crate::flow::context) fn after_startup(
+    run: super::super::tests::Fixture,
+    inventory: crate::flow::templates::CompiledInventory,
+) {
+    let (end, _unused) = crate::channel::ClassifyChannel::pair().unwrap();
+    let peer =
+        crate::flow::ste100_channel::Channel::from_owned(end.into_pump_fd().unwrap(), 262144)
+            .unwrap();
+    let fx = TemplateFixture {
+        input: super::super::input_tests::InputFixture { run, peer },
+    };
+    circuit_with_fixture(Fault::None, fx, inventory, true);
+}
+
+fn circuit_with_fixture(
+    fault: Fault,
+    mut fx: TemplateFixture,
+    inventory: crate::flow::templates::CompiledInventory,
+    actual_child: bool,
+) {
     let enter = fx
         .input
         .run
@@ -92,7 +114,7 @@ fn circuit(fault: Fault) {
     let (channel, decoder) = DecodeChannel::pair().unwrap();
     let mut decode = DecodePort::from_channel(channel).unwrap();
     fx.input.run.state.set_nonblocking(true).unwrap();
-    let mut boot = BootComposition::new(&mut fx.input.run.context, &mut decode, inventory());
+    let mut boot = BootComposition::new(&mut fx.input.run.context, &mut decode, inventory);
     let mut input = Vec::new();
     let mut queries = Vec::new();
     let mut releases = 0;
@@ -104,6 +126,9 @@ fn circuit(fault: Fault) {
     let mut held_release: Option<(s::StateFrame, usize)> = None;
     let mut held_steps = 0;
     for _ in 0..4096 {
+        if actual_child {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         if let Some((response, remaining)) = held_release.as_mut() {
             assert_eq!(boot.stage(), BootStage::Prompt);
             assert!(boot.context.boot_head.is_none());
@@ -192,7 +217,7 @@ fn circuit(fault: Fault) {
             if matches!(fault, Fault::HoldPromptRelease) {
                 assert_eq!(held_steps, 10);
             }
-            assert_eq!(checks, 3);
+            assert_eq!(checks, if actual_child { 0 } else { 3 });
             assert_eq!(opens, 1);
             assert_eq!(releases, 4);
             assert_eq!(queries, ["prompt", "pairs", "pairs", "summary"]);
@@ -224,7 +249,7 @@ fn circuit(fault: Fault) {
             }
             return;
         }
-        if let Receive::Complete(message) = fx.input.peer.try_receive().unwrap() {
+        if !actual_child && let Receive::Complete(message) = fx.input.peer.try_receive().unwrap() {
             assert_eq!(message.tag, Tag::Request);
             let request: s::Ste100Request = serde_json::from_slice(&message.payload).unwrap();
             checks += 1;
@@ -248,7 +273,7 @@ fn circuit(fault: Fault) {
                 .begin_send(Tag::Reply, message.id, serde_json::to_vec(&answer).unwrap())
                 .unwrap();
         }
-        if fx.input.peer.has_pending_send() {
+        if !actual_child && fx.input.peer.has_pending_send() {
             fx.input.peer.try_send().unwrap();
         }
         let mut bytes = [0; 65536];
