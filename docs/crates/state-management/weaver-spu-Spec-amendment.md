@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #232
+**Landing PR:** #260
 
 **Version:** 0.8 **Date filed:** 2026-10-22 **Parent:** weaver-spu-PRD
 

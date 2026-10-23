@@ -2,6 +2,8 @@
 
 Date: 2026-10-22. Issue: #146. This is an unapproved Spec proposal.
 Source: #258 Planner review 5622585660, row 5.
+Draft PR: https://github.com/toddwbucy/WeaverAgent/pull/260
+Branch: docs/state-positive-generation; base main 45f8483393ce25af4ade3f0fa7bd96c1e8ed78f1.
 
 ## Proposed decision
 
