@@ -46,7 +46,8 @@ The next drafts stack from this baseline, each on its preceding carrier:
 | #277 code/state-ste100-review | Eleven #272 runtime followups: static absent-adapter refusal, bounded retained reads, unwind notification, shared descriptor ownership/digest checks, retirement cleanup and real wait/exit/destruction-order tests. Full SPU 393, types 168/226, admin 498/37 ignored and harness 1,733/18 ignored pass; final focused/lint/fmt checks pass after a test-only helper move. All 18 compiled protective failures and exact restores pass; production adapter and lifecycle/qualification duties remain owed. |
 | #278 code/state-place-phase-custody | #273 followups: phase-bound reload evidence/extraction, explicit cancelled Staged, checked consumed-lease disposal, private returned inputs and native proposal moves. Harness 1,738/18 ignored, trace 160 and affected gates pass. Ten unique compiled protective failures pass after strengthening one initially surviving source-identity fixture; the separate four-field privacy pin passes. Original failure/survivor evidence is retained. |
 | #279 code/state-held-author-admission | #274 rows 2-9: held-original admission/release/Closed guards with exact admitted-owner continuations, pending ordinary Unload debt custody, typed summary rollback and correction proof accounting. Thirty-one incoming source paths and one root test migration; harness 1,752/18 ignored, trace 160 and affected gates pass. All 26 compiled protective failures and restores pass; separate E0308 typed-Boot rejection and eight restored tests pass. Row 1 remains #276. |
-| code/state-failed-enter-cleanup | Bounded Failed pre-input context/resource cleanup: actual fork custody, owed Boot accounts, descriptorless retirement, exact Release/reap/Unload and original-cap drain. Eighteen source paths reviewed; harness 1,779/18 ignored, trace 160 and final21 owner/lint gates pass. All 20 unique compiled protective failures and restores pass, plus three separate ownership compiler pins. Initial survivor/instrument error remain preserved. Healthy refusal and complete lifecycle composition remain owed. |
+| #280 code/state-failed-enter-cleanup | Bounded Failed pre-input context/resource cleanup: actual fork custody, owed Boot accounts, descriptorless retirement, exact Release/reap/Unload and original-cap drain. Eighteen source paths reviewed; harness 1,779/18 ignored, trace 160 and final21 owner/lint gates pass. All 20 unique compiled protective failures and restores pass, plus three separate ownership compiler pins. Initial survivor/instrument error remain preserved. Healthy refusal and complete lifecycle composition remain owed. |
+| code/state-author-claims | #275 rows 1-9: exact waiting-original/claim carrier, actual allocated ticket, immediate trace-only witness binding, immutable refusal identity and separate settled-cancel accounting. Harness 1,793/18 ignored, trace 160 and affected gates pass. All 23 unique compiled controls and restores pass after a filter-only rerun of the preserved A9 survivor; two separate non-Clone pins pass. Defensive caller and redundant-cache limits remain explicit. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
@@ -97,6 +98,20 @@ phase and event identity, truthful Failed binding and tests, a filed single-slot
 witness interleave, direct assembly identity, settled-state bookkeeping, exact
 queue-return ticket and claim-helper consistency, and A2/A3/A6/A7/A8/A10 controls.
 Its HARNESS-CLOCK grade is by reading only, not an independent behavior control.
+
+#278's Planner grade at fd873096 has zero fix rows and closes all eight #273
+rows. Its eight new batch findings remain tracked: common phase-bound account
+extraction, the two remaining success takes, consumed lease admission/disposal,
+structural native proposal custody, an impossible reload state and independent
+status/order/origin controls. P4 is redundant; P6/P7 overlap in the reviewed
+fixtures. The operator has not merged this stack.
+
+#279's Planner grade at 5f7a3372 has zero fix rows and reproduces its scoped
+gates. #274 rows 2-8 are closed and row 9 is partly closed. Its nine new batch
+rows remain tracked. The fatal-versus-correctable held-boundary behavior and
+second-held-author loss belong to the still-unelected #276 proposal; other
+refusal consistency, proof-helper and actual admission/account-return tests
+remain owed. Its grade does not authorize the pending proposal.
 
 Separate draft #276 on main proposes a move-owned author rejection result to
 return an unaccepted original while preserving earlier held/fatal custody.

@@ -266,7 +266,7 @@ impl RecordingContext {
                     "template_id": "sort.outbound", "source_id": rejected.source(), "result": rejected.reply(),
                 })).expect("typed rejection serializes"),
             };
-            self.waiting_content = Some(AuthoredEvent {
+            self.waiting_content = Some(WaitingAuthor::ordinary(AuthoredEvent {
                 kind: Kind::Fault,
                 subsystem: weaver_trace::Subsystem::Harness,
                 turn: Some(work.checked.input().effective.account().turn().clone()),
@@ -275,7 +275,7 @@ impl RecordingContext {
                 payload: Some(Payload::Fault(
                     serde_json::value::to_raw_value(&fault).expect("typed fault serializes"),
                 )),
-            });
+            }));
             self.outbound_work_mut().unwrap().fault_started = true;
         }
         if let Some(sequence) = self.completed_author.take() {

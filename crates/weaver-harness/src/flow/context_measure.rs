@@ -175,10 +175,19 @@ enum AuthorPurpose {
 }
 
 struct MeasureAuthor {
-    identity: std::sync::Arc<()>,
+    record: AuthorRecord,
     purpose: AuthorPurpose,
-    ticket: Option<u64>,
-    sequence: Option<Sequence>,
+}
+impl std::ops::Deref for MeasureAuthor {
+    type Target = AuthorRecord;
+    fn deref(&self) -> &AuthorRecord {
+        &self.record
+    }
+}
+impl std::ops::DerefMut for MeasureAuthor {
+    fn deref_mut(&mut self) -> &mut AuthorRecord {
+        &mut self.record
+    }
 }
 
 pub(super) struct MeasureTransaction {
@@ -560,23 +569,25 @@ impl RecordingContext {
     fn stage_measure_author(&mut self, purpose: AuthorPurpose, kind: Kind, payload: Payload) {
         let owner = self.measure.as_mut().expect("measurement owns its author");
         owner.author = Some(MeasureAuthor {
-            identity: std::sync::Arc::new(()),
+            record: AuthorRecord::new(),
             purpose,
-            ticket: None,
-            sequence: None,
         });
-        self.waiting_content = Some(AuthoredEvent {
-            kind,
-            subsystem: if purpose == AuthorPurpose::PlacementRefusal {
-                Subsystem::Harness
-            } else {
-                Subsystem::SpuDecoder
+        let identity = std::sync::Arc::clone(&owner.author.as_ref().unwrap().identity);
+        self.waiting_content = Some(WaitingAuthor::claimed(
+            AuthoredEvent {
+                kind,
+                subsystem: if purpose == AuthorPurpose::PlacementRefusal {
+                    Subsystem::Harness
+                } else {
+                    Subsystem::SpuDecoder
+                },
+                turn: owner.request.turn.clone(),
+                source: AuthoredSource::Runtime,
+                causal_parent: None,
+                payload: Some(payload),
             },
-            turn: owner.request.turn.clone(),
-            source: AuthoredSource::Runtime,
-            causal_parent: None,
-            payload: Some(payload),
-        });
+            AuthorClaim::Measurement(identity),
+        ));
     }
 
     fn stage_measure_placement_refusal(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
@@ -608,67 +619,23 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<MeasureProgress, RunFailure> {
-        let purpose = self
-            .measure
-            .as_ref()
-            .unwrap()
-            .author
-            .as_ref()
-            .unwrap()
-            .purpose;
-        let sequence = if let Some(sequence) = self
-            .measure
-            .as_ref()
-            .unwrap()
-            .author
-            .as_ref()
-            .unwrap()
-            .sequence
-        {
+        let author = self.measure.as_ref().unwrap().author.as_ref().unwrap();
+        let (purpose, recorded, ticket) = (author.purpose, author.sequence, author.ticket);
+        let identity = std::sync::Arc::clone(&author.identity);
+        let sequence = if let Some(sequence) = recorded {
             if self.completed_author == Some(sequence) {
                 self.completed_author = None;
             }
             sequence
         } else {
-            if let Some(ticket) = self
-                .measure
-                .as_ref()
-                .unwrap()
-                .author
-                .as_ref()
-                .unwrap()
-                .ticket
+            if let Some(ticket) = ticket
                 && self.barrier.pending_author().map(|a| a.ticket) != Some(ticket)
             {
                 return Err(self.measure_fault(ports.io, "measurement author ticket changed"));
             }
-            let identity = std::sync::Arc::clone(
-                &self
-                    .measure
-                    .as_ref()
-                    .unwrap()
-                    .author
-                    .as_ref()
-                    .unwrap()
-                    .identity,
-            );
             let sequence = self
                 .resume_claimed_author_and_wait(ports, Some(AuthorClaim::Measurement(identity)))?;
-            if self
-                .measure
-                .as_ref()
-                .unwrap()
-                .author
-                .as_ref()
-                .unwrap()
-                .sequence
-                != Some(sequence)
-            {
-                return Err(self.measure_fault(
-                    ports.io,
-                    "measurement completion has another author's ticket",
-                ));
-            }
+            self.complete_measure_author(sequence, ports.io)?;
             sequence
         };
         self.measure_wait_matches(ports.io)?;
@@ -864,9 +831,9 @@ impl RecordingContext {
 
         if !self.measure.as_ref().unwrap().failed_refusal_queued {
             if self.barrier.pending().is_some() {
-                // The barrier retains any actual trace-only sequence. This
-                // method's Some result remains exclusive to its own refusal.
-                if let Err(error) = self.barrier.resume_trace_only() {
+                // Bind an older exact owner before this refusal can replace the
+                // barrier witness. Some remains exclusive to this refusal.
+                if let Err(error) = self.resume_trace_only_and_bind() {
                     self.measure_refusal_report_failed(
                         Some(now),
                         format!("prior trace drain: {error:?}"),
@@ -899,7 +866,7 @@ impl RecordingContext {
             }
             self.measure.as_mut().unwrap().failed_refusal_queued = true;
         }
-        match self.barrier.resume_trace_only() {
+        match self.resume_trace_only_and_bind() {
             Ok(Some(sequence)) => {
                 let owner = self.measure.as_mut().unwrap();
                 owner.failed_refusal_queued = false;
@@ -1111,6 +1078,7 @@ impl RecordingContext {
         let owner = self.measure.as_ref().unwrap();
         if let Some(author) = owner.author.as_ref() {
             let (purpose, ticket, sequence) = (author.purpose, author.ticket, author.sequence);
+            let claim = AuthorClaim::Measurement(std::sync::Arc::clone(&author.identity));
             let sequence = if let Some(sequence) = sequence {
                 Some(sequence)
             } else {
@@ -1123,8 +1091,7 @@ impl RecordingContext {
                         return Ok(false);
                     }
                     let event = self
-                        .waiting_content
-                        .take()
+                        .take_claimed_waiting_author(&claim)
                         .ok_or(RunFailure::MeasureOwned)?;
                     if let Err(e) = self.barrier.queue_trace_only_authored(
                         event,
@@ -1132,7 +1099,7 @@ impl RecordingContext {
                         self.last_ns,
                         wall_ms().map_err(|_| RunFailure::MeasureOwned)?,
                     ) {
-                        self.waiting_content = Some(e.event);
+                        self.waiting_content = Some(WaitingAuthor::claimed(e.event, claim));
                         return Err(RunFailure::MeasureOwned);
                     }
                     self.measure
@@ -1143,8 +1110,7 @@ impl RecordingContext {
                         .unwrap()
                         .ticket = self.barrier.pending_author().map(|a| a.ticket);
                 }
-                self.barrier
-                    .resume_trace_only()
+                self.resume_trace_only_and_bind()
                     .map_err(|_| RunFailure::MeasureOwned)?
             };
             let Some(sequence) = sequence else {
@@ -1179,6 +1145,24 @@ impl RecordingContext {
 }
 
 impl RecordingContext {
+    pub(super) fn complete_measure_author(
+        &mut self,
+        sequence: Sequence,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        if self
+            .measure
+            .as_ref()
+            .and_then(|w| w.author.as_ref())
+            .and_then(|a| a.sequence)
+            != Some(sequence)
+        {
+            return Err(
+                self.measure_fault(io, "measurement completion has another author's ticket")
+            );
+        }
+        Ok(())
+    }
     pub(super) fn claim_measure_author_ticket(
         &mut self,
         identity: &std::sync::Arc<()>,
@@ -1187,24 +1171,14 @@ impl RecordingContext {
         let Some(author) = self.measure.as_mut().and_then(|w| w.author.as_mut()) else {
             return false;
         };
-        if !std::sync::Arc::ptr_eq(&author.identity, identity)
-            || author.sequence.is_some()
-            || author.ticket.is_some_and(|held| held != ticket)
-        {
-            return false;
-        }
-        author.ticket = Some(ticket);
-        true
+        author.record.claim(identity, ticket)
     }
     pub(super) fn bind_place_measure_author(&mut self, sequence: Sequence) {
         let recorded_ticket = self.barrier.recorded_author_ticket(sequence);
         if let Some(author) = self.measure.as_mut().and_then(|w| w.author.as_mut())
-            && author.ticket.is_some()
-            && author.ticket == recorded_ticket
             && self.waiting_content.is_none()
-            && author.sequence.is_none()
         {
-            author.sequence = Some(sequence)
+            author.record.bind(recorded_ticket, sequence);
         }
     }
     #[cfg(test)]
@@ -1217,6 +1191,14 @@ impl RecordingContext {
             .as_ref()
             .and_then(|w| w.author.as_ref())
             .map(|a| (a.ticket, a.sequence))
+    }
+    #[cfg(test)]
+    pub(super) fn measure_author_identity_for_test(&self) -> Option<std::sync::Arc<()>> {
+        self.measure
+            .as_ref()?
+            .author
+            .as_ref()
+            .map(|a| std::sync::Arc::clone(&a.identity))
     }
     pub(super) fn place_measure_author_ticket(&self) -> Option<u64> {
         self.measure

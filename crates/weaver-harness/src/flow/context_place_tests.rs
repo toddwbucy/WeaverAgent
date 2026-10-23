@@ -1016,3 +1016,6 @@ mod native_tests;
 
 #[path = "context_place_append_review_tests.rs"]
 mod append_review_tests;
+
+#[path = "context_place_refusal_boundary_tests.rs"]
+mod refusal_boundary_tests;

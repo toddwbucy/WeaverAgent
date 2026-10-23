@@ -709,7 +709,7 @@ impl RecordingContext {
                 }
                 self.retain_boot_author_ticket();
             }
-            let result = self.barrier.resume_trace_only();
+            let result = self.resume_trace_only_and_bind();
             match result {
                 Ok(Some(sequence)) => self.bind_boot_recorded(sequence),
                 Ok(None) => {}

@@ -331,7 +331,14 @@ fn boot_pairs_cancelled_account_exposes_exact_unstarted_terminal() {
             break;
         }
     }
-    let original = fx.run().context.waiting_content.as_ref().unwrap().clone();
+    let original = fx
+        .run()
+        .context
+        .waiting_content
+        .as_ref()
+        .unwrap()
+        .event
+        .clone();
     let run = fx.run();
     run.context.cancel_boot_pairs(&mut run.clock).unwrap();
     let BootPairsCompletion::Cancelled(account) = fx.complete() else {

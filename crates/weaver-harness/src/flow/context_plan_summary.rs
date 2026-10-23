@@ -1188,7 +1188,7 @@ impl RecordingContext {
             }
             self.retain_read_author_ticket();
         }
-        match self.barrier.resume_trace_only() {
+        match self.resume_trace_only_and_bind() {
             Ok(Some(sequence)) => {
                 if let Err(detail) = self.retain_read_recorded(sequence) {
                     self.abandon_plan_summary_account(detail);
