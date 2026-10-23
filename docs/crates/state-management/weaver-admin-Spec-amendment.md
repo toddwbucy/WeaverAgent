@@ -2,6 +2,8 @@
 
 **Status:** MERGED.
 
+**Landing PR:** #268
+
 **Version:** 0.16 **Date filed:** 2026-10-23 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is

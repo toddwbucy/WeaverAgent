@@ -6,7 +6,7 @@
 This proposes one missing management outcome before a root plan effect. It is a
 proposal for operator ruling and review, with no approval, implementation, production
 qualification or cutover claim. The draft branch is
-`docs/state-plan-preflight-read-refusal`. Its PR number has not been assigned.
+`docs/state-plan-preflight-read-refusal`. Its draft PR is #268.
 The baseline is main commit 45f8483393ce25af4ade3f0fa7bd96c1e8ed78f1.
 
 ## Problem and requested election
