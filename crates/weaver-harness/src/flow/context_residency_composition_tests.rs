@@ -230,12 +230,16 @@ pub(in crate::flow::context) fn drive<'a>(
     } else {
         mode
     });
+    let instruction = startup
+        .original_enter()
+        .map(|original| original.envelope().enter().spu_instruction.clone())
+        .unwrap_or_else(instruction_fixture);
     let mut owner = ResidencyComposition::new(
         startup,
         ResidencyRequest {
             binary: binary.0.clone(),
             arguments: vec![],
-            instruction: instruction_fixture(),
+            instruction,
         },
     );
     if mode == "cleanup-before-fork" {

@@ -1,7 +1,8 @@
 //! Completed boot -> actual contained gate fork -> checked Raise completion.
-//! The caller still owns the admission judgment and the original Enter peer.
+//! The caller owns admission judgment; composed boot retains its original Enter peer.
 use super::*;
 use crate::flow::context::failed_enter_driver::OwnedChild;
+use crate::flow::pump::enter::{probe_enter_peer, with_enter};
 use crate::flow::pump::{LifecycleListener, PumpSource};
 use crate::flow::pump_transport::{OrganPort, OrganSend, ReceivedOrgan, TrackedStage};
 use crate::tools_cgroup::ToolsCgroup;
@@ -70,7 +71,24 @@ impl<'a> ComposedBoot<'a> {
         let invalid = self.context.phase != RecordingPhase::Entered
             || enter.is_none()
             || self.context.place_engine.is_none()
-            || self.context.committed_plan_summary().is_err();
+            || self.context.committed_plan_summary().is_err()
+            || self
+                .resident
+                .as_ref()
+                .and_then(|arms| arms.evidence.startup.original_enter.as_ref())
+                .is_some_and(|original| {
+                    !original.adopted_by(self.context)
+                        || match &original.envelope().enter().binding {
+                            weaver_types::state_flow::enter::EnterBinding::Serving {
+                                gate_instruction,
+                                shell,
+                                ..
+                            } => {
+                                gate_instruction != &request.instruction || shell != &request.shell
+                            }
+                            _ => true,
+                        }
+                });
         let raise = OrganEnvelope {
             exchange: weaver_types::ExchangeId {
                 opener: Opener::Harness,
@@ -174,26 +192,52 @@ impl<'a> GateStartup<'a> {
         lifecycle: LifecyclePorts<'_>,
         io: &mut impl PumpIo,
     ) -> GateStartupStage {
-        if !self.check(&lifecycle, io) {
+        if self.stage == GateStartupStage::Stopped {
             return self.stage;
         }
-        if self.boot.resident.is_some() && lifecycle.residency.is_some() {
-            let error = self.protocol(io, "resident gate received a substitute residency port");
-            return self.stopped(GateStartupStop::Run(error));
+        if let Some(failure) = self.boot.context.failure().cloned() {
+            return self.stopped(GateStartupStop::Run(failure));
         }
         let mut resident = self.boot.resident.take();
         let mut lifecycle = lifecycle;
-        if let Some(arms) = resident.as_mut() {
-            lifecycle.residency = Some(&mut *arms.residency);
-        }
-        // SAFETY: the caller carries the serving-thread child lifetime contract.
-        let result = unsafe { self.step(lifecycle, io) };
-        self.boot.resident = resident;
-        if let Err(error) = result {
+        let result = if resident.is_some() && lifecycle.residency.is_some() {
+            let error = self.protocol(io, "resident gate received a substitute residency port");
             self.stopped(GateStartupStop::Run(error));
+            Ok(())
+        } else {
+            let original = resident.as_mut().and_then(|arms| {
+                lifecycle.residency = Some(&mut *arms.residency);
+                arms.evidence.startup.original_enter.as_mut()
+            });
+            with_enter(original, lifecycle, |mut ports, payload| {
+                if !self.check(&ports, io) {
+                    return;
+                }
+                if payload.is_some()
+                    && let Err(failure) = probe_enter_peer(&mut ports)
+                {
+                    self.stopped(GateStartupStop::Run(RunFailure::Transport {
+                        source: PumpSource::Admin,
+                        failure,
+                    }));
+                    return;
+                }
+                // SAFETY: the caller carries the serving-thread child lifetime contract.
+                if let Err(error) = unsafe { self.step(ports, io) } {
+                    self.stopped(GateStartupStop::Run(error));
+                }
+            })
+        };
+        self.boot.resident = resident;
+        if let Err(failure) = result {
+            self.stopped(GateStartupStop::Run(RunFailure::Transport {
+                source: PumpSource::Admin,
+                failure,
+            }));
         }
         self.stage
     }
+
     unsafe fn step(
         &mut self,
         mut lifecycle: LifecyclePorts<'_>,
@@ -376,11 +420,43 @@ impl<'a> GateStartup<'a> {
         lifecycle: LifecyclePorts<'_>,
         io: &mut impl PumpIo,
     ) -> Result<RaisedBoot<'a>, Self> {
-        if self.stage != GateStartupStage::Complete
-            || !self.check(&lifecycle, io)
-            || self.listener.held().is_some()
-        {
+        if self.stage != GateStartupStage::Complete || self.listener.held().is_some() {
             return Err(self);
+        }
+        if let Some(failure) = self.boot.context.failure().cloned() {
+            self.stopped(GateStartupStop::Run(failure));
+            return Err(self);
+        }
+        let mut resident = self.boot.resident.take();
+        let original = resident
+            .as_mut()
+            .and_then(|arms| arms.evidence.startup.original_enter.as_mut());
+        let checked = with_enter(original, lifecycle, |mut ports, payload| {
+            if !self.check(&ports, io) {
+                return false;
+            }
+            if payload.is_some()
+                && let Err(failure) = probe_enter_peer(&mut ports)
+            {
+                self.stopped(GateStartupStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return false;
+            }
+            true
+        });
+        self.boot.resident = resident;
+        match checked {
+            Ok(true) => (),
+            Ok(false) => return Err(self),
+            Err(failure) => {
+                self.stopped(GateStartupStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return Err(self);
+            }
         }
         Ok(RaisedBoot { owner: self })
     }

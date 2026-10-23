@@ -176,7 +176,7 @@ pub(in crate::flow::context) fn drive(
     mode: &str,
 ) {
     let resident_mode = mode.to_owned();
-    let mode = if mode.starts_with("resident-") {
+    let mode = if mode.starts_with("resident-") || mode.starts_with("entered-") {
         "ready"
     } else {
         mode
@@ -199,14 +199,82 @@ pub(in crate::flow::context) fn drive(
     .unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
     let enter = boot.context.deadlines.get(PumpDeadline::Enter).unwrap();
+    let (mut gate_instruction, gate_shell) = boot
+        .resident
+        .as_ref()
+        .and_then(|arms| arms.evidence.startup.original_enter.as_ref())
+        .map(|original| {
+            let weaver_types::state_flow::enter::EnterBinding::Serving {
+                gate_instruction,
+                shell,
+                ..
+            } = &original.envelope().enter().binding
+            else {
+                panic!()
+            };
+            (gate_instruction.clone(), shell.clone())
+        })
+        .unwrap_or_else(|| (instruction(), (mode == "shell").then(shell)));
+    if resident_mode == "entered-wrong-gate" {
+        gate_instruction.access_rule.allowed_uids.insert(999);
+    }
     let mut guard = Guard(Some(boot.into_gate(
         GateStartupRequest {
             binary,
-            instruction: instruction(),
-            shell: (mode == "shell").then(shell),
+            instruction: gate_instruction,
+            shell: gate_shell,
         },
         listener,
     )));
+    if resident_mode == "entered-wrong-gate" {
+        let owner = guard.0.as_ref().unwrap();
+        assert_eq!(owner.stage(), GateStartupStage::Stopped);
+        assert!(matches!(owner.stop(), Some(GateStartupStop::InvalidEntry)));
+        assert!(owner.child.is_none());
+        assert!(
+            owner
+                .boot
+                .resident
+                .as_ref()
+                .unwrap()
+                .evidence
+                .startup
+                .original_enter
+                .is_some()
+        );
+        return;
+    }
+    if resident_mode == "entered-substitute-gate" {
+        let (near, _far) = crate::channel::OrganChannel::pair().unwrap();
+        let mut peer = LifecyclePeer::from_channel(near).unwrap();
+        let owner = guard.0.as_mut().unwrap();
+        // SAFETY: the checked rejection precedes any fork.
+        assert_eq!(
+            unsafe {
+                owner.advance(
+                    LifecyclePorts {
+                        peer: Some(&mut peer),
+                        ..Default::default()
+                    },
+                    clock,
+                )
+            },
+            GateStartupStage::Stopped
+        );
+        assert!(owner.child.is_none());
+        assert!(
+            owner
+                .boot
+                .resident
+                .as_ref()
+                .unwrap()
+                .evidence
+                .startup
+                .original_enter
+                .is_some()
+        );
+        return;
+    }
     if resident_mode == "resident-gate-substitute" {
         let (near, _far) = crate::channel::OrganChannel::pair().unwrap();
         let mut substitute = OrganPort::from_channel(near).unwrap();
@@ -272,6 +340,10 @@ pub(in crate::flow::context) fn drive(
                 .unwrap();
         }
         if owner.stage() == GateStartupStage::Raise {
+            if resident_mode == "entered-eof-gate" && !did_stop {
+                crate::flow::context::startup_composition::tests::entered_tests::close_original_peer();
+                did_stop = true;
+            }
             if resident_mode == "resident-spu-eof-gate" && !did_stop {
                 owner.boot.resident.as_mut().unwrap().spu.stop_at_cap();
                 did_stop = true;
@@ -336,7 +408,7 @@ pub(in crate::flow::context) fn drive(
         let stage = unsafe {
             owner.advance(
                 LifecyclePorts {
-                    peer: Some(&mut admin),
+                    peer: (!resident_mode.starts_with("entered-")).then_some(&mut admin),
                     residency: residency.as_deref_mut(),
                     ..Default::default()
                 },
@@ -405,6 +477,30 @@ pub(in crate::flow::context) fn drive(
     if mode == "pressure" {
         assert!(pressure_seen, "send never faced backpressure");
     }
+    if resident_mode == "entered-eof-gate" {
+        assert_eq!(owner.stage(), GateStartupStage::Stopped);
+        assert!(matches!(
+            owner.stop(),
+            Some(GateStartupStop::Run(RunFailure::Transport {
+                source: PumpSource::Admin,
+                ..
+            }))
+        ));
+        assert!(
+            owner
+                .boot
+                .resident
+                .as_ref()
+                .unwrap()
+                .evidence
+                .startup
+                .original_enter
+                .is_some()
+        );
+        guard.0 = Some(owner);
+        return;
+    }
+
     if matches!(
         mode,
         "ready" | "shell" | "delay" | "finish-expiry" | "pressure"
@@ -429,18 +525,26 @@ pub(in crate::flow::context) fn drive(
                 .unwrap()
                 .belongs_to(owner.port.as_ref().unwrap())
         );
-        if mode == "finish-expiry" {
+        if mode == "finish-expiry" || resident_mode == "entered-finish-expiry-eof" {
             clock.advance_to(enter.deadline_ns()).unwrap();
+        }
+        if matches!(
+            resident_mode.as_str(),
+            "entered-finish-eof" | "entered-finish-expiry-eof"
+        ) {
+            crate::flow::context::startup_composition::tests::entered_tests::close_original_peer();
         }
         match owner.finish(
             LifecyclePorts {
-                peer: Some(&mut admin),
+                peer: (!resident_mode.starts_with("entered-")).then_some(&mut admin),
                 residency,
                 ..Default::default()
             },
             clock,
         ) {
             Ok(ready) => {
+                assert_ne!(resident_mode, "entered-finish-eof");
+                assert_ne!(resident_mode, "entered-finish-expiry-eof");
                 assert_ne!(mode, "finish-expiry");
                 let arms = ready
                     .owner
@@ -450,6 +554,16 @@ pub(in crate::flow::context) fn drive(
                     .expect("raised gate retains actual resident arms");
                 assert!(arms.evidence.reply.belongs_to(arms.residency));
                 assert_eq!(arms.evidence.enter, enter);
+                if resident_mode.starts_with("entered-") {
+                    let source = arms
+                        .evidence
+                        .startup
+                        .original_enter
+                        .as_ref()
+                        .expect("original Enter survives gate Ready");
+                    assert_eq!(source.envelope().exchange.ordinal, 7);
+                    assert!(source.adopted_by(ready.owner.boot.context));
+                }
                 assert!(arms.request.send().sent());
                 assert_eq!(
                     arms.spu.state(),
@@ -468,7 +582,29 @@ pub(in crate::flow::context) fn drive(
                 guard.0 = Some(ready.owner);
             }
             Err(stopped) => {
-                assert_eq!(mode, "finish-expiry");
+                if resident_mode == "entered-finish-eof" {
+                    assert!(matches!(
+                        stopped.stop(),
+                        Some(GateStartupStop::Run(RunFailure::Transport {
+                            source: PumpSource::Admin,
+                            ..
+                        }))
+                    ));
+                    assert!(
+                        stopped
+                            .boot
+                            .resident
+                            .as_ref()
+                            .unwrap()
+                            .evidence
+                            .startup
+                            .original_enter
+                            .is_some()
+                    );
+                    guard.0 = Some(stopped);
+                    return;
+                }
+                assert!(mode == "finish-expiry" || resident_mode == "entered-finish-expiry-eof");
                 assert!(matches!(
                     stopped.stop(),
                     Some(GateStartupStop::Run(RunFailure::Wait {
@@ -529,7 +665,11 @@ fn scenario(name: &str, mode: &str) {
             )
             .unwrap();
         }
-        crate::flow::context::startup_composition::tests::residency("full");
+        if mode.starts_with("entered-") {
+            crate::flow::context::startup_composition::tests::entered_full();
+        } else {
+            crate::flow::context::startup_composition::tests::residency("full");
+        }
         return;
     }
     let layout = crate::tools_cgroup::tests::ScratchLayout::new(mode);
@@ -610,4 +750,36 @@ scenario!(
 scenario!(
     gate_startup_composition_resident_spu_eof_gate,
     "resident-spu-eof-gate"
+);
+
+scenario!(gate_startup_composition_entered_ready, "entered-ready");
+
+scenario!(
+    gate_startup_composition_entered_eof_boot,
+    "entered-eof-boot"
+);
+scenario!(
+    gate_startup_composition_entered_substitute_boot,
+    "entered-substitute-boot"
+);
+scenario!(
+    gate_startup_composition_entered_eof_gate,
+    "entered-eof-gate"
+);
+scenario!(
+    gate_startup_composition_entered_substitute_gate,
+    "entered-substitute-gate"
+);
+scenario!(
+    gate_startup_composition_entered_wrong_gate,
+    "entered-wrong-gate"
+);
+scenario!(
+    gate_startup_composition_entered_finish_eof,
+    "entered-finish-eof"
+);
+
+scenario!(
+    gate_startup_composition_entered_finish_expiry_eof,
+    "entered-finish-expiry-eof"
 );

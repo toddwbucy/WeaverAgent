@@ -413,6 +413,11 @@ impl RecordingContext {
         })
     }
 
+    /// Shared private identity for adoption joins; only the actual receiver can
+    /// attach it to its retained original Enter.
+    pub(in crate::flow) fn enter_origin(&self) -> &std::sync::Arc<()> {
+        &self.read_origin
+    }
     pub(super) fn phase(&self) -> RecordingPhase {
         self.phase
     }

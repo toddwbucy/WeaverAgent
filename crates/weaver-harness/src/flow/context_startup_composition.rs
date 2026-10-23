@@ -3,9 +3,20 @@
 use super::*;
 use crate::flow::channel::StateCompletion;
 use crate::flow::pump::LifecyclePorts;
+use crate::flow::pump::enter::{ReceivedEnter, probe_enter_peer, with_enter};
 use crate::flow::ste100_socket::AdmissionPoll;
 use crate::flow::templates::CompiledInventory;
 use std::path::PathBuf;
+#[path = "context_enter_startup.rs"]
+mod entered;
+use entered::EnterLoadFacts;
+
+pub(in crate::flow) struct EnterStartupInputs {
+    pub original: ReceivedEnter,
+    pub composer: weaver_trace::LoopIdentity,
+    pub classifier_binary: PathBuf,
+    pub inventory: CompiledInventory,
+}
 
 pub(in crate::flow) struct StartupRequest {
     pub start: StartIdentity,
@@ -42,6 +53,7 @@ pub(in crate::flow) enum StartupStop {
 
 /// Returned alongside boot, so consumed observations do not disappear at the join.
 pub(in crate::flow) struct StartupEvidence {
+    pub original_enter: Option<ReceivedEnter>,
     pub opened: StateCompletion,
     pub load: Sequence,
     pub initial_grants: InspectionCompletion,
@@ -55,6 +67,8 @@ pub(in crate::flow) struct StartupComposition<'a> {
     start: StartIdentity,
     limits: ReadLimits,
     load: Option<AuthoredEvent>,
+    original_enter: Option<ReceivedEnter>,
+    enter_load: Option<EnterLoadFacts>,
     bootstrap: Ste100Bootstrap,
     binary: PathBuf,
     inventory: CompiledInventory,
@@ -82,6 +96,8 @@ pub(in crate::flow) struct StoppedStartupAccount {
     pub start: StartIdentity,
     pub limits: ReadLimits,
     pub load: Option<AuthoredEvent>,
+    pub original_enter: Option<ReceivedEnter>,
+    pub enter_load: Option<EnterLoadFacts>,
     pub bootstrap: Ste100Bootstrap,
     pub binary: PathBuf,
     pub inventory: CompiledInventory,
@@ -92,6 +108,10 @@ pub(in crate::flow) struct StoppedStartupAccount {
 }
 
 impl<'a> PreparedStartup<'a> {
+    pub(in crate::flow) fn original_enter(&self) -> Option<&ReceivedEnter> {
+        self.evidence.original_enter.as_ref()
+    }
+
     pub(in crate::flow) fn into_parts(
         self,
     ) -> (
@@ -124,6 +144,8 @@ impl<'a> StartupComposition<'a> {
             start: request.start,
             limits: request.limits,
             load: Some(request.load),
+            original_enter: None,
+            enter_load: None,
             bootstrap: request.bootstrap,
             binary: request.classifier_binary,
             inventory: request.inventory,
@@ -195,12 +217,37 @@ impl<'a> StartupComposition<'a> {
         lifecycle: LifecyclePorts<'_>,
         io: &mut impl PumpIo,
     ) -> StartupStage {
-        if !self.check(&lifecycle, io) {
+        if self.stage == StartupStage::Stopped {
             return self.stage;
         }
-        // SAFETY: forwarded from this driver's serving-thread lifetime contract.
-        if let Err(error) = unsafe { self.step(lifecycle, io) } {
-            self.stop(StartupStop::Run(error));
+        if let Some(failure) = self.context.failure().cloned() {
+            return self.stop(StartupStop::Run(failure));
+        }
+        let mut original = self.original_enter.take();
+        let result = with_enter(original.as_mut(), lifecycle, |mut lifecycle, payload| {
+            if !self.check(&lifecycle, io) {
+                return;
+            }
+            if payload.is_some()
+                && let Err(failure) = probe_enter_peer(&mut lifecycle)
+            {
+                self.stop(StartupStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return;
+            }
+            // SAFETY: forwarded from this driver's serving-thread lifetime contract.
+            if let Err(error) = unsafe { self.step(lifecycle, payload, io) } {
+                self.stop(StartupStop::Run(error));
+            }
+        });
+        self.original_enter = original;
+        if let Err(failure) = result {
+            self.stop(StartupStop::Run(RunFailure::Transport {
+                source: PumpSource::Admin,
+                failure,
+            }));
         }
         self.stage
     }
@@ -208,6 +255,7 @@ impl<'a> StartupComposition<'a> {
     unsafe fn step(
         &mut self,
         lifecycle: LifecyclePorts<'_>,
+        payload: Option<&weaver_types::state_flow::enter::EnterPayload>,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         let mut ports = PumpPorts {
@@ -233,7 +281,21 @@ impl<'a> StartupComposition<'a> {
                 }
             }
             StartupStage::Load => {
-                let mut event = self.load.take().expect("one retained load input");
+                let mut event = match self.load.take() {
+                    Some(event) => event,
+                    None => self
+                        .enter_load
+                        .as_ref()
+                        .expect("retained Enter load facts")
+                        .event(
+                            payload.expect("original Enter accompanies every advance"),
+                            &self.inventory,
+                            self.context.origin_ns(),
+                            self.context
+                                .opened_identity()
+                                .expect("actual Open before load"),
+                        ),
+                };
                 if let Some(Payload::Elections(load)) = &mut event.payload {
                     load.origin_ns = self.context.origin_ns().into();
                     load.state_member_observation = crate::flow::mirror::member(
@@ -341,14 +403,47 @@ impl<'a> StartupComposition<'a> {
         lifecycle: LifecyclePorts<'_>,
         io: &mut impl PumpIo,
     ) -> Result<PreparedStartup<'a>, Self> {
-        if self.stage != StartupStage::Complete || !self.check(&lifecycle, io) {
+        if self.stage != StartupStage::Complete {
             return Err(self);
+        }
+        if let Some(failure) = self.context.failure().cloned() {
+            self.stop(StartupStop::Run(failure));
+            return Err(self);
+        }
+        let mut original = self.original_enter.take();
+        let checked = with_enter(original.as_mut(), lifecycle, |mut ports, payload| {
+            if !self.check(&ports, io) {
+                return false;
+            }
+            if payload.is_some()
+                && let Err(failure) = probe_enter_peer(&mut ports)
+            {
+                self.stop(StartupStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return false;
+            }
+            true
+        });
+        self.original_enter = original;
+        match checked {
+            Ok(true) => (),
+            Ok(false) => return Err(self),
+            Err(failure) => {
+                self.stop(StartupStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return Err(self);
+            }
         }
         Ok(PreparedStartup {
             context: self.context,
             resources: self.resources,
             inventory: self.inventory,
             evidence: StartupEvidence {
+                original_enter: self.original_enter,
                 opened: self.opened.expect("actual recorded Open retained"),
                 load: self.load_sequence.expect("actual load retained"),
                 initial_grants: self.initial_grants.expect("actual initial Grants retained"),
@@ -380,6 +475,8 @@ impl<'a> StartupComposition<'a> {
                 start: self.start,
                 limits: self.limits,
                 load: self.load,
+                original_enter: self.original_enter,
+                enter_load: self.enter_load,
                 bootstrap: self.bootstrap,
                 binary: self.binary,
                 inventory: self.inventory,
