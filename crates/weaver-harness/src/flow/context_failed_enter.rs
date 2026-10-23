@@ -236,6 +236,11 @@ impl FailedEnterResources {
                 .as_ref()
                 .is_some_and(|spu| !matches!(spu.child.state(), ChildState::Reaped(_)))
     }
+    /// Observe the actual retained classifier child without waiting or inventing
+    /// a successful reap. The lifecycle owner still owes its terminal disposition.
+    pub(super) fn poll_classifier_child(&mut self) -> Option<ChildState> {
+        self.classifier.as_mut().map(OwnedChild::poll)
+    }
     pub(in crate::flow) fn classifier_child(&self) -> Option<ChildState> {
         self.classifier.as_ref().map(OwnedChild::state)
     }

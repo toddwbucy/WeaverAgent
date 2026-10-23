@@ -14,7 +14,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 use weaver_types::state_flow as s;
 
-struct CircuitIo<'a>(&'a mut FakePumpIo);
+pub(super) struct CircuitIo<'a>(pub(super) &'a mut FakePumpIo);
 impl PumpIo for CircuitIo<'_> {
     fn now(&mut self) -> std::io::Result<u64> {
         self.0.now()
@@ -225,7 +225,13 @@ fn circuit(case: Case) {
         if matches!(stage, StartupStage::Stopped | StartupStage::Complete)
             && let Case::RefusalJoin(mode) = case
         {
-            super::refusal::tests::drive(owner, &mut run.clock, &mut run._reader, mode);
+            super::refusal::tests::drive(
+                owner,
+                &mut run.clock,
+                &mut run._reader,
+                &mut run.state,
+                mode,
+            );
             resources.reap_startup_test_children();
             return;
         }

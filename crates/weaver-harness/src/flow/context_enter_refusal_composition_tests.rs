@@ -48,7 +48,7 @@ fn fill(context: &mut RecordingContext, io: &mut FakePumpIo) {
     panic!("actual ordinary queue did not fill")
 }
 
-fn drain(context: &RecordingContext, reader: &mut UnixStream) {
+pub(super) fn drain(context: &RecordingContext, reader: &mut UnixStream) {
     reader.set_nonblocking(true).unwrap();
     let watchdog = Instant::now() + Duration::from_secs(3);
     let mut bytes = [0; 65536];
@@ -67,6 +67,7 @@ pub(in crate::flow::context::startup_composition) fn drive(
     startup: StartupComposition<'_>,
     io: &mut FakePumpIo,
     reader: &mut UnixStream,
+    state: &mut UnixStream,
     mode: &str,
 ) {
     let exchange = ExchangeId {
@@ -294,6 +295,10 @@ pub(in crate::flow::context::startup_composition) fn drive(
             .is_some()
     );
     assert!(recorded.owner.startup.resources.spu_child().is_none());
+    if mode.starts_with("response-") {
+        super::response::tests::drive(recorded, io, reader, state, mode);
+        return;
+    }
     drain(recorded.owner.startup.context, reader);
 }
 

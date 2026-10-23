@@ -295,6 +295,32 @@ impl LifecyclePeer {
         }
         self.sender.stage(envelope)
     }
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_tracked(
+        &mut self,
+        envelope: OrganEnvelope,
+    ) -> Result<super::pump_transport::TrackedStage, StageFailure<OrganEnvelope>> {
+        if let Err(failure) = self.live() {
+            return Err(StageFailure {
+                input: envelope,
+                failure,
+            });
+        }
+        self.sender.stage_tracked(envelope)
+    }
+    pub(super) fn owns_send(&self, send: &super::pump_transport::OrganSend) -> bool {
+        send.belongs_to(&self.sender)
+    }
+    pub(super) fn try_send_observed(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<SendProgress, Failure> {
+        self.live()?;
+        if self.interrupted || self.zero_received {
+            return Ok(SendProgress::Pending);
+        }
+        self.sender.try_send_observed(io)
+    }
     pub(super) fn try_send(&mut self) -> Result<SendProgress, Failure> {
         self.live()?;
         if self.interrupted || self.zero_received {
@@ -785,7 +811,7 @@ impl CommonPump {
                     return Ok(false);
                 };
                 if send {
-                    peer.try_send()
+                    peer.try_send_observed(ports.io)
                         .map(|progress| progress != SendProgress::Pending)
                         .map_err(transport)
                 } else {

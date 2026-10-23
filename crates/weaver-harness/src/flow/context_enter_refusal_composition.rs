@@ -220,3 +220,6 @@ impl RecordingContext {
 #[cfg(test)]
 #[path = "context_enter_refusal_composition_tests.rs"]
 pub(super) mod tests;
+
+#[path = "context_rollback_composition.rs"]
+pub(in crate::flow) mod response;
