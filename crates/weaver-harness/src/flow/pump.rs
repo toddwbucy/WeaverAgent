@@ -1244,3 +1244,57 @@ fn interest<'a>(
 #[cfg(test)]
 #[path = "pump_tests.rs"]
 mod tests;
+
+/// Descriptorless terminal evidence. Received handle roles remain explicit;
+/// the actual descriptors close without becoming another run's inputs.
+pub(super) struct RetiredLifecycleMessage {
+    pub(super) envelope: OrganEnvelope,
+    pub(super) had_sink: bool,
+    pub(super) had_state: bool,
+}
+impl LifecycleMessage {
+    pub(super) fn retire_failed(self) -> RetiredLifecycleMessage {
+        RetiredLifecycleMessage {
+            envelope: self.envelope,
+            had_sink: self.sink.is_some(),
+            had_state: self.state.is_some(),
+        }
+    }
+}
+pub(super) struct RetiredLifecyclePeer {
+    pub(super) sender: super::pump_transport::PacketPort<OrganEnvelope, ()>,
+    pub(super) held: Option<RetiredLifecycleMessage>,
+    pub(super) wire: Option<Vec<u8>>,
+    pub(super) failure: Option<Failure>,
+    pub(super) interrupted: bool,
+    pub(super) zero_received: bool,
+}
+impl LifecyclePeer {
+    pub(super) fn retire_failed(self) -> RetiredLifecyclePeer {
+        RetiredLifecyclePeer {
+            sender: self.sender.retire_failed(),
+            held: self.held.map(LifecycleMessage::retire_failed),
+            wire: self.wire,
+            failure: self.failure,
+            interrupted: self.interrupted,
+            zero_received: self.zero_received,
+        }
+    }
+}
+pub(super) struct RetiredLifecycleListener {
+    pub(super) held: Option<RetiredLifecyclePeer>,
+    pub(super) accepted_ns: Option<u64>,
+    pub(super) failure: Option<Failure>,
+    pub(super) interrupted: bool,
+}
+impl LifecycleListener {
+    pub(super) fn retire_failed(self) -> RetiredLifecycleListener {
+        self.listener.unlink();
+        RetiredLifecycleListener {
+            held: self.held.map(LifecyclePeer::retire_failed),
+            accepted_ns: self.accepted_ns,
+            failure: self.failure,
+            interrupted: self.interrupted,
+        }
+    }
+}

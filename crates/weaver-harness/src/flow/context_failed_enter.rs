@@ -284,6 +284,17 @@ impl FailedEnterResources {
     }
     /// Observe the actual retained classifier child without waiting or inventing
     /// a successful reap. The lifecycle owner still owes its terminal disposition.
+    /// Only the classifier exists in the actual refused-startup rollback. At
+    /// the inherited halt cap it receives the existing nonblocking stop action.
+    pub(in crate::flow::context) fn retire_rollback_child(&mut self, expired: bool) {
+        if let Some(child) = &mut self.classifier {
+            if expired {
+                child.stop_at_cap();
+            } else {
+                child.poll();
+            }
+        }
+    }
     pub(super) fn poll_classifier_child(&mut self) -> Option<ChildState> {
         self.classifier.as_mut().map(OwnedChild::poll)
     }

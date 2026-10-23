@@ -383,7 +383,7 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
     let mut rollback_far = Some(rollback_far);
     let allowance = if mode == "response-listener-leave-expiry" {
         1_000_000_000
-    } else if mode.starts_with("response-listener-") {
+    } else if mode.starts_with("response-listener-") || mode.starts_with("response-halt-") {
         5_000_000_000
     } else {
         100000
@@ -471,6 +471,17 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
         );
         assert_eq!(rollback.leave(), leave_bound);
         assert_eq!(rollback.directive().envelope, directive);
+        return;
+    }
+    if mode.starts_with("response-halt-") {
+        super::halt::tests::drive(
+            rollback,
+            io,
+            reader,
+            state,
+            mode,
+            rollback_far.as_ref().unwrap(),
+        );
         return;
     }
     if mode.starts_with("response-listener-") {
@@ -850,4 +861,52 @@ scenario!(
 scenario!(
     rollback_readback_composition_state_loss_does_not_grant_preparation,
     "response-state-gone"
+);
+
+scenario!(rollback_halt_composition_state_eof, "response-halt-eof");
+
+scenario!(
+    rollback_halt_composition_state_timeout,
+    "response-halt-timeout"
+);
+
+scenario!(
+    rollback_halt_composition_partial_response,
+    "response-halt-partial"
+);
+
+scenario!(
+    rollback_halt_composition_pending_measurement_retained,
+    "response-halt-pressure"
+);
+
+scenario!(
+    rollback_halt_composition_pending_measurement_records_once,
+    "response-halt-record"
+);
+
+scenario!(rollback_halt_composition_expired_leave, "response-halt-cap");
+
+scenario!(
+    rollback_halt_composition_broken_clock,
+    "response-halt-clock"
+);
+
+scenario!(
+    rollback_halt_composition_foreign_wait_rejected,
+    "response-halt-foreign"
+);
+
+scenario!(
+    rollback_halt_composition_original_peer_input_retained,
+    "response-halt-extra"
+);
+
+scenario!(
+    rollback_halt_composition_recorded_before_clock_failure,
+    "response-halt-record-clock"
+);
+scenario!(
+    rollback_halt_composition_owed_measurement_keeps_original_cap,
+    "response-halt-record-expiry"
 );
