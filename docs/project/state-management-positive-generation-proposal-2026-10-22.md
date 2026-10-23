@@ -1,9 +1,14 @@
 # Foundation boot generation limit proposal
 
-Date: 2026-10-22. Issue: #146. This is an unapproved Spec proposal.
+Date: 2026-10-22. Issue: #146. Approved election; Spec merge remains pending.
 Source: #258 Planner review 5622585660, row 5.
 Draft PR: https://github.com/toddwbucy/WeaverAgent/pull/260
 Branch: docs/state-positive-generation; base main 45f8483393ce25af4ade3f0fa7bd96c1e8ed78f1.
+
+The operator approved positive generation for boot in comment 6354978619.
+Planner review 5622765455 found no fix-bucket rows and recommended this election.
+Its two prose-wrap findings are corrected without changing the Spec words.
+Implementation still waits for merge by the operator.
 
 ## Proposed decision
 
@@ -53,5 +58,5 @@ boot_failed and grant no journal/mark. Positive boundary controls must still
 succeed. Exercise trace pressure, cancellation and original-bound expiry
 without losing the failed fit's owed account. A mutation that admits zero must
 fail that actual owner test. Keep carrier zero roundtrips and diagnostic session
-zero-limit behavior valid. The operator decides this proposal; it does not
+zero-limit behavior valid. The operator has approved this proposal; it does not
 complete #146 or qualify serving.

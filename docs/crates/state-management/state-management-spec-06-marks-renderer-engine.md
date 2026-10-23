@@ -306,10 +306,11 @@ journal or boot-mark readiness and follows failed-enter teardown. The Opened car
 still represents zero, and the SPU reports its resolved limit unchanged. This condition
 does not change diagnostic generation or the general session stop rule. The current
 single-token terminator is an existing seam fact, not an invented measured value.
-C_tail includes every delta token, tool schemas, framing and generation openers, and all generated work already resident
-outside the prefix. No separate uncounted schema allowance exists. A different
-terminator convention requires an explicit amendment to the session contract before
-admission. Reason: the universal tail limit cannot spend the same memory twice.
+C_tail includes every delta token, tool schemas, framing and generation openers,
+and all generated work already resident outside the prefix. No separate uncounted
+schema allowance exists. A different terminator convention requires an explicit
+amendment to the session contract before admission. Reason: the universal tail
+limit cannot spend the same memory twice.
 [PLACE-3, PLACE-4, COST-2]
 
 At place, require prefix_tokens <= c-head, and keep - prefix_tokens + input_tokens <=

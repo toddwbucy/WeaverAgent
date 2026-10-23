@@ -1301,14 +1301,13 @@ checked arithmetic, including generation_limit greater than zero for foundation
 serving. Zero is valid evidence of the resolved limit but fails this configured fit;
 it follows the truthful placement then boot_failed path below, not protocol failure.
 A valid Opened describes a prefix already seated, whether or not that configured fit
-succeeds. Retain its exact evidence and author the assembly-zero
-placement with the existing boot recall sequence as causal_parent. Keep the reservation
-and active boot ownership through recorder backpressure. A shared author ticket has
-this one purpose and cannot be consumed by an input, repair or other owner. Save the
-returned Recorded sequence and next continuation before any recoverable lifecycle
-check. No wake authors the event twice or consumes a proof before retaining its next
-state. No stage restarts the original enter bound. [FLOW-3, PERSIST-6, PLACE-1,
-PLACE-3, COST-4]
+succeeds. Retain its exact evidence and author the assembly-zero placement with the
+existing boot recall sequence as causal_parent. Keep the reservation and active boot
+ownership through recorder backpressure. A shared author ticket has this one purpose
+and cannot be consumed by an input, repair or other owner. Save the returned Recorded
+sequence and next continuation before any recoverable lifecycle check. No wake authors
+the event twice or consumes a proof before retaining its next state. No stage restarts
+the original enter bound. [FLOW-3, PERSIST-6, PLACE-1, PLACE-3, COST-4]
 
 **HARNESS-OPEN-LIVE.** Live admission for this owner means RecordingPhase::Entered,
 an active coordinator, a clear first-failure latch, no observed stop or leave for
