@@ -100,7 +100,10 @@ pub(super) fn snapshot(db: &Connection, seed: &str, out: &mut Output, row: &Row<
             .transpose()?
     )?;
     out.raw(",\"document_sha256\":")?;
-    value!(out, operator_digest(db, row.get("operator_source")?)?)?;
+    value!(
+        out,
+        operator_context(db, row.get("operator_source")?)?.document_sha256
+    )?;
     out.raw(",\"last_source\":")?;
     value!(out, transition_position(db, row.get("last_source")?)?)?;
     out.raw(",\"categories\":[")?;
@@ -167,9 +170,12 @@ pub(super) fn snapshot(db: &Connection, seed: &str, out: &mut Output, row: &Row<
     out.raw("}")
 }
 
-fn operator_digest(db: &Connection, id: i64) -> Result<Digest> {
+pub(in crate::engine::serving_sqlite) fn operator_context(
+    db: &Connection,
+    id: i64,
+) -> Result<PlanInputContext> {
     let mut statement = db.prepare(
-        "SELECT context_raw FROM content_block WHERE id=?1 AND source_kind='event' AND kind='plan.event' AND channel='input' AND origin='operator' AND turn IS NULL AND block=?2 AND effect IS NULL",
+        "SELECT context_raw FROM content_block WHERE id=?1 AND source_kind='event' AND kind='plan.event' AND channel='input' AND origin='operator' AND turn IS NULL AND block=?2 AND effect IS NULL AND scheme_id=(SELECT scheme_id FROM store_meta WHERE singleton=1)",
     )?;
     let mut rows = statement.query(params![id, blob(0.into())])?;
     let row = rows.next()?.ok_or(ReadFailure::ComponentCorruption(
@@ -181,11 +187,6 @@ fn operator_digest(db: &Connection, id: i64) -> Result<Digest> {
         .get_ref("context_raw")?
         .as_str()
         .map_err(|_| ReadFailure::ComponentCorruption("plan operator context is not text"))?;
-    if !raw.trim_start().starts_with('{') {
-        return Err(ReadFailure::ComponentCorruption(
-            "plan operator context is not an object",
-        ));
-    }
     let context: PlanInputContext = decode_strict(raw)
         .map_err(|_| ReadFailure::ComponentCorruption("invalid plan operator context"))?;
     if context.cause.uid != 0 {
@@ -193,17 +194,21 @@ fn operator_digest(db: &Connection, id: i64) -> Result<Digest> {
             "plan operator context has no root provenance",
         ));
     }
-    Ok(context.document_sha256)
+    Ok(context)
 }
 
 fn transition_position(db: &Connection, id: i64) -> Result<SourcePosition> {
-    let mut statement = db.prepare(
-        "SELECT run,sequence,block,turn FROM content_block WHERE id=?1 AND source_kind='event'",
-    )?;
+    let mut statement =
+        db.prepare("SELECT run,sequence,block,turn,source_kind FROM content_block WHERE id=?1")?;
     let mut rows = statement.query([id])?;
     let row = rows.next()?.ok_or(ReadFailure::ComponentCorruption(
         "missing plan transition source",
     ))?;
+    if row.get::<_, String>("source_kind")? != "event" {
+        return Err(ReadFailure::ComponentCorruption(
+            "plan transition source is not an event",
+        ));
+    }
     Ok(SourcePosition {
         block_id: SourceBlockId {
             run: row.get("run")?,

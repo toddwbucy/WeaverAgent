@@ -15,6 +15,8 @@ use std::io::{Read, Write};
 use weaver_traits::{ContentBlock, ToolCall};
 use weaver_types::state_flow as s;
 
+#[path = "context_repair_custody_tests.rs"]
+mod custody_tests;
 #[path = "context_empty_correction_tests.rs"]
 mod empty_correction_tests;
 #[path = "context_recall_refusal_tests.rs"]

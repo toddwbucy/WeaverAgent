@@ -29,7 +29,8 @@ The next drafts stack from this baseline, each on its preceding carrier:
 | #256 code/state-plan-summary-carrier | Required digest and complete last SourcePosition across state, harness and image consumers. Published draft ddebb53c. Boot/effect cache coordinator remains owed. |
 | #257 code/state-malformed-recall-owner | Identity-bearing refusal before an inward pair, with Recorded custody and no model feedback. Published draft ee7488e6. Complete inward boot/repair and serving selection remain owed. |
 | #258 code/state-boot-open-owner | Exact reserved Open from real BootHead, Recorded placement, checked fit/LIVE, private journal initialization and bounded stopped accounting. Published 066d51a3; Planner undrafted after its scoped grade. Review followups and worker boot composition, place/generation and qualified cutover remain owed. |
-| code/state-ste100-artifact-owner | Exact absolute manifest acquisition, confined named regular files, checked retained bytes and sealed production admission entry. Production adapters, lifecycle composition and language qualification remain owed. |
+| #259 code/state-ste100-artifact-owner | Exact absolute manifest acquisition, confined named regular files, checked retained bytes and sealed production admission entry. Published e3833de2. Production adapters, lifecycle composition and language qualification remain owed. |
+| code/state-review-custody-followups | Contained #255-#258 review corrections above exact #259: actual Recorded repair custody, strict codecs/shared provenance, canonical Open decoding and boot ticket/cancellation/event ownership. Author gates and 54 compiled protective failures pass; full failed-enter composition remains owed. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
@@ -57,8 +58,10 @@ Codex must not trigger them. All new PRs are submitted as drafts.
 surviving behavioral probes and two redundant/tautological guards. These are
 assigned to the next review-followup slice. Its stopped-tap release composition
 must be proved before activation. Zero effective generation remains valid under
-the merged rules; a separate foundation-boot fit proposal needs operator ruling,
-review and merge before implementation. No follow-up is implied by the initial
+the merged rules; the operator approved draft #260's positive foundation-boot fit
+on 2026-10-22. Planner review 5622765455 found no fix-bucket rows; the two prose
+wraps are corrected at f0b2cedd. Operator merge remains required for implementation.
+No follow-up is implied by the initial
 scoped grade or by the original 21 author mutations.
 
 The STE100 artifact owner's author gates pass 336 full SPU cuda,gguf tests,
@@ -69,6 +72,23 @@ lint, formatting and lock pass. Its acquisition and retained-input proofs do not
 supply the production language artifacts, adapter or lifecycle composition.
 #258's current-head Codex code review is complete without findings; its Planner
 batch findings still travel in the separate review-followup slice.
+
+#259's Planner grade 5622813219 has no fix-bucket rows, and its current-head Codex
+code review is complete without findings. The Planner undrafted it. Acquisition
+efficiency, validation ordering, syntax/test consistency and bounded filesystem
+retry findings travel in a separate followup. Dispatcher bootstrap custody and
+concrete retained-backend operations remain named duties of actual adapter wiring.
+The Planner ran 1,499 harness tests plus one named skip; the author ran all 1,500.
+
+The review-custody followup passes 1,520 harness tests with 18 inherited ignores,
+221 state tests with eight inherited ignores, types 149 default/205 config,
+trace 160 and SPU cuda,gguf lib/bins 275 plus one actual loaded decode-seam test.
+The final gates and all 54 protective mutations use its own private target.
+Earlier reused-target logs remain retained and superseded. An inherited closed-fd
+test race is corrected with isolated child execution; production fd handling is
+unchanged. Full PlanSummary owner integration is the next prepared slice, including
+the internal plan metadata/public-response cap separation. Source review of that
+staging is not a runtime pass or a completed landing.
 
 The foundation, trace and additive harness roots reached main on 2026-10-21.
 The operator merged #215 at a42d1f02, #189 at 4edf1513, #192 at aec3dcc2 and

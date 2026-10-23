@@ -307,6 +307,31 @@ mod tests {
     #[test]
     fn image_descriptor_is_read_only_regular_and_owned_once() {
         use std::os::fd::{AsRawFd, IntoRawFd};
+
+        const CHILD: &str = "WEAVER_STATE_IMAGE_FD_TEST_CHILD";
+        const TEST: &str =
+            "member::room::tests::image_descriptor_is_read_only_regular_and_owned_once";
+        if std::env::var_os(CHILD).is_none() {
+            // The closed descriptor number must not be reused by another test
+            // between read_image_fd returning and the ownership probe below.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success(),
+                "isolated descriptor test failed: {stdout}\n{stderr}"
+            );
+            assert!(
+                stdout.contains("test result: ok. 1 passed;"),
+                "the exact child test must run once: {stdout}\n{stderr}"
+            );
+            return;
+        }
+
         let scratch = Scratch::new();
         let path = scratch.0.join("image");
         std::fs::write(&path, b"raw image bytes").unwrap();
@@ -317,12 +342,20 @@ mod tests {
             .unwrap();
         assert!(read_image_fd(writable.as_raw_fd(), true).is_err());
         assert!(read_image_fd(writable.as_raw_fd(), false).is_err());
+        let directory = std::fs::File::open(&scratch.0).unwrap();
+        assert!(read_image_fd(directory.as_raw_fd(), true).is_err());
         let read = std::fs::File::open(&path).unwrap();
         let fd = read.into_raw_fd();
         assert_eq!(
             read_image_fd(fd, true).unwrap().unwrap(),
             b"raw image bytes"
         );
+        // No descriptor-opening operation occurs before this probe. The child
+        // runs only this test, so EBADF proves the adopted File closed its fd.
         assert_eq!(unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) }, -1);
+        assert_eq!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(nix::libc::EBADF)
+        );
     }
 }

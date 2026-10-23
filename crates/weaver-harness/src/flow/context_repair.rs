@@ -161,6 +161,8 @@ struct RepairAuthor {
     event: Option<AuthoredEvent>,
     expansion: Option<TemplateExpansion>,
     source: Option<SourcePosition>,
+    recall_refusal: Option<weaver_types::state_flow::RecallRequestRefusal>,
+    association_index: Option<usize>,
     started: bool,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -187,7 +189,6 @@ pub(super) struct RepairTransaction {
     held_output: Option<CheckedGeneration>,
     associations: Vec<RefusalRecord>,
     association_next: usize,
-    association_last: Option<SourcePosition>,
     accounting: Option<Accounting>,
     pair_started: bool,
     correction: Option<OriginalRequests>,
@@ -332,7 +333,6 @@ impl RecordingContext {
             held_output: None,
             associations: vec![],
             association_next: 0,
-            association_last: None,
             accounting: None,
             pair_started: false,
             correction: None,
@@ -435,6 +435,43 @@ impl RecordingContext {
         )
     }
 
+    #[cfg(test)]
+    pub(super) fn repair_recorded_account(&self) -> &RepairAccount {
+        self.repair.as_ref().unwrap().ledger.account_for_test()
+    }
+
+    #[cfg(test)]
+    pub(super) fn stage_repair_test_refusal(&mut self, io: &mut impl PumpIo) {
+        // Exercise a future refusal ordering without fabricating a Recorded
+        // source, a terminal pair disposition or an instruction check.
+        self.ensure_repair_wait(io).unwrap();
+        self.stage_repair_refusal(
+            RefusalRecord::Instruction {
+                template_id: "fixture.restatement".into(),
+                case: weaver_types::state_flow::InstructionRefusal::InvalidTemplate,
+                detail: "fixture structural refusal before owed records".into(),
+            },
+            AuthorPurpose::InstructionRefusal,
+            None,
+            io,
+        )
+        .unwrap();
+    }
+
+    #[cfg(test)]
+    pub(super) fn replace_staged_recall_for_test(
+        &mut self,
+        replacement: weaver_types::state_flow::RecallRequestRefusal,
+    ) {
+        self.repair
+            .as_mut()
+            .unwrap()
+            .author
+            .as_mut()
+            .unwrap()
+            .recall_refusal = Some(replacement);
+    }
+
     pub(super) fn bind_repair_author(
         &mut self,
         sequence: Sequence,
@@ -478,8 +515,35 @@ impl RecordingContext {
         // Keep the actual receipt and retire its exact continuation before a
         // later clock, lifecycle or intake wait can interrupt author completion.
         let recorded = match author.purpose {
-            AuthorPurpose::RecallRefusal => work.ledger.recorded_recall_refusal(source),
+            AuthorPurpose::RecallRefusal => work.ledger.recorded_recall_refusal(
+                author
+                    .recall_refusal
+                    .as_ref()
+                    .expect("staged recall identity"),
+                source,
+            ),
             AuthorPurpose::ProtocolRefusal => work.ledger.recorded_protocol_refusal(source),
+            AuthorPurpose::EmptyCorrectionRefusal => {
+                work.ledger.recorded_empty_correction_refusal(source)
+            }
+            AuthorPurpose::Association => {
+                let index = author.association_index.expect("staged association index");
+                if index != work.association_next {
+                    Err(RepairError::WrongAccounting)
+                } else if let Some(refusal) = work.associations.get(index).cloned() {
+                    work.ledger
+                        .recorded_association_refusal(
+                            refusal,
+                            source,
+                            index + 1 == work.associations.len(),
+                        )
+                        .map(|()| {
+                            work.association_next += 1;
+                        })
+                } else {
+                    Err(RepairError::WrongAccounting)
+                }
+            }
             _ => Ok(()),
         };
         recorded.map_err(|error| self.repair_fault(io, format!("recorded refusal: {error:?}")))?;
@@ -511,7 +575,7 @@ impl RecordingContext {
             return self.advance_cancelled_repair(ports);
         }
         if self.repair.as_ref().unwrap().refused {
-            return Ok(RepairProgress::Refused);
+            return self.advance_refused_repair(ports);
         }
         if self.repair.as_ref().unwrap().author.is_some() {
             return self.advance_repair_author(ports);
@@ -552,6 +616,7 @@ impl RecordingContext {
                         self.stage_repair_refusal(
                             refusal,
                             AuthorPurpose::InstructionRefusal,
+                            None,
                             ports.io,
                         )?;
                         return Ok(RepairProgress::Progress);
@@ -703,8 +768,9 @@ impl RecordingContext {
             .validate()
             .map_err(|error| self.repair_fault(io, error.to_string()))?;
         let parent = Sequence(refusal.statement.block_id.sequence.0);
-        let payload = serde_json::value::to_raw_value(&RefusalRecord::RecallRequest(refusal))
-            .map_err(|error| self.repair_fault(io, error.to_string()))?;
+        let payload =
+            serde_json::value::to_raw_value(&RefusalRecord::RecallRequest(refusal.clone()))
+                .map_err(|error| self.repair_fault(io, error.to_string()))?;
         self.stage_repair_author(
             AuthorPurpose::RecallRefusal,
             Kind::Refusal,
@@ -712,7 +778,8 @@ impl RecordingContext {
             Some(parent),
             Payload::Refusal(payload),
             None,
-        );
+        )
+        .recall_refusal = Some(refusal);
         self.ensure_repair_wait(io)?;
         Ok(RepairProgress::Progress)
     }
@@ -728,17 +795,7 @@ impl RecordingContext {
             case: ProtocolRepairCase::CorrectionCall,
             detail: "a restatement pass attempted a call".into(),
         };
-        self.stage_repair_refusal(refusal, AuthorPurpose::ProtocolRefusal, io)?;
-        self.repair
-            .as_mut()
-            .unwrap()
-            .author
-            .as_mut()
-            .unwrap()
-            .event
-            .as_mut()
-            .unwrap()
-            .causal_parent = Some(parent);
+        self.stage_repair_refusal(refusal, AuthorPurpose::ProtocolRefusal, Some(parent), io)?;
         self.ensure_repair_wait(io)?;
         Ok(RepairProgress::Progress)
     }
@@ -843,9 +900,12 @@ impl RecordingContext {
         causal_parent: Option<Sequence>,
         payload: Payload,
         expansion: Option<TemplateExpansion>,
-    ) {
+    ) -> &mut RepairAuthor {
         let turn = self.repair_turn();
-        self.repair.as_mut().unwrap().author = Some(RepairAuthor {
+        let work = self.repair.as_mut().unwrap();
+        let association_index =
+            (purpose == AuthorPurpose::Association).then_some(work.association_next);
+        work.author = Some(RepairAuthor {
             purpose,
             event: Some(AuthoredEvent {
                 kind,
@@ -857,13 +917,17 @@ impl RecordingContext {
             }),
             expansion,
             source: None,
+            recall_refusal: None,
+            association_index,
             started: false,
         });
+        work.author.as_mut().expect("just staged")
     }
     fn stage_repair_refusal(
         &mut self,
         refusal: RefusalRecord,
         purpose: AuthorPurpose,
+        causal_parent: Option<Sequence>,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         let payload = serde_json::value::to_raw_value(&refusal)
@@ -875,7 +939,7 @@ impl RecordingContext {
             purpose,
             Kind::Refusal,
             AuthoredSource::Runtime,
-            None,
+            causal_parent,
             Payload::Refusal(payload),
             None,
         );
@@ -1040,36 +1104,29 @@ impl RecordingContext {
                             event: None,
                             expansion: Some(expanded),
                             source: None,
+                            recall_refusal: None,
+                            association_index: None,
                             started: true,
                         });
                         Err(error)
                     }
                 }
             }
-            // These continuations were retained at the actual Recorded hook.
-            AuthorPurpose::ProtocolRefusal | AuthorPurpose::RecallRefusal => Ok(()),
-            AuthorPurpose::EmptyCorrectionRefusal => self
-                .repair
-                .as_mut()
-                .unwrap()
-                .ledger
-                .recorded_empty_correction_refusal(source),
-            AuthorPurpose::Association => {
-                let work = self.repair.as_mut().unwrap();
-                work.association_next += 1;
-                work.association_last = Some(source);
-                if work.association_next == work.associations.len() {
-                    work.ledger
-                        .recorded_association_refusals(work.association_last.take().unwrap())
-                } else {
-                    Ok(())
-                }
-            }
+            // All four semantic receipts were retained at the actual Recorded hook.
+            AuthorPurpose::ProtocolRefusal
+            | AuthorPurpose::RecallRefusal
+            | AuthorPurpose::EmptyCorrectionRefusal
+            | AuthorPurpose::Association => Ok(()),
             AuthorPurpose::TemplateFault | AuthorPurpose::InstructionRefusal => {
                 let work = self.repair.as_mut().unwrap();
                 work.refused = true;
                 work.refusal_source = Some(source);
-                self.finish_repair_wait();
+                work.ledger.cancel();
+                if work.ledger.next_recall_refusal().is_none()
+                    && work.ledger.cancelled_protocol_refusal().is_none()
+                {
+                    self.finish_repair_wait();
+                }
                 return Ok(RepairProgress::Refused);
             }
         };
@@ -1112,7 +1169,7 @@ impl RecordingContext {
         let Some(refusal) = work.associations.get(work.association_next).cloned() else {
             return Err(self.repair_fault(io, "association frontier has no typed refusal"));
         };
-        self.stage_repair_refusal(refusal, AuthorPurpose::Association, io)?;
+        self.stage_repair_refusal(refusal, AuthorPurpose::Association, None, io)?;
         Ok(RepairProgress::Progress)
     }
 
@@ -1387,7 +1444,7 @@ impl RecordingContext {
         let Some(work) = self.repair.as_mut() else {
             return Ok(None);
         };
-        if work.cancel.is_some() || work.refused {
+        if work.cancel.is_some() || work.refused || work.author.is_some() {
             return Ok(None);
         }
         let result = work.ledger.take_exhausted();
@@ -1398,6 +1455,33 @@ impl RecordingContext {
         Ok(result)
     }
 
+    /// Settle trace-only debts while retaining the original operation refusal.
+    /// This does not select a cancellation or manufacture a pair terminal fate.
+    fn advance_refused_repair<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<RepairProgress, RunFailure> {
+        self.repair.as_mut().unwrap().ledger.cancel();
+        if self.repair.as_ref().unwrap().author.is_some() {
+            return self.advance_repair_author(ports);
+        }
+        if let Some(refusal) = self.repair.as_ref().unwrap().ledger.next_recall_refusal() {
+            return self.start_recall_refusal(refusal, ports.io);
+        }
+        if let Some(correction) = self
+            .repair
+            .as_ref()
+            .unwrap()
+            .ledger
+            .cancelled_protocol_refusal()
+        {
+            return self.start_correction_call_refusal(correction, ports.io);
+        }
+        Ok(RepairProgress::Refused)
+    }
+
+    /// If this returns None for owed records, advance_repair settles those same
+    /// authors and preserves Refused until this extraction transfers custody once.
     pub(in crate::flow) fn take_refused_repair(
         &mut self,
         io: &mut impl PumpIo,
@@ -1406,7 +1490,7 @@ impl RecordingContext {
         let Some(work) = self.repair.as_mut() else {
             return Ok(None);
         };
-        if !work.refused || work.cancel.is_some() {
+        if !work.refused || work.cancel.is_some() || work.author.is_some() {
             return Ok(None);
         }
         // This state has no outstanding correction or pair-accounting loan.

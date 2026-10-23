@@ -240,44 +240,7 @@ impl RecordingContext {
             || self.load_duty.is_none()
         {
             Some(BootPairsBeginRefusal::WrongOpen)
-        } else if self.inspection.is_some()
-            || self.open_turn.is_some()
-            || self.input.snapshot().is_some()
-            || self.input_turn.is_some()
-            || self.input_author.is_some()
-            || self.output.is_some()
-            || self.pair_work.is_some()
-            || self.repair.is_some()
-            || self.filing.is_some()
-            || self.read.is_some()
-            || self.marks.is_some()
-            || self.freshness.is_some()
-            || self.boot_open_blocks_external()
-            || self.measure.is_some()
-            || self.member_capture.is_some()
-            || self.templates_block_content()
-            || self.waiting_content.is_some()
-            || self.completed_author.is_some()
-            || self.template_blocked_author.is_some()
-            || self.barrier.pending().is_some()
-            || self.barrier.pending_author().is_some()
-            || self.flow.has_pending_record()
-            || self.flow.has_filing_consumer()
-            || self.flow.has_output_consumer()
-            || self.flow.pending_control().is_some()
-            || self.flow.pending_check().is_some()
-            || self.flow.operation_completion().is_some()
-            || !self.flow.state().outstanding().is_empty()
-            || self.flow.state().held_measurement().is_some()
-            || [
-                PumpDeadline::Decision,
-                PumpDeadline::Cut,
-                PumpDeadline::Gate,
-                PumpDeadline::StateControl,
-            ]
-            .into_iter()
-            .any(|key| self.deadlines.get(key).is_some())
-        {
+        } else if self.boot_open_blocks_external() || self.boot_begin_busy() {
             Some(BootPairsBeginRefusal::Busy)
         } else {
             None

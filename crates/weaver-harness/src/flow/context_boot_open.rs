@@ -17,8 +17,7 @@ use weaver_trace::serving::payloads::{
 };
 use weaver_types::state_flow::{PersistenceCase, PersistenceStage, SpanRef};
 use weaver_types::{
-    LifecycleAsk, LifecycleDirective, LifecycleRefusal, RefusalRecord, SessionId, TokenAnswer,
-    TokenAsk, TokenDirective,
+    LifecycleAsk, LifecycleRefusal, RefusalRecord, SessionId, TokenAnswer, TokenAsk, TokenDirective,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +48,6 @@ pub(in crate::flow) enum BootOpenProgress {
 pub(in crate::flow) struct CheckedBootOpen {
     origin: Arc<()>,
     run: String,
-    session: SessionId,
     head: Sequence,
     placement: Sequence,
     span: SpanRef,
@@ -106,11 +104,7 @@ impl<'a> ValidatedOpen<'a> {
     fn check(
         opened: &'a weaver_types::Opened,
         session: &SessionId,
-        trace_session: &str,
     ) -> Result<Self, crate::open_evidence::OpenEvidenceError> {
-        if session.0 != trace_session {
-            return Err(crate::open_evidence::OpenEvidenceError::Session);
-        }
         crate::open_evidence::validate(opened, session)?;
         Ok(Self { opened })
     }
@@ -163,7 +157,7 @@ enum AuthorKind {
 }
 struct BootAuthor {
     kind: AuthorKind,
-    event: AuthoredEvent,
+    event: Option<AuthoredEvent>,
     queued: bool,
     ticket: Option<u64>,
 }
@@ -172,8 +166,8 @@ pub(in crate::flow) struct OwedBootAuthor {
     event: AuthoredEvent,
 }
 impl OwedBootAuthor {
-    pub(in crate::flow) fn event(&self) -> &AuthoredEvent {
-        &self.event
+    pub(in crate::flow) fn into_event(self) -> AuthoredEvent {
+        self.event
     }
 }
 /// Only the boot owner can license an active flow's failed-enter release while
@@ -221,10 +215,17 @@ pub(super) struct BootOpenTransaction {
     unavailable: Option<String>,
 }
 impl BootOpenTransaction {
+    #[cfg(test)]
+    pub(super) fn unsubmitted_event_for_test(&self) -> Option<&AuthoredEvent> {
+        self.author.as_ref()?.event.as_ref()
+    }
     pub(super) fn revoke(&mut self) {
         self.revoked = true;
     }
     fn progress(&self) -> BootOpenProgress {
+        if self.grant_taken {
+            return BootOpenProgress::Complete;
+        }
         match self.stage {
             Stage::Incomplete => BootOpenProgress::Incomplete,
             Stage::Settled => BootOpenProgress::Cancelled,
@@ -267,19 +268,7 @@ impl RecordingContext {
         let cancelled = ports
             .peer
             .as_deref()
-            .and_then(|peer| peer.held())
-            .is_some_and(|held| {
-                held.envelope.exchange.opener == weaver_types::Opener::Admin
-                    && held.envelope.position == weaver_types::Position::Open
-                    && matches!(
-                        held.envelope.payload,
-                        weaver_types::Payload::Directive(
-                            LifecycleDirective::Stop { .. }
-                                | LifecycleDirective::Leave { .. }
-                                | LifecycleDirective::JoinLeave { .. }
-                        )
-                    )
-            });
+            .is_some_and(|peer| peer.cancels_boot_open());
         if cancelled {
             self.boot_enter_cancelled = true;
             if let Some(owner) = &mut self.boot_open
@@ -313,7 +302,7 @@ impl RecordingContext {
             || self.completed_template_enter().is_err()
         {
             Some(BootOpenBeginRefusal::MissingHead)
-        } else if self.boot_open_begin_busy() {
+        } else if self.boot_pairs.is_some() || self.boot_begin_busy() {
             Some(BootOpenBeginRefusal::Busy)
         } else {
             None
@@ -322,6 +311,8 @@ impl RecordingContext {
             return Err(BootOpenBeginError { refusal, failure });
         }
         let head = self.boot_head.as_ref().unwrap();
+        // The held request is authored from this immutable trace session;
+        // validation independently compares the received echo with that request.
         let request = TokenDirective::Open {
             session: SessionId(self.author.session().to_owned()),
             messages: vec![head.message().clone()],
@@ -378,9 +369,8 @@ impl RecordingContext {
         Ok(())
     }
 
-    fn boot_open_begin_busy(&self) -> bool {
-        self.boot_pairs.is_some()
-            || self.open_turn.is_some()
+    pub(super) fn boot_begin_busy(&self) -> bool {
+        self.open_turn.is_some()
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()
@@ -535,7 +525,7 @@ impl RecordingContext {
         let reply = owner.received.as_ref().unwrap().reply();
         match reply {
             DecodeReply::Answer(TokenAnswer::Opened(opened)) => {
-                let validated = match ValidatedOpen::check(opened, session, self.author.session()) {
+                let validated = match ValidatedOpen::check(opened, session) {
                     Ok(validated) => validated,
                     Err(error) => {
                         return Err(self.boot_open_fault(
@@ -560,14 +550,14 @@ impl RecordingContext {
                 let payload = validated.placement(owner.wait_ns.unwrap());
                 owner.author = Some(BootAuthor {
                     kind: AuthorKind::Placement,
-                    event: AuthoredEvent {
+                    event: Some(AuthoredEvent {
                         kind: Kind::StatePlacement,
                         subsystem: Subsystem::Harness,
                         turn: None,
                         source: AuthoredSource::Loop,
                         causal_parent: Some(owner.head),
                         payload: Some(Payload::Placement(Box::new(payload))),
-                    },
+                    }),
                     queued: false,
                     ticket: None,
                 });
@@ -602,14 +592,14 @@ impl RecordingContext {
         let owner = self.boot_open.as_mut().unwrap();
         owner.author = Some(BootAuthor {
             kind: AuthorKind::Refusal,
-            event: AuthoredEvent {
+            event: Some(AuthoredEvent {
                 kind: Kind::Refusal,
                 subsystem,
                 turn: None,
                 source: AuthoredSource::Runtime,
                 causal_parent: owner.placement,
                 payload: Some(Payload::Refusal(payload)),
-            },
+            }),
             queued: false,
             ticket: None,
         });
@@ -643,7 +633,6 @@ impl RecordingContext {
         let checked = CheckedBootOpen {
             origin: owner.origin.clone(),
             run: self.flow.run().to_owned(),
-            session: opened.session.clone(),
             head: owner.head,
             placement: owner.placement.unwrap(),
             span: owner.span.clone(),
@@ -670,14 +659,14 @@ impl RecordingContext {
         owner.journal = Some(journal);
         owner.author = Some(BootAuthor {
             kind: AuthorKind::Mark,
-            event: AuthoredEvent {
+            event: Some(AuthoredEvent {
                 kind: Kind::StateMarkPosition,
                 subsystem: Subsystem::Harness,
                 turn: None,
                 source: AuthoredSource::Loop,
                 causal_parent: owner.placement,
                 payload: Some(Payload::MarkPosition(Box::new(mark))),
-            },
+            }),
             queued: false,
             ticket: None,
         });
@@ -692,9 +681,6 @@ impl RecordingContext {
     ) -> Result<(), RunFailure> {
         let owner = self.boot_open.as_ref().ok_or(RunFailure::BootOpenOwned)?;
         let author = owner.author.as_ref().ok_or(RunFailure::BootOpenOwned)?;
-        if stopped && author.kind == AuthorKind::Mark {
-            return Err(RunFailure::BootOpenOwned);
-        }
         if author.queued {
             if self.barrier.pending_author().map(|held| held.ticket) != author.ticket {
                 return Err(self.boot_open_fault(io, "boot author lost its exact recorder ticket"));
@@ -707,13 +693,32 @@ impl RecordingContext {
         }
         if stopped {
             if !author.queued {
-                let permit = OwedBootAuthor {
-                    event: author.event.clone(),
-                };
                 let wall = wall_ms().map_err(|detail| self.boot_trace_fault(io, detail))?;
-                self.barrier
-                    .queue_boot_open_account(&permit, &self.author, self.last_ns, wall)
-                    .map_err(|detail| self.boot_trace_fault(io, detail))?;
+                let permit = OwedBootAuthor {
+                    event: self
+                        .boot_open
+                        .as_mut()
+                        .unwrap()
+                        .author
+                        .as_mut()
+                        .unwrap()
+                        .event
+                        .take()
+                        .expect("unsubmitted boot event"),
+                };
+                if let Err(error) =
+                    self.barrier
+                        .queue_boot_open_account(permit, &self.author, self.last_ns, wall)
+                {
+                    self.boot_open
+                        .as_mut()
+                        .unwrap()
+                        .author
+                        .as_mut()
+                        .unwrap()
+                        .event = Some(error.event);
+                    return Err(self.boot_trace_fault(io, error.detail));
+                }
                 self.retain_boot_author_ticket();
             }
             let result = self.barrier.resume_trace_only();
@@ -729,8 +734,17 @@ impl RecordingContext {
                 self.barrier
                     .resume_with_clock(&mut self.inbox, &mut self.budget, &mut || io.now())
             } else {
-                let event = author.event.clone();
                 let wall = wall_ms().map_err(|detail| self.boot_trace_fault(io, detail))?;
+                let event = self
+                    .boot_open
+                    .as_mut()
+                    .unwrap()
+                    .author
+                    .as_mut()
+                    .unwrap()
+                    .event
+                    .take()
+                    .expect("unsubmitted boot event");
                 self.barrier.submit_authored_with_clock(
                     event,
                     RecordPurpose::Observation,
@@ -751,8 +765,23 @@ impl RecordingContext {
                 RecordProgress::Failed => {
                     if let Some(sequence) = self.barrier.admitted_before_failure() {
                         self.bind_boot_recorded(sequence);
+                    } else if self.barrier.pending_author().is_some() {
+                        // This invocation moved the sole event into the previously
+                        // empty slot, or resumed its checked exact ticket. Preserve
+                        // custody even if the clock/prepare failed before admission.
+                        self.retain_boot_author_ticket();
                     }
                     return Err(self.record_failed(io));
+                }
+                RecordProgress::BusyAuthored { event, .. } => {
+                    self.boot_open
+                        .as_mut()
+                        .unwrap()
+                        .author
+                        .as_mut()
+                        .unwrap()
+                        .event = Some(event);
+                    return Err(self.boot_open_fault(io, "boot author admission refused"));
                 }
                 _ => {
                     return Err(
@@ -825,9 +854,7 @@ impl RecordingContext {
             .checked
             .take()
             .expect("complete boot retains checked facts");
-        if proof.session.0 != self.author.session()
-            || !Arc::ptr_eq(&proof.origin, &self.read_origin)
-        {
+        if !Arc::ptr_eq(&proof.origin, &self.read_origin) {
             owner.checked = Some(proof);
             return Err(self.boot_open_fault(io, "boot proof identity changed"));
         }
@@ -1006,7 +1033,12 @@ impl RecordingContext {
                         self.barrier.set_boot_open_owed(false);
                         return Ok(());
                     }
-                    Err(error) => owner.reservation = Some(error.reservation),
+                    Err(error) => {
+                        owner.reservation = Some(error.reservation);
+                        // Inbound protocol debris cannot license a first Open byte
+                        // after cancellation. The caller retires this account incomplete.
+                        return Err(RunFailure::BootOpenOwned);
+                    }
                 }
             }
             self.pump.stopped_decode_step(decode).map_err(|error| {

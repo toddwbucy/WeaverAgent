@@ -12,6 +12,7 @@ use weaver_types::state_flow::*;
 mod content;
 mod marks;
 mod plans;
+pub(super) use plans::operator_context;
 #[cfg(test)]
 mod tests;
 

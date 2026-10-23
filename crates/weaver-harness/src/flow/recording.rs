@@ -297,10 +297,12 @@ impl RecordBarrier {
         budget: &mut RetentionBudget,
         now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
-        if (event.kind == Kind::Unload && self.boot_open_owed)
-            || self.pending.is_some()
-            || self.pending_author.is_some()
-        {
+        // Unload is held by the owed boot account, not by a competing author.
+        // Return its original intact without poisoning the still-live barrier.
+        if event.kind == Kind::Unload && self.boot_open_owed {
+            return RecordProgress::BusyAuthored { event, purpose };
+        }
+        if self.pending.is_some() || self.pending_author.is_some() {
             self.remember_failure(
                 RecordFailure::Protocol("second author while a ticket is pending".into()),
                 budget,
@@ -655,31 +657,43 @@ impl RecordBarrier {
         Ok(())
     }
 
+    #[allow(clippy::result_large_err)] // Keep the sole original on preparation refusal.
     pub(super) fn queue_boot_open_account(
         &mut self,
-        permit: &super::context::boot_open_driver::OwedBootAuthor,
+        permit: super::context::boot_open_driver::OwedBootAuthor,
         author: &ServingAuthor,
         raw_ns: u64,
         wall_ms: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), TerminalAuthorFailure> {
+        let event = permit.into_event();
         if !self.boot_open_owed
             || !self.recorder.tap_stopped()
             || self.recorder.is_closed()
             || self.pending.is_some()
             || self.pending_author.is_some()
         {
-            return Err("boot account requires its stopped, empty ordinary slot".into());
+            return Err(TerminalAuthorFailure {
+                event,
+                detail: "boot account requires its stopped, empty ordinary slot".into(),
+            });
         }
-        let event = permit.event();
-        let ticket = self.next_ticket.ok_or("author ticket overflow")?;
-        let prepared = author
-            .prepare(event, raw_ns, wall_ms)
-            .map_err(|error| format!("boot account author: {error:?}"))?;
+        let Some(ticket) = self.next_ticket else {
+            return Err(TerminalAuthorFailure {
+                event,
+                detail: "author ticket overflow".into(),
+            });
+        };
+        let prepared = match author.prepare(&event, raw_ns, wall_ms) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                return Err(TerminalAuthorFailure {
+                    event,
+                    detail: format!("boot account author: {error:?}"),
+                });
+            }
+        };
         self.next_ticket = ticket.checked_add(1);
-        self.pending_author = Some(AuthorTicket {
-            ticket,
-            event: event.clone(),
-        });
+        self.pending_author = Some(AuthorTicket { ticket, event });
         self.pending = Some((prepared, RecordPurpose::Observation));
         Ok(())
     }

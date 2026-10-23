@@ -254,6 +254,21 @@ impl LifecyclePeer {
     pub(super) fn held(&self) -> Option<&LifecycleMessage> {
         self.held.as_ref()
     }
+    /// Only these held admin openers revoke an in-progress boot Open.
+    pub(super) fn cancels_boot_open(&self) -> bool {
+        self.held.as_ref().is_some_and(|held| {
+            held.envelope.exchange.opener == weaver_types::Opener::Admin
+                && held.envelope.position == weaver_types::Position::Open
+                && matches!(
+                    held.envelope.payload,
+                    weaver_types::Payload::Directive(
+                        weaver_types::LifecycleDirective::Stop { .. }
+                            | weaver_types::LifecycleDirective::Leave { .. }
+                            | weaver_types::LifecycleDirective::JoinLeave { .. }
+                    )
+                )
+        })
+    }
     pub(super) fn failure(&self) -> Option<&Failure> {
         self.failure.as_ref().or(self.sender.failure())
     }
@@ -671,9 +686,9 @@ impl CommonPump {
         }
         self.cursor = (self.cursor + 1) % ROTATING.len();
         for source in order {
-            // Let the lifecycle owner reduce a newly held directive before the
-            // boot reservation can send its first byte. This is transport yield,
-            // not classification of Observe/Stop/Leave by the pump.
+            // Yield the first Open byte only for the same held cancellation
+            // that the boot owner observes. Unrelated lifecycle traffic keeps
+            // its original completion and cannot suppress the decode send.
             if source == PumpSource::Decode
                 && ports
                     .decode
@@ -683,7 +698,7 @@ impl CommonPump {
                     .lifecycle
                     .peer
                     .as_deref()
-                    .is_some_and(|peer| peer.held().is_some())
+                    .is_some_and(|peer| peer.cancels_boot_open())
             {
                 continue;
             }

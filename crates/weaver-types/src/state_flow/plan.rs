@@ -260,14 +260,33 @@ pub enum PlanInputOperation {
 }
 
 /// Operator provenance retained on block zero without instruction text.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlanInputContext {
     pub document_sha256: Digest,
     pub cause: crate::Cause,
-    #[serde(deserialize_with = "super::required_option")]
     pub expected: Option<PlanRef>,
     pub operation: PlanInputOperation,
+}
+
+impl<'de> Deserialize<'de> for PlanInputContext {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            document_sha256: Digest,
+            cause: crate::Cause,
+            #[serde(deserialize_with = "super::required_option")]
+            expected: Option<PlanRef>,
+            operation: PlanInputOperation,
+        }
+        let fields: Fields = super::codec::deserialize_object(deserializer)?;
+        Ok(Self {
+            document_sha256: fields.document_sha256,
+            cause: fields.cause,
+            expected: fields.expected,
+            operation: fields.operation,
+        })
+    }
 }
 
 /// The held provenance of a lock, not a model-supplied authority grant.
@@ -436,8 +455,7 @@ impl<'de> Deserialize<'de> for PlanSnapshot {
 }
 
 /// One fixed plan and content frontier for forward-flag counts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlanFlagSnapshot {
     pub plan: PlanRef,
     pub after: SourceBlockId,
@@ -447,14 +465,57 @@ pub struct PlanFlagSnapshot {
     pub unmatched_flags: DecimalU64,
 }
 
+impl<'de> Deserialize<'de> for PlanFlagSnapshot {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            plan: PlanRef,
+            after: SourceBlockId,
+            through: SourcePosition,
+            total_flags: DecimalU64,
+            matched_flags: DecimalU64,
+            unmatched_flags: DecimalU64,
+        }
+        let fields: Fields = super::codec::deserialize_object(deserializer)?;
+        Ok(Self {
+            plan: fields.plan,
+            after: fields.after,
+            through: fields.through,
+            total_flags: fields.total_flags,
+            matched_flags: fields.matched_flags,
+            unmatched_flags: fields.unmatched_flags,
+        })
+    }
+}
+
 /// Committed plan account carried by lifecycle observation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlanSummary {
     pub plan: PlanRef,
     pub status: PlanStatus,
     pub document_sha256: Digest,
     pub last_source: SourcePosition,
+}
+
+impl<'de> Deserialize<'de> for PlanSummary {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            plan: PlanRef,
+            status: PlanStatus,
+            document_sha256: Digest,
+            last_source: SourcePosition,
+        }
+        let fields: Fields = super::codec::deserialize_object(deserializer)?;
+        Ok(Self {
+            plan: fields.plan,
+            status: fields.status,
+            document_sha256: fields.document_sha256,
+            last_source: fields.last_source,
+        })
+    }
 }
 
 /// An ordinary plan operation refusal, never a component halt.
@@ -742,6 +803,110 @@ mod tests {
                     super::super::decode_strict::<super::super::QueryResult>(&duplicate).is_err()
                 );
             }
+        }
+    }
+
+    fn assert_closed_object<T>(object: serde_json::Value, fields: &[&str])
+    where
+        T: serde::de::DeserializeOwned + Serialize,
+    {
+        let raw = object.to_string();
+        let value: T = serde_json::from_str(&raw).unwrap();
+        assert_eq!(serde_json::to_value(value).unwrap(), object);
+        let value: T = super::super::decode_strict(&raw).unwrap();
+        assert_eq!(serde_json::to_value(value).unwrap(), object);
+        let mut decoder = serde_json::Deserializer::from_str(&raw);
+        let value = T::deserialize(&mut decoder).unwrap();
+        assert_eq!(serde_json::to_value(value).unwrap(), object);
+
+        let mut invalid = vec![
+            serde_json::Value::Array(fields.iter().map(|key| object[*key].clone()).collect())
+                .to_string(),
+        ];
+        let mut unknown = object.clone();
+        unknown["unknown"] = serde_json::Value::Null;
+        invalid.push(unknown.to_string());
+        for key in fields {
+            let mut missing = object.clone();
+            missing.as_object_mut().unwrap().remove(*key);
+            invalid.push(missing.to_string());
+            let encoded_key = serde_json::to_string(key).unwrap();
+            invalid.push(format!("{{{encoded_key}:{},{}", object[*key], &raw[1..]));
+        }
+        for raw in invalid {
+            assert!(serde_json::from_str::<T>(&raw).is_err(), "direct: {raw}");
+            assert!(
+                super::super::decode_strict::<T>(&raw).is_err(),
+                "strict: {raw}"
+            );
+            let mut decoder = serde_json::Deserializer::from_str(&raw);
+            assert!(T::deserialize(&mut decoder).is_err(), "visitor: {raw}");
+        }
+    }
+
+    #[test]
+    fn plan_input_context_requires_a_closed_named_object_at_every_decoder() {
+        let object = serde_json::json!({
+            "document_sha256":"1".repeat(64),
+            "cause":{"uid":0},
+            "expected":null,
+            "operation":{"authorize":{
+                "task":"0","categories":[],"groups":[],
+                "review":{"setup_id":"review","sha256":"0".repeat(64)}
+            }}
+        });
+        assert_closed_object::<PlanInputContext>(
+            object,
+            &["document_sha256", "cause", "expected", "operation"],
+        );
+    }
+
+    #[test]
+    fn plan_summary_requires_a_closed_named_object_at_every_decoder() {
+        for turn in [serde_json::Value::Null, serde_json::json!("original-turn")] {
+            let snapshot = snapshot_json();
+            let mut object = serde_json::json!({
+                "plan":snapshot["plan"],"status":snapshot["status"],
+                "document_sha256":snapshot["document_sha256"],
+                "last_source":snapshot["last_source"]
+            });
+            object["last_source"]["turn"] = turn;
+            assert_closed_object::<PlanSummary>(
+                object,
+                &["plan", "status", "document_sha256", "last_source"],
+            );
+        }
+    }
+
+    #[test]
+    fn plan_flag_snapshot_requires_a_closed_named_object_at_every_decoder() {
+        for turn in [serde_json::Value::Null, serde_json::json!("original-turn")] {
+            let snapshot = snapshot_json();
+            let mut object = serde_json::json!({
+                "plan":snapshot["plan"],"after":snapshot["operator_source"],
+                "through":snapshot["last_source"],
+                "total_flags":"3","matched_flags":"2","unmatched_flags":"1"
+            });
+            object["through"]["turn"] = turn;
+            let fields = [
+                "plan",
+                "after",
+                "through",
+                "total_flags",
+                "matched_flags",
+                "unmatched_flags",
+            ];
+            assert_closed_object::<PlanFlagSnapshot>(object.clone(), &fields);
+            let wire = serde_json::json!({"plan_flags":{"snapshot":object}});
+            assert!(
+                super::super::decode_strict::<super::super::QueryResult>(&wire.to_string()).is_ok()
+            );
+            let array = serde_json::Value::Array(fields.map(|name| object[name].clone()).into());
+            let wire = serde_json::json!({"plan_flags":{"snapshot":array}});
+            assert!(
+                super::super::decode_strict::<super::super::QueryResult>(&wire.to_string())
+                    .is_err()
+            );
         }
     }
 

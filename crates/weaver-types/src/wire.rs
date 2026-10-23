@@ -1199,9 +1199,41 @@ impl Serialize for TokenAnswer {
 impl<'de> Deserialize<'de> for TokenAnswer {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         // Serde's adjacent-tag decoder buffers a body encountered before its
-        // kind as generic Content, which loses RawValue's original bytes. Hold
-        // only the two raw outer values and feed kind first to the generated
-        // decoder. Neither the body nor either evidence box is normalized.
+        // kind as generic Content, which loses RawValue's original bytes. The
+        // normal kind-first stream can use its typed decoder directly. Only a
+        // body-first answer needs raw outer buffers to replay kind first.
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field {
+            Kind,
+            Body,
+        }
+        struct KindFirst<A> {
+            map: A,
+            first: bool,
+        }
+        impl<'de, A: serde::de::MapAccess<'de>> serde::de::MapAccess<'de> for KindFirst<A> {
+            type Error = A::Error;
+            fn next_key_seed<K: serde::de::DeserializeSeed<'de>>(
+                &mut self,
+                seed: K,
+            ) -> Result<Option<K::Value>, A::Error> {
+                if std::mem::take(&mut self.first) {
+                    seed.deserialize(serde::de::value::BorrowedStrDeserializer::<A::Error>::new(
+                        "kind",
+                    ))
+                    .map(Some)
+                } else {
+                    self.map.next_key_seed(seed)
+                }
+            }
+            fn next_value_seed<V: serde::de::DeserializeSeed<'de>>(
+                &mut self,
+                seed: V,
+            ) -> Result<V::Value, A::Error> {
+                self.map.next_value_seed(seed)
+            }
+        }
         struct Envelope;
         impl<'de> serde::de::Visitor<'de> for Envelope {
             type Value = TokenAnswer;
@@ -1213,18 +1245,25 @@ impl<'de> Deserialize<'de> for TokenAnswer {
                 mut map: A,
             ) -> Result<TokenAnswer, A::Error> {
                 use serde::de::Error;
+                let first = map
+                    .next_key::<Field>()?
+                    .ok_or_else(|| A::Error::missing_field("kind"))?;
+                if matches!(first, Field::Kind) {
+                    return TokenAnswer::deserialize(serde::de::value::MapAccessDeserializer::new(
+                        KindFirst { map, first: true },
+                    ));
+                }
                 let mut kind = None;
-                let mut body = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    let slot = match key.as_str() {
-                        "kind" => &mut kind,
-                        "body" => &mut body,
-                        _ => return Err(A::Error::unknown_field(&key, &["kind", "body"])),
+                let mut body = Some(buffer_decode_answer_value(&mut map)?);
+                while let Some(key) = map.next_key::<Field>()? {
+                    let (slot, name) = match key {
+                        Field::Kind => (&mut kind, "kind"),
+                        Field::Body => (&mut body, "body"),
                     };
                     if slot.is_some() {
-                        return Err(A::Error::custom(format!("duplicate field {key}")));
+                        return Err(A::Error::custom(format!("duplicate field {name}")));
                     }
-                    *slot = Some(map.next_value::<Box<serde_json::value::RawValue>>()?);
+                    *slot = Some(buffer_decode_answer_value(&mut map)?);
                 }
                 let kind = kind.ok_or_else(|| A::Error::missing_field("kind"))?;
                 let fields = std::iter::once(("kind", kind.as_ref()))
@@ -1237,66 +1276,106 @@ impl<'de> Deserialize<'de> for TokenAnswer {
     }
 }
 
-/// Evidence of the successful identity prefill under TYPES-DECODE. The SPU owns
-/// each raw box's contents; the harness validates them before use. The floor
-/// preserves the bytes and deliberately grants no rendering or placement proof.
-#[derive(Debug, Clone, Serialize)]
-pub struct Opened {
-    pub session: SessionId,
-    pub prefix_tokens: u64,
-    pub capacity: u64,
-    pub generation_limit: u64,
-    pub terminal_tokens: u64,
-    pub request: Box<serde_json::value::RawValue>,
-    pub measurement: Box<serde_json::value::RawValue>,
+fn buffer_decode_answer_value<'de, A: serde::de::MapAccess<'de>>(
+    map: &mut A,
+) -> Result<Box<serde_json::value::RawValue>, A::Error> {
+    let raw = map.next_value::<Box<serde_json::value::RawValue>>()?;
+    #[cfg(test)]
+    DECODE_ANSWER_BUFFERED.with(|counts| {
+        let (values, bytes) = counts.get();
+        counts.set((values + 1, bytes + raw.get().len()));
+    });
+    Ok(raw)
 }
 
-impl<'de> Deserialize<'de> for Opened {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            session: SessionId,
-            prefix_tokens: u64,
-            capacity: u64,
-            generation_limit: u64,
-            terminal_tokens: u64,
-            request: Box<serde_json::value::RawValue>,
-            measurement: Box<serde_json::value::RawValue>,
+#[cfg(test)]
+thread_local! {
+    // Counts actual owned raw envelope buffers, not payload Strings or raw boxes.
+    static DECODE_ANSWER_BUFFERED: std::cell::Cell<(usize, usize)> = const {
+        std::cell::Cell::new((0, 0))
+    };
+}
+
+// One field list supplies both the public carrier and its private decoder. A
+// public remote derive would expose an inherent decoder bypassing the map gate.
+macro_rules! define_opened {
+    ($(#[$doc:meta])* $($field:ident : $kind:ty),* $(,)?) => {
+        $(#[$doc])*
+        #[derive(Debug, Clone, Serialize)]
+        pub struct Opened {
+            $(pub $field: $kind,)*
         }
-        struct Object;
-        impl<'de> serde::de::Visitor<'de> for Object {
-            type Value = Opened;
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("an Opened object")
-            }
-            fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Opened, A::Error> {
-                let fields =
-                    Fields::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
-                Ok(Opened {
-                    session: fields.session,
-                    prefix_tokens: fields.prefix_tokens,
-                    capacity: fields.capacity,
-                    generation_limit: fields.generation_limit,
-                    terminal_tokens: fields.terminal_tokens,
-                    request: fields.request,
-                    measurement: fields.measurement,
-                })
+        impl<'de> Deserialize<'de> for Opened {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Fields { $($field: $kind,)* }
+                struct Object;
+                impl<'de> serde::de::Visitor<'de> for Object {
+                    type Value = Opened;
+                    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str("an Opened object")
+                    }
+                    fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Opened, A::Error> {
+                        let Fields { $($field,)* } = Fields::deserialize(
+                            serde::de::value::MapAccessDeserializer::new(map),
+                        )?;
+                        Ok(Opened { $($field,)* })
+                    }
+                }
+                deserializer.deserialize_map(Object)
             }
         }
-        deserializer.deserialize_map(Object)
-    }
+    };
+}
+
+define_opened! {
+    /// Evidence of the successful identity prefill under TYPES-DECODE. The SPU owns
+    /// each raw box's contents; the harness validates them before use. The floor
+    /// preserves the bytes and deliberately grants no rendering or placement proof.
+    /// There is no public inherent decoder bypassing the Deserialize trait gate.
+    ///
+    /// ```compile_fail
+    /// let _ = weaver_types::Opened::deserialize(
+    ///     &mut serde_json::Deserializer::from_str("{}"),
+    /// );
+    /// ```
+    session: SessionId,
+    prefix_tokens: u64,
+    capacity: u64,
+    generation_limit: u64,
+    terminal_tokens: u64,
+    request: Box<serde_json::value::RawValue>,
+    measurement: Box<serde_json::value::RawValue>,
 }
 
 impl PartialEq for Opened {
     fn eq(&self, other: &Self) -> bool {
-        self.session == other.session
-            && self.prefix_tokens == other.prefix_tokens
-            && self.capacity == other.capacity
-            && self.generation_limit == other.generation_limit
-            && self.terminal_tokens == other.terminal_tokens
-            && self.request.get() == other.request.get()
-            && self.measurement.get() == other.measurement.get()
+        let Self {
+            session,
+            prefix_tokens,
+            capacity,
+            generation_limit,
+            terminal_tokens,
+            request,
+            measurement,
+        } = self;
+        let Self {
+            session: other_session,
+            prefix_tokens: other_prefix_tokens,
+            capacity: other_capacity,
+            generation_limit: other_generation_limit,
+            terminal_tokens: other_terminal_tokens,
+            request: other_request,
+            measurement: other_measurement,
+        } = other;
+        session == other_session
+            && prefix_tokens == other_prefix_tokens
+            && capacity == other_capacity
+            && generation_limit == other_generation_limit
+            && terminal_tokens == other_terminal_tokens
+            && request.get() == other_request.get()
+            && measurement.get() == other_measurement.get()
     }
 }
 

@@ -247,13 +247,18 @@ fn cancellation_finishes_a_pending_empty_refusal_without_retry_or_success() {
             }
         }
         let cancelled = cancelled.expect("recorded refusal returns retained cancellation custody");
+        assert!(cancelled.pending().is_none());
+        assert_eq!(cancelled.account().corrections().len(), 1);
         assert_eq!(
-            cancelled.pending().unwrap().generation().source(),
+            cancelled.account().corrections()[0].generation().source(),
             &empty_source
         );
-        assert!(cancelled.account().corrections().is_empty());
+        let receipt = &cancelled.account().empty_corrections()[0];
+        assert_eq!(receipt.correction(), &empty_source);
+        assert_eq!(receipt.failed_corrections(), 1);
         let refusals = empty_refusals(&fx);
         assert_eq!(refusals.len(), 1);
+        assert_eq!(receipt.source().block_id.sequence.0, sequence(&refusals[0]));
         assert_empty_refusal(
             &refusals[0],
             request.source(),
