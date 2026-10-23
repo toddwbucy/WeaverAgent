@@ -102,14 +102,35 @@ result remains deferred to #276. This clarification does not claim the prior
 implementation batch has or has not merged, and does not resolve its remaining
 review/test rows by changing this prose.
 
+## Landing form and sequence
+
+The owning Spec is written in the prospective landing form for this draft's
+recommended Busy election: Landing PR #276, normative clauses, and no proposal
+banner or losing alternative inside the Spec. That form does not record an
+operator election. This project proposal retains the alternative and the
+pending operator ruling, review and merge; no implementation is authorized
+before all three. If the operator chooses the fatal-boundary alternative,
+revise the owning clause and its instruments before landing.
+
+Both this draft and #282 currently propose harness amendment version 0.30 from
+main version 0.29. Sequence their landings. The first may land as 0.30; the
+second must incorporate the first's actual merged clauses and advance to 0.31.
+Do not resolve that join by dropping either the author-custody or EnterWindow
+clause. The merge order remains the operator's; no merge is claimed here.
+
+The header's Date filed convention remains open: 2026-10-21 was the first
+filing, while these revisions currently say 2026-10-23. No convention is
+elected by this prose correction. Keep the original pending combined
+AuthorFailure/held-boundary question unchanged.
+
 ## Author-result alternative and caller migration
 
 An alternative to the proposed consuming author-result interface is a borrowing
 admission interface that refuses before taking the caller's original, with ownership
 transfer represented in its type. An advisory preflight bool is insufficient because
 the old consuming call remains able to discard a third original. Retaining an
-unbounded queue, cloning events into errors, inventing tickets, or expanding the halt-
-account wire format are not part of this proposal.
+unbounded queue, cloning events into errors, inventing tickets, or expanding the
+halt-account wire format are not part of this proposal.
 
 Implementation after merge must migrate all six direct production author
 sites: four input paths, mark-refusal authoring and repair authoring. It also
@@ -126,8 +147,8 @@ a pending release returning under debt while another original is held through ei
 resume entry, exact original identity and stage retention, unchanged ticket/sequence
 and deadline facts, and propagation into bounded caller cleanup. New admission and all
 four boundaries above must refuse untaken held or template-blocked input while
-existing private work can settle. Under the recommended election, actual otherwise-
-valid boundary fixtures must show nonfatal Busy, unchanged phase/bounds/exact
+existing private work can settle. Under the recommended election, actual
+otherwise-valid boundary fixtures must show nonfatal Busy, unchanged phase/bounds/exact
 originals, then successful or truthfully expired retry after the real take. Repeat
 with both held slots, an already-latched cause and an independent failure observed
 during the call: no case may clear the latch, delay fatal teardown, replace a cause,

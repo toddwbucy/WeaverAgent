@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #276 (proposed; prior merged revision #244).
+**Landing PR:** #276.
 
 **Version:** 0.30 **Date filed:** 2026-10-23 **Parent:** weaver-harness-PRD
 
@@ -12,10 +12,6 @@ Replacement text for harness Spec 2, 3, 4, 6, and 7, with instruments for sectio
 This unit includes the store/read and seed/boot clauses. Its classifier near side is
 buildable against a declared double. The production STE100 duty and tool pairing remain
 dependencies, not implied implementation. Source anchors use 2eb5c5a2.
-
-The author-return and held-boundary amendments in #276 remain proposed until the
-operator's revised ruling, review and merge. This header states the landing state
-required by Working Process section 2; it does not authorize pre-merge implementation.
 
 ## 1. Ownership, authoring, and capacity, destinations sections 2 and 4
 
@@ -219,14 +215,12 @@ attempt's unadmitted preparation and bookkeeping. A withdrawal assigns no trace 
 and renews no wait. Existing mandatory account settlement continues; no return permits
 skipping it. [FLOW-2, FLOW-3, FLOW-4, FLOW-5]
 
-**HARNESS-HELD-BOUNDARY (proposed election).** New owner admission, release,
-Enter rollback, member-capture preparation and Closed refuse while the held caller slot
-or the template-blocked caller slot is occupied, including an original held after
-release began. Recommend a recoverable Busy refusal when the held original is the
-blocking condition, rather than latching protocol_failed for that condition alone.
-This recommendation requires the operator's explicit ruling on #276 before
-implementation. It does not alter the separate second-submit caller-error rule above.
-[FLOW-2, FLOW-3, FLOW-5]
+**HARNESS-HELD-BOUNDARY.** New owner admission, release, Enter rollback,
+member-capture preparation and Closed refuse while the held caller slot or the
+template-blocked caller slot is occupied, including an original held after release
+began. Return a recoverable Busy refusal when the held original is the blocking
+condition; do not latch protocol_failed for that condition alone. The separate
+second-submit caller-error rule above remains unchanged. [FLOW-2, FLOW-3, FLOW-5]
 
 Use one shared private held-input predicate and reason across these admission roads.
 The Busy reason identifies the occupied caller-held or template-blocked slot; if both
@@ -239,10 +233,10 @@ incomplete/rejected certification retains its own TemplateBlocked reason. Neithe
 nor TemplateBlocked by itself creates a trace refusal or a new wire vocabulary.
 [FLOW-2, FLOW-3, CLASS-8]
 
-The following four boundary guards change under the recommended election: held input
-at begin_releasing, begin_enter_rollback, close_after_drain and prepare_member_capture
-returns recoverable Busy, not a new fatal ProtocolFailed. Other invalid phase, missing
-proof, wrong bound or unmet protocol preconditions keep their existing rules. A held
+Held input at begin_releasing, begin_enter_rollback, close_after_drain and
+prepare_member_capture returns recoverable Busy, not a new fatal ProtocolFailed. Other
+invalid phase, missing proof, wrong bound or unmet protocol preconditions keep their
+existing rules. A held
 refusal leaves phase, pending ticket, exact originals, resources and original deadlines
 unchanged; it neither arms a replacement wait nor starts release or capture. Taking the
 exact originals only removes this hold. A subsequent attempt must still pass all
@@ -261,12 +255,8 @@ is dropped just to satisfy close. [FLOW-2, FLOW-3, FLOW-5]
 
 Existing admitted owners may complete their exact private continuations; held input
 grants none of its own. This rule adds no halt-account member, fabricated ticket,
-implicit submission, overflow queue or successful close that loses an original. The
-alternative election is to retain fatal caller-error treatment at the four boundaries;
-then taking the original permits custody recovery and fatal teardown only, not retry of
-the healthy boundary. The [proposal][author-return-proposal] states this choice and the
-required evidence. Until operator election, review and merge, neither alternative is
-new implementation authority. [FLOW-2, FLOW-3, FLOW-5]
+implicit submission, overflow queue or successful close that loses an original.
+[FLOW-2, FLOW-3, FLOW-5]
 
 Every caller handles both ownership outcomes explicitly. A returned original goes back
 to that caller's existing event or stopped-evidence owner; a caller may not use an error
@@ -831,7 +821,7 @@ a fresh observation or blocks teardown on that read. [FLOW-3, FLOW-5]
 | Gate, cut, decision or undisputed control bound expires | Corresponding bound reason, barrier | Wait stage, original start/deadline and observation time, source or input where known |
 | Whole-copy backlog still blocks next model request at decision_wait expiry | queue_limit, barrier | Waiting copy, original decision deadline and current backlog sample, never an immediate-full failure |
 | Harness counter overflow | protocol_failed, counter | Counter domain in detail, current source/request where known, no wrapped ID |
-| Busy misuse (excluding the proposed HARNESS-HELD-BOUNDARY recovery refusal), invalid ticket or unknown barrier source | protocol_failed, author or barrier | Pending author or supplied source identity, detail names the failed check |
+| Busy misuse (excluding the HARNESS-HELD-BOUNDARY recovery refusal), invalid ticket or unknown barrier source | protocol_failed, author or barrier | Pending author or supplied source identity, detail names the failed check |
 | Trace admission, render, append, queue or sink failure | trace_failed, author | Pending author where present, source event only after admission. Keep existing StreamWriteFailed fault case |
 
 R20-6 keeps missing snapshot/finished answers on the retry path after PERSIST-CLEANUP.
@@ -1674,6 +1664,3 @@ state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 
 [recall-shape]:
 weaver-trace-Spec-amendment.md#61-serving-recall-representation
-
-[author-return-proposal]:
-../../project/state-management-author-return-proposal-2026-10-23.md
