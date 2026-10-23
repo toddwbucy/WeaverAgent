@@ -194,6 +194,10 @@ this read refusal, retry the update, renew its bound or halt solely for a valid 
 the table. The operation answers no PlanUpdated and grants no dependent effect.
 [PLAN-6, FLOW-1, FLOW-4]
 
+Release the root operation's allocator grant at settlement, after any acquired cursor
+cleanup, all admitted dispositions and the Recorded refusal, before answering. The
+grant does not survive the transition back to Idle. [PLAN-1, PLAN-6, FLOW-4]
+
 This outcome ends at effect admission. A required refresh after a committed effect
 still follows PLAN-SUMMARY-EVIDENCE: a refusal, malformed result, failed seam or held
 expectation mismatch latches component failure, preserves the committed receipt and

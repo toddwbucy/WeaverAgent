@@ -1497,7 +1497,7 @@ undone. [PLAN-6, MARK-5, FLOW-4]
 | --- | --- | --- |
 | Idle | Root update accepted | Begin decision deadline, read plan/marks, Reading |
 | Reading | Matching snapshots | Check expected revision and typed structure, author operator plan.event, Input |
-| Reading or pre-effect preflight | Valid PLAN-PREFLIGHT-READ refusal | Finish acquired cleanup and admitted dispositions, record read_refused with exact code/detail, keep prior cache, answer refusal, Idle |
+| Reading, or Input during preflight | Valid PLAN-PREFLIGHT-READ refusal | Finish acquired cleanup and admitted dispositions, record read_refused with exact code/detail, release allocator grant, keep prior cache, answer refusal, Idle |
 | Input | Every selected statement filed | Preflight source-backed effect, Effect |
 | Input | Correct rejection | Finish dispositions, record/refuse non_ste100, Idle |
 | Effect | Valid private grant | Expand certified template, author/classify/file effect, AwaitReceipt |
@@ -1520,7 +1520,9 @@ refused query, guess a snapshot or parent, or substitute a later release measure
 
 An initial refusal sends no release. An acquired cursor is released once within the
 original bounds before the operation refusal completes. Existing source dispositions
-still settle. No new effect is admitted, the previous committed cache remains evidence
+still settle. Release the allocator grant with operation settlement, after acquired
+cursor cleanup, admitted dispositions and the Recorded refusal, before answering.
+No new effect is admitted, the previous committed cache remains evidence
 and becomes usable after those duties, and this valid operation refusal alone latches
 no component failure. A failed release, invalid leg/code/identity, malformed response
 or observation, dead seam or applicable expiry keeps its existing failure account.
