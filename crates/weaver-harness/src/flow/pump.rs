@@ -133,8 +133,8 @@ pub(super) struct PumpPorts<'a, I: PumpIo> {
 /// An Enter's handles stay beside the exact envelope until one explicit take.
 /// The caller, not transport, judges which directive owes each supplied handle.
 #[derive(Debug)]
-pub(super) struct LifecycleMessage {
-    pub envelope: OrganEnvelope,
+pub(super) struct LifecycleMessage<E = OrganEnvelope> {
+    pub envelope: E,
     pub sink: Option<OwnedFd>,
     pub state: Option<OwnedFd>,
 }
@@ -406,14 +406,27 @@ impl LifecyclePeer {
     }
 
     pub(super) fn try_receive(&mut self) -> Result<ReceiveProgress, Failure> {
+        match self.receive_message(|bytes| serde_json::from_slice::<OrganEnvelope>(bytes))? {
+            Some(message) => {
+                self.held = Some(message);
+                Ok(ReceiveProgress::Held)
+            }
+            None => Ok(ReceiveProgress::Pending),
+        }
+    }
+
+    fn receive_message<E>(
+        &mut self,
+        decode: impl FnOnce(&[u8]) -> Result<E, serde_json::Error>,
+    ) -> Result<Option<LifecycleMessage<E>>, Failure> {
         self.live()?;
         if self.held.is_some() {
             self.check_terminal()?;
-            return Ok(ReceiveProgress::Pending);
+            return Ok(None);
         }
         if self.zero_received {
             if !self.check_terminal()? {
-                return Ok(ReceiveProgress::Pending);
+                return Ok(None);
             }
             return self.fail(invalid_failure("empty live coordination packet"));
         }
@@ -444,11 +457,11 @@ impl LifecyclePeer {
             let error = Errno::last();
             if error == Errno::EINTR {
                 self.interrupted = true;
-                return Ok(ReceiveProgress::Pending);
+                return Ok(None);
             }
             if error == Errno::EAGAIN {
                 self.interrupted = false;
-                return Ok(ReceiveProgress::Pending);
+                return Ok(None);
             }
             return self.fail(io_failure(error));
         }
@@ -511,12 +524,12 @@ impl LifecyclePeer {
         if count == 0 {
             self.zero_received = true;
             if !self.check_terminal()? {
-                return Ok(ReceiveProgress::Pending);
+                return Ok(None);
             }
             return self.fail(invalid_failure("empty live coordination packet"));
         }
         bytes.truncate(count as usize);
-        let decoded = serde_json::from_slice(&bytes);
+        let decoded = decode(&bytes);
         self.wire = Some(bytes);
         let envelope = decoded.map_err(|error| {
             let failure =
@@ -524,12 +537,11 @@ impl LifecyclePeer {
             self.failure = Some(failure.clone());
             failure
         })?;
-        self.held = Some(LifecycleMessage {
+        Ok(Some(LifecycleMessage {
             envelope,
             sink,
             state,
-        });
-        Ok(ReceiveProgress::Held)
+        }))
     }
 }
 
@@ -1301,3 +1313,6 @@ impl LifecycleListener {
         }
     }
 }
+
+#[path = "pump_enter.rs"]
+pub(super) mod enter;

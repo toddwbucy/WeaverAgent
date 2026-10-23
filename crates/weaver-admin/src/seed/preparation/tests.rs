@@ -7,10 +7,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use weaver_types::state_flow::{Binding, NounBinding, PromptDuty, Span};
 
-pub(in crate::seed) struct Fixture {
-    pub(in crate::seed) config: ServiceConfig,
+pub(crate) struct Fixture {
+    pub(crate) config: ServiceConfig,
     pub(in crate::seed) prepared: PreparedSeed,
-    boundary: inventory::Boundary,
+    pub(crate) boundary: inventory::Boundary,
     _scratch: crate::scratch::Scratch,
 }
 
@@ -33,7 +33,7 @@ impl Fixture {
     }
 }
 
-pub(in crate::seed) fn fixture() -> Fixture {
+pub(crate) fn fixture() -> Fixture {
     let uid = nix::unistd::geteuid().as_raw();
     let gid = nix::unistd::getegid().as_raw();
     fixture_with_member(inventory::MemberAccount {

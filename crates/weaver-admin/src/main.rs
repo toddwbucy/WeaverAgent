@@ -46,8 +46,11 @@ mod log;
 // Complete replacement operations, inactive until FOUNDATION-TRANSITION cutover.
 #[allow(dead_code)]
 mod offline_state;
+// Paired replacement Enter producer, dormant until the coupled cutover.
 mod random;
 mod save_points;
+#[allow(dead_code)]
+mod serving_enter;
 // Complete replacement component, inactive until FOUNDATION-TRANSITION cutover.
 #[allow(dead_code)]
 mod seed;

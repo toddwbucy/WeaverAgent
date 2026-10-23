@@ -315,13 +315,47 @@ impl Coordination {
                 bound: MAX_ENVELOPE_BYTES,
             });
         }
+        self.send_descriptor_bytes(&body, sink, state_end)
+    }
+
+    /// Dormant paired TYPES-ENTER sender. No active command selects this codec.
+    pub(crate) fn send_replacement_enter(
+        &self,
+        envelope: &weaver_types::state_flow::enter::EnterEnvelope,
+        sink: BorrowedFd<'_>,
+        state_end: Option<BorrowedFd<'_>>,
+    ) -> Result<(), ChannelFault> {
+        use weaver_types::state_flow::enter::{CodecError, EnterBinding};
+        if matches!(envelope.enter().binding, EnterBinding::Serving { .. }) && state_end.is_none() {
+            return Err(ChannelFault::Undecodable);
+        }
+        let body = envelope.encode().map_err(|error| match error {
+            CodecError::TooLarge => ChannelFault::Truncated {
+                bound: MAX_ENVELOPE_BYTES,
+            },
+            _ => ChannelFault::Undecodable,
+        })?;
+        self.send_descriptor_bytes(&body, sink, state_end)
+    }
+
+    fn send_descriptor_bytes(
+        &self,
+        body: &[u8],
+        sink: BorrowedFd<'_>,
+        state_end: Option<BorrowedFd<'_>>,
+    ) -> Result<(), ChannelFault> {
+        if body.len() > MAX_ENVELOPE_BYTES {
+            return Err(ChannelFault::Truncated {
+                bound: MAX_ENVELOPE_BYTES,
+            });
+        }
         let mut fds = vec![sink.as_raw_fd()];
         if let Some(end) = state_end {
             fds.push(end.as_raw_fd());
         }
         let control = [ControlMessage::ScmRights(&fds)];
-        let slices = [std::io::IoSlice::new(&body)];
-        sendmsg::<()>(
+        let slices = [std::io::IoSlice::new(body)];
+        let sent = sendmsg::<()>(
             self.fd.as_raw_fd(),
             &slices,
             &control,
@@ -329,6 +363,9 @@ impl Coordination {
             None,
         )
         .map_err(|_| ChannelFault::Closed)?;
+        if sent != body.len() {
+            return Err(ChannelFault::Closed);
+        }
         Ok(())
     }
 
