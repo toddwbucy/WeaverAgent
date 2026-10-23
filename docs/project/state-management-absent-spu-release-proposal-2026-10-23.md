@@ -110,11 +110,11 @@ retired port; source-only assertions do not establish this behavior.
 
 The owning Specs use prospective landing form. Their MERGED headers do not
 record operator approval or make an unmerged branch implementation authority.
-The publishing act must assign the new numeric Landing PR to all three owning
-Specs. The harness amendment will need version sequencing with #276 and #282: the
-first actual merged revision advances 0.29 to 0.30, each later join retains all
-merged clauses and increments again. No merge order or Date filed convention is
-elected here.
+All three owning Specs name #285 as the prospective Landing PR. The harness
+amendment needs version sequencing with #276 and #282: the first actual merged
+revision advances 0.29 to 0.30, each later join retains all merged clauses and
+increments again. Original Date filed headers are preserved; no merge order or
+Date filed convention is elected here.
 
 Implements (proposal, not implementation authority): weaver-trace Spec section 3;
 state-management trace amendment TRACE-HALT; harness amendment HARNESS-HALT and

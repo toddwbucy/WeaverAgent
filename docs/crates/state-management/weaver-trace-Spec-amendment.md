@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** Pending for this proposal.
+**Landing PR:** #285.
 
 **Version:** 0.26 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
 
