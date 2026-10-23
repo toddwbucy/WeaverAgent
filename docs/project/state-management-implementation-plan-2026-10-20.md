@@ -47,7 +47,8 @@ The next drafts stack from this baseline, each on its preceding carrier:
 | #278 code/state-place-phase-custody | #273 followups: phase-bound reload evidence/extraction, explicit cancelled Staged, checked consumed-lease disposal, private returned inputs and native proposal moves. Harness 1,738/18 ignored, trace 160 and affected gates pass. Ten unique compiled protective failures pass after strengthening one initially surviving source-identity fixture; the separate four-field privacy pin passes. Original failure/survivor evidence is retained. |
 | #279 code/state-held-author-admission | #274 rows 2-9: held-original admission/release/Closed guards with exact admitted-owner continuations, pending ordinary Unload debt custody, typed summary rollback and correction proof accounting. Thirty-one incoming source paths and one root test migration; harness 1,752/18 ignored, trace 160 and affected gates pass. All 26 compiled protective failures and restores pass; separate E0308 typed-Boot rejection and eight restored tests pass. Row 1 remains #276. |
 | #280 code/state-failed-enter-cleanup | Bounded Failed pre-input context/resource cleanup: actual fork custody, owed Boot accounts, descriptorless retirement, exact Release/reap/Unload and original-cap drain. Eighteen source paths reviewed; harness 1,779/18 ignored, trace 160 and final21 owner/lint gates pass. All 20 unique compiled protective failures and restores pass, plus three separate ownership compiler pins. Initial survivor/instrument error remain preserved. Healthy refusal and complete lifecycle composition remain owed. |
-| code/state-author-claims | #275 rows 1-9: exact waiting-original/claim carrier, actual allocated ticket, immediate trace-only witness binding, immutable refusal identity and separate settled-cancel accounting. Harness 1,793/18 ignored, trace 160 and affected gates pass. All 23 unique compiled controls and restores pass after a filter-only rerun of the preserved A9 survivor; two separate non-Clone pins pass. Defensive caller and redundant-cache limits remain explicit. |
+| #281 code/state-author-claims | #275 rows 1-9: exact waiting-original/claim carrier, actual allocated ticket, immediate trace-only witness binding, immutable refusal identity and separate settled-cancel accounting. Harness 1,793/18 ignored, trace 160 and affected gates pass. All 23 unique compiled controls and restores pass after a filter-only rerun of the preserved A9 survivor; two separate non-Clone pins pass. Defensive caller and redundant-cache limits remain explicit. |
+| code/state-management-refusal | Elected closed lifecycle refusal vocabulary and dormant exact admission mapping, full-envelope bounds and original value custody. Types 171/229, harness 1,798/18 ignored, trace 160, admin 498/37 ignored and downstream checks pass; final affected lint/fmt/lock pass after an exact private tuple alias. All 15 compiled protective failures and exact restores pass. Full healthy rollback remains owed. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
@@ -115,9 +116,18 @@ remain owed. Its grade does not authorize the pending proposal.
 
 Separate draft #276 on main proposes a move-owned author rejection result to
 return an unaccepted original while preserving earlier held/fatal custody.
-It changes the merged internal signature and remains unelected/unmerged;
-its caller migration is not implementation authority yet. Independent cleanup
-rows proceed without a new overflow queue, ticket or halt-account field.
+Revision 03e8f8e8 also makes the #279 held-boundary choice explicit: recoverable
+Busy is recommended for held-only admission/release/Enter rollback/capture/Closed,
+with current fatal caller-error treatment as the alternative. The revised
+operator election, review and merge remain pending. Its caller migration is
+not implementation authority yet. Independent cleanup rows proceed without a
+new overflow queue, ticket or halt-account field.
+
+Separate draft #282 at 544ebde3 proposes the missing required Serving EnterWindow,
+original pre-preparation load anchor and distinct malformed/expired paths across
+Types/Admin/Harness. Its four docs and source checks are independently clear;
+the operator election, review and merge are pending. It changes no code or
+active serving selection and gives no new timeout grace or cleanup proof.
 
 The Planner graded #255 at b26420e5 with no fix-bucket findings and reproduced
 its gates and 17 protective mutations. Its TRACE-PLACEMENT claim is limited to
