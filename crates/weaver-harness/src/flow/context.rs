@@ -2004,6 +2004,9 @@ pub(super) use capture_driver::{CaptureAnswer, CaptureProgress};
 #[path = "context_capture_tests.rs"]
 mod capture_tests;
 
+#[path = "context_boot_composition.rs"]
+pub(in crate::flow) mod boot_composition;
+
 #[path = "context_templates.rs"]
 mod template_driver;
 #[allow(unused_imports)] // Dormant certification boundary, consumed by enter at cutover.

@@ -51,7 +51,7 @@ fn templates() -> &'static [s::TemplateSpec] {
     })
 }
 
-fn inventory() -> CompiledInventory {
+pub(super) fn inventory() -> CompiledInventory {
     CompiledInventory::new(templates()).unwrap()
 }
 

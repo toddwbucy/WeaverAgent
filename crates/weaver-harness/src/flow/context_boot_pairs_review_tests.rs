@@ -245,7 +245,7 @@ fn boot_pairs_release_refuses_initial_between_leg_and_completed_ownership() {
             let index = fx.answered.iter().position(|answered| !answered).unwrap();
             fx.answer(index).unwrap();
             record_terminal(&mut fx);
-            assert_eq!(fx.advance().unwrap(), BootPairsProgress::Pending);
+            assert_eq!(fx.advance().unwrap(), BootPairsProgress::Progress);
         } else if checkpoint == 2 {
             fx.held = Hold::None;
             assert!((0..256).any(|_| fx.step().unwrap() == BootPairsProgress::Complete));
