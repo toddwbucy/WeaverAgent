@@ -1763,6 +1763,7 @@ impl RecordingContext {
             PumpDeadline::Enter
             | PumpDeadline::Leave
             | PumpDeadline::Label
+            | PumpDeadline::AdminRead
             | PumpDeadline::CaptureResult
             | PumpDeadline::CaptureWindow => {
                 return RunFailure::Wait { key, bound };

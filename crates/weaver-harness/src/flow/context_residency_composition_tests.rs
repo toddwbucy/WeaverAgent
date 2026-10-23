@@ -281,6 +281,8 @@ pub(in crate::flow::context) fn drive<'a>(
                         listener: None,
                         peer: None,
                         residency: owner.resources.residency_mut(),
+                        dial: None,
+                        leave_peer: None,
                     },
                     gate: None,
                     decode: None,
@@ -307,6 +309,8 @@ pub(in crate::flow::context) fn drive<'a>(
             listener: None,
             peer: (mode == "stop").then_some(&mut admin),
             residency: None,
+            dial: None,
+            leave_peer: None,
         };
         // SAFETY: the caller's fixture guard retains/reaps children on this thread.
         let stage = unsafe { owner.advance(ports, &mut CircuitIo(clock)) };

@@ -2,8 +2,11 @@
 //! measured initial/current Grants comparison and an owned release handoff.
 //! Terminal cleanup remains separate; this owner grants no Unload or Left.
 use super::*;
-use crate::flow::pump::{LifecycleMessage, LifecyclePeer};
+use crate::flow::pump::{LifecycleListener, LifecycleMessage, LifecyclePeer};
+#[path = "context_rollback_listener.rs"]
+mod listener;
 use crate::flow::pump_transport::{OrganSend, TrackedStage};
+use listener::RollbackDials;
 use weaver_trace::GrantSurface;
 use weaver_types::{LifecycleDirective, Position};
 
@@ -150,10 +153,12 @@ pub(in crate::flow) enum RollbackJoinReason {
     NoDirective,
     WrongDirective,
     WrongWindow,
+    UnclockedListener,
 }
 pub(in crate::flow) struct RollbackJoinError<'a> {
     pub response: EnterRefusalResponse<'a>,
     pub peer: LifecyclePeer,
+    pub listener: LifecycleListener,
     pub bound: AbsoluteBound,
     pub reason: RollbackJoinReason,
 }
@@ -184,6 +189,7 @@ pub(in crate::flow) enum RollbackStop {
 pub(in crate::flow) struct RollbackComposition<'a> {
     response: EnterRefusalResponse<'a>,
     peer: LifecyclePeer,
+    dials: RollbackDials,
     directive: LifecycleMessage,
     leave: AbsoluteBound,
     stage: RollbackStage,
@@ -199,6 +205,7 @@ impl<'a> EnterRefusalResponse<'a> {
     pub(in crate::flow) fn accept_rollback(
         self,
         mut peer: LifecyclePeer,
+        listener: LifecycleListener,
         bound: AbsoluteBound,
     ) -> Result<RollbackComposition<'a>, RollbackJoinError<'a>> {
         let reason = match peer.held() {
@@ -224,6 +231,7 @@ impl<'a> EnterRefusalResponse<'a> {
             return Err(RollbackJoinError {
                 response: self,
                 peer,
+                listener,
                 bound,
                 reason,
             });
@@ -238,8 +246,18 @@ impl<'a> EnterRefusalResponse<'a> {
             return Err(RollbackJoinError {
                 response: self,
                 peer,
+                listener,
                 bound,
                 reason: RollbackJoinReason::WrongWindow,
+            });
+        }
+        if listener.held().is_some() && listener.accepted_ns().is_none() {
+            return Err(RollbackJoinError {
+                response: self,
+                peer,
+                listener,
+                bound,
+                reason: RollbackJoinReason::UnclockedListener,
             });
         }
         let directive = peer
@@ -249,6 +267,7 @@ impl<'a> EnterRefusalResponse<'a> {
         Ok(RollbackComposition {
             response: self,
             peer,
+            dials: RollbackDials::new(listener),
             directive,
             leave: bound,
             stage: RollbackStage::Transition,
@@ -336,7 +355,24 @@ impl<'a> RollbackComposition<'a> {
             return self.stage;
         }
         if let Err(error) = self.step(io) {
-            self.stopped(RollbackStop::Run(error));
+            let context = &mut self.response.refusal.owner.startup.context;
+            let result = if matches!(
+                error,
+                RunFailure::Transport {
+                    source: crate::flow::pump::PumpSource::LeavePeer,
+                    ..
+                }
+            ) {
+                eprintln!(
+                    "weaver-harness: accepted Leave answer path failed ({error:?}); rollback continues"
+                );
+                context.live(io)
+            } else {
+                self.dials.recover(context, error, io)
+            };
+            if let Err(error) = result {
+                self.stopped(RollbackStop::Run(error));
+            }
         }
         self.stage
     }
@@ -391,7 +427,7 @@ impl<'a> RollbackComposition<'a> {
             self.stopped(RollbackStop::WrongWindow);
             return Ok(());
         }
-        context.live(io)?;
+        self.dials.prepare(context, self.leave, io)?;
         match self.stage {
             RollbackStage::RetireClassifier => {
                 context.retire_refused_classifier(io)?;
@@ -412,11 +448,9 @@ impl<'a> RollbackComposition<'a> {
                     self.inspecting = true;
                 }
                 let mut ports = PumpPorts {
-                    // Leave has already been received in full. Its connection
-                    // is now only an answer path, retained until terminal cleanup;
-                    // EOF on it cannot cancel the accepted directive (contract 2).
-                    // The outer listener still needs its separate composition.
-                    lifecycle: LifecyclePorts::default(),
+                    // The original Leave peer remains only an answer path;
+                    // secondary dials cannot become new cancellation authority.
+                    lifecycle: self.dials.ports(&mut self.peer),
                     gate: None,
                     decode: None,
                     label: None,

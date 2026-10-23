@@ -1721,6 +1721,8 @@ fn plan_summary_actual_held_stop_revokes_boot_without_stealing_lifecycle_complet
                 listener: None,
                 peer: Some(&mut admin),
                 residency: None,
+                dial: None,
+                leave_peer: None,
             },
             gate: None,
             decode: None,

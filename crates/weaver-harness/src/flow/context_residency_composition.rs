@@ -260,6 +260,8 @@ impl<'a> ResidencyComposition<'a> {
                     listener: lifecycle.listener.take(),
                     peer: lifecycle.peer.take(),
                     residency: Some(residency),
+                    dial: lifecycle.dial.take(),
+                    leave_peer: lifecycle.leave_peer.take(),
                 };
                 self.context.pump_once(&mut PumpPorts {
                     lifecycle: ports,

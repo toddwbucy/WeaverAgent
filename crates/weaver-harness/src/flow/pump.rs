@@ -29,7 +29,7 @@ use super::pump_transport::{
 };
 use super::ste100_socket::{AdmissionPoll, SocketPort};
 
-const SOURCE_COUNT: usize = 9;
+const SOURCE_COUNT: usize = 11;
 const CONTROL_BYTES: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +40,8 @@ pub(super) enum PumpDeadline {
     Cut,
     Decision,
     StateControl,
+    /// A silent secondary admin dial, owned by the accepted Leave.
+    AdminRead,
     /// Snapshot/finished missing results require cleanup, not immediate halt.
     CaptureResult,
     /// The unchanged publication window, retained separately from leg waits.
@@ -52,6 +54,8 @@ pub(super) enum PumpDeadline {
 pub(super) enum PumpSource {
     Listener,
     Admin,
+    AdminDial,
+    LeavePeer,
     Residency,
     Gate,
     Decode,
@@ -61,9 +65,11 @@ pub(super) enum PumpSource {
     Trace,
 }
 
-const LIFECYCLE: [PumpSource; 3] = [
+const LIFECYCLE: [PumpSource; 5] = [
     PumpSource::Listener,
     PumpSource::Admin,
+    PumpSource::AdminDial,
+    PumpSource::LeavePeer,
     PumpSource::Residency,
 ];
 const ROTATING: [PumpSource; 6] = [
@@ -107,6 +113,12 @@ pub(super) enum PumpStep {
 pub(super) struct LifecyclePorts<'a> {
     pub listener: Option<&'a mut LifecycleListener>,
     pub peer: Option<&'a mut LifecyclePeer>,
+    /// A dial during an already accepted Leave. Its raw directives are not
+    /// new boot/placement cancellation authority; the Leave owner judges them.
+    pub dial: Option<&'a mut LifecyclePeer>,
+    /// The already accepted Leave's connection. Extra packets stay held and
+    /// EOF is a fact for its owner, never another accepted lifecycle directive.
+    pub leave_peer: Option<&'a mut LifecyclePeer>,
     pub residency: Option<&'a mut OrganPort>,
 }
 
@@ -130,6 +142,7 @@ pub(super) struct LifecycleMessage {
 pub(super) struct LifecycleListener {
     listener: CoordinationListener,
     held: Option<LifecyclePeer>,
+    accepted_ns: Option<u64>,
     failure: Option<Failure>,
     interrupted: bool,
 }
@@ -152,6 +165,7 @@ impl LifecycleListener {
         Ok(Self {
             listener,
             held: None,
+            accepted_ns: None,
             failure: None,
             interrupted: false,
         })
@@ -161,7 +175,17 @@ impl LifecycleListener {
         self.held.as_ref()
     }
     pub(super) fn take_connection(&mut self) -> Option<LifecyclePeer> {
+        self.accepted_ns = None;
         self.held.take()
+    }
+    pub(super) fn accepted_ns(&self) -> Option<u64> {
+        self.accepted_ns
+    }
+    pub(super) fn take_observed_connection(&mut self) -> Option<(LifecyclePeer, u64)> {
+        let at = self.accepted_ns?;
+        let peer = self.held.take()?;
+        self.accepted_ns = None;
+        Some((peer, at))
     }
     pub(super) fn unlink(&self) {
         self.listener.unlink();
@@ -795,19 +819,37 @@ impl CommonPump {
         let transport = |failure| PumpFailure::Transport { source, failure };
         match source {
             PumpSource::Listener => {
-                if ports.lifecycle.peer.is_some() {
+                if ports.lifecycle.peer.is_some() || ports.lifecycle.dial.is_some() {
                     return Ok(false);
                 }
                 let Some(listener) = ports.lifecycle.listener.as_mut() else {
                     return Ok(false);
                 };
+                if listener.held.is_none() && is_terminal(flags) {
+                    return listener
+                        .fail(closed_failure("coordination listener closed"))
+                        .map_err(transport);
+                }
                 listener
                     .advance()
-                    .map(|progress| progress != ListenProgress::Pending)
+                    .map(|progress| {
+                        if progress == ListenProgress::Accepted {
+                            // The common clock was checked immediately before
+                            // this nonblocking accept. Delayed reduction cannot
+                            // restart the dial's original receive allowance.
+                            listener.accepted_ns = Some(self.previous);
+                        }
+                        progress != ListenProgress::Pending
+                    })
                     .map_err(transport)
             }
-            PumpSource::Admin => {
-                let Some(peer) = ports.lifecycle.peer.as_mut() else {
+            PumpSource::Admin | PumpSource::AdminDial | PumpSource::LeavePeer => {
+                let slot = match source {
+                    PumpSource::Admin => &mut ports.lifecycle.peer,
+                    PumpSource::AdminDial => &mut ports.lifecycle.dial,
+                    _ => &mut ports.lifecycle.leave_peer,
+                };
+                let Some(peer) = slot.as_mut() else {
                     return Ok(false);
                 };
                 if send {
@@ -912,9 +954,13 @@ fn present<I: PumpIo>(
 ) -> bool {
     match source {
         PumpSource::Listener => {
-            ports.lifecycle.peer.is_none() && ports.lifecycle.listener.is_some()
+            ports.lifecycle.peer.is_none()
+                && ports.lifecycle.dial.is_none()
+                && ports.lifecycle.listener.is_some()
         }
         PumpSource::Admin => ports.lifecycle.peer.is_some(),
+        PumpSource::AdminDial => ports.lifecycle.dial.is_some(),
+        PumpSource::LeavePeer => ports.lifecycle.leave_peer.is_some(),
         PumpSource::Residency => ports.lifecycle.residency.is_some(),
         PumpSource::Gate => ports.gate.is_some(),
         PumpSource::Decode => ports.decode.is_some(),
@@ -937,6 +983,7 @@ fn local_work<I: PumpIo>(
     match source {
         PumpSource::Listener => {
             ports.lifecycle.peer.is_none()
+                && ports.lifecycle.dial.is_none()
                 && ports.lifecycle.listener.as_ref().is_some_and(|port| {
                     port.interrupted || port.held.as_ref().is_some_and(|peer| peer.needs_progress())
                 })
@@ -944,6 +991,16 @@ fn local_work<I: PumpIo>(
         PumpSource::Admin => ports
             .lifecycle
             .peer
+            .as_ref()
+            .is_some_and(|port| port.needs_progress()),
+        PumpSource::AdminDial => ports
+            .lifecycle
+            .dial
+            .as_ref()
+            .is_some_and(|port| port.needs_progress()),
+        PumpSource::LeavePeer => ports
+            .lifecycle
+            .leave_peer
             .as_ref()
             .is_some_and(|port| port.needs_progress()),
         PumpSource::Residency => ports
@@ -1056,6 +1113,22 @@ fn standing_transport_failure<I: PumpIo>(ports: &PumpPorts<'_, I>) -> Option<Pum
                 .and_then(|port| port.failure()),
         ),
         (
+            PumpSource::AdminDial,
+            ports
+                .lifecycle
+                .dial
+                .as_ref()
+                .and_then(|port| port.failure()),
+        ),
+        (
+            PumpSource::LeavePeer,
+            ports
+                .lifecycle
+                .leave_peer
+                .as_ref()
+                .and_then(|port| port.failure()),
+        ),
+        (
             PumpSource::Residency,
             ports
                 .lifecycle
@@ -1093,11 +1166,19 @@ fn interest<'a>(
     cx: &'a FlowRecording<'_>,
 ) -> Option<(BorrowedFd<'a>, PollFlags)> {
     match source {
-        PumpSource::Listener if lifecycle.peer.is_none() => {
+        PumpSource::Listener if lifecycle.peer.is_none() && lifecycle.dial.is_none() => {
             lifecycle.listener.as_ref().map(|port| port.interest())
         }
         PumpSource::Admin => lifecycle
             .peer
+            .as_ref()
+            .map(|port| (port.fd(), port.interest())),
+        PumpSource::AdminDial => lifecycle
+            .dial
+            .as_ref()
+            .map(|port| (port.fd(), port.interest())),
+        PumpSource::LeavePeer => lifecycle
+            .leave_peer
             .as_ref()
             .map(|port| (port.fd(), port.interest())),
         PumpSource::Residency => lifecycle
