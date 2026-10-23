@@ -129,21 +129,23 @@ impl Drop for ChildFixture {
     }
 }
 
-struct ResourceFixture(FailedEnterResources);
+struct ResourceFixture(Option<FailedEnterResources>);
 impl std::ops::Deref for ResourceFixture {
     type Target = FailedEnterResources;
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0.as_ref().unwrap()
     }
 }
 impl std::ops::DerefMut for ResourceFixture {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        self.0.as_mut().unwrap()
     }
 }
 impl Drop for ResourceFixture {
     fn drop(&mut self) {
-        self.0.reap_startup_test_children();
+        if let Some(resources) = &mut self.0 {
+            resources.reap_startup_test_children();
+        }
     }
 }
 
@@ -203,7 +205,7 @@ fn circuit(case: Case) {
     record.origin_ns = 999.into();
     record.state_member_observation.pid = 999;
     let start = serde_json::from_value(serde_json::to_value(&record.state_start).unwrap()).unwrap();
-    let mut resources = ResourceFixture(run.context.failed_enter_resources().unwrap());
+    let mut resources = ResourceFixture(Some(run.context.failed_enter_resources().unwrap()));
     let request = StartupRequest {
         start,
         limits: s::ReadLimits {
@@ -366,14 +368,24 @@ fn circuit(case: Case) {
                     Err(owner) => panic!("startup finish refused {:?}", owner.stopped()),
                 };
                 if let Case::Residency(mode) = case {
+                    let mut stopped = None;
                     if let Some(admitted) = super::super::residency_composition::tests::drive(
                         prepared,
                         &mut run.clock,
                         mode,
+                        &run.state,
+                        &mut stopped,
                     ) {
-                        let (context, _, inventory, evidence) = admitted.into_parts();
+                        let (context, admitted_resources, inventory, evidence) =
+                            admitted.into_parts();
                         assert_eq!(context.origin_ns(), origin);
-                        assert!(evidence.send.sent());
+                        assert!(
+                            admitted_resources
+                                .residency_request()
+                                .unwrap()
+                                .send()
+                                .sent()
+                        );
                         assert_initial_grants(
                             &evidence.startup.initial_grants,
                             expected_grants.as_ref().unwrap(),
@@ -390,7 +402,16 @@ fn circuit(case: Case) {
                             return;
                         }
                     }
-                    resources.reap_startup_test_children();
+                    if let Some(account) = stopped {
+                        super::super::residency_composition::cleanup::tests::drive(
+                            &mut run,
+                            resources.0.take().unwrap(),
+                            account,
+                            mode,
+                        );
+                    } else {
+                        resources.reap_startup_test_children();
+                    }
                     return;
                 }
                 let (context, _, inventory, evidence) = prepared.into_parts();

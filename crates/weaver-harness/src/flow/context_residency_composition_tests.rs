@@ -77,6 +77,25 @@ fn residency_composition_child() {
             Ok(0) => return,
             Ok(n) => {
                 let request: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
+                if matches!(
+                    request.payload,
+                    weaver_types::Payload::Directive(LifecycleDirective::Release)
+                ) {
+                    assert!(admitted);
+                    assert_eq!(
+                        recv(decode.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
+                        Ok(0)
+                    );
+                    packet!(
+                        lifecycle.as_raw_fd(),
+                        &OrganEnvelope {
+                            exchange: request.exchange,
+                            position: Position::Close,
+                            payload: weaver_types::Payload::Answer(LifecycleAnswer::Released),
+                        }
+                    );
+                    return;
+                }
                 let weaver_types::Payload::Directive(LifecycleDirective::Admit { instruction }) =
                     request.payload
                 else {
@@ -98,8 +117,12 @@ fn residency_composition_child() {
                 let mut response = OrganEnvelope {
                     exchange: request.exchange,
                     position: Position::Close,
-                    payload: if mode == "refuse" {
+                    payload: if mode == "cleanup-release-refusal" {
                         weaver_types::Payload::Refusal(weaver_types::LifecycleRefusal::NoResidency)
+                    } else if matches!(mode.as_str(), "refuse" | "cleanup-refuse") {
+                        weaver_types::Payload::Refusal(
+                            weaver_types::LifecycleRefusal::DeviceCannotAdmit,
+                        )
                     } else {
                         weaver_types::Payload::Answer(LifecycleAnswer::Admitted)
                     },
@@ -125,6 +148,7 @@ fn residency_composition_child() {
             other => panic!("residency child receive {other:?}"),
         }
         match recv(decode.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
+            Ok(0) if mode == "cleanup-ready" => {}
             Ok(0) => return,
             Ok(n) => {
                 assert!(admitted);
@@ -196,8 +220,16 @@ pub(in crate::flow::context) fn drive<'a>(
     startup: PreparedStartup<'a>,
     clock: &mut FakePumpIo,
     mode: &str,
+    state: &std::os::unix::net::UnixStream,
+    stopped: &mut Option<StoppedResidency>,
 ) -> Option<AdmittedStartup<'a>> {
-    let binary = BinaryFixture::new(mode);
+    let binary = BinaryFixture::new(if mode == "cleanup-wrong" {
+        "wrong"
+    } else if mode.starts_with("cleanup-ready") {
+        "cleanup-ready"
+    } else {
+        mode
+    });
     let mut owner = ResidencyComposition::new(
         startup,
         ResidencyRequest {
@@ -206,13 +238,29 @@ pub(in crate::flow::context) fn drive<'a>(
             instruction: instruction_fixture(),
         },
     );
+    if mode == "cleanup-before-fork" {
+        state.shutdown(std::net::Shutdown::Write).unwrap();
+        for _ in 0..32 {
+            let _ = owner.context.pump_once(&mut PumpPorts {
+                lifecycle: LifecyclePorts::default(),
+                gate: None,
+                decode: None,
+                label: None,
+                io: &mut CircuitIo(clock),
+            });
+            if owner.context.failure().is_some() {
+                break;
+            }
+        }
+        assert!(owner.context.failure().is_some());
+    }
     let origin = owner.context.origin_ns();
     let enter = owner.context.deadlines.get(PumpDeadline::Enter).unwrap();
     let (admin, peer) = OrganChannel::pair().unwrap();
     let mut admin = LifecyclePeer::from_channel(admin).unwrap();
     let mut staged_stop = false;
     for _ in 0..3000 {
-        if mode == "early" && owner.stage() == ResidencyStage::Admit && owner.send.is_none() {
+        if mode == "early" && owner.stage() == ResidencyStage::Admit && owner.send().is_none() {
             for _ in 0..3000 {
                 let port = owner.resources.residency_mut().unwrap();
                 port.try_receive().unwrap();
@@ -268,7 +316,7 @@ pub(in crate::flow::context) fn drive<'a>(
             Some(enter)
         );
         if mode == "stop"
-            && let Some(send) = owner.send.as_ref()
+            && let Some(send) = owner.send()
         {
             assert!(!send.sent());
         }
@@ -277,21 +325,30 @@ pub(in crate::flow::context) fn drive<'a>(
                 Ok(x) => x,
                 Err(_) => panic!("stopped custody refused"),
             };
-            assert!(resources.spu_child().is_some());
+            assert_eq!(
+                resources.spu_child().is_some(),
+                mode != "cleanup-before-fork"
+            );
+            if mode.starts_with("cleanup-") {
+                *stopped = Some(account);
+                return None;
+            }
             assert_eq!(account.request.instruction, instruction_fixture());
             match mode {
                 "refuse" => {
                     assert!(matches!(account.cause, ResidencyStop::Refused));
                     assert!(matches!(
                         account.reply.as_ref().unwrap().envelope().payload,
-                        weaver_types::Payload::Refusal(weaver_types::LifecycleRefusal::NoResidency)
+                        weaver_types::Payload::Refusal(
+                            weaver_types::LifecycleRefusal::DeviceCannotAdmit
+                        )
                     ));
                 }
                 "wrong" | "position" | "opener" | "arm" | "early" => {
                     assert!(matches!(account.cause, ResidencyStop::Run(_)));
                     assert!(!account.reply.as_ref().unwrap().raw_bytes().is_empty());
                     if mode == "early" {
-                        assert!(!account.send.as_ref().unwrap().sent());
+                        assert!(!resources.residency_request().unwrap().send().sent());
                     }
                 }
                 "eof" => {
@@ -300,16 +357,36 @@ pub(in crate::flow::context) fn drive<'a>(
                 }
                 "stop" => {
                     assert!(matches!(account.cause, ResidencyStop::Interrupted));
-                    assert!(!account.send.as_ref().unwrap().sent());
+                    assert!(!resources.residency_request().unwrap().send().sent());
                 }
                 _ => panic!("unexpected stop {:?}", account.cause),
             }
             return None;
         }
         if stage == ResidencyStage::Complete {
+            if mode.starts_with("cleanup-ready") {
+                state.shutdown(std::net::Shutdown::Write).unwrap();
+                for _ in 0..32 {
+                    let _ = owner.context.pump_once(&mut PumpPorts {
+                        lifecycle: LifecyclePorts::default(),
+                        gate: None,
+                        decode: None,
+                        label: None,
+                        io: &mut CircuitIo(clock),
+                    });
+                    if owner.context.failure().is_some() {
+                        break;
+                    }
+                }
+                assert!(
+                    owner.context.failure().is_some(),
+                    "actual state EOF must latch"
+                );
+                continue;
+            }
             assert!(matches!(mode, "ready" | "delay" | "full" | "expiry"));
-            assert!(owner.send.as_ref().unwrap().sent());
-            let sent_at = owner.send.as_ref().unwrap().sent_at().unwrap();
+            assert!(owner.send().unwrap().sent());
+            let sent_at = owner.send().unwrap().sent_at().unwrap();
             assert!(sent_at >= origin && sent_at < enter.deadline_ns());
             if mode == "expiry" {
                 clock.advance_to(enter.deadline_ns()).unwrap();

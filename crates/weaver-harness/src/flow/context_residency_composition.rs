@@ -35,16 +35,16 @@ pub(in crate::flow) enum ResidencyStop {
 pub(in crate::flow) struct ResidencyEvidence {
     pub startup: StartupEvidence,
     pub request: ResidencyRequest,
-    pub send: OrganSend,
     pub reply: ReceivedOrgan,
 }
 
 pub(in crate::flow) struct StoppedResidency {
+    origin: std::sync::Arc<()>,
+    pub enter: Option<AbsoluteBound>,
     pub cause: ResidencyStop,
     pub startup: StartupEvidence,
     pub request: ResidencyRequest,
     pub inventory: CompiledInventory,
-    pub send: Option<OrganSend>,
     pub reply: Option<ReceivedOrgan>,
     pub returned_directive: Option<LifecycleDirective>,
 }
@@ -77,7 +77,6 @@ pub(in crate::flow) struct ResidencyComposition<'a> {
     request: ResidencyRequest,
     enter: Option<AbsoluteBound>,
     stage: ResidencyStage,
-    send: Option<OrganSend>,
     reply: Option<ReceivedOrgan>,
     returned_directive: Option<LifecycleDirective>,
     stop: Option<ResidencyStop>,
@@ -102,11 +101,16 @@ impl<'a> ResidencyComposition<'a> {
             } else {
                 ResidencyStage::Fork
             },
-            send: None,
             reply: None,
             returned_directive: None,
             stop: invalid.then_some(ResidencyStop::InvalidEntry),
         }
+    }
+
+    fn send(&self) -> Option<&OrganSend> {
+        self.resources
+            .residency_request()
+            .map(|request| request.send())
     }
 
     pub(in crate::flow) fn stage(&self) -> ResidencyStage {
@@ -200,12 +204,12 @@ impl<'a> ResidencyComposition<'a> {
                 }
             }
             ResidencyStage::Admit => {
-                if self.send.is_none() {
+                if self.send().is_none() {
                     let directive = LifecycleDirective::Admit {
                         instruction: self.request.instruction.clone(),
                     };
                     match self.resources.stage_residency(directive) {
-                        Ok(send) => self.send = Some(send),
+                        Ok(()) => {}
                         Err((original, detail)) => {
                             self.returned_directive = Some(original);
                             self.stop(ResidencyStop::Stage(detail));
@@ -289,9 +293,9 @@ impl<'a> ResidencyComposition<'a> {
             .expect("reply retained before validation");
         let port = self
             .resources
-            .residency_mut()
+            .residency_port()
             .expect("original residency port");
-        let send = self.send.as_ref().expect("original Admit ticket");
+        let send = self.send().expect("original Admit ticket");
         let envelope = reply.envelope();
         if !reply.belongs_to(port)
             || !send.belongs_to(port)
@@ -308,7 +312,9 @@ impl<'a> ResidencyComposition<'a> {
             weaver_types::Payload::Answer(LifecycleAnswer::Admitted) => {
                 self.stage = ResidencyStage::Complete;
             }
-            weaver_types::Payload::Refusal(_) => {
+            weaver_types::Payload::Refusal(_)
+                if super::failed_enter_driver::admit_reply_is_terminal(envelope) =>
+            {
                 self.stop(ResidencyStop::Refused);
             }
             _ => return Err(self.protocol(io, "Admit reply has the wrong terminal arm")),
@@ -332,7 +338,6 @@ impl<'a> ResidencyComposition<'a> {
             evidence: ResidencyEvidence {
                 startup: self.startup,
                 request: self.request,
-                send: self.send.expect("actual sent Admit"),
                 reply: self.reply.expect("actual Admitted"),
             },
         })
@@ -352,15 +357,17 @@ impl<'a> ResidencyComposition<'a> {
         if self.stage != ResidencyStage::Stopped {
             return Err(self);
         }
+        let origin = std::sync::Arc::clone(&self.context.read_origin);
         Ok((
             self.context,
             self.resources,
             StoppedResidency {
+                origin,
+                enter: self.enter,
                 cause: self.stop.expect("stopped cause"),
                 startup: self.startup,
                 request: self.request,
                 inventory: self.inventory,
-                send: self.send,
                 reply: self.reply,
                 returned_directive: self.returned_directive,
             },
@@ -371,3 +378,6 @@ impl<'a> ResidencyComposition<'a> {
 #[cfg(test)]
 #[path = "context_residency_composition_tests.rs"]
 pub(super) mod tests;
+
+#[path = "context_residency_cleanup.rs"]
+pub(in crate::flow) mod cleanup;
