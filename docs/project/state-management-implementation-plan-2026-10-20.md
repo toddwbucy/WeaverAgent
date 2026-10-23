@@ -37,10 +37,19 @@ The next drafts stack from this baseline, each on its preceding carrier:
 | #266 code/state-review-ledger-followups | Contained #261 review corrections: actual correction-pair/refusal custody, ledger-owned association frontier, typed author identities, shared boot access and closed plan field lists, exact child-execution sentinel. Dedicated-target gates and 15 compiled protective failures with exact restores pass; cancellation-counting election stays in #263. |
 | #267 code/state-plan-summary-review-followups | #262 review corrections: refuse pre-boot effect admission, keep state traffic moving while unsent generation waits, exact summary Cut ownership, retained completed dispositions and tested admission/account guards. Dedicated-target gates and 17 compiled protective failures with exact restores pass; full plan producer/lifecycle/placement composition remains owed. |
 | #269 code/state-placement-owner | Dormant measured placement, generation confirmation, native marks, queued Cut and Staged carry; decoder-health and extracted-Boot cancellation guards. Harness 1,668/18 ignored, trace 160, 67 protective controls and required lint/fmt/lock pass. Production admission, lifecycle/selection and qualification remain owed. |
-| code/state-release-repair-review | #265/#266 review consistency: exact release-mark/original custody, typed boot/placement debt, monotone refused-pair causes, exact errors and retained settled proofs. Harness 1,678/18 ignored, trace 160, 19 protective controls, one separate non-Clone pin and required lint/fmt/lock pass; no #263 counting change or serving activation. |
+| #270 code/state-release-repair-review | #265/#266 review consistency: exact release-mark/original custody, typed boot/placement debt, monotone refused-pair causes, exact errors and retained settled proofs. Harness 1,678/18 ignored, trace 160, 19 protective controls, one separate non-Clone pin and required lint/fmt/lock pass; no #263 counting change or serving activation. |
+| code/state-boot-rollback-custody | Completed Boot evidence remains truthful after revocation; extracted pre-install proof returns its original owner for bounded rollback. Harness 1,694/18 ignored, trace 160, 19 protective controls, a separate installed-borrow type pin and required lint/fmt/lock pass. Full boot/lifecycle composition and qualified cutover remain owed. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
+
+#269 Planner review 5624951821 found two fix rows: cancelled reload can strand
+Staged or returned inputs, and cancelled native marks can block later turn work.
+Both remain open in a separate followup, along with its batch and filed rows.
+#270 review 5625064169 has zero fix rows and its Codex code review is complete
+without findings at 51a54907; the Planner undrafted it. Its seven batch rows
+remain tracked, and it still depends on #269. The boot rollback slice answers
+#267 row 1 only; it does not close the two #269 fixes.
 
 The Planner graded #255 at b26420e5 with no fix-bucket findings and reproduced
 its gates and 17 protective mutations. Its TRACE-PLACEMENT claim is limited to

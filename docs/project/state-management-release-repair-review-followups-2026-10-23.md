@@ -1,7 +1,7 @@
 # Release and repair review consistency
 
-Date: 2026-10-23. Branch: code/state-release-repair-review. Parent: exact
-#269 d2896bcd336b1b1ec78f370a6ff657b6ae9bcbef. Issue: #146.
+Published in #270 on code/state-release-repair-review, above exact #269
+d2896bcd336b1b1ec78f370a6ff657b6ae9bcbef. Advances #146.
 
 ## Scope and authority
 
@@ -90,8 +90,8 @@ grades or production qualification.
 
 ## Remaining composition
 
-The separate completed-Boot rollback slice retains pre-extraction evidence after
-Stop. A proof extracted earlier still needs a consuming failed-Enter rollback
-adapter. Production lifecycle/worker callers, qualified classifier artifacts,
+The separate code/state-boot-rollback-custody slice retains completed evidence
+after Stop and returns an extracted proof through a consuming failed-Enter
+rollback adapter. Production lifecycle/worker callers, qualified classifier artifacts,
 prompts and measured limits, and the reviewed coupled serving cutover remain
 open. The existing serving path stays active; this slice does not complete #146.

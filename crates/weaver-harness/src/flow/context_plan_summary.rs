@@ -74,22 +74,50 @@ impl PlanSummaryTransaction {
     fn effect(&self) -> bool {
         matches!(self.prerequisite, Prerequisite::Effect(_))
     }
+
+    #[cfg(test)]
+    pub(super) fn disposition_for_test(&self) -> (bool, bool, PumpDeadline, AbsoluteBound, u64) {
+        (
+            self.complete,
+            self.cancelled,
+            self.key,
+            self.bound,
+            self.account_deadline,
+        )
+    }
 }
 
 #[derive(Debug)]
 pub(in crate::flow) struct BootPlanSummary {
-    repaired: RepairedBootPairs,
-    committed: Arc<CommittedPlanSummary>,
+    // Ordinary extraction transfers the complete original owner, including its
+    // rollback seal and frozen account bound. No scalar reconstruction can
+    // recover that custody after Stop or another failed Enter prerequisite.
+    work: Box<PlanSummaryTransaction>,
 }
 impl BootPlanSummary {
     pub(in crate::flow) fn repaired(&self) -> &RepairedBootPairs {
-        &self.repaired
+        match &self.work.prerequisite {
+            Prerequisite::Boot(repaired) => repaired,
+            Prerequisite::Effect(_) => unreachable!("only boot extraction constructs this proof"),
+        }
     }
     pub(in crate::flow) fn read(&self) -> &RecordedRead {
-        self.committed.read()
+        self.work
+            .recorded
+            .as_ref()
+            .expect("successful boot read")
+            .read()
     }
     pub(in crate::flow) fn summary(&self) -> Option<&PlanSummary> {
-        self.committed.summary()
+        self.work
+            .recorded
+            .as_ref()
+            .expect("successful boot read")
+            .summary()
+    }
+    #[cfg(test)]
+    pub(super) fn disposition_for_test(&self) -> (bool, bool, PumpDeadline, AbsoluteBound, u64) {
+        self.work.disposition_for_test()
     }
 }
 #[derive(Debug)]
@@ -113,6 +141,11 @@ pub(in crate::flow) struct PlanSummaryAccount {
     work: Box<PlanSummaryTransaction>,
 }
 impl PlanSummaryAccount {
+    #[cfg(test)]
+    pub(super) fn disposition_for_test(&self) -> (bool, bool, PumpDeadline, AbsoluteBound, u64) {
+        self.work.disposition_for_test()
+    }
+
     pub(in crate::flow) fn recorded_read(&self) -> Option<&RecordedRead> {
         self.work
             .recorded
@@ -677,14 +710,26 @@ impl RecordingContext {
         if self.plan_summary.as_ref().is_none_or(|work| !work.complete) {
             return Ok(None);
         }
+        if self.plan_summary.as_ref().is_some_and(|work| {
+            !work.effect()
+                && (work.cancelled
+                    || work.refusal.is_some()
+                    || self.boot_enter_cancelled
+                    || self.plan_cache.unavailable == Some(PlanSummaryUnavailable::Revoked))
+        }) {
+            // A completed read stays successful evidence after Stop, but Boot
+            // cannot transfer Enter readiness or strand its rollback seal. The
+            // stopped account retains that same disposition in Releasing.
+            return Err(RunFailure::PlanSummaryOwned);
+        }
         if self
             .plan_summary
             .as_ref()
-            .is_some_and(|work| !work.effect() && (work.cancelled || work.refusal.is_some()))
+            .is_some_and(|work| !work.effect())
         {
-            // Failed Enter rollback retains its seal until the lifecycle has
-            // moved this owner to Releasing; ordinary extraction cannot strand it.
-            return Err(RunFailure::PlanSummaryOwned);
+            // A Leave can be held before normal Boot extraction. Its original
+            // minimum travels with the proof even if that wait later retires.
+            self.freeze_plan_summary_account_bound();
         }
         let work = self.plan_summary.take().unwrap();
         if work.cancelled {
@@ -698,16 +743,77 @@ impl RecordingContext {
                 work: Box::new(work),
             })));
         }
+        if !work.effect() {
+            return Ok(Some(PlanSummaryCompletion::Boot(BootPlanSummary {
+                work: Box::new(work),
+            })));
+        }
         let committed = work.recorded.expect("complete successful summary proof");
-        Ok(Some(match work.prerequisite {
-            Prerequisite::Boot(repaired) => PlanSummaryCompletion::Boot(BootPlanSummary {
-                repaired,
-                committed,
-            }),
-            Prerequisite::Effect(filing) => {
-                PlanSummaryCompletion::Effect(EffectPlanSummary { filing, committed })
-            }
-        }))
+        let Prerequisite::Effect(filing) = work.prerequisite else {
+            unreachable!("boot owner transferred above");
+        };
+        Ok(Some(PlanSummaryCompletion::Effect(EffectPlanSummary {
+            filing,
+            committed,
+        })))
+    }
+
+    /// Return the exact previously extracted Boot owner for cleanup only. This
+    /// moves custody without live admission or a new clock, including after the
+    /// first failure. Existing release/halt methods still own bounded disposal.
+    #[allow(clippy::result_large_err)] // Refusal returns the same owned proof.
+    pub(in crate::flow) fn restore_boot_plan_summary_for_rollback(
+        &mut self,
+        boot: BootPlanSummary,
+    ) -> Result<(), PlanSummaryBeginError<BootPlanSummary>> {
+        let work = &boot.work;
+        let valid = boot.repaired().belongs_to(self)
+            && boot.read().belongs_to(self)
+            && self.plan_cache.boot_started
+            && self.plan_cache.committed.as_ref().is_some_and(|cached| {
+                Arc::ptr_eq(
+                    cached,
+                    work.recorded.as_ref().expect("successful boot read"),
+                )
+            })
+            && boot.repaired().checked_open().is_some_and(|open| {
+                Arc::ptr_eq(open.origin(), &self.read_origin)
+                    && open.run() == self.barrier.run()
+                    && self.boot_journal.is_some()
+                    && self
+                        .boot_head
+                        .as_ref()
+                        .is_some_and(|head| head.recall_sequence() == open.head())
+                    && work.key == PumpDeadline::Enter
+                    && work.bound == open.enter()
+                    && self.deadlines.get(PumpDeadline::Enter) == Some(work.bound)
+            });
+        let refusal = if !matches!(self.phase, RecordingPhase::Entered | RecordingPhase::Failed)
+            || self.flow.standing_state().is_none()
+        {
+            Some(PlanSummaryBeginRefusal::WrongPhase)
+        } else if !valid {
+            Some(PlanSummaryBeginRefusal::WrongProof)
+        } else if self.plan_summary_admission_busy(PumpDeadline::Enter)
+            || self.plan_cache.required.is_some()
+        {
+            Some(PlanSummaryBeginRefusal::Busy)
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            return Err(PlanSummaryBeginError {
+                prerequisite: boot,
+                refusal,
+                failure: self.failure.clone(),
+            });
+        }
+        self.plan_summary = Some(*boot.work);
+        self.plan_cache.revoke();
+        // take_stopped_plan_summary does not sample a clock or freeze a bound;
+        // retain the existing Leave/halt minimum before exposing that path.
+        self.freeze_plan_summary_account_bound();
+        Ok(())
     }
     /// A failed Enter retains its summary proof/account until rollback owns it.
     /// An unfinished live read must drain; only expiry permits incomplete disposal.
@@ -722,9 +828,11 @@ impl RecordingContext {
         if work.effect() || self.phase != RecordingPhase::Entered {
             return Err(RunFailure::PlanSummaryOwned);
         }
-        work.cancelled = true;
+        if !work.complete {
+            work.cancelled = true;
+            self.cancel_plan_summary_read();
+        }
         self.plan_cache.revoke();
-        self.cancel_plan_summary_read();
         if let Some(failure) = &self.failure {
             return Err(failure.clone());
         }
@@ -874,7 +982,11 @@ impl RecordingContext {
     fn settle_plan_summary_account(&mut self, incomplete: Option<&str>) {
         let read = self.read.take();
         let work = self.plan_summary.as_mut().unwrap();
-        work.cancelled = true;
+        // Disposal cannot rewrite a read that had already completed. Revoked
+        // future use remains a separate cache/Enter admission fact.
+        if !work.complete {
+            work.cancelled = true;
+        }
         work.account_settled = true;
         if let Some(read) = read {
             if let Some(refusal) = read.plan_refusal() {
