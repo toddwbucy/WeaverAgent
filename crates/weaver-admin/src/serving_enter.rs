@@ -51,7 +51,7 @@ impl PreparedEnter {
         Self::prepare_against(config, agent, artifact, facts, ordinal, &boundary)
     }
 
-    fn prepare_against(
+    pub(super) fn prepare_against(
         config: &ServiceConfig,
         agent: &AgentName,
         artifact: VerifiedArtifact,

@@ -51,6 +51,9 @@ mod random;
 mod save_points;
 #[allow(dead_code)]
 mod serving_enter;
+// Dormant root startup composition; selected only with the qualified worker.
+#[allow(dead_code)]
+mod serving_load;
 // Complete replacement component, inactive until FOUNDATION-TRANSITION cutover.
 #[allow(dead_code)]
 mod seed;
