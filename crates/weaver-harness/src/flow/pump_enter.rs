@@ -215,3 +215,20 @@ pub(in crate::flow) fn probe_enter_peer(lifecycle: &mut LifecyclePorts<'_>) -> R
         .check_terminal()
         .map(|_| ())
 }
+
+impl ReceivedEnter {
+    pub(in crate::flow) fn peer(&self) -> &LifecyclePeer {
+        &self.peer
+    }
+    pub(in crate::flow) fn peer_mut(&mut self) -> &mut LifecyclePeer {
+        &mut self.peer
+    }
+    /// The response exchange comes from the retained original, never a caller.
+    pub(in crate::flow) fn ready_envelope(&self) -> OrganEnvelope {
+        OrganEnvelope {
+            exchange: self.message.envelope.exchange.clone(),
+            position: weaver_types::Position::Close,
+            payload: weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::Ready),
+        }
+    }
+}

@@ -476,3 +476,6 @@ impl RaisedBoot<'_> {
 #[cfg(test)]
 #[path = "context_gate_startup_tests.rs"]
 pub(in crate::flow::context) mod tests;
+
+#[path = "context_enter_ready.rs"]
+pub(in crate::flow) mod ready;

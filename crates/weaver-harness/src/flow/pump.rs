@@ -259,6 +259,7 @@ pub(super) struct LifecyclePeer {
     failure: Option<Failure>,
     interrupted: bool,
     zero_received: bool,
+    enter_ready_guard: bool,
 }
 
 impl LifecyclePeer {
@@ -273,6 +274,7 @@ impl LifecyclePeer {
             failure: None,
             interrupted: false,
             zero_received: false,
+            enter_ready_guard: false,
         })
     }
     pub(super) fn fd(&self) -> BorrowedFd<'_> {
@@ -320,7 +322,11 @@ impl LifecyclePeer {
                 failure,
             });
         }
-        self.sender.stage(envelope)
+        let result = self.sender.stage(envelope)?;
+        if matches!(result, Stage::Queued) {
+            self.enter_ready_guard = false;
+        }
+        Ok(result)
     }
     #[allow(clippy::result_large_err)]
     pub(super) fn stage_tracked(
@@ -333,7 +339,25 @@ impl LifecyclePeer {
                 failure,
             });
         }
-        self.sender.stage_tracked(envelope)
+        let result = self.sender.stage_tracked(envelope)?;
+        if matches!(result, super::pump_transport::TrackedStage::Queued(_)) {
+            self.enter_ready_guard = false;
+        }
+        Ok(result)
+    }
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_enter_ready(
+        &mut self,
+        envelope: OrganEnvelope,
+    ) -> Result<super::pump_transport::TrackedStage, StageFailure<OrganEnvelope>> {
+        let result = self.stage_tracked(envelope)?;
+        if matches!(result, super::pump_transport::TrackedStage::Queued(_)) {
+            self.enter_ready_guard = true;
+        }
+        Ok(result)
+    }
+    fn enter_ready_pending(&self) -> bool {
+        self.enter_ready_guard && self.sender.send_pending()
     }
     pub(super) fn owns_send(&self, send: &super::pump_transport::OrganSend) -> bool {
         send.belongs_to(&self.sender)
@@ -750,6 +774,18 @@ impl CommonPump {
             }
         }
         self.cursor = (self.cursor + 1) % ROTATING.len();
+        // The final Enter answer observes every standing component before its
+        // write. This does not reduce a completion or grant readiness itself.
+        if ports
+            .lifecycle
+            .peer
+            .as_deref()
+            .is_some_and(LifecyclePeer::enter_ready_pending)
+            && order.contains(&PumpSource::Admin)
+        {
+            order.retain(|source| *source != PumpSource::Admin);
+            order.push(PumpSource::Admin);
+        }
         for source in order {
             // Withhold only the first Open/placement write for the same held
             // cancellation that the owner observes. Keep receive and terminal
@@ -780,6 +816,37 @@ impl CommonPump {
                     .is_some_and(|peer| peer.cancels_boot_open())
             {
                 ready[source as usize].remove(PollFlags::POLLOUT);
+            }
+            if source == PumpSource::Admin
+                && ports
+                    .lifecycle
+                    .peer
+                    .as_deref()
+                    .is_some_and(LifecyclePeer::enter_ready_pending)
+            {
+                if let Some(expired) = self.deadline(ports.io, deadlines)? {
+                    return Ok(expired);
+                }
+                let peer = ports
+                    .lifecycle
+                    .peer
+                    .as_deref_mut()
+                    .expect("present original Enter");
+                // One bounded receive by the original owner precedes this
+                // irrevocable answer. A held cancellation grants no Ready write.
+                peer.try_receive()
+                    .map_err(|failure| PumpFailure::Transport { source, failure })?;
+                let cancelled = peer.cancels_boot_open();
+                if let Some(expired) = self.deadline(ports.io, deadlines)? {
+                    return Ok(expired);
+                }
+                if cancelled || !ready[source as usize].contains(PollFlags::POLLOUT) {
+                    progressed.push(source);
+                    continue;
+                }
+                // The receive above is this source's read unit. Preserve the
+                // actual writable hint; EAGAIN never means a completed answer.
+                ready[source as usize].remove(PollFlags::POLLIN);
             }
             if let Some(expired) = self.deadline(ports.io, deadlines)? {
                 return Ok(expired);

@@ -124,7 +124,7 @@ fn gate_startup_child() {
     while recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()).unwrap_or(0) > 0 {}
 }
 
-struct CircuitIo<'a>(&'a mut FakePumpIo);
+pub(super) struct CircuitIo<'a>(pub(super) &'a mut FakePumpIo);
 impl PumpIo for CircuitIo<'_> {
     fn now(&mut self) -> std::io::Result<u64> {
         self.0.now()
@@ -543,6 +543,14 @@ pub(in crate::flow::context) fn drive(
             clock,
         ) {
             Ok(ready) => {
+                if resident_mode.starts_with("entered-aggregate-")
+                    || resident_mode == "resident-aggregate-missing"
+                {
+                    guard.0 = Some(super::ready::tests::drive(ready, clock, &resident_mode));
+                    drop(guard);
+                    let _ = std::fs::remove_dir_all(path);
+                    return;
+                }
                 assert_ne!(resident_mode, "entered-finish-eof");
                 assert_ne!(resident_mode, "entered-finish-expiry-eof");
                 assert_ne!(mode, "finish-expiry");
@@ -782,4 +790,69 @@ scenario!(
 scenario!(
     gate_startup_composition_entered_finish_expiry_eof,
     "entered-finish-expiry-eof"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_ready,
+    "entered-aggregate-ready"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_pressure,
+    "entered-aggregate-pressure"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_stop,
+    "entered-aggregate-stop"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_stop_pressure,
+    "entered-aggregate-stop-pressure"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_eof,
+    "entered-aggregate-eof"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_expiry,
+    "entered-aggregate-expiry"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_gate_dead,
+    "entered-aggregate-gate-dead"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_spu_dead,
+    "entered-aggregate-spu-dead"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_clock_after_send,
+    "entered-aggregate-clock-after-send"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_expiry_after_send,
+    "entered-aggregate-expiry-after-send"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_busy,
+    "entered-aggregate-busy"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_missing,
+    "resident-aggregate-missing"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_gate_terminal,
+    "entered-aggregate-gate-terminal"
 );

@@ -167,3 +167,11 @@ pub(in crate::flow::context) fn close_original_peer() {
         nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
     });
 }
+
+pub(in crate::flow::context) fn original_peer_fd() -> i32 {
+    ORIGINAL_ADMIN.with(|slot| {
+        let fd = slot.get();
+        assert!(fd >= 0);
+        fd
+    })
+}
