@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #244
+**Landing PR:** Pending for this proposal.
 
-**Version:** 0.29 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.30 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -684,6 +684,23 @@ existing outcomes unless they also produce a flow component failure. [FLOW-4, FL
 | Releasing | Settle or abandon HARNESS-OPEN's owed account under its earlier bound before retiring the decode transport; release SPU, close state and classifier, then author unload with end_reason component_failure | Draining |
 | Draining | Bounded trace drain, return ChannelFault::Closed | Failed worker exit |
 | Any halt phase | Further failure | Preserve first cause, append available evidence, never restart teardown |
+
+**HARNESS-RELEASE-ABSENT.** Retain whether the harness
+actually created an SPU child for this run through healthy rollback and Failed
+cleanup. A typed classifier admission refusal before SPU fork and a real failure
+before SPU fork both leave that fact false. A successful SPU fork makes it true,
+including later exec, Load or Open failure and a child already reaped. Port
+retirement never resets it. Do not start an SPU merely to obtain a release outcome.
+
+Every new Unload still carries `release`. Use the paired trace Spec's optional
+`release.spu`: omit it only when no SPU child was created; otherwise retain the
+exact existing Confirmed/Unconfirmed rule. Retain the member's independent actual
+Closed/Unconfirmed/absent disposition. Absence creates no Release exchange, death
+fault, new terminal permit, successful Left or additional time. A healthy refusal
+still waits for explicit rollback and uses its actual forced/cause facts. A real
+halt still preserves its first failure, original cap and component-failure
+account. Existing bounded cleanup and trace-drain duties are unchanged. [FLOW-3,
+FLOW-4, FLOW-5]
 
 HARNESS-OPEN supplies one additional trace-only author permit for an Open already
 sent before cancellation or failure. It may finish that exchange's owed boot placement

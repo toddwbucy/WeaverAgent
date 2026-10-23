@@ -7,7 +7,7 @@ build order. Code is written against it under the gates of Working Process secti
 **Document ID:** `weaver-trace-Spec`
 **Parent:** `weaver-trace-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #181
+**Landing PR:** Pending for this proposal.
 
 ---
 
@@ -324,7 +324,7 @@ pub struct UnloadClose {
 }
 
 pub struct Release {
-    pub spu: ReleaseOutcome,
+    pub spu: Option<ReleaseOutcome>,
     pub member: Option<MemberRelease>,
 }
 
@@ -710,10 +710,26 @@ bound, whose `cause` stays the graceful caller's, and is never written null; abs
 read in a record written before the lifecycle act, which no force could join, so the
 absence reads the same, per section 3's rule for an added member; an optional member on a standing kind's payload, it names no new kind. **`release` says how the run's organs let go**, on the lifecycle act's I9 (`weaver-admin-Spec`
 section 3): the SPU and the member are released before `unload` is authored, so
-`unload` is the run's terminal event and carries the outcome. The SPU's is `Confirmed`
-or `Unconfirmed`, its `Release` answered `Released` or not, per
-`weaver-harness-spu-contract` section 5, and an SPU that dies in its release is a
-`fault` authored before `unload`, its outcome `Unconfirmed`. The member's is
+`unload` is the run's terminal event and carries the outcome. For an SPU child the
+harness actually forked, the SPU's is `Confirmed` or `Unconfirmed`, its `Release`
+answered `Released` or not, per `weaver-harness-spu-contract` section 5, and an SPU
+that dies in its release is a `fault` authored before `unload`, its outcome
+`Unconfirmed`. Creating the child is the boundary: a successful fork remains an
+SPU that stood even if exec, Load or Open later failed. An unsuccessful fork that
+created no child does not stand an SPU.
+
+**Absent-SPU representation.** `release.spu` is optional and
+omitted exactly when the harness created no SPU child for this run. Do not write
+null or a new enum spelling. At the read, an absent `spu` inside a present
+`release` means no SPU child was created, never that a created child's release was
+confirmed or unconfirmed. Present values keep exactly `confirmed` and
+`unconfirmed`; explicit null is invalid. Existing records with either present
+value retain their meaning and require no rewrite. The writer derives absence
+from actual process ownership, never from a missing port, missing reply, cleared
+resource slot or successful reap. A child already reaped still stood. An unknown
+or lost process disposition cannot be replaced by absence.
+
+The member's is
 `Closed` or `Unconfirmed`, absent where the run stands no member: the member has no
 release exchange, so this crate closes its ask end of the state seam, the tee's end
 closing with the writer after `unload` crosses it, and the member retires on its own

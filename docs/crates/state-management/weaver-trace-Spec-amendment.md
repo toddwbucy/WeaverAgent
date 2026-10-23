@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #244
+**Landing PR:** Pending for this proposal.
 
-**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
+**Version:** 0.26 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
 
 ## 0. What this document is
 
@@ -513,7 +513,10 @@ refuses them under the serving-vocabulary rule. [FLOW-3 through FLOW-6]
 The harness supplies the same first-failure snapshot as the fault and adds only its
 secondary failures to account.secondary. fault_sequence names the successfully recorded
 first fault in this run, or is null if it could not be recorded. Existing forced,
-forced_by, cause, release and grant_surface keep their meanings. An unload with
+forced_by, cause and grant_surface keep their meanings. Release remains required
+on every new Unload; optional `release.spu` follows the paired trace
+Spec's absent-SPU rule and HARNESS-RELEASE-ABSENT. Its absence describes actual
+noncreation of an SPU child, not missing failure evidence. An unload with
 component_failure supplies no successful Left. A reader joins the fault sequence rather
 than counting the repeated account as a second halt. The trace's raw account arm stays
 opaque and adds no dependency on the harness. The evidence fixture compares the first
