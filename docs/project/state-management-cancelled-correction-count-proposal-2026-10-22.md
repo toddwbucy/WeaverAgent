@@ -80,8 +80,8 @@ The concrete proposal edits [Spec 02 REPAIR, EMPTY-CORRECTION and the new
 CANCELLED-CORRECTION clause][spec02], [Spec 05 purpose precedence and
 COMPLETED-PAIR][spec05], and [HARNESS-RECALL-REFUSAL][harness]. The Spec headers describe
 the intended merged document state under Working Process section 2; this unmerged
-proposal itself carries no implementation authority. Existing Landing PR metadata will
-be updated when this proposal is assigned its own draft PR number.
+proposal itself carries no implementation authority. Landing metadata names draft PR #263; the proposal still waits for operator ruling,
+Planner review and merge.
 
 A census of failed_corrections and correction-count references found no additional
 wire field, trace kind, state operation or owning contract to change. Historical
