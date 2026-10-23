@@ -11,6 +11,17 @@ use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::net::UnixStream;
 use weaver_types::state_flow as s;
 
+fn reading_buffer(completion: &InspectionCompletion) -> usize {
+    match completion {
+        InspectionCompletion::Grants { surface, .. } => surface.as_ptr() as usize,
+        InspectionCompletion::Refused {
+            failure: crate::flow::read::ReadFailure::Refused { detail, .. },
+            ..
+        } => detail.as_ptr() as usize,
+        other => panic!("unexpected read-back: {other:?}"),
+    }
+}
+
 fn receive(channel: &OrganChannel) -> Option<Vec<u8>> {
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
     match recv(
@@ -340,7 +351,8 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
     {
         *forced = false;
     }
-    let (peer, _rollback_far) = delivered(&directive, false);
+    let (peer, rollback_far) = delivered(&directive, false);
+    let mut rollback_far = Some(rollback_far);
     let leave_bound = AbsoluteBound::after(io.now().unwrap(), 100000).unwrap();
     if mode == "response-replaced-enter" {
         let rejected = match response.accept_rollback(peer, leave_bound) {
@@ -352,9 +364,16 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
         assert_eq!(rejected.response.refusal.sequence(), sequence);
         return;
     }
-    let mut rollback = match response.accept_rollback(peer, leave_bound) {
+    let rollback = match response.accept_rollback(peer, leave_bound) {
         Ok(x) => x,
         Err(e) => panic!("rollback join: {:?}", e.reason),
+    };
+    if mode == "response-peer-gone" {
+        drop(rollback_far.take());
+    }
+    let mut rollback = match rollback.into_prepared() {
+        Err(owner) => owner,
+        Ok(_) => panic!("rollback granted preparation before reading current Grants"),
     };
     assert_eq!(rollback.directive().envelope, directive);
     assert!(rollback.forced());
@@ -439,32 +458,13 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
         if stage == RollbackStage::Prepared {
             break;
         }
+        if stage == RollbackStage::Release {
+            rollback = match rollback.into_prepared() {
+                Err(owner) => owner,
+                Ok(_) => panic!("Grants alone granted preparation before the release transition"),
+            };
+        }
         if stage == RollbackStage::Stopped {
-            if mode == "response-grants-refused" {
-                assert!(matches!(
-                    rollback.stop(),
-                    Some(RollbackStop::Inspection(
-                        InspectionCompletion::Refused { .. }
-                    ))
-                ));
-                assert_eq!(
-                    rollback.response.refusal.owner.startup.context.phase(),
-                    RecordingPhase::Entered
-                );
-                assert!(
-                    rollback
-                        .response
-                        .refusal
-                        .owner
-                        .startup
-                        .context
-                        .failure()
-                        .is_none()
-                );
-                assert!(rollback.current().is_none());
-                assert_eq!(rollback.directive().envelope, directive);
-                return;
-            }
             panic!("rollback stopped: {:?}", rollback.stop());
         }
         let mut chunk = [0; 8192];
@@ -484,17 +484,47 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
                     ..
                 }
             ));
+            if mode == "response-state-gone" {
+                state.shutdown(std::net::Shutdown::Both).unwrap();
+                for _ in 0..128 {
+                    if rollback.advance(&mut CircuitIo(io)) == RollbackStage::Stopped {
+                        break;
+                    }
+                }
+                assert_eq!(rollback.stage(), RollbackStage::Stopped);
+                assert!(matches!(rollback.stop(), Some(RollbackStop::Run(_))));
+                assert!(rollback.current().is_none());
+                assert_eq!(rollback.directive().envelope, directive);
+                assert_eq!(rollback.leave(), leave_bound);
+                assert!(
+                    rollback.into_prepared().is_err(),
+                    "state transport loss granted preparation"
+                );
+                return;
+            }
             let began = io.now().unwrap() + 1;
             let answer = s::StateFrame::ControlAnswer {
                 common: request.common().clone(),
-                frame: if mode == "response-grants-refused" {
+                frame: if matches!(
+                    mode,
+                    "response-grants-refused" | "response-both-grants-refused"
+                ) {
                     s::StateControlAnswer::ControlRefused {
                         code: s::ControlRefusalCode::Read(s::ReadRefusalCode::AnswerTooLarge),
                         detail: "exact rollback grants refusal".into(),
                     }
                 } else {
                     s::StateControlAnswer::Grants {
-                        surface: vec!["read".into()],
+                        surface: match mode {
+                            "response-grants-same" => {
+                                vec!["owner:actual".into(), "mode:0750".into()]
+                            }
+                            "response-grants-reordered" => {
+                                vec!["mode:0750".into(), "owner:actual".into()]
+                            }
+                            "response-grants-empty" => vec![],
+                            _ => vec!["read".into()],
+                        },
                     }
                 },
                 observation: operation(&request, 3, began),
@@ -508,13 +538,35 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
         }
     }
     assert_eq!(rollback.stage(), RollbackStage::Prepared);
-    let InspectionCompletion::Grants { surface, evidence } = rollback.current().unwrap() else {
-        panic!("actual Grants")
+    let refused = matches!(
+        mode,
+        "response-grants-refused" | "response-both-grants-refused"
+    );
+    let evidence = match rollback.current().unwrap() {
+        InspectionCompletion::Grants { surface, evidence } if !refused => {
+            let expected: &[&str] = match mode {
+                "response-grants-same" => &["owner:actual", "mode:0750"],
+                "response-grants-reordered" => &["mode:0750", "owner:actual"],
+                "response-grants-empty" => &[],
+                _ => &["read"],
+            };
+            assert_eq!(surface, expected);
+            evidence
+        }
+        InspectionCompletion::Refused { failure, evidence } if refused => {
+            assert!(matches!(failure, crate::flow::read::ReadFailure::Refused {
+                code: s::ReadRefusalCode::AnswerTooLarge, detail
+            } if detail == "exact rollback grants refusal"));
+            evidence
+        }
+        other => panic!("lost current Grants: {other:?}"),
     };
-    assert_eq!(surface, &["read".to_owned()]);
     let initial = match rollback.initial() {
         InspectionCompletion::Grants { surface, evidence }
-            if mode != "response-initial-grants-refused" =>
+            if !matches!(
+                mode,
+                "response-initial-grants-refused" | "response-both-grants-refused"
+            ) =>
         {
             assert_eq!(
                 surface,
@@ -523,7 +575,10 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
             evidence
         }
         InspectionCompletion::Refused { failure, evidence }
-            if mode == "response-initial-grants-refused" =>
+            if matches!(
+                mode,
+                "response-initial-grants-refused" | "response-both-grants-refused"
+            ) =>
         {
             assert!(
                 matches!(failure, crate::flow::read::ReadFailure::Refused { code: s::ReadRefusalCode::AnswerTooLarge, detail } if detail == "exact initial Grants refusal")
@@ -585,7 +640,67 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
         receive(&far).is_none(),
         "rollback pumped the retired Enter response"
     );
+    assert!(
+        rollback
+            .response
+            .refusal
+            .owner
+            .startup
+            .context
+            .failure()
+            .is_none()
+    );
+    let initial_ptr = reading_buffer(rollback.initial());
+    let current_ptr = reading_buffer(rollback.current().unwrap());
+    // Capture the actual payload buffers; moving the owner must not replace or
+    // reconstruct either observation from caller-supplied summaries.
+    let current_wire =
+        s::encode_state_line(evidence.answer(), s::FrameDirection::Response).unwrap();
+    let initial_wire = s::encode_state_line(initial.answer(), s::FrameDirection::Response).unwrap();
     super::super::tests::drain(rollback.response.refusal.owner.startup.context, reader);
+    let prepared = match rollback.into_prepared() {
+        Ok(owner) => owner,
+        Err(_) => panic!("actual read-back did not produce its consuming handoff"),
+    };
+    let expected_surface = match mode {
+        "response-grants-refused"
+        | "response-both-grants-refused"
+        | "response-initial-grants-refused" => weaver_trace::GrantSurface::Unreadable,
+        "response-grants-same" => weaver_trace::GrantSurface::Unchanged,
+        _ => weaver_trace::GrantSurface::Varied,
+    };
+    assert_eq!(prepared.grant_surface(), expected_surface);
+    assert_eq!(prepared.leave(), leave_bound);
+    assert_eq!(prepared.directive().envelope, directive);
+    assert!(prepared.forced());
+    assert_eq!(reading_buffer(prepared.initial()), initial_ptr);
+    assert_eq!(reading_buffer(prepared.current()), current_ptr);
+    let read_evidence = |completion: &InspectionCompletion| match completion {
+        InspectionCompletion::Grants { evidence, .. }
+        | InspectionCompletion::Refused { evidence, .. } => {
+            s::encode_state_line(evidence.answer(), s::FrameDirection::Response).unwrap()
+        }
+        other => panic!("unexpected retained read-back: {other:?}"),
+    };
+    assert_eq!(read_evidence(prepared.initial()), initial_wire);
+    assert_eq!(read_evidence(prepared.current()), current_wire);
+    assert_eq!(prepared.owner.response.refusal.sequence(), sequence);
+    assert_eq!(
+        prepared.owner.response.refusal.source().detail.as_ptr(),
+        source
+    );
+    assert_eq!(
+        prepared
+            .owner
+            .response
+            .refusal
+            .owner
+            .startup
+            .context
+            .deadlines
+            .get(PumpDeadline::Leave),
+        Some(leave_bound)
+    );
 }
 
 macro_rules! scenario {
@@ -645,7 +760,7 @@ scenario!(
     "response-leave-expiry"
 );
 scenario!(
-    rollback_composition_keeps_typed_grants_refusal_without_release,
+    rollback_composition_records_typed_grants_refusal_and_prepares_unreadable_release,
     "response-grants-refused"
 );
 
@@ -662,4 +777,30 @@ scenario!(
 scenario!(
     startup_grants_composition_preserves_initial_refusal_through_actual_rollback,
     "response-initial-grants-refused"
+);
+
+scenario!(
+    rollback_readback_composition_same_actual_surfaces_are_unchanged,
+    "response-grants-same"
+);
+scenario!(
+    rollback_readback_composition_reordered_actual_surface_is_varied,
+    "response-grants-reordered"
+);
+scenario!(
+    rollback_readback_composition_empty_actual_surface_is_varied,
+    "response-grants-empty"
+);
+scenario!(
+    rollback_readback_composition_two_refusals_are_unreadable,
+    "response-both-grants-refused"
+);
+scenario!(
+    rollback_readback_composition_accepted_leave_survives_its_peer_eof,
+    "response-peer-gone"
+);
+
+scenario!(
+    rollback_readback_composition_state_loss_does_not_grant_preparation,
+    "response-state-gone"
 );

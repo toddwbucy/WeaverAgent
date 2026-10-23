@@ -1,8 +1,10 @@
 //! Actual Recorded Enter refusal -> tracked response -> accepted rollback ->
-//! measured current Grants and release phase. Terminal cleanup remains owned.
+//! measured initial/current Grants comparison and an owned release handoff.
+//! Terminal cleanup remains separate; this owner grants no Unload or Left.
 use super::*;
 use crate::flow::pump::{LifecycleMessage, LifecyclePeer};
 use crate::flow::pump_transport::{OrganSend, TrackedStage};
+use weaver_trace::GrantSurface;
 use weaver_types::{LifecycleDirective, Position};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -257,7 +259,7 @@ impl<'a> EnterRefusalResponse<'a> {
     }
 }
 
-impl RollbackComposition<'_> {
+impl<'a> RollbackComposition<'a> {
     pub(in crate::flow) fn stage(&self) -> RollbackStage {
         self.stage
     }
@@ -286,6 +288,43 @@ impl RollbackComposition<'_> {
             .initial_grants
             .as_ref()
             .expect("classifier refusal follows the retained initial Grants")
+    }
+    /// Move the whole actual chain into release preparation. No caller can
+    /// provide a substitute initial reading, result, cause, deadline or peer.
+    /// Rejection returns the unchanged owner for its ongoing work/accounting.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn into_prepared(self) -> Result<PreparedRollback<'a>, Self> {
+        if self.stage != RollbackStage::Prepared {
+            return Err(self);
+        }
+        let Some(current) = self.current.as_ref() else {
+            return Err(self);
+        };
+        let grant_surface = match (self.initial(), current) {
+            (
+                InspectionCompletion::Grants {
+                    surface: initial, ..
+                },
+                InspectionCompletion::Grants {
+                    surface: current, ..
+                },
+            ) if initial == current => GrantSurface::Unchanged,
+            (InspectionCompletion::Grants { .. }, InspectionCompletion::Grants { .. }) => {
+                GrantSurface::Varied
+            }
+            (
+                InspectionCompletion::Grants { .. } | InspectionCompletion::Refused { .. },
+                InspectionCompletion::Refused { .. },
+            )
+            | (InspectionCompletion::Refused { .. }, InspectionCompletion::Grants { .. }) => {
+                GrantSurface::Unreadable
+            }
+            _ => return Err(self),
+        };
+        Ok(PreparedRollback {
+            owner: self,
+            grant_surface,
+        })
     }
     fn stopped(&mut self, cause: RollbackStop) -> RollbackStage {
         self.stop = Some(cause);
@@ -373,10 +412,11 @@ impl RollbackComposition<'_> {
                     self.inspecting = true;
                 }
                 let mut ports = PumpPorts {
-                    lifecycle: LifecyclePorts {
-                        peer: Some(&mut self.peer),
-                        ..Default::default()
-                    },
+                    // Leave has already been received in full. Its connection
+                    // is now only an answer path, retained until terminal cleanup;
+                    // EOF on it cannot cancel the accepted directive (contract 2).
+                    // The outer listener still needs its separate composition.
+                    lifecycle: LifecyclePorts::default(),
                     gate: None,
                     decode: None,
                     label: None,
@@ -385,8 +425,11 @@ impl RollbackComposition<'_> {
                 let progress = context.advance_inspection(&mut ports)?;
                 if let Some(completion) = context.take_inspection(ports.io)? {
                     match completion {
-                        granted @ InspectionCompletion::Grants { .. } => {
-                            self.current = Some(granted);
+                        reading @ (InspectionCompletion::Grants { .. }
+                        | InspectionCompletion::Refused { .. }) => {
+                            // A typed read refusal is a recorded observation of
+                            // unreadability, not authority to stop healthy Leave.
+                            self.current = Some(reading);
                             self.stage = RollbackStage::Release;
                         }
                         stopped => {
@@ -411,6 +454,37 @@ impl RollbackComposition<'_> {
             RollbackStage::Transition | RollbackStage::Stopped => unreachable!(),
         }
         Ok(())
+    }
+}
+
+/// Preparation is a retained fact, not terminal permission. The final lifecycle
+/// owner must still service the listener, release resources, record Unload and
+/// drain before answering Left. There is no mutable context/peer escape here.
+pub(in crate::flow) struct PreparedRollback<'a> {
+    owner: RollbackComposition<'a>,
+    grant_surface: GrantSurface,
+}
+
+impl PreparedRollback<'_> {
+    pub(in crate::flow) fn grant_surface(&self) -> GrantSurface {
+        self.grant_surface
+    }
+    pub(in crate::flow) fn initial(&self) -> &InspectionCompletion {
+        self.owner.initial()
+    }
+    pub(in crate::flow) fn current(&self) -> &InspectionCompletion {
+        self.owner
+            .current()
+            .expect("prepared rollback retains its current reading")
+    }
+    pub(in crate::flow) fn directive(&self) -> &LifecycleMessage {
+        self.owner.directive()
+    }
+    pub(in crate::flow) fn forced(&self) -> bool {
+        self.owner.forced()
+    }
+    pub(in crate::flow) fn leave(&self) -> AbsoluteBound {
+        self.owner.leave()
     }
 }
 

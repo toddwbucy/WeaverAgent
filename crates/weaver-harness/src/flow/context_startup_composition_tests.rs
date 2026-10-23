@@ -170,7 +170,8 @@ enum Case {
 fn circuit(case: Case) {
     let grants_refused = matches!(
         case,
-        Case::RefuseGrants | Case::RefusalJoin("response-initial-grants-refused")
+        Case::RefuseGrants
+            | Case::RefusalJoin("response-initial-grants-refused" | "response-both-grants-refused")
     );
     let child = ChildFixture::new(
         if matches!(case, Case::Refused)
