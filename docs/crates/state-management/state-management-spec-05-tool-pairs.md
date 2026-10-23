@@ -4,7 +4,7 @@
 
 **Landing PR:** #241
 
-**Version:** 0.10 **Date filed:** 2026-10-20 **Document ID:** state-management-spec-05
+**Version:** 0.11 **Date filed:** 2026-10-22 **Document ID:** state-management-spec-05
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -164,8 +164,11 @@ Purpose and cancellation checks run after send association and before execution.
 pass_purpose records that the caller supplied a purpose which bars model-requested
 dispatch. The primitive checks that capability and elects no pass schedule. A completed
 repair-cap disposition uses repair_exhausted for the original pass's remaining
-conforming sends. A stop or leave already accepted takes precedence, using stop or
-unload. A broken flow permits no further filing under FLOW-4. Refusing execution is
+conforming sends. A stop or leave already accepted takes precedence for a terminal
+not yet admitted to its author, using stop or unload. A terminal already admitted,
+including one awaiting its same recorder ticket, keeps its exact cause and source;
+later Stop or Leave changes only the unclaimed suffix. A broken flow permits no
+further filing under FLOW-4. Refusing execution is
 never a reason to lose a known conforming pair. [PAIR-1, CLASS-9, PLAN-1, STRAT-2,
 FLOW-4]
 
@@ -266,6 +269,14 @@ A gate response, model text or read record cannot mint this grant. When closure 
 review pair, it additionally requires lane review, completed fate and
 ToolOutcome::Result under Spec 07. A category permitting closure without review uses
 attest_closure instead, never a fabricated pair. [R20-17] [PAIR-1, PAIR-3, PLAN-2]
+
+For a forbidden correction, Spec 02 CANCELLED-CORRECTION uses this same completion
+proof. A Recorded terminal whose Filed receipt or required opening commit is still
+outstanding cannot complete the pass's failed-attempt account. Stop or leave may finish
+healthy owed accounting under the original earlier bounds, retaining an immutable
+pass_purpose or stop prefix alongside the remaining stop or unload suffix. No counter
+update licenses dispatch, rewrites a terminal, substitutes a trace record for a commit,
+or permits store writes after a foundation halt. [PAIR-1, PAIR-4, CLASS-9, FLOW-4]
 
 **RETURN-CARRY.** The port retains terminal source and completion grants until
 acknowledged or unloaded. take_result(CallId) returns a borrowed complete result grant

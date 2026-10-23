@@ -4,7 +4,7 @@
 
 **Landing PR:** #244
 
-**Version:** 0.29 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.30 **Date filed:** 2026-10-22 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -357,10 +357,16 @@ FLOW-3, CLASS-8, STORE-3]
 
 The repair account keeps Recorded refusals inspectable alongside valid requests without
 releasing a refused CallId as a request candidate. In a correction, complete the one
-correction_call disposition, every RECALL-REFUSAL and every required valid
-pair terminal before charging the one failed correction. Preserve the original call
-identity and any corrected statement source independently. Cancellation and phase
-permissions follow RECALL-REFUSAL and HARNESS-RECORD-LIFETIME. No new terminal reserve,
+correction_call disposition, every RECALL-REFUSAL and every required valid pair's
+actual CompletedPair, including opening commits and the terminal Filed receipt, before
+charging the one failed correction. Preserve the original call identity and any
+corrected statement source independently. Spec 02 CANCELLED-CORRECTION owns the
+complete-attempt boundary across Stop/leave: retain exact correction identity and
+count once when all required facts exist, before fallible continuation or extraction,
+without reopening any cancelled grant or cap continuation. Recorded PairEnded alone
+is not a completion receipt. Cancellation and phase permissions follow
+RECALL-REFUSAL and HARNESS-RECORD-LIFETIME; no new filing after foundation halt or
+renewal of the original wait is authorized. No new terminal reserve,
 placement grant, final-answer policy or classifier meaning is introduced. [CLASS-9,
 CLASS-10, FLOW-4, FLOW-5, OUT-1]
 
