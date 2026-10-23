@@ -47,6 +47,7 @@ pub(in crate::flow) struct StartupEvidence {
 
 pub(in crate::flow) struct StartupComposition<'a> {
     context: &'a mut RecordingContext,
+    enter_bound: Option<AbsoluteBound>,
     resources: &'a mut FailedEnterResources,
     start: StartIdentity,
     limits: ReadLimits,
@@ -73,6 +74,7 @@ pub(in crate::flow) struct PreparedStartup<'a> {
 /// This account grants neither a retry nor a healthy lifecycle answer.
 pub(in crate::flow) struct StoppedStartupAccount {
     pub cause: StartupStop,
+    pub enter_bound: Option<AbsoluteBound>,
     pub start: StartIdentity,
     pub limits: ReadLimits,
     pub load: Option<AuthoredEvent>,
@@ -109,8 +111,10 @@ impl<'a> StartupComposition<'a> {
             || resources.classifier_child().is_some()
             || resources.spu_child().is_some()
             || request.load.kind != Kind::Load;
+        let enter_bound = context.deadlines.get(PumpDeadline::Enter);
         Self {
             context,
+            enter_bound,
             resources,
             start: request.start,
             limits: request.limits,
@@ -322,6 +326,7 @@ impl<'a> StartupComposition<'a> {
             self.resources,
             StoppedStartupAccount {
                 cause: self.stop.expect("stopped cause retained"),
+                enter_bound: self.enter_bound,
                 start: self.start,
                 limits: self.limits,
                 load: self.load,
@@ -339,3 +344,6 @@ impl<'a> StartupComposition<'a> {
 #[cfg(test)]
 #[path = "context_startup_composition_tests.rs"]
 pub(super) mod tests;
+
+#[path = "context_enter_refusal_composition.rs"]
+pub(in crate::flow) mod refusal;

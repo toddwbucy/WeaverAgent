@@ -151,6 +151,7 @@ impl Drop for ResourceFixture {
 enum Case {
     Ready,
     Refused,
+    RefusalJoin(&'static str),
     Partition,
     Expiry,
     DelayedOpen,
@@ -160,11 +161,15 @@ enum Case {
 }
 
 fn circuit(case: Case) {
-    let child = ChildFixture::new(if matches!(case, Case::Refused) {
-        "refuse"
-    } else {
-        "ready"
-    });
+    let child = ChildFixture::new(
+        if matches!(case, Case::Refused)
+            || matches!(case, Case::RefusalJoin(mode) if mode != "ready")
+        {
+            "refuse"
+        } else {
+            "ready"
+        },
+    );
     let (bootstrap, scheme, ready) = classifier_fixture();
     let mut declaration = config();
     declaration.scheme = scheme;
@@ -217,6 +222,13 @@ fn circuit(case: Case) {
             owner.context.deadlines.get(PumpDeadline::Enter),
             Some(enter)
         );
+        if matches!(stage, StartupStage::Stopped | StartupStage::Complete)
+            && let Case::RefusalJoin(mode) = case
+        {
+            super::refusal::tests::drive(owner, &mut run.clock, &mut run._reader, mode);
+            resources.reap_startup_test_children();
+            return;
+        }
         if stage == StartupStage::Stopped {
             match case {
                 Case::RefuseOpen => {
@@ -449,4 +461,8 @@ fn startup_composition_open_refusal_retains_unwritten_load_and_never_forks() {
 
 pub(in crate::flow::context) fn residency(mode: &'static str) {
     circuit(Case::Residency(mode));
+}
+
+pub(super) fn refusal_join(mode: &'static str) {
+    circuit(Case::RefusalJoin(mode));
 }
