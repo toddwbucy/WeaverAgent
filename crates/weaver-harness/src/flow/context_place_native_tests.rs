@@ -3,6 +3,81 @@ use super::*;
 use crate::flow::templates::{CompiledInventory, TemplateCertificate};
 use std::sync::OnceLock;
 
+#[test]
+fn author_review_active_native_marks_defers_foreign_proof_without_replacing_the_owner() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in std::iter::once(None).chain(HOLDS.map(Some)) {
+        let (mut foreign, plan) = PlaceFixture::with_active_scope();
+        foreign.turn("foreign-scope");
+        let proof = foreign.closed_effect(plan);
+        let raw = proof.read().raw_bytes().as_ptr();
+        let (mut fx, plan) = PlaceFixture::with_active_scope();
+        fx.turn("own-scope");
+        let own = fx.closed_effect(plan);
+        let before = fx.journal();
+        let run = fx.run();
+        run.context
+            .begin_place_effect_marks(own, &mut run.clock)
+            .unwrap();
+        let native = std::ptr::from_ref(run.context.native_marks.as_ref().unwrap());
+        let waits = format!("{:?}", run.context.deadlines);
+        let originals = held.map(|held| hold(&mut run.context, held));
+        let error = run
+            .context
+            .begin_place_effect_marks(proof, &mut run.clock)
+            .unwrap_err();
+        assert_eq!(error.refusal, PlaceError::Busy(held));
+        assert!(error.failure.is_none());
+        assert_eq!(error.prerequisite.read().raw_bytes().as_ptr(), raw);
+        assert_eq!(
+            std::ptr::from_ref(run.context.native_marks.as_ref().unwrap()),
+            native
+        );
+        assert_eq!(format!("{:?}", run.context.deadlines), waits);
+        if let Some(originals) = originals {
+            originals.assert_held(&run.context);
+        }
+        assert_eq!(fx.journal(), before);
+    }
+}
+
+#[test]
+fn boundary_batch_effect_marks_validate_receipt_and_wait_before_custody() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        for foreign in [false, true] {
+            let (mut first, plan) = PlaceFixture::with_active_scope();
+            first.turn("scope-work");
+            let proof = first.closed_effect(plan);
+            let raw = proof.read().raw_bytes().as_ptr();
+            let (mut second, plan) = PlaceFixture::with_active_scope();
+            second.turn("scope-work");
+            let _own = second.closed_effect(plan);
+            let run = if foreign { second.run() } else { first.run() };
+            if !foreign {
+                run.context.complete_wait(proof.filing().wait_key());
+            }
+            let originals = hold(&mut run.context, held);
+            let error = run
+                .context
+                .begin_place_effect_marks(proof, &mut run.clock)
+                .unwrap_err();
+            assert_eq!(
+                error.refusal,
+                if foreign {
+                    PlaceError::WrongProof
+                } else {
+                    PlaceError::MissingWait
+                }
+            );
+            assert!(error.failure.is_none());
+            assert_eq!(error.prerequisite.read().raw_bytes().as_ptr(), raw);
+            assert!(run.context.native_marks.is_none());
+            originals.assert_held(&run.context);
+        }
+    }
+}
+
 // wait_recorded is a blocking custody barrier. Full-recorder fixtures use an
 // unrelated recoverable wait to return to their caller while retaining the
 // original Decision/Cut clocks and exact pending author.

@@ -73,6 +73,77 @@ pub(super) enum RunFailure {
     EnterRefusalOwned,
 }
 
+/// Failure and custody are separate facts. An original returned here has no
+/// recorder ticket or sequence. Moving this result must not discard that input.
+#[derive(Debug)]
+#[must_use]
+pub(super) struct AuthorFailure {
+    pub(super) reason: RunFailure,
+    pub(super) original: Option<AuthoredEvent>,
+}
+
+impl From<RunFailure> for AuthorFailure {
+    fn from(reason: RunFailure) -> Self {
+        Self {
+            reason,
+            original: None,
+        }
+    }
+}
+
+impl AuthorFailure {
+    /// Restore an unaccepted original into this attempt's existing owner. The
+    /// caller keeps the reason as its stopped disposition; this grants no retry.
+    fn retain(self, original: &mut Option<AuthoredEvent>) -> RunFailure {
+        if let Some(event) = self.original {
+            assert!(
+                original.is_none(),
+                "returned author already has an original"
+            );
+            *original = Some(event);
+        }
+        self.reason
+    }
+
+    #[cfg(test)]
+    fn retained_reason(self) -> RunFailure {
+        assert!(
+            self.original.is_none(),
+            "test must inspect returned author custody"
+        );
+        self.reason
+    }
+}
+
+/// One caller's returned attempt, retained with its operation through teardown.
+/// It is not a queue, a pending ticket, or authority to retry the event.
+#[derive(Debug, Default)]
+struct StoppedAuthor {
+    failure: Option<AuthorFailure>,
+}
+impl StoppedAuthor {
+    fn check(&self) -> Result<(), RunFailure> {
+        match &self.failure {
+            Some(failure) => Err(failure.reason.clone()),
+            None => Ok(()),
+        }
+    }
+    fn retain(&mut self, failure: AuthorFailure) -> RunFailure {
+        if failure.original.is_some() {
+            assert!(self.failure.is_none(), "stopped attempt cannot be replaced");
+            let reason = failure.reason.clone();
+            self.failure = Some(failure);
+            reason
+        } else {
+            failure.reason
+        }
+    }
+    fn retain_started(&mut self, failure: AuthorFailure, started: &mut bool) -> RunFailure {
+        *started = failure.original.is_none();
+        self.retain(failure)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HeldInput {
     Caller,
@@ -134,15 +205,23 @@ impl AuthorClaim {
 struct WaitingAuthor {
     event: AuthoredEvent,
     claim: Option<AuthorClaim>,
+    // A freshness continuation may withdraw the original caller's attempt.
+    // Reuse this same slot until that caller takes the failure, never resubmit it.
+    withdrawn: Option<RunFailure>,
 }
 impl WaitingAuthor {
     fn ordinary(event: AuthoredEvent) -> Self {
-        Self { event, claim: None }
+        Self {
+            event,
+            claim: None,
+            withdrawn: None,
+        }
     }
     fn claimed(event: AuthoredEvent, claim: AuthorClaim) -> Self {
         Self {
             event,
             claim: Some(claim),
+            withdrawn: None,
         }
     }
     fn matches(&self, claim: Option<&AuthorClaim>) -> bool {
@@ -167,6 +246,7 @@ impl std::ops::Deref for WaitingAuthor {
 /// only the barrier's allocated/Recorded ticket can advance these fields.
 #[derive(Debug)]
 struct AuthorRecord {
+    returned: StoppedAuthor,
     identity: std::sync::Arc<()>,
     ticket: Option<u64>,
     sequence: Option<Sequence>,
@@ -174,10 +254,21 @@ struct AuthorRecord {
 impl AuthorRecord {
     fn new() -> Self {
         Self {
+            returned: StoppedAuthor::default(),
             identity: std::sync::Arc::new(()),
             ticket: None,
             sequence: None,
         }
+    }
+    fn retain_failure(&mut self, failure: AuthorFailure) -> RunFailure {
+        if failure.original.is_some() {
+            assert!(
+                self.sequence.is_none(),
+                "returned original cannot be Recorded"
+            );
+            self.ticket = None;
+        }
+        self.returned.retain(failure)
     }
     fn claim(&mut self, identity: &std::sync::Arc<()>, ticket: u64) -> bool {
         if !std::sync::Arc::ptr_eq(&self.identity, identity)
@@ -218,7 +309,7 @@ pub(crate) struct RecordingContext {
     template_setup_refusal: Option<super::templates::TemplateError>,
     template_blocked_author: Option<AuthoredEvent>,
     input: super::input::InputSlot,
-    input_author: Option<input_driver::InputAuthorStage>,
+    input_author: Option<input_driver::InputAuthor>,
     input_turn: Option<input_driver::InputTurn>,
     input_turns: std::collections::BTreeSet<String>,
     member_capture: Option<capture_driver::MemberCapture>,
@@ -258,6 +349,7 @@ pub(crate) struct RecordingContext {
     pair_work: Option<pair_driver::PairTransaction>,
     pair_gate_identity: Option<crate::flow::pump_transport::PortIdentity>,
     pair_rejected_authoring: bool,
+    pair_rejected_return: StoppedAuthor,
     pair_rejection_wait: Option<(AbsoluteBound, bool)>,
     pair_refused_gate: Option<crate::flow::pump_transport::ReceivedOrgan>,
     repair: Option<repair_driver::RepairTransaction>,
@@ -396,6 +488,7 @@ impl RecordingContext {
             pair_work: None,
             pair_gate_identity: None,
             pair_rejected_authoring: false,
+            pair_rejected_return: StoppedAuthor::default(),
             pair_rejection_wait: None,
             pair_refused_gate: None,
             repair: None,
@@ -444,8 +537,7 @@ impl RecordingContext {
         self.refused_author.as_ref()
     }
 
-    /// Latest nonfatal owner hold. A later held attempt replaces only this slot;
-    /// callers needing an earlier original must take it before another attempt.
+    /// First nonfatal owner hold. A later attempt cannot replace this original.
     pub(super) fn held_author(&self) -> Option<&AuthoredEvent> {
         self.held_author.as_ref()
     }
@@ -724,7 +816,14 @@ impl RecordingContext {
     pub(super) fn complete_wait(&mut self, key: PumpDeadline) -> Option<AbsoluteBound> {
         self.freeze_plan_summary_account_bound();
         self.freeze_place_account_bound();
-        if self.failure.is_some()
+        if self.wait_still_owned(key) {
+            return None;
+        }
+        self.disarm_wait(key)
+    }
+
+    fn wait_still_owned(&self, key: PumpDeadline) -> bool {
+        self.failure.is_some()
             || self.phase == RecordingPhase::Closed
             || self.filing_wait_still_owned(key)
             || self.output_wait_still_owned(key)
@@ -746,10 +845,6 @@ impl RecordingContext {
                     .template_checks
                     .as_ref()
                     .is_some_and(|owner| owner.can_certify()))
-        {
-            return None;
-        }
-        self.disarm_wait(key)
     }
 
     /// A retired Enter receipt proves the original registered cap was actually
@@ -806,7 +901,7 @@ impl RecordingContext {
             ));
         }
         self.flow
-            .check_releasing(&mut FlowRecording {
+            .require_releasing(&mut FlowRecording {
                 barrier: &mut self.barrier,
                 inbox: &mut self.inbox,
                 budget: &mut self.budget,
@@ -856,7 +951,7 @@ impl RecordingContext {
             ));
         }
         self.flow
-            .check_enter_rollback(&mut FlowRecording {
+            .require_enter_rollback(&mut FlowRecording {
                 barrier: &mut self.barrier,
                 inbox: &mut self.inbox,
                 budget: &mut self.budget,
@@ -932,7 +1027,7 @@ impl RecordingContext {
         }
         if self.flow.phase() != CoordinatorPhase::Closed {
             self.flow
-                .check_close(&mut FlowRecording {
+                .require_close(&mut FlowRecording {
                     barrier: &mut self.barrier,
                     inbox: &mut self.inbox,
                     budget: &mut self.budget,
@@ -977,96 +1072,131 @@ impl RecordingContext {
 
     /// Only complete, unchanged original author input enters this road. While
     /// its record waits, transport may fill slots but no completion is reduced.
+    // Return exact caller custody without allocating on a failure path.
+    #[allow(clippy::result_large_err)]
     pub(super) fn author_and_wait<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
         event: AuthoredEvent,
-    ) -> Result<Sequence, RunFailure> {
+    ) -> Result<Sequence, AuthorFailure> {
         self.admit_author_and_wait(ports, event, false)
     }
 
+    // Return exact caller custody without allocating on a failure path.
+    #[allow(clippy::result_large_err)]
     fn admit_author_and_wait<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
         event: AuthoredEvent,
         retained_retry: bool,
-    ) -> Result<Sequence, RunFailure> {
+    ) -> Result<Sequence, AuthorFailure> {
         let initial_wait = match self.live(ports.io) {
             Ok(()) => None,
             Err(failure @ RunFailure::Wait { .. }) => Some(failure),
             Err(failure) => {
-                self.retain_refused(event);
-                return Err(failure);
+                return Err(self.refused_author_failure(failure, event));
             }
         };
+        // Earlier owners may complete only their synchronous private author
+        // continuation. A competing caller must first take its own held input.
+        if self.caller_author_blocks_continuation(|| {
+            (self.marks.is_some() && !self.marks_blocks_external())
+                || (self.repair.is_some() && !self.repair_blocks_external())
+        }) {
+            let reason = self.fail(
+                ports.io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Author,
+                "second author while an earlier caller original is held",
+            );
+            return Err(self.refused_author_failure(reason, event));
+        }
         if self.place_blocks_external()
             || (self.place_admission_stopped() && event.kind == Kind::TurnStarted)
         {
-            self.held_author = Some(event);
-            return Err(RunFailure::PlaceOwned);
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::PlaceOwned,
+                event,
+            ));
         }
         if (self.plan_summary_blocks_external() && !self.plan_summary_allows_turn_close(&event))
             || (receipt_driver::is_plan_effect_event(&event) && !self.plan_effect_inflight())
         {
-            self.held_author = Some(event);
-            return Err(RunFailure::PlanSummaryOwned);
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::PlanSummaryOwned,
+                event,
+            ));
         }
         if self.boot_open_blocks_external() {
-            self.held_author = Some(event);
-            return Err(RunFailure::BootOpenOwned);
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::BootOpenOwned,
+                event,
+            ));
         }
         if self.boot_pairs_blocks_external() {
-            self.held_author = Some(event);
-            return Err(RunFailure::BootPairsOwned);
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::BootPairsOwned,
+                event,
+            ));
         }
         if self.marks_blocks_external() {
-            self.held_author = Some(event);
-            return Err(RunFailure::MarksOwned);
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::MarksOwned,
+                event,
+            ));
         }
         if self.freshness.is_some() && !retained_retry {
-            self.held_author = Some(event);
-            return Err(RunFailure::FreshnessOwned);
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::FreshnessOwned,
+                event,
+            ));
         }
         if self.inspection.is_some() {
-            self.held_author = Some(event);
-            return Err(RunFailure::InspectionOwned);
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::InspectionOwned,
+                event,
+            ));
         }
         if self.read.is_some() {
-            self.held_author = Some(event);
-            return Err(RunFailure::ReadOwned);
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::ReadOwned,
+                event,
+            ));
         }
         if self.repair_blocks_external() {
-            self.held_author = Some(event);
-            return Err(RunFailure::RepairOwned);
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::RepairOwned,
+                event,
+            ));
         }
         if self.measure_blocks_external() {
-            self.held_author = Some(event);
-            return Err(RunFailure::MeasureOwned);
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::MeasureOwned,
+                event,
+            ));
         }
         if self.filing.is_some()
             || self.output.is_some()
             || self.pair_work.is_some()
             || self.pair_rejected_authoring
         {
-            self.retain_refused(event);
-            return Err(self.fail(
+            let reason = self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Author,
                 "another author entered an owned content transaction",
-            ));
-        }
-        if self.template_blocked_author.is_some() {
-            // The first refused input has not returned to its caller. A second
-            // author violates the one-owner protocol. Preserve both events:
-            // the first in its refusal slot, this one as terminal evidence.
-            self.retain_refused(event);
-            return Err(self.fail(
-                ports.io,
-                FlowHaltReason::ProtocolFailed,
-                HaltPoint::Author,
-                "previous template-blocked author has not been taken",
-            ));
+            );
+            return Err(self.refused_author_failure(reason, event));
         }
         if self.templates_block_content()
             && (serving::content_schema(event.kind) != ContentSchema::None
@@ -1075,21 +1205,27 @@ impl RecordingContext {
             // This is refused caller input, never a pending author ticket.
             // The caller takes it unchanged before attempting another author.
             // resume_author_and_wait cannot turn it into admitted content.
-            self.template_blocked_author = Some(event);
-            return Err(RunFailure::TemplateBlocked);
+            return Err(Self::hold_author_failure(
+                &mut self.template_blocked_author,
+                RunFailure::TemplateBlocked,
+                event,
+            ));
         }
         if matches!(event.kind, Kind::ToolCallStarted | Kind::ToolCallCompleted) {
-            self.held_author = Some(event);
-            return Err(RunFailure::PairOwned);
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::PairOwned,
+                event,
+            ));
         }
         if !self.author_allowed(&event) {
-            self.retain_refused(event);
-            return Err(self.fail(
+            let reason = self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Author,
                 "author kind is not legal in this recording phase",
-            ));
+            );
+            return Err(self.refused_author_failure(reason, event));
         }
         if self.barrier.pending().is_some()
             || self.barrier.pending_author().is_some()
@@ -1097,26 +1233,28 @@ impl RecordingContext {
             || self.completed_author.is_some()
             || self.flow.has_pending_record()
         {
-            self.retain_refused(event);
-            return Err(self.fail(
+            let reason = self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Author,
-                "second author while a ticket is pending",
-            ));
+                "second author while an earlier original or ticket is owned",
+            );
+            return Err(self.refused_author_failure(reason, event));
         }
         self.waiting_content = Some(WaitingAuthor::ordinary(event));
         if let Some(failure) = initial_wait {
             self.author_admission_pending = true;
-            return Err(failure);
+            return Err((failure).into());
         }
         self.continue_waiting_content(ports)
     }
 
+    // Return exact caller custody without allocating on a failure path.
+    #[allow(clippy::result_large_err)]
     fn continue_waiting_content<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
-    ) -> Result<Sequence, RunFailure> {
+    ) -> Result<Sequence, AuthorFailure> {
         self.continue_claimed_content(ports, None)
     }
 
@@ -1131,37 +1269,50 @@ impl RecordingContext {
         self.waiting_content.take().map(WaitingAuthor::into_event)
     }
 
+    // Return exact caller custody without allocating on a failure path.
+    #[allow(clippy::result_large_err)]
     fn continue_claimed_content<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
         claim: Option<AuthorClaim>,
-    ) -> Result<Sequence, RunFailure> {
+    ) -> Result<Sequence, AuthorFailure> {
+        // Freshness drives another caller's author. Its withdrawal is a return,
+        // never permission to queue that original past the owning account.
+        if let Some(failure) = self.take_withdrawn_author(claim.as_ref(), ports.io) {
+            return Err(failure);
+        }
+        if let Some(failure) = self.failure.clone() {
+            return Err(failure.into());
+        }
         if claim.is_some() && self.phase != RecordingPhase::Entered {
-            return Err(match claim {
+            return Err((match claim {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 _ => RunFailure::MeasureOwned,
-            });
+            })
+            .into());
         }
         if !self
             .waiting_content
             .as_ref()
             .is_some_and(|waiting| waiting.matches(claim.as_ref()))
         {
-            return Err(self.fail(
+            return Err((self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Author,
                 "waiting author does not belong to the exact private claim",
-            ));
+            ))
+            .into());
         }
         #[cfg(test)]
         if claim.is_some() && std::mem::take(&mut self.pause_claim_queue_for_test) {
-            return Err(match claim {
+            return Err((match claim {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 _ => RunFailure::MeasureOwned,
-            });
+            })
+            .into());
         }
         if self.author_admission_pending {
             let event = self
@@ -1190,7 +1341,7 @@ impl RecordingContext {
                 && advance != Advance::Progress
                 && let PumpStep::Deadline { key, bound } = self.pump_once(ports)?
             {
-                return Err(RunFailure::Wait { key, bound });
+                return Err((RunFailure::Wait { key, bound }).into());
             }
         }
         let event = self
@@ -1213,13 +1364,13 @@ impl RecordingContext {
         let wall_ms = match wall_ms() {
             Ok(wall_ms) => wall_ms,
             Err(detail) => {
-                self.retain_refused(event);
-                return Err(self.fail(
+                let reason = self.fail(
                     ports.io,
                     FlowHaltReason::TraceFailed,
                     HaltPoint::Author,
                     detail,
-                ));
+                );
+                return Err(self.refused_author_failure(reason, event));
             }
         };
         self.author_turn = Some((event.kind, event.turn.clone()));
@@ -1254,12 +1405,13 @@ impl RecordingContext {
                         }
                     };
                 if !retained {
-                    return Err(self.fail(
+                    return Err((self.fail(
                         ports.io,
                         FlowHaltReason::ProtocolFailed,
                         HaltPoint::Author,
                         "queued author lost its exact private owner",
-                    ));
+                    ))
+                    .into());
                 }
             }
             if matches!(&queued.progress, RecordProgress::Pending) {
@@ -1275,13 +1427,18 @@ impl RecordingContext {
 
     /// A lifecycle or legacy-label wait can interrupt a nested author. Its
     /// owner handles that typed outcome, then resumes this same ticket.
+    // Return exact caller custody without allocating on a failure path.
+    #[allow(clippy::result_large_err)]
     pub(super) fn resume_author_and_wait<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
-    ) -> Result<Sequence, RunFailure> {
+    ) -> Result<Sequence, AuthorFailure> {
+        if let Some(failure) = self.take_withdrawn_author(None, ports.io) {
+            return Err(failure);
+        }
         self.live(ports.io)?;
         if self.place_blocks_external() {
-            return Err(RunFailure::PlaceOwned);
+            return Err((RunFailure::PlaceOwned).into());
         }
         if self.plan_summary_blocks_external()
             && !self
@@ -1289,57 +1446,68 @@ impl RecordingContext {
                 .pending_author()
                 .is_some_and(|held| self.plan_summary_allows_turn_close(&held.event))
         {
-            return Err(RunFailure::PlanSummaryOwned);
+            return Err((RunFailure::PlanSummaryOwned).into());
         }
         if self.boot_open_blocks_external() {
-            return Err(RunFailure::BootOpenOwned);
+            return Err((RunFailure::BootOpenOwned).into());
         }
         if self.boot_pairs_blocks_external() {
-            return Err(RunFailure::BootPairsOwned);
+            return Err((RunFailure::BootPairsOwned).into());
         }
         if self.marks_blocks_external() {
-            return Err(RunFailure::MarksOwned);
+            return Err((RunFailure::MarksOwned).into());
         }
         if self.inspection.is_some() {
-            return Err(RunFailure::InspectionOwned);
+            return Err((RunFailure::InspectionOwned).into());
         }
         if self.read.is_some() {
-            return Err(RunFailure::ReadOwned);
+            return Err((RunFailure::ReadOwned).into());
         }
         if self.repair_blocks_external() {
-            return Err(RunFailure::RepairOwned);
+            return Err((RunFailure::RepairOwned).into());
         }
         if self.measure_blocks_external() {
-            return Err(RunFailure::MeasureOwned);
+            return Err((RunFailure::MeasureOwned).into());
         }
         if self.filing.is_some()
             || self.output.is_some()
             || self.pair_work.is_some()
             || self.pair_rejected_authoring
         {
-            return Err(self.fail(
+            return Err((self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Author,
                 "generic resume cannot consume a content owner's author",
-            ));
+            ))
+            .into());
         }
         self.resume_owned_author_and_wait(ports)
     }
 
     // Only a private owner that reserved this exact author may call this path.
+    // Return exact caller custody without allocating on a failure path.
+    #[allow(clippy::result_large_err)]
     fn resume_owned_author_and_wait<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
-    ) -> Result<Sequence, RunFailure> {
+    ) -> Result<Sequence, AuthorFailure> {
         self.resume_claimed_author_and_wait(ports, None)
     }
 
+    // Return exact caller custody without allocating on a failure path.
+    #[allow(clippy::result_large_err)]
     fn resume_claimed_author_and_wait<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
         claim: Option<AuthorClaim>,
-    ) -> Result<Sequence, RunFailure> {
+    ) -> Result<Sequence, AuthorFailure> {
+        if let Some(failure) = self.take_withdrawn_author(claim.as_ref(), ports.io) {
+            return Err(failure);
+        }
+        if let Some(failure) = self.failure.clone() {
+            return Err(failure.into());
+        }
         if let Some(sequence) = self.completed_author.take() {
             self.finish_release_author();
             return Ok(sequence);
@@ -1351,12 +1519,13 @@ impl RecordingContext {
             return self.continue_claimed_content(ports, claim);
         }
         if self.flow.has_pending_record() || self.barrier.pending_author().is_none() {
-            return Err(self.fail(
+            return Err((self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Author,
                 "resume requires this caller's pending author",
-            ));
+            ))
+            .into());
         }
         let progress = self.resume_context_author(ports.io);
         self.wait_recorded(ports, progress)
@@ -1375,11 +1544,13 @@ impl RecordingContext {
         Ok(recorded)
     }
 
+    // Return exact caller custody without allocating on a failure path.
+    #[allow(clippy::result_large_err)]
     fn wait_recorded<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
         mut progress: RecordProgress,
-    ) -> Result<Sequence, RunFailure> {
+    ) -> Result<Sequence, AuthorFailure> {
         loop {
             // Retain this exact owner's actual admission even when the recorder
             // subsequently reports an observer failure. The failure remains
@@ -1446,40 +1617,58 @@ impl RecordingContext {
                 }
                 RecordProgress::Pending => {
                     if let PumpStep::Deadline { key, bound } = self.pump_once(ports)? {
-                        return Err(RunFailure::Wait { key, bound });
+                        return Err((RunFailure::Wait { key, bound }).into());
                     }
                 }
                 RecordProgress::BusyAuthored { event, owed, .. } => {
+                    // Only this unadmitted attempt is retired. Its earlier held
+                    // siblings, first failure, and original waits stay untouched.
                     if let Some(owed) = owed {
-                        // The barrier returns this exact unadmitted attempt,
-                        // including withdrawing its pending ticket on resume.
-                        // Retain it before any fallible observer and retire only
-                        // this attempt's turn/release bookkeeping.
-                        self.held_author = Some(event);
                         self.author_turn = None;
+                        self.author_admission_pending = false;
                         self.finish_release_author();
-                        if let Err(failure) = self.drain_intake(ports.io) {
-                            let original = self.held_author.take().expect("returned original");
-                            self.retain_refused(original);
-                            return Err(failure);
+                        let AuthorFailure {
+                            reason: owed_reason,
+                            original,
+                        } = Self::hold_author_failure(
+                            &mut self.held_author,
+                            match owed {
+                                OwedAuthor::BootOpen => RunFailure::BootOpenOwned,
+                                OwedAuthor::Placement => RunFailure::PlaceOwned,
+                            },
+                            event,
+                        );
+                        let reason = match self.drain_intake(ports.io) {
+                            Err(reason) => reason,
+                            Ok(()) => self.failure.clone().unwrap_or(owed_reason),
+                        };
+                        if self.failure.is_some()
+                            && original.is_none()
+                            && self.refused_author.is_none()
+                        {
+                            // This attempt just occupied the empty held slot.
+                            // A simultaneous intake failure makes it first-fatal
+                            // evidence, without touching any earlier original.
+                            self.refused_author = self.held_author.take();
                         }
-                        return Err(match owed {
-                            OwedAuthor::BootOpen => RunFailure::BootOpenOwned,
-                            OwedAuthor::Placement => RunFailure::PlaceOwned,
-                        });
+                        return Err(AuthorFailure { reason, original });
                     }
-                    self.retain_refused(event);
-                    self.drain_intake(ports.io)?;
-                    return Err(self.record_failed(ports.io));
+                    let original = self.retain_refused(event);
+                    let reason = match self.drain_intake(ports.io) {
+                        Err(reason) => reason,
+                        Ok(()) => self.record_failed(ports.io),
+                    };
+                    return Err(AuthorFailure { reason, original });
                 }
-                RecordProgress::Failed => return Err(self.record_failed(ports.io)),
+                RecordProgress::Failed => return Err((self.record_failed(ports.io)).into()),
                 RecordProgress::Busy { .. } | RecordProgress::Recorded { proof: Some(_), .. } => {
-                    return Err(self.fail(
+                    return Err((self.fail(
                         ports.io,
                         FlowHaltReason::ProtocolFailed,
                         HaltPoint::Author,
                         "ordinary author received another owner's proof",
-                    ));
+                    ))
+                    .into());
                 }
             }
             progress = self.resume_context_author(ports.io);
@@ -1744,6 +1933,8 @@ impl RecordingContext {
             io,
             wall_ms,
         );
+        self.observe_repair_text_count();
+        self.observe_repair_call_count();
         let advance = result.map_err(|failure| self.flow_failed(io, failure))?;
         self.settle_recorded_input(io)?;
         self.settle_recorded_capture(io)?;
@@ -1780,6 +1971,7 @@ impl RecordingContext {
     }
 
     fn live(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        self.observe_repair_text_count();
         self.observe_plan_effect_receipts();
         if self.failure.is_none()
             && let Some(detail) = self.plan_cache.invalid
@@ -1802,6 +1994,14 @@ impl RecordingContext {
         }
         if self.barrier.failure().is_some() || self.barrier.standing_failure().is_some() {
             return Err(self.record_failed(io));
+        }
+        if let Some(error) = self.repair_count_failure() {
+            return Err(self.fail(
+                io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                format!("recorded correction count: {error:?}"),
+            ));
         }
         // A read can own the recorder and prevent ordinary flow reduction.
         // Inspect an already observed channel failure without consuming that
@@ -1987,10 +2187,62 @@ impl RecordingContext {
         result
     }
 
-    fn retain_refused(&mut self, event: AuthoredEvent) {
-        if self.refused_author.is_none() {
+    fn hold_author_failure(
+        slot: &mut Option<AuthoredEvent>,
+        reason: RunFailure,
+        event: AuthoredEvent,
+    ) -> AuthorFailure {
+        let original = if slot.is_some() {
+            Some(event)
+        } else {
+            *slot = Some(event);
+            None
+        };
+        AuthorFailure { reason, original }
+    }
+
+    #[must_use]
+    fn retain_refused(&mut self, event: AuthoredEvent) -> Option<AuthoredEvent> {
+        if self.refused_author.is_some() || self.caller_author_held() {
+            Some(event)
+        } else {
             self.refused_author = Some(event);
+            None
         }
+    }
+
+    fn refused_author_failure(
+        &mut self,
+        reason: RunFailure,
+        event: AuthoredEvent,
+    ) -> AuthorFailure {
+        AuthorFailure {
+            reason,
+            original: self.retain_refused(event),
+        }
+    }
+
+    fn take_withdrawn_author(
+        &mut self,
+        claim: Option<&AuthorClaim>,
+        io: &mut impl PumpIo,
+    ) -> Option<AuthorFailure> {
+        if !self
+            .waiting_content
+            .as_ref()
+            .is_some_and(|waiting| waiting.withdrawn.is_some() && waiting.matches(claim))
+        {
+            return None;
+        }
+        let observed = self.live(io).err();
+        let waiting = self
+            .waiting_content
+            .take()
+            .expect("withdrawn caller original");
+        Some(AuthorFailure {
+            reason: observed.unwrap_or_else(|| waiting.withdrawn.unwrap()),
+            original: Some(waiting.event),
+        })
     }
 
     fn fail(
@@ -2013,6 +2265,7 @@ impl RecordingContext {
             owner.revoke();
         }
         // Revoke before sampling or reporting. A broken clock cannot grant work.
+        self.observe_repair_text_count();
         self.observe_plan_effect_receipts();
         self.plan_cache.fail();
         self.revoke_place();

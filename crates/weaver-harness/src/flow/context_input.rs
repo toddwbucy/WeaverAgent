@@ -51,11 +51,17 @@ pub(in crate::flow) enum InputAuthorStage {
     Refusal,
 }
 
+pub(in crate::flow) struct InputAuthor {
+    stage: InputAuthorStage,
+    returned: StoppedAuthor,
+}
+
 pub(in crate::flow) struct InputTurn {
     input: ConsumedInput,
     turn: TurnRef,
     turn_recorded: bool,
     author_started: bool,
+    returned_author: StoppedAuthor,
     reuse_installed: bool,
 }
 
@@ -182,8 +188,12 @@ impl RecordingContext {
         if self.input_turn.is_some() {
             return Ok(InputProgress::Pending);
         }
-        if let Some(stage) = self.input_author {
-            let sequence = self.resume_author_and_wait(ports)?;
+        if let Some(author) = &self.input_author {
+            author.returned.check()?;
+            let stage = author.stage;
+            let sequence = self
+                .resume_author_and_wait(ports)
+                .map_err(|failure| self.input_author.as_mut().unwrap().returned.retain(failure))?;
             self.finish_input_author_stage(stage, sequence, ports.io)?;
             return Ok(InputProgress::Progress);
         }
@@ -196,8 +206,13 @@ impl RecordingContext {
             });
         }
         if let Some(event) = self.input.offered_event() {
-            self.input_author = Some(InputAuthorStage::Offered);
-            let sequence = self.author_and_wait(ports, event)?;
+            self.input_author = Some(InputAuthor {
+                stage: InputAuthorStage::Offered,
+                returned: StoppedAuthor::default(),
+            });
+            let sequence = self
+                .author_and_wait(ports, event)
+                .map_err(|failure| self.input_author.as_mut().unwrap().returned.retain(failure))?;
             self.finish_input_author_stage(InputAuthorStage::Offered, sequence, ports.io)?;
             return Ok(InputProgress::Progress);
         }
@@ -215,8 +230,13 @@ impl RecordingContext {
                 causal_parent: None,
                 payload: Some(Payload::Refusal(payload)),
             };
-            self.input_author = Some(InputAuthorStage::Refusal);
-            let sequence = self.author_and_wait(ports, event)?;
+            self.input_author = Some(InputAuthor {
+                stage: InputAuthorStage::Refusal,
+                returned: StoppedAuthor::default(),
+            });
+            let sequence = self
+                .author_and_wait(ports, event)
+                .map_err(|failure| self.input_author.as_mut().unwrap().returned.retain(failure))?;
             self.finish_input_author_stage(InputAuthorStage::Refusal, sequence, ports.io)?;
             return Ok(InputProgress::Progress);
         }
@@ -519,6 +539,7 @@ impl RecordingContext {
             turn,
             turn_recorded: false,
             author_started: false,
+            returned_author: StoppedAuthor::default(),
             reuse_installed: false,
         });
         self.resume_input_turn(ports)
@@ -540,6 +561,9 @@ impl RecordingContext {
         }
         if self.marks_blocks_external() {
             return Err(RunFailure::MarksOwned);
+        }
+        if let Some(work) = &self.input_turn {
+            work.returned_author.check()?;
         }
         let Some(mut work) = self.input_turn.take() else {
             return Err(self.input_fault(ports.io, "input turn has no retained handoff"));
@@ -567,8 +591,11 @@ impl RecordingContext {
                     work.author_started = false;
                 }
                 Err(error) => {
+                    let reason = work
+                        .returned_author
+                        .retain_started(error, &mut work.author_started);
                     self.input_turn = Some(work);
-                    return Err(error);
+                    return Err(reason);
                 }
             }
         }
@@ -608,8 +635,11 @@ impl RecordingContext {
         let sequence = match result {
             Ok(sequence) => sequence,
             Err(error) => {
+                let reason = work
+                    .returned_author
+                    .retain_started(error, &mut work.author_started);
                 self.input_turn = Some(work);
-                return Err(error);
+                return Err(reason);
             }
         };
         let finish = self.flow.finish_input_author(
@@ -655,3 +685,7 @@ impl RecordingContext {
         self.input.frame().expect("owned intake frame").clone()
     }
 }
+
+#[cfg(test)]
+#[path = "context_input_author_failure_tests.rs"]
+mod author_failure_tests;

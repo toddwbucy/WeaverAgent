@@ -1,6 +1,9 @@
 //! Origin, recorder custody and lifecycle first-byte boundaries.
 use super::*;
 
+#[path = "context_place_boundary_batch_tests.rs"]
+mod boundary_batch_tests;
+
 #[test]
 fn held_boundary_place_release_preserves_the_pending_decode_and_first_failure() {
     use crate::flow::context::held_input_tests::{HOLDS, hold};

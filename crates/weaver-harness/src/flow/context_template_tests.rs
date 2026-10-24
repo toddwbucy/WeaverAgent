@@ -906,8 +906,23 @@ fn a_second_blocked_author_preserves_both_original_events_and_halts_protocol_mis
         RunFailure::TemplateBlocked
     );
     assert!(fx.input.run.context.halt().is_none());
+    let failure = fx
+        .input
+        .run
+        .context
+        .author_and_wait(
+            &mut PumpPorts {
+                lifecycle: crate::flow::pump::LifecyclePorts::default(),
+                gate: None,
+                decode: None,
+                label: None,
+                io: &mut fx.input.run.clock,
+            },
+            second.clone(),
+        )
+        .unwrap_err();
     assert!(matches!(
-        fx.input.run.author(second.clone()).unwrap_err(),
+        failure.reason,
         RunFailure::Flow {
             reason: FlowHaltReason::ProtocolFailed,
             point: HaltPoint::Author,
@@ -916,7 +931,10 @@ fn a_second_blocked_author_preserves_both_original_events_and_halts_protocol_mis
     ));
     assert_eq!(fx.input.run.context.phase(), RecordingPhase::Failed);
     let held_first = fx.input.run.context.take_template_blocked_author().unwrap();
-    let held_second = fx.input.run.context.refused_author().unwrap();
+    let held_second = failure
+        .original
+        .as_ref()
+        .expect("second original returned to its caller");
     for (actual, expected) in [(&held_first, &first), (held_second, &second)] {
         assert_eq!(actual.kind, expected.kind);
         assert_eq!(actual.subsystem, expected.subsystem);

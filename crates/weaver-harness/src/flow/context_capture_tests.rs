@@ -1545,6 +1545,7 @@ fn cancelling_a_timely_finished_proof_queues_release_and_public_author_resume_pr
         .run
         .context
         .resume_author_and_wait(&mut ports(&mut member.run.clock))
+        .map_err(|failure| failure.retained_reason())
         .unwrap();
     assert!(member.run.context.pending_author().is_none());
     member
@@ -1696,6 +1697,7 @@ fn a_recorded_acknowledge_refusal_behind_an_author_cancels_with_abort_not_releas
         .run
         .context
         .resume_author_and_wait(&mut ports(&mut member.run.clock))
+        .map_err(|failure| failure.retained_reason())
         .unwrap();
     assert!(
         member

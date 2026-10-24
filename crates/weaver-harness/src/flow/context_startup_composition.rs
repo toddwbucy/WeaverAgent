@@ -305,7 +305,10 @@ impl<'a> StartupComposition<'a> {
                             .expect("checked structural Open"),
                     );
                 }
-                let sequence = self.context.author_and_wait(&mut ports, event)?;
+                let sequence = self
+                    .context
+                    .author_and_wait(&mut ports, event)
+                    .map_err(|failure| failure.retain(&mut self.load))?;
                 self.load_sequence = Some(sequence);
                 self.stage = StartupStage::Activate;
             }

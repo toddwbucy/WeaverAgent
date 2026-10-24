@@ -2,162 +2,76 @@
 //! real Boot/Placement account fixtures separately pin public owner admission.
 use super::*;
 
-#[test]
-fn release_custody_nonfatal_originals_replace_only_held_evidence_and_can_be_taken() {
-    for (boot, place, expected) in [
-        (true, false, RunFailure::BootOpenOwned),
-        (false, true, RunFailure::PlaceOwned),
-        (true, true, RunFailure::PlaceOwned),
-    ] {
-        let mut fx = releasing(true, false);
-        fx.context.barrier.set_boot_open_owed(boot);
-        fx.context.barrier.set_place_owed(place);
-        let first = shutdown(Kind::Fault);
-        let second = shutdown(Kind::Refusal);
-        let first_pointer = original_pointer(&first);
-        let second_pointer = original_pointer(&second);
-        assert_ne!(first_pointer, second_pointer);
-        let before = fx.context.barrier.recorder().structure().len();
-        for (original, pointer) in [(first, first_pointer), (second, second_pointer)] {
-            // Both events exist before the earlier held allocation is replaced.
-            assert_eq!(fx.author(original), Err(expected.clone()));
-            assert_eq!(original_pointer(fx.context.held_author().unwrap()), pointer);
-            assert!(fx.context.refused_author().is_none());
-            assert!(fx.context.author_turn.is_none());
-            assert!(fx.context.release_author.is_none());
-            assert!(fx.context.pending_author().is_none());
-            assert!(fx.context.barrier.pending().is_none());
-            assert!(fx.context.failure().is_none());
-            assert_eq!(fx.context.barrier.recorder().structure().len(), before);
-        }
-        let returned = fx.context.take_held_author().unwrap();
-        assert!(fx.context.take_held_author().is_none());
-        assert_eq!(original_pointer(&returned), second_pointer);
-        fx.context.barrier.set_boot_open_owed(false);
-        fx.context.barrier.set_place_owed(false);
-        fx.author(returned).unwrap();
-        assert_eq!(fx.context.barrier.recorder().structure().len(), before + 1);
-        assert_eq!(
-            fx.context
-                .barrier
-                .recorder()
-                .structure()
-                .by_kind(Kind::Refusal)
-                .count(),
-            1
-        );
-    }
-}
+// The old last-wins hold tests are replaced by the AuthorFailure instruments
+// in author_failure: second submissions must preserve, not replace, originals.
 
 #[test]
-fn release_custody_prior_hold_cannot_replace_first_fatal_original() {
-    let mut fx = releasing(true, false);
-    fx.context.barrier.set_boot_open_owed(true);
-    let held = shutdown(Kind::Fault);
-    let fatal = shutdown(Kind::Refusal);
-    let held_pointer = original_pointer(&held);
-    let fatal_pointer = original_pointer(&fatal);
-    assert_eq!(fx.author(held), Err(RunFailure::BootOpenOwned));
+fn author_failure_pending_owner_refusal_preserves_and_resumes_the_first_ticket() {
+    let mut fx = releasing(true, true);
+    let wait = AbsoluteBound::after(fx.clock.now().unwrap(), 10).unwrap();
+    fx.context
+        .arm(PumpDeadline::Label, wait, &mut fx.clock)
+        .unwrap();
+    let first = shutdown(Kind::Fault);
+    let pointer = original_pointer(&first);
+    assert_eq!(
+        fx.author(first),
+        Err(RunFailure::Wait {
+            key: PumpDeadline::Label,
+            bound: wait
+        })
+    );
+    let turn = fx.context.author_turn.clone();
+    let ticket = fx.context.pending_author().unwrap().ticket;
+    let release = Arc::clone(&fx.context.release_author.as_ref().unwrap().identity);
+    fx.context.complete_wait(PumpDeadline::Label).unwrap();
+    // Reserved pair kinds retain their independent owner refusal, even while
+    // the earlier shutdown author holds a real CapacityPending ticket.
+    assert_eq!(
+        fx.author(event(Kind::ToolCallStarted, None)),
+        Err(RunFailure::PairOwned)
+    );
+    assert_eq!(
+        fx.context.take_held_author().unwrap().kind,
+        Kind::ToolCallStarted
+    );
+    assert!(fx.context.failure().is_none());
     assert!(fx.context.refused_author().is_none());
-    fx.context.barrier.set_boot_open_owed(false);
-    let progress =
-        fx.context
-            .submit_context_author(fatal, RecordPurpose::Content, 1, &mut fx.clock);
-    let failure = fx
-        .context
-        .wait_recorded(&mut ports(&mut fx.clock), progress)
-        .unwrap_err();
-    assert!(matches!(
-        failure,
-        RunFailure::Flow {
-            reason: FlowHaltReason::ProtocolFailed,
-            ..
-        }
+    assert_eq!(fx.context.author_turn, turn);
+    assert_eq!(fx.context.pending_author().unwrap().ticket, ticket);
+    assert_eq!(
+        original_pointer(&fx.context.pending_author().unwrap().event),
+        pointer
+    );
+    assert!(Arc::ptr_eq(
+        &release,
+        &fx.context.release_author.as_ref().unwrap().identity
     ));
+    drain(&mut fx);
+    fx.context
+        .resume_author_and_wait(&mut ports(&mut fx.clock))
+        .unwrap();
+    assert!(fx.context.author_turn.is_none());
+    assert!(fx.context.pending_author().is_none());
+    assert!(fx.context.release_author.is_none());
     assert_eq!(
-        original_pointer(fx.context.refused_author().unwrap()),
-        fatal_pointer
-    );
-    assert_eq!(
-        original_pointer(fx.context.held_author().unwrap()),
-        held_pointer
-    );
-    // A later original cannot replace the first fatal evidence or failure.
-    assert_eq!(fx.author(shutdown(Kind::Fault)), Err(failure.clone()));
-    assert_eq!(fx.context.failure(), Some(&failure));
-    assert_eq!(
-        original_pointer(fx.context.refused_author().unwrap()),
-        fatal_pointer
-    );
-    let held = fx.context.take_held_author().unwrap();
-    assert_eq!(original_pointer(&held), held_pointer);
-    assert_eq!(fx.author(held), Err(failure));
-    assert_eq!(
-        original_pointer(fx.context.refused_author().unwrap()),
-        fatal_pointer
-    );
-}
-
-#[test]
-fn release_custody_early_nonfatal_and_fatal_second_callers_keep_pending_author_turn() {
-    for fatal in [false, true] {
-        let mut fx = releasing(true, true);
-        let wait = AbsoluteBound::after(fx.clock.now().unwrap(), 10).unwrap();
         fx.context
-            .arm(PumpDeadline::Label, wait, &mut fx.clock)
-            .unwrap();
-        let first = shutdown(Kind::Fault);
-        let pointer = original_pointer(&first);
-        assert_eq!(
-            fx.author(first),
-            Err(RunFailure::Wait {
-                key: PumpDeadline::Label,
-                bound: wait
-            })
-        );
-        let turn = fx.context.author_turn.clone();
-        assert!(turn.is_some());
-        let ticket = fx.context.pending_author().unwrap().ticket;
-        let attempt = Arc::clone(&fx.context.release_author.as_ref().unwrap().identity);
-        fx.context.complete_wait(PumpDeadline::Label).unwrap();
-        if fatal {
-            assert!(matches!(
-                fx.author(shutdown(Kind::Refusal)),
-                Err(RunFailure::Flow {
-                    reason: FlowHaltReason::ProtocolFailed,
-                    ..
-                })
-            ));
-            assert!(fx.context.refused_author().is_some());
-        } else {
-            assert_eq!(
-                fx.author(event(Kind::ToolCallStarted, None)),
-                Err(RunFailure::PairOwned)
-            );
-            assert_eq!(
-                fx.context.take_held_author().unwrap().kind,
-                Kind::ToolCallStarted
-            );
-            assert!(fx.context.refused_author().is_none());
-        }
-        assert_eq!(fx.context.author_turn, turn);
-        assert_eq!(fx.context.pending_author().unwrap().ticket, ticket);
-        assert_eq!(
-            original_pointer(&fx.context.pending_author().unwrap().event),
-            pointer
-        );
-        assert!(Arc::ptr_eq(
-            &attempt,
-            &fx.context.release_author.as_ref().unwrap().identity
-        ));
-        if !fatal {
-            drain(&mut fx);
-            fx.context
-                .resume_author_and_wait(&mut ports(&mut fx.clock))
-                .unwrap();
-            assert!(fx.context.author_turn.is_none());
-        }
-    }
+            .barrier
+            .recorder()
+            .structure()
+            .by_kind(Kind::Fault)
+            .count(),
+        1
+    );
+    assert_eq!(
+        fx.context
+            .barrier
+            .recorder()
+            .structure()
+            .by_kind(Kind::ToolCallStarted)
+            .count(),
+        0
+    );
 }
 
 #[test]
@@ -199,6 +113,7 @@ fn release_custody_defensive_debt_rise_returns_exact_unadmitted_ticket_without_r
         let failure = fx
             .context
             .wait_recorded(&mut ports(&mut fx.clock), progress)
+            .map_err(|failure| failure.retained_reason())
             .unwrap_err();
         assert_eq!(
             failure,

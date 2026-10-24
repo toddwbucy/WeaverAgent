@@ -87,6 +87,7 @@ pub(super) struct OutboundWork {
     completion: Option<FilingCompletion>,
     cancelled: bool,
     fault_started: bool,
+    returned_fault: StoppedAuthor,
     fault_source: Option<Sequence>,
 }
 impl OutboundWork {
@@ -209,6 +210,7 @@ impl RecordingContext {
             completion: None,
             cancelled: false,
             fault_started: false,
+            returned_fault: StoppedAuthor::default(),
             fault_source: None,
         });
         Ok(())
@@ -234,6 +236,7 @@ impl RecordingContext {
             self.outbound_work_mut().unwrap().completion = Some(completion);
         }
         let work = self.outbound_work().unwrap();
+        work.returned_fault.check()?;
         if work.complete() {
             // A lifecycle wait can interrupt after the Recorded hook, leaving
             // this owner's completed author to consume on its next advance.
@@ -281,12 +284,20 @@ impl RecordingContext {
         if let Some(sequence) = self.completed_author.take() {
             debug_assert_eq!(self.outbound_work().unwrap().fault_source, Some(sequence));
         } else if self.waiting_content.is_some() {
-            self.continue_waiting_content(ports)?;
+            self.continue_waiting_content(ports).map_err(|failure| {
+                let work = self.outbound_work_mut().unwrap();
+                work.returned_fault
+                    .retain_started(failure, &mut work.fault_started)
+            })?;
         } else {
             let progress =
                 self.barrier
                     .resume_with_clock(&mut self.inbox, &mut self.budget, &mut || ports.io.now());
-            self.wait_recorded(ports, progress)?;
+            self.wait_recorded(ports, progress).map_err(|failure| {
+                let work = self.outbound_work_mut().unwrap();
+                work.returned_fault
+                    .retain_started(failure, &mut work.fault_started)
+            })?;
         }
         self.live(ports.io)?;
         Ok(OutboundProgress::Complete)

@@ -16,6 +16,107 @@ use weaver_types::{TurnFrame, state_flow as s};
 #[path = "context_task_material_tests.rs"]
 mod task_material;
 
+#[test]
+fn author_review_exempt_marks_author_cannot_replace_a_held_original() {
+    let mut fx = TaskFixture::new();
+    fx.reject_mark = true;
+    fx.begin();
+    for _ in 0..512 {
+        fx.step().unwrap();
+        if marks_driver::validation_tests::fault_author_is_next(&fx.input.run.context) {
+            break;
+        }
+    }
+    assert!(marks_driver::validation_tests::fault_author_is_next(
+        &fx.input.run.context
+    ));
+
+    // Preserve a genuine read owner from a second task. Ordinary admission
+    // excludes this overlap; move it only to exercise the defensive competing
+    // owner branch during the real marks fault continuation. No read is driven
+    // or treated as evidence in the other context.
+    let mut other = TaskFixture::new();
+    other.begin();
+    for _ in 0..512 {
+        other.step().unwrap();
+        if other.input.run.context.read.is_some() {
+            break;
+        }
+    }
+    let read = other
+        .input
+        .run
+        .context
+        .read
+        .take()
+        .expect("actual admitted read");
+    let original = tests::event(
+        Kind::Fault,
+        Some(Payload::Fault(
+            serde_json::value::to_raw_value(&serde_json::json!({"earlier":"caller"})).unwrap(),
+        )),
+    );
+    let expected = format!("{original:?}");
+    let Some(Payload::Fault(raw)) = original.payload.as_ref() else {
+        unreachable!()
+    };
+    let pointer = raw.get().as_ptr();
+    let run = &mut fx.input.run;
+    let failure = run
+        .context
+        .author_and_wait(&mut ports(&mut run.clock), original)
+        .unwrap_err();
+    assert_eq!(failure.reason, RunFailure::MarksOwned);
+    assert!(failure.original.is_none());
+    let bound = run.context.deadlines.get(PumpDeadline::Decision);
+    assert!(run.context.read.is_none());
+    run.context.read = Some(read);
+    let inserted_read = std::ptr::from_ref(run.context.read.as_ref().unwrap());
+    assert_eq!(fx.step(), Err(RunFailure::ReadOwned));
+    let run = &mut fx.input.run;
+    assert!(run.context.failure().is_none());
+    assert!(run.context.pending_author().is_none());
+    assert_eq!(run.context.deadlines.get(PumpDeadline::Decision), bound);
+    assert_eq!(
+        std::ptr::from_ref(run.context.read.as_ref().unwrap()),
+        inserted_read
+    );
+    assert_eq!(
+        format!("{:?}", run.context.held_author().unwrap()),
+        expected
+    );
+    let Some(Payload::Fault(raw)) = &run.context.held_author().unwrap().payload else {
+        unreachable!()
+    };
+    assert_eq!(raw.get().as_ptr(), pointer);
+    let (returned, started) = marks_driver::validation_tests::returned_fault_author(&run.context)
+        .expect("marks owns its returned original");
+    assert_eq!(returned.reason, RunFailure::ReadOwned);
+    assert!(!started);
+    let event = returned.original.as_ref().unwrap();
+    assert_eq!(event.kind, Kind::Fault);
+    let Some(Payload::Fault(raw)) = &event.payload else {
+        unreachable!()
+    };
+    let returned_pointer = raw.get().as_ptr();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(raw.get()).unwrap()["case"],
+        "state_template_rejected"
+    );
+    run.context.take_held_author().unwrap();
+    assert_eq!(fx.step(), Err(RunFailure::ReadOwned));
+    let run = &mut fx.input.run;
+    let (returned, _) =
+        marks_driver::validation_tests::returned_fault_author(&run.context).unwrap();
+    let Some(Payload::Fault(raw)) = &returned.original.as_ref().unwrap().payload else {
+        unreachable!()
+    };
+    assert_eq!(raw.get().as_ptr(), returned_pointer);
+    // Move the read back to its actual owner; its successful proof was never borrowed.
+    other.input.run.context.read = run.context.read.take();
+    assert!(fx.input.records(Kind::Fault).is_empty());
+}
+
 // Public task/source values cannot recreate the private receipt-bearing owners.
 const _: fn() = || {
     trait MustNotClone<Marker> {
@@ -753,7 +854,8 @@ fn begin_task_held_author_keeps_input_read_and_mark_continuations_live() {
     let run = &mut fx.input.run;
     assert_eq!(
         run.context
-            .author_and_wait(&mut ports(&mut run.clock), original),
+            .author_and_wait(&mut ports(&mut run.clock), original)
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::MarksOwned)
     );
     let TaskCompletion::Begun(task) = fx.finish() else {
@@ -792,6 +894,7 @@ fn begin_task_excludes_public_read_author_and_preserves_original_deadline() {
             .run
             .context
             .author_and_wait(&mut ports(&mut fx.input.run.clock), event)
+            .map_err(|failure| failure.retained_reason())
             .unwrap_err(),
         RunFailure::MarksOwned
     );

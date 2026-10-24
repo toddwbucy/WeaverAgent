@@ -38,6 +38,7 @@ fn finish_shutdown(run: &mut Fixture, stopped: bool) {
         sequences.push(
             run.context
                 .author_and_wait(&mut ports(&mut run.clock), shutdown_event(kind))
+                .map_err(|failure| failure.retained_reason())
                 .unwrap(),
         );
         assert!(run.context.failure().is_none());
@@ -68,7 +69,8 @@ fn finish_shutdown(run: &mut Fixture, stopped: bool) {
     assert_eq!(run.context.phase(), RecordingPhase::Closed);
     assert_eq!(
         run.context
-            .author_and_wait(&mut ports(&mut run.clock), shutdown_event(Kind::Fault)),
+            .author_and_wait(&mut ports(&mut run.clock), shutdown_event(Kind::Fault))
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::Closed)
     );
     assert!(run.context.reduce_flow(&mut run.clock).is_err());
@@ -98,6 +100,7 @@ fn release_shutdown_follows_real_boot_unsent_sent_pressure_fit_and_expired_accou
             assert_eq!(fx.records(Kind::StatePlacement).len(), 1);
             assert_eq!(fx.records(Kind::Refusal).len(), 1);
         }
+        let mut earlier_held = None;
         if road == "pressure" {
             fx.answer(fx.opened());
             fx.advance().unwrap();
@@ -137,7 +140,8 @@ fn release_shutdown_follows_real_boot_unsent_sent_pressure_fit_and_expired_accou
             for (original, expected) in [first, second].into_iter().zip(pointers) {
                 assert_eq!(
                     run.context
-                        .author_and_wait(&mut ports(&mut run.clock), original),
+                        .author_and_wait(&mut ports(&mut run.clock), original)
+                        .map_err(|failure| failure.retained_reason()),
                     Err(RunFailure::BootOpenOwned)
                 );
                 assert_eq!(pointer(run.context.held_author().unwrap()), expected);
@@ -146,6 +150,11 @@ fn release_shutdown_follows_real_boot_unsent_sent_pressure_fit_and_expired_accou
                 assert_eq!(run.context.author_turn, author_turn);
                 assert_eq!(run.context.barrier.recorder().structure().len(), before);
                 assert!(run.context.failure().is_none());
+                if expected == pointers[0] {
+                    // Take the first original before offering another. A
+                    // second submit with that slot occupied is now fatal.
+                    earlier_held = run.context.take_held_author();
+                }
             }
             fx.drain();
         }
@@ -168,6 +177,7 @@ fn release_shutdown_follows_real_boot_unsent_sent_pressure_fit_and_expired_accou
                 .count();
             run.context
                 .author_and_wait(&mut ports(&mut run.clock), returned)
+                .map_err(|failure| failure.retained_reason())
                 .unwrap();
             assert_eq!(
                 run.context
@@ -179,6 +189,7 @@ fn release_shutdown_follows_real_boot_unsent_sent_pressure_fit_and_expired_accou
                 before + 1
             );
             assert!(run.context.take_held_author().is_none());
+            assert_eq!(earlier_held.as_ref().unwrap().kind, Kind::Fault);
         }
         assert!(fx.boot.member.run.context.boot_journal.is_none());
         assert!(fx.records(Kind::StateMarkPosition).is_empty());

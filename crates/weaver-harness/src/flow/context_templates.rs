@@ -307,6 +307,7 @@ impl RecordingContext {
 
     /// Positive evidence for the next enter owner, even after the caller has
     /// taken its template certificate. Absence is never certification.
+    #[cfg(test)]
     pub(super) fn completed_template_enter(&self) -> Result<AbsoluteBound, RunFailure> {
         let enter = self.certified_template_enter()?;
         self.check_held_input()?;

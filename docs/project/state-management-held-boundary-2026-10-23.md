@@ -1,228 +1,212 @@
 # Held-input lifecycle boundaries
 
-Date: 2026-10-23. Branch: `code/state-author-custody-composition`. PR: #312.
-Base: consolidated main `f8ca92ef5e32e298239f562b3a65b5a8811e712e`.
+Date: 2026-10-23. Branch: `code/state-author-review-fixes`.
+Stack: reviewed draft #312 at `b24a260e`, draft #314 at `a95e0a6d`,
+draft #315 at `f372720a`, then this act.
 Authority: merged #276, `weaver-harness-Spec-amendment`
 HARNESS-HELD-BOUNDARY. This is implementation evidence for issue #146,
-not a new protocol or a production qualification.
+not a new protocol or production qualification. Git and the evidence deposits
+retain the superseded source, measurements and review records.
 
 ## Behavior and scope
 
-An untaken caller original used to make release, Enter rollback, member-capture
-preparation or final close latch ProtocolFailed. These boundaries now return
-recoverable Busy when held input is the sole unmet condition, after their
-ordinary prerequisite checks and before phase, resource, ticket or wait mutation.
-The private HeldInput reason identifies Caller, Template or Both. Taking an
-original removes only its custody hold. Every retry still passes the same
-phase, proof and original-deadline checks.
+An untaken caller original makes new owner admission, release, Enter rollback,
+member-capture preparation and final close return recoverable Busy when custody
+is the only unmet condition. The private HeldInput identifies Caller, Template
+or Both. Genuine phase, proof, ownership, bound and coordinator defects retain
+their own refusals. Liveness observes independent failures before Busy, and a
+previously latched fatal cause remains first. Taking an exact original removes
+only its custody hold; it grants no admission, retry, phase recovery or new time.
 
-Required liveness checks precede the hold. A previously latched cause or an
-independent failure observed during the call wins over Busy. Taking input in
-Failed cannot restore a healthy phase. An expired original Leave or capture
-window is not replaced. Both originals remain the same allocations when both
-slots are occupied.
+A held-only refusal leaves original allocations, pending ticket, resources and
+waits unchanged. In particular, it cannot cancel an admitted summary read or
+placement. An unheld summary or placement release attempt still revokes future
+use before its later transition checks, even if foreign work or a mismatched
+Leave refuses the release. This restores the behavior predating #312's review
+corrections. An already completed summary keeps its exact past disposition;
+revocation prevents future cache use without rewriting that evidence.
 
-Completed template certification remains valid while unrelated caller input is
-held; it returns Busy rather than claiming certification failed. Genuine
-incomplete or rejected certification keeps TemplateBlocked. Boot read and
-boot Open return typed Busy(Some(HeldInput)) for custody and Busy(None) for
-other busy causes. Placement installation returns the exact offered
-BootPlanSummary with the same held-slot reason. Real template/head/proof
-failures keep their original reasons even when input is also held. No template grant, boot proof, read request,
-decoder exchange or placement grant is fabricated by these refusals.
+An unfinished summary whose required read has not started reports Busy for a
+Template/Both hold: that hold prevents the read from starting. An ordinary
+caller hold permits the admitted summary's private read continuation, so its
+unsettled account still returns PlanSummaryOwned. A started read also retains
+PlanSummaryOwned. An earlier unheld attempt may already have cancelled an
+unstarted read; that account also returns PlanSummaryOwned because it can settle
+without taking the held original. None starts cancellation while input is held.
 
-One shared held-input predicate now also governs the existing private read,
-filing, measurement, output and repair-pair continuation exemptions. It preserves
-their prior rule: an ordinary held caller cannot stop an already admitted
-owner's exact continuation; a template-held caller still blocks a new content
-continuation. The predicate accepts no public continuation election.
+The three stopped-disposal roads share release_live: original Enter/Leave expiry
+permits disposal, and other liveness failures retain priority. Clock reversal
+now deliberately uses the common TraceFailed/Author reason and detail
+"common clock reversed" on both held and unheld roads. This differs from the
+older boot-specific ProtocolFailed/Barrier mapping and unavailable flag.
+The common failure latch revokes boot/place/plan use and keeps the run Failed.
+Existing Failed liveness gates prevent subsequent use; equivalent private flags
+or complete teardown are not claimed. The tests pin this implementation choice;
+the Spec has no distinct clock-reversal taxonomy row.
+
+Placement prefix, read-only measurement, request and effect-mark admission
+first exclude their operational owners. Their side-effect-free proof, context
+and wait refusals precede held-only Busy. Refusals that install a notice owner
+must wait until custody is clear: InvalidCut, stale placement prefix and invalid
+selection may otherwise create a second owner, arm Cut or close an active turn.
+Both operational and custody Busy leave place_notice, place_owed and deadlines
+unchanged and grant no trace refusal, reservation, decode send or placement.
+
+Measurement projection, schema and selection checks are read-only; they follow
+operational exclusion and precede held-only Busy. They burn no IDs and install
+no notice. Placement uses the journal reservation's existing full validation
+and single error mapping. The duplicate selection precheck is removed rather
+than repeating coverage scans and the InvalidPair/InvalidSpan mapping.
 
 ## Caller and boundary census
 
-| Road | Disposition in this slice |
+| Road | Disposition |
 | --- | --- |
-| `begin_releasing`, `begin_enter_rollback`, `close_after_drain`, `prepare_member_capture` | Shared RunFailure::Busy reason after liveness and ordinary context/coordinator prerequisites, before boundary mutation. |
-| `begin_boot_open_release`, `begin_boot_plan_summary_release`, `begin_place_release` | Shared stopped-disposal liveness admits original Enter/Leave expiry, observes other failures, then checks owners/bounds before held-only Busy or release changes. |
-| `completed_template_enter`, `template_enter_live` | Distinguish custody from real certification failure; retain first cause and original Enter expiry. |
-| `begin_boot_read`, `begin_boot_open`, `install_place` | Typed Busy carries Caller/Template/Both; real invalid prerequisites precede the hold. Request/proof ownership stays exact. |
-| Read, filing, measurement, output, repair-pair intake | Shared private predicate retains the existing ownership exemptions. |
-| Input, repair, freshness, inspection, mark, template, boot and plan-summary admission; prefix/placement admission; Enter-refusal join | Existing Busy guards use the shared held-input predicate. No new admission permission. |
-| `take_template_certificate` | Existing held-input check keeps the actual certificate until custody is returned. |
-| `BootComposition::advance_retained` install arm | Existing Install error owns the returned BootPlanSummary and the stopped composition owns its context/resources. No successful boot is fabricated. |
-| `RollbackComposition::step` release arm | Existing error path retains the complete rollback owner and its original Leave; it cannot produce Prepared from Busy. |
+| begin_releasing, begin_enter_rollback, close_after_drain, prepare_member_capture | Require genuine context and coordinator prerequisites before held-only Busy; preserve original bound before mutation. |
+| begin_boot_open_release, begin_boot_plan_summary_release, begin_place_release | Common stopped-disposal liveness and existing owner/bound refusals. Summary/place preserve unheld revocation, while custody excludes cancellation. |
+| certified_template_enter, template_enter_live | Real incomplete/rejected certification keeps TemplateBlocked. The combined completed_template_enter helper is test-only; production boot callers check certification and custody separately. |
+| begin_boot_read, begin_boot_open, install_place | Typed Busy carries Some(Caller/Template/Both), ordinary contention carries None. MissingHead/WrongProof precedes custody, with exact proof return. |
+| prepare_prefix, begin_place_measurement, begin_place_inner, begin_place_effect_marks | Operational Busy first, then side-effect-free genuine checks, then held-only Busy. Notice-producing cut/prefix/selection refusals require clear custody. Offered request and effect evidence remain exact on Busy. |
+| begin_measurement refusal translations inside context_place | Busy(None): earlier custody validation has excluded held input before reaching the decode/measurement admission. |
+| Read, filing, measurement, output, repair-pair continuation | Shared private predicate permits an already admitted owner's continuation with an ordinary caller hold; template custody still excludes a new content continuation. |
+| Input, repair, freshness, inspection, marks, templates, boot, plan-summary admission, Enter-refusal join | Existing shared held-input guard; no new continuation permission. |
+| take_template_certificate | Retains the actual certificate until custody is returned. |
+| BootComposition install | Existing Install error retains the complete offered BootPlanSummary. |
+| Worker advance_engine prefix and placement retry sites | Prefix Busy still becomes a fault, and retries cannot take held input; carried into the actual caller composition. |
+| RollbackComposition::step | Healthy Busy still enters Stopped without its required exit; carried into full lifecycle composition. |
 
-The four named lifecycle APIs are internal. Capture and final-close composition
-are still incomplete under #146. This slice does not add an autonomous retry
-loop, a new teardown wait, a model-facing refusal or an active serving caller.
+The coordinator's side-effecting prerequisite methods are named require_*,
+because a refusal may latch failure. Both the context and the mutating
+coordinator entry call them: context must establish precedence before custody,
+and direct coordinator callers must remain safe. The rollback missing-state
+branch remains a bounded fail path, not an expect panic, even though the preceding
+requirement excludes it today. Removing the second check or introducing a
+new unchecked commit capability is deferred; it would expand this correction
+into a different ownership boundary. Capture therefore still scans its frontier
+twice on admission.
 
-## Instruments
+Placement release snapshots ownership before liveness only to decide whether
+an unheld attempt must revoke future use. It rechecks current ownership after
+release_live before admitting the transition; a settled account cannot pass
+using stale pre-liveness debt.
 
-Thirteen new tests exercise the three occupied-slot cases, real release and
-refused-Enter prerequisites, Recorded Unload with real writer drain, real
-capture requests, completed template checks, retained boot reads and decoder
-admission, exact BootPlanSummary return, and placement release with a pending
-decoder exchange. Cases include repeated Busy, take and successful retry,
-take and expired retry, an already latched cause, and an independent clock
-failure observed at the call. Pointer and full-value checks pin exact originals.
+The five Leave checks retain their explicit local dispositions. A common helper
+would need policies for fatal context misuse, boot refusal and summary/place
+owner refusals, plus their different arming and clock rules. This act keeps the
+short checks at their owning roads instead of adding a policy abstraction.
+Existing wrong-bound tests cover them; no deadline renewal is authorized.
 
-The shared slot fixture deliberately installs unaccepted event inputs to
-isolate all three boundary states, including Both. It creates no recorder
-ticket or successful proof. Existing integration tests separately reach the
-ordinary and template slots through actual author calls and complete admitted
-mark, repair, summary, read, output and measurement continuations.
+## Review disposition
 
-Fourteen compiled mutations must fail: bypass each of the four boundary checks;
-relatch fatal release; hide an independent failure; renew Leave during Busy;
-stall an existing private owner; allow a template-held continuation; replace
-the first template failure; misreport installation as WrongProof, boot read as
-Templates, boot Open as MissingHead, or placement release as PlaceOwned.
-Every mutated source is restored before the final gates.
+Planner regrade 5637136323 of #312 at b24a260e reported zero fix, twelve batch
+and zero new file rows. That reviewed root is unchanged by this child.
 
-Initial-head (04e5532a) restored-source author gates passed:
-
-- `process/gates/lock.sh`, `cargo fmt --all -- --check`, and `git diff --check`.
-- `cargo test -p weaver-harness --locked -- --test-threads=4`: 1,959 passed,
-  including 22 doctests; 183 ignored. The 165 delegated instruments among these
-  ignored cases were not rerun for this slice; this is not their qualification.
-- `cargo clippy -p weaver-harness --all-targets --locked -- -D warnings`.
-- All 13 focused tests passed before the mutation run. All 14 mutations
-  compiled and failed the matching behavioral test. The final full suite
-  passed after exact restoration.
-
-Those initial-head Cargo runs used the pinned toolchain, `--locked` where
-dependencies resolve, and the private target
-`/home/todd/Projects/WeaverTools_Project/WeaverAgent/target/state-146-held-boundary`.
-That target was inside home, contrary to the outside-home rule for delegated
-fixtures; the ignored lanes were not qualified by that run. The review-correction
-gates below use `/var/tmp/weaver-state-146-held-boundary-review-target`. The 268 harness Rust files matched their recorded
-SHA-256 manifest after the final gates. The manifest SHA-256 is
-`3ac5d3b3942b03975b471154156436048dbf831c05610f01fd887327173fe149`.
-
-The first sandboxed run was refused at Unix socket creation before the code
-was exercised. The first socket-enabled run found a test using an active-only
-recorder inspector on a correctly refused preflight recorder; that instrument
-now reads the actual Recorded sequence. The initial full suite also found an
-old fatal-boundary expectation, updated to the approved Busy rule, and a
-trace-pressure fixture hit EAGAIN during queue filling. That fixture passed
-alone and the corrected full suite passed with four test threads before the
-last placement-release addition. These earlier logs remain evidence, not the
-final gate result.
-
-## Remaining work and review boundary
-
-The move-owned AuthorFailure migration in HARNESS-RECORD-LIFETIME is the next
-connected slice. In particular, #255 Planner review 5636484478 row 1's second
-blocked-author overwrite, third-attempt return, resume-withdrawal custody and
-all production author callers remain open. This boundary work does not claim
-that finding closed. The original six-site census has grown: startup Load and
-worker fault, Stop closure and emission refusal authoring also require the
-new ownership result. Private pair, placement, measurement, Enter-refusal,
-filing/output and retained-freshness paths must preserve their exact returns.
-
-The complete failed-run drain, healthy lifecycle composition, remaining worker
-workflow, production artifacts, measured limits, security disposition and
-coupled cutover remain tracked by #146. Existing serving stays active. Only the
-operator merges or deploys, all new PRs remain drafts, and CodeRabbit requests
-remain operator-controlled.
-
-Author checks are not a Planner grade. The code-review and
-verification-before-completion skills are absent from this environment after
-filesystem/tool discovery; no invocation or independent review is claimed.
-The draft still requires the repository's remaining review seats.
-
-After-action: the plan separated boundary semantics from the consuming-author
-result migration. The consumer walk found two more misleading boot-admission
-translations and the separate placement-release entry; all are included here.
-Keep that complete consumer walk for the next signature change, and record
-environment/fixture failures separately from restored behavioral evidence.
-
-
-## Planner review corrections, 2026-10-24
-
-Reviewed base: #312 at 04e5532a, tree 5f90d2f7. These corrections implement
-the existing HARNESS-HELD-BOUNDARY rule; no new operator election is needed.
-All changes remain in the dormant foundation path. The AuthorFailure caller
-migration is preserved in its separate, unpublished child worktree.
-
-| Planner row | Disposition |
+| Regrade row | Disposition in this act |
 | --- | --- |
-| 1, fix | The four lifecycle boundaries validate genuine context and coordinator prerequisites before the pure held-input check. Release and rollback check the original Leave identity before Busy and arm only after admission. Shared coordinator checks are reused by the mutating entry points, avoiding a second predicate that can drift. New cases combine all three holds with invalid phases, an open turn, missing refusal or Unload, changed bounds, and invalid capture identity/window. Both original allocations remain owed after ProtocolFailed. |
-| 2, 3, 8 | All three private release roads use one stopped-disposal liveness policy on held and unheld paths. Original Enter/Leave expiry permits stopped disposal; other observed failures retain priority. Existing ownership and bound refusals precede held-only Busy. An admitted release cancels/revokes only after taking custody has ceased to block it. An unfinished summary still needs cancellation/drain and returns PlanSummaryOwned under its existing account cap. |
-| 4 | Genuine template certification is checked separately from custody. Incomplete/rejected certification retains Templates/TemplateBlocked. A completed certificate plus template-held input yields the held reason. |
-| 5 | Real missing BootHead and stale BootPlanSummary keep MissingHead/WrongProof, with exact proof return, before custody is considered. |
-| 6, carry | RollbackComposition still has no healthy Busy retry/exit disposition. Its preceding Enter-refusal join excludes held input today, and no serving binary constructs it. The complete worker/lifecycle composition in #146 must make this disposition explicit and prove retry or bounded failed exit before wiring that route; this slice does not claim it resolved. |
-| 7 | BootReadBeginRefusal, BootOpenBeginRefusal and PlaceError carry Busy(Option<HeldInput>). Some identifies Caller, Template or Both; None keeps ordinary owner/decode pressure distinct. All constructors and comparisons are migrated; the worker generation caller accepts either Busy disposition without reconstructing a proof. |
-| 9 | Boot Open and plan-summary release now test latched failure, independently observed plan failure, backward clock, original Enter expiry, original Leave expiry, and owner absence alongside all three held-slot states. Place release adds owner/expired-Leave cases to its existing failure instrument. |
-| 10 | check_held_input is a pure custody predicate. Each entry runs its own required liveness first; the three stopped-disposal roads share release_live. No unreachable second latch check is credited as enforcement. |
-| 11 | preinput_cleanup_domain now uses the shared held-input predicate. |
-| 12 | Initial and current target directories are named above. The absent code-review and verification-before-completion skills remain a disclosed process carry; no unavailable invocation or independent self-review is claimed. |
-| 13, filed | The pre-existing parallel worker fixture timestamp race is tracked by #313. Its reported failure is not a clean qualification result; production timestamp validation is unchanged. |
+| 1 | Restore unheld summary/place cancellation before refused transitions; held cases remain non-cancelling. Actual read settlement and decoder Cancel tests enforce the distinction. |
+| 2 | Apply the corrected #315 review ordering: operational Busy, pure checks, held-only Busy, then notice-producing validation. Retain exact offered evidence on Busy. |
+| 3 | Open composition carry: worker prefix Busy and placement retry ownership. |
+| 4 | Add coordinator-only close and rollback refusals after context prerequisites pass. Protective mutations remove each context-side coordinator requirement. |
+| 5 | Report Template/Both custody when it alone prevents an uncancelled unstarted summary read; an already cancelled account or admitted continuation keeps PlanSummaryOwned. |
+| 6 | Record and test the common-clock reason change explicitly, including held and unheld boot and summary roads. |
+| 7 | Open composition carry: RollbackComposition healthy Busy exit. |
+| 8 | Restrict the production-unused combined template helper to tests. |
+| 9 | Spell both post-measurement-admission Busy reasons as None. |
+| 10 | Name the latching prerequisite methods require_*. Retain defensive revalidation and the bounded missing-state failure for direct coordinator callers as explained above. |
+| 11 | Retain per-road Leave checks with their different refusal policies; no shared policy helper in this correction. |
+| 12 | Replace appended dated history with this single current record. Prior evidence remains in Git and the deposits. |
 
-The caller walk covers the four lifecycle boundaries, their coordinator checks,
-the three private release roads, template completion, boot read/Open, placement
-installation, and every typed Busy constructor/consumer. Placement prefix,
-measurement, placement-begin and effect-mark Busy sites
-carry the same optional held identity; actual decode/reservation contention
-without a held caller retains None. This signature change adds no serialized
-field or public protocol.
+Planner review 5637284596 of #315 corrects the earlier broad prerequisite-order
+request. All eight numbered findings are handled in this child; the reviewed
+parent remains unchanged pending independent review of these corrections.
 
-The review fixtures add twelve tests to the initial thirteen. They use actual
-context/recorder/transport prerequisites and isolate held slots through the same
-unaccepted-original fixture. Deliberately invalid phase/turn/window variants
-exercise the refusal, not a successful capability. The new tests and exact
-original-pointer checks do not qualify full failed-run cleanup or production
-artifacts.
-
-The first full run found the older admitted-summary fixture still expecting
-Busy where the unfinished account independently requires PlanSummaryOwned.
-The correction preserves that reason and returns before cancelling the admitted
-read when input is also held. The updated fixture then completes its actual
-Boot/effect refresh with the exact competing original still retained. Separate
-compiled mutations pin both the owner reason and the absence of cancellation.
-The earlier failing run and its exact source are retained with the gate evidence.
-
-The typed-result census is finite:
-
-| File and consumers | Held/ordinary disposition |
+| #315 review row | Disposition |
 | --- | --- |
-| context_boot_read::begin_boot_read | Certified custody refusal carries Some(HeldInput); underlying read contention carries None. |
-| context_boot_open::begin_boot_open | Held slot carries Some; non-custody owner pressure and decoder reservation contention carry None. |
-| context_place::{install_place, prepare_prefix, begin_place_measurement, begin_place_inner} | Preserve exact proof/request and carry the current held identity at every held-aware Busy return. |
-| context_place_marks::begin_place_effect_marks | Carry the same held identity through native-mark admission. |
-| context_place_refusal::queue_place_refusal | Existing notice/bound contention carries None; this is not held-input admission. |
-| context_place_generation::begin_generation | Actual decoder reservation contention carries None. |
-| context_place_reload::{begin_cut_and_reload, begin_staged_place} | Existing reload/prefix contention carries None; owned continuations retain their prior rules. |
-| context_worker_generation::advance_engine (two retry sites) | Match Busy with either optional reason, retaining the existing operation/request owner. |
-| context_boot_composition::BootStop | PromptStart, OpenStart and Install retain their complete existing typed error, including the exact offered installation proof. |
+| 1, fix | Restore operational Busy before placement defects; exclude held custody before creating a refusal owner. Tests assert unchanged notice, debt and waits with active generation and held originals. |
+| 2 | Restore operational Busy before native-mark and measurement checks. Actual active native work retains its owner and rejects a foreign proof with Busy; active generation excludes measurement of an invalid proposal. |
+| 3 | Outstanding notice is caught by operational Busy with the actual held-slot reason, before InvalidCut can lose it. |
+| 4 | An already cancelled unstarted summary retains PlanSummaryOwned and settles without a held-input take. |
+| 5 | Restore the bounded missing-state failure branch in coordinator rollback. |
+| 6 | Re-evaluate placement ownership after release_live. |
+| 7 and 8 | Remove the duplicate selection precheck; reservation owns the single validation pass and refusal mapping. |
 
-Final review-correction author gates passed on the restored source, using
-`CARGO_TARGET_DIR=/var/tmp/weaver-state-146-held-boundary-review-target`,
-`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4` and the pinned toolchain:
+## Current Planner disposition
 
-- `process/gates/lock.sh` before and after Cargo: 0; formatting, strict harness
-  clippy and diff checks: 0.
-- `cargo test -p weaver-harness --locked -- --test-threads=4`: 1,971 passed,
-  including 22 doctests, with 183 ignored in the ordinary run. Counts exclude
-  duplicate child re-execution summaries.
-- Separately, all 165 delegated harness instruments passed serially in their
-  own root-owned test scopes: gate startup 46, worker startup 17, input 19,
-  Observe 14, Stop 16, generation 20 and emission 33. The actual admin test
-  executable was freshly built with `cargo test -p weaver-admin --locked
-  --no-run` in this same private target for the Stop/Observe consumers.
-  Eighteen inherited harness ignores and the separate privileged admin startup
-  suite are not qualified by these runs. Serial generation success does not
-  resolve #313's reported parallel fixture race.
-- All 25 focused held-boundary tests passed. The final full run also includes
-  the corrected admitted-summary continuation fixture.
-- Twenty-four compiled protective mutations failed as intended: 19 boundary,
-  prerequisite, reason and liveness controls; three additional placement-caller
-  controls; two unfinished-summary refusal/cancellation controls. Each run
-  restored its exact source. The intervening source revisions and the initial
-  failed full run remain retained; final gates ran after the last restoration.
-- All 657 tracked crate/configuration source files matched the final gate
-  manifest, SHA-256 `f3572b4168d1f77228c11ebeb56f905e4ee207bf9362ee7db497347583a76e79`.
+[Review 5637407681 of #317 at b413e6b2](https://github.com/toddwbucy/WeaverAgent/pull/317#pullrequestreview-5637407681)
+accepts the #315 fixes and marks the child ready, with zero fix rows. Its
+remaining boundary findings are explicit carries:
 
-These are author gate results, not a fresh Planner grade, security disposition
-or production qualification. #312 remains draft for regrade and the operator's
-merge decision. Full AuthorFailure, lifecycle/failed-run composition and the
-qualified serving cutover remain open under #146.
+| #317 row | Current disposition |
+| --- | --- |
+| 1 | Open: prefix admission still uses the narrower existing owner predicate; share the same operational check. |
+| 2 | Open Spec wording election for the operator: held Busy before a notice-producing refusal. The two existing amendment clauses need explicit precedence. No ruling is inferred. |
+| 5 | Open: consolidate placement helper layers after caller ownership is complete. |
+| 6 | The current maps here and in the author record retain all rows. |
+| 7 | Open test gap: Planner mutation W10, preserving pre-liveness place ownership across release_live, survived. The code rechecks ownership, but a case in which liveness settles the last owed work must enforce the resulting PlaceOwned. The author's eleven detected mutations below do not establish this missing case. |
+| 3/4/8/9 | Caller identity, the shared hold ladder and marks cancellation are mapped in the author record; #316 includes both marks findings. |
+
+## Instruments and validation
+
+The eleven boundary_batch_ cases use real recorder, state and decode evidence
+with all three held-slot cases. They cover refused unheld cancellation,
+coordinator-only close/rollback defects, common-clock taxonomy and exact offered
+proofs. The corrected prefix/request cases now inspect place_notice, place_owed
+and all deadlines, rather than merely unchanged journal IDs and originals.
+
+Three additional author_review_ boundary tests run an actual pending generation,
+an actual native-mark owner, and an already cancelled unstarted boot-summary
+read. The generation fixture combines both a foreign prefix and foreign units
+with operational Busy; its invalid Cut must install no notice or new wait, and
+no Refusal or TurnClosed may appear. The native fixture preserves the exact
+active owner and offered read allocation. The summary fixture settles its
+cancelled account without taking any held original, then encounters custody
+Busy at the release boundary itself. No fixture manufactures a successful
+capability or receipt.
+
+The three author-custody tests in state-management-author-failure-2026-10-24.md
+share this child and final gate run. Earlier exact sources and failing fixture
+runs remain in Git and their evidence deposits.
+
+Final restored-source checks passed with the pinned toolchain,
+CARGO_INCREMENTAL=0, CARGO_BUILD_JOBS=4, --locked and private target
+`/var/tmp/weaver-state-146-author-review-fixes-target`.
+
+| Gate or instrument | Result |
+| --- | --- |
+| lock.sh before/after Cargo, formatting, strict harness clippy and diff check | Passed |
+| Full harness suite with four test threads | 1,996 passed, including 22 doctests; 183 ignored in the ordinary run |
+| Focused author_review_ and boundary_batch_ cases | All six new and eleven corrected existing cases passed |
+| Delegated gate/startup/input/Observe/Stop/generation/emission | 46/17/19/14/16/20/33 passed; 165 total, serially in isolated scopes |
+| Protective mutations on the final combined source | All eleven compiled and failed the intended tests; every source restored exactly |
+| Final source manifest | All 660 tracked crate/configuration files verified |
+
+The source manifest SHA-256 is `b2b203c2e4d35c9668edc3a98b934d7831e3f02e9d7ef085ccedf960af7773a8`.
+Observe and Stop used the actual admin test executable rebuilt in this private
+target. Eighteen inherited harness ignores and eight privileged admin-startup
+instruments remain outside this gate. Serial passes do not close #313's parallel
+startup/generation clock races. No Cargo or Git mutations overlapped, deployed
+agent changed, or CodeRabbit review was requested. These author checks are not
+an independent Planner grade, security disposition or production qualification.
+
+## Remaining work and after-action
+
+Draft #314 implements move-owned AuthorFailure and migrates its current internal
+callers. Its evidence record is state-management-author-failure-2026-10-24.md.
+This child corrects its two blocking custody findings as well as #315's notice
+admission finding. The Planner has now passed #317 at the unchanged head, with
+the batch/file carries above; that grade does not complete the parent stack.
+This boundary correction does not complete worker/dev_loop, lifecycle Busy
+exits, failed-run drain, final world close, production artifacts, measured limits,
+security disposition or coupled cutover. Those remain under #146. The legacy
+serving path stays active; only the operator merges or deploys. New PRs are
+published as drafts and CodeRabbit requests remain operator-controlled.
+
+The Executor's code-review and verification-before-completion skills are absent
+from this environment; no invocation or independent grade is claimed. The
+Planner and operator still review the completed draft at its exact head.
+
+The review exposed why validation ordering must include its effects. A refusal
+that installs a notice is owner admission even when no placement is granted.
+The corrected instruments inspect that owner, its debt and original deadlines
+as well as unchanged journal IDs and offered allocations. Pure prerequisite
+checks can precede custody; notice-producing checks require clear admission.

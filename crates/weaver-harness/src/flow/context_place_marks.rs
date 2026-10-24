@@ -224,7 +224,7 @@ impl RecordingContext {
         {
             Some(PlaceError::WrongPhase)
         } else if self.native_marks.is_some()
-            || self.place_busy_except_reload()
+            || self.place_owners_busy_except_reload()
             || (self
                 .reload
                 .as_ref()
@@ -296,6 +296,13 @@ impl RecordingContext {
             return Err(NativeMarkBeginError {
                 prerequisite,
                 refusal: PlaceError::Stale,
+                failure: None,
+            });
+        }
+        if self.caller_author_held() {
+            return Err(NativeMarkBeginError {
+                prerequisite,
+                refusal: PlaceError::Busy(self.held_input()),
                 failure: None,
             });
         }

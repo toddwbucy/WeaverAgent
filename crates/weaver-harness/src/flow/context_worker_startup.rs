@@ -381,6 +381,7 @@ impl<'a> FoundationEnter<'a> {
             unreachable!()
         };
         Ok(FoundationServing {
+            gate_outgoing: owner.gate_raise.exchange.ordinal,
             owner,
             gate_exchanges: Default::default(),
         })
@@ -406,6 +407,7 @@ fn ports(listener: &mut Option<Box<LifecycleListener>>) -> LifecyclePorts<'_> {
 pub struct FoundationServing<'a> {
     owner: Box<EnteredServing<'a>>,
     gate_exchanges: std::collections::HashSet<u64>,
+    gate_outgoing: u64,
 }
 
 #[path = "context_worker_input.rs"]

@@ -133,16 +133,19 @@ fn author_claim_review_releasing_rejects_before_consuming_the_original_waiting_o
         .begin_place_release(leave, &mut run.clock)
         .unwrap();
     assert_eq!(run.context.phase(), RecordingPhase::Releasing);
-    let result = run.context.continue_claimed_content(
-        &mut PumpPorts {
-            lifecycle: LifecyclePorts::default(),
-            gate: None,
-            decode: None,
-            label: None,
-            io: &mut run.clock,
-        },
-        Some(claim),
-    );
+    let result = run
+        .context
+        .continue_claimed_content(
+            &mut PumpPorts {
+                lifecycle: LifecyclePorts::default(),
+                gate: None,
+                decode: None,
+                label: None,
+                io: &mut run.clock,
+            },
+            Some(claim),
+        )
+        .map_err(|failure| failure.retained_reason());
     assert_eq!(result, Err(RunFailure::PlaceOwned));
     assert_eq!(
         format!("{:?}", run.context.waiting_content.as_ref().unwrap()),
@@ -176,6 +179,7 @@ fn author_claim_review_substituted_waiting_original_keeps_its_real_foreign_claim
             },
             Some(claim),
         )
+        .map_err(|failure| failure.retained_reason())
         .unwrap_err();
     assert!(
         matches!(failure, RunFailure::Flow { point: HaltPoint::Author, ref detail, .. }

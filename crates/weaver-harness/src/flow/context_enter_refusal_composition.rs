@@ -149,6 +149,7 @@ impl EnterRefusalComposition<'_> {
             .enter_refusal_record
             .as_ref()
             .expect("exclusive owner");
+        record.returned.check()?;
         let claim = AuthorClaim::EnterRefusal(Arc::clone(&record.identity));
         if let Some(original) = self.original.take() {
             if context.waiting_content.is_some() || context.barrier.pending_author().is_some() {
@@ -168,7 +169,15 @@ impl EnterRefusalComposition<'_> {
                 "Enter refusal lost its exact queued author",
             ));
         }
-        let sequence = context.resume_claimed_author_and_wait(ports, Some(claim))?;
+        let sequence = context
+            .resume_claimed_author_and_wait(ports, Some(claim))
+            .map_err(|failure| {
+                context
+                    .enter_refusal_record
+                    .as_mut()
+                    .unwrap()
+                    .retain_failure(failure)
+            })?;
         if context.enter_refusal_record.as_ref().unwrap().sequence != Some(sequence) {
             return Err(context.fail(
                 ports.io,

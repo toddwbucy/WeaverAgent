@@ -444,6 +444,7 @@ fn inspection_and_read_refuse_a_real_pressured_author_without_consuming_its_tick
             .run
             .context
             .author_and_wait(&mut ports(&mut member.run.clock), event)
+            .map_err(|failure| failure.retained_reason())
             .unwrap_err(),
         RunFailure::Wait {
             key: PumpDeadline::Label,
@@ -490,6 +491,7 @@ fn inspection_and_read_refuse_a_real_pressured_author_without_consuming_its_tick
         .run
         .context
         .resume_author_and_wait(&mut ports(&mut member.run.clock))
+        .map_err(|failure| failure.retained_reason())
         .unwrap();
     assert!(member.run.context.pending_author().is_none());
 }

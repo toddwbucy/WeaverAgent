@@ -518,6 +518,7 @@ fn inspection_excludes_read_input_author_and_freshness_until_final_take() {
             .run
             .context
             .author_and_wait(&mut ports(&mut member.run.clock), event)
+            .map_err(|failure| failure.retained_reason())
             .unwrap_err(),
         RunFailure::InspectionOwned
     );

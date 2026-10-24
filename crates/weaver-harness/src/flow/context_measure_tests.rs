@@ -542,16 +542,20 @@ fn measurement_owner_rejects_generic_authors_and_preserves_its_wait() {
     peer.begin(request(), PumpDeadline::Decision);
     peer.sent();
     assert!(matches!(
-        peer.run.context.author_and_wait(
-            &mut ports(&mut peer.decode, &mut peer.run.clock),
-            event(Kind::SessionClosed, None)
-        ),
+        peer.run
+            .context
+            .author_and_wait(
+                &mut ports(&mut peer.decode, &mut peer.run.clock),
+                event(Kind::SessionClosed, None)
+            )
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::MeasureOwned)
     ));
     assert!(matches!(
         peer.run
             .context
-            .resume_author_and_wait(&mut ports(&mut peer.decode, &mut peer.run.clock)),
+            .resume_author_and_wait(&mut ports(&mut peer.decode, &mut peer.run.clock))
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::MeasureOwned)
     ));
     assert!(

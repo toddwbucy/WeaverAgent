@@ -1361,6 +1361,7 @@ fn plan_summary_boot_refusal_stays_distinct_from_null_and_retains_rollback_until
         let sequence = run
             .context
             .author_and_wait(&mut ports(&mut run.clock), unload())
+            .map_err(|failure| failure.retained_reason())
             .unwrap();
         assert!(sequence.0 > 0);
         assert!(run.context.barrier.is_closed());

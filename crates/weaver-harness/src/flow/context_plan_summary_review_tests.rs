@@ -253,6 +253,7 @@ fn plan_summary_unflagged_author_cannot_file_a_plan_effect_or_step_outcome() {
         assert_eq!(
             run.context
                 .author_and_wait(&mut ports(&mut run.clock), event)
+                .map_err(|failure| failure.retained_reason())
                 .unwrap_err(),
             RunFailure::PlanSummaryOwned
         );

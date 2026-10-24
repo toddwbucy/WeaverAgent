@@ -4,6 +4,73 @@ use crate::flow::context::held_input_tests::{HOLDS, hold};
 use weaver_types::state_flow::ReadSelector;
 
 #[test]
+fn boundary_batch_close_checks_coordinator_ports_before_held_custody() {
+    for held in HOLDS {
+        let mut fx = Fixture::new(config());
+        fx.activate();
+        fx.context.complete_wait(PumpDeadline::Enter).unwrap();
+        let leave = AbsoluteBound::after(fx.clock.now().unwrap(), 1_000_000).unwrap();
+        fx.context.begin_releasing(leave, &mut fx.clock).unwrap();
+        // The context has its real Unload and correct phase, but the actual
+        // state/classifier ports have not retired. Only the coordinator rejects.
+        fx.author(shutdown(Kind::Unload)).unwrap();
+        drain(&mut fx);
+        assert!(fx.context.barrier.is_closed());
+        let originals = hold(&mut fx.context, held);
+        let failure = fx
+            .context
+            .close_after_drain(&mut ports(&mut fx.clock))
+            .unwrap_err();
+        assert!(matches!(&failure, RunFailure::Flow {
+            reason: FlowHaltReason::ProtocolFailed, detail, ..
+        } if detail.contains("close requires retired ports")));
+        assert_eq!(fx.context.failure(), Some(&failure));
+        assert_eq!(fx.context.phase(), RecordingPhase::Failed);
+        assert_eq!(fx.context.deadlines.get(PumpDeadline::Leave), Some(leave));
+        originals.assert_held(&fx.context);
+    }
+}
+
+#[test]
+fn boundary_batch_rollback_checks_coordinator_phase_before_held_custody() {
+    for held in HOLDS {
+        let mut fx = refused_enter();
+        // Exercise an interrupted split transition: the actual coordinator
+        // consumed the refused Open, but context phase has not advanced yet.
+        assert_eq!(
+            fx.context
+                .flow
+                .begin_enter_rollback(
+                    &mut FlowRecording {
+                        barrier: &mut fx.context.barrier,
+                        inbox: &mut fx.context.inbox,
+                        budget: &mut fx.context.budget,
+                        author: &fx.context.author,
+                    },
+                    &mut fx.clock
+                )
+                .unwrap(),
+            Advance::Progress
+        );
+        assert_eq!(fx.context.phase(), RecordingPhase::Entered);
+        assert!(fx.context.barrier.is_refused());
+        let leave = AbsoluteBound::after(fx.clock.now().unwrap(), 1_000_000).unwrap();
+        let originals = hold(&mut fx.context, held);
+        let failure = fx
+            .context
+            .begin_enter_rollback(leave, &mut fx.clock)
+            .unwrap_err();
+        assert!(matches!(&failure, RunFailure::Flow {
+            reason: FlowHaltReason::ProtocolFailed, detail, ..
+        } if detail.contains("recorded preactivation refusal")));
+        assert_eq!(fx.context.failure(), Some(&failure));
+        assert_eq!(fx.context.phase(), RecordingPhase::Failed);
+        assert!(fx.context.deadlines.get(PumpDeadline::Leave).is_none());
+        originals.assert_held(&fx.context);
+    }
+}
+
+#[test]
 fn held_boundary_release_preserves_both_originals_and_the_original_leave() {
     for held in HOLDS {
         for expired in [false, true] {
