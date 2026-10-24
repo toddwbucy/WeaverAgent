@@ -21,6 +21,104 @@ const SAVE_NS: u64 = 10_000_000_000;
 const SNAPSHOT_NS: u64 = 1000;
 const SMALL_CONTROL_NS: u64 = 2_000_000_000;
 
+#[test]
+fn held_boundary_capture_returns_busy_without_freezing_a_frontier_or_new_window() {
+    use super::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        for expired in [false, true] {
+            let mut run = active();
+            let window = Member::new(&mut run).requested(42, SAVE_NS);
+            let before = run.context.barrier.recorder().structure().len();
+            let waits = format!("{:?}", run.context.deadlines);
+            let originals = hold(&mut run.context, held);
+            assert_eq!(
+                run.context
+                    .prepare_member_capture(42.into(), window, &mut run.clock),
+                Err(RunFailure::Busy(held))
+            );
+            assert!(run.context.member_capture.is_none());
+            assert!(run.context.flow.state().outstanding().is_empty());
+            assert!(run.context.failure().is_none());
+            assert_eq!(run.context.phase(), RecordingPhase::Entered);
+            assert_eq!(format!("{:?}", run.context.deadlines), waits);
+            assert_eq!(run.context.barrier.recorder().structure().len(), before);
+            originals.assert_held(&run.context);
+            originals.take(&mut run.context);
+            if expired {
+                run.clock.advance_to(window.deadline_ns.0).unwrap();
+                assert_eq!(
+                    run.context
+                        .prepare_member_capture(42.into(), window, &mut run.clock),
+                    Err(RunFailure::Wait {
+                        key: PumpDeadline::CaptureWindow,
+                        bound: AbsoluteBound::from_absolute(
+                            window.began_ns.0,
+                            window.deadline_ns.0
+                        )
+                        .unwrap()
+                    })
+                );
+                assert!(run.context.member_capture.is_none());
+                assert_eq!(format!("{:?}", run.context.deadlines), waits);
+            } else {
+                run.context
+                    .prepare_member_capture(42.into(), window, &mut run.clock)
+                    .unwrap();
+                assert!(run.context.member_capture.is_some());
+                assert_eq!(
+                    run.context
+                        .deadlines
+                        .get(PumpDeadline::CaptureWindow)
+                        .unwrap()
+                        .deadline_ns(),
+                    window.deadline_ns.0
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn held_boundary_capture_observes_failure_before_busy_and_take_does_not_revive_it() {
+    use super::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        for already_failed in [false, true] {
+            let mut run = active();
+            let window = Member::new(&mut run).requested(42, SAVE_NS);
+            let originals = hold(&mut run.context, held);
+            let first = already_failed.then(|| {
+                run.context.fail(
+                    &mut run.clock,
+                    FlowHaltReason::ProtocolFailed,
+                    HaltPoint::Barrier,
+                    "first capture cause",
+                )
+            });
+            if !already_failed {
+                run.clock = crate::flow::clock::testing::FakePumpIo::new(0);
+            }
+            let failure = run
+                .context
+                .prepare_member_capture(42.into(), window, &mut run.clock)
+                .unwrap_err();
+            assert!(matches!(failure, RunFailure::Flow { .. }));
+            if let Some(first) = first {
+                assert_eq!(failure, first);
+            }
+            assert_eq!(run.context.failure(), Some(&failure));
+            originals.assert_held(&run.context);
+            originals.take(&mut run.context);
+            assert_eq!(
+                run.context
+                    .prepare_member_capture(42.into(), window, &mut run.clock),
+                Err(failure)
+            );
+            assert_eq!(run.context.phase(), RecordingPhase::Failed);
+            assert!(run.context.member_capture.is_none());
+        }
+    }
+}
+
 fn ports<I: PumpIo>(io: &mut I) -> PumpPorts<'_, I> {
     PumpPorts {
         lifecycle: LifecyclePorts::default(),
@@ -1447,6 +1545,7 @@ fn cancelling_a_timely_finished_proof_queues_release_and_public_author_resume_pr
         .run
         .context
         .resume_author_and_wait(&mut ports(&mut member.run.clock))
+        .map_err(|failure| failure.retained_reason())
         .unwrap();
     assert!(member.run.context.pending_author().is_none());
     member
@@ -1598,6 +1697,7 @@ fn a_recorded_acknowledge_refusal_behind_an_author_cancels_with_abort_not_releas
         .run
         .context
         .resume_author_and_wait(&mut ports(&mut member.run.clock))
+        .map_err(|failure| failure.retained_reason())
         .unwrap();
     assert!(
         member
@@ -2133,4 +2233,73 @@ fn cleanup_unblocks_a_real_selected_filing_then_a_new_capture() {
     let image = member.image(&retry, 21);
     member.result(CaptureProgress::ImageReady, &image);
     assert!(member.run.context.halt().is_none());
+}
+
+#[test]
+fn held_boundary_capture_does_not_hide_other_invalid_prerequisites() {
+    use super::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        for defect in ["turn", "window", "identity", "phase"] {
+            let mut run = active();
+            let mut window = Member::new(&mut run).requested(42, SAVE_NS);
+            if defect == "turn" {
+                run.context.open_turn = Some(TurnRef("open".into()));
+            }
+            if defect == "window" {
+                window.deadline_ns.0 -= 1;
+            }
+            if defect == "phase" {
+                run.context.phase = RecordingPhase::Releasing;
+            }
+            let originals = hold(&mut run.context, held);
+            let id = if defect == "identity" { 0 } else { 42 };
+            let failure = run
+                .context
+                .prepare_member_capture(id.into(), window, &mut run.clock)
+                .unwrap_err();
+            assert!(
+                matches!(
+                    failure,
+                    RunFailure::Flow {
+                        reason: FlowHaltReason::ProtocolFailed,
+                        ..
+                    }
+                ),
+                "{defect}: {failure:?}"
+            );
+            assert_eq!(run.context.failure(), Some(&failure));
+            assert!(run.context.member_capture.is_none());
+            assert!(run.context.capture_snapshot().is_none());
+            assert!(
+                run.context
+                    .deadlines
+                    .get(PumpDeadline::CaptureWindow)
+                    .is_none()
+            );
+            originals.assert_held(&run.context);
+        }
+    }
+}
+
+#[test]
+fn held_boundary_capture_keeps_genuine_incomplete_certification() {
+    use super::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        let mut fx = super::template_tests::TemplateFixture::new();
+        fx.begin();
+        let run = &mut fx.input.run;
+        let originals = hold(&mut run.context, held);
+        let window = s::SaveWindow {
+            began_ns: 100.into(),
+            deadline_ns: 200.into(),
+        };
+        assert_eq!(
+            run.context
+                .prepare_member_capture(42.into(), window, &mut run.clock),
+            Err(RunFailure::TemplateBlocked)
+        );
+        assert!(run.context.failure().is_none());
+        assert!(run.context.member_capture.is_none());
+        originals.assert_held(&run.context);
+    }
 }

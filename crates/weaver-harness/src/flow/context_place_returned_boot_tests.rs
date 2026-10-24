@@ -121,6 +121,7 @@ fn place_returned_boot_install_refusal_transfers_exact_cleanup_owner_through_clo
         run.context.retire_classifier(&mut run.clock).unwrap();
         run.context
             .author_and_wait(&mut ports(&mut run.clock), unload())
+            .map_err(|failure| failure.retained_reason())
             .unwrap();
         assert_eq!(summary.records(Kind::StatePlacement), before_placement);
         assert_eq!(summary.records(Kind::Recall), before_recall);

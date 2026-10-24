@@ -1,7 +1,7 @@
 //! Dormant placement capabilities. Only the run owner combines these with actual
 //! decode, receipt and Recorded evidence; none is a public wire constructor.
 pub(super) mod mirror;
-use super::context::{BootPlanSummary, MeasureFacts};
+use super::context::{BootPlanSummary, HeldInput, MeasureFacts};
 use super::journal::{PendingAppend, PrefixProjection};
 use super::material::SelectedUnit;
 use super::pump_transport::ReceivedDecode;
@@ -48,7 +48,7 @@ pub(in crate::flow) struct PlaceRequest {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::flow) enum PlaceError {
-    Busy,
+    Busy(Option<HeldInput>),
     WrongPhase,
     WrongProof,
     MissingWait,
@@ -123,6 +123,7 @@ pub(in crate::flow) struct ConfirmedGeneration {
     pub(super) grant: PlacementGrant,
     pub(super) received: ReceivedDecode,
     pub(super) output: Option<super::coordinator::CheckedGeneration>,
+    pub(super) append_receipt: Option<super::journal::AppendReceipt>,
 }
 impl ConfirmedGeneration {
     pub(in crate::flow) fn take_output(&mut self) -> Option<super::coordinator::CheckedGeneration> {

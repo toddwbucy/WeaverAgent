@@ -242,6 +242,7 @@ fn release_pressure_and_recoverable_wait_keep_exact_original_ticket_until_one_re
     let sequence = fx
         .context
         .resume_author_and_wait(&mut ports(&mut fx.clock))
+        .map_err(|failure| failure.retained_reason())
         .unwrap();
     assert!(sequence.0 > 0);
     assert!(fx.context.pending_author().is_none());
@@ -300,7 +301,9 @@ fn release_preparation_clock_and_attribution_failure_retain_the_original_before_
         assert_eq!(fx.context.barrier.recorder().structure().len(), before);
         let first = fx.context.record_failed(&mut fx.clock);
         assert_eq!(
-            fx.context.resume_author_and_wait(&mut ports(&mut fx.clock)),
+            fx.context
+                .resume_author_and_wait(&mut ports(&mut fx.clock))
+                .map_err(|failure| failure.retained_reason()),
             Err(first.clone())
         );
         assert_eq!(fx.context.pending_author().unwrap().ticket, ticket);
@@ -631,7 +634,8 @@ fn release_recorded_sequence_survives_later_clock_failure_or_recoverable_wait() 
             };
             let outcome = fx
                 .context
-                .author_and_wait(&mut ports(&mut io), shutdown(Kind::SessionClosed));
+                .author_and_wait(&mut ports(&mut io), shutdown(Kind::SessionClosed))
+                .map_err(|failure| failure.retained_reason());
             if fx.context.barrier.recorder().structure().len() != before + 1 || outcome.is_ok() {
                 continue;
             }
@@ -656,7 +660,9 @@ fn release_recorded_sequence_survives_later_clock_failure_or_recoverable_wait() 
                 let first = outcome.unwrap_err();
                 assert_eq!(fx.context.failure(), Some(&first));
                 assert_eq!(
-                    fx.context.resume_author_and_wait(&mut ports(&mut fx.clock)),
+                    fx.context
+                        .resume_author_and_wait(&mut ports(&mut fx.clock))
+                        .map_err(|failure| failure.retained_reason()),
                     Err(first.clone())
                 );
                 assert_eq!(fx.context.failure(), Some(&first));
@@ -673,7 +679,9 @@ fn release_recorded_sequence_survives_later_clock_failure_or_recoverable_wait() 
                 fx.clock.advance_to(wait.deadline_ns()).unwrap();
                 fx.context.complete_wait(PumpDeadline::Label).unwrap();
                 assert_eq!(
-                    fx.context.resume_author_and_wait(&mut ports(&mut fx.clock)),
+                    fx.context
+                        .resume_author_and_wait(&mut ports(&mut fx.clock))
+                        .map_err(|failure| failure.retained_reason()),
                     Ok(sequence)
                 );
                 assert!(fx.context.completed_author.is_none());
@@ -797,7 +805,8 @@ fn release_owed_boot_defense_returns_typed_refusal_without_admission_or_halt() {
         assert!(fx.context.barrier.pending().is_none());
         assert_eq!(
             fx.context
-                .wait_recorded(&mut ports(&mut fx.clock), progress),
+                .wait_recorded(&mut ports(&mut fx.clock), progress)
+                .map_err(|failure| failure.retained_reason()),
             Err(RunFailure::BootOpenOwned)
         );
         assert_eq!(format!("{:?}", fx.context.held_author().unwrap()), expected);
@@ -889,6 +898,7 @@ fn release_returned_original_survives_a_failing_intake_before_the_hold_result() 
         let failure = fx
             .context
             .wait_recorded(&mut ports(&mut fx.clock), progress)
+            .map_err(|failure| failure.retained_reason())
             .unwrap_err();
         assert!(matches!(&failure, RunFailure::Flow { reason, .. }
             if *reason == if owed { FlowHaltReason::TraceFailed } else { FlowHaltReason::ProtocolFailed }));
@@ -912,3 +922,6 @@ mod custody_tests;
 
 #[path = "context_author_admission_review_tests.rs"]
 mod author_admission_review_tests;
+
+#[path = "context_author_failure_tests.rs"]
+mod author_failure;

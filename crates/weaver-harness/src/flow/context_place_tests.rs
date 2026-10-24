@@ -607,6 +607,7 @@ const _: fn() = || {
     let _ = <PreparedPrefix as Private<_>>::pin;
     let _ = <PlacementGrant as Private<_>>::pin;
     let _ = <ConfirmedGeneration as Private<_>>::pin;
+    let _ = <crate::flow::journal::AppendReceipt as Private<_>>::pin;
     let _ = <Staged as Private<_>>::pin;
     let _ = <PendingReloadText as Private<_>>::pin;
 };
@@ -993,7 +994,7 @@ fn place_valid_measurement_tail_refusal_records_close_without_component_latch_or
         run.context
             .prepare_prefix(None, s::CutMethod::Flush, &mut run.clock)
             .unwrap_err(),
-        PlaceError::Busy
+        PlaceError::Busy(None)
     );
     run.context.place_response_sent(&mut run.clock).unwrap();
     assert!(

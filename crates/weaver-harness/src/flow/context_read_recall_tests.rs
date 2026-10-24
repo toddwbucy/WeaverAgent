@@ -348,6 +348,7 @@ fn recall_pressure_retains_one_ticket_and_cancelled_read_drains_without_consumpt
             .run
             .context
             .author_and_wait(&mut ports(&mut member.run.clock), foreign)
+            .map_err(|failure| failure.retained_reason())
             .unwrap_err(),
         RunFailure::ReadOwned
     );
@@ -356,6 +357,7 @@ fn recall_pressure_retains_one_ticket_and_cancelled_read_drains_without_consumpt
             .run
             .context
             .resume_author_and_wait(&mut ports(&mut member.run.clock))
+            .map_err(|failure| failure.retained_reason())
             .unwrap_err(),
         RunFailure::ReadOwned
     );

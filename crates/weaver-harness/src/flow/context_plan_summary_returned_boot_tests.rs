@@ -79,6 +79,7 @@ fn returned_boot_rollback_actual_revocation_restores_exact_owner_and_closes() {
         run.context.retire_classifier(&mut run.clock).unwrap();
         run.context
             .author_and_wait(&mut ports(&mut run.clock), unload())
+            .map_err(|failure| failure.retained_reason())
             .unwrap();
         fx.drain();
         let run = fx.run();

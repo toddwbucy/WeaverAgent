@@ -100,7 +100,7 @@ impl RecordingContext {
             return Err(PlaceBeginError {
                 input: (prefix, tail),
                 refusal: if busy {
-                    PlaceError::Busy
+                    PlaceError::Busy(None)
                 } else if self.flow.standing_classifier().is_none() {
                     PlaceError::ClassifierNotAdmitted
                 } else if !valid {
@@ -948,7 +948,7 @@ impl RecordingContext {
                     staged,
                     selection,
                     context,
-                    refusal: PlaceError::Busy,
+                    refusal: PlaceError::Busy(None),
                     failure: None,
                 });
             }

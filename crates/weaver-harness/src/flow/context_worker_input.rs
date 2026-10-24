@@ -1,7 +1,7 @@
 //! Actual gate intake joined to the entered worker's one recording context.
 //! The loop chooses a turn only after checked acceptance. No caller can mint a
 //! gate source, a send receipt, an accepted token or a selected content copy.
-use super::super::{InputProgress, RunFailure, SeatedInput};
+use super::super::{InputProgress, RunFailure, SeatedInput, StoppedAuthor};
 use super::FoundationServing;
 use crate::flow::author::{AuthoredEvent, AuthoredSource};
 use crate::flow::clock::{MonotonicIo, PumpIo};
@@ -17,6 +17,9 @@ pub(crate) mod generation;
 #[path = "context_worker_management.rs"]
 pub(crate) mod management;
 
+#[path = "context_worker_close.rs"]
+mod close;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoundationInputProgress {
     Pending,
@@ -26,8 +29,16 @@ pub enum FoundationInputProgress {
     Placed,
     Generated,
     Restatement,
+    CorrectionPlaced,
     Effective,
     Sorted,
+    /// The next selected request has both actual opening receipts. The worker
+    /// must explicitly elect its operation; readiness does not dispatch.
+    PairReady,
+    /// Every conforming request has its actual terminal filing proof.
+    PairsComplete,
+    /// The clean turn close is Recorded and its exact world reply fully sent.
+    Completed,
     /// An operation refused. Its full account remains with this owner.
     OperationRefused,
     Refused,
@@ -50,6 +61,7 @@ enum Stage {
     Aborted,
     Turn,
     Engine,
+    Completed,
     Stopped,
 }
 
@@ -73,6 +85,7 @@ pub struct FoundationInput<'a> {
     send: Option<OrganSend>,
     report: Option<(ReceivedOrgan, Subsystem)>,
     report_started: bool,
+    returned_report: StoppedAuthor,
     failure: Option<RunFailure>,
     engine: Option<Box<generation::EngineWork>>,
 }
@@ -92,6 +105,7 @@ impl<'a> FoundationServing<'a> {
             send: None,
             report: None,
             report_started: false,
+            returned_report: StoppedAuthor::default(),
             failure: None,
             engine: None,
         })
@@ -112,6 +126,7 @@ impl<'a> FoundationInput<'a> {
             Stage::Engine => self.engine.as_ref().unwrap().progress(),
             Stage::Refused => FoundationInputProgress::Refused,
             Stage::Aborted => FoundationInputProgress::Aborted,
+            Stage::Completed => FoundationInputProgress::Completed,
             _ => FoundationInputProgress::Pending,
         }
     }
@@ -138,7 +153,15 @@ impl<'a> FoundationInput<'a> {
                 self.step(io)
             }
         });
-        if let Err(failure) = result {
+        if let Err(mut failure) = result {
+            if self.final_send_clock_failed() {
+                failure = self.serving.owner.context.fail(
+                    io,
+                    FlowHaltReason::TraceFailed,
+                    HaltPoint::Author,
+                    format!("final reply send clock observation failed: {failure:?}"),
+                );
+            }
             // The common pump reports external transport failure without
             // electing the enclosing owner's disposition. This owner stops
             // serving and revokes input before handing custody to teardown.
@@ -203,8 +226,15 @@ impl<'a> FoundationInput<'a> {
             io,
         };
         if self.report.is_some() {
+            self.returned_report.check()?;
             if self.report_started {
-                owner.context.resume_author_and_wait(&mut ports)?;
+                owner
+                    .context
+                    .resume_author_and_wait(&mut ports)
+                    .map_err(|failure| {
+                        self.returned_report
+                            .retain_started(failure, &mut self.report_started)
+                    })?;
             } else {
                 let (received, subsystem) = self.report.as_ref().unwrap();
                 let Payload::Fault(report) = &received.envelope().payload else {
@@ -213,17 +243,23 @@ impl<'a> FoundationInput<'a> {
                 let payload = serde_json::value::to_raw_value(report)
                     .expect("a received fault is serializable");
                 self.report_started = true;
-                owner.context.author_and_wait(
-                    &mut ports,
-                    AuthoredEvent {
-                        kind: serving::Kind::Fault,
-                        subsystem: *subsystem,
-                        turn: None,
-                        source: AuthoredSource::Runtime,
-                        causal_parent: None,
-                        payload: Some(serving::Payload::Fault(payload)),
-                    },
-                )?;
+                owner
+                    .context
+                    .author_and_wait(
+                        &mut ports,
+                        AuthoredEvent {
+                            kind: serving::Kind::Fault,
+                            subsystem: *subsystem,
+                            turn: None,
+                            source: AuthoredSource::Runtime,
+                            causal_parent: None,
+                            payload: Some(serving::Payload::Fault(payload)),
+                        },
+                    )
+                    .map_err(|failure| {
+                        self.returned_report
+                            .retain_started(failure, &mut self.report_started)
+                    })?;
             }
             self.report = None;
             self.report_started = false;
@@ -412,6 +448,9 @@ impl<'a> FoundationInput<'a> {
         match self.progress() {
             FoundationInputProgress::Refused => Ok(FoundationInputResult::Refused(self.serving)),
             FoundationInputProgress::Aborted => Ok(FoundationInputResult::Aborted(self.serving)),
+            FoundationInputProgress::Completed => {
+                Ok(FoundationInputResult::Completed(self.serving))
+            }
             FoundationInputProgress::Turn => {
                 Ok(FoundationInputResult::Turn(Box::new(FoundationTurn {
                     serving: self.serving,
@@ -433,6 +472,7 @@ impl<'a> FoundationInput<'a> {
 pub enum FoundationInputResult<'a> {
     Refused(FoundationServing<'a>),
     Aborted(FoundationServing<'a>),
+    Completed(FoundationServing<'a>),
     Turn(Box<FoundationTurn<'a>>),
     Generated(generation::FoundationGeneration<'a>),
     Sorted(generation::emission::FoundationOutbound<'a>),
@@ -471,6 +511,7 @@ impl<'a> FoundationTurn<'a> {
             send: None,
             report: None,
             report_started: false,
+            returned_report: StoppedAuthor::default(),
             failure: None,
             engine: None,
         })

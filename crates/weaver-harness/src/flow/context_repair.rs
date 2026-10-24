@@ -23,6 +23,9 @@ use weaver_types::state_flow::{
 };
 use weaver_types::{FaultCase, FaultReport, RefusalRecord};
 
+#[path = "context_restatement.rs"]
+mod restatement;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::flow) enum RepairBeginRefusal {
     WrongPhase,
@@ -179,6 +182,7 @@ const _: fn() = || {
 };
 
 struct RepairAuthor {
+    returned: StoppedAuthor,
     purpose: AuthorPurpose,
     event: Option<AuthoredEvent>,
     expansion: Option<TemplateExpansion>,
@@ -239,6 +243,8 @@ fn walk_pair_proofs<'a>(
 
 pub(super) struct RepairTransaction {
     ledger: RepairLedger,
+    scheme: RequestScheme,
+    count_failure: Option<RepairError>,
     certificate: TemplateCertificate,
     template: Option<&'static RestatementTemplate>,
     internal: bool,
@@ -249,6 +255,8 @@ pub(super) struct RepairTransaction {
     issued: bool,
     output_started: bool,
     issued_source: Option<SourceBlockId>,
+    issued_instruction: Option<SourcePosition>,
+    instruction_lease: Option<crate::flow::ledger::SourceLease>,
     expected_correction: Option<SourcePosition>,
     held_output: Option<CheckedGeneration>,
     accounting: Option<Accounting>,
@@ -274,7 +282,11 @@ impl RepairTransaction {
         &mut self,
         proofs: &[&super::pairs::CompletedPair],
     ) -> Result<(), RepairError> {
-        if let Some(correction) = &self.correction {
+        if let Some(correction) = self
+            .correction
+            .as_ref()
+            .or_else(|| self.ledger.pending_correction())
+        {
             super::repair::validate_refused_accounted(
                 correction
                     .requests()
@@ -296,9 +308,9 @@ impl RepairTransaction {
         proofs: &[&super::pairs::CompletedPair],
     ) -> Result<(), RepairError> {
         let result = match kind {
-            Accounting::Correction => match self
+            Accounting::Correction | Accounting::CancelCorrection => match self
                 .ledger
-                .finish_correction_accounting(correction.unwrap(), proofs)
+                .finish_correction_accounting(correction.unwrap(), proofs, self.cancel)
             {
                 Ok(_) => Ok(()),
                 Err((correction, error)) => {
@@ -316,15 +328,22 @@ impl RepairTransaction {
                     Err(error)
                 }
             },
-            Accounting::CancelCorrection => {
-                self.correction = correction;
-                Ok(())
-            }
             Accounting::RefusedCorrection => {
                 // Restore the complete original before validating its proofs;
                 // even a real validation error must retain correction custody.
                 self.correction = correction;
-                self.settle_refused_proofs(proofs)
+                self.settle_refused_proofs(proofs)?;
+                if self.ledger.outstanding_loan() == Some(RepairError::OutstandingCorrectionLoan) {
+                    let correction = self.correction.take().unwrap();
+                    if let Err((correction, error)) =
+                        self.ledger
+                            .finish_correction_accounting(correction, proofs, self.cancel)
+                    {
+                        self.correction = Some(correction);
+                        return Err(error);
+                    }
+                }
+                Ok(())
             }
             Accounting::CancelOriginal => {
                 self.account = account;
@@ -485,6 +504,23 @@ impl RecordingContext {
             .instruction
             .repair_cap
             .attempts;
+        let scheme = match RequestScheme::from_exact_scheme(
+            &self.load_duty.as_ref().unwrap().scheme_text,
+            &self.declaration.scheme,
+        ) {
+            Ok(scheme) => scheme,
+            Err(error) => {
+                return Err(RepairBeginError {
+                    original,
+                    certificate,
+                    refusal: RepairBeginRefusal::WrongGeneration,
+                    failure: Some(
+                        self.repair_fault(io, format!("loaded request scheme: {error:?}")),
+                    ),
+                    instruction_refusal: None,
+                });
+            }
+        };
         let mut ledger = match RepairLedger::begin(original, cap) {
             Ok(ledger) => ledger,
             Err((original, _)) => {
@@ -502,6 +538,8 @@ impl RecordingContext {
         }
         self.repair = Some(RepairTransaction {
             ledger,
+            scheme,
+            count_failure: None,
             certificate,
             template,
             internal: false,
@@ -512,6 +550,8 @@ impl RecordingContext {
             issued: false,
             output_started: false,
             issued_source: None,
+            issued_instruction: None,
+            instruction_lease: None,
             expected_correction: None,
             held_output: None,
             accounting: None,
@@ -647,7 +687,14 @@ impl RecordingContext {
         &self,
     ) -> (Option<&RepairAccount>, Option<&OriginalRequests>) {
         let work = self.repair.as_ref().unwrap();
-        (work.account.as_ref(), work.correction.as_ref())
+        (
+            work.account
+                .as_ref()
+                .or_else(|| work.ledger.retained_account_for_test()),
+            work.correction
+                .as_ref()
+                .or_else(|| work.ledger.pending_correction()),
+        )
     }
     #[cfg(test)]
     pub(super) fn repair_refused_pairs_settled_for_test(&self) -> bool {
@@ -960,23 +1007,7 @@ impl RecordingContext {
                 self.start_correction_call_refusal(correction, ports.io)
             }
             RepairIntent::EmptyCorrectionRefusal { source, correction } => {
-                self.ensure_repair_wait(ports.io)?;
-                let refusal = RefusalRecord::ProtocolRepair {
-                    source_id: source,
-                    case: ProtocolRepairCase::EmptyCorrection,
-                    detail: ProtocolRepairCase::EMPTY_CORRECTION_DETAIL.into(),
-                };
-                let payload = serde_json::value::to_raw_value(&refusal)
-                    .map_err(|error| self.repair_fault(ports.io, error.to_string()))?;
-                self.stage_repair_author(
-                    AuthorPurpose::EmptyCorrectionRefusal,
-                    Kind::Refusal,
-                    AuthoredSource::Runtime,
-                    Some(Sequence(correction.block_id.sequence.0)),
-                    Payload::Refusal(payload),
-                    None,
-                );
-                Ok(RepairProgress::Progress)
+                self.start_empty_refusal(source, correction, ports.io)
             }
             RepairIntent::CorrectionAccounting => {
                 let correction = self
@@ -1052,6 +1083,126 @@ impl RecordingContext {
             .or_else(|| work.account.as_ref().map(|account| account.turn().clone()))
             .or_else(|| self.open_turn.clone())
             .expect("repair retains attributed turn")
+    }
+
+    fn start_empty_refusal(
+        &mut self,
+        source: SourceBlockId,
+        correction: SourcePosition,
+        io: &mut impl PumpIo,
+    ) -> Result<RepairProgress, RunFailure> {
+        self.ensure_repair_wait(io)?;
+        let refusal = RefusalRecord::ProtocolRepair {
+            source_id: source,
+            case: ProtocolRepairCase::EmptyCorrection,
+            detail: ProtocolRepairCase::EMPTY_CORRECTION_DETAIL.into(),
+        };
+        let payload = serde_json::value::to_raw_value(&refusal)
+            .map_err(|error| self.repair_fault(io, error.to_string()))?;
+        self.stage_repair_author(
+            AuthorPurpose::EmptyCorrectionRefusal,
+            Kind::Refusal,
+            AuthoredSource::Runtime,
+            Some(Sequence(correction.block_id.sequence.0)),
+            Payload::Refusal(payload),
+            None,
+        );
+        Ok(RepairProgress::Progress)
+    }
+
+    /// Observe facts before any fallible continuation or output-loan transfer.
+    /// This observer neither advances repair nor changes a lifecycle/Decision bound.
+    pub(super) fn observe_repair_text_count(&mut self) {
+        let Some(work) = self.repair.as_mut() else {
+            return;
+        };
+        if !work.issued || !work.output_started || work.count_failure.is_some() {
+            return;
+        }
+        let (Some(source), Some(expected), Some(checks)) = (
+            work.issued_source.as_ref(),
+            work.expected_correction.as_ref(),
+            self.flow.output_checks(),
+        ) else {
+            return;
+        };
+        if checks.source() == Some(expected)
+            && checks.recorded_failed_text_only(&work.scheme)
+            && let Err(error) = work.ledger.recorded_text_failure(source, expected)
+        {
+            work.count_failure = Some(error);
+        }
+    }
+
+    /// Flow has retained the actual Filed observation. Settle only the existing
+    /// correction terminal before a later flow error can freeze PairLedger.
+    pub(super) fn observe_repair_call_count(&mut self) {
+        let Some(work) = self.repair.as_ref() else {
+            return;
+        };
+        if work.count_failure.is_some()
+            || !work.pair_started
+            || !matches!(
+                work.accounting,
+                Some(
+                    Accounting::Correction
+                        | Accounting::CancelCorrection
+                        | Accounting::RefusedCorrection
+                )
+            )
+        {
+            return;
+        }
+        if self.retain_repair_pair_terminal().is_err() {
+            self.repair.as_mut().unwrap().count_failure = Some(RepairError::WrongAccounting);
+            return;
+        }
+        if !self.pairs.is_complete() {
+            return;
+        }
+        let Some(correction) = self.pairs.original() else {
+            return;
+        };
+        let proofs = scan_pair_proofs(
+            correction
+                .requests()
+                .iter()
+                .map(|request| self.pairs.completed(&request.opening().call_id)),
+            ProofPhase::BeforeIntake,
+        );
+        let work = self.repair.as_mut().unwrap();
+        match proofs {
+            Ok(Some(proofs)) => {
+                if let Err(error) =
+                    work.ledger
+                        .recorded_call_failure(correction, &proofs, work.cancel)
+                {
+                    work.count_failure = Some(error);
+                }
+            }
+            Ok(None) => {}
+            Err(_) => work.count_failure = Some(RepairError::WrongAccounting),
+        }
+    }
+
+    /// Retain the account while its cancelled correction loan owns the pair
+    /// suffix. Completed correction custody still returns through pending.
+    fn begin_cancelled_correction_accounting(
+        &mut self,
+        kind: Accounting,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        let work = self.repair.as_mut().unwrap();
+        let Some(correction) = work.ledger.take_correction_accounting() else {
+            return Ok(false);
+        };
+        work.correction = Some(correction);
+        self.begin_pending_correction_accounting(kind, io)?;
+        Ok(true)
+    }
+
+    pub(super) fn repair_count_failure(&self) -> Option<RepairError> {
+        self.repair.as_ref().and_then(|work| work.count_failure)
     }
 
     fn start_recall_refusal(
@@ -1198,6 +1349,7 @@ impl RecordingContext {
         let turn = self.repair_turn();
         let work = self.repair.as_mut().unwrap();
         work.author = Some(RepairAuthor {
+            returned: StoppedAuthor::default(),
             purpose,
             event: Some(AuthoredEvent {
                 kind,
@@ -1240,6 +1392,14 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<RepairProgress, RunFailure> {
+        self.repair
+            .as_ref()
+            .unwrap()
+            .author
+            .as_ref()
+            .unwrap()
+            .returned
+            .check()?;
         if self
             .repair
             .as_ref()
@@ -1278,7 +1438,10 @@ impl RecordingContext {
                 self.author_and_wait(ports, event)
             };
             self.repair.as_mut().unwrap().internal = false;
-            result?;
+            result.map_err(|failure| {
+                let author = self.repair.as_mut().unwrap().author.as_mut().unwrap();
+                author.returned.retain_started(failure, &mut author.started)
+            })?;
         }
         // The actual Recorded hook can retain this source before the generic
         // author's final clock check yields. Settle only its matching completion
@@ -1339,31 +1502,32 @@ impl RecordingContext {
             if instruction != expected {
                 return Err(self.repair_fault(ports.io, "instruction check names another author"));
             }
-            if let InstructionCheck::Checked(check) = check
-                && matches!(check.reply().result, Ste100Result::NotSte100 { .. })
-            {
-                let account = serde_json::value::to_raw_value(&serde_json::json!({
+            if let InstructionCheck::Checked(mut check) = check {
+                self.repair.as_mut().unwrap().instruction_lease = check.take_lease();
+                if matches!(check.reply().result, Ste100Result::NotSte100 { .. }) {
+                    let account = serde_json::value::to_raw_value(&serde_json::json!({
                     "template_id": self.repair.as_ref().unwrap().template.expect("instruction has a compiled family").template_id(),
                     "source_id": check.instruction().block_id,
                     "result_source": check.source(), "result": check.reply(),
                 }))
                 .map_err(|error| self.repair_fault(ports.io, error.to_string()))?;
-                let fault = FaultReport {
-                    case: FaultCase::StateTemplateRejected,
-                    account,
-                };
-                let payload = serde_json::value::to_raw_value(&fault)
-                    .map_err(|error| self.repair_fault(ports.io, error.to_string()))?;
-                self.repair.as_mut().unwrap().rejection = Some(check);
-                self.stage_repair_author(
-                    AuthorPurpose::TemplateFault,
-                    Kind::Fault,
-                    AuthoredSource::Runtime,
-                    None,
-                    Payload::Fault(payload),
-                    None,
-                );
-                return Ok(RepairProgress::Progress);
+                    let fault = FaultReport {
+                        case: FaultCase::StateTemplateRejected,
+                        account,
+                    };
+                    let payload = serde_json::value::to_raw_value(&fault)
+                        .map_err(|error| self.repair_fault(ports.io, error.to_string()))?;
+                    self.repair.as_mut().unwrap().rejection = Some(*check);
+                    self.stage_repair_author(
+                        AuthorPurpose::TemplateFault,
+                        Kind::Fault,
+                        AuthoredSource::Runtime,
+                        None,
+                        Payload::Fault(payload),
+                        None,
+                    );
+                    return Ok(RepairProgress::Progress);
+                }
             }
         }
         // A recorded instruction is still ordinary selected content. Even
@@ -1385,13 +1549,15 @@ impl RecordingContext {
                     .ledger
                     .recorded_instruction(expanded, source);
                 match result {
-                    Ok(request) => {
+                    Ok(mut request) => {
+                        request.lease = self.repair.as_mut().unwrap().instruction_lease.take();
                         self.repair.as_mut().unwrap().restatement = Some(request);
                         self.finish_repair_wait();
                         return Ok(RepairProgress::Restatement);
                     }
                     Err((expanded, error)) => {
                         self.repair.as_mut().unwrap().author = Some(RepairAuthor {
+                            returned: StoppedAuthor::default(),
                             purpose: AuthorPurpose::Instruction,
                             event: None,
                             expansion: Some(expanded),
@@ -1547,10 +1713,7 @@ impl RecordingContext {
         // checks exact identities and causes before accepting its custody back.
         let calls = self.repair.as_ref().unwrap().calls.clone();
         let lookups = calls.iter().map(|call| self.pairs.completed(call));
-        let proofs = if matches!(
-            kind,
-            Accounting::CancelCorrection | Accounting::CancelOriginal
-        ) {
+        let proofs = if kind == Accounting::CancelOriginal {
             walk_pair_proofs(lookups, ProofPhase::AfterAccounting, |_| {})
                 .map(|ready| ready.then(Vec::new))
         } else {
@@ -1593,6 +1756,7 @@ impl RecordingContext {
             work.issued = true;
             work.output_started = false;
             work.issued_source = Some(request.source().clone());
+            work.issued_instruction = Some(request.recorded().clone());
             work.expected_correction = None;
         }
         Ok(request)
@@ -1719,7 +1883,10 @@ impl RecordingContext {
             .into_iter()
             .flat_map(|correction| correction.requests())
             .map(|request| self.pairs.completed(&request.opening().call_id));
-        let scanned = if kind == Accounting::RefusedCorrection {
+        let scanned = if matches!(
+            kind,
+            Accounting::RefusedCorrection | Accounting::CancelCorrection
+        ) {
             scan_pair_proofs(lookups, ProofPhase::BeforeIntake)
         } else {
             walk_pair_proofs(lookups, ProofPhase::BeforeIntake, |_| {})
@@ -1733,6 +1900,14 @@ impl RecordingContext {
         };
         let work = self.repair.as_mut().unwrap();
         if let Some(proofs) = proofs {
+            if work.ledger.outstanding_loan() == Some(RepairError::OutstandingCorrectionLoan) {
+                let correction = work.correction.take();
+                work.finish_accounting(kind, correction, None, &proofs)
+                    .map_err(|error| {
+                        self.repair_fault(io, format!("refused correction pair proof: {error:?}"))
+                    })?;
+                return Ok(false);
+            }
             if kind == Accounting::RefusedCorrection {
                 work.settle_refused_proofs(&proofs).map_err(|error| {
                     self.repair_fault(io, format!("refused correction pair proof: {error:?}"))
@@ -1779,6 +1954,9 @@ impl RecordingContext {
             .cancelled_protocol_refusal()
         {
             return self.start_correction_call_refusal(correction, ports.io);
+        }
+        if self.begin_cancelled_correction_accounting(Accounting::RefusedCorrection, ports.io)? {
+            return Ok(RepairProgress::Progress);
         }
         if self.repair.as_ref().unwrap().account.is_none() {
             if let Some(error) = self.repair.as_ref().unwrap().ledger.outstanding_loan() {
@@ -1861,11 +2039,11 @@ impl RecordingContext {
         }
         work.ledger.cancel();
         work.restatement = None;
-        if work
-            .author
-            .as_ref()
-            .is_some_and(|author| author.purpose == AuthorPurpose::Instruction && !author.started)
-        {
+        if work.author.as_ref().is_some_and(|author| {
+            author.purpose == AuthorPurpose::Instruction
+                && !author.started
+                && author.returned.failure.is_none()
+        }) {
             work.author = None;
             self.flow.cancel_instruction_check();
         }
@@ -1893,15 +2071,11 @@ impl RecordingContext {
                 return Ok(RepairProgress::Pending);
             };
             self.repair.as_mut().unwrap().held_output = Some(checked);
-            let scheme = RequestScheme::from_exact_scheme(
-                &self.load_duty.as_ref().unwrap().scheme_text,
-                &self.declaration.scheme,
-            )
-            .map_err(|error| {
-                self.repair_fault(ports.io, format!("loaded request scheme: {error:?}"))
-            })?;
             let checked = self.repair.as_mut().unwrap().held_output.take().unwrap();
-            let correction = match OriginalRequests::from_checked(checked, &scheme) {
+            let correction = match OriginalRequests::from_checked(
+                checked,
+                &self.repair.as_ref().unwrap().scheme,
+            ) {
                 Ok(correction) => correction,
                 Err(failure) => {
                     self.repair.as_mut().unwrap().held_output = Some(failure.generation);
@@ -1954,6 +2128,18 @@ impl RecordingContext {
             .cancelled_protocol_refusal()
         {
             return self.start_correction_call_refusal(correction, ports.io);
+        }
+        if let Some((source, correction)) = self
+            .repair
+            .as_ref()
+            .unwrap()
+            .ledger
+            .cancelled_empty_refusal()
+        {
+            return self.start_empty_refusal(source, correction, ports.io);
+        }
+        if self.begin_cancelled_correction_accounting(Accounting::CancelCorrection, ports.io)? {
+            return Ok(RepairProgress::Progress);
         }
         if self.repair.as_ref().unwrap().account.is_none() {
             let cancelled = self
