@@ -75,18 +75,6 @@ kind, channel, origin, attribution and partition rules. The harness retains the 
 received packet until the exact rejection is Recorded, through capacity pressure and
 cancellation under the existing applicable bound. [FLOW-3, TAP-3, TAP-5, PAIR-2]
 
-This representation applies to new foundation runs at the paired cutover. Historical
-records whose raw_envelope is an object remain historical objects. Readers distinguish
-the field types and preserve old source records without rewriting them into the new
-shape or claiming a normalized object reproduces its original packet. Update every
-producer and trace reader before cutover, including WeaverAnalysis's canonical trace
-reader and its diagnostic/preload conversion path. This repository's authoritative
-weaver-analysis-state contract draws this reader rule from the canonical trace;
-WeaverAnalysis must mirror it and verify both historical shapes. The organ wire,
-state-copy/1 registry and forbidden projection are unchanged. The old shape is not
-accepted by the new publisher
-as an alternate encoding for a new run. [FLOW-3, TAP-1, TAP-3]
-
 The organ packet bound governs the received payload, not the escaped trace line.
 The recorder has no per-record byte ceiling. The resulting line may exceed the organ
 bound and is not PayloadMalformed merely for that size. Qualification must account
@@ -319,7 +307,7 @@ serving contract remains applicable.
 | Claim | Instrument and test | Protective change that must fail the test |
 | --- | --- | --- |
 | TRACE-ENVELOPE | Perturbation in tests/recorder.rs, canonical fixture with escaped content and omitted options | Infer origin from content or change sequence to a JSON number |
-| TRACE-REJECTED-RETURN | Real recorder lines from exact multiline and escaped packets, capacity/cancellation resume and historical object/string reader fixtures | Embed RawValue, normalize the packet, discard before Recorded, rewrite history or turn the evidence into a selectable projection |
+| TRACE-REJECTED-RETURN | Real recorder lines from exact multiline, escaped and maximum admitted packets, and capacity/cancellation resume | Embed RawValue, normalize the packet, discard before Recorded or turn the evidence into a selectable projection |
 | TRACE-REGISTRY | Exhaustive enum match and tests/kinds.rs, plus table-driven turn/payload tests and harness-authored recall refusal bytes | Omit a new kind, alter the typed refusal bytes or admit a forbidden projection |
 | TRACE-PLAN | Canonical operator/effect, failed/closed outcome and break fixtures, checked against the floor-to-trace conversion | Swap the two plan payloads, license close as plan.event, omit null context, change an identity or accept a wrong turn/channel/origin |
 | Plan observation | Canonical fixtures for flags success/refusal, successor readiness and both capacity paths | Replace unavailable with zero, drop an identity, add an unknown variant or admit the measurement to residue |

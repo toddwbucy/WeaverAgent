@@ -187,20 +187,6 @@ fn rejected_return_string_records_exact_multiline_payload_in_one_line() {
     let fixture: serde_json::Value = serde_json::from_str(expected).unwrap();
     let payload = fixture["payload"]["raw_envelope"].as_str().unwrap();
     assert_eq!(rejected_return_line(payload), expected);
-
-    let historical = include_str!("../../tests/fixtures/rejected-return-historical-object.jsonl");
-    let old: serde_json::Value = serde_json::from_str(historical).unwrap();
-    assert!(old["payload"]["raw_envelope"].is_object());
-    assert_eq!(
-        old["payload"]["raw_envelope"],
-        serde_json::from_str::<serde_json::Value>(payload).unwrap()
-    );
-    // Compatibility corpus for readers; the new publisher emits only String.
-    // An old object establishes JSON content, not original packet spelling.
-    assert_ne!(
-        serde_json::to_vec(&old["payload"]["raw_envelope"]).unwrap(),
-        payload.as_bytes()
-    );
 }
 
 #[test]

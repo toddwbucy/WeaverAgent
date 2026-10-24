@@ -200,8 +200,8 @@ RejectedReturn. [PAIR-2, PAIR-3, FLOW-3]
 The kind uses channel tool, origin tool, and is forbidden by the partition validator.
 A duplicate or late response never changes a stored terminal. No new unknown_call or
 wrong_tool payload case is invented for a wire that carries neither name nor application
-call ID on its close. TRACE-REJECTED-RETURN owns the single-line encoding and historical
-reader boundary. This change carries the same raw evidence and gives it no model or
+call ID on its close. TRACE-REJECTED-RETURN owns the single-line encoding.
+This change carries the same raw evidence and gives it no model or
 state projection. [PAIR-2, PAIR-3, TAP-1, TAP-3]
 
 ## 3. The coordinator and the single clock

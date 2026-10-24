@@ -5,11 +5,9 @@
 **Date filed:** 2026-08-24
 **Document ID:** `weaver-analysis-state-contract`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #312
-**Copies:** this WeaverAgent copy is authoritative by the operator's ruling of
-2026-10-20. WeaverAnalysis mirrors it, tracked by
-[WeaverAnalysis#7](https://github.com/toddwbucy/WeaverAnalysis/issues/7) and
-[WeaverAnalysis#15](https://github.com/toddwbucy/WeaverAnalysis/issues/15).
+**Landing PR:** #650
+**Copies:** this copy (WeaverAgent) edited by #58; WeaverAnalysis's copy follows under
+WeaverAnalysis#7.
 
 ---
 
@@ -81,17 +79,6 @@ spells them. The driver reads the record itself, outside the agent, and its
 distillates are projections of canonical events exactly as the tee's are:
 the source facts crossing this seam are facts the record carries. An explicit
 destination rewrite changes the session name alone, as section 2 governs.
-
-At the held state-management foundation cutover, WeaverAnalysis's trace reader and
-diagnostic/preload conversion path support the historical object and new string
-shapes of tool.return_rejected.raw_envelope under the trace amendment's
-TRACE-REJECTED-RETURN. Preserve historical records without rewriting their shape or
-claiming an object recovers the original payload bytes. This event remains forbidden
-from state projection; accepting its trace representation grants no preload traffic.
-WeaverAgent #312 carries this authoritative contract and the String producer;
-WeaverAnalysis#15 carries the mirror and reader implementation to the other party.
-That issue must be satisfied before the foundation cutover; filing it does not
-establish reader compatibility.
 
 **From `weaver-types`.** Nothing crosses. The binding kind conditions this
 door's existence and never rides it, the declaration having done its work at

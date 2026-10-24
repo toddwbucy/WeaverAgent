@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #312
+**Landing PR:** #182
 
-**Version:** 0.9 **Date filed:** 2026-10-20 **Parent:** weaver-diagnostic-PRD
+**Version:** 0.8 **Date filed:** 2026-10-20 **Parent:** weaver-diagnostic-PRD
 
 ## 0. What this document is
 
@@ -39,13 +39,8 @@ election and preload door on a separate connection/catalog. It never adopts a
 state-content/1 serving dump or supplies a serving seed. No serving load can enable the
 preload door. This stages the local interpretation of analysis-state contract 1/2/3,
 whose copy in this repository is authoritative under R20-5. WeaverAnalysis mirrors it
-and owns its counterpart changes. TRACE-REJECTED-RETURN's reader compatibility for
-object-valued and string-valued rejected-return evidence is required before the
-foundation cutover, as tracked by
-[WeaverAnalysis#15](https://github.com/toddwbucy/WeaverAnalysis/issues/15).
-Other diagnostic/preload counterpart work does not become a serving deployment gate.
-The reader obligation grants no preload traffic and does not change
-DIAGNOSTIC-CONVERT's refusal of new serving kinds. [SCOPE-1, PERSIST-5, October 18 R8]
+and owns its counterpart changes, without becoming a serving deployment gate. [SCOPE-1,
+PERSIST-5, October 18 R8]
 
 ## 2. Enforcement, destinations sections 3.1 and 3.2
 
