@@ -310,9 +310,13 @@ fn pair_terminal_keeps_existing_numeric_exchange_and_tool_outcome() {
             ordinal: 7,
         },
         reason: "duplicate_return".into(),
-        raw_envelope: raw(r#"{ "opaque": "\u0061" }"#),
+        raw_envelope: r#"{ "opaque": "\u0061" }"#.into(),
     };
-    assert!(json(&rejected).ends_with(r#""raw_envelope":{ "opaque": "\u0061" }}"#));
+    let value: serde_json::Value = serde_json::from_str(&json(&rejected)).unwrap();
+    assert_eq!(
+        value["raw_envelope"].as_str(),
+        Some(r#"{ "opaque": "\u0061" }"#)
+    );
 }
 
 #[test]
@@ -830,7 +834,7 @@ pub(crate) fn payload_fixtures() -> Vec<(
                     ordinal: 1,
                 },
                 reason: "duplicate_return".into(),
-                raw_envelope: raw(r#"{"original":"whole"}"#),
+                raw_envelope: r#"{"original":"whole"}"#.into(),
             })),
         ),
         (

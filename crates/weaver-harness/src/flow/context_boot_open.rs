@@ -25,7 +25,7 @@ pub(in crate::flow) enum BootOpenBeginRefusal {
     WrongPhase,
     MissingHead,
     AlreadyStarted,
-    Busy,
+    Busy(Option<HeldInput>),
 }
 #[derive(Debug)]
 pub(in crate::flow) struct BootOpenBeginError {
@@ -216,6 +216,15 @@ pub(super) struct BootOpenTransaction {
 }
 impl BootOpenTransaction {
     #[cfg(test)]
+    pub(super) fn release_disposition_for_test(&self) -> (bool, u64, bool, bool) {
+        (
+            self.revoked,
+            self.account_deadline,
+            self.owed,
+            self.grant_taken,
+        )
+    }
+    #[cfg(test)]
     pub(super) fn unsubmitted_event_for_test(&self) -> Option<&AuthoredEvent> {
         self.author.as_ref()?.event.as_ref()
     }
@@ -299,11 +308,13 @@ impl RecordingContext {
                 || self.deadlines.get(PumpDeadline::Enter) != Some(head.enter_bound())
         }) || self.load_duty.is_none()
             || self.open_start.is_none()
-            || self.completed_template_enter().is_err()
+            || self.certified_template_enter().is_err()
         {
             Some(BootOpenBeginRefusal::MissingHead)
+        } else if let Some(held) = self.held_input() {
+            Some(BootOpenBeginRefusal::Busy(Some(held)))
         } else if self.boot_pairs.is_some() || self.boot_begin_busy() {
-            Some(BootOpenBeginRefusal::Busy)
+            Some(BootOpenBeginRefusal::Busy(None))
         } else {
             None
         };
@@ -323,7 +334,7 @@ impl RecordingContext {
             Ok(DecodeStage::Queued(reservation)) => reservation,
             Ok(DecodeStage::Busy(_)) => {
                 return Err(BootOpenBeginError {
-                    refusal: BootOpenBeginRefusal::Busy,
+                    refusal: BootOpenBeginRefusal::Busy(None),
                     failure: None,
                 });
             }
@@ -536,7 +547,8 @@ impl RecordingContext {
                 };
                 let opened = validated.opened;
                 owner.fit = Some(
-                    opened.prefix_tokens <= owner.budget.c_head
+                    opened.generation_limit > 0
+                        && opened.prefix_tokens <= owner.budget.c_head
                         && owner.budget.c_head > 0
                         && owner.budget.c_tail > 0
                         && owner
@@ -874,33 +886,25 @@ impl RecordingContext {
         leave: AbsoluteBound,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
-        if self.boot_open.is_none() {
+        self.release_live(io)?;
+        if self
+            .boot_open
+            .as_ref()
+            .is_none_or(|owner| owner.grant_taken)
+        {
             return Err(RunFailure::BootOpenOwned);
         }
-        if self.caller_author_held() {
-            return Err(self.failure.clone().unwrap_or(RunFailure::BootOpenOwned));
-        }
-        self.cancel_boot_open()?;
-        if let Some(failure) = &self.failure {
-            return Err(failure.clone());
-        }
-        // Expired Enter/Leave means immediate stopped disposal, not an
-        // unreachable rollback that requires renewing the original window.
-        let now = io
-            .now()
-            .map_err(|error| self.boot_open_fault(io, format!("boot release clock: {error}")))?;
-        if now < self.last_ns {
-            return Err(self.boot_open_fault(io, "boot release clock reversed"));
-        }
-        self.last_ns = now;
         if self.phase != RecordingPhase::Entered || self.flow.phase() != CoordinatorPhase::Active {
             return Err(RunFailure::BootOpenOwned);
         }
-        if let Some(held) = self.deadlines.get(PumpDeadline::Leave) {
-            if held != leave {
-                return Err(self.boot_open_fault(io, "boot release replaced its Leave bound"));
-            }
-        } else {
+        if let Some(held) = self.deadlines.get(PumpDeadline::Leave)
+            && held != leave
+        {
+            return Err(self.boot_open_fault(io, "boot release replaced its Leave bound"));
+        }
+        self.check_held_input()?;
+        self.cancel_boot_open()?;
+        if self.deadlines.get(PumpDeadline::Leave).is_none() {
             self.deadlines
                 .arm(PumpDeadline::Leave, leave)
                 .map_err(|error| {

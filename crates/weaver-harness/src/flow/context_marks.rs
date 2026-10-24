@@ -143,6 +143,7 @@ pub(super) struct MarksTransaction {
     filing: Option<FilingCompletion>,
     stage: Stage,
     fault_started: bool,
+    returned_author: StoppedAuthor,
     fault_sequence: Option<Sequence>,
     refusal: Option<TaskRefusal>,
     cancelled: bool,
@@ -330,6 +331,7 @@ impl RecordingContext {
             filing: None,
             stage: Stage::Input,
             fault_started: false,
+            returned_author: StoppedAuthor::default(),
             fault_sequence: None,
             refusal: None,
             cancelled: false,
@@ -704,6 +706,7 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
         let work = self.marks.as_ref().unwrap();
+        work.returned_author.check()?;
         if !work.fault_started {
             let filing = work.filing.as_ref().unwrap();
             let rejected = filing
@@ -727,13 +730,21 @@ impl RecordingContext {
                 )),
             };
             self.marks.as_mut().unwrap().fault_started = true;
-            let sequence = self.author_and_wait(ports, event)?;
+            let sequence = self.author_and_wait(ports, event).map_err(|failure| {
+                let work = self.marks.as_mut().unwrap();
+                work.returned_author
+                    .retain_started(failure, &mut work.fault_started)
+            })?;
             self.marks.as_mut().unwrap().fault_sequence = Some(sequence);
         } else if self.completed_author.is_some()
             || self.waiting_content.is_some()
             || self.barrier.pending_author().is_some()
         {
-            let sequence = self.resume_author_and_wait(ports)?;
+            let sequence = self.resume_author_and_wait(ports).map_err(|failure| {
+                let work = self.marks.as_mut().unwrap();
+                work.returned_author
+                    .retain_started(failure, &mut work.fault_started)
+            })?;
             self.marks.as_mut().unwrap().fault_sequence = Some(sequence);
         }
         let work = self.marks.as_mut().unwrap();

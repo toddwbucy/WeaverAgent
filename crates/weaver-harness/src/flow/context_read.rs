@@ -112,6 +112,7 @@ pub(in crate::flow) struct ReadTransaction {
     accepted: Option<ReadAdvance>,
     released: Option<Result<CompletedRead, ReadFailure>>,
     recall: Option<AuthoredEvent>,
+    returned_recall: Option<AuthoredEvent>,
     author_started: bool,
     author_ticket: Option<u64>,
     orphan_recorded: Option<RecordedRead>,
@@ -359,8 +360,7 @@ impl RecordingContext {
             || self.input_author.is_some()
             || self.input_turn.is_some()
             || self.repair_blocks_external()
-            || self.template_blocked_author.is_some()
-            || (self.held_author.is_some() && !owned_continuation)
+            || self.caller_author_blocks_continuation(|| owned_continuation)
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()
@@ -439,6 +439,7 @@ impl RecordingContext {
             accepted: None,
             released: None,
             recall: None,
+            returned_recall: None,
             author_started: false,
             author_ticket: None,
             orphan_recorded: None,
@@ -890,7 +891,10 @@ impl RecordingContext {
                 Ok(ReadProgress::Pending)
             }
             RecordProgress::BusyAuthored { event, .. } => {
-                self.retain_refused(event);
+                // The immutable recall facts remain in recall; this is the
+                // exact attempted original, withdrawn without an admission.
+                assert!(self.read.as_ref().unwrap().returned_recall.is_none());
+                self.read.as_mut().unwrap().returned_recall = Some(event);
                 Err(self.record_failed(ports.io))
             }
             RecordProgress::Failed => {

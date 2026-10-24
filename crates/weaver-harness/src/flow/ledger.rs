@@ -770,6 +770,18 @@ impl Ledger {
         self.receipts.as_ref()
     }
 
+    pub(super) fn take_recorded_pair_terminal(
+        &mut self,
+        source: &SourceBlockId,
+    ) -> Option<CommittedSource> {
+        let receipt = self
+            .receipts
+            .as_mut()?
+            .take_recorded_pair_terminal(source)?;
+        self.receipts = None;
+        Some(receipt)
+    }
+
     /// No completion crosses this port on failure or before every subscribed
     /// disposition was recorded. Taking it relinquishes the one subscription.
     pub(super) fn take_receipts(&mut self) -> Result<Option<ReceiptSet>, LedgerError> {

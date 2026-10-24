@@ -323,6 +323,7 @@ fn boot_cleanup_review_closed_context_returns_original_proof_and_never_reopens()
     );
     run.context
         .author_and_wait(&mut ports(&mut run.clock), unload())
+        .map_err(|failure| failure.retained_reason())
         .unwrap();
     fx.drain();
     let run = fx.run();

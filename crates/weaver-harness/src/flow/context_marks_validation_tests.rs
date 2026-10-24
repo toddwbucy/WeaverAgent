@@ -3,6 +3,23 @@
 
 use super::*;
 
+pub(in crate::flow::context) fn fault_author_is_next(context: &RecordingContext) -> bool {
+    context
+        .marks
+        .as_ref()
+        .is_some_and(|work| work.stage == Stage::Fault)
+}
+
+pub(in crate::flow::context) fn returned_fault_author(
+    context: &RecordingContext,
+) -> Option<(&AuthorFailure, bool)> {
+    let work = context.marks.as_ref()?;
+    work.returned_author
+        .failure
+        .as_ref()
+        .map(|failure| (failure, work.fault_started))
+}
+
 /// Read-only inspection values from a real task's retained licensing evidence.
 /// Typed identities and canonical protocol bytes do not depend on Debug output
 /// and cannot reconstruct any private receipt-bearing owner.

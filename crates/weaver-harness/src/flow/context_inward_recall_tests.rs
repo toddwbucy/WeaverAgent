@@ -134,7 +134,9 @@ impl InwardFixture {
             run.context
                 .advance_inward_recall(&mut ports(&mut run.clock))?;
         } else {
-            run.context.advance_pairs(&mut ports(&mut run.clock))?;
+            run.context
+                .advance_pairs(&mut ports(&mut run.clock))
+                .map_err(AuthorFailure::retained_reason)?;
         }
         self.pairs.checker();
         self.member();

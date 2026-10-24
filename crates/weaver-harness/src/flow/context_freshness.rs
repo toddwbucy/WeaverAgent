@@ -188,10 +188,27 @@ impl RecordingContext {
             && (self.waiting_content.is_some()
                 || (self.barrier.pending_author().is_some() && !self.flow.has_pending_record()))
         {
-            let sequence = self.resume_owned_author_and_wait(ports)?;
-            // The original caller still owns this return value. Retain it
-            // before any subsequent flow, clock or recoverable lifecycle work.
-            self.completed_author = Some(sequence);
+            match self.resume_owned_author_and_wait(ports) {
+                Ok(sequence) => {
+                    // The original caller still owns this return value.
+                    self.completed_author = Some(sequence);
+                }
+                Err(failure) => {
+                    let AuthorFailure { reason, original } = failure;
+                    if let Some(event) = original {
+                        // Freshness only progresses the previous caller. Keep
+                        // its withdrawn input in the same waiting slot for that
+                        // caller to take, without resubmission or a new ticket.
+                        assert!(self.waiting_content.is_none());
+                        self.waiting_content = Some(WaitingAuthor {
+                            event,
+                            claim: None,
+                            withdrawn: Some(reason.clone()),
+                        });
+                    }
+                    return Err(reason);
+                }
+            }
         }
         let progress = self.reduce_flow(ports.io)?;
         if self.waiting_content.is_some()

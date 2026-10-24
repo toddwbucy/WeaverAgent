@@ -2,9 +2,8 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #285.
-
-**Version:** 0.26 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
+**Version:** 0.27 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
+**Landing PR:** #312
 
 ## 0. What this document is
 
@@ -64,6 +63,28 @@ both the trace and declaration parser. [TAP-1, TAP-3]
 | recall | Payload::RecallRecord with TRACE-RECALL's serving read or boot variant | Forbidden, including boot recall | Forbidden |
 | message.system, message.restored, save_point | Existing payloads | Forbidden | Existing rule |
 | All other kinds | Existing payloads | No selectable surface in this amendment | Existing rule |
+
+**TRACE-REJECTED-RETURN.** Spec 05's RejectedReturn.raw_envelope is a JSON string
+whose decoded UTF-8 bytes equal the original organ frame's complete payload, as held
+by ReceivedOrgan.raw_bytes, excluding transport delimiters and length prefixes. The
+trace mirrors this as a serialize-only String field, never RawValue or a parsed
+object. Serialize the
+outer string normally so quotes, backslashes and literal CR/LF in that packet cannot
+introduce a second trace line. The event retains one final newline and all existing
+kind, channel, origin, attribution and partition rules. The harness retains the actual
+received packet until the exact rejection is Recorded, through capacity pressure and
+cancellation under the existing applicable bound. [FLOW-3, TAP-3, TAP-5, PAIR-2]
+
+The organ packet bound governs the received payload, not the escaped trace line.
+The recorder has no per-record byte ceiling. The resulting line may exceed the organ
+bound and is not PayloadMalformed merely for that size. Qualification must account
+for the full outer event and escaping expansion, retained packet and author copies,
+and recording time under the existing rejection wait. Test maximum admitted payloads
+and control-character expansion; admission on the organ wire alone does not qualify
+recording cost. Existing recorder failure and pressure rules still apply. Escaping
+adds no recorder byte ceiling, new timing field, overflow queue or renewed deadline.
+The record certifies exact evidence carriage, not the rejected outcome's truth or an
+execution grant. [FLOW-3, FLOW-4, TAP-3, COST-4]
 
 The existing refusal kind also carries the harness-authored raw encoding of
 TYPES-RECALL-REFUSAL. It has no selectable projection. For that variant the harness
@@ -286,6 +307,7 @@ serving contract remains applicable.
 | Claim | Instrument and test | Protective change that must fail the test |
 | --- | --- | --- |
 | TRACE-ENVELOPE | Perturbation in tests/recorder.rs, canonical fixture with escaped content and omitted options | Infer origin from content or change sequence to a JSON number |
+| TRACE-REJECTED-RETURN | Real recorder lines from exact multiline, escaped and maximum admitted packets, and capacity/cancellation resume | Embed RawValue, normalize the packet, discard before Recorded or turn the evidence into a selectable projection |
 | TRACE-REGISTRY | Exhaustive enum match and tests/kinds.rs, plus table-driven turn/payload tests and harness-authored recall refusal bytes | Omit a new kind, alter the typed refusal bytes or admit a forbidden projection |
 | TRACE-PLAN | Canonical operator/effect, failed/closed outcome and break fixtures, checked against the floor-to-trace conversion | Swap the two plan payloads, license close as plan.event, omit null context, change an identity or accept a wrong turn/channel/origin |
 | Plan observation | Canonical fixtures for flags success/refusal, successor readiness and both capacity paths | Replace unavailable with zero, drop an identity, add an unknown variant or admit the measurement to residue |

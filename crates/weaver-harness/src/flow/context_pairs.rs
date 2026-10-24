@@ -83,6 +83,39 @@ impl PairTransaction {
 }
 
 impl RecordingContext {
+    /// Retain an already committed terminal before a later flow error freezes
+    /// the pair owner. This narrow repair road performs no continuation, new
+    /// authoring, filing, wait or send and never releases a FilingCompletion.
+    pub(super) fn retain_repair_pair_terminal(&mut self) -> Result<(), super::pairs::PairError> {
+        let Some(leg) = self.pair_work.as_ref().and_then(|work| work.leg.as_ref()) else {
+            return Ok(());
+        };
+        if leg.phase != PairRecordPhase::Terminal || self.pairs.has_effective() {
+            return Ok(());
+        }
+        let Some(source) = &leg.recorded else {
+            return Ok(());
+        };
+        if !self
+            .filing
+            .as_ref()
+            .is_some_and(|owner| owner.owns_recorded_pair_terminal(source))
+        {
+            return Ok(());
+        }
+        let Some(receipt) = self.flow.take_recorded_pair_terminal(source) else {
+            return Ok(());
+        };
+        if let Err((receipt, error)) = self.pairs.install_terminal(&leg.call, receipt) {
+            self.pair_work.as_mut().unwrap().refused_receipt =
+                Some(SourceDisposition::Committed(receipt));
+            return Err(error);
+        }
+        self.filing = None;
+        self.pair_work.as_mut().unwrap().leg = None;
+        Ok(())
+    }
+
     /// Account all accepted requests, including accepted siblings of blocks still
     /// awaiting repair. Return the original ownership unchanged on caller refusal.
     #[allow(clippy::result_large_err)]
@@ -188,8 +221,7 @@ impl RecordingContext {
             || self.output.is_some()
             || self.filing.is_some()
             || self.templates_block_content()
-            || self.template_blocked_author.is_some()
-            || (self.held_author.is_some() && !self.repair_pair_intake_allowed())
+            || self.caller_author_blocks_continuation(|| self.repair_pair_intake_allowed())
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()
@@ -332,13 +364,16 @@ impl RecordingContext {
         Ok(())
     }
 
+    /// A refused admission returns its exact event for caller-owned teardown.
+    /// A lifecycle Wait is not a latch or authority to replace that evidence.
+    #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn advance_pairs<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
-    ) -> Result<PairProgress, RunFailure> {
+    ) -> Result<PairProgress, AuthorFailure> {
         self.live(ports.io)?;
         if self.repair_blocks_external() && self.repair_owns_pairs() {
-            return Err(RunFailure::RepairOwned);
+            return Err(RunFailure::RepairOwned.into());
         }
         if self.pair_rejected_authoring || self.pairs.pending_rejection().is_some() {
             return Ok(PairProgress::Pending);
@@ -460,13 +495,18 @@ impl RecordingContext {
                     PairProgress::Pending
                 });
             }
-            self.retain_refused(error.event);
-            return Err(error.failure.unwrap_or_else(|| {
-                self.pair_fault(
-                    ports.io,
-                    format!("pair filing could not start: {:?}", error.refusal),
-                )
-            }));
+            // A nonfatal Leave/Enter expiry can refuse another attempt later.
+            // Return each exact unadmitted event to its caller, without a slot
+            // that could overwrite an earlier original or panic on that retry.
+            return Err(AuthorFailure {
+                reason: error.failure.unwrap_or_else(|| {
+                    self.pair_fault(
+                        ports.io,
+                        format!("pair filing could not start: {:?}", error.refusal),
+                    )
+                }),
+                original: Some(error.event),
+            });
         }
         // begin only reserves custody, it submits no author ticket. Claim now,
         // before advance can record or any failure callback can observe progress.

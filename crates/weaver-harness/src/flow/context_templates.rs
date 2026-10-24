@@ -294,8 +294,11 @@ impl RecordingContext {
     }
 
     pub(super) fn templates_block_content(&self) -> bool {
+        self.template_blocked_author.is_some() || self.template_certification_blocks_content()
+    }
+
+    pub(super) fn template_certification_blocks_content(&self) -> bool {
         self.template_setup_refusal.is_some()
-            || self.template_blocked_author.is_some()
             || self
                 .template_checks
                 .as_ref()
@@ -304,23 +307,30 @@ impl RecordingContext {
 
     /// Positive evidence for the next enter owner, even after the caller has
     /// taken its template certificate. Absence is never certification.
+    #[cfg(test)]
     pub(super) fn completed_template_enter(&self) -> Result<AbsoluteBound, RunFailure> {
+        let enter = self.certified_template_enter()?;
+        self.check_held_input()?;
+        Ok(enter)
+    }
+
+    /// Read certification separately so a genuine defect precedes custody.
+    pub(super) fn certified_template_enter(&self) -> Result<AbsoluteBound, RunFailure> {
         self.template_enter_live()?;
         let owner = self
             .template_checks
             .as_ref()
             .expect("checked template owner");
-        if !owner.complete
-            || owner.rejected
-            || self.template_setup_refusal.is_some()
-            || self.caller_author_held()
-        {
+        if !owner.complete || owner.rejected || self.template_setup_refusal.is_some() {
             return Err(RunFailure::TemplateBlocked);
         }
         Ok(owner.enter)
     }
 
     fn template_enter_live(&self) -> Result<(), RunFailure> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone());
+        }
         let Some(owner) = self.template_checks.as_ref() else {
             return Err(RunFailure::TemplateBlocked);
         };

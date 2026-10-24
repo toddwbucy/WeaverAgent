@@ -29,7 +29,7 @@ fn place_refusal_after_failed_measure_admission_names_the_actual_retry_reservati
             .context
             .begin_place(request, &mut fx.decode, &mut run.clock)
             .unwrap_err();
-        assert_eq!(error.refusal, PlaceError::Busy);
+        assert_eq!(error.refusal, PlaceError::Busy(None));
         assert!(error.failure.is_none());
         assert_eq!(error.input.prefix.assembly, old_assembly);
         assert_eq!(error.input.prefix.revision(), original_prefix);

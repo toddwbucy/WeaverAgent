@@ -6,6 +6,29 @@ use weaver_traits::{ContentBlock, Message, Role};
 
 const PROMPT: &str = "Read caf\u{e9}.";
 
+#[test]
+fn held_boundary_boot_read_keeps_certification_and_request_identity_until_take() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        let mut fx = BootFixture::new(true);
+        let run = &mut fx.member.run;
+        let enter = run.context.completed_template_enter().unwrap();
+        let originals = hold(&mut run.context, held);
+        let error = run.context.begin_boot_read(&mut run.clock).unwrap_err();
+        assert_eq!(error.refusal, BootReadBeginRefusal::Busy(Some(held)));
+        assert!(error.failure.is_none());
+        assert!(!run.context.boot_read_started);
+        assert!(run.context.read.is_none());
+        assert!(run.context.flow.state().outstanding().is_empty());
+        assert_eq!(run.context.deadlines.get(PumpDeadline::Enter), Some(enter));
+        originals.assert_held(&run.context);
+        originals.take(&mut run.context);
+        run.context.begin_boot_read(&mut run.clock).unwrap();
+        assert!(run.context.read.is_some());
+        assert_eq!(run.context.deadlines.get(PumpDeadline::Enter), Some(enter));
+    }
+}
+
 const _: fn() = || {
     trait MustNotClone<Marker> {
         fn check() {}
@@ -479,7 +502,7 @@ fn boot_admission_requires_positive_template_completion_and_preserves_busy_input
         .context
         .begin_boot_read(&mut fx.member.run.clock)
         .unwrap_err();
-    assert_eq!(error.refusal, BootReadBeginRefusal::Busy);
+    assert_eq!(error.refusal, BootReadBeginRefusal::Busy(None));
     assert!(error.failure.is_none());
     assert!(!fx.member.run.context.boot_read_started);
     assert!(!fx.member.run.context.content_read_started);
@@ -990,3 +1013,19 @@ mod pair_repair_tests;
 
 #[path = "context_boot_open_tests.rs"]
 mod open_owner_tests;
+
+#[test]
+fn held_boundary_boot_read_preserves_genuine_template_failure() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        let mut fx = BootFixture::new(false);
+        let run = &mut fx.member.run;
+        let originals = hold(&mut run.context, held);
+        let error = run.context.begin_boot_read(&mut run.clock).unwrap_err();
+        assert_eq!(error.refusal, BootReadBeginRefusal::Templates);
+        assert_eq!(error.failure, Some(RunFailure::TemplateBlocked));
+        assert!(run.context.failure().is_none());
+        assert!(run.context.read.is_none());
+        originals.assert_held(&run.context);
+    }
+}

@@ -620,6 +620,7 @@ fn boot_pairs_owns_read_author_and_waits_until_completion_is_taken() {
     assert_eq!(
         run.context
             .author_and_wait(&mut ports(&mut run.clock), event)
+            .map_err(|failure| failure.retained_reason())
             .unwrap_err(),
         RunFailure::BootPairsOwned
     );

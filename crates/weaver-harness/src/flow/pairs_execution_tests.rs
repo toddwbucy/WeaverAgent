@@ -374,7 +374,7 @@ fn rejection_keeps_exact_wire_until_actual_recorded_disposition() {
         .unwrap();
     let pending = ledger.pending_rejection().unwrap();
     assert_eq!(pending.raw_bytes(), encoded.as_bytes());
-    assert!(pending.record().raw_envelope.get().contains("{  "));
+    assert_eq!(pending.record().raw_envelope.as_bytes(), encoded.as_bytes());
     assert_eq!(pending.record().reason, "unexpected_exchange");
     assert!(pending.record().call_id.is_none());
     let (held, error) = ledger.observe_gate(received(1, result())).unwrap_err();
@@ -403,6 +403,45 @@ fn rejection_keeps_exact_wire_until_actual_recorded_disposition() {
         ledger.observe_gate(held).unwrap(),
         GateObservation::Matched(call)
     );
+}
+
+#[test]
+fn rejected_return_maximum_admitted_payload_keeps_every_byte() {
+    let (mut ledger, call, _) = ready();
+    dispatch(&mut ledger, &call, 1);
+    let wire = serde_json::to_string(&OrganEnvelope {
+        exchange: exchange(97),
+        position: Position::Close,
+        payload: weaver_types::Payload::ToolAnswer(result()),
+    })
+    .unwrap();
+    let mut encoded = String::from("\r\n\t ");
+    encoded.push_str(&wire);
+    encoded.extend(
+        ['\r', '\n', '\t', ' ']
+            .into_iter()
+            .cycle()
+            .take(weaver_types::MAX_ENVELOPE_BYTES - encoded.len()),
+    );
+    assert_eq!(encoded.len(), weaver_types::MAX_ENVELOPE_BYTES);
+    assert_eq!(
+        ledger
+            .observe_gate(received_raw(encoded.as_bytes()))
+            .unwrap(),
+        GateObservation::Rejected
+    );
+    let pending = ledger.pending_rejection().unwrap();
+    assert_eq!(pending.raw_bytes(), encoded.as_bytes());
+    assert_eq!(pending.record().raw_envelope.as_bytes(), encoded.as_bytes());
+    let outer = serde_json::to_vec(pending.record()).unwrap();
+    assert!(outer.len() > weaver_types::MAX_ENVELOPE_BYTES);
+    assert!(!outer.contains(&b'\n'));
+    let decoded: serde_json::Value = serde_json::from_slice(&outer).unwrap();
+    assert_eq!(
+        decoded["raw_envelope"].as_str().unwrap().as_bytes(),
+        encoded.as_bytes()
+    );
+    assert!(ledger.pending_rejection().is_some());
 }
 
 #[test]

@@ -497,8 +497,7 @@ impl RecordingContext {
     fn preinput_cleanup_domain(&self) -> bool {
         self.flow.preinput_failed_owner()
             && self.enter_refusal_record.is_none()
-            && self.held_author.is_none()
-            && self.template_blocked_author.is_none()
+            && !self.caller_author_held()
             && self.waiting_content.is_none()
             && !self.author_admission_pending
             && !self.ever_started_turn

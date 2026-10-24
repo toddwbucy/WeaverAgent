@@ -168,7 +168,9 @@ mod request_receipt_port_visibility {
 #[cfg(test)]
 mod pair_port_visibility {
     use super::clock::testing::FakePumpIo;
-    use super::context::{PairBeginError, PairProgress, RecordingContext, RunFailure};
+    use super::context::{
+        AuthorFailure, PairBeginError, PairProgress, RecordingContext, RunFailure,
+    };
     use super::coordinator::OriginalRequests;
     use super::pump::PumpPorts;
     use weaver_types::state_flow::NonDispatchCause;
@@ -182,7 +184,7 @@ mod pair_port_visibility {
     const _: fn(
         &mut RecordingContext,
         &mut PumpPorts<'_, FakePumpIo>,
-    ) -> Result<PairProgress, RunFailure> = RecordingContext::advance_pairs;
+    ) -> Result<PairProgress, AuthorFailure> = RecordingContext::advance_pairs;
     const _: fn(
         &mut RecordingContext,
         &mut FakePumpIo,

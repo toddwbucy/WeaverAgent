@@ -23,7 +23,7 @@ impl RecordingContext {
         detail: &str,
     ) -> Result<(), PlaceError> {
         if self.place_notice.is_some() {
-            return Err(PlaceError::Busy);
+            return Err(PlaceError::Busy(None));
         }
         let inherited = [
             PumpDeadline::Decision,
@@ -42,7 +42,7 @@ impl RecordingContext {
                         .map_err(|_| PlaceError::Exhausted)?;
                 self.deadlines
                     .arm(PumpDeadline::Cut, bound)
-                    .map_err(|_| PlaceError::Busy)?;
+                    .map_err(|_| PlaceError::Busy(None))?;
                 (PumpDeadline::Cut, bound, true)
             }
         };

@@ -197,30 +197,29 @@ impl RecordingContext {
             _ => false,
         }
     }
+    fn place_release_owned(&self) -> bool {
+        (self.place.is_some()
+            || self.generation.is_some()
+            || self.reload.is_some()
+            || self.native_marks.is_some()
+            || self.place_notice.is_some())
+            && self.place_owed()
+            && self.phase == RecordingPhase::Entered
+    }
     pub(in crate::flow) fn begin_place_release(
         &mut self,
         leave: AbsoluteBound,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
-        if (self.place.is_none()
-            && self.generation.is_none()
-            && self.reload.is_none()
-            && self.native_marks.is_none()
-            && self.place_notice.is_none())
-            || !self.place_owed()
-            || self.caller_author_held()
-            || self.phase != RecordingPhase::Entered
-        {
-            return Err(RunFailure::PlaceOwned);
+        let owns_release = self.place_release_owned();
+        // Preserve revocation on refused unheld attempts. A custody hold must
+        // leave the admitted operation live until its owner takes the original.
+        if owns_release && !self.caller_author_held() {
+            self.revoke_place();
         }
-        self.revoke_place();
-        match self.live(io) {
-            Ok(()) => {}
-            Err(RunFailure::Wait {
-                key: PumpDeadline::Enter | PumpDeadline::Leave,
-                ..
-            }) => {}
-            Err(failure) => return Err(failure),
+        self.release_live(io)?;
+        if !self.place_release_owned() {
+            return Err(RunFailure::PlaceOwned);
         }
         // Foreign content/classification is never silently waived by this seal.
         if self.output.is_some()
@@ -232,16 +231,13 @@ impl RecordingContext {
         {
             return Err(RunFailure::PlaceOwned);
         }
-        let now = io.now().map_err(|e| self.place_fault(io, e.to_string()))?;
-        if now < self.last_ns {
-            return Err(self.place_fault(io, "place release clock reversed"));
+        if let Some(held) = self.deadlines.get(PumpDeadline::Leave)
+            && held != leave
+        {
+            return Err(RunFailure::PlaceOwned);
         }
-        self.last_ns = now;
-        if let Some(held) = self.deadlines.get(PumpDeadline::Leave) {
-            if held != leave {
-                return Err(RunFailure::PlaceOwned);
-            }
-        } else {
+        self.check_held_input()?;
+        if self.deadlines.get(PumpDeadline::Leave).is_none() {
             self.deadlines
                 .arm(PumpDeadline::Leave, leave)
                 .map_err(|_| RunFailure::PlaceOwned)?;
@@ -477,6 +473,7 @@ impl RecordingContext {
             // Retire only the exact priority owner whose author was resumed.
             // A queued cut can coexist with an earlier owner's owed records.
             if self.place.as_ref().is_some_and(|w| w.author.is_some()) {
+                self.retain_place_return_record(ports.io)?;
                 let w = self.place.as_mut().unwrap();
                 w.author = None;
                 w.done = true;

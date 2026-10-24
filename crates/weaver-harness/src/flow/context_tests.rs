@@ -262,16 +262,18 @@ impl Fixture {
     }
 
     pub(super) fn author(&mut self, event: AuthoredEvent) -> Result<Sequence, RunFailure> {
-        self.context.author_and_wait(
-            &mut PumpPorts {
-                lifecycle: LifecyclePorts::default(),
-                gate: None,
-                decode: None,
-                label: None,
-                io: &mut self.clock,
-            },
-            event,
-        )
+        self.context
+            .author_and_wait(
+                &mut PumpPorts {
+                    lifecycle: LifecyclePorts::default(),
+                    gate: None,
+                    decode: None,
+                    label: None,
+                    io: &mut self.clock,
+                },
+                event,
+            )
+            .map_err(|failure| failure.retained_reason())
     }
 
     pub(super) fn activate(&mut self) {
@@ -568,7 +570,8 @@ fn deferred_author_rechecks_phase_after_a_real_release_transition() {
     assert_eq!(fx.context.phase(), RecordingPhase::Releasing);
     assert!(matches!(
         fx.context
-            .resume_author_and_wait(&mut author_ports(&mut fx.clock)),
+            .resume_author_and_wait(&mut author_ports(&mut fx.clock))
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::Flow {
             reason: FlowHaltReason::ProtocolFailed,
             point: HaltPoint::Author,
@@ -698,6 +701,7 @@ fn initial_author_wait_keeps_template_refusal_and_fatal_liveness_distinct() {
                 fx.run
                     .context
                     .resume_author_and_wait(&mut author_ports(&mut fx.run.clock))
+                    .map_err(|failure| failure.retained_reason())
                     .is_err()
             );
         }

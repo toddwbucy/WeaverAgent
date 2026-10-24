@@ -2,10 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #263
-
-**Version:** 0.11 **Date filed:** 2026-10-20 **Document ID:** state-management-spec-05
+**Version:** 0.12 **Date filed:** 2026-10-20 **Document ID:** state-management-spec-05
 **Parent:** state-management-primitives-PRD
+**Landing PR:** #312
 
 ## 0. What this document is
 
@@ -188,11 +187,22 @@ fault, not a fabricated tool return. Preserve the merged fault and teardown beha
 after recording the available raw evidence. [PAIR-2, PAIR-3, FLOW-3]
 
 RejectedReturn is {call_id:CallId-or-null,execution:ExchangeId,reason,
-raw_envelope:RawValue}. It records the entire received envelope with no normalizing
-parse/reserialize. The kind uses channel tool, origin tool, and is forbidden by the
-partition validator. A duplicate or late response never changes a stored terminal. No
-new unknown_call or wrong_tool payload case is invented for a wire that carries neither
-name nor application call ID on its close. [PAIR-2, PAIR-3, TAP-1, TAP-3]
+raw_envelope:String}. The string is the exact UTF-8 text of the received organ frame's
+payload, as held by ReceivedOrgan.raw_bytes. It excludes transport delimiters and
+length prefixes. Payload whitespace, literal CR/LF, JSON escapes and member order
+remain evidence, including whitespace at either end of that payload. JSON string
+escaping belongs only to the outer trace encoding. Decoding that field recovers the
+original payload bytes. Do not parse/reserialize the packet, trim it or use lossy
+UTF-8 conversion to construct the string. A malformed
+packet still follows the existing protocol-fault evidence path, not a fabricated
+RejectedReturn. [PAIR-2, PAIR-3, FLOW-3]
+
+The kind uses channel tool, origin tool, and is forbidden by the partition validator.
+A duplicate or late response never changes a stored terminal. No new unknown_call or
+wrong_tool payload case is invented for a wire that carries neither name nor application
+call ID on its close. TRACE-REJECTED-RETURN owns the single-line encoding.
+This change carries the same raw evidence and gives it no model or
+state projection. [PAIR-2, PAIR-3, TAP-1, TAP-3]
 
 ## 3. The coordinator and the single clock
 
@@ -465,7 +475,7 @@ and outcome evidence, not elapsed-time guesses. [PAIR-1, PAIR-3]
 | PAIR-PROJECTION | Valid/invalid partition matrix with real tee copies | Select model-facing message.tool_result, omit a required tuple or inspect fate inside tee |
 | PAIR-OPEN, RECALL-REFUSAL | Mixed accepted recall bindings and correction passes through the real association owner | Open an invalid-shape request, invent a subject or change a later CallId |
 | PAIR-END | Every row of the outcome table through real codecs and store transactions | Treat a clock kill as completed, classify a fate or hide a partial attachment |
-| PAIR-MATCH | Scripted organ exchanges and real lower drain | Discard a late close without trace, accept a wrong ordinal or reopen a terminal |
+| PAIR-MATCH | Scripted organ exchanges, real lower drain and exact raw-packet string round trips with CR/LF, surrounding whitespace and JSON escapes | Discard a late close without trace, normalize packet bytes, accept a wrong ordinal or reopen a terminal |
 | PAIR-STATES | Row-by-row coordinator fixture, including stop/leave before receipts | Skip unopened-list closures or advance a terminal before commit |
 | TOOL-CLOCK | Gate integration with short fixture clock, descendants and load validation | Start a second kill clock, answer before containment or accept a clock above the gate maximum |
 | RETRY | Fresh and repeated requests with changed arguments, foreign run and open predecessor | Reuse CallId or accept invalid lineage |

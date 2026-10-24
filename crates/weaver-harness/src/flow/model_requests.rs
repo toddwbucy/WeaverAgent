@@ -5,11 +5,11 @@
 use std::collections::BTreeSet;
 
 use sha2::{Digest as _, Sha256};
-use weaver_traits::{ContentBlock, Role};
+use weaver_traits::{ContentBlock, Message, Role};
 use weaver_types::state_flow::{
     CallId, Digest, PairLane, PairRequest, PairStarted, ProtocolRepairCase, RecallRequestRefusal,
-    SchemeDeclaration, SourceBlockId, StatementRef, Ste100Result, Ste100Scheme, Ste100Target,
-    decode_strict,
+    SchemeDeclaration, SourceBlockId, StatementRef, Ste100Reply, Ste100Result, Ste100Scheme,
+    Ste100Target, decode_strict,
 };
 
 use super::{CheckedGeneration, RecordedOutputBlock};
@@ -56,6 +56,24 @@ impl RequestScheme {
 
     fn is_recall(&self, verb: &str) -> bool {
         self.recall_keys.contains(verb)
+    }
+
+    /// The same loaded recall keys govern association and early accounting.
+    /// Even a malformed recall or unrecovered call forbids a Text-only pass.
+    pub(super) fn attempted_call<'a>(
+        &self,
+        message: &Message,
+        mut replies: impl Iterator<Item = &'a Ste100Reply>,
+    ) -> bool {
+        message.content.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::ToolCall(_) | ContentBlock::UnrecoveredCall { .. }
+            )
+        }) || replies.any(|reply| {
+            matches!(&reply.result, Ste100Result::Accepted { bindings }
+                if bindings.iter().any(|binding| self.is_recall(&binding.verb)))
+        })
     }
 }
 
@@ -247,7 +265,7 @@ fn associate(
     let mut requests = Vec::new();
     let mut unresolved = Vec::new();
     let mut refusals = Vec::new();
-    let mut attempted = false;
+    let attempted = scheme.attempted_call(message, generation.blocks().iter().map(|b| b.reply()));
     let mut check_index = 0;
     for (index, block) in message.content.iter().enumerate() {
         let index = u64::try_from(index).map_err(|_| AssociationError::CounterExhausted)?;
@@ -264,7 +282,6 @@ fn associate(
                         if !scheme.is_recall(&binding.verb) {
                             continue;
                         }
-                        attempted = true;
                         let call_id = call_id(source, recall);
                         recall = recall
                             .checked_add(1)
@@ -301,7 +318,6 @@ fn associate(
                 }
             }
             ContentBlock::ToolCall(tool) => {
-                attempted = true;
                 let call_id = call_id(source, external);
                 external = external
                     .checked_add(1)
@@ -371,7 +387,7 @@ fn associate(
                     }
                 }
             }
-            ContentBlock::UnrecoveredCall { .. } => attempted = true,
+            ContentBlock::UnrecoveredCall { .. } => {}
             _ => return Err(AssociationError::InvalidGeneration),
         }
     }

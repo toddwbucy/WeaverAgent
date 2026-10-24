@@ -239,6 +239,7 @@ fn recorded_author_result_survives_a_post_record_lifecycle_deadline_once() {
     assert_eq!(
         fx.context
             .author_and_wait(&mut ports(&mut io), event(Kind::SessionClosed, None))
+            .map_err(|failure| failure.retained_reason())
             .unwrap_err(),
         RunFailure::Wait {
             key: PumpDeadline::Label,
@@ -257,6 +258,7 @@ fn recorded_author_result_survives_a_post_record_lifecycle_deadline_once() {
     assert_eq!(
         fx.context
             .resume_author_and_wait(&mut ports(&mut fx.clock))
+            .map_err(|failure| failure.retained_reason())
             .unwrap(),
         Sequence(before as u64)
     );
@@ -267,7 +269,9 @@ fn recorded_author_result_survives_a_post_record_lifecycle_deadline_once() {
         Sequence(before as u64 + 1)
     );
     assert!(matches!(
-        fx.context.resume_author_and_wait(&mut ports(&mut fx.clock)),
+        fx.context
+            .resume_author_and_wait(&mut ports(&mut fx.clock))
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::Flow {
             reason: FlowHaltReason::ProtocolFailed,
             ..
@@ -292,7 +296,8 @@ fn an_unreturned_recorded_result_blocks_a_second_author() {
     };
     assert!(matches!(
         fx.context
-            .author_and_wait(&mut ports(&mut io), event(Kind::SessionClosed, None)),
+            .author_and_wait(&mut ports(&mut io), event(Kind::SessionClosed, None))
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::Wait { .. })
     ));
     let completed = fx.context.completed_author;
@@ -514,6 +519,7 @@ fn a_backlog_wait_resumes_the_original_author_before_it_had_a_ticket() {
     assert_eq!(
         fx.context
             .author_and_wait(&mut ports(&mut io), original)
+            .map_err(|failure| failure.retained_reason())
             .unwrap_err(),
         RunFailure::Wait {
             key: PumpDeadline::Label,
@@ -562,6 +568,7 @@ fn a_backlog_wait_resumes_the_original_author_before_it_had_a_ticket() {
     let third = fx
         .context
         .resume_author_and_wait(&mut ports(&mut fx.clock))
+        .map_err(|failure| failure.retained_reason())
         .unwrap();
     assert!(third.0 > second.0);
     assert!(fx.context.waiting_content.is_none());

@@ -277,7 +277,7 @@ fn place_empty_elide_stages_without_elision_and_exclusive_carry_blocks_another_c
         run.context
             .prepare_prefix(None, s::CutMethod::Flush, &mut run.clock)
             .unwrap_err(),
-        PlaceError::Busy
+        PlaceError::Busy(None)
     );
     fx.turn("empty-carry-next");
     fx.begin_staged(staged, vec![]);

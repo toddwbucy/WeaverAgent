@@ -1,6 +1,102 @@
 //! Origin, recorder custody and lifecycle first-byte boundaries.
 use super::*;
 
+#[path = "context_place_boundary_batch_tests.rs"]
+mod boundary_batch_tests;
+
+#[test]
+fn held_boundary_place_release_preserves_the_pending_decode_and_first_failure() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        for failure_case in 0..3 {
+            let mut fx = PlaceFixture::new();
+            let units = fx.text(8, "record");
+            fx.turn("held-release");
+            let grant = fx.grant(units, 3);
+            fx.start_generation(grant);
+            fx.sent_generation();
+            let run = fx.run();
+            let leave = AbsoluteBound::after(run.clock.now().unwrap(), PLACE_WAIT).unwrap();
+            let waits = format!("{:?}", run.context.deadlines);
+            let generation = std::ptr::from_ref(run.context.generation.as_ref().unwrap());
+            let originals = hold(&mut run.context, held);
+            let first = (failure_case == 1).then(|| {
+                run.context.fail(
+                    &mut run.clock,
+                    FlowHaltReason::ProtocolFailed,
+                    HaltPoint::Barrier,
+                    "first placement cause",
+                )
+            });
+            if failure_case == 2 {
+                run.clock = FakePumpIo::new(0);
+            }
+            let result = run.context.begin_place_release(leave, &mut run.clock);
+            originals.assert_held(&run.context);
+            assert_eq!(
+                std::ptr::from_ref(run.context.generation.as_ref().unwrap()),
+                generation
+            );
+            assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());
+            if failure_case == 0 {
+                assert_eq!(result, Err(RunFailure::Busy(held)));
+                assert!(run.context.failure().is_none());
+                assert_eq!(run.context.phase(), RecordingPhase::Entered);
+                assert_eq!(format!("{:?}", run.context.deadlines), waits);
+                originals.take(&mut run.context);
+                run.context
+                    .begin_place_release(leave, &mut run.clock)
+                    .unwrap();
+                assert_eq!(run.context.phase(), RecordingPhase::Releasing);
+                assert_eq!(run.context.deadlines.get(PumpDeadline::Leave), Some(leave));
+            } else {
+                let failure = result.unwrap_err();
+                assert!(matches!(failure, RunFailure::Flow { .. }));
+                if let Some(first) = first {
+                    assert_eq!(failure, first);
+                }
+                assert_eq!(run.context.failure(), Some(&failure));
+                assert_eq!(run.context.phase(), RecordingPhase::Failed);
+                originals.take(&mut run.context);
+                // Taking held input does not clear the failed run or its cause.
+                assert_eq!(run.context.live(&mut run.clock), Err(failure));
+            }
+        }
+    }
+}
+
+#[test]
+fn held_boundary_install_returns_the_exact_boot_proof_with_busy_then_admits_after_take() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        let mut fx = SummaryFixture::new(vec![]);
+        let proof = fx.boot(None);
+        let raw = proof.read().raw_bytes().as_ptr();
+        let recall = proof.read().recall_sequence();
+        let run = fx.run();
+        let waits = format!("{:?}", run.context.deadlines);
+        let originals = hold(&mut run.context, held);
+        let error = run
+            .context
+            .install_place(proof, &mut run.clock)
+            .unwrap_err();
+        assert_eq!(error.refusal, PlaceError::Busy(Some(held)));
+        assert!(error.failure.is_none());
+        assert_eq!(error.prerequisite.read().raw_bytes().as_ptr(), raw);
+        assert_eq!(error.prerequisite.read().recall_sequence(), recall);
+        assert!(run.context.place_engine.is_none());
+        assert!(run.context.failure().is_none());
+        assert_eq!(format!("{:?}", run.context.deadlines), waits);
+        originals.assert_held(&run.context);
+        originals.take(&mut run.context);
+        run.context
+            .install_place(error.prerequisite, &mut run.clock)
+            .unwrap();
+        assert!(run.context.place_engine.is_some());
+        assert_eq!(format!("{:?}", run.context.deadlines), waits);
+    }
+}
+
 #[test]
 fn place_held_author_allows_confirmed_output_but_blocks_release() {
     let mut fx = PlaceFixture::new();
@@ -17,7 +113,7 @@ fn place_held_author_allows_confirmed_output_but_blocks_release() {
     let leave = AbsoluteBound::after(run.clock.now().unwrap(), PLACE_WAIT).unwrap();
     assert_eq!(
         run.context.begin_place_release(leave, &mut run.clock),
-        Err(RunFailure::PlaceOwned)
+        Err(RunFailure::Busy(HeldInput::Caller))
     );
     assert_eq!(run.context.phase(), RecordingPhase::Entered);
     assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());
@@ -1514,3 +1610,120 @@ mod returned_boot_tests;
 
 #[path = "context_place_custody_review_tests.rs"]
 mod custody_review_tests;
+
+#[test]
+fn held_boundary_install_keeps_genuine_wrong_proof_and_exact_return() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        let mut fx = SummaryFixture::new(vec![]);
+        let proof = fx.boot(None);
+        let raw = proof.read().raw_bytes().as_ptr();
+        let run = fx.run();
+        run.context.plan_cache.revoke();
+        let originals = hold(&mut run.context, held);
+        let error = run
+            .context
+            .install_place(proof, &mut run.clock)
+            .unwrap_err();
+        assert_eq!(error.refusal, PlaceError::WrongProof);
+        assert_eq!(error.prerequisite.read().raw_bytes().as_ptr(), raw);
+        assert!(error.failure.is_none());
+        assert!(run.context.place_engine.is_none());
+        originals.assert_held(&run.context);
+    }
+}
+
+#[test]
+fn held_boundary_place_release_keeps_expired_leave_and_owner_precedence() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        for owned in [false, true] {
+            let mut fx = PlaceFixture::new();
+            if owned {
+                let units = fx.text(8, "record");
+                fx.turn("expired-held-release");
+                let grant = fx.grant(units, 3);
+                fx.start_generation(grant);
+                fx.sent_generation();
+            }
+            let run = fx.run();
+            let leave = AbsoluteBound::after(run.clock.now().unwrap(), 1).unwrap();
+            run.context
+                .arm(PumpDeadline::Leave, leave, &mut run.clock)
+                .unwrap();
+            run.clock.advance_to(leave.deadline_ns()).unwrap();
+            let originals = hold(&mut run.context, held);
+            let result = run.context.begin_place_release(leave, &mut run.clock);
+            assert_eq!(
+                result,
+                Err(if owned {
+                    RunFailure::Busy(held)
+                } else {
+                    RunFailure::PlaceOwned
+                })
+            );
+            assert!(run.context.failure().is_none());
+            assert_eq!(run.context.deadlines.get(PumpDeadline::Leave), Some(leave));
+            originals.assert_held(&run.context);
+            if owned {
+                originals.take(&mut run.context);
+                run.context
+                    .begin_place_release(leave, &mut run.clock)
+                    .unwrap();
+                assert_eq!(run.context.phase(), RecordingPhase::Releasing);
+            }
+        }
+    }
+}
+
+#[test]
+fn held_boundary_place_prefix_measure_and_begin_keep_the_slot_reason_and_request() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        let mut fx = PlaceFixture::new();
+        let units = fx.text(8, "record");
+        fx.turn("held-place-request");
+        let request = fx.request(units);
+        let selected = request.selection.as_ptr();
+        let assembly = request.prefix.assembly_id();
+        let run = &mut fx.summary.boot.member.run;
+        let waits = format!("{:?}", run.context.deadlines);
+        let originals = hold(&mut run.context, held);
+        assert_eq!(
+            run.context
+                .prepare_prefix(None, s::CutMethod::Flush, &mut run.clock)
+                .unwrap_err(),
+            PlaceError::Busy(Some(held))
+        );
+        assert_eq!(
+            run.context.begin_place_measurement(
+                &request.prefix,
+                &request.selection,
+                &request.tool_schemas,
+                PumpDeadline::Decision,
+                &mut fx.decode,
+                &mut run.clock
+            ),
+            Err(PlaceError::Busy(Some(held)))
+        );
+        let error = run
+            .context
+            .begin_place(request, &mut fx.decode, &mut run.clock)
+            .unwrap_err();
+        assert_eq!(error.refusal, PlaceError::Busy(Some(held)));
+        assert!(error.failure.is_none());
+        assert_eq!(error.input.prefix.assembly_id(), assembly);
+        assert_eq!(error.input.selection.as_ptr(), selected);
+        assert!(run.context.place.is_none());
+        assert!(run.context.measure.is_none());
+        assert!(!fx.decode.send_pending());
+        assert_eq!(format!("{:?}", run.context.deadlines), waits);
+        originals.assert_held(&run.context);
+        originals.take(&mut run.context);
+        run.context
+            .begin_place(error.input, &mut fx.decode, &mut run.clock)
+            .unwrap();
+        assert!(run.context.place.is_some());
+        assert!(run.context.measure.is_some());
+    }
+}

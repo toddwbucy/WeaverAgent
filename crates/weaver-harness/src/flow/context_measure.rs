@@ -329,8 +329,7 @@ impl RecordingContext {
             || self.read.is_some()
             || self.inspection.is_some()
             || self.templates_block_content()
-            || self.template_blocked_author.is_some()
-            || (self.held_author.is_some() && !self.place_measurement_continuation(wait))
+            || self.caller_author_blocks_continuation(|| self.place_measurement_continuation(wait))
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()
@@ -620,6 +619,7 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<MeasureProgress, RunFailure> {
         let author = self.measure.as_ref().unwrap().author.as_ref().unwrap();
+        author.returned.check()?;
         let (purpose, recorded, ticket) = (author.purpose, author.sequence, author.ticket);
         let identity = std::sync::Arc::clone(&author.identity);
         let sequence = if let Some(sequence) = recorded {
@@ -634,7 +634,17 @@ impl RecordingContext {
                 return Err(self.measure_fault(ports.io, "measurement author ticket changed"));
             }
             let sequence = self
-                .resume_claimed_author_and_wait(ports, Some(AuthorClaim::Measurement(identity)))?;
+                .resume_claimed_author_and_wait(ports, Some(AuthorClaim::Measurement(identity)))
+                .map_err(|failure| {
+                    self.measure
+                        .as_mut()
+                        .unwrap()
+                        .author
+                        .as_mut()
+                        .unwrap()
+                        .record
+                        .retain_failure(failure)
+                })?;
             self.complete_measure_author(sequence, ports.io)?;
             sequence
         };
