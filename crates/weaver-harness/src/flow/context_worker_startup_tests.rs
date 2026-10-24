@@ -326,6 +326,7 @@ impl Member {
                                     verb: None,
                                     condition: None,
                                 } if mode.contains("-pairs-")
+                                    || mode.contains("-final-")
                                     || mode.ends_with("correction-inward") =>
                                 {
                                     self.requests.push(format!("recall:{noun}"));
@@ -1762,4 +1763,103 @@ scenario!(
 scenario!(
     worker_external_composition_queued_input,
     "input-generation-emission-pairs-external-queued-input"
+);
+
+scenario!(
+    worker_final_composition_text,
+    "input-worker-generation-emission-final-text"
+);
+
+scenario!(
+    worker_final_composition_empty,
+    "input-worker-generation-emission-final-empty"
+);
+
+scenario!(
+    worker_final_composition_bindings,
+    "input-worker-generation-emission-final-bindings"
+);
+
+scenario!(
+    worker_final_composition_length,
+    "input-worker-generation-emission-final-length"
+);
+
+scenario!(
+    worker_final_composition_correction,
+    "input-worker-generation-emission-final-correction"
+);
+
+scenario!(
+    worker_final_composition_round_once,
+    "input-worker-generation-emission-final-return-round-once"
+);
+
+scenario!(
+    worker_final_composition_round_limit,
+    "input-worker-generation-emission-final-return-round-limit"
+);
+
+scenario!(
+    worker_final_composition_external,
+    "input-worker-generation-emission-final-return-external-healthy"
+);
+
+scenario!(
+    worker_final_composition_subset,
+    "input-generation-emission-final-manual-subset"
+);
+
+scenario!(
+    worker_final_composition_round_held,
+    "input-generation-emission-final-manual-round-held"
+);
+
+scenario!(
+    worker_final_composition_gate_pressure,
+    "input-generation-emission-final-manual-gate-pressure"
+);
+
+scenario!(
+    worker_final_composition_stop_before,
+    "input-generation-emission-final-manual-stop-before"
+);
+
+scenario!(
+    worker_final_composition_stop_after,
+    "input-generation-emission-final-manual-stop-after"
+);
+
+scenario!(
+    worker_final_composition_trace_failure,
+    "input-generation-emission-final-manual-trace-failure"
+);
+
+scenario!(
+    worker_final_composition_trace_pressure,
+    "input-generation-emission-final-manual-trace-pressure"
+);
+
+scenario!(
+    worker_final_composition_deadline,
+    "input-generation-emission-final-manual-deadline"
+);
+scenario!(
+    worker_final_composition_send_clock,
+    "input-generation-emission-final-manual-send-clock"
+);
+
+scenario!(
+    worker_final_composition_management_observe,
+    "input-worker-generation-emission-final-return-round-once-management-observe"
+);
+
+scenario!(
+    worker_final_composition_management_stop_before,
+    "input-worker-generation-emission-final-return-round-once-management-stop-before"
+);
+
+scenario!(
+    worker_final_composition_management_leave,
+    "input-worker-generation-emission-final-return-round-once-management-leave"
 );

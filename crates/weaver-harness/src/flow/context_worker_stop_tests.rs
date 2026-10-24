@@ -12,7 +12,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use weaver_types::ExchangeId;
 
-fn fill_trace(
+pub(in crate::flow::context::worker_startup) fn fill_trace(
     context: &mut crate::flow::context::RecordingContext,
     clock: &mut FakePumpIo,
 ) -> usize {
@@ -102,7 +102,7 @@ impl PumpIo for TraceWait<'_> {
     }
 }
 
-fn fill(fd: i32) {
+pub(in crate::flow::context::worker_startup) fn fill(fd: i32) {
     let mut count = 0;
     loop {
         match send(

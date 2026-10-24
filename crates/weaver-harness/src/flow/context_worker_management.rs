@@ -83,10 +83,11 @@ impl<'a> FoundationManagement<'a> {
             return self.progress;
         }
         if let Err(mut failure) = self.step(io) {
-            if self
-                .send
-                .as_ref()
-                .is_some_and(|send| send.sent() && send.sent_at().is_none())
+            if self.input.final_send_clock_failed()
+                || self
+                    .send
+                    .as_ref()
+                    .is_some_and(|send| send.sent() && send.sent_at().is_none())
                 || self
                     .stop
                     .as_ref()
@@ -300,10 +301,17 @@ impl<'a> FoundationManagement<'a> {
                 }))?,
             }
         }
-        if self.stop.as_ref().is_some_and(|stop| !stop.gate_done) {
+        if self
+            .stop
+            .as_ref()
+            .is_some_and(|stop| stop.close_sequence.is_some() && !stop.gate_done)
+        {
             // After EAGAIN the gate needs the sole pump's ordinary writable
             // wait. Nonblocking lifecycle observation alone would strand the
             // owed close once the admin answer is sent or its peer departs.
+            // Before the close exists, the engine owns its own waits. A local
+            // pair/repair transition may have no descriptor ready yet; adding
+            // an outer blocking poll here would strand that transition.
             let owner = &mut self.input.serving.owner;
             let pumped = owner.context.pump_once(&mut PumpPorts {
                 lifecycle: LifecyclePorts {

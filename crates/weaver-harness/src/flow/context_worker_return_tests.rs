@@ -25,7 +25,7 @@ fn generation(mode: &str, pass: u64, stopped: bool) -> TokenAnswer {
         } else {
             Finish::Completed
         },
-        content: if pass == 0 {
+        content: if pass == 0 || mode.contains("-final-return-round-limit") {
             super::emission::tests::content(mode)
         } else {
             vec![ContentBlock::Text {
@@ -117,6 +117,13 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                         tool_schemas,
                         ..
                     } => {
+                        if mode.contains("-final-") {
+                            std::fs::write(
+                                root.join(format!("final-pass-{pass}.json")),
+                                &bytes[..n],
+                            )
+                            .unwrap();
+                        }
                         let (original, schemas) = measured.take().unwrap();
                         assert_eq!(delta, &original);
                         assert_eq!(tool_schemas, &schemas);

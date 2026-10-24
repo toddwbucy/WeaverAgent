@@ -127,7 +127,17 @@ pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
                             }
                         }
                         if !mode.ends_with("stop-generation") {
-                            packet(fd, &generated(mode, Finish::Completed));
+                            packet(
+                                fd,
+                                &generated(
+                                    mode,
+                                    if mode.ends_with("final-length") {
+                                        Finish::Length
+                                    } else {
+                                        Finish::Completed
+                                    },
+                                ),
+                            );
                         }
                     }
                     TokenDirective::Cancel { turn } => {

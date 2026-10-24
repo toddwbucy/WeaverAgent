@@ -174,7 +174,14 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         assert!(pending.is_none());
                         let value: serde_json::Value =
                             serde_json::from_slice(&close.octets().unwrap()).unwrap();
-                        assert_eq!(value["kind"], "stopped");
+                        assert_eq!(
+                            value["kind"],
+                            if mode.contains("-final-") {
+                                "answered"
+                            } else {
+                                "stopped"
+                            }
+                        );
                         assert_eq!(value["turn"], "generation-turn");
                         std::fs::write(root.join("closed.json"), &bytes[..n]).unwrap();
                     }

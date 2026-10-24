@@ -148,6 +148,25 @@ fn text(words: &str) -> ContentBlock {
     ContentBlock::Text { text: words.into() }
 }
 pub(in crate::flow::context) fn content(mode: &str) -> Vec<ContentBlock> {
+    if mode.contains("-final-") && !mode.contains("-external-") {
+        if mode.contains("-round-") {
+            return vec![text("Recall archive."), text("Recall ledger.")];
+        }
+        if mode.contains("empty") {
+            return vec![];
+        }
+        if mode.contains("bindings") {
+            return vec![text("Read zeta. Read alpha.")];
+        }
+        return vec![
+            text(if mode.contains("correction") {
+                "Read bad."
+            } else {
+                "Read file."
+            }),
+            text("Read caf\u{e9}."),
+        ];
+    }
     if mode.contains("-external-") {
         let mut blocks = vec![
             text("Read file."),
@@ -398,6 +417,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if mode.contains("-final-") {
+        return super::super::final_tests::exercise(
+            serving, member, reader, clock, socket, root, mode,
+        );
+    }
     let mut guard = Guard {
         input: Some(serving.input()),
         management: None,

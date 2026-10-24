@@ -109,7 +109,13 @@ fn worker_input_gate_child() {
     if mode == "input-queued" {
         packet(3, &frame(&mode, 102));
     }
-    if mode == "input-pressure" || mode == "input-stop-gate-pressure" {
+    if mode == "input-pressure"
+        || mode == "input-stop-gate-pressure"
+        || mode.contains("final-manual-gate-pressure")
+        || mode.contains("final-manual-stop-after")
+        || mode.contains("final-manual-deadline")
+        || mode.contains("final-manual-send-clock")
+    {
         let end = Instant::now() + Duration::from_secs(5);
         while !root.join("drain").exists() && Instant::now() < end {
             std::thread::sleep(Duration::from_millis(1));
@@ -133,7 +139,14 @@ fn worker_input_gate_child() {
             };
             let value: serde_json::Value =
                 serde_json::from_slice(&frame.octets().unwrap()).unwrap();
-            assert_eq!(value["kind"], "stopped");
+            assert_eq!(
+                value["kind"],
+                if mode.contains("-final-") && !mode.contains("stop-before") {
+                    "answered"
+                } else {
+                    "stopped"
+                }
+            );
             assert_eq!(value["turn"], "generation-turn");
         } else if mode.contains("stop-") {
             let Payload::Frame(frame) = &reply.payload else {
@@ -260,6 +273,7 @@ pub(in super::super) fn exercise(
         guard.0 = Some(match result {
             Ok(FoundationInputResult::Refused(serving)) => Held::Serving(serving),
             Ok(FoundationInputResult::Aborted(serving)) => Held::Serving(serving),
+            Ok(FoundationInputResult::Completed(serving)) => Held::Serving(serving),
             Ok(FoundationInputResult::Turn(turn)) => Held::Turn(turn),
             Ok(FoundationInputResult::Generated(output)) => Held::Input(output.into_service()),
             Ok(FoundationInputResult::Sorted(output)) => Held::Input(output.into_service()),

@@ -276,6 +276,39 @@ impl EffectiveEmission {
     pub(in crate::flow) fn text(&self) -> &str {
         &self.text
     }
+    /// Render selected effective blocks from their checked statement spans.
+    /// Corrections retain their own source identities at the original logical
+    /// position. Neither opaque emission text nor unselected blocks contribute.
+    pub(in crate::flow) fn answer_text(
+        &self,
+        acts: &[weaver_types::state_flow::SortAct],
+    ) -> Result<String, RepairError> {
+        let mut text = Vec::new();
+        for statement in &self.statements {
+            if !acts.iter().any(|act| matches!(act,
+                weaver_types::state_flow::SortAct::Answer { source } if source == &statement.block_id
+            )) {
+                continue;
+            }
+            let check = self.account.generations().flat_map(|g| g.blocks()).find(|check| {
+                matches!(&check.request().target, Ste100Target::Source(source) if source == &statement.block_id)
+            }).ok_or(RepairError::InvalidStatement)?;
+            let Ste100Result::Accepted { bindings } = &check.reply().result else {
+                return Err(RepairError::InvalidStatement);
+            };
+            let binding = usize::try_from(statement.binding.0)
+                .ok()
+                .and_then(|index| bindings.get(index))
+                .ok_or(RepairError::InvalidStatement)?;
+            text.push(
+                binding
+                    .statement_span
+                    .slice(&check.request().text)
+                    .map_err(|_| RepairError::InvalidStatement)?,
+            );
+        }
+        Ok(text.join("\n"))
+    }
     pub(in crate::flow) fn attempted_call(&self) -> bool {
         self.attempted_call
     }

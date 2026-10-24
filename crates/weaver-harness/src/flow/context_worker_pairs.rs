@@ -33,9 +33,15 @@ pub(super) struct WorkerPairs {
     calls: Vec<CallId>,
     external: Vec<ExternalWork>,
     cancelled: bool,
+    barred: Option<NonDispatchCause>,
 }
 impl WorkerPairs {
-    fn new(effective: EffectiveEmission) -> Self {
+    pub(super) fn completed_effective(&self) -> Option<&EffectiveEmission> {
+        (matches!(self.stage, Stage::Complete) && !self.cancelled)
+            .then_some(self.effective.as_ref())
+            .flatten()
+    }
+    fn new(effective: EffectiveEmission, barred: Option<NonDispatchCause>) -> Self {
         Self {
             stage: Stage::Begin,
             calls: effective
@@ -46,6 +52,7 @@ impl WorkerPairs {
             effective: Some(effective),
             external: Vec::new(),
             cancelled: false,
+            barred,
         }
     }
     pub(super) fn progress(&self) -> FoundationInputProgress {
@@ -89,8 +96,15 @@ impl WorkerPairs {
                 decision(context, ports.io)?;
                 match context.begin_pair_execution(self.effective.take().unwrap(), ports.io) {
                     Ok(()) => {
-                        if self.cancelled {
-                            context.bar_pending_pairs(NonDispatchCause::Stop, ports.io)?;
+                        if self.cancelled || self.barred.is_some() {
+                            context.bar_pending_pairs(
+                                if self.cancelled {
+                                    NonDispatchCause::Stop
+                                } else {
+                                    self.barred.unwrap()
+                                },
+                                ports.io,
+                            )?;
                         }
                         self.stage = Stage::Opening;
                     }
@@ -186,6 +200,19 @@ impl FoundationInput<'_> {
     /// requests receive plan_break terminals; they never disappear. Selection
     /// order does not replace the request source order required by Spec 05.
     pub fn begin_pairs(&mut self) -> Result<(), FoundationInputProgress> {
+        self.begin_selected_pairs(None)
+    }
+
+    /// File every original conforming pair with a round_limit terminal. The
+    /// worker elects this only after exhausting its execution-round budget.
+    pub fn bar_round_limit(&mut self) -> Result<(), FoundationInputProgress> {
+        self.begin_selected_pairs(Some(NonDispatchCause::RoundLimit))
+    }
+
+    fn begin_selected_pairs(
+        &mut self,
+        barred: Option<NonDispatchCause>,
+    ) -> Result<(), FoundationInputProgress> {
         if self.progress() != FoundationInputProgress::Sorted {
             return Err(self.progress());
         }
@@ -196,7 +223,7 @@ impl FoundationInput<'_> {
         let (input, record) = sorted.into_parts();
         emission.selected = Some((input.source, input.acts));
         emission.sort_record = Some(record);
-        emission.execution = Some(WorkerPairs::new(input.effective));
+        emission.execution = Some(WorkerPairs::new(input.effective, barred));
         emission.stage = EmissionStage::Execution;
         Ok(())
     }

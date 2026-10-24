@@ -22,6 +22,13 @@ pub(in crate::flow::context) mod return_tests;
 #[path = "context_worker_emission.rs"]
 pub(crate) mod emission;
 
+#[path = "context_worker_final.rs"]
+mod answer;
+
+#[cfg(test)]
+#[path = "context_worker_final_tests.rs"]
+pub(in crate::flow::context) mod final_tests;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EngineStage {
     StartTask,
@@ -37,6 +44,7 @@ enum EngineStage {
     Refused,
     Cancelled,
     Closing,
+    Answer,
 }
 
 pub(super) struct EngineWork {
@@ -52,6 +60,7 @@ pub(super) struct EngineWork {
     return_calls: Vec<weaver_types::state_flow::CallId>,
     return_units: Option<Vec<crate::flow::material::SelectedUnit>>,
     rounds: Vec<RetainedRound>,
+    answer: Option<answer::AnswerWork>,
 }
 // A later model pass does not discard the decoder, repair, sort and pair
 // evidence of its predecessor. The service owner retains the whole chain.
@@ -96,6 +105,7 @@ impl<'a> FoundationInput<'a> {
             return_calls: vec![],
             return_units: None,
             rounds: vec![],
+            answer: None,
         }));
         Ok(())
     }
@@ -202,6 +212,20 @@ impl<'a> FoundationInput<'a> {
         io: &mut impl PumpIo,
     ) -> Result<bool, RunFailure> {
         if self.stage == Stage::Engine
+            && self.engine.as_ref().unwrap().stage == EngineStage::Answer
+            && self
+                .engine
+                .as_ref()
+                .unwrap()
+                .answer
+                .as_ref()
+                .unwrap()
+                .started()
+        {
+            self.advance_engine(peer, io)?;
+            return Ok(false);
+        }
+        if self.stage == Stage::Engine
             && ((self.engine.as_ref().unwrap().stage == EngineStage::Place
                 && self.serving.owner.context.placement_refusing())
                 || self
@@ -240,6 +264,11 @@ impl<'a> FoundationInput<'a> {
             io,
         };
         match work.stage {
+            EngineStage::Answer => {
+                if work.answer.as_mut().unwrap().advance(context, &mut ports)? {
+                    self.stage = Stage::Completed;
+                }
+            }
             EngineStage::StartTask => {
                 decision(context, ports.io)?;
                 let token = self.token.take().expect("actual accepted input");
