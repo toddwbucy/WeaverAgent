@@ -1931,6 +1931,7 @@ impl RecordingContext {
             wall_ms,
         );
         self.observe_repair_text_count();
+        self.observe_repair_call_count();
         let advance = result.map_err(|failure| self.flow_failed(io, failure))?;
         self.settle_recorded_input(io)?;
         self.settle_recorded_capture(io)?;

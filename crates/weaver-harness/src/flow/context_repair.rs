@@ -277,7 +277,11 @@ impl RepairTransaction {
         &mut self,
         proofs: &[&super::pairs::CompletedPair],
     ) -> Result<(), RepairError> {
-        if let Some(correction) = &self.correction {
+        if let Some(correction) = self
+            .correction
+            .as_ref()
+            .or_else(|| self.ledger.pending_correction())
+        {
             super::repair::validate_refused_accounted(
                 correction
                     .requests()
@@ -299,9 +303,9 @@ impl RepairTransaction {
         proofs: &[&super::pairs::CompletedPair],
     ) -> Result<(), RepairError> {
         let result = match kind {
-            Accounting::Correction => match self
+            Accounting::Correction | Accounting::CancelCorrection => match self
                 .ledger
-                .finish_correction_accounting(correction.unwrap(), proofs)
+                .finish_correction_accounting(correction.unwrap(), proofs, self.cancel)
             {
                 Ok(_) => Ok(()),
                 Err((correction, error)) => {
@@ -319,15 +323,22 @@ impl RepairTransaction {
                     Err(error)
                 }
             },
-            Accounting::CancelCorrection => {
-                self.correction = correction;
-                Ok(())
-            }
             Accounting::RefusedCorrection => {
                 // Restore the complete original before validating its proofs;
                 // even a real validation error must retain correction custody.
                 self.correction = correction;
-                self.settle_refused_proofs(proofs)
+                self.settle_refused_proofs(proofs)?;
+                if self.ledger.outstanding_loan() == Some(RepairError::OutstandingCorrectionLoan) {
+                    let correction = self.correction.take().unwrap();
+                    if let Err((correction, error)) =
+                        self.ledger
+                            .finish_correction_accounting(correction, proofs, self.cancel)
+                    {
+                        self.correction = Some(correction);
+                        return Err(error);
+                    }
+                }
+                Ok(())
             }
             Accounting::CancelOriginal => {
                 self.account = account;
@@ -669,7 +680,14 @@ impl RecordingContext {
         &self,
     ) -> (Option<&RepairAccount>, Option<&OriginalRequests>) {
         let work = self.repair.as_ref().unwrap();
-        (work.account.as_ref(), work.correction.as_ref())
+        (
+            work.account
+                .as_ref()
+                .or_else(|| work.ledger.retained_account_for_test()),
+            work.correction
+                .as_ref()
+                .or_else(|| work.ledger.pending_correction()),
+        )
     }
     #[cfg(test)]
     pub(super) fn repair_refused_pairs_settled_for_test(&self) -> bool {
@@ -1107,6 +1125,73 @@ impl RecordingContext {
         {
             work.count_failure = Some(error);
         }
+    }
+
+    /// Flow has retained the actual Filed observation. Settle only the existing
+    /// correction terminal before a later flow error can freeze PairLedger.
+    pub(super) fn observe_repair_call_count(&mut self) {
+        let Some(work) = self.repair.as_ref() else {
+            return;
+        };
+        if work.count_failure.is_some()
+            || !work.pair_started
+            || !matches!(
+                work.accounting,
+                Some(
+                    Accounting::Correction
+                        | Accounting::CancelCorrection
+                        | Accounting::RefusedCorrection
+                )
+            )
+        {
+            return;
+        }
+        if self.retain_repair_pair_terminal().is_err() {
+            self.repair.as_mut().unwrap().count_failure = Some(RepairError::WrongAccounting);
+            return;
+        }
+        if !self.pairs.is_complete() {
+            return;
+        }
+        let Some(correction) = self.pairs.original() else {
+            return;
+        };
+        let proofs = scan_pair_proofs(
+            correction
+                .requests()
+                .iter()
+                .map(|request| self.pairs.completed(&request.opening().call_id)),
+            ProofPhase::BeforeIntake,
+        );
+        let work = self.repair.as_mut().unwrap();
+        match proofs {
+            Ok(Some(proofs)) => {
+                if let Err(error) =
+                    work.ledger
+                        .recorded_call_failure(correction, &proofs, work.cancel)
+                {
+                    work.count_failure = Some(error);
+                }
+            }
+            Ok(None) => {}
+            Err(_) => work.count_failure = Some(RepairError::WrongAccounting),
+        }
+    }
+
+    /// Retain the account while its cancelled correction loan owns the pair
+    /// suffix. Completed correction custody still returns through pending.
+    fn begin_cancelled_correction_accounting(
+        &mut self,
+        kind: Accounting,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        let work = self.repair.as_mut().unwrap();
+        let Some(correction) = work.ledger.take_correction_accounting() else {
+            return Ok(false);
+        };
+        work.correction = Some(correction);
+        self.begin_pending_correction_accounting(kind, io)?;
+        Ok(true)
     }
 
     pub(super) fn repair_count_failure(&self) -> Option<RepairError> {
@@ -1619,10 +1704,7 @@ impl RecordingContext {
         // checks exact identities and causes before accepting its custody back.
         let calls = self.repair.as_ref().unwrap().calls.clone();
         let lookups = calls.iter().map(|call| self.pairs.completed(call));
-        let proofs = if matches!(
-            kind,
-            Accounting::CancelCorrection | Accounting::CancelOriginal
-        ) {
+        let proofs = if kind == Accounting::CancelOriginal {
             walk_pair_proofs(lookups, ProofPhase::AfterAccounting, |_| {})
                 .map(|ready| ready.then(Vec::new))
         } else {
@@ -1791,7 +1873,10 @@ impl RecordingContext {
             .into_iter()
             .flat_map(|correction| correction.requests())
             .map(|request| self.pairs.completed(&request.opening().call_id));
-        let scanned = if kind == Accounting::RefusedCorrection {
+        let scanned = if matches!(
+            kind,
+            Accounting::RefusedCorrection | Accounting::CancelCorrection
+        ) {
             scan_pair_proofs(lookups, ProofPhase::BeforeIntake)
         } else {
             walk_pair_proofs(lookups, ProofPhase::BeforeIntake, |_| {})
@@ -1805,6 +1890,14 @@ impl RecordingContext {
         };
         let work = self.repair.as_mut().unwrap();
         if let Some(proofs) = proofs {
+            if work.ledger.outstanding_loan() == Some(RepairError::OutstandingCorrectionLoan) {
+                let correction = work.correction.take();
+                work.finish_accounting(kind, correction, None, &proofs)
+                    .map_err(|error| {
+                        self.repair_fault(io, format!("refused correction pair proof: {error:?}"))
+                    })?;
+                return Ok(false);
+            }
             if kind == Accounting::RefusedCorrection {
                 work.settle_refused_proofs(&proofs).map_err(|error| {
                     self.repair_fault(io, format!("refused correction pair proof: {error:?}"))
@@ -1851,6 +1944,9 @@ impl RecordingContext {
             .cancelled_protocol_refusal()
         {
             return self.start_correction_call_refusal(correction, ports.io);
+        }
+        if self.begin_cancelled_correction_accounting(Accounting::RefusedCorrection, ports.io)? {
+            return Ok(RepairProgress::Progress);
         }
         if self.repair.as_ref().unwrap().account.is_none() {
             if let Some(error) = self.repair.as_ref().unwrap().ledger.outstanding_loan() {
@@ -2031,6 +2127,9 @@ impl RecordingContext {
             .cancelled_empty_refusal()
         {
             return self.start_empty_refusal(source, correction, ports.io);
+        }
+        if self.begin_cancelled_correction_accounting(Accounting::CancelCorrection, ports.io)? {
+            return Ok(RepairProgress::Progress);
         }
         if self.repair.as_ref().unwrap().account.is_none() {
             let cancelled = self

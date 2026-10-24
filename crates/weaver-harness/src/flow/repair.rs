@@ -358,6 +358,8 @@ pub(super) struct RepairLedger {
     frontier: u64,
     pending: Option<OriginalRequests>,
     pending_protocol_recorded: bool,
+    pending_calls_accounted: bool,
+    correction_out_protocol_recorded: bool,
     correction_out: Option<SourcePosition>,
     account_out: Option<Arc<()>>,
     associations: Vec<RepairAssociationRefusal>,
@@ -430,6 +432,8 @@ impl RepairLedger {
             frontier,
             pending: None,
             pending_protocol_recorded: false,
+            pending_calls_accounted: false,
+            correction_out_protocol_recorded: false,
             correction_out: None,
             account_out: None,
             associations: vec![],
@@ -513,6 +517,11 @@ impl RepairLedger {
         self.account.as_ref().unwrap()
     }
 
+    #[cfg(test)]
+    pub(super) fn retained_account_for_test(&self) -> Option<&RepairAccount> {
+        self.account.as_ref()
+    }
+
     /// Only checked association evidence supplies a refusal. The account's
     /// private Recorded entries retire each exact request once, in record order.
     pub(super) fn next_recall_refusal(&self) -> Option<RecallRequestRefusal> {
@@ -551,6 +560,7 @@ impl RepairLedger {
                 refusal,
                 sequence: source.block_id.sequence,
             });
+        self.record_unpaired_call_failure();
         Ok(())
     }
 
@@ -756,6 +766,53 @@ impl RepairLedger {
         if self.stage != Stage::Cancelled {
             self.stage = Stage::CorrectionAccounting;
         }
+        self.record_unpaired_call_failure();
+        Ok(())
+    }
+
+    /// An attempted call with no conforming request owes no synthetic pair.
+    /// The last actual refusal establishes its complete accounting boundary.
+    fn record_unpaired_call_failure(&mut self) {
+        let Some(correction) = self.pending.as_ref() else {
+            return;
+        };
+        if correction.attempted_call()
+            && correction.requests().is_empty()
+            && self.pending_protocol_recorded
+            && self.next_recall_refusal().is_none()
+        {
+            self.retain_failed_correction(correction.generation().source().clone());
+        }
+    }
+
+    /// Called from the terminal fact producer, before pair/account extraction.
+    /// A complete borrowed proof changes only the retained count, never stage.
+    pub(super) fn recorded_call_failure(
+        &mut self,
+        correction: &OriginalRequests,
+        completed: &[&CompletedPair],
+        cancel: Option<NonDispatchCause>,
+    ) -> Result<(), RepairError> {
+        if !matches!(self.stage, Stage::CorrectionOut | Stage::Cancelled)
+            || self.correction_out.as_ref() != Some(correction.generation().source())
+            || !correction.attempted_call()
+            || !self.correction_out_protocol_recorded
+            || self.next_recall_refusal().is_some()
+        {
+            return Err(RepairError::WrongAccounting);
+        }
+        if correction.generation().scheme() != self.account.as_ref().unwrap().scheme() {
+            return Err(RepairError::WrongScheme);
+        }
+        validate_refused_accounted(
+            correction
+                .requests()
+                .iter()
+                .map(|request| request.opening()),
+            completed,
+            cancel,
+        )?;
+        self.retain_failed_correction(correction.generation().source().clone());
         Ok(())
     }
 
@@ -796,13 +853,24 @@ impl RepairLedger {
     }
 
     pub(super) fn take_correction_accounting(&mut self) -> Option<OriginalRequests> {
-        if self.stage != Stage::CorrectionAccounting || self.next_recall_refusal().is_some() {
+        if !matches!(self.stage, Stage::CorrectionAccounting | Stage::Cancelled)
+            || !self.pending_protocol_recorded
+            || self.pending_calls_accounted
+            || self.next_recall_refusal().is_some()
+            || (self.stage == Stage::Cancelled
+                && self
+                    .pending
+                    .as_ref()
+                    .is_some_and(|p| p.requests().is_empty()))
+        {
             return None;
         }
         let correction = self.pending.take()?;
-        self.pending_protocol_recorded = false;
+        self.correction_out_protocol_recorded = std::mem::take(&mut self.pending_protocol_recorded);
         self.correction_out = Some(correction.generation().source().clone());
-        self.stage = Stage::CorrectionOut;
+        if self.stage != Stage::Cancelled {
+            self.stage = Stage::CorrectionOut;
+        }
         Some(correction)
     }
 
@@ -811,6 +879,7 @@ impl RepairLedger {
         &mut self,
         correction: OriginalRequests,
         completed: &[&CompletedPair],
+        cancel: Option<NonDispatchCause>,
     ) -> Result<CorrectionProgress, (OriginalRequests, RepairError)> {
         let validation = (|| {
             if !matches!(self.stage, Stage::CorrectionOut | Stage::Cancelled) {
@@ -822,27 +891,23 @@ impl RepairLedger {
             if correction.generation().scheme() != self.account.as_ref().unwrap().scheme() {
                 return Err(RepairError::WrongScheme);
             }
-            if self.stage == Stage::Cancelled {
-                return Ok(());
-            }
-            validate_accounted(
-                correction
-                    .requests()
-                    .iter()
-                    .map(|request| request.opening()),
-                completed,
-                NonDispatchCause::PassPurpose,
-            )
+            self.recorded_call_failure(&correction, completed, cancel)
         })();
         if let Err(error) = validation {
             return Err((correction, error));
         }
         let correction_source = correction.generation().source().clone();
-        self.account.as_mut().unwrap().corrections.push(correction);
         self.correction_out = None;
         if self.stage == Stage::Cancelled {
+            self.pending = Some(correction);
+            self.pending_calls_accounted = true;
+            self.pending_protocol_recorded =
+                std::mem::take(&mut self.correction_out_protocol_recorded);
             return Ok(CorrectionProgress::Cancelled);
         }
+        self.account.as_mut().unwrap().corrections.push(correction);
+        self.correction_out_protocol_recorded = false;
+        self.pending_protocol_recorded = false;
         Ok(self.failed_attempt(correction_source))
     }
 
@@ -1051,6 +1116,11 @@ impl RepairLedger {
             || self.next_recall_refusal().is_some()
             || self.cancelled_protocol_refusal().is_some()
             || self.cancelled_empty_refusal().is_some()
+            || (self
+                .pending
+                .as_ref()
+                .is_some_and(|p| p.attempted_call() && !p.requests().is_empty())
+                && !self.pending_calls_accounted)
         {
             return None;
         }

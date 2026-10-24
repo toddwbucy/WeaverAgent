@@ -1191,6 +1191,15 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.ledger.receipts()
     }
 
+    pub(super) fn take_recorded_pair_terminal(
+        &mut self,
+        source: &SourceBlockId,
+    ) -> Option<super::ledger::CommittedSource> {
+        let receipt = self.ledger.take_recorded_pair_terminal(source)?;
+        self.receipt_reservation = None;
+        Some(receipt)
+    }
+
     pub(super) fn filing_recorded_ns(&self) -> Option<u64> {
         self.receipt_reservation
             .as_ref()

@@ -388,7 +388,7 @@ fn correction_calls_require_recorded_protocol_refusal_and_accounting_before_one_
     assert!(ledger.take_correction_accounting().is_none());
     assert_eq!(
         ledger
-            .finish_correction_accounting(correction, &[])
+            .finish_correction_accounting(correction, &[], None)
             .unwrap(),
         CorrectionProgress::Retry
     );
@@ -413,7 +413,7 @@ fn conforming_forbidden_correction_requests_cannot_be_discarded_as_completed_acc
     let correction = ledger.take_correction_accounting().unwrap();
     assert_eq!(correction.requests().len(), 2);
     let (returned, error) = ledger
-        .finish_correction_accounting(correction, &[])
+        .finish_correction_accounting(correction, &[], None)
         .unwrap_err();
     assert_eq!(error, RepairError::WrongAccounting);
     assert_eq!(returned.generation().source(), &record(100));
@@ -815,23 +815,21 @@ fn cancellation_recovers_a_lent_forbidden_correction_without_minting_completion(
     );
     ledger.cancel();
     assert!(ledger.take_cancelled().is_none());
-    // The stopped owner may return before every pair is terminal. Custody still
-    // returns, but no success or exhaustion capability is released.
-    assert_eq!(
-        ledger
-            .finish_correction_accounting(correction, &[])
-            .unwrap(),
-        CorrectionProgress::Cancelled
-    );
+    // A missing terminal cannot complete the loan or charge an attempt.
+    // Return the exact capability to its caller so it can finish owed accounting.
+    let (correction, error) = ledger
+        .finish_correction_accounting(correction, &[], Some(NonDispatchCause::Stop))
+        .unwrap_err();
+    assert_eq!(error, RepairError::WrongAccounting);
+    assert_eq!(correction.generation().source(), &record(100));
+    assert_eq!(correction.requests().len(), 1);
     assert!(ledger.take_effective().unwrap().is_none());
     assert!(ledger.take_exhausted().is_none());
     assert_eq!(ledger.failed_corrections(), Some(0));
-    let cancelled = ledger.take_cancelled().unwrap();
-    assert_eq!(cancelled.account().corrections().len(), 1);
-    assert_eq!(cancelled.account().corrections()[0].requests().len(), 1);
+    assert!(ledger.take_cancelled().is_none());
     assert_eq!(
-        cancelled.account().corrections()[0].generation().source(),
-        &record(100)
+        ledger.outstanding_loan(),
+        Some(RepairError::OutstandingCorrectionLoan)
     );
 }
 
@@ -986,7 +984,7 @@ fn repair_custody_pending_protocol_flag_clears_at_transfer_and_empty_installatio
         "transferred pending identity leaves no stale purpose bit"
     );
     ledger
-        .finish_correction_accounting(correction, &[])
+        .finish_correction_accounting(correction, &[], None)
         .unwrap();
     let instruction = expansion("run", ledger.account.as_ref().unwrap().scheme());
     ledger
