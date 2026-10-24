@@ -4,6 +4,136 @@
 
 use super::*;
 
+#[test]
+fn diagnostic_open_retains_each_evidence_cause_and_the_original_refusal() {
+    fn drive(
+        opened: weaver_types::Opened,
+        diagnostic: &mut impl std::io::Write,
+    ) -> Result<(), LifecycleRefusal> {
+        use nix::sys::socket::{
+            AddressFamily, MsgFlags, SockFlag, SockType, recv, send, socketpair,
+        };
+        use std::os::fd::AsRawFd;
+        let (near, far) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let peer = std::thread::spawn(move || {
+            let mut buffer = [0; 1024];
+            let n = recv(far.as_raw_fd(), &mut buffer, MsgFlags::empty()).unwrap();
+            assert!(
+                matches!(serde_json::from_slice::<TokenDirective>(&buffer[..n]).unwrap(),
+                TokenDirective::Open { session, messages, column_ask: false }
+                    if session == SessionId("session".into()) && messages.is_empty())
+            );
+            let wire = serde_json::to_vec(&TokenAnswer::Opened(opened)).unwrap();
+            assert_eq!(
+                send(far.as_raw_fd(), &wire, MsgFlags::empty()).unwrap(),
+                wire.len()
+            );
+        });
+        let result = open_session_with_diagnostic(
+            &crate::channel::decode_from_owned(near),
+            SessionId("session".into()),
+            vec![],
+            false,
+            diagnostic,
+        );
+        peer.join().unwrap();
+        result
+    }
+    let raw = |value: serde_json::Value| {
+        serde_json::value::RawValue::from_string(value.to_string()).unwrap()
+    };
+    let measurement = serde_json::json!({
+        "model": "private-model", "weights_hash": "private-hash", "prefix_token_ids": [7],
+        "blocks": [{ "label": "identity-prefix", "start": 0, "end": "private-evidence".len() }],
+    });
+    let valid = weaver_types::Opened {
+        session: SessionId("session".into()),
+        prefix_tokens: 1,
+        capacity: 99,
+        generation_limit: 7,
+        terminal_tokens: 1,
+        request: raw(
+            serde_json::json!({ "rendered": "private-evidence", "template": "private-template" }),
+        ),
+        measurement: raw(measurement.clone()),
+    };
+    let mut diagnostic = Vec::new();
+    assert_eq!(drive(valid.clone(), &mut diagnostic), Ok(()));
+    assert!(
+        diagnostic.is_empty(),
+        "a valid Open writes no refusal diagnostic"
+    );
+    for cause in [
+        "Session",
+        "Counts",
+        "Request",
+        "Measurement",
+        "TokenCount",
+        "IdentityBlock",
+    ] {
+        let mut opened = valid.clone();
+        match cause {
+            "Session" => opened.session = SessionId("other".into()),
+            "Counts" => opened.terminal_tokens = 2,
+            "Request" => opened.request = raw(serde_json::Value::Null),
+            "Measurement" => opened.measurement = raw(serde_json::Value::Null),
+            "TokenCount" => {
+                let mut changed = measurement.clone();
+                changed["prefix_token_ids"][0] = serde_json::json!(4294967296_u64);
+                opened.measurement = raw(changed);
+            }
+            "IdentityBlock" => {
+                let mut changed = measurement.clone();
+                changed["blocks"][0]["end"] = serde_json::json!(1);
+                opened.measurement = raw(changed);
+            }
+            _ => unreachable!(),
+        }
+        let mut diagnostic = Vec::new();
+        assert_eq!(
+            drive(opened, &mut diagnostic),
+            Err(LifecycleRefusal::NoResidency),
+            "{cause}"
+        );
+        let line = std::str::from_utf8(&diagnostic).unwrap();
+        assert_eq!(line.lines().count(), 1);
+        assert!(line.ends_with('\n'));
+        let detail: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(
+            detail,
+            serde_json::json!({ "open_evidence_invalid": { "cause": cause } })
+        );
+        assert!(
+            !line.contains("private-"),
+            "model evidence remains protected"
+        );
+    }
+    struct FailedLog(usize);
+    impl std::io::Write for FailedLog {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            self.0 += 1;
+            Err(std::io::Error::other("log unavailable"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut log = FailedLog(0);
+    let mut invalid = valid;
+    invalid.session = SessionId("other".into());
+    assert_eq!(drive(invalid, &mut log), Err(LifecycleRefusal::NoResidency));
+    assert_eq!(
+        log.0, 1,
+        "one attempted write; log failure changes no refusal"
+    );
+}
+
 /// **What a diagnostic enter waits on is named**, per
 /// `weaver-harness-Spec` section 6.1 as of 2026-09-06: one typed line
 /// naming the seal and the bound.

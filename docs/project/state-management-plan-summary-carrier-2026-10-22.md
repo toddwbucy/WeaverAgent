@@ -29,9 +29,11 @@ plan event with its strict typed context. The digest is not recomputed from a
 snapshot or prompt. The source run and nullable turn are not replaced with the
 latest event, a prior nonnull turn or the adopting run.
 
-Image verification compares the carrier against its held operator context and
-transition turn as well as retaining the existing revision/effect provenance
-checks. Stored last_source remains a content key; no schema column changes.
+Image construction derives the carrier digest and complete source position
+through the same validated held-source read. Their consistency holds by
+construction, rather than independent digest/turn comparisons. Adoption retains
+the independent revision/effect/source provenance checks. Stored last_source
+remains a content key; no schema column changes.
 PlanFlags.after remains SourceBlockId. A caller derives it with
 snapshot.last_source.block_id. Existing checked-successor behavior remains
 unchanged; the endpoint election tracked by #246 remains open.

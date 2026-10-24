@@ -386,7 +386,7 @@ fn close_fixture_step(store: &ServingSqlite, plan: &PlanRef, step: u64, source: 
 fn plan_queries_keep_groups_and_find_waiting_steps_before_preserved_closures() {
     let store = test_store();
     let (plan, source) = plan_fixture(&store);
-    let snapshot = plan_snapshot(&store.connection, "seed", &plan, 1_000_000.into()).unwrap();
+    let snapshot = plan_snapshot(&store.connection, "seed", &plan).unwrap();
     assert_eq!(snapshot.steps.len(), 2);
     assert_eq!(snapshot.groups[0].step_ids[1].local_id.0, 2);
     close_fixture_step(&store, &plan, 2, &source);

@@ -206,7 +206,7 @@ fn allocate_plan(plan: &PlanRef, next: &mut Option<u64>) -> Result<(), FileFault
 }
 
 fn snapshot(db: &Connection, seed: &str, plan: &PlanRef) -> Result<PlanSnapshot, FileFault> {
-    reads::plan_snapshot(db, seed, plan, u64::MAX.into()).map_err(read_fault)
+    reads::plan_snapshot(db, seed, plan).map_err(read_fault)
 }
 
 fn held_step<'a>(p: &'a PlanSnapshot, id: &StepId) -> Result<&'a PlanStep, FileFault> {

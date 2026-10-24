@@ -106,6 +106,12 @@ pub(in crate::flow) struct PageRead {
 }
 
 impl PageRead {
+    pub(in crate::flow) fn buffered_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    pub(in crate::flow) fn snapshot(&self) -> Option<DecimalU64> {
+        self.snapshot
+    }
     pub(in crate::flow) fn new(
         selector: ReadSelector,
         limit: DecimalU64,

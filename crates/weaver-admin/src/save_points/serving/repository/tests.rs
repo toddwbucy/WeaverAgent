@@ -780,3 +780,14 @@ fn directory_default_acl_and_unreadable_acl_judgment_refuse() {
         nix::fcntl::open(&f.path, OFlag::O_PATH | OFlag::O_DIRECTORY, Mode::empty()).unwrap();
     assert!(Repository::from_judged_directory(path_fd, f.owner, f.owner.gid).is_err());
 }
+
+/// Real indexed/hash/custody verification for the paired Enter composition tests.
+pub(crate) fn verified_enter_fixture(bound: weaver_types::ServingDeclaration) -> VerifiedArtifact {
+    let mut fixture = Fixture::new();
+    fixture.session = bound.agent().session.clone();
+    fixture.trace_path = super::super::trace_path(&bound.agent().trace_sink).to_path_buf();
+    let image = b"synthetic member image, not SQLite qualification";
+    let bound = bound.with_start(hash(image));
+    fixture.artifact(1, None, image, Some(&declaration::render(&bound).unwrap()));
+    fixture.repository().load(None, &fixture.scope()).unwrap()
+}

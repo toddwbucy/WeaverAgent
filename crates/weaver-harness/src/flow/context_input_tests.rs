@@ -48,7 +48,7 @@ fn duty() -> (s::Ste100Bootstrap, s::SchemeDeclaration, s::Ste100Ready) {
     };
     let instruction = s::Ste100Instruction {
         model_binding: ModelBinding {
-            artifact: ArtifactRef("synthetic-input-transaction-fixture".into()),
+            artifact: ArtifactRef("/synthetic/input-transaction-manifest.json".into()),
             devices: vec![DeviceOrdinal(0)],
         },
         model_artifact_sha256: seed.checker_artifact_sha256,
@@ -104,6 +104,19 @@ impl InputFixture {
         Self::with_templates(Some(inventory))
     }
 
+    pub(super) fn with_template_inventory_and_enter(
+        inventory: &super::super::templates::CompiledInventory,
+        remaining_enter_ns: u64,
+    ) -> Self {
+        Self::with_declaration_scheme_tools_enter(
+            Some(inventory),
+            config(),
+            None,
+            None,
+            remaining_enter_ns,
+        )
+    }
+
     pub(super) fn with_template_inventory_and_scheme(
         inventory: &super::super::templates::CompiledInventory,
         scheme_text: String,
@@ -147,9 +160,25 @@ impl InputFixture {
 
     pub(super) fn with_declaration_scheme_tools(
         inventory: Option<&super::super::templates::CompiledInventory>,
+        declaration: FlowConfig,
+        override_scheme: Option<(String, s::SchemeDeclaration)>,
+        sh: Option<weaver_trace::serving::payloads::ToolPolicy>,
+    ) -> Self {
+        Self::with_declaration_scheme_tools_enter(
+            inventory,
+            declaration,
+            override_scheme,
+            sh,
+            1_000_000_000,
+        )
+    }
+
+    fn with_declaration_scheme_tools_enter(
+        inventory: Option<&super::super::templates::CompiledInventory>,
         mut declaration: FlowConfig,
         override_scheme: Option<(String, s::SchemeDeclaration)>,
         sh: Option<weaver_trace::serving::payloads::ToolPolicy>,
+        remaining_enter_ns: u64,
     ) -> Self {
         let (mut bootstrap, mut scheme, mut ready) = duty();
         if let Some((text, declared)) = override_scheme {
@@ -159,7 +188,7 @@ impl InputFixture {
             ready.artifact_sha256 = scheme.artifact_sha256.clone();
         }
         declaration.scheme = scheme;
-        let mut run = Fixture::new(declaration);
+        let mut run = Fixture::with_enter(declaration, remaining_enter_ns);
         run.opened();
         let mut authored = run.load_event();
         let Some(Payload::Elections(load)) = &mut authored.payload else {
@@ -427,7 +456,7 @@ impl InputFixture {
     }
 }
 
-fn accepted(request: &s::Ste100Request) -> s::Ste100Reply {
+pub(super) fn accepted(request: &s::Ste100Request) -> s::Ste100Reply {
     assert!(request.text.starts_with("Read ") && request.text.ends_with('.'));
     let length = request.text.len() as u64;
     s::Ste100Reply {

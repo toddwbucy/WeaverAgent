@@ -1,6 +1,102 @@
 use super::*;
 
 #[test]
+fn kind_first_decode_answers_do_not_buffer_or_reparse_the_outer_values() {
+    let bodies = [
+        ("token", r#"{"token":17,"piece":"\u00e9\n"}"#),
+        ("field", r#"{"position":2,"ranked":[],"realized":17}"#),
+        ("column", r#"{"position":2,"layers":[[1.0,2.0]]}"#),
+        (
+            "delta_measured",
+            r#"{"resident":2,"prefix_tokens":1,"keep":1,"input_tokens":1,"capacity":99}"#,
+        ),
+        ("flushed", r#"{"resident_before":7,"resident_after":3}"#),
+        ("elided", r#"{"resident_before":7,"resident_after":3}"#),
+        (
+            "opened",
+            r#"{"session":"s","prefix_tokens":2,"capacity":99,"generation_limit":7,"terminal_tokens":1,"request":{ "x":"\u00e9" },"measurement":{ "n":1e0 }}"#,
+        ),
+        (
+            "generated",
+            r#"{"emission":"x","finish":"completed","content":[],"request":{ "x":"\u00e9" },"measurement":{ "n":1e0 },"resident":1,"capacity":99}"#,
+        ),
+        (
+            "re_fed",
+            r#"{"emission":"x","finish":"completed","content":[],"request":{ "x":"\u00e9" },"measurement":{ "n":1e0 },"resident":1,"capacity":99}"#,
+        ),
+        (
+            "fault",
+            r#"{"case":"device_fault_during_generation","account":{ "x":"\u00e9" }}"#,
+        ),
+    ];
+    for (kind, body) in bodies {
+        let canonical = format!("{{\"kind\":\"{kind}\",\"body\":{body}}}");
+        DECODE_ANSWER_BUFFERED.with(|counts| counts.set((0, 0)));
+        let expected: TokenAnswer = serde_json::from_str(&canonical).unwrap();
+        assert_eq!(
+            DECODE_ANSWER_BUFFERED.with(|counts| counts.get()),
+            (0, 0),
+            "{kind}"
+        );
+        let read: TokenAnswer = serde_json::from_reader(canonical.as_bytes()).unwrap();
+        assert_eq!(read, expected);
+        assert_eq!(
+            DECODE_ANSWER_BUFFERED.with(|counts| counts.get()),
+            (0, 0),
+            "reader {kind}"
+        );
+
+        let body_first = format!("{{\"body\":{body},\"kind\":\"{kind}\"}}");
+        let actual: TokenAnswer = serde_json::from_str(&body_first).unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(
+            DECODE_ANSWER_BUFFERED.with(|counts| counts.get()),
+            (2, body.len() + kind.len() + 2),
+            "actual fallback buffers for {kind}"
+        );
+        let read: TokenAnswer = serde_json::from_reader(body_first.as_bytes()).unwrap();
+        assert_eq!(
+            read, expected,
+            "reader retains exact raw evidence for {kind}"
+        );
+        assert_eq!(
+            DECODE_ANSWER_BUFFERED.with(|counts| counts.get()),
+            (4, 2 * (body.len() + kind.len() + 2)),
+            "reader fallback buffers for {kind}"
+        );
+    }
+    DECODE_ANSWER_BUFFERED.with(|counts| counts.set((0, 0)));
+    assert_eq!(
+        serde_json::from_str::<TokenAnswer>(r#"{"kind":"at_rest"}"#).unwrap(),
+        TokenAnswer::AtRest
+    );
+    assert_eq!(DECODE_ANSWER_BUFFERED.with(|counts| counts.get()), (0, 0));
+}
+
+#[test]
+fn kind_first_decode_fast_path_retains_closed_envelope_and_typed_body_checks() {
+    for invalid in [
+        r#"{"kind":"token","kind":"token","body":{"token":1,"piece":"a"}}"#,
+        r#"{"kind":"token","body":{"token":1,"piece":"a"},"body":{"token":1,"piece":"a"}}"#,
+        r#"{"kind":"token","extra":null,"body":{"token":1,"piece":"a"}}"#,
+        r#"{"kind":"token","body":{"token":1,"piece":"a"},"extra":null}"#,
+        r#"{"kind":"token"}"#,
+        r#"{"kind":"token","body":{"token":4294967296,"piece":"a"}}"#,
+        r#"{"kind":"token","body":{"token":1,"piece":"a","extra":null}}"#,
+        r#"{"kind":"unknown","body":{}}"#,
+        r#"{"kind":null,"body":{}}"#,
+        r#"{"body":{"token":1,"piece":"a"}}"#,
+        r#"{}"#,
+        r#"["token",{"token":1,"piece":"a"}]"#,
+    ] {
+        assert!(
+            serde_json::from_str::<TokenAnswer>(invalid).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
 fn state_fault_cases_keep_component_and_conformance_results_distinct() {
     for (case, spelling) in [
         (FaultCase::StateFlowFailed, "state_flow_failed"),
@@ -135,6 +231,104 @@ fn input_refusal_does_not_change_existing_refusal_shapes() {
             serde_json::from_str::<RefusalRecord>(expected).unwrap(),
             record
         );
+    }
+}
+
+#[test]
+fn recall_request_refusal_is_exact_closed_and_keeps_independent_identities() {
+    use crate::state_flow::{CallId, RecallRequestRefusal, SourceBlockId, StatementRef};
+    let refusal = RecallRequestRefusal {
+        call_id: CallId {
+            run: "original".into(),
+            sequence: 17.into(),
+            call: 4.into(),
+        },
+        call_block: 8.into(),
+        statement: StatementRef {
+            block_id: SourceBlockId {
+                run: "checked".into(),
+                sequence: 29.into(),
+                block: 2.into(),
+            },
+            binding: 3.into(),
+        },
+        noun_count: 2.into(),
+        has_condition: false,
+        detail: RecallRequestRefusal::DETAIL.into(),
+    };
+    let record = RefusalRecord::RecallRequest(refusal.clone());
+    let expected = r#"{"seam":"recall_request","call_id":{"run":"original","sequence":"17","call":"4"},"call_block":"8","statement":{"block_id":{"run":"checked","sequence":"29","block":"2"},"binding":"3"},"noun_count":"2","has_condition":false,"detail":"recall requires exactly one noun and no governing condition"}"#;
+    assert_eq!(serde_json::to_string(&record).unwrap(), expected);
+    assert_eq!(
+        crate::state_flow::decode_strict::<RefusalRecord>(expected).unwrap(),
+        record
+    );
+    for (count, condition) in [(1, true), (2, true), (u64::MAX, false)] {
+        let value = RecallRequestRefusal {
+            noun_count: count.into(),
+            has_condition: condition,
+            ..refusal.clone()
+        };
+        let raw = serde_json::to_string(&RefusalRecord::RecallRequest(value.clone())).unwrap();
+        assert_eq!(
+            crate::state_flow::decode_strict::<RefusalRecord>(&raw).unwrap(),
+            RefusalRecord::RecallRequest(value)
+        );
+    }
+    for field in [
+        "call_id",
+        "call_block",
+        "statement",
+        "noun_count",
+        "has_condition",
+        "detail",
+    ] {
+        let mut value: serde_json::Value = serde_json::from_str(expected).unwrap();
+        value.as_object_mut().unwrap().remove(field);
+        assert_refusal_rejected(&value.to_string());
+    }
+    for path in ["call_id", "statement", "block_id"] {
+        let mut value: serde_json::Value = serde_json::from_str(expected).unwrap();
+        match path {
+            "call_id" => value["call_id"] = serde_json::json!(["original", "17", "4"]),
+            "statement" => {
+                value["statement"] = serde_json::json!([value["statement"]["block_id"], "3"])
+            }
+            "block_id" => {
+                value["statement"]["block_id"] = serde_json::json!(["checked", "29", "2"])
+            }
+            _ => unreachable!(),
+        }
+        assert_refusal_rejected(&value.to_string());
+    }
+    let positional = serde_json::json!([
+        refusal.call_id,
+        refusal.call_block,
+        refusal.statement,
+        refusal.noun_count,
+        refusal.has_condition,
+        refusal.detail,
+    ])
+    .to_string();
+    assert!(serde_json::from_str::<RecallRequestRefusal>(&positional).is_err());
+    assert!(crate::state_flow::decode_strict::<RecallRequestRefusal>(&positional).is_err());
+    for (from, to) in [
+        ("\"noun_count\":\"2\"", "\"noun_count\":\"0\""),
+        ("\"noun_count\":\"2\"", "\"noun_count\":\"1\""),
+        ("\"noun_count\":\"2\"", "\"noun_count\":2"),
+        ("\"call_block\":\"8\"", "\"call_block\":\"08\""),
+        ("\"call\":\"4\"", "\"call\":\"18446744073709551616\""),
+        ("\"binding\":\"3\"", "\"binding\":\"-1\""),
+        ("\"sequence\":\"17\"", "\"sequence\":\"0\""),
+        ("\"sequence\":\"29\"", "\"sequence\":\"0\""),
+        ("\"detail\":", "\"subject\":\"guessed\",\"detail\":"),
+        ("\"detail\":", "\"detail\":\"duplicate\",\"detail\":"),
+        ("\"noun_count\":", "\"noun_count\":\"3\",\"noun_count\":"),
+        ("\"call\":", "\"call\":\"3\",\"call\":"),
+        ("\"binding\":", "\"binding\":\"2\",\"binding\":"),
+        (RecallRequestRefusal::DETAIL, "different detail"),
+    ] {
+        assert_refusal_rejected(&expected.replace(from, to));
     }
 }
 

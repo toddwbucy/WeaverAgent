@@ -100,11 +100,12 @@ pub(super) fn verify(db: &Connection, start: &StartIdentity) -> Result<(), OpenF
         {
             return Err(invalid("review pair does not identify its instruction"));
         }
-        if let PairRequest::Recall { subject } = &send.request {
-            let matched:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM binding_noun WHERE binding_id=?1 AND value=?2 COLLATE BINARY)",params![statement_id,subject],|r|r.get(0))?;
-            if subject.is_empty() || !matched {
-                return Err(invalid("recall subject is not a held noun"));
-            }
+        if let PairRequest::Recall { subject } = &send.request
+            && !filing::pairs::recall_matches_statement(db, statement_id, subject)?
+        {
+            return Err(invalid(
+                "recall requires its exact single held noun and no condition",
+            ));
         }
         if let Some(previous) = retry {
             if !matches!(send.lane, PairLane::External)
