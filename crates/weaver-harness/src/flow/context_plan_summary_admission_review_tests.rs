@@ -32,7 +32,8 @@ fn summary_admission_review_held_original_does_not_stall_admitted_refresh() {
         assert!(run.context.read.is_none());
         assert_eq!(
             run.context
-                .author_and_wait(&mut ports(&mut run.clock), original),
+                .author_and_wait(&mut ports(&mut run.clock), original)
+                .map_err(|failure| failure.retained_reason()),
             Err(RunFailure::PlanSummaryOwned)
         );
         assert!(run.context.pending_author().is_none());

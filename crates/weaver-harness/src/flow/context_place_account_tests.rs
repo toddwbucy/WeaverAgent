@@ -242,6 +242,7 @@ fn place_full_releasing_account_retires_decode_state_classifier_then_unloads_and
     assert!(run.context.flow.standing_classifier().is_none());
     run.context
         .author_and_wait(&mut ports(&mut run.clock), unload())
+        .map_err(|failure| failure.retained_reason())
         .unwrap();
     assert!(run.context.barrier.is_closed());
     assert!(run.context.failure().is_none());
@@ -253,7 +254,8 @@ fn place_full_releasing_account_retires_decode_state_classifier_then_unloads_and
     assert_eq!(run.context.phase(), RecordingPhase::Closed);
     assert_eq!(
         run.context
-            .author_and_wait(&mut ports(&mut run.clock), unload()),
+            .author_and_wait(&mut ports(&mut run.clock), unload())
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::Closed)
     );
     assert_eq!(
@@ -306,7 +308,8 @@ fn place_join_owed_account_blocks_release_scope_without_consuming_shutdown_origi
     let first_pointer = raw.get().as_ptr();
     assert_eq!(
         run.context
-            .author_and_wait(&mut ports(&mut run.clock), first),
+            .author_and_wait(&mut ports(&mut run.clock), first)
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::PlaceOwned)
     );
     let Payload::Fault(raw) = run.context.held_author().unwrap().payload.as_ref().unwrap() else {
@@ -335,14 +338,19 @@ fn place_join_owed_account_blocks_release_scope_without_consuming_shutdown_origi
             ..
         }
     ));
-    assert_eq!(
-        run.context
-            .wait_recorded(&mut ports(&mut run.clock), progress),
-        Err(RunFailure::PlaceOwned)
-    );
-    // The consumer must retain the actual returned original before observing
-    // fallible intake, and retire only this unadmitted shutdown attempt.
-    let event = run.context.take_held_author().unwrap();
+    let failure = run
+        .context
+        .wait_recorded(&mut ports(&mut run.clock), progress)
+        .unwrap_err();
+    assert_eq!(failure.reason, RunFailure::PlaceOwned);
+    let event = failure
+        .original
+        .expect("occupied slot returns the exact new attempt");
+    let first = run.context.take_held_author().unwrap();
+    let Payload::Fault(raw) = first.payload.as_ref().unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(raw.get().as_ptr(), first_pointer);
     let Payload::Refusal(returned) = event.payload.as_ref().unwrap() else {
         unreachable!()
     };
@@ -366,11 +374,11 @@ fn place_join_owed_account_blocks_release_scope_without_consuming_shutdown_origi
     assert_eq!(account.raw_bytes(), Some(raw.as_slice()));
     assert!(account.incomplete().is_none());
     assert!(!fx.run().context.place_owed());
-    let run = fx.run();
-    run.context
-        .author_and_wait(&mut ports(&mut run.clock), event)
-        .unwrap();
-    assert_eq!(fx.records(Kind::Refusal).len(), 1);
+    // Returned custody alone grants no retry. Both unaccepted originals
+    // remain caller evidence through the actual account's terminal teardown.
+    assert!(fx.records(Kind::Refusal).is_empty());
+    assert_eq!(event.kind, Kind::Refusal);
+    assert_eq!(first.kind, Kind::Fault);
     let PlaceFixture {
         mut summary,
         decode,
@@ -388,6 +396,7 @@ fn place_join_owed_account_blocks_release_scope_without_consuming_shutdown_origi
     );
     run.context
         .author_and_wait(&mut ports(&mut run.clock), unload())
+        .map_err(|failure| failure.retained_reason())
         .unwrap();
     summary.drain();
     let run = summary.run();

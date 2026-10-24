@@ -179,6 +179,7 @@ const _: fn() = || {
 };
 
 struct RepairAuthor {
+    returned: StoppedAuthor,
     purpose: AuthorPurpose,
     event: Option<AuthoredEvent>,
     expansion: Option<TemplateExpansion>,
@@ -1198,6 +1199,7 @@ impl RecordingContext {
         let turn = self.repair_turn();
         let work = self.repair.as_mut().unwrap();
         work.author = Some(RepairAuthor {
+            returned: StoppedAuthor::default(),
             purpose,
             event: Some(AuthoredEvent {
                 kind,
@@ -1240,6 +1242,14 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<RepairProgress, RunFailure> {
+        self.repair
+            .as_ref()
+            .unwrap()
+            .author
+            .as_ref()
+            .unwrap()
+            .returned
+            .check()?;
         if self
             .repair
             .as_ref()
@@ -1278,7 +1288,10 @@ impl RecordingContext {
                 self.author_and_wait(ports, event)
             };
             self.repair.as_mut().unwrap().internal = false;
-            result?;
+            result.map_err(|failure| {
+                let author = self.repair.as_mut().unwrap().author.as_mut().unwrap();
+                author.returned.retain_started(failure, &mut author.started)
+            })?;
         }
         // The actual Recorded hook can retain this source before the generic
         // author's final clock check yields. Settle only its matching completion
@@ -1392,6 +1405,7 @@ impl RecordingContext {
                     }
                     Err((expanded, error)) => {
                         self.repair.as_mut().unwrap().author = Some(RepairAuthor {
+                            returned: StoppedAuthor::default(),
                             purpose: AuthorPurpose::Instruction,
                             event: None,
                             expansion: Some(expanded),
@@ -1861,11 +1875,11 @@ impl RecordingContext {
         }
         work.ledger.cancel();
         work.restatement = None;
-        if work
-            .author
-            .as_ref()
-            .is_some_and(|author| author.purpose == AuthorPurpose::Instruction && !author.started)
-        {
+        if work.author.as_ref().is_some_and(|author| {
+            author.purpose == AuthorPurpose::Instruction
+                && !author.started
+                && author.returned.failure.is_none()
+        }) {
             work.author = None;
             self.flow.cancel_instruction_check();
         }

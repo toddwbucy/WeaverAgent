@@ -1253,6 +1253,7 @@ fn boot_open_full_stopped_release_accounts_then_retires_unloads_and_drains() {
                 },
                 unload(),
             )
+            .map_err(|failure| failure.retained_reason())
             .unwrap();
         assert!(recorded.0 > 0);
         assert!(run.context.barrier.is_closed());

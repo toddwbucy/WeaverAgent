@@ -341,6 +341,7 @@ fn completed_boot_rollback_actual_stop_retires_transports_then_records_unload_an
     let unload_sequence = run
         .context
         .author_and_wait(&mut ports(&mut run.clock), unload())
+        .map_err(|failure| failure.retained_reason())
         .unwrap();
     assert!(unload_sequence.0 > evidence.recall_sequence.0);
     assert!(run.context.barrier.is_closed());

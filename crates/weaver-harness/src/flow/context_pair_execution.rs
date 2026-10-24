@@ -410,8 +410,13 @@ impl RecordingContext {
         {
             return Err(RunFailure::PairOwned);
         }
+        self.pair_rejected_return.check()?;
         let sequence = if self.pair_rejected_authoring {
-            self.resume_owned_author_and_wait(ports)?
+            self.resume_owned_author_and_wait(ports)
+                .map_err(|failure| {
+                    self.pair_rejected_return
+                        .retain_started(failure, &mut self.pair_rejected_authoring)
+                })?
         } else {
             if self.filing.is_some()
                 || self.waiting_content.is_some()
@@ -455,7 +460,10 @@ impl RecordingContext {
                 payload: Some(Payload::RejectedReturn(Box::new(record))),
             }));
             self.pair_rejected_authoring = true;
-            self.continue_waiting_content(ports)?
+            self.continue_waiting_content(ports).map_err(|failure| {
+                self.pair_rejected_return
+                    .retain_started(failure, &mut self.pair_rejected_authoring)
+            })?
         };
         let source = SourcePosition {
             block_id: weaver_types::state_flow::SourceBlockId {

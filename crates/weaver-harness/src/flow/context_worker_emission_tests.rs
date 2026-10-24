@@ -21,6 +21,69 @@ use weaver_types::{LifecycleAnswer, LifecycleDirective};
 static FAMILY: FoundationRestatement = FoundationRestatement::new("fixture.restatement");
 static MISSING: FoundationRestatement = FoundationRestatement::new("fixture.missing");
 
+#[test]
+fn author_failure_worker_emission_keeps_exact_refusal_after_cancel() {
+    use crate::flow::context::HeldInput;
+    use crate::flow::context::held_input_tests::hold;
+    use crate::flow::context::tests::{Fixture, config, event};
+
+    let mut fx = Fixture::new(config());
+    fx.activate();
+    fx.context.complete_wait(PumpDeadline::Enter).unwrap();
+    let held = hold(&mut fx.context, HeldInput::Both);
+    let raw = serde_json::value::to_raw_value(&serde_json::json!({
+        "fixture": "exact outbound refusal"
+    }))
+    .unwrap();
+    let original = raw.get().as_ptr();
+    let mut work = EmissionWork::new(None);
+    work.refusal_author = Some(event(
+        serving::Kind::Refusal,
+        Some(serving::Payload::Refusal(raw)),
+    ));
+    let expected = format!("{:?}", work.refusal_author.as_ref().unwrap());
+    work.stage = EmissionStage::RefusalAuthor;
+    let before = fx.context.barrier.recorder().structure().len();
+    let mut ports = PumpPorts {
+        lifecycle: LifecyclePorts::default(),
+        gate: None,
+        decode: None,
+        label: None,
+        io: &mut fx.clock,
+    };
+    let failure = work
+        .advance(&mut None, &mut None, &mut fx.context, &mut ports)
+        .unwrap_err();
+    assert_eq!(fx.context.failure(), Some(&failure));
+    assert!(!work.refusal_started);
+    assert!(work.refusal_record.is_none());
+    assert!(work.refusal_author.is_none());
+    work.cancel(&mut fx.context, ports.io).unwrap();
+    assert!(work.stage == EmissionStage::RefusalAuthor);
+    assert_eq!(
+        work.advance(&mut None, &mut None, &mut fx.context, &mut ports),
+        Err(failure)
+    );
+    let kept = work
+        .returned_refusal
+        .failure
+        .as_ref()
+        .unwrap()
+        .original
+        .as_ref()
+        .unwrap();
+    assert_eq!(format!("{kept:?}"), expected);
+    let Some(serving::Payload::Refusal(raw)) = &kept.payload else {
+        panic!("same refusal payload must stay with the emission owner")
+    };
+    assert_eq!(raw.get().as_ptr(), original);
+    assert!(!work.refusal_started);
+    assert!(work.refusal_record.is_none());
+    assert!(fx.context.pending_author().is_none());
+    assert_eq!(fx.context.barrier.recorder().structure().len(), before);
+    held.assert_held(&fx.context);
+}
+
 pub(in crate::flow::context) fn templates(mode: &str) -> &'static [s::TemplateSpec] {
     static ALL: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     static NO_SORT: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();

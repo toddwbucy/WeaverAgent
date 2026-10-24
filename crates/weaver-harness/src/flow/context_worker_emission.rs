@@ -70,6 +70,7 @@ pub(super) struct EmissionWork {
     selected: Option<(SourcePosition, Vec<SortAct>)>,
     refusal_author: Option<AuthoredEvent>,
     refusal_started: bool,
+    returned_refusal: crate::flow::context::StoppedAuthor,
     refusal_record: Option<weaver_trace::Sequence>,
     unexpected_refusal: Option<AuthoredEvent>,
     detail: Option<String>,
@@ -98,6 +99,7 @@ impl EmissionWork {
             detail: None,
             refusal_author: None,
             refusal_started: false,
+            returned_refusal: crate::flow::context::StoppedAuthor::default(),
             refusal_record: None,
             unexpected_refusal: None,
         }
@@ -326,11 +328,20 @@ impl EmissionWork {
                 }
             }
             EmissionStage::RefusalAuthor => {
+                self.returned_refusal.check()?;
                 let sequence = if self.refusal_started {
-                    context.resume_author_and_wait(ports)?
+                    context.resume_author_and_wait(ports).map_err(|failure| {
+                        self.returned_refusal
+                            .retain_started(failure, &mut self.refusal_started)
+                    })?
                 } else {
                     self.refusal_started = true;
-                    context.author_and_wait(ports, self.refusal_author.take().unwrap())?
+                    context
+                        .author_and_wait(ports, self.refusal_author.take().unwrap())
+                        .map_err(|failure| {
+                            self.returned_refusal
+                                .retain_started(failure, &mut self.refusal_started)
+                        })?
                 };
                 self.refusal_record = Some(sequence);
                 context.complete_wait(PumpDeadline::Decision);

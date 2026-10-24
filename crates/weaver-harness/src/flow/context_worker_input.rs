@@ -1,7 +1,7 @@
 //! Actual gate intake joined to the entered worker's one recording context.
 //! The loop chooses a turn only after checked acceptance. No caller can mint a
 //! gate source, a send receipt, an accepted token or a selected content copy.
-use super::super::{InputProgress, RunFailure, SeatedInput};
+use super::super::{InputProgress, RunFailure, SeatedInput, StoppedAuthor};
 use super::FoundationServing;
 use crate::flow::author::{AuthoredEvent, AuthoredSource};
 use crate::flow::clock::{MonotonicIo, PumpIo};
@@ -73,6 +73,7 @@ pub struct FoundationInput<'a> {
     send: Option<OrganSend>,
     report: Option<(ReceivedOrgan, Subsystem)>,
     report_started: bool,
+    returned_report: StoppedAuthor,
     failure: Option<RunFailure>,
     engine: Option<Box<generation::EngineWork>>,
 }
@@ -92,6 +93,7 @@ impl<'a> FoundationServing<'a> {
             send: None,
             report: None,
             report_started: false,
+            returned_report: StoppedAuthor::default(),
             failure: None,
             engine: None,
         })
@@ -203,8 +205,15 @@ impl<'a> FoundationInput<'a> {
             io,
         };
         if self.report.is_some() {
+            self.returned_report.check()?;
             if self.report_started {
-                owner.context.resume_author_and_wait(&mut ports)?;
+                owner
+                    .context
+                    .resume_author_and_wait(&mut ports)
+                    .map_err(|failure| {
+                        self.returned_report
+                            .retain_started(failure, &mut self.report_started)
+                    })?;
             } else {
                 let (received, subsystem) = self.report.as_ref().unwrap();
                 let Payload::Fault(report) = &received.envelope().payload else {
@@ -213,17 +222,23 @@ impl<'a> FoundationInput<'a> {
                 let payload = serde_json::value::to_raw_value(report)
                     .expect("a received fault is serializable");
                 self.report_started = true;
-                owner.context.author_and_wait(
-                    &mut ports,
-                    AuthoredEvent {
-                        kind: serving::Kind::Fault,
-                        subsystem: *subsystem,
-                        turn: None,
-                        source: AuthoredSource::Runtime,
-                        causal_parent: None,
-                        payload: Some(serving::Payload::Fault(payload)),
-                    },
-                )?;
+                owner
+                    .context
+                    .author_and_wait(
+                        &mut ports,
+                        AuthoredEvent {
+                            kind: serving::Kind::Fault,
+                            subsystem: *subsystem,
+                            turn: None,
+                            source: AuthoredSource::Runtime,
+                            causal_parent: None,
+                            payload: Some(serving::Payload::Fault(payload)),
+                        },
+                    )
+                    .map_err(|failure| {
+                        self.returned_report
+                            .retain_started(failure, &mut self.report_started)
+                    })?;
             }
             self.report = None;
             self.report_started = false;
@@ -471,6 +486,7 @@ impl<'a> FoundationTurn<'a> {
             send: None,
             report: None,
             report_started: false,
+            returned_report: StoppedAuthor::default(),
             failure: None,
             engine: None,
         })

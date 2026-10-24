@@ -848,6 +848,7 @@ fn a_structural_repair_refusal_records_its_original_attribution_and_case() {
                 &mut ports(&mut fx.input.run.clock),
                 event.expect("structural refusal must retain its exact authored event"),
             )
+            .map_err(|failure| failure.retained_reason())
             .unwrap();
         let records = fx.input.records(Kind::Refusal);
         assert_eq!(records.len(), 1);
@@ -1331,14 +1332,16 @@ fn generic_author_and_resume_cannot_steal_the_pending_repair_record() {
         fx.input
             .run
             .context
-            .author_and_wait(&mut ports(&mut fx.input.run.clock), event),
+            .author_and_wait(&mut ports(&mut fx.input.run.clock), event)
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::RepairOwned)
     ));
     assert!(matches!(
         fx.input
             .run
             .context
-            .resume_author_and_wait(&mut ports(&mut fx.input.run.clock)),
+            .resume_author_and_wait(&mut ports(&mut fx.input.run.clock))
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::RepairOwned)
     ));
     assert_eq!(

@@ -14,7 +14,8 @@ fn repair_accounting_review_held_original_allows_actual_correction_pair_drain() 
     let bound = run.context.deadlines.get(PumpDeadline::Decision).unwrap();
     assert_eq!(
         run.context
-            .author_and_wait(&mut ports(&mut run.clock), original),
+            .author_and_wait(&mut ports(&mut run.clock), original)
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::RepairOwned)
     );
     let refused = finish_refused(&mut fx);

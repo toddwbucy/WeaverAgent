@@ -706,7 +706,8 @@ fn generic_resume_cannot_take_the_receipt_owners_pending_author() {
         fx.input
             .run
             .context
-            .resume_author_and_wait(&mut ports(&mut fx.input.run.clock)),
+            .resume_author_and_wait(&mut ports(&mut fx.input.run.clock))
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::Flow {
             reason: FlowHaltReason::ProtocolFailed,
             ..

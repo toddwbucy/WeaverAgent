@@ -64,6 +64,7 @@ pub(super) struct PairTransaction {
     // A failed receipt check must not drop the exact evidence it rejected.
     refused_receipt: Option<SourceDisposition>,
     refused_filing: Option<FilingCompletion>,
+    refused_event: Option<AuthoredEvent>,
     pub(super) send: Option<crate::flow::pump_transport::OrganSend>,
     pub(super) refused_send: Option<weaver_types::OrganEnvelope>,
 }
@@ -76,6 +77,7 @@ impl PairTransaction {
             leg: None,
             refused_receipt: None,
             refused_filing: None,
+            refused_event: None,
             send: None,
             refused_send: None,
         }
@@ -459,7 +461,9 @@ impl RecordingContext {
                     PairProgress::Pending
                 });
             }
-            self.retain_refused(error.event);
+            let work = self.pair_work.as_mut().expect("pair owns attempted filing");
+            assert!(work.refused_event.is_none());
+            work.refused_event = Some(error.event);
             return Err(error.failure.unwrap_or_else(|| {
                 self.pair_fault(
                     ports.io,

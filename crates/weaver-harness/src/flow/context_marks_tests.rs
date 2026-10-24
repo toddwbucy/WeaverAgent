@@ -753,7 +753,8 @@ fn begin_task_held_author_keeps_input_read_and_mark_continuations_live() {
     let run = &mut fx.input.run;
     assert_eq!(
         run.context
-            .author_and_wait(&mut ports(&mut run.clock), original),
+            .author_and_wait(&mut ports(&mut run.clock), original)
+            .map_err(|failure| failure.retained_reason()),
         Err(RunFailure::MarksOwned)
     );
     let TaskCompletion::Begun(task) = fx.finish() else {
@@ -792,6 +793,7 @@ fn begin_task_excludes_public_read_author_and_preserves_original_deadline() {
             .run
             .context
             .author_and_wait(&mut ports(&mut fx.input.run.clock), event)
+            .map_err(|failure| failure.retained_reason())
             .unwrap_err(),
         RunFailure::MarksOwned
     );

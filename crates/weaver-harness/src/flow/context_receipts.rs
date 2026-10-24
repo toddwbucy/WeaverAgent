@@ -93,6 +93,7 @@ pub(super) struct FilingTransaction {
     bound: AbsoluteBound,
     sequence: Option<Sequence>,
     author_done: bool,
+    returned_author: StoppedAuthor,
     cancelled: bool,
     cancelled_event: Option<AuthoredEvent>,
     cancelled_receipts: Option<ReceiptSet>,
@@ -272,6 +273,7 @@ impl RecordingContext {
             bound: bound.expect("existing borrowed bound"),
             sequence: None,
             author_done: false,
+            returned_author: StoppedAuthor::default(),
             cancelled: false,
             cancelled_event: None,
             cancelled_receipts: None,
@@ -437,18 +439,31 @@ impl RecordingContext {
         self.live(ports.io)?;
         self.filing_wait_matches(ports.io)?;
         let owner = self.filing.as_ref().expect("checked owner");
+        owner.returned_author.check()?;
         if !owner.author_done {
             let sequence = if let Some(sequence) = self.completed_author.take() {
                 sequence
             } else if self.waiting_content.is_some() {
-                self.continue_waiting_content(ports)?
+                self.continue_waiting_content(ports).map_err(|failure| {
+                    self.filing
+                        .as_mut()
+                        .unwrap()
+                        .returned_author
+                        .retain(failure)
+                })?
             } else if self.barrier.pending_author().is_some() && !self.flow.has_pending_record() {
                 let progress =
                     self.barrier
                         .resume_with_clock(&mut self.inbox, &mut self.budget, &mut || {
                             ports.io.now()
                         });
-                self.wait_recorded(ports, progress)?
+                self.wait_recorded(ports, progress).map_err(|failure| {
+                    self.filing
+                        .as_mut()
+                        .unwrap()
+                        .returned_author
+                        .retain(failure)
+                })?
             } else {
                 return Err(self.fail(
                     ports.io,

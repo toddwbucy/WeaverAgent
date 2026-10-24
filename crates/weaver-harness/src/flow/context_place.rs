@@ -1310,6 +1310,7 @@ impl RecordingContext {
         let Some(author) = self.active_place_author() else {
             return Ok(());
         };
+        author.returned.check()?;
         if author.sequence.is_some() {
             self.consume_place_completion()?;
             return Ok(());
@@ -1331,7 +1332,12 @@ impl RecordingContext {
         if let Ok(sequence) = result {
             self.complete_place_author(sequence, ports.io)?;
         }
-        result.map(|_| ())
+        result.map(|_| ()).map_err(|failure| {
+            self.active_place_author_mut()
+                .unwrap()
+                .record
+                .retain_failure(failure)
+        })
     }
     pub(super) fn complete_place_author(
         &mut self,

@@ -27,6 +27,63 @@ fn fixture(limit: u64) -> ReceiptFixture {
     fx
 }
 
+#[test]
+fn author_failure_freshness_returns_the_previous_callers_original_without_restarting_it() {
+    let mut fx = fixture(100);
+    let wait = AbsoluteBound::after(fx.input.run.clock.now().unwrap(), 5).unwrap();
+    fx.input
+        .run
+        .context
+        .arm(PumpDeadline::Leave, wait, &mut fx.input.run.clock)
+        .unwrap();
+    fx.input.run.clock.advance_to(wait.deadline_ns()).unwrap();
+    let event = note();
+    let original = format!("{event:?}");
+    let Some(Payload::ModelMeasurement(raw)) = &event.payload else {
+        unreachable!()
+    };
+    let pointer = raw.get().as_ptr();
+    assert!(matches!(
+        fx.input.run.author(event),
+        Err(RunFailure::Wait { .. })
+    ));
+    fx.input
+        .run
+        .context
+        .complete_wait(PumpDeadline::Leave)
+        .unwrap();
+    let cut = begin(&mut fx, vec![]);
+    let held =
+        crate::flow::context::held_input_tests::hold(&mut fx.input.run.context, HeldInput::Both);
+    let failure = advance(&mut fx).unwrap_err();
+    assert_eq!(fx.input.run.context.failure(), Some(&failure));
+    let waiting = fx.input.run.context.waiting_content.as_ref().unwrap();
+    assert_eq!(waiting.withdrawn.as_ref(), Some(&failure));
+    assert_eq!(format!("{:?}", waiting.event), original);
+    let returned = fx
+        .input
+        .run
+        .context
+        .resume_author_and_wait(&mut ports(&mut fx.input.run.clock))
+        .unwrap_err();
+    assert_eq!(returned.reason, failure);
+    let event = returned.original.unwrap();
+    assert_eq!(format!("{event:?}"), original);
+    let Some(Payload::ModelMeasurement(raw)) = &event.payload else {
+        unreachable!()
+    };
+    assert_eq!(raw.get().as_ptr(), pointer);
+    assert!(fx.input.run.context.waiting_content.is_none());
+    assert!(fx.input.run.context.pending_author().is_none());
+    assert!(fx.input.run.context.completed_author.is_none());
+    assert_eq!(
+        fx.input.run.context.deadlines.get(PumpDeadline::Cut),
+        Some(cut)
+    );
+    held.assert_held(&fx.input.run.context);
+    assert!(fx.input.records(Kind::ModelMeasurement).is_empty());
+}
+
 fn sources(sequence: Sequence, blocks: u64) -> Vec<s::SourceBlockId> {
     (0..blocks)
         .map(|block| s::SourceBlockId {
@@ -619,6 +676,7 @@ fn freshness_retains_a_deferred_generic_author_and_its_sequence_across_leave() {
                 .run
                 .context
                 .resume_author_and_wait(&mut ports(&mut fx.input.run.clock))
+                .map_err(|failure| failure.retained_reason())
                 .unwrap(),
             sequence
         );
@@ -689,6 +747,7 @@ fn refuse_cut_then_finish_retained_turn(fx: &mut ReceiptFixture) {
         .run
         .context
         .resume_author_and_wait(&mut ports(&mut fx.input.run.clock))
+        .map_err(|failure| failure.retained_reason())
         .unwrap();
     let turn = retained_turn_start().turn.unwrap();
     assert_eq!(fx.input.run.context.open_turn.as_ref(), Some(&turn));
@@ -837,6 +896,7 @@ fn freshness_resumes_the_existing_trace_ticket_without_taking_its_caller_result(
             .run
             .context
             .resume_author_and_wait(&mut ports(&mut fx.input.run.clock))
+            .map_err(|failure| failure.retained_reason())
             .unwrap(),
         sequence
     );

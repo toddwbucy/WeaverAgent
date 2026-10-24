@@ -7,6 +7,7 @@ pub(super) struct StopWork {
     turn: TurnRef,
     cause: Cause,
     author_started: bool,
+    returned_author: StoppedAuthor,
     pub(super) close_sequence: Option<Sequence>,
     gate_close: Option<OrganEnvelope>,
     pub(super) gate_send: Option<OrganSend>,
@@ -59,6 +60,7 @@ impl StopWork {
                 .clone(),
             cause,
             author_started: false,
+            returned_author: StoppedAuthor::default(),
             close_sequence: None,
             gate_close: None,
             gate_send: None,
@@ -95,26 +97,39 @@ impl StopWork {
             io,
         };
         if self.close_sequence.is_none() {
+            self.returned_author.check()?;
             let sequence = if self.author_started {
-                owner.context.resume_author_and_wait(&mut ports)?
+                owner
+                    .context
+                    .resume_author_and_wait(&mut ports)
+                    .map_err(|failure| {
+                        self.returned_author
+                            .retain_started(failure, &mut self.author_started)
+                    })?
             } else {
                 self.author_started = true;
-                owner.context.author_and_wait(
-                    &mut ports,
-                    AuthoredEvent {
-                        kind: serving::Kind::TurnClosed,
-                        subsystem: Subsystem::Harness,
-                        turn: Some(self.turn.clone()),
-                        source: AuthoredSource::Runtime,
-                        causal_parent: None,
-                        payload: Some(serving::Payload::TurnClosed(TurnClose::Stopped {
-                            reason: StopReason::Directive,
-                            cause: Some(weaver_trace::Cause {
-                                uid: self.cause.uid,
-                            }),
-                        })),
-                    },
-                )?
+                owner
+                    .context
+                    .author_and_wait(
+                        &mut ports,
+                        AuthoredEvent {
+                            kind: serving::Kind::TurnClosed,
+                            subsystem: Subsystem::Harness,
+                            turn: Some(self.turn.clone()),
+                            source: AuthoredSource::Runtime,
+                            causal_parent: None,
+                            payload: Some(serving::Payload::TurnClosed(TurnClose::Stopped {
+                                reason: StopReason::Directive,
+                                cause: Some(weaver_trace::Cause {
+                                    uid: self.cause.uid,
+                                }),
+                            })),
+                        },
+                    )
+                    .map_err(|failure| {
+                        self.returned_author
+                            .retain_started(failure, &mut self.author_started)
+                    })?
             };
             self.close_sequence = Some(sequence);
             let close = crate::lifecycle::render_close(
