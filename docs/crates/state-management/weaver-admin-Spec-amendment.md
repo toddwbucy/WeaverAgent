@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #282.
+**Landing PR:** #268
 
-**Version:** 0.16 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
+**Version:** 0.17 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -419,7 +419,7 @@ digest and cause with a new existing-channel exchange ordinal. [PLAN-6, CLASS-8]
 | Observing | Running serving at rest with loaded facts | Send one PlanUpdate, Waiting |
 | Observing | Other state, refusal or observation bound | Existing refusal, no update |
 | Waiting | Matching PlanUpdated | Print/log that receipt's PlanRef and source, exit success |
-| Waiting | Matching LifecycleRefusal | Print/log it, exit refused, no retry |
+| Waiting | Matching LifecycleRefusal | Print/log it, including typed read_code for read_refused, exit refused, no retry |
 | Waiting | Closure or bound without answer | Print/log Unanswered, no rollback or automatic retry |
 | Waiting | Wrong exchange/payload | Existing protocol refusal, no guessed update result |
 
@@ -429,6 +429,16 @@ summary and the source/receipt trace to resolve that case. The worker's own boun
 governs an unfinished update, even if admin has disconnected. No timeout here signals or
 unloads a healthy worker. A confirmed update has no publication side effect. Save points
 still use their own verb and protocol. [PLAN-6, FLOW-4]
+
+For PLAN-PREFLIGHT-READ, print and log the matching PlanUpdateRefused with
+case read_refused, its typed read_code, unchanged member detail and empty
+rejected_blocks. Admin does not parse detail to recover the code or convert the
+refusal to Unanswered, malformed_plan, stale_plan or success. It performs no automatic
+retry, narrower read, rollback, save or unload. show may still report the prior
+committed PlanSummary once the worker's refused operation has settled. This is a
+worker operation outcome, distinct from missing the answer and from a required
+post-commit refresh failure. All other plan-refusal cases carry read_code:null.
+[PLAN-6, FLOW-4, SEAM-3]
 
 **ADMIN-PLAN-SHOW.** Preserve the existing Observe/State shape and add its optional plan
 summary under TYPES-PLAN-CONTROL. show only relays the worker's account. It never reads
