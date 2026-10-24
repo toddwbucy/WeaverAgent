@@ -114,7 +114,7 @@ impl RecordingContext {
             || self.barrier.pending_author().is_some()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
-            || self.template_blocked_author.is_some()
+            || self.caller_author_held()
             || self.flow.has_pending_record()
             || self.flow.pending_check().is_some()
             || self.flow.pending_control().is_some()
@@ -285,7 +285,7 @@ impl RecordingContext {
             || self.barrier.pending_author().is_some()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
-            || self.template_blocked_author.is_some()
+            || self.caller_author_held()
             || self.flow.has_pending_record()
         {
             return Ok(None);
@@ -313,7 +313,7 @@ impl RecordingContext {
         if !owner.complete
             || owner.rejected
             || self.template_setup_refusal.is_some()
-            || self.template_blocked_author.is_some()
+            || self.caller_author_held()
         {
             return Err(RunFailure::TemplateBlocked);
         }

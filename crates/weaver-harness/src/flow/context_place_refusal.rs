@@ -166,6 +166,7 @@ impl RecordingContext {
         }
         let mut refusal = work.refusal.take().unwrap();
         refusal.account = Some(PlaceAccount {
+            phase: self.phase,
             work: AccountWork::Notice(Box::new(work)),
             measure: None,
         });
