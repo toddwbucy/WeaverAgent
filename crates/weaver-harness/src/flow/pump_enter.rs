@@ -11,6 +11,7 @@ pub(in crate::flow) struct ReceivedEnter {
     peer: LifecyclePeer,
     message: LifecycleMessage<EnterEnvelope>,
     wire: Vec<u8>,
+    adopted_origin: Option<std::sync::Arc<()>>,
 }
 impl EnterReceiver {
     #[allow(clippy::result_large_err)]
@@ -61,6 +62,7 @@ impl EnterReceiver {
             peer: self.peer,
             message,
             wire,
+            adopted_origin: None,
         })
     }
 }
@@ -144,10 +146,13 @@ impl ReceivedEnter {
             .map_err(|error| error.0)
         })();
         match result {
-            Ok(context) => Ok(AdoptedEnter {
-                source: self,
-                context,
-            }),
+            Ok(context) => {
+                self.adopted_origin = Some(std::sync::Arc::clone(context.enter_origin()));
+                Ok(AdoptedEnter {
+                    source: self,
+                    context,
+                })
+            }
             Err(detail) => Err(AdoptionFailure {
                 source: self,
                 detail,
@@ -166,3 +171,64 @@ impl AdoptedEnter {
 #[cfg(test)]
 #[path = "pump_enter_tests.rs"]
 mod tests;
+
+impl ReceivedEnter {
+    pub(in crate::flow) fn adopted_by(
+        &self,
+        context: &super::super::context::RecordingContext,
+    ) -> bool {
+        self.adopted_origin
+            .as_ref()
+            .is_some_and(|origin| std::sync::Arc::ptr_eq(origin, context.enter_origin()))
+    }
+}
+/// Lend the actual source peer while keeping the immutable original payload.
+/// A caller cannot replace that connection during a composed Enter stage.
+pub(in crate::flow) fn with_enter<'a, T>(
+    original: Option<&'a mut ReceivedEnter>,
+    mut lifecycle: LifecyclePorts<'a>,
+    operation: impl FnOnce(
+        LifecyclePorts<'a>,
+        Option<&'a weaver_types::state_flow::enter::EnterPayload>,
+    ) -> T,
+) -> Result<T, Failure> {
+    let payload = if let Some(original) = original {
+        if lifecycle.peer.is_some() {
+            return Err(invalid_failure(
+                "composed Enter received a substitute admin peer",
+            ));
+        }
+        lifecycle.peer = Some(&mut original.peer);
+        Some(original.message.envelope.enter())
+    } else {
+        None
+    };
+    Ok(operation(lifecycle, payload))
+}
+
+/// Probe the retained source only after the owning stage checks its deadline.
+pub(in crate::flow) fn probe_enter_peer(lifecycle: &mut LifecyclePorts<'_>) -> Result<(), Failure> {
+    lifecycle
+        .peer
+        .as_mut()
+        .expect("original peer lent by with_enter")
+        .check_terminal()
+        .map(|_| ())
+}
+
+impl ReceivedEnter {
+    pub(in crate::flow) fn peer(&self) -> &LifecyclePeer {
+        &self.peer
+    }
+    pub(in crate::flow) fn peer_mut(&mut self) -> &mut LifecyclePeer {
+        &mut self.peer
+    }
+    /// The response exchange comes from the retained original, never a caller.
+    pub(in crate::flow) fn ready_envelope(&self) -> OrganEnvelope {
+        OrganEnvelope {
+            exchange: self.message.envelope.exchange.clone(),
+            position: weaver_types::Position::Close,
+            payload: weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::Ready),
+        }
+    }
+}

@@ -38,7 +38,7 @@ impl PumpIo for CircuitIo<'_> {
     }
 }
 
-fn prompt(seed: &str) -> Vec<u8> {
+pub(in crate::flow::context) fn prompt(seed: &str) -> Vec<u8> {
     let corpus: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("fixtures/recall-sources.json")).unwrap();
     let mut result = corpus
@@ -206,6 +206,40 @@ fn circuit_with_fixture(
         BootComposition::new(&mut fx.input.run.context, &mut fallback_decode, inventory)
     };
     let resident_mode = std::env::var("WEAVER_GATE_STARTUP_DRIVER").unwrap_or_default();
+    if resident_mode == "entered-eof-boot" || resident_mode == "entered-substitute-boot" {
+        let (near, _far) = crate::channel::OrganChannel::pair().unwrap();
+        let mut substitute = crate::flow::pump::LifecyclePeer::from_channel(near).unwrap();
+        if resident_mode == "entered-eof-boot" {
+            super::super::startup_composition::tests::entered_tests::close_original_peer();
+        }
+        let result = boot.advance(
+            LifecyclePorts {
+                peer: (resident_mode == "entered-substitute-boot").then_some(&mut substitute),
+                ..Default::default()
+            },
+            &mut fx.input.run.clock,
+        );
+        assert_eq!(result, BootCompositionProgress::Stopped);
+        assert!(matches!(
+            boot.stopped(),
+            Some(BootCompositionStop::Run(RunFailure::Transport {
+                source: PumpSource::Admin,
+                ..
+            }))
+        ));
+        let stopped = boot.into_stopped().ok().unwrap();
+        assert!(
+            stopped
+                .resident
+                .as_ref()
+                .unwrap()
+                .evidence
+                .startup
+                .original_enter
+                .is_some()
+        );
+        return;
+    }
     if resident_mode == "resident-spu-eof-boot" {
         boot.resident.as_mut().unwrap().spu.stop_at_cap();
         for _ in 0..3000 {

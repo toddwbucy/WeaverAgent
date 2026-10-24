@@ -44,7 +44,7 @@ pub(crate) fn fixture() -> Fixture {
 
 /// Test-only host identity input. The same private preparation validates it,
 /// and root host instruments can exercise an actual distinct credential drop.
-pub(in crate::seed) fn fixture_with_member(member: inventory::MemberAccount) -> Fixture {
+pub(crate) fn fixture_with_member(member: inventory::MemberAccount) -> Fixture {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let base = std::env::temp_dir().join(format!(
         "weaver-seed-preparation-{}-{}",

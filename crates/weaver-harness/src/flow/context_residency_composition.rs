@@ -2,6 +2,7 @@
 use super::*;
 use crate::flow::context::startup_composition::{PreparedStartup, StartupEvidence};
 use crate::flow::pump::LifecyclePorts;
+use crate::flow::pump::enter::{probe_enter_peer, with_enter};
 use crate::flow::pump_transport::{OrganSend, ReceivedOrgan};
 use crate::flow::templates::CompiledInventory;
 use std::path::PathBuf;
@@ -109,7 +110,11 @@ impl<'a> ResidencyComposition<'a> {
         let (context, resources, inventory, startup) = startup.into_parts();
         let invalid = context.phase != RecordingPhase::Entered
             || !resources.matches(context)
-            || resources.spu_child().is_some();
+            || resources.spu_child().is_some()
+            || startup.original_enter.as_ref().is_some_and(|original| {
+                !original.adopted_by(context)
+                    || request.instruction != original.envelope().enter().spu_instruction
+            });
         let enter = context.deadlines.get(PumpDeadline::Enter);
         Self {
             context,
@@ -191,12 +196,37 @@ impl<'a> ResidencyComposition<'a> {
         lifecycle: LifecyclePorts<'_>,
         io: &mut impl PumpIo,
     ) -> ResidencyStage {
-        if !self.check(&lifecycle, io) {
+        if self.stage == ResidencyStage::Stopped {
             return self.stage;
         }
-        // SAFETY: forwarded from this driver's caller contract.
-        if let Err(failure) = unsafe { self.step(lifecycle, io) } {
-            self.stop(ResidencyStop::Run(failure));
+        if let Some(failure) = self.context.failure().cloned() {
+            return self.stop(ResidencyStop::Run(failure));
+        }
+        let mut original = self.startup.original_enter.take();
+        let result = with_enter(original.as_mut(), lifecycle, |mut lifecycle, payload| {
+            if !self.check(&lifecycle, io) {
+                return;
+            }
+            if payload.is_some()
+                && let Err(failure) = probe_enter_peer(&mut lifecycle)
+            {
+                self.stop(ResidencyStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return;
+            }
+            // SAFETY: forwarded from this driver's caller contract.
+            if let Err(failure) = unsafe { self.step(lifecycle, io) } {
+                self.stop(ResidencyStop::Run(failure));
+            }
+        });
+        self.startup.original_enter = original;
+        if let Err(failure) = result {
+            self.stop(ResidencyStop::Run(RunFailure::Transport {
+                source: PumpSource::Admin,
+                failure,
+            }));
         }
         self.stage
     }
@@ -352,8 +382,40 @@ impl<'a> ResidencyComposition<'a> {
         lifecycle: LifecyclePorts<'_>,
         io: &mut impl PumpIo,
     ) -> Result<AdmittedStartup<'a>, Self> {
-        if self.stage != ResidencyStage::Complete || !self.check(&lifecycle, io) {
+        if self.stage != ResidencyStage::Complete {
             return Err(self);
+        }
+        if let Some(failure) = self.context.failure().cloned() {
+            self.stop(ResidencyStop::Run(failure));
+            return Err(self);
+        }
+        let mut original = self.startup.original_enter.take();
+        let checked = with_enter(original.as_mut(), lifecycle, |mut ports, payload| {
+            if !self.check(&ports, io) {
+                return false;
+            }
+            if payload.is_some()
+                && let Err(failure) = probe_enter_peer(&mut ports)
+            {
+                self.stop(ResidencyStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return false;
+            }
+            true
+        });
+        self.startup.original_enter = original;
+        match checked {
+            Ok(true) => (),
+            Ok(false) => return Err(self),
+            Err(failure) => {
+                self.stop(ResidencyStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return Err(self);
+            }
         }
         let origin = self.resources.origin_for_boot();
         Ok(AdmittedStartup {
