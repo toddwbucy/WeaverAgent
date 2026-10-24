@@ -816,7 +816,14 @@ impl RecordingContext {
     pub(super) fn complete_wait(&mut self, key: PumpDeadline) -> Option<AbsoluteBound> {
         self.freeze_plan_summary_account_bound();
         self.freeze_place_account_bound();
-        if self.failure.is_some()
+        if self.wait_still_owned(key) {
+            return None;
+        }
+        self.disarm_wait(key)
+    }
+
+    fn wait_still_owned(&self, key: PumpDeadline) -> bool {
+        self.failure.is_some()
             || self.phase == RecordingPhase::Closed
             || self.filing_wait_still_owned(key)
             || self.output_wait_still_owned(key)
@@ -838,10 +845,6 @@ impl RecordingContext {
                     .template_checks
                     .as_ref()
                     .is_some_and(|owner| owner.can_certify()))
-        {
-            return None;
-        }
-        self.disarm_wait(key)
     }
 
     /// A retired Enter receipt proves the original registered cap was actually

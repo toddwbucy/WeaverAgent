@@ -377,9 +377,6 @@ impl<'a> FoundationInput<'a> {
                     ports.io,
                 ) {
                     Ok(()) => {
-                        // Admission may wait under Decision, but decoding does
-                        // not spend the next OUTPUT barrier's budget.
-                        context.complete_wait(PumpDeadline::Decision);
                         work.stage = EngineStage::Generation;
                     }
                     Err(error) => {

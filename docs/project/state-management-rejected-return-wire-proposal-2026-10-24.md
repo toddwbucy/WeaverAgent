@@ -2,7 +2,7 @@
 
 Date filed: 2026-10-24
 Issue: #146. Parent: #324 at
-`bbe299fe6fd8c3515a16f550976c7652ba5e78f7`.
+`5fc27ead205637465c60f86ee34ac13655401b12`.
 Branch: `docs/state-rejected-return-wire`.
 
 This is a design proposal for operator election, Planner review and merge before

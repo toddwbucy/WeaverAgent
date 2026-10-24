@@ -640,7 +640,7 @@ fn return_carry_foreign_append_receipt_does_not_match_the_actual_placement() {
 }
 
 #[test]
-fn return_carry_frozen_ledger_grants_no_new_record_or_delivery() {
+fn return_carry_frozen_ledger_retains_receipts_without_grant_or_delivery() {
     let mut fx = PlaceFixture::new();
     let call = actual_completed_pair(&mut fx);
     let returned = fx.run().context.hold_place_return(&call).unwrap();
@@ -664,12 +664,66 @@ fn return_carry_frozen_ledger_grants_no_new_record_or_delivery() {
     );
     assert_eq!(
         fx.run().context.pairs.record_result(&call, sequence),
-        Err(pairs::PairError::Frozen)
+        Ok(())
     );
     assert_eq!(
         fx.run().context.acknowledge_delivery(&call, &proof),
         Err(pairs::PairError::Frozen)
     );
+}
+
+#[test]
+fn return_carry_failed_pending_author_retains_its_recorded_receipt() {
+    let mut fx = PlaceFixture::new();
+    let call = actual_completed_pair(&mut fx);
+    let returned = fx.run().context.hold_place_return(&call).unwrap();
+    let request = fx.request(vec![returned]);
+    fx.begin(request);
+    let TokenDirective::MeasureDelta { keep, .. } = fx.next_measure() else {
+        unreachable!()
+    };
+    fx.answer(&fx.measured(keep, 2));
+    fx.summary.boot.member.fill_trace();
+    let mut ticket = None;
+    for _ in 0..128 {
+        fx.advance_placement_pressure().unwrap();
+        if let Some(author) = fx.run().context.pending_author() {
+            assert_eq!(author.event.kind, Kind::MessageToolResult);
+            ticket = Some(author.ticket);
+            break;
+        }
+    }
+    let ticket = ticket.expect("the actual result author is waiting on trace");
+    let run = fx.run();
+    let first = run.context.fail(
+        &mut run.clock,
+        FlowHaltReason::ProtocolFailed,
+        HaltPoint::Barrier,
+        "fixture failure while result author is pending",
+    );
+    assert_eq!(run.context.pending_author().unwrap().ticket, ticket);
+    fx.first_fault_attempt();
+    fx.summary.drain();
+    let account = fx.settled_account();
+    assert!(account.incomplete().is_none());
+    assert_eq!(fx.run().context.failure(), Some(&first));
+    let records = fx.records(Kind::MessageToolResult);
+    assert_eq!(records.len(), 1);
+    let sequence = fx.run().context.pairs.remove_result_record_for_test(&call);
+    assert_eq!(
+        serde_json::to_value(sequence).unwrap(),
+        records[0]["sequence"],
+        "the stopped account retained the exact receipt before it completed"
+    );
+    assert_eq!(
+        fx.run().context.pairs.record_result(&call, sequence),
+        Ok(())
+    );
+    assert!(matches!(
+        fx.run().context.hold_place_return(&call),
+        Err(pairs::PairError::Frozen)
+    ));
+    assert!(receive(fx.peer.as_fd()).is_none());
 }
 
 #[test]

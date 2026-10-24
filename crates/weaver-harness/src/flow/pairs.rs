@@ -1670,7 +1670,8 @@ impl PairLedger {
         call: &CallId,
         sequence: weaver_trace::Sequence,
     ) -> Result<(), PairError> {
-        self.live()?;
+        // Retaining an already-authored receipt is owed even after fail()
+        // freezes the ledger. This grants neither another author nor delivery.
         let index = *self
             .closed_by_call
             .get(&call_key(call))
