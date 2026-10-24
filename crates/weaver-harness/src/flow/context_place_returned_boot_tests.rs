@@ -1,6 +1,7 @@
 //! Actual refused placement hands its original Boot proof to bounded rollback.
 //! Requires the separate returned-Boot adapter; this overlay changes no policy.
 use super::*;
+use crate::flow::context::plan_summary_driver::PlanSummaryDisposition;
 
 #[test]
 fn place_returned_boot_install_refusal_transfers_exact_cleanup_owner_through_closed() {
@@ -89,13 +90,13 @@ fn place_returned_boot_install_refusal_transfers_exact_cleanup_owner_through_clo
         let account = run.context.take_stopped_plan_summary().unwrap().unwrap();
         assert_eq!(
             account.disposition_for_test(),
-            (
-                true,
-                false,
-                PumpDeadline::Enter,
-                enter,
-                enter.deadline_ns().min(leave.deadline_ns())
-            )
+            PlanSummaryDisposition {
+                complete: true,
+                cancelled: false,
+                key: PumpDeadline::Enter,
+                bound: enter,
+                account_deadline: enter.deadline_ns().min(leave.deadline_ns())
+            }
         );
         assert_eq!(
             std::ptr::from_ref(account.recorded_read().unwrap()) as usize,

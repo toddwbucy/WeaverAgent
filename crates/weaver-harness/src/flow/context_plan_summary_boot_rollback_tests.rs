@@ -1,6 +1,7 @@
 //! Completed boot reads keep their past disposition and their rollback custody.
 //! This is a primitive composition, not the still-held serving Enter adapter.
 use super::*;
+use crate::flow::context::plan_summary_driver::PlanSummaryDisposition;
 
 /// Scalar and pointer witnesses only. No test rebuilds or copies a capability.
 struct CompletedBootEvidence {
@@ -47,13 +48,13 @@ fn completed_boot(populated: bool) -> (SummaryFixture, CompletedBootEvidence) {
             .as_ref()
             .unwrap()
             .disposition_for_test(),
-        (
-            true,
-            false,
-            PumpDeadline::Enter,
-            evidence.enter,
-            evidence.enter.deadline_ns()
-        )
+        PlanSummaryDisposition {
+            complete: true,
+            cancelled: false,
+            key: PumpDeadline::Enter,
+            bound: evidence.enter,
+            account_deadline: evidence.enter.deadline_ns()
+        }
     );
     (fx, evidence)
 }
@@ -128,13 +129,13 @@ fn assert_completed_boot_account(
     let run = fx.run();
     assert_eq!(
         account.disposition_for_test(),
-        (
-            true,
-            false,
-            PumpDeadline::Enter,
-            evidence.enter,
-            evidence.enter.deadline_ns().min(leave.deadline_ns()),
-        )
+        PlanSummaryDisposition {
+            complete: true,
+            cancelled: false,
+            key: PumpDeadline::Enter,
+            bound: evidence.enter,
+            account_deadline: evidence.enter.deadline_ns().min(leave.deadline_ns())
+        }
     );
     assert!(account.refusal().is_none());
     assert!(account.incomplete().is_none());
@@ -205,7 +206,11 @@ fn completed_boot_rollback_revocation_retains_exact_evidence_in_both_handoff_ord
                 let measurements = fx.records(Kind::StateStoreMeasurement).len();
                 revoke_completed_boot(&mut fx, cause);
                 let run = fx.run();
-                let (complete, cancelled, ..) = run
+                let PlanSummaryDisposition {
+                    complete,
+                    cancelled,
+                    ..
+                } = run
                     .context
                     .plan_summary
                     .as_ref()
@@ -347,7 +352,7 @@ fn completed_boot_rollback_actual_stop_retires_transports_then_records_unload_an
     assert_eq!(run.context.phase(), RecordingPhase::Closed);
     assert!(run.context.failure().is_none());
     assert_eq!(account.recorded_read().unwrap().raw_bytes(), evidence.raw);
-    assert!(!account.disposition_for_test().1);
+    assert!(!account.disposition_for_test().cancelled);
     // This fixture owns no real lifecycle/residency aggregate and makes no
     // claim about Ready/Left responses or the returned-proof teardown adapter.
 }
@@ -394,7 +399,7 @@ fn completed_boot_rollback_unfinished_control_keeps_its_actual_cancelled_disposi
         run.context.cancel_plan_summary(&mut run.clock).unwrap();
         finish_summary_without_take(&mut fx);
         let account = rollback_boot_summary(&mut fx);
-        assert!(account.disposition_for_test().1);
+        assert!(account.disposition_for_test().cancelled);
         assert_eq!(
             account.recorded_read().map(|read| read.raw_bytes()),
             raw.as_deref()

@@ -317,18 +317,20 @@ pub struct DecoderInstruction {
     pub tunable_values: std::collections::BTreeMap<String, f64>,
 }
 
-/// The model artifact and the devices it is assigned to.
-///
-/// The vector is ordered and the order is the shard order. An empty set is a
-/// parse error rather than a default, because a binding assigning no device is a
-/// declaration the operator did not finish, and defaulting it to device zero is
-/// the placement decision this crate exists not to make. Whether the devices
-/// exist and can shard is admission's; this crate answers well-formed only.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct ModelBinding {
-    pub artifact: ArtifactRef,
-    pub devices: Vec<DeviceOrdinal>,
+crate::state_flow::codec::closed_object! {
+    /// The model artifact and the devices it is assigned to.
+    ///
+    /// The vector is ordered and the order is the shard order. An empty set is a
+    /// parse error rather than a default, because a binding assigning no device is a
+    /// declaration the operator did not finish, and defaulting it to device zero is
+    /// the placement decision this crate exists not to make. Whether the devices
+    /// exist and can shard is admission's; this crate answers well-formed only.
+    #[derive(Debug, Clone, PartialEq, Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub struct ModelBinding {
+        pub artifact: ArtifactRef,
+        pub devices: Vec<DeviceOrdinal>,
+    }
 }
 
 /// The instruction the gate resolves and never interprets beyond its fields.

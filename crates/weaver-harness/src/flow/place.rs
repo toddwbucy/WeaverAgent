@@ -153,6 +153,9 @@ impl ConfirmedGeneration {
 #[derive(Debug)]
 pub(in crate::flow) struct ReloadTail {
     pub(super) items: Vec<ReloadItem>,
+    // Original consumed pending leases stay with the retry tail. The index is
+    // their position in that original ordered tail, not a new source identity.
+    pub(super) filed_sources: Vec<(usize, PendingReloadText)>,
 }
 #[derive(Debug)]
 pub(super) enum ReloadItem {
@@ -172,6 +175,7 @@ impl ReloadTail {
                 .into_iter()
                 .map(|unit| ReloadItem::Held(Arc::new(unit)))
                 .collect(),
+            filed_sources: vec![],
         }
     }
     pub(in crate::flow) fn push_pending(&mut self, pending: PendingReloadText) {

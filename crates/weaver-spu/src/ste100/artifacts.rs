@@ -19,7 +19,7 @@ use weaver_types::state_flow::{
     Ste100ModelManifest,
 };
 
-use super::admission::{VerifiedFiles, verify_file_digest, verify_manifest};
+use super::admission::{VerifiedFiles, parse_manifest};
 
 /// No public constructor can assert a path's custody from supplied bytes.
 #[derive(Debug)]
@@ -36,13 +36,13 @@ impl AcquiredArtifacts {
         acquire_with(instruction, |_| {})
     }
 
-    // Only admission, after validate_bootstrap, uses the prevalidated route. This
-    // callback checks compatibility before any referenced model input is opened.
-    pub(super) fn acquire_validated(
+    // Admission checks compatibility before any referenced model input is opened.
+    // Every route still checks the exact instruction before any path is opened.
+    pub(super) fn acquire_compatible(
         instruction: &Ste100Instruction,
         compatible: impl FnOnce(&Ste100ModelManifest) -> Result<(), Ste100AdmissionRefused>,
     ) -> Result<Self, Ste100AdmissionRefused> {
-        acquire_validated_with(instruction, compatible, |_| {})
+        acquire_compatible_with(instruction, compatible, |_| {})
     }
 
     pub fn manifest_bytes(&self) -> &[u8] {
@@ -60,12 +60,21 @@ impl AcquiredArtifacts {
 enum Acquired<'a> {
     Root,
     Manifest,
+    Materialize(&'a str),
     Reference(&'a str),
 }
 
 fn acquire_with(
     instruction: &Ste100Instruction,
     acquired: impl FnMut(Acquired<'_>),
+) -> Result<AcquiredArtifacts, Ste100AdmissionRefused> {
+    acquire_compatible_with(instruction, |_| Ok(()), acquired)
+}
+
+fn acquire_compatible_with(
+    instruction: &Ste100Instruction,
+    compatible: impl FnOnce(&Ste100ModelManifest) -> Result<(), Ste100AdmissionRefused>,
+    mut acquired: impl FnMut(Acquired<'_>),
 ) -> Result<AcquiredArtifacts, Ste100AdmissionRefused> {
     instruction
         .validate()
@@ -74,14 +83,6 @@ fn acquire_with(
             code: Ste100AdmissionCode::InvalidInstruction,
             detail: error.to_string(),
         })?;
-    acquire_validated_with(instruction, |_| Ok(()), acquired)
-}
-
-fn acquire_validated_with(
-    instruction: &Ste100Instruction,
-    compatible: impl FnOnce(&Ste100ModelManifest) -> Result<(), Ste100AdmissionRefused>,
-    mut acquired: impl FnMut(Acquired<'_>),
-) -> Result<AcquiredArtifacts, Ste100AdmissionRefused> {
     let locator = instruction.model_binding.artifact.0.as_str();
     // Split bytes without Path::components normalization: a symlink followed by
     // '..' has filesystem semantics. Validation already rejected a trailing slash.
@@ -105,18 +106,25 @@ fn acquire_validated_with(
         Mode::empty(),
     )
     .map_err(|error| failure(locator, error))?;
-    let (mut manifest_file, manifest_len) = regular_file(File::from(manifest), locator)?;
+    let mut manifest_file = regular_file(File::from(manifest), locator)?;
     let (manifest_bytes, manifest) =
-        read_matching_manifest(&mut manifest_file, manifest_len, instruction, || {})?;
+        read_matching_manifest(&mut manifest_file, instruction, || {
+            acquired(Acquired::Materialize(locator))
+        })?;
     compatible(&manifest)?;
     acquired(Acquired::Manifest);
-    let mut files = BTreeMap::new();
+    let mut files: BTreeMap<String, HashedBytes> = BTreeMap::new();
     for reference in std::iter::once(&manifest.encoder.config)
         .chain(manifest.encoder.weights.iter())
         .chain([&manifest.tokenizer, &manifest.span_head])
     {
         // validate() already checked all names before the first reference open.
-        if !files.contains_key(&reference.name) {
+        if let Some(held) = files.get(&reference.name) {
+            // A repeated declaration shares one allocation, but must name its digest.
+            if held.digest != reference.sha256 {
+                return Err(failure(&reference.name, "manifest file digest differs"));
+            }
+        } else {
             let descriptor = retry_confined_open(|| {
                 // BENEATH currently also disables magic links on Linux. Keep the
                 // explicit NO_MAGICLINKS requirement if that kernel behavior changes;
@@ -127,11 +135,12 @@ fn acquire_validated_with(
                 openat2(&root, reference.name.as_str(), how)
             })
             .map_err(|error| failure(&reference.name, error))?;
-            let (mut file, len) = regular_file(File::from(descriptor), &reference.name)?;
-            let bytes = read_owned(&mut file, len, &reference.name)?;
-            files.insert(reference.name.clone(), bytes);
+            let mut file = regular_file(File::from(descriptor), &reference.name)?;
+            let held = read_matching_bytes(&mut file, &reference.sha256, &reference.name, || {
+                acquired(Acquired::Materialize(&reference.name))
+            })?;
+            files.insert(reference.name.clone(), held);
         }
-        verify_file_digest(reference, &files[&reference.name])?;
         acquired(Acquired::Reference(&reference.name));
     }
     Ok(AcquiredArtifacts {
@@ -139,7 +148,12 @@ fn acquire_validated_with(
         instruction: instruction.clone(),
         manifest,
         manifest_bytes,
-        files: VerifiedFiles { files },
+        files: VerifiedFiles {
+            files: files
+                .into_iter()
+                .map(|(name, held)| (name, held.bytes))
+                .collect(),
+        },
     })
 }
 
@@ -156,7 +170,7 @@ fn retry_confined_open<T>(mut open: impl FnMut() -> Result<T, Errno>) -> Result<
     unreachable!("the final bounded attempt always returns")
 }
 
-fn regular_file(file: File, name: &str) -> Result<(File, u64), Ste100AdmissionRefused> {
+fn regular_file(file: File, name: &str) -> Result<File, Ste100AdmissionRefused> {
     let metadata = file.metadata().map_err(|error| failure(name, error))?;
     if !metadata.is_file() {
         return Err(failure(name, "artifact is not a regular file"));
@@ -164,48 +178,84 @@ fn regular_file(file: File, name: &str) -> Result<(File, u64), Ste100AdmissionRe
     // Nonblocking open prevents FIFO acquisition from waiting before the kind
     // check. A verified regular descriptor uses ordinary blocking file reads.
     let flags = fcntl(&file, FcntlArg::F_GETFL).map_err(|error| failure(name, error))?;
-    let flags = OFlag::from_bits_truncate(flags) & !OFlag::O_NONBLOCK;
+    let flags = blocking_regular_flags(flags);
     fcntl(&file, FcntlArg::F_SETFL(flags)).map_err(|error| failure(name, error))?;
-    Ok((file, metadata.len()))
+    Ok(file)
+}
+
+// Retain status bits even when this version of nix does not name them.
+fn blocking_regular_flags(flags: i32) -> OFlag {
+    OFlag::from_bits_retain(flags & !OFlag::O_NONBLOCK.bits())
 }
 
 const READ_CHUNK: usize = 16 * 1024;
 
+#[derive(Debug)]
+struct HashedBytes {
+    bytes: Arc<Vec<u8>>,
+    digest: Digest,
+}
+
 fn read_matching_manifest(
     reader: &mut (impl Read + Seek),
-    len: u64,
     instruction: &Ste100Instruction,
     after_precheck: impl FnOnce(),
 ) -> Result<(Arc<Vec<u8>>, Ste100ModelManifest), Ste100AdmissionRefused> {
     let name = instruction.model_binding.artifact.0.as_str();
+    let held = read_matching_bytes(
+        reader,
+        &instruction.model_artifact_sha256,
+        name,
+        after_precheck,
+    )?;
+    // This owner has checked the retained digest while reading. Parse once, with
+    // no additional whole-buffer hash pass and no pathname reopen.
+    let manifest = parse_manifest(instruction, &held.bytes)?;
+    Ok((held.bytes, manifest))
+}
+
+fn read_matching_bytes(
+    reader: &mut (impl Read + Seek),
+    expected: &Digest,
+    name: &str,
+    after_precheck: impl FnOnce(),
+) -> Result<HashedBytes, Ste100AdmissionRefused> {
     let mut hash = Sha256::new();
     let mut chunk = [0u8; READ_CHUNK];
+    let mut len = 0u64;
     loop {
         let size = read_chunk(reader, &mut chunk, name)?;
         if size == 0 {
             break;
         }
         hash.update(&chunk[..size]);
+        len = len
+            .checked_add(size as u64)
+            .ok_or_else(|| failure(name, "artifact byte count overflow"))?;
     }
-    let actual =
-        Digest::new(format!("{:x}", hash.finalize())).expect("SHA-256 lower hex is a valid Digest");
-    if actual != instruction.model_artifact_sha256 {
+    if finish_digest(hash) != *expected {
         return Err(failure(
             name,
-            "manifest digest differs from the loaded instruction",
+            "artifact digest differs from the declaration",
         ));
     }
-    // No manifest size policy is invented. A wrong large locator is rejected with
-    // fixed scratch memory. A matching declared artifact is still an allocation
-    // and qualification obligation. Both reads use this same regular descriptor.
+    // Wrong large or sparse inputs reach no materialization. A matching input is
+    // still an allocation/qualification obligation, without an invented size cap.
+    // Reserve the observed length rather than unchecked metadata from a pathname.
     after_precheck();
     reader.rewind().map_err(|error| failure(name, error))?;
-    let bytes = read_owned(reader, len, name)?;
-    // Rehash retained bytes before the single closed parse: an in-place change
-    // between precheck and materialization cannot gain admission. Downstream
-    // admission consumes this parsed owner without hashing or decoding it again.
-    let manifest = verify_manifest(instruction, &bytes)?;
-    Ok((bytes, manifest))
+    let held = read_owned(reader, len, name)?;
+    if held.digest != *expected {
+        return Err(failure(
+            name,
+            "retained artifact digest differs from the declaration",
+        ));
+    }
+    Ok(held)
+}
+
+fn finish_digest(hash: Sha256) -> Digest {
+    Digest::new(format!("{:x}", hash.finalize())).expect("SHA-256 lower hex is a valid Digest")
 }
 
 fn read_chunk(
@@ -225,24 +275,39 @@ fn read_owned(
     reader: &mut impl Read,
     len: u64,
     name: &str,
-) -> Result<Arc<Vec<u8>>, Ste100AdmissionRefused> {
+) -> Result<HashedBytes, Ste100AdmissionRefused> {
     let len = usize::try_from(len).map_err(|error| failure(name, error))?;
     let mut bytes = Vec::new();
+    let mut hash = Sha256::new();
     bytes
         .try_reserve_exact(len)
         .map_err(|error| failure(name, error))?;
     let mut chunk = [0u8; READ_CHUNK];
     loop {
-        let size = read_chunk(reader, &mut chunk, name)?;
+        // The observed precheck length is the admitted input size, not a policy cap.
+        // Read at most its remaining bytes plus one sentinel to detect growth.
+        let remaining = len - bytes.len();
+        let read_limit = remaining.saturating_add(1).min(chunk.len());
+        let size = read_chunk(reader, &mut chunk[..read_limit], name)?;
         if size == 0 {
+            if bytes.len() != len {
+                return Err(failure(name, "artifact size changed after precheck"));
+            }
             break;
+        }
+        if size > remaining {
+            return Err(failure(name, "artifact size changed after precheck"));
         }
         bytes
             .try_reserve(size)
             .map_err(|error| failure(name, error))?;
+        hash.update(&chunk[..size]);
         bytes.extend_from_slice(&chunk[..size]);
     }
-    Ok(share_bytes(bytes))
+    Ok(HashedBytes {
+        bytes: share_bytes(bytes),
+        digest: finish_digest(hash),
+    })
 }
 
 fn share_bytes(bytes: Vec<u8>) -> Arc<Vec<u8>> {

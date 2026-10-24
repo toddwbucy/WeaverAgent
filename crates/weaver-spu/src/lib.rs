@@ -22,7 +22,8 @@
 //!
 //! Semantic operations live beside `decoder/`, with their own process seams.
 //! The `ste100` module implements the new duty's protocol and binding mechanics.
-//! Its production grammar, backend and executable remain qualification work.
+//! Its separate executable refuses unsupported artifacts; production grammar,
+//! backend and measured limits remain qualification work.
 
 pub mod artifact;
 pub mod channel;
@@ -37,3 +38,11 @@ pub mod readout;
 pub mod residency;
 pub mod sampling;
 pub mod ste100;
+
+// One copy of shared helpers per unit-test binary, including isolated children.
+#[cfg(test)]
+#[path = "../tests/common/ste100_fixture.rs"]
+mod ste100_test_fixture;
+#[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod test_common;

@@ -431,8 +431,14 @@ impl RecordingContext {
             return Ok(PlaceProgress::Progress);
         }
         let work = self.native_marks.as_mut().unwrap();
-        if !work.cancelled {
-            self.place_engine.as_mut().unwrap().native = work.next.take().unwrap();
+        // All admitted positions have actual Recorded receipts. Entered adopts
+        // the owned proposal once. Only cancelled-account extraction later
+        // copies it for evidence; ordinary success needs no metadata clone.
+        if self.phase == RecordingPhase::Entered {
+            self.place_engine.as_mut().unwrap().native = work
+                .next
+                .take()
+                .expect("unsettled native work retains its proposal");
         }
         work.done = true;
         Ok(PlaceProgress::Complete)
@@ -508,10 +514,11 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<NativeMarkCompletion>, RunFailure> {
         self.live(io)?;
-        if !self
-            .native_marks
-            .as_ref()
-            .is_some_and(|work| work.done && !work.cancelled)
+        if self.phase != RecordingPhase::Entered
+            || !self
+                .native_marks
+                .as_ref()
+                .is_some_and(|work| work.done && !work.cancelled)
         {
             return Ok(None);
         }
@@ -521,6 +528,51 @@ impl RecordingContext {
             prerequisite: work.prerequisite,
             positions: work.registered,
             recorded: work.recorded,
+        }))
+    }
+
+    pub(super) fn take_native_account_work(&mut self) -> Option<NativeMarkTransaction> {
+        let mut work = self.native_marks.take()?;
+        if work.next.is_none() {
+            // No competing placement can change this engine while native work
+            // still owns the slot. The missing proposal was moved here at its
+            // actual Entered completion, before a later Stop/teardown.
+            work.next = Some(
+                self.place_engine
+                    .as_ref()
+                    .expect("native work retains its engine")
+                    .native
+                    .clone(),
+            );
+        }
+        Some(work)
+    }
+
+    /// A settled cancellation can leave Entered without resetting its original
+    /// wait or granting another turn. Failed/Releasing keep their account path.
+    pub(in crate::flow) fn take_cancelled_place_marks(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<Option<PlaceAccount>, RunFailure> {
+        self.live(io)?;
+        if self.phase != RecordingPhase::Entered
+            || !self.native_marks.as_ref().is_some_and(|work| {
+                work.done
+                    && work.cancelled
+                    && work.incomplete.is_none()
+                    && work.author.is_none()
+                    && work.positions.is_empty()
+                    && work.registered.len() == work.recorded.len()
+            })
+        {
+            return Ok(None);
+        }
+        let work = self.take_native_account_work().unwrap();
+        self.barrier.set_place_owed(self.place_owed());
+        Ok(Some(PlaceAccount {
+            phase: self.phase,
+            work: AccountWork::Native(Box::new(work)),
+            measure: None,
         }))
     }
 
@@ -726,6 +778,12 @@ impl PlaceAccount {
     pub(in crate::flow) fn native_prerequisite(&self) -> Option<&EffectPlanSummary> {
         match &self.work {
             AccountWork::Native(work) => Some(&work.prerequisite),
+            _ => None,
+        }
+    }
+    pub(in crate::flow) fn native_proposal(&self) -> Option<&NativeScopes> {
+        match &self.work {
+            AccountWork::Native(work) => work.next.as_ref(),
             _ => None,
         }
     }

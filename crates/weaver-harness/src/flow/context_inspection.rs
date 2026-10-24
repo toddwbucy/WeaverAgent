@@ -166,7 +166,7 @@ impl RecordingContext {
             || self.pair_rejected_authoring
             || self.pairs.pending_rejection().is_some()
             || self.templates_block_content()
-            || self.template_blocked_author.is_some()
+            || self.caller_author_held()
             || self.input.snapshot().is_some()
             || self.input_author.is_some()
             || self.input_turn.is_some()
