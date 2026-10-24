@@ -1637,6 +1637,16 @@ scenario!(
 );
 
 scenario!(
+    worker_correction_composition_held_decode_deadline,
+    "input-generation-emission-correction-held-decode-deadline"
+);
+
+scenario!(
+    worker_correction_composition_held_decode_inherited,
+    "input-generation-emission-correction-held-decode-inherited"
+);
+
+scenario!(
     worker_correction_composition_fit_refusal_close_stop,
     "input-generation-emission-correction-fit-refusal-close-stop"
 );
