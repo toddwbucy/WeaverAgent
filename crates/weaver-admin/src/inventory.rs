@@ -198,6 +198,17 @@ pub(crate) fn take_serving_inventory(
     judge_config(name, source, draft.agent().clone(), boundary, None)
 }
 
+/// Loaded settings come from the repository's verified bound declaration, never
+/// the mutable authoring draft. The caller retains its verified artifact.
+pub(crate) fn take_bound_inventory(
+    name: &AgentName,
+    source: &str,
+    bound: &weaver_types::ServingDeclaration,
+    boundary: &Boundary,
+) -> Result<Inventory, LifecycleRefusal> {
+    judge_config(name, source, bound.agent().clone(), boundary, None)
+}
+
 fn judge_config(
     name: &AgentName,
     source: &str,

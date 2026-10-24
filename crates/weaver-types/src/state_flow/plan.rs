@@ -259,33 +259,15 @@ pub enum PlanInputOperation {
     },
 }
 
-/// Operator provenance retained on block zero without instruction text.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PlanInputContext {
-    pub document_sha256: Digest,
-    pub cause: crate::Cause,
-    pub expected: Option<PlanRef>,
-    pub operation: PlanInputOperation,
-}
-
-impl<'de> Deserialize<'de> for PlanInputContext {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            document_sha256: Digest,
-            cause: crate::Cause,
-            #[serde(deserialize_with = "super::required_option")]
-            expected: Option<PlanRef>,
-            operation: PlanInputOperation,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            document_sha256: fields.document_sha256,
-            cause: fields.cause,
-            expected: fields.expected,
-            operation: fields.operation,
-        })
+super::codec::closed_object! {
+    /// Operator provenance retained on block zero without instruction text.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct PlanInputContext {
+        pub document_sha256: Digest,
+        pub cause: crate::Cause,
+        #[serde(deserialize_with = "super::required_option")]
+        pub expected: Option<PlanRef>,
+        pub operation: PlanInputOperation,
     }
 }
 
@@ -396,125 +378,49 @@ pub struct PlanBreakRecord {
     pub source: SourceBlockId,
 }
 
-/// One complete committed revision, independent of argument placement.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PlanSnapshot {
-    pub plan: PlanRef,
-    pub task: TaskScopeRef,
-    pub status: PlanStatus,
-    pub review: ReviewSetupRef,
-    pub operator_source: SourceBlockId,
-    pub lock_source: Option<SourceBlockId>,
-    pub document_sha256: Digest,
-    pub last_source: SourcePosition,
-    pub categories: Vec<Category>,
-    pub group_drafts: Vec<GroupDraft>,
-    pub groups: Vec<PlanGroup>,
-    pub steps: Vec<PlanStep>,
-    pub broken: Option<PlanBreakRecord>,
-}
-
-impl<'de> Deserialize<'de> for PlanSnapshot {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            plan: PlanRef,
-            task: TaskScopeRef,
-            status: PlanStatus,
-            review: ReviewSetupRef,
-            operator_source: SourceBlockId,
-            #[serde(deserialize_with = "super::required_option")]
-            lock_source: Option<SourceBlockId>,
-            document_sha256: Digest,
-            last_source: SourcePosition,
-            categories: Vec<Category>,
-            group_drafts: Vec<GroupDraft>,
-            groups: Vec<PlanGroup>,
-            steps: Vec<PlanStep>,
-            #[serde(deserialize_with = "super::required_option")]
-            broken: Option<PlanBreakRecord>,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            plan: fields.plan,
-            task: fields.task,
-            status: fields.status,
-            review: fields.review,
-            operator_source: fields.operator_source,
-            lock_source: fields.lock_source,
-            document_sha256: fields.document_sha256,
-            last_source: fields.last_source,
-            categories: fields.categories,
-            group_drafts: fields.group_drafts,
-            groups: fields.groups,
-            steps: fields.steps,
-            broken: fields.broken,
-        })
+super::codec::closed_object! {
+    /// One complete committed revision, independent of argument placement.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct PlanSnapshot {
+        pub plan: PlanRef,
+        pub task: TaskScopeRef,
+        pub status: PlanStatus,
+        pub review: ReviewSetupRef,
+        pub operator_source: SourceBlockId,
+        #[serde(deserialize_with = "super::required_option")]
+        pub lock_source: Option<SourceBlockId>,
+        pub document_sha256: Digest,
+        pub last_source: SourcePosition,
+        pub categories: Vec<Category>,
+        pub group_drafts: Vec<GroupDraft>,
+        pub groups: Vec<PlanGroup>,
+        pub steps: Vec<PlanStep>,
+        #[serde(deserialize_with = "super::required_option")]
+        pub broken: Option<PlanBreakRecord>,
     }
 }
 
-/// One fixed plan and content frontier for forward-flag counts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PlanFlagSnapshot {
-    pub plan: PlanRef,
-    pub after: SourceBlockId,
-    pub through: SourcePosition,
-    pub total_flags: DecimalU64,
-    pub matched_flags: DecimalU64,
-    pub unmatched_flags: DecimalU64,
-}
-
-impl<'de> Deserialize<'de> for PlanFlagSnapshot {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            plan: PlanRef,
-            after: SourceBlockId,
-            through: SourcePosition,
-            total_flags: DecimalU64,
-            matched_flags: DecimalU64,
-            unmatched_flags: DecimalU64,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            plan: fields.plan,
-            after: fields.after,
-            through: fields.through,
-            total_flags: fields.total_flags,
-            matched_flags: fields.matched_flags,
-            unmatched_flags: fields.unmatched_flags,
-        })
+super::codec::closed_object! {
+    /// One fixed plan and content frontier for forward-flag counts.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct PlanFlagSnapshot {
+        pub plan: PlanRef,
+        pub after: SourceBlockId,
+        pub through: SourcePosition,
+        pub total_flags: DecimalU64,
+        pub matched_flags: DecimalU64,
+        pub unmatched_flags: DecimalU64,
     }
 }
 
-/// Committed plan account carried by lifecycle observation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PlanSummary {
-    pub plan: PlanRef,
-    pub status: PlanStatus,
-    pub document_sha256: Digest,
-    pub last_source: SourcePosition,
-}
-
-impl<'de> Deserialize<'de> for PlanSummary {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            plan: PlanRef,
-            status: PlanStatus,
-            document_sha256: Digest,
-            last_source: SourcePosition,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            plan: fields.plan,
-            status: fields.status,
-            document_sha256: fields.document_sha256,
-            last_source: fields.last_source,
-        })
+super::codec::closed_object! {
+    /// Committed plan account carried by lifecycle observation.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct PlanSummary {
+        pub plan: PlanRef,
+        pub status: PlanStatus,
+        pub document_sha256: Digest,
+        pub last_source: SourcePosition,
     }
 }
 

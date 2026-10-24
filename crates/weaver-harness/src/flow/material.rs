@@ -57,7 +57,15 @@ pub(super) struct StepQueryOccurrence {
 #[derive(Debug)]
 enum Evidence {
     Reads(Vec<RecordedRead>),
+    Pair {
+        origin: Arc<()>,
+        pair: Arc<super::context::CompletedPair>,
+    },
     FiledTask(Box<BegunTask>),
+    FiledSource {
+        origin: Arc<()>,
+        source: Box<super::ledger::CommittedSource>,
+    },
 }
 
 impl Evidence {
@@ -66,6 +74,7 @@ impl Evidence {
             // Read constructors retain at least one read and check every owner.
             Self::Reads(reads) => reads[0].origin(),
             Self::FiledTask(task) => task.origin(),
+            Self::FiledSource { origin, .. } | Self::Pair { origin, .. } => origin,
         }
     }
 
@@ -73,13 +82,13 @@ impl Evidence {
         match self {
             Self::Reads(reads) => reads,
             // The retained marks catalog is not candidate-producing content.
-            Self::FiledTask(_) => &[],
+            Self::FiledTask(_) | Self::FiledSource { .. } | Self::Pair { .. } => &[],
         }
     }
 
     fn task(&self) -> Option<&BegunTask> {
         match self {
-            Self::Reads(_) => None,
+            Self::Reads(_) | Self::FiledSource { .. } | Self::Pair { .. } => None,
             Self::FiledTask(task) => Some(task),
         }
     }
@@ -88,6 +97,9 @@ impl Evidence {
         match self {
             Self::Reads(reads) => reads.iter().all(|read| read.belongs_to(context)),
             Self::FiledTask(task) => task.belongs_to(context),
+            Self::FiledSource { origin, .. } | Self::Pair { origin, .. } => {
+                Arc::ptr_eq(origin, context.material_origin())
+            }
         }
     }
 }
@@ -737,5 +749,90 @@ fn finish(
             reads,
             failure: None,
         }),
+    }
+}
+
+/// Only a real live-ledger committed whole Text can enter the reload UNIT path.
+/// The original immutable receipt remains owned by every resulting unit.
+#[allow(clippy::result_large_err)] // Return the original receipt intact on a refused conversion.
+pub(super) fn from_filed(
+    origin: Arc<()>,
+    source: super::ledger::CommittedSource,
+) -> Result<SelectedUnit, (super::ledger::CommittedSource, MaterialFailure)> {
+    let super::ledger::LedgerFile::Statement(file) = source.file() else {
+        return Err((
+            source,
+            MaterialFailure::Invalid("reload source is not Text"),
+        ));
+    };
+    let role = match file.source.kind.as_str() {
+        "message.assistant" => Role::Assistant,
+        "message.user" | "loop.instruction" | "plan.event" | "step.outcome" | "sort.decision"
+        | "state.mark" => Role::User,
+        _ => return Err((source, MaterialFailure::Invalid("unknown reload Text kind"))),
+    };
+    if file.text.is_empty() {
+        return Err((source, MaterialFailure::InvalidSpan));
+    }
+    let content = ContentRef::Event {
+        block_id: file.block_id.clone(),
+    };
+    let mut unit = Unit::new(UnitId::Block {
+        source: content.clone(),
+    });
+    unit.messages.push(Message {
+        role,
+        content: vec![ContentBlock::Text {
+            text: file.text.clone(),
+        }],
+    });
+    unit.map(
+        MaterialRef::Text {
+            source: content,
+            span: Span {
+                start: 0.into(),
+                end: (file.text.len() as u64).into(),
+            },
+        },
+        0,
+        Some((0, file.text.len() as u64)),
+    );
+    let evidence = Arc::new(Evidence::FiledSource {
+        origin,
+        source: Box::new(source),
+    });
+    Ok(SelectedUnit { evidence, unit })
+}
+
+pub(super) fn from_completed_pair(
+    origin: Arc<()>,
+    pair: Arc<super::context::CompletedPair>,
+) -> SelectedUnit {
+    let call_id = pair.started().call_id.clone();
+    let mut unit = Unit::new(UnitId::Result {
+        call_id: call_id.clone(),
+    });
+    unit.messages.push(Message {
+        role: Role::ToolResult,
+        content: vec![ContentBlock::ToolResult(pair.result().block())],
+    });
+    unit.map(MaterialRef::Returned { call_id }, 0, None);
+    SelectedUnit {
+        unit,
+        evidence: Arc::new(Evidence::Pair { origin, pair }),
+    }
+}
+impl SelectedUnit {
+    pub(super) fn filed_source(&self) -> Option<&super::ledger::CommittedSource> {
+        match self.evidence.as_ref() {
+            Evidence::FiledSource { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+    pub(super) fn completed_pair(&self) -> Option<&super::context::CompletedPair> {
+        match self.evidence.as_ref() {
+            Evidence::Pair { pair, .. } => Some(pair),
+            _ => None,
+        }
     }
 }

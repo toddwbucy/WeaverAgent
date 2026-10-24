@@ -99,6 +99,10 @@ pub(super) struct FilingTransaction {
 }
 
 impl FilingTransaction {
+    pub(super) fn is_boot_cleanup_filing(&self) -> bool {
+        self.owner == FilingOwner::BootPairs
+    }
+
     pub(super) fn cancelled(&self) -> bool {
         self.cancelled
     }
@@ -196,7 +200,20 @@ impl RecordingContext {
                 failure: None,
             });
         }
-        if (self.boot_pairs.is_some() && owner != FilingOwner::BootPairs)
+        // Boot must establish even the committed-null summary before a plan
+        // effect can create a refresh duty. Return the unchanged event before
+        // reserving a receipt subscription or admitting any author input.
+        let plan_effect = is_plan_effect_event(&event);
+        let owned_continuation = match owner {
+            FilingOwner::Pair => self.pair_work.as_ref().is_some_and(|work| {
+                work.leg.is_none() && work.bound == bound && key == PumpDeadline::Decision
+            }),
+            FilingOwner::Marks => self.marks_filing_allowed(key),
+            FilingOwner::BootPairs => self.boot_pairs_filing_allowed(),
+            FilingOwner::Ordinary | FilingOwner::Outbound => false,
+        };
+        if (plan_effect && (!self.plan_cache.boot_started || self.plan_cache.committed.is_none()))
+            || (self.boot_pairs.is_some() && owner != FilingOwner::BootPairs)
             || (owner == FilingOwner::BootPairs && !self.boot_pairs_filing_allowed())
             || self.output.is_some()
             || self.freshness.is_some()
@@ -204,6 +221,7 @@ impl RecordingContext {
             || self.flow.has_filing_consumer()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()
+            || (self.held_author.is_some() && !owned_continuation)
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()
@@ -212,6 +230,11 @@ impl RecordingContext {
             || self.inspection.is_some()
             || self.boot_open_blocks_external()
             || self.plan_summary_blocks_external()
+            || (self.place_blocks_external()
+                && !(self.reload_draining()
+                    && matches!(owner,FilingOwner::Pair if self.pair_work.is_some())
+                    || self.reload_draining()
+                        && matches!(owner,FilingOwner::Marks if self.marks.is_some())))
             || self.measure_blocks_external()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
@@ -243,7 +266,7 @@ impl RecordingContext {
         }
         self.filing = Some(FilingTransaction {
             receipt_identity: std::sync::Arc::new(()),
-            plan_effect: is_plan_effect_event(&event),
+            plan_effect,
             outbound: None,
             owner,
             key,
@@ -256,7 +279,7 @@ impl RecordingContext {
         });
         // The unchanged original remains in the context's established pre-ticket
         // custody slot, including when older filings delay this author.
-        self.waiting_content = Some(event);
+        self.waiting_content = Some(WaitingAuthor::ordinary(event));
         Ok(())
     }
 
@@ -289,7 +312,7 @@ impl RecordingContext {
         {
             return None;
         }
-        let event = self.waiting_content.take();
+        let event = self.waiting_content.take().map(WaitingAuthor::into_event);
         self.flow.cancel_filing_receipts();
         self.filing = None;
         event
@@ -577,12 +600,15 @@ impl RecordingContext {
         {
             return None;
         }
-        let event = self.waiting_content.take();
+        let event = self.waiting_content.take().map(WaitingAuthor::into_event);
         self.flow.cancel_filing_receipts();
         self.filing = None;
         event
     }
 
+    /// Stop/Leave cancellation is terminal, including an unstarted effect whose
+    /// event is returned unchanged. This is not a retry/withdraw operation: a
+    /// future non-terminal withdrawal must preserve an unchanged committed cache.
     pub(in crate::flow) fn cancel_filing(&mut self) {
         let Some(owner) = self.filing.as_mut() else {
             return;
@@ -602,7 +628,7 @@ impl RecordingContext {
         }
         if unstarted {
             // No author ticket was allocated. Return the unchanged caller input.
-            owner.cancelled_event = self.waiting_content.take();
+            owner.cancelled_event = self.waiting_content.take().map(WaitingAuthor::into_event);
             owner.author_done = true;
         }
     }

@@ -31,10 +31,129 @@ The next drafts stack from this baseline, each on its preceding carrier:
 | #258 code/state-boot-open-owner | Exact reserved Open from real BootHead, Recorded placement, checked fit/LIVE, private journal initialization and bounded stopped accounting. Published 066d51a3; Planner undrafted after its scoped grade. Review followups and worker boot composition, place/generation and qualified cutover remain owed. |
 | #259 code/state-ste100-artifact-owner | Exact absolute manifest acquisition, confined named regular files, checked retained bytes and sealed production admission entry. Published e3833de2. Production adapters, lifecycle composition and language qualification remain owed. |
 | #261 code/state-review-custody-followups | Contained #255-#258 review corrections above exact #259: actual Recorded repair custody, strict codecs/shared provenance, canonical Open decoding and boot ticket/cancellation/event ownership. Published ef32e86b. Author gates and 54 compiled protective failures pass; full failed-enter composition remains owed. |
-| code/state-plan-summary-owner | Actual boot/effect PlanSummary cache owner, exact receipt/read/Recorded custody, original-bound rollback and internal state metadata independent of public result caps. Author gates and 27 compiled protective failures with restored passes complete. Active lifecycle/plan producer and qualified cutover remain owed. |
+| #262 code/state-plan-summary-owner | Actual boot/effect PlanSummary cache owner, exact receipt/read/Recorded custody, original-bound rollback and internal state metadata independent of public result caps. Published 7cad4da7. Author gates and 27 compiled protective failures with restored passes complete. Active lifecycle/plan producer and qualified cutover remain owed. |
+| #264 code/state-ste100-review-followups | Closed scheme-object/disposition codecs and contained #259 acquisition/validation efficiency corrections. Dedicated-target gates and 32 compiled protective failures with restored passes complete. Actual adapter/lifecycle readiness and production artifacts remain owed. |
+| #265 code/state-stopped-release-admission | Exact Releasing-only shutdown author admission through a stopped tap, original ticket/owner/capacity custody and actual boot/summary rollback composites. Author gates and 13 compiled protective failures with exact restores pass; full lifecycle composition remains owed. |
+| #266 code/state-review-ledger-followups | Contained #261 review corrections: actual correction-pair/refusal custody, ledger-owned association frontier, typed author identities, shared boot access and closed plan field lists, exact child-execution sentinel. Dedicated-target gates and 15 compiled protective failures with exact restores pass; cancellation-counting election stays in #263. |
+| #267 code/state-plan-summary-review-followups | #262 review corrections: refuse pre-boot effect admission, keep state traffic moving while unsent generation waits, exact summary Cut ownership, retained completed dispositions and tested admission/account guards. Dedicated-target gates and 17 compiled protective failures with exact restores pass; full plan producer/lifecycle/placement composition remains owed. |
+| #269 code/state-placement-owner | Dormant measured placement, generation confirmation, native marks, queued Cut and Staged carry; decoder-health and extracted-Boot cancellation guards. Harness 1,668/18 ignored, trace 160, 67 protective controls and required lint/fmt/lock pass. Production admission, lifecycle/selection and qualification remain owed. |
+| #270 code/state-release-repair-review | #265/#266 review consistency: exact release-mark/original custody, typed boot/placement debt, monotone refused-pair causes, exact errors and retained settled proofs. Harness 1,678/18 ignored, trace 160, 19 protective controls, one separate non-Clone pin and required lint/fmt/lock pass; no #263 counting change or serving activation. |
+| #271 code/state-boot-rollback-custody | Completed Boot evidence remains truthful after revocation; extracted pre-install proof returns its original owner for bounded rollback. Harness 1,694/18 ignored, trace 160, 19 protective controls, a separate installed-borrow type pin and required lint/fmt/lock pass. Full boot/lifecycle composition and qualified cutover remain owed. |
+| #272 code/state-ste100-runtime | Separate dormant duty process, retained backend/input ownership, bounded reactor handoffs and artifact/codec review corrections. Types 168 default/224 config, SPU cuda,gguf 380, admin 498/37 ignored and harness 1,694/18 ignored pass; 48 behavior probes plus manifest/reporting controls fail and exact restores pass. Production has no compatible compiled adapter and cannot return Ready. Worker wiring and qualified artifacts/limits remain owed. |
+| #273 code/state-place-stop-returns | Returns exact cancelled reload custody and settles completed native marks after turn-scoped Stop. Nine actual-owner tests, harness 1,703/18 ignored, trace 160 and 14 compiled protective failures with restored passes. #269 fix rows 1-2 addressed for review; worker composition, remaining review rows and qualification remain owed. |
+| #274 code/state-owner-custody-review | Combined #270/#271 custody followups: separate held/fatal originals, exact release withdrawal, shared pair-proof scan and typed completed Boot cleanup through state retirement. Harness 1,721/18 ignored and trace 160 pass; final repair/lint/fmt checks pass after an equivalent condition collapse. All 32 compiled protective failures and restored controls pass, with a separate typed-carrier pin. Full lifecycle composition and qualification remain owed. |
+| #275 code/state-place-author-custody | Actual reserved refusal assembly, exact author-ticket binding, append/drain controls and no new Cancel after a consumed settled terminal. Harness 1,733/18 ignored, trace 160 and affected lint/fmt/lock pass. All fifteen compiled protective failures and exact restores pass; remaining review and full composition duties stay open. |
+| #277 code/state-ste100-review | Eleven #272 runtime followups: static absent-adapter refusal, bounded retained reads, unwind notification, shared descriptor ownership/digest checks, retirement cleanup and real wait/exit/destruction-order tests. Full SPU 393, types 168/226, admin 498/37 ignored and harness 1,733/18 ignored pass; final focused/lint/fmt checks pass after a test-only helper move. All 18 compiled protective failures and exact restores pass; production adapter and lifecycle/qualification duties remain owed. |
+| #278 code/state-place-phase-custody | #273 followups: phase-bound reload evidence/extraction, explicit cancelled Staged, checked consumed-lease disposal, private returned inputs and native proposal moves. Harness 1,738/18 ignored, trace 160 and affected gates pass. Ten unique compiled protective failures pass after strengthening one initially surviving source-identity fixture; the separate four-field privacy pin passes. Original failure/survivor evidence is retained. |
+| #279 code/state-held-author-admission | #274 rows 2-9: held-original admission/release/Closed guards with exact admitted-owner continuations, pending ordinary Unload debt custody, typed summary rollback and correction proof accounting. Thirty-one incoming source paths and one root test migration; harness 1,752/18 ignored, trace 160 and affected gates pass. All 26 compiled protective failures and restores pass; separate E0308 typed-Boot rejection and eight restored tests pass. Row 1 remains #276. |
+| #280 code/state-failed-enter-cleanup | Bounded Failed pre-input context/resource cleanup: actual fork custody, owed Boot accounts, descriptorless retirement, exact Release/reap/Unload and original-cap drain. Eighteen source paths reviewed; harness 1,779/18 ignored, trace 160 and final 21 owner/lint gates pass. All 20 unique compiled protective failures and restores pass, plus three separate ownership compiler pins. Initial survivor/instrument error remain preserved. Healthy refusal and complete lifecycle composition remain owed. |
+| #281 code/state-author-claims | #275 rows 1-9: exact waiting-original/claim carrier, actual allocated ticket, immediate trace-only witness binding, immutable refusal identity and separate settled-cancel accounting. Harness 1,793/18 ignored, trace 160 and affected gates pass. All 23 unique compiled controls and restores pass after a filter-only rerun of the preserved A9 survivor; two separate non-Clone pins pass. Defensive caller and redundant-cache limits remain explicit. |
+| #283 code/state-management-refusal | Elected closed lifecycle refusal vocabulary and dormant exact admission mapping, full-envelope bounds and original value custody. Types 171/229, harness 1,798/18 ignored, trace 160, admin 498/37 ignored and downstream checks pass; final affected lint/fmt/lock pass after an exact private tuple alias. All 15 compiled protective failures and exact restores pass. Full healthy rollback remains owed. |
+| #284 code/state-spu-admission-ownership | #277 seven followups: unsafe first-ownership entry APIs, recursive scoped fixture inventory, adapter-owned precheck refusal, structural notification-before-backend-drop and distinct repeated-adoption diagnostics. SPU cuda,gguf 407, affected lint/fmt/lock gates, eleven compiled named control failures/restores and four separate E0133 pins pass. Full lifecycle and production qualification remain owed. |
+| code/state-place-capability | #278 eight followups: Entered-only capability return, complete registration disposal, single-source leases and shared immutable native proposals. Harness 1,811/18 inherited ignored and trace 160 pass; affected lint/fmt/lock, all seventeen compiled protective failures/restores and the separate E0594 pin pass. Initial test-only corrections are preserved. Full lifecycle/qualification stays open. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
+
+#269 Planner review 5624951821 found two fix rows: cancelled reload can strand
+Staged or returned inputs, and cancelled native marks can block later turn work.
+#273's Planner grade at 6bd5ddf8 closes both with biting controls and undrafts
+that followup. The original #269 head remains unchanged and stays draft pending
+the join. Its batch and filed rows remain tracked.
+#270 review 5625064169 has zero fix rows and its Codex code review is complete
+without findings at 51a54907; the Planner undrafted it. Its seven batch rows
+remain tracked, and it still depends on #269. The boot rollback slice answers
+#267 row 1 only; it does not close the two #269 fixes.
+
+#271 Planner review 5625350211 has zero fix rows at 9ca28702 and closes #267
+row 1 within its dormant scope. The Planner undrafted it. Its five batch rows
+remain tracked: complete failed-Enter restoration order, typed successful Boot
+evidence, shared identity checks, single-match extraction and named test fields.
+The restoration-order duty must be resolved before full failed-Enter composition.
+The owner-custody-review followup addresses the #270/#271 batch for review,
+retaining their complete row dispositions and defensive/redundant probe limits.
+Its cleanup-return changes do not supply the full failed-Enter composer.
+
+#272's Planner grade at 044d1049 has zero fix rows and reproduces its scoped
+gates; the Planner undrafted it. Its eleven followups remain tracked, including
+two filed edge cases and three distinct test gaps: pending-reply wait
+writability, orderly Idle process exit and backend destruction before grammar
+inputs. R1/R7 are redundant guards. Its shared ModelBinding decoder also narrows
+live admin TOML parsing by rejecting positional arrays, now named in its record.
+
+#273's eight batch rows remain open. N1/N2 and M3/M6 are redundant or implied;
+N4/M2/M4/M5 are distinct test gaps. Its record now distinguishes the retained,
+possibly re-prepared prefix from the initial caller value and names the native
+adoption phase gap honestly. The next followup addresses its remaining custody,
+API and test items without granting production readiness.
+
+#274's Planner grade at f3b16c7f has zero fix rows and closes its earlier
+#270/#271 rows; the Planner undrafted it. Nine new batch rows remain tracked:
+held-event overwrite and release custody, pending Unload debt recheck, absent
+state outside cleanup, rollback carrier/scan consistency, and S4/S5/P6 tests.
+P7 is redundant; P10/P11 remain independently unpinned or redundant. These
+followups must preserve returned originals before full lifecycle composition.
+
+#275's Planner grade at 8d86a254 has zero fix rows and closes #269 rows 4-6
+and Q6/Q24 with biting controls; Q12/Q13 are answered in the record. The
+Planner undrafted it. Nine new findings remain tracked: explicit claimed-path
+phase and event identity, truthful Failed binding and tests, a filed single-slot
+witness interleave, direct assembly identity, settled-state bookkeeping, exact
+queue-return ticket and claim-helper consistency, and A2/A3/A6/A7/A8/A10 controls.
+Its HARNESS-CLOCK grade is by reading only, not an independent behavior control.
+
+#278's Planner grade at fd873096 has zero fix rows and closes all eight #273
+rows. Its eight new batch findings remain tracked: common phase-bound account
+extraction, the two remaining success takes, consumed lease admission/disposal,
+structural native proposal custody, an impossible reload state and independent
+status/order/origin controls. P4 is redundant; P6/P7 overlap in the reviewed
+fixtures. The operator has not merged this stack.
+
+#279's Planner grade at 5f7a3372 has zero fix rows and reproduces its scoped
+gates. #274 rows 2-8 are closed and row 9 is partly closed. Its nine new batch
+rows remain tracked. The fatal-versus-correctable held-boundary behavior and
+second-held-author loss belong to the still-unelected #276 proposal; other
+refusal consistency, proof-helper and actual admission/account-return tests
+remain owed. Its grade does not authorize the pending proposal.
+
+#280's Planner grade at 49e276aa has zero fix rows and confirms the scoped
+1,779/18 harness count. Eleven followup rows, including its addendum, remain:
+terminal reporting/reap order, stale lifecycle-answer custody, shared retirement
+predicate, bounded secondary diagnostics, completed-author refusal, absent-SPU
+Unload facts, terminal result accessors, inherited wait bounds, reap wakeup
+policy, missing terminal/clock controls and parallel child-fixture robustness.
+The mandatory Unload SPU field lacks an absent-child representation; this needs
+a paired Spec disposition before a complete pre-decoder composer can claim it.
+
+#281's Planner grade at eddcd9ca has zero fix rows and closes #275 rows 1-6
+and 9, with 7-8 partly closed. Its eleven followups cover remaining stopped
+queue/bind consistency, private test seams, claim ownership and result shape,
+direct record/ticket tests, and the same inherited #280 child-fixture race.
+The first full Planner run failed that inherited fixture; two reruns passed.
+The original author gates remain historical evidence, not a claim that this
+parallel observation issue has already been repaired.
+
+Separate draft #276 on main proposes a move-owned author rejection result to
+return an unaccepted original while preserving earlier held/fatal custody.
+Revision a8c5793e makes the #279 held-boundary choice explicit: recoverable
+Busy is recommended for held-only admission/release/Enter rollback/capture/Closed,
+with current fatal caller-error treatment as the alternative. The revised
+operator election, review and merge remain pending. Its caller migration is
+not implementation authority yet. Independent cleanup rows proceed without a
+new overflow queue, ticket or halt-account field.
+
+Separate draft #282 at 2dbaa828 proposes the missing required Serving EnterWindow,
+original pre-preparation load anchor and distinct malformed/expired paths across
+Types/Admin/Harness. Its four docs and source checks are independently clear;
+the operator election, review and merge are pending. It changes no code or
+active serving selection and gives no new timeout grace or cleanup proof.
+
+Separate draft #285 at 0abef1b6 proposes the absent-SPU Unload representation:
+outer release remains required, while inner spu is omitted only for actual child
+noncreation. A successfully forked child remains present despite failed exec,
+port retirement or reap. Its four documents and evidence are verified; operator
+ruling, Planner review and merge remain pending. It elects no terminal ordering
+algorithm, extra time or successful lifecycle result.
 
 The Planner graded #255 at b26420e5 with no fix-bucket findings and reproduced
 its gates and 17 protective mutations. Its TRACE-PLACEMENT claim is limited to
