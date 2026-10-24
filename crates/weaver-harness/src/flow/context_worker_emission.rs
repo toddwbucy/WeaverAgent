@@ -87,6 +87,7 @@ pub(super) struct EmissionWork {
     refusal_author: Option<AuthoredEvent>,
     refusal_started: bool,
     returned_refusal: crate::flow::context::StoppedAuthor,
+    returned_pair_filing: crate::flow::context::StoppedAuthor,
     refusal_record: Option<weaver_trace::Sequence>,
     unexpected_refusal: Option<AuthoredEvent>,
     detail: Option<String>,
@@ -127,6 +128,7 @@ impl EmissionWork {
             refusal_author: None,
             refusal_started: false,
             returned_refusal: crate::flow::context::StoppedAuthor::default(),
+            returned_pair_filing: crate::flow::context::StoppedAuthor::default(),
             refusal_record: None,
             unexpected_refusal: None,
         }
@@ -534,7 +536,10 @@ impl EmissionWork {
                 }
             }
             EmissionStage::Pairs => {
-                let progress = context.advance_pairs(ports)?;
+                self.returned_pair_filing.check()?;
+                let progress = context
+                    .advance_pairs(ports)
+                    .map_err(|failure| self.returned_pair_filing.retain(failure))?;
                 if let Some(account) = context.take_repair_accounting(ports.io)? {
                     self.account = Some(account);
                     context.complete_wait(PumpDeadline::Decision);

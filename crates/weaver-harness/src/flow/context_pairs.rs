@@ -64,7 +64,6 @@ pub(super) struct PairTransaction {
     // A failed receipt check must not drop the exact evidence it rejected.
     refused_receipt: Option<SourceDisposition>,
     refused_filing: Option<FilingCompletion>,
-    refused_event: Option<AuthoredEvent>,
     pub(super) send: Option<crate::flow::pump_transport::OrganSend>,
     pub(super) refused_send: Option<weaver_types::OrganEnvelope>,
 }
@@ -77,7 +76,6 @@ impl PairTransaction {
             leg: None,
             refused_receipt: None,
             refused_filing: None,
-            refused_event: None,
             send: None,
             refused_send: None,
         }
@@ -366,13 +364,16 @@ impl RecordingContext {
         Ok(())
     }
 
+    /// A refused admission returns its exact event for caller-owned teardown.
+    /// A lifecycle Wait is not a latch or authority to replace that evidence.
+    #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn advance_pairs<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
-    ) -> Result<PairProgress, RunFailure> {
+    ) -> Result<PairProgress, AuthorFailure> {
         self.live(ports.io)?;
         if self.repair_blocks_external() && self.repair_owns_pairs() {
-            return Err(RunFailure::RepairOwned);
+            return Err(RunFailure::RepairOwned.into());
         }
         if self.pair_rejected_authoring || self.pairs.pending_rejection().is_some() {
             return Ok(PairProgress::Pending);
@@ -494,15 +495,18 @@ impl RecordingContext {
                     PairProgress::Pending
                 });
             }
-            let work = self.pair_work.as_mut().expect("pair owns attempted filing");
-            assert!(work.refused_event.is_none());
-            work.refused_event = Some(error.event);
-            return Err(error.failure.unwrap_or_else(|| {
-                self.pair_fault(
-                    ports.io,
-                    format!("pair filing could not start: {:?}", error.refusal),
-                )
-            }));
+            // A nonfatal Leave/Enter expiry can refuse another attempt later.
+            // Return each exact unadmitted event to its caller, without a slot
+            // that could overwrite an earlier original or panic on that retry.
+            return Err(AuthorFailure {
+                reason: error.failure.unwrap_or_else(|| {
+                    self.pair_fault(
+                        ports.io,
+                        format!("pair filing could not start: {:?}", error.refusal),
+                    )
+                }),
+                original: Some(error.event),
+            });
         }
         // begin only reserves custody, it submits no author ticket. Claim now,
         // before advance can record or any failure callback can observe progress.

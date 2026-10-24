@@ -1668,7 +1668,8 @@ fn cancellation_of_entered_correction_pairs_keeps_the_owned_receipt_path() {
         fx.input
             .run
             .context
-            .advance_pairs(&mut ports(&mut fx.input.run.clock)),
+            .advance_pairs(&mut ports(&mut fx.input.run.clock))
+            .map_err(AuthorFailure::retained_reason),
         Err(RunFailure::RepairOwned)
     ));
     assert!(matches!(

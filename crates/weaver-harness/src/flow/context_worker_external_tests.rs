@@ -283,7 +283,8 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             let done = std::sync::atomic::AtomicBool::new(false);
             guard.input = Some(std::thread::scope(|scope| {
                 let responder = scope.spawn(|| {
-                    while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                    let end = Instant::now() + Duration::from_secs(8);
+                    while !done.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
                         member.step_live(mode);
                         std::thread::sleep(Duration::from_millis(1));
                     }

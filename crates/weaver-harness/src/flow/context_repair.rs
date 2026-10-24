@@ -261,6 +261,7 @@ pub(super) struct RepairTransaction {
     held_output: Option<CheckedGeneration>,
     accounting: Option<Accounting>,
     pair_started: bool,
+    returned_pair_filing: StoppedAuthor,
     correction: Option<OriginalRequests>,
     account: Option<RepairAccount>,
     calls: Vec<CallId>,
@@ -556,6 +557,7 @@ impl RecordingContext {
             held_output: None,
             accounting: None,
             pair_started: false,
+            returned_pair_filing: StoppedAuthor::default(),
             correction: None,
             account: None,
             calls: vec![],
@@ -721,7 +723,7 @@ impl RecordingContext {
         let returned = match result {
             Ok(PairProgress::Complete) => self.take_pair_accounting(ports.io),
             Ok(_) => Ok(None),
-            Err(failure) => Err(failure),
+            Err(failure) => Err(failure.retained_reason()),
         };
         self.repair.as_mut().unwrap().internal = false;
         returned
@@ -1606,6 +1608,7 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<RepairProgress, RunFailure> {
         self.ensure_repair_wait(ports.io)?;
+        self.repair.as_ref().unwrap().returned_pair_filing.check()?;
         let kind = self.repair.as_ref().unwrap().accounting.unwrap();
         let cause = self
             .repair
@@ -1688,7 +1691,14 @@ impl RecordingContext {
         }
         let result = self.advance_pairs(ports);
         self.repair.as_mut().unwrap().internal = false;
-        if result? != PairProgress::Complete {
+        if result.map_err(|failure| {
+            self.repair
+                .as_mut()
+                .unwrap()
+                .returned_pair_filing
+                .retain(failure)
+        })? != PairProgress::Complete
+        {
             return Ok(RepairProgress::Pending);
         }
         self.repair.as_mut().unwrap().internal = true;

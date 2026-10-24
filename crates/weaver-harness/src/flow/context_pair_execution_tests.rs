@@ -572,7 +572,7 @@ fn terminal_handoff_keeps_the_next_wait_across_each_leave_boundary() {
             );
         } else {
             assert_eq!(
-                progress.unwrap_err(),
+                progress.unwrap_err().retained_reason(),
                 RunFailure::Wait {
                     key: PumpDeadline::Leave,
                     bound: leave,
@@ -685,7 +685,10 @@ fn matched_gate_answer_installs_its_terminal_wait_before_leave_can_yield() {
     assert_eq!(context.pair_work.as_ref().unwrap().bound, Some(terminal));
     assert!(context.pairs.next_terminal().is_some());
     assert_eq!(
-        context.advance_pairs(&mut ports(&mut clock)).unwrap_err(),
+        context
+            .advance_pairs(&mut ports(&mut clock))
+            .unwrap_err()
+            .retained_reason(),
         RunFailure::Wait {
             key: PumpDeadline::Leave,
             bound: leave,

@@ -34,6 +34,7 @@ pub(super) struct WorkerPairs {
     external: Vec<ExternalWork>,
     cancelled: bool,
     barred: Option<NonDispatchCause>,
+    returned_filing: crate::flow::context::StoppedAuthor,
 }
 impl WorkerPairs {
     pub(super) fn completed_effective(&self) -> Option<&EffectiveEmission> {
@@ -53,6 +54,7 @@ impl WorkerPairs {
             external: Vec::new(),
             cancelled: false,
             barred,
+            returned_filing: crate::flow::context::StoppedAuthor::default(),
         }
     }
     pub(super) fn progress(&self) -> FoundationInputProgress {
@@ -125,7 +127,10 @@ impl WorkerPairs {
                 }
             }
             Stage::Opening => {
-                let progress = context.advance_pairs(ports)?;
+                self.returned_filing.check()?;
+                let progress = context
+                    .advance_pairs(ports)
+                    .map_err(|failure| self.returned_filing.retain(failure))?;
                 if let Some(effective) = context.take_executed_pairs(ports.io)? {
                     self.effective = Some(effective);
                     context.complete_wait(PumpDeadline::Decision);

@@ -240,6 +240,7 @@ impl PairFixture {
             .run
             .context
             .advance_pairs(&mut ports(&mut self.output.input.run.clock))
+            .map_err(AuthorFailure::retained_reason)
     }
 
     fn step(&mut self, hold: Hold) -> PairProgress {
@@ -1539,6 +1540,9 @@ fn generic_cancellation_cannot_drop_or_duplicate_a_repaired_pair_filing() {
 
 #[path = "context_pair_execution_tests.rs"]
 mod execution;
+
+#[path = "context_pair_refusal_tests.rs"]
+mod refusal;
 
 #[path = "context_inward_recall_tests.rs"]
 mod inward;
