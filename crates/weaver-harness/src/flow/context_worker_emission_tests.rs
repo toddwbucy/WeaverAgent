@@ -59,7 +59,7 @@ fn author_failure_worker_emission_keeps_exact_refusal_after_cancel() {
     assert!(!work.refusal_started);
     assert!(work.refusal_record.is_none());
     assert!(work.refusal_author.is_none());
-    work.cancel(&mut fx.context, None, ports.io).unwrap();
+    work.cancel(&mut fx.context, None, None, ports.io).unwrap();
     assert!(work.stage == EmissionStage::RefusalAuthor);
     assert_eq!(
         work.advance(&mut None, &mut None, &mut fx.context, &mut ports),
@@ -148,6 +148,47 @@ fn text(words: &str) -> ContentBlock {
     ContentBlock::Text { text: words.into() }
 }
 pub(in crate::flow::context) fn content(mode: &str) -> Vec<ContentBlock> {
+    if mode.contains("-final-") && !mode.contains("-external-") {
+        if mode.contains("-round-") {
+            return vec![text("Recall archive."), text("Recall ledger.")];
+        }
+        if mode.contains("empty") {
+            return vec![];
+        }
+        if mode.contains("bindings") {
+            return vec![text("Read zeta. Read alpha.")];
+        }
+        return vec![
+            text(if mode.contains("correction") {
+                "Read bad."
+            } else {
+                "Read file."
+            }),
+            text("Read caf\u{e9}."),
+        ];
+    }
+    if mode.contains("-external-") {
+        let mut blocks = vec![
+            text("Read file."),
+            ContentBlock::ToolCall(ToolCall {
+                name: "sh".into(),
+                arguments: "opaque first command".into(),
+            }),
+        ];
+        if mode.contains("mixed") {
+            blocks.push(text("Recall archive."));
+        }
+        blocks.push(text("Read file."));
+        blocks.push(ContentBlock::ToolCall(ToolCall {
+            name: "sh".into(),
+            arguments: if mode.contains("identical") {
+                "opaque first command".into()
+            } else {
+                "opaque second command".into()
+            },
+        }));
+        return blocks;
+    }
     if mode.contains("-pairs-") {
         if mode.ends_with("empty") {
             return vec![];
@@ -376,6 +417,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if mode.contains("-final-") {
+        return super::super::final_tests::exercise(
+            serving, member, reader, clock, socket, root, mode,
+        );
+    }
     let mut guard = Guard {
         input: Some(serving.input()),
         management: None,
@@ -419,6 +465,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     );
     assert_eq!(input.progress(), FoundationInputProgress::Generated);
     let before = std::fs::read(root.join("appended.json")).unwrap();
+    if mode.contains("-external-") {
+        return super::execution::external_tests::exercise(
+            guard, member, reader, clock, socket, root, mode,
+        );
+    }
     if mode.contains("-pairs-") {
         return super::execution::tests::exercise(guard, member, reader, clock, socket, root, mode);
     }
@@ -796,12 +847,27 @@ pub(in crate::flow::context::worker_startup) fn stop(
         }
     }
     guard.management = Some(guard.input.take().unwrap().management().ok().unwrap());
+    if mode.contains("external-stop-unsent") {
+        for _ in 0..8 {
+            guard
+                .management
+                .as_mut()
+                .unwrap()
+                .advance_with_io(&mut CircuitIo(clock));
+            member.step(clock.now().unwrap(), mode);
+        }
+        assert!(!root.join("external-2.json").exists());
+        assert!(!root.join("closed.json").exists());
+        std::fs::write(root.join("drain-external"), b"drain").unwrap();
+    }
     if member.hold_control.is_some() {
         for _ in 0..8 {
             let management = guard.management.as_mut().unwrap();
             assert_eq!(
                 management.advance_with_io(&mut CircuitIo(clock)),
-                FoundationManagementProgress::Pending
+                FoundationManagementProgress::Pending,
+                "{:?}",
+                management.detail()
             );
             member.step(clock.now().unwrap(), mode);
         }
@@ -925,7 +991,7 @@ fn actual_worker(
         let responder = scope.spawn(|| {
             let end = Instant::now() + Duration::from_secs(8);
             while !done.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
-                member.step(MonotonicIo.now().unwrap(), mode);
+                member.step_live(mode);
                 std::thread::sleep(Duration::from_millis(1));
             }
         });

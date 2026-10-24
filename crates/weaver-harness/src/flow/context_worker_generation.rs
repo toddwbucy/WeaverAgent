@@ -22,6 +22,17 @@ pub(in crate::flow::context) mod return_tests;
 #[path = "context_worker_emission.rs"]
 pub(crate) mod emission;
 
+#[path = "context_worker_final.rs"]
+mod answer;
+
+#[cfg(test)]
+#[path = "context_worker_final_tests.rs"]
+pub(in crate::flow::context) mod final_tests;
+
+#[cfg(test)]
+#[path = "context_worker_session_tests.rs"]
+pub(in crate::flow::context) mod session_tests;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EngineStage {
     StartTask,
@@ -37,6 +48,7 @@ enum EngineStage {
     Refused,
     Cancelled,
     Closing,
+    Answer,
 }
 
 pub(super) struct EngineWork {
@@ -52,6 +64,7 @@ pub(super) struct EngineWork {
     return_calls: Vec<weaver_types::state_flow::CallId>,
     return_units: Option<Vec<crate::flow::material::SelectedUnit>>,
     rounds: Vec<RetainedRound>,
+    answer: Option<super::close::WorldClose>,
 }
 // A later model pass does not discard the decoder, repair, sort and pair
 // evidence of its predecessor. The service owner retains the whole chain.
@@ -78,7 +91,7 @@ impl<'a> FoundationInput<'a> {
     /// Elect begin_task using the one accepted input. It waits for the actual
     /// input and mark filings before supplying task material to the next call.
     pub fn start_task(&mut self, turn: TurnKey) -> Result<(), TurnKey> {
-        if self.progress() != FoundationInputProgress::Accepted || turn.0.is_empty() {
+        if !self.accepts_turn(&turn) {
             return Err(turn);
         }
         self.turn = Some(turn);
@@ -96,8 +109,17 @@ impl<'a> FoundationInput<'a> {
             return_calls: vec![],
             return_units: None,
             rounds: vec![],
+            answer: None,
         }));
         Ok(())
+    }
+
+    /// Preflight a loop-supplied identity without consuming the accepted input.
+    /// The context's existing turn set is authoritative across session wrappers.
+    pub fn accepts_turn(&self, turn: &TurnKey) -> bool {
+        self.progress() == FoundationInputProgress::Accepted
+            && !turn.0.is_empty()
+            && !self.serving.owner.context.input_turns.contains(&turn.0)
     }
 
     /// Select this filed task's exact source as the complete fresh selection.
@@ -202,6 +224,20 @@ impl<'a> FoundationInput<'a> {
         io: &mut impl PumpIo,
     ) -> Result<bool, RunFailure> {
         if self.stage == Stage::Engine
+            && self.engine.as_ref().unwrap().stage == EngineStage::Answer
+            && self
+                .engine
+                .as_ref()
+                .unwrap()
+                .answer
+                .as_ref()
+                .unwrap()
+                .started()
+        {
+            self.advance_engine(peer, io)?;
+            return Ok(false);
+        }
+        if self.stage == Stage::Engine
             && ((self.engine.as_ref().unwrap().stage == EngineStage::Place
                 && self.serving.owner.context.placement_refusing())
                 || self
@@ -240,6 +276,11 @@ impl<'a> FoundationInput<'a> {
             io,
         };
         match work.stage {
+            EngineStage::Answer => {
+                if work.answer.as_mut().unwrap().advance(context, &mut ports)? {
+                    self.stage = work.answer.as_ref().unwrap().completed();
+                }
+            }
             EngineStage::StartTask => {
                 decision(context, ports.io)?;
                 let token = self.token.take().expect("actual accepted input");
@@ -495,11 +536,12 @@ impl<'a> FoundationInput<'a> {
             work.stage = EngineStage::Emission;
         }
         if work.stage == EngineStage::Emission {
-            return work
-                .emission
-                .as_mut()
-                .unwrap()
-                .cancel(owner.context, Some(owner.decode), io);
+            return work.emission.as_mut().unwrap().cancel(
+                owner.context,
+                Some(owner.decode),
+                Some(&mut owner.gate),
+                io,
+            );
         }
         owner.context.cancel_task();
         owner.context.revoke_place();
@@ -539,7 +581,10 @@ impl<'a> FoundationInput<'a> {
     }
 }
 
-fn decision(context: &mut RecordingContext, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+pub(super) fn decision(
+    context: &mut RecordingContext,
+    io: &mut impl PumpIo,
+) -> Result<(), RunFailure> {
     if context.deadlines.get(PumpDeadline::Decision).is_none() {
         let elapsed = context
             .load_duty

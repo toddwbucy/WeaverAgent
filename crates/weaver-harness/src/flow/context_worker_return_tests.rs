@@ -25,7 +25,7 @@ fn generation(mode: &str, pass: u64, stopped: bool) -> TokenAnswer {
         } else {
             Finish::Completed
         },
-        content: if pass == 0 {
+        content: if pass == 0 || mode.contains("-final-return-round-limit") {
             super::emission::tests::content(mode)
         } else {
             vec![ContentBlock::Text {
@@ -67,7 +67,11 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                     } => {
                         assert!(measured.is_none());
                         assert_eq!(*keep, 3 + 5 * pass);
-                        assert!(tool_schemas.is_empty());
+                        if mode.contains("-external-") && !mode.contains("no-grant") {
+                            assert_eq!(tool_schemas, &[crate::tools::shell_schema().to_owned()]);
+                        } else {
+                            assert!(tool_schemas.is_empty());
+                        }
                         if pass == 0 {
                             assert_eq!(
                                 delta,
@@ -113,6 +117,13 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                         tool_schemas,
                         ..
                     } => {
+                        if mode.contains("-final-") {
+                            std::fs::write(
+                                root.join(format!("final-pass-{pass}.json")),
+                                &bytes[..n],
+                            )
+                            .unwrap();
+                        }
                         let (original, schemas) = measured.take().unwrap();
                         assert_eq!(delta, &original);
                         assert_eq!(tool_schemas, &schemas);
@@ -209,7 +220,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         guard.input = Some(std::thread::scope(|scope| {
             let responder = scope.spawn(|| {
                 while !done.load(std::sync::atomic::Ordering::SeqCst) {
-                    member.step(MonotonicIo.now().unwrap(), mode);
+                    member.step_live(mode);
                     std::thread::sleep(Duration::from_millis(1));
                 }
             });

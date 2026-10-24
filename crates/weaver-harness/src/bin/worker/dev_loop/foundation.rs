@@ -6,6 +6,12 @@ use weaver_harness::{
 };
 use weaver_types::TurnKey;
 
+#[path = "foundation_turn.rs"]
+pub mod turn;
+
+#[path = "foundation_session.rs"]
+pub mod session;
+
 /// Workflow choices are separate from the harness's protocol transitions. The
 /// caller chooses when to start a task, select its source and use its placement.
 /// Management and refusal return the same owner for the loop's next decision.
@@ -98,6 +104,16 @@ fn drive(input: &mut FoundationInput<'_>) {
     while input.progress() == FoundationInputProgress::Pending {
         input.advance();
     }
+}
+
+pub fn execute(
+    mut input: Box<FoundationInput<'_>>,
+    call: weaver_types::state_flow::CallId,
+) -> Box<FoundationInput<'_>> {
+    if input.execute(call).is_ok() {
+        drive(&mut input);
+    }
+    input
 }
 
 /// Service the actual held root connection, then resume the same
