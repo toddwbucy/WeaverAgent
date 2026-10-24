@@ -4,7 +4,7 @@
 
 **Landing PR:** #260
 
-**Version:** 0.8 **Date filed:** 2026-10-22 **Parent:** weaver-spu-PRD
+**Version:** 0.8 **Date filed:** 2026-10-21 **Parent:** weaver-spu-PRD
 
 ## 0. Scope and owning clauses
 

@@ -3,7 +3,8 @@
 Date: 2026-10-22. Issue: #146. Approved election; Spec merge remains pending.
 Source: #258 Planner review 5622585660, row 5.
 Draft PR: https://github.com/toddwbucy/WeaverAgent/pull/260
-Branch: docs/state-positive-generation; base main 45f8483393ce25af4ade3f0fa7bd96c1e8ed78f1.
+Branch: docs/state-positive-generation.
+Original main base: 45f8483393ce25af4ade3f0fa7bd96c1e8ed78f1.
 
 The operator approved positive generation for boot in comment 6354978619.
 Planner review 5622765455 found no fix-bucket rows and recommended this election.
@@ -60,3 +61,20 @@ without losing the failed fit's owed account. A mutation that admits zero must
 fail that actual owner test. Keep carrier zero roundtrips and diagnostic session
 zero-limit behavior valid. The operator has approved this proposal; it does not
 complete #146 or qualify serving.
+
+## Integration with merged release-absence wording
+
+On 2026-10-23, main at f4482c60936efb6b7b38dd888fb61f25f8a953ed
+was joined into this proposal without rewriting its history. The header
+conflict keeps this proposal as Landing PR and advances the harness
+amendment from merged version 0.30 to proposed version 0.31. Date filed
+retains each owning document's date from main under the operator's
+first-filing convention. Both the proposed clauses and the merged
+HARNESS-RELEASE-ABSENT / TRACE-RELEASE-ABSENT wording are retained.
+
+Exact body comparisons preserve the previously reviewed Spec clause text;
+the harness body additionally contains the unchanged merged absence
+clause. Documentation checks accompany this conflict resolution. These
+five proposals remain separate main-based PRs; later landings must
+incorporate preceding merged clauses and advance shared versions again.
+The proposal remains unmerged and grants no implementation authority.
