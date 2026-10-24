@@ -3,6 +3,32 @@
 use super::*;
 use crate::flow::context::plan_summary_driver::PlanSummaryDisposition;
 
+#[test]
+fn boundary_batch_summary_release_uses_common_clock_failure_with_or_without_custody() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in std::iter::once(None).chain(HOLDS.into_iter().map(Some)) {
+        let (mut fx, evidence) = completed_boot(true);
+        let leave = completed_boot_leave(&mut fx, &evidence, false);
+        let run = fx.run();
+        let originals = held.map(|held| hold(&mut run.context, held));
+        run.clock = FakePumpIo::new(0);
+        let failure = run
+            .context
+            .begin_boot_plan_summary_release(leave, &mut run.clock)
+            .unwrap_err();
+        assert!(matches!(&failure, RunFailure::Flow {
+            reason: FlowHaltReason::TraceFailed, point: HaltPoint::Author, detail,
+        } if detail == "common clock reversed"));
+        assert_eq!(run.context.failure(), Some(&failure));
+        assert_eq!(run.context.phase(), RecordingPhase::Failed);
+        assert!(run.context.committed_plan_summary().is_err());
+        assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());
+        if let Some(originals) = originals {
+            originals.assert_held(&run.context);
+        }
+    }
+}
+
 /// Scalar and pointer witnesses only. No test rebuilds or copies a capability.
 struct CompletedBootEvidence {
     open_address: usize,

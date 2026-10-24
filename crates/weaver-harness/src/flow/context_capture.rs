@@ -156,7 +156,7 @@ impl RecordingContext {
             .ok_or_else(|| self.capture_fault(io, "capture has no recorded frontier"))?
             .0;
         self.flow
-            .check_capture_barrier(
+            .require_capture_barrier(
                 &mut FlowRecording {
                     barrier: &mut self.barrier,
                     inbox: &mut self.inbox,

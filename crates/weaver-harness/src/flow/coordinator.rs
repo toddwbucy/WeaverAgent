@@ -218,6 +218,7 @@ pub(super) struct RecordedInstructionCheck {
     reply: Ste100Reply,
     source: SourcePosition,
     recorded_ns: u64,
+    lease: Option<SourceLease>,
 }
 
 impl RecordedInstructionCheck {
@@ -233,12 +234,15 @@ impl RecordedInstructionCheck {
     pub(super) fn recorded_ns(&self) -> u64 {
         self.recorded_ns
     }
+    pub(super) fn take_lease(&mut self) -> Option<SourceLease> {
+        self.lease.take()
+    }
 }
 
 #[derive(Debug)]
 pub(super) enum InstructionCheck {
     Unselected { source: SourcePosition },
-    Checked(RecordedInstructionCheck),
+    Checked(Box<RecordedInstructionCheck>),
 }
 
 struct InstructionCheckWatch {
@@ -247,6 +251,7 @@ struct InstructionCheckWatch {
     source: Option<SourcePosition>,
     selected: bool,
     completion: Option<InstructionCheck>,
+    lease: Option<SourceLease>,
 }
 
 impl RecordedCheck {
@@ -687,6 +692,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             source: None,
             selected: false,
             completion: None,
+            lease: None,
         });
         Ok(())
     }
@@ -775,6 +781,36 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.instruction_check = None;
     }
 
+    fn register_instruction_receipt(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: u64,
+        sources: &[SourceBlockId],
+    ) -> Result<(), FlowFailure> {
+        let Some(watch) = self.instruction_check.as_ref() else {
+            return Ok(());
+        };
+        let Some(source) = watch.source.as_ref() else {
+            return Ok(());
+        };
+        if source.block_id.sequence.0 != sequence {
+            return Ok(());
+        }
+        if !watch.selected || watch.lease.is_some() || sources != [source.block_id.clone()] {
+            return Err(self.fail(
+                cx,
+                "instruction_check",
+                "instruction receipt source differs",
+            ));
+        }
+        let lease = self
+            .ledger
+            .register_source_lease(sources.to_vec())
+            .map_err(|error| self.fail(cx, "instruction_check", error.error))?;
+        self.instruction_check.as_mut().unwrap().lease = Some(lease);
+        Ok(())
+    }
+
     fn observe_instruction_check(
         &mut self,
         cx: &mut FlowRecording<'_>,
@@ -813,9 +849,10 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             reply: reply.clone(),
             source: source.clone(),
             recorded_ns,
+            lease: self.instruction_check.as_mut().unwrap().lease.take(),
         };
         self.instruction_check.as_mut().unwrap().completion =
-            Some(InstructionCheck::Checked(completion));
+            Some(InstructionCheck::Checked(Box::new(completion)));
         Ok(())
     }
     /// Reserve complete model content before authoring. Source identity belongs
@@ -1191,6 +1228,15 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.ledger.receipts()
     }
 
+    pub(super) fn take_recorded_pair_terminal(
+        &mut self,
+        source: &SourceBlockId,
+    ) -> Option<super::ledger::CommittedSource> {
+        let receipt = self.ledger.take_recorded_pair_terminal(source)?;
+        self.receipt_reservation = None;
+        Some(receipt)
+    }
+
     pub(super) fn filing_recorded_ns(&self) -> Option<u64> {
         self.receipt_reservation
             .as_ref()
@@ -1455,7 +1501,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
 
     /// Existing admin rollback, after an actual preactivation enter refusal.
     /// No tee was installed and this Open can never authorize boot or filing.
-    pub(super) fn check_enter_rollback(
+    pub(super) fn require_enter_rollback(
         &mut self,
         cx: &mut FlowRecording<'_>,
     ) -> Result<(), FlowFailure> {
@@ -1489,7 +1535,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         cx: &mut FlowRecording<'_>,
         _io: &mut impl PumpIo,
     ) -> Result<Advance, FlowFailure> {
-        self.check_enter_rollback(cx)?;
+        self.require_enter_rollback(cx)?;
         let Some(owner) = &mut self.state else {
             return Err(self.fail(cx, "barrier", "enter rollback lost its state owner"));
         };
@@ -1659,7 +1705,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             .and_then(|account| account.close_error.as_deref())
     }
 
-    pub(super) fn check_releasing(
+    pub(super) fn require_releasing(
         &mut self,
         cx: &mut FlowRecording<'_>,
     ) -> Result<(), FlowFailure> {
@@ -1685,7 +1731,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         &mut self,
         cx: &mut FlowRecording<'_>,
     ) -> Result<(), FlowFailure> {
-        self.check_releasing(cx)?;
+        self.require_releasing(cx)?;
         self.phase = CoordinatorPhase::Releasing;
         Ok(())
     }
@@ -1757,7 +1803,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         Ok(Advance::Progress)
     }
 
-    pub(super) fn check_close(&mut self, cx: &mut FlowRecording<'_>) -> Result<(), FlowFailure> {
+    pub(super) fn require_close(&mut self, cx: &mut FlowRecording<'_>) -> Result<(), FlowFailure> {
         self.observe_failures(cx)?;
         if self.phase != CoordinatorPhase::Releasing
             || !self.state_retired
@@ -1774,7 +1820,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     }
 
     pub(super) fn close(&mut self, cx: &mut FlowRecording<'_>) -> Result<(), FlowFailure> {
-        self.check_close(cx)?;
+        self.require_close(cx)?;
         self.phase = CoordinatorPhase::Closed;
         Ok(())
     }
@@ -1845,7 +1891,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
 
     /// The context has frozen ordinary admission at a turn boundary. Existing
     /// owed copies still drain through their actual classification and receipts.
-    pub(super) fn check_capture_barrier(
+    pub(super) fn require_capture_barrier(
         &mut self,
         cx: &mut FlowRecording<'_>,
         capture_id: DecimalU64,
@@ -1865,7 +1911,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         capture_id: DecimalU64,
         frontier: u64,
     ) -> Result<(), FlowFailure> {
-        self.check_capture_barrier(cx, capture_id, frontier)?;
+        self.require_capture_barrier(cx, capture_id, frontier)?;
         self.capture = Some(CaptureOwner {
             snapshot: CaptureSnapshot {
                 capture_id,
@@ -2812,6 +2858,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                         installed.source_sequence,
                         &installed.sources,
                     )?;
+                    self.register_instruction_receipt(
+                        cx,
+                        installed.source_sequence,
+                        &installed.sources,
+                    )?;
                     copied.try_reserve(1).map_err(|_| {
                         self.fail(cx, "counter", "copied transition reservation failed")
                     })?;
@@ -3331,6 +3382,22 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 }
             }
             (Some(PendingRecord::Classifier), RecordProof::Classifier(proof)) => {
+                if let Some(request) = self.classifier().outstanding()
+                    && self
+                        .output_checks
+                        .as_ref()
+                        .is_some_and(|output| output.observes(request))
+                {
+                    let classifier = self.classifier.as_ref().expect("standing classifier");
+                    let reply = classifier
+                        .held()
+                        .expect("Recorded classifier reply remains held");
+                    self.output_checks
+                        .as_mut()
+                        .unwrap()
+                        .observe_recorded(classifier.outstanding().unwrap(), reply, &proof)
+                        .map_err(|error| self.fail(cx, "output", error))?;
+                }
                 self.classifier_release = Some(ClassifierRelease {
                     source: proof.source().clone(),
                     recorded_ns: io.now().map_err(|error| self.fail(cx, "clock", error))?,

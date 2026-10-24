@@ -21,6 +21,156 @@ use weaver_types::state_flow as s;
 #[path = "../bin/worker/dev_loop/foundation.rs"]
 pub(super) mod worker;
 
+/// Recorded does not imply the sink reader has received the writer's bytes.
+/// Keep partial lines and wait through the actual Recorded sequence under a
+/// fixture deadline. A missing row is a failed instrument, never a partial pass.
+pub(super) fn trace_through(
+    reader: &mut impl Read,
+    mut bytes: Vec<u8>,
+    through: weaver_trace::Sequence,
+    deadline: Instant,
+) -> std::io::Result<Vec<serde_json::Value>> {
+    let mut rows = Vec::<serde_json::Value>::new();
+    loop {
+        match reader.read_to_end(&mut bytes) {
+            Ok(_) => (),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) => {}
+            Err(error) => return Err(error),
+        }
+        while let Some(end) = bytes.iter().position(|b| *b == b'\n') {
+            let line: Vec<_> = bytes.drain(..=end).collect();
+            rows.push(serde_json::from_slice(&line).map_err(std::io::Error::other)?);
+        }
+        let last = rows
+            .last()
+            .and_then(|row| row["sequence"].as_str())
+            .and_then(|s| s.parse::<u64>().ok());
+        if last.is_some_and(|sequence| sequence >= through.0) {
+            return Ok(rows);
+        }
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "trace fixture ended at {last:?}, before Recorded {}",
+                    through.0
+                ),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn worker_fixture_trace_waits_for_delayed_complete_recorded_row() {
+    struct Delayed(std::collections::VecDeque<Vec<u8>>);
+    impl Read for Delayed {
+        fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+            let Some(bytes) = self.0.front_mut() else {
+                return Ok(0);
+            };
+            if bytes.is_empty() {
+                self.0.pop_front();
+                return Err(std::io::ErrorKind::WouldBlock.into());
+            }
+            let count = bytes.len().min(output.len());
+            output[..count].copy_from_slice(&bytes[..count]);
+            bytes.drain(..count);
+            if bytes.is_empty() {
+                self.0.pop_front();
+            }
+            Ok(count)
+        }
+    }
+    let mut reader = Delayed(std::collections::VecDeque::from([
+        b"{\"sequence\":\"1\"}\n{\"sequence\":".to_vec(),
+        vec![],
+        b"\"2\",\"kind\":\"turn.closed\"}\n".to_vec(),
+    ]));
+    let rows = trace_through(
+        &mut reader,
+        vec![],
+        weaver_trace::Sequence(2),
+        Instant::now() + Duration::from_secs(1),
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1]["kind"], "turn.closed");
+}
+
+#[test]
+fn worker_fixture_trace_missing_recorded_row_fails_at_deadline() {
+    let mut reader = std::io::Cursor::new(b"{\"sequence\":\"1\"}\n");
+    let error = trace_through(
+        &mut reader,
+        vec![],
+        weaver_trace::Sequence(2),
+        Instant::now(),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(error.to_string().contains("before Recorded 2"));
+}
+
+#[test]
+fn worker_fixture_clock_waits_for_complete_request_receipt() {
+    use std::io::BufRead;
+    let (mut peer, member) = UnixStream::pair().unwrap();
+    member.set_nonblocking(true).unwrap();
+    let mut member = Member {
+        peer: member,
+        bytes: vec![],
+        seed: "seed".into(),
+        ordinal: 0,
+        requests: vec![],
+        hold_mark: false,
+        hold_kind: None,
+        filings: vec![],
+        held_file: None,
+        hold_control: None,
+        held_control: None,
+    };
+    let samples = std::cell::Cell::new(0);
+    let sample = || {
+        samples.set(samples.get() + 1);
+        30
+    };
+    // Arrival after an empty poll and then a partial line must not reuse an
+    // earlier reading. No scheduling assumption or production validator changes.
+    member.step_observed("ready", sample);
+    assert_eq!(samples.get(), 0);
+    let request = s::StateFrame::Control {
+        common: s::Common {
+            session_id: "session".into(),
+            run_id: "run".into(),
+            request_id: 2.into(),
+        },
+        frame: s::StateControl::Read {
+            selector: s::ReadSelector::OpenPairs {},
+        },
+    };
+    let bytes = s::encode_state_line(&request, s::FrameDirection::Request).unwrap();
+    peer.write_all(&bytes[..bytes.len() - 1]).unwrap();
+    member.step_observed("ready", sample);
+    assert_eq!(samples.get(), 0);
+    peer.write_all(&bytes[bytes.len() - 1..]).unwrap();
+    member.step_observed("ready", sample);
+    assert_eq!(samples.get(), 1);
+    let mut bytes = vec![];
+    std::io::BufReader::new(peer)
+        .read_until(b'\n', &mut bytes)
+        .unwrap();
+    let answer = s::decode_state_line(&bytes, s::FrameDirection::Response).unwrap();
+    let s::StateFrame::ControlAnswer { observation, .. } = answer else {
+        panic!("actual read response")
+    };
+    assert_eq!(observation.began_ns.0, 30);
+}
+
 struct Files(PathBuf);
 impl Files {
     fn new() -> Self {
@@ -222,9 +372,28 @@ pub(super) struct Member {
     pub(super) hold_kind: Option<&'static str>,
     pub(super) filings: Vec<s::StateFrame>,
     pub(super) held_file: Option<s::StateFrame>,
+    pub(super) hold_control: Option<&'static str>,
+    pub(super) held_control: Option<s::StateFrame>,
 }
 impl Member {
     pub(super) fn step(&mut self, now: u64, mode: &str) {
+        self.step_observed(mode, || now);
+    }
+
+    /// The concurrent worker can send after this responder starts its step.
+    /// Sample a fresh reading only after each complete request is received.
+    pub(super) fn step_live(&mut self, mode: &str) {
+        self.step_observed(mode, || MonotonicIo.now().unwrap());
+    }
+
+    fn step_observed(&mut self, mode: &str, mut now: impl FnMut() -> u64) {
+        if self.hold_control.is_none()
+            && let Some(response) = self.held_control.take()
+        {
+            self.peer
+                .write_all(&s::encode_state_line(&response, s::FrameDirection::Response).unwrap())
+                .unwrap();
+        }
         if !self.hold_mark
             && self.hold_kind.is_none()
             && let Some(response) = self.held_file.take()
@@ -243,7 +412,7 @@ impl Member {
             let line: Vec<_> = self.bytes.drain(..=end).collect();
             let request = s::decode_state_line(&line, s::FrameDirection::Request).unwrap();
             self.ordinal += 1;
-            let observation = operation(&request, self.ordinal, now);
+            let observation = operation(&request, self.ordinal, now());
             let response = match &request {
                 s::StateFrame::Open {
                     schema_id,
@@ -305,16 +474,42 @@ impl Member {
                                 }
                                 s::ReadSelector::Marks {} if mode.contains("generation") => {
                                     self.requests.push("marks".into());
-                                    serde_json::to_vec(&s::QueryResult::Marks {
-                                        next_span_id: 1.into(),
-                                        current_task: None,
-                                        open_scopes: vec![],
+                                    serde_json::to_vec(&if mode.contains("-session-") {
+                                        super::input::generation::session_tests::marks(
+                                            &self.filings,
+                                        )
+                                    } else {
+                                        s::QueryResult::Marks {
+                                            next_span_id: 1.into(),
+                                            current_task: None,
+                                            open_scopes: vec![],
+                                        }
                                     })
                                     .unwrap()
                                 }
+                                s::ReadSelector::History {
+                                    noun,
+                                    verb: None,
+                                    condition: None,
+                                } if mode.contains("-pairs-")
+                                    || mode.contains("-final-")
+                                    || mode.ends_with("correction-inward") =>
+                                {
+                                    self.requests.push(format!("recall:{noun}"));
+                                    br#"{ "entries" : { "entries" : [] } }"#.to_vec()
+                                }
                                 _ => panic!("unexpected read {selector:?}"),
                             };
-                            if mode == "prompt-refusal"
+                            if (mode.contains("-pairs-") && mode.contains("read-refused"))
+                                && matches!(selector, s::ReadSelector::History { .. })
+                            {
+                                s::StateControlAnswer::ControlRefused {
+                                    code: s::ControlRefusalCode::Read(
+                                        s::ReadRefusalCode::ResultTooLarge,
+                                    ),
+                                    detail: "whole history exceeds the fixture bound".into(),
+                                }
+                            } else if mode == "prompt-refusal"
                                 || (mode.ends_with("read-refusal")
                                     && matches!(selector, s::ReadSelector::Marks {}))
                             {
@@ -367,6 +562,25 @@ impl Member {
                 }
                 _ => panic!("unexpected request {request:?}"),
             };
+            let hold_control = match &request {
+                s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::History { .. },
+                        },
+                    ..
+                } => self.hold_control == Some("read"),
+                s::StateFrame::Control {
+                    frame: s::StateControl::Release { .. },
+                    ..
+                } => self.hold_control == Some("release"),
+                _ => false,
+            };
+            if hold_control {
+                assert!(self.held_control.is_none());
+                self.held_control = Some(response);
+                continue;
+            }
             let hold = match &request {
                 s::StateFrame::File { filing, .. } => (self.hold_mark && filing.source.kind == "state.mark") || self.hold_kind == Some(filing.source.kind.as_str()),
                 s::StateFrame::FilePair { filing, .. } => self.hold_kind == Some(filing.source.kind.as_str()) && (!mode.contains("second-pair") || self.filings.iter().filter(|f| matches!(f, s::StateFrame::FilePair { filing, .. } if filing.source.kind == "tool.call.completed")).count() >= 2),
@@ -436,12 +650,27 @@ fn circuit(mode: &str) {
         load.state_flow.ste100.decision_wait.elapsed_ns = 5_000_000_000.into();
         bootstrap.instruction.decision_wait.elapsed_ns = 5_000_000_000.into();
     }
+    if mode.contains("-external-") && !mode.contains("no-grant") {
+        load.state_flow.tools.sh = Some(weaver_trace::serving::payloads::ToolPolicy {
+            clock_ms: 1234,
+            measurement_ref: "synthetic-worker-external".into(),
+        });
+    }
     let envelope = super::super::startup_composition::tests::entered_tests::envelope(
         &config,
         &load,
         &bootstrap,
         program.organs.classify.as_ref().unwrap(),
     );
+    let envelope = if mode.contains("-external-") && !mode.contains("no-grant") {
+        let mut value = serde_json::to_value(envelope).unwrap();
+        value["payload"]["body"]["payload"]["binding"]["shell"] = serde_json::json!({
+            "binary": "/synthetic/sh", "commands": "/synthetic/commands"
+        });
+        serde_json::from_value(value).unwrap()
+    } else {
+        envelope
+    };
     let bytes = envelope.encode().unwrap();
     let wire = if mode == "malformed" {
         b"{bad".to_vec()
@@ -533,6 +762,8 @@ fn circuit(mode: &str) {
         hold_kind: None,
         filings: vec![],
         held_file: None,
+        hold_control: None,
+        held_control: None,
     };
     if mode == "worker" || mode.starts_with("input-worker") {
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -540,7 +771,7 @@ fn circuit(mode: &str) {
         let responder = std::thread::spawn(move || {
             let limit = Instant::now() + Duration::from_secs(8);
             while !flag.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < limit {
-                member.step(MonotonicIo.now().unwrap(), "ready");
+                member.step_live("ready");
                 std::thread::sleep(Duration::from_millis(1));
             }
             member
@@ -1077,6 +1308,10 @@ scenario!(
     "input-generation-ready"
 );
 scenario!(
+    worker_generation_composition_slow_decode,
+    "input-generation-slow-decode"
+);
+scenario!(
     worker_generation_composition_elide_without_cut,
     "input-generation-elide"
 );
@@ -1314,4 +1549,569 @@ scenario!(
 scenario!(
     worker_emission_composition_completed_observe_repair_refusal,
     "input-generation-emission-completed-observe-repair-refusal"
+);
+
+scenario!(
+    worker_correction_composition_ready,
+    "input-generation-emission-correction-ready"
+);
+
+scenario!(
+    worker_correction_composition_held_filing,
+    "input-generation-emission-correction-held-filing"
+);
+
+scenario!(
+    worker_correction_composition_retry_text,
+    "input-generation-emission-correction-retry-text"
+);
+
+scenario!(
+    worker_correction_composition_retry_empty,
+    "input-generation-emission-correction-retry-empty"
+);
+
+scenario!(
+    worker_correction_composition_retry_call,
+    "input-generation-emission-correction-retry-call"
+);
+
+scenario!(
+    worker_correction_composition_stop_restatement,
+    "input-generation-emission-correction-stop-restatement"
+);
+
+scenario!(
+    worker_correction_composition_stop_placed,
+    "input-generation-emission-correction-stop-placed"
+);
+
+scenario!(
+    worker_correction_composition_stop_generation,
+    "input-generation-emission-correction-stop-generation"
+);
+
+scenario!(
+    worker_correction_composition_stop_checks,
+    "input-generation-emission-correction-stop-checks"
+);
+
+scenario!(
+    worker_correction_composition_retry_text_stop_checks,
+    "input-generation-emission-correction-retry-text-stop-checks"
+);
+
+scenario!(
+    worker_correction_composition_retry_empty_stop_checks,
+    "input-generation-emission-correction-retry-empty-stop-checks"
+);
+
+scenario!(
+    worker_correction_composition_retry_call_stop_checks,
+    "input-generation-emission-correction-retry-call-stop-checks"
+);
+
+scenario!(
+    worker_correction_composition_fit_refusal,
+    "input-generation-emission-correction-fit-refusal"
+);
+
+scenario!(
+    worker_correction_composition_measure_refusal,
+    "input-generation-emission-correction-measure-refusal"
+);
+
+scenario!(
+    worker_correction_composition_actual_worker,
+    "input-worker-generation-emission-correction-actual-worker"
+);
+
+scenario!(
+    worker_correction_composition_cap,
+    "input-generation-emission-correction-cap"
+);
+
+scenario!(
+    worker_correction_composition_held_decode,
+    "input-generation-emission-correction-held-decode"
+);
+
+scenario!(
+    worker_correction_composition_fit_refusal_close_stop,
+    "input-generation-emission-correction-fit-refusal-close-stop"
+);
+
+scenario!(
+    worker_correction_composition_actual_worker_fit_refusal,
+    "input-worker-generation-emission-correction-actual-worker-fit-refusal"
+);
+
+scenario!(
+    worker_inward_composition_ready,
+    "input-generation-emission-pairs-ready"
+);
+
+scenario!(
+    worker_inward_composition_identical,
+    "input-generation-emission-pairs-identical"
+);
+
+scenario!(
+    worker_inward_composition_reverse,
+    "input-generation-emission-pairs-reverse"
+);
+
+scenario!(
+    worker_inward_composition_empty,
+    "input-generation-emission-pairs-empty"
+);
+
+scenario!(
+    worker_inward_composition_barred,
+    "input-generation-emission-pairs-barred"
+);
+
+scenario!(
+    worker_inward_composition_omit_first,
+    "input-generation-emission-pairs-omit-first"
+);
+
+scenario!(
+    worker_inward_composition_mixed,
+    "input-generation-emission-pairs-mixed"
+);
+
+scenario!(
+    worker_inward_composition_external,
+    "input-generation-emission-pairs-external"
+);
+
+scenario!(
+    worker_inward_composition_held_statement,
+    "input-generation-emission-pairs-held-statement"
+);
+
+scenario!(
+    worker_inward_composition_held_opening,
+    "input-generation-emission-pairs-held-opening"
+);
+
+scenario!(
+    worker_inward_composition_held_read,
+    "input-generation-emission-pairs-held-read"
+);
+scenario!(
+    worker_inward_composition_read_expired,
+    "input-generation-emission-pairs-held-read-expired"
+);
+
+scenario!(
+    worker_inward_composition_held_release,
+    "input-generation-emission-pairs-held-release"
+);
+
+scenario!(
+    worker_inward_composition_held_terminal,
+    "input-generation-emission-pairs-held-terminal"
+);
+
+scenario!(
+    worker_inward_composition_read_refused,
+    "input-generation-emission-pairs-read-refused"
+);
+
+scenario!(
+    worker_inward_composition_stop_begin,
+    "input-generation-emission-pairs-stop-begin"
+);
+
+scenario!(
+    worker_inward_composition_stop_ready,
+    "input-generation-emission-pairs-stop-ready"
+);
+scenario!(
+    worker_inward_composition_stop_plan_break_prefix,
+    "input-generation-emission-pairs-omit-first-stop-ready"
+);
+scenario!(
+    worker_inward_composition_corrected,
+    "input-generation-emission-correction-inward"
+);
+scenario!(
+    worker_inward_composition_stop_elected,
+    "input-generation-emission-pairs-stop-elected"
+);
+
+scenario!(
+    worker_inward_composition_stop_read,
+    "input-generation-emission-pairs-stop-read"
+);
+
+scenario!(
+    worker_inward_composition_stop_terminal,
+    "input-generation-emission-pairs-stop-terminal"
+);
+
+scenario!(
+    worker_inward_composition_stop_complete,
+    "input-generation-emission-pairs-stop-complete"
+);
+
+scenario!(
+    worker_inward_composition_actual_worker,
+    "input-worker-generation-emission-pairs-actual-worker"
+);
+
+scenario!(
+    worker_return_composition_ready,
+    "input-generation-emission-pairs-return-ready"
+);
+scenario!(
+    worker_return_composition_slow_decode,
+    "input-generation-emission-pairs-return-slow-decode"
+);
+
+scenario!(
+    worker_return_composition_identical,
+    "input-generation-emission-pairs-return-identical"
+);
+
+scenario!(
+    worker_return_composition_reverse,
+    "input-generation-emission-pairs-return-reverse"
+);
+
+scenario!(
+    worker_return_composition_barred,
+    "input-generation-emission-pairs-return-barred"
+);
+
+scenario!(
+    worker_return_composition_read_refused,
+    "input-generation-emission-pairs-return-read-refused"
+);
+
+scenario!(
+    worker_return_composition_subset,
+    "input-generation-emission-pairs-return-subset"
+);
+
+scenario!(
+    worker_return_composition_fit_refusal,
+    "input-generation-emission-pairs-return-fit-refusal"
+);
+
+scenario!(
+    worker_return_composition_stop_election,
+    "input-generation-emission-pairs-return-stop-election"
+);
+
+scenario!(
+    worker_return_composition_stop_placed,
+    "input-generation-emission-pairs-return-stop-placed"
+);
+
+scenario!(
+    worker_return_composition_stop_generating,
+    "input-generation-emission-pairs-return-stop-generating"
+);
+
+scenario!(
+    worker_return_composition_stop_generated,
+    "input-generation-emission-pairs-return-stop-generated"
+);
+
+scenario!(
+    worker_return_composition_actual_worker,
+    "input-worker-generation-emission-pairs-return-actual-worker"
+);
+
+scenario!(
+    worker_external_composition_ready,
+    "input-generation-emission-pairs-external-ready"
+);
+
+scenario!(
+    worker_external_composition_identical,
+    "input-generation-emission-pairs-external-identical"
+);
+
+scenario!(
+    worker_external_composition_mixed,
+    "input-generation-emission-pairs-external-mixed"
+);
+
+scenario!(
+    worker_external_composition_reverse,
+    "input-generation-emission-pairs-external-reverse"
+);
+
+scenario!(
+    worker_external_composition_no_grant,
+    "input-generation-emission-pairs-external-no-grant"
+);
+
+scenario!(
+    worker_external_composition_refused,
+    "input-generation-emission-pairs-external-refused"
+);
+
+scenario!(
+    worker_external_composition_errored,
+    "input-generation-emission-pairs-external-errored"
+);
+
+scenario!(
+    worker_external_composition_killed,
+    "input-generation-emission-pairs-external-killed"
+);
+
+scenario!(
+    worker_external_composition_held_terminal,
+    "input-generation-emission-pairs-external-held-terminal"
+);
+
+scenario!(
+    worker_external_composition_stop_elected,
+    "input-generation-emission-pairs-external-stop-elected"
+);
+
+scenario!(
+    worker_external_composition_stop_unsent,
+    "input-generation-emission-pairs-external-stop-unsent"
+);
+
+scenario!(
+    worker_external_composition_stop_running,
+    "input-generation-emission-pairs-external-stop-running"
+);
+
+scenario!(
+    worker_external_composition_stop_crossed,
+    "input-generation-emission-pairs-external-stop-crossed"
+);
+
+scenario!(
+    worker_external_composition_stop_terminal,
+    "input-generation-emission-pairs-external-stop-terminal"
+);
+
+scenario!(
+    worker_external_composition_wrong_return,
+    "input-generation-emission-pairs-external-wrong-return"
+);
+
+scenario!(
+    worker_external_composition_duplicate,
+    "input-generation-emission-pairs-external-duplicate"
+);
+
+scenario!(
+    worker_external_composition_actual_worker,
+    "input-worker-generation-emission-pairs-external-actual-worker"
+);
+
+scenario!(
+    worker_external_composition_mixed_revoked,
+    "input-generation-emission-pairs-external-mixed-revoked"
+);
+
+scenario!(
+    worker_external_composition_gate_death,
+    "input-generation-emission-pairs-external-gate-death"
+);
+
+scenario!(
+    worker_external_composition_multiline,
+    "input-generation-emission-pairs-external-multiline"
+);
+
+scenario!(
+    worker_external_composition_queued_input,
+    "input-generation-emission-pairs-external-queued-input"
+);
+
+scenario!(
+    worker_final_composition_text,
+    "input-worker-generation-emission-final-text"
+);
+
+scenario!(
+    worker_final_composition_empty,
+    "input-worker-generation-emission-final-empty"
+);
+
+scenario!(
+    worker_final_composition_bindings,
+    "input-worker-generation-emission-final-bindings"
+);
+
+scenario!(
+    worker_final_composition_length,
+    "input-worker-generation-emission-final-length"
+);
+
+scenario!(
+    worker_final_composition_correction,
+    "input-worker-generation-emission-final-correction"
+);
+
+scenario!(
+    worker_final_composition_round_once,
+    "input-worker-generation-emission-final-return-round-once"
+);
+
+scenario!(
+    worker_final_composition_round_limit,
+    "input-worker-generation-emission-final-return-round-limit"
+);
+
+scenario!(
+    worker_final_composition_external,
+    "input-worker-generation-emission-final-return-external-healthy"
+);
+
+scenario!(
+    worker_final_composition_subset,
+    "input-generation-emission-final-manual-subset"
+);
+
+scenario!(
+    worker_final_composition_round_held,
+    "input-generation-emission-final-manual-round-held"
+);
+
+scenario!(
+    worker_final_composition_gate_pressure,
+    "input-generation-emission-final-manual-gate-pressure"
+);
+
+scenario!(
+    worker_final_composition_stop_before,
+    "input-generation-emission-final-manual-stop-before"
+);
+
+scenario!(
+    worker_final_composition_stop_after,
+    "input-generation-emission-final-manual-stop-after"
+);
+
+scenario!(
+    worker_final_composition_trace_failure,
+    "input-generation-emission-final-manual-trace-failure"
+);
+
+scenario!(
+    worker_final_composition_trace_pressure,
+    "input-generation-emission-final-manual-trace-pressure"
+);
+
+scenario!(
+    worker_final_composition_deadline,
+    "input-generation-emission-final-manual-deadline"
+);
+scenario!(
+    worker_final_composition_send_clock,
+    "input-generation-emission-final-manual-send-clock"
+);
+
+scenario!(
+    worker_final_composition_management_observe,
+    "input-worker-generation-emission-final-return-round-once-management-observe"
+);
+
+scenario!(
+    worker_final_composition_management_stop_before,
+    "input-worker-generation-emission-final-return-round-once-management-stop-before"
+);
+
+scenario!(
+    worker_final_composition_management_leave,
+    "input-worker-generation-emission-final-return-round-once-management-leave"
+);
+
+scenario!(
+    worker_session_composition_two,
+    "input-worker-generation-emission-session-two"
+);
+
+scenario!(
+    worker_session_composition_three,
+    "input-worker-generation-emission-session-three"
+);
+
+scenario!(
+    worker_session_composition_refused,
+    "input-worker-generation-emission-session-refused"
+);
+
+scenario!(
+    worker_session_composition_queued,
+    "input-worker-generation-emission-session-queued"
+);
+
+scenario!(
+    worker_session_composition_observe,
+    "input-worker-generation-emission-session-observe"
+);
+
+scenario!(
+    worker_session_composition_stop_idle,
+    "input-worker-generation-emission-session-stop-idle"
+);
+
+scenario!(
+    worker_session_composition_stop_active,
+    "input-worker-generation-emission-session-stop-active"
+);
+
+scenario!(
+    worker_session_composition_leave,
+    "input-worker-generation-emission-session-leave"
+);
+
+scenario!(
+    worker_session_composition_duplicate,
+    "input-worker-generation-emission-session-duplicate"
+);
+
+scenario!(
+    worker_session_composition_observe_accepted,
+    "input-worker-generation-emission-session-observe-accepted"
+);
+
+scenario!(
+    worker_session_composition_stop_accepted,
+    "input-worker-generation-emission-session-stop-accepted"
+);
+
+scenario!(
+    worker_session_composition_decoder_failure,
+    "input-worker-generation-emission-session-decoder-failure"
+);
+
+scenario!(
+    worker_final_composition_model_stop,
+    "input-worker-generation-emission-final-model-stop"
+);
+scenario!(
+    worker_session_composition_model_stop,
+    "input-worker-generation-emission-session-model-stop"
+);
+scenario!(
+    worker_session_composition_read_refusal,
+    "input-worker-generation-emission-session-read-refusal"
+);
+scenario!(
+    worker_session_composition_generation_refusal,
+    "input-worker-generation-emission-session-generation-refusal"
+);
+scenario!(
+    worker_session_composition_election_management,
+    "input-worker-generation-emission-session-election"
+);
+
+scenario!(
+    worker_stop_composition_inherited_deadline,
+    "input-stop-inherited-deadline"
 );

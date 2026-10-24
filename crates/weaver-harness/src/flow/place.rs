@@ -123,6 +123,7 @@ pub(in crate::flow) struct ConfirmedGeneration {
     pub(super) grant: PlacementGrant,
     pub(super) received: ReceivedDecode,
     pub(super) output: Option<super::coordinator::CheckedGeneration>,
+    pub(super) append_receipt: Option<super::journal::AppendReceipt>,
 }
 impl ConfirmedGeneration {
     pub(in crate::flow) fn take_output(&mut self) -> Option<super::coordinator::CheckedGeneration> {

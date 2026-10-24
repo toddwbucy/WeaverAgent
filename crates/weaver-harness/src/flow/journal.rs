@@ -14,6 +14,7 @@ use super::material::SelectedUnit;
 mod layout;
 mod owner;
 use layout::{PlacedSource, RetainedMessage};
+pub(in crate::flow) use owner::AppendReceipt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum JournalError {

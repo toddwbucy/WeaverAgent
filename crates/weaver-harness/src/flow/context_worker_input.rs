@@ -17,6 +17,9 @@ pub(crate) mod generation;
 #[path = "context_worker_management.rs"]
 pub(crate) mod management;
 
+#[path = "context_worker_close.rs"]
+mod close;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoundationInputProgress {
     Pending,
@@ -26,8 +29,16 @@ pub enum FoundationInputProgress {
     Placed,
     Generated,
     Restatement,
+    CorrectionPlaced,
     Effective,
     Sorted,
+    /// The next selected request has both actual opening receipts. The worker
+    /// must explicitly elect its operation; readiness does not dispatch.
+    PairReady,
+    /// Every conforming request has its actual terminal filing proof.
+    PairsComplete,
+    /// The clean turn close is Recorded and its exact world reply fully sent.
+    Completed,
     /// An operation refused. Its full account remains with this owner.
     OperationRefused,
     Refused,
@@ -50,6 +61,7 @@ enum Stage {
     Aborted,
     Turn,
     Engine,
+    Completed,
     Stopped,
 }
 
@@ -114,6 +126,7 @@ impl<'a> FoundationInput<'a> {
             Stage::Engine => self.engine.as_ref().unwrap().progress(),
             Stage::Refused => FoundationInputProgress::Refused,
             Stage::Aborted => FoundationInputProgress::Aborted,
+            Stage::Completed => FoundationInputProgress::Completed,
             _ => FoundationInputProgress::Pending,
         }
     }
@@ -140,7 +153,15 @@ impl<'a> FoundationInput<'a> {
                 self.step(io)
             }
         });
-        if let Err(failure) = result {
+        if let Err(mut failure) = result {
+            if self.final_send_clock_failed() {
+                failure = self.serving.owner.context.fail(
+                    io,
+                    FlowHaltReason::TraceFailed,
+                    HaltPoint::Author,
+                    format!("final reply send clock observation failed: {failure:?}"),
+                );
+            }
             // The common pump reports external transport failure without
             // electing the enclosing owner's disposition. This owner stops
             // serving and revokes input before handing custody to teardown.
@@ -427,6 +448,9 @@ impl<'a> FoundationInput<'a> {
         match self.progress() {
             FoundationInputProgress::Refused => Ok(FoundationInputResult::Refused(self.serving)),
             FoundationInputProgress::Aborted => Ok(FoundationInputResult::Aborted(self.serving)),
+            FoundationInputProgress::Completed => {
+                Ok(FoundationInputResult::Completed(self.serving))
+            }
             FoundationInputProgress::Turn => {
                 Ok(FoundationInputResult::Turn(Box::new(FoundationTurn {
                     serving: self.serving,
@@ -448,6 +472,7 @@ impl<'a> FoundationInput<'a> {
 pub enum FoundationInputResult<'a> {
     Refused(FoundationServing<'a>),
     Aborted(FoundationServing<'a>),
+    Completed(FoundationServing<'a>),
     Turn(Box<FoundationTurn<'a>>),
     Generated(generation::FoundationGeneration<'a>),
     Sorted(generation::emission::FoundationOutbound<'a>),

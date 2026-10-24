@@ -113,6 +113,17 @@ pub(super) struct SelectedUnit {
 }
 
 impl SelectedUnit {
+    /// Corrupt only coverage after real source and append evidence exists.
+    /// No production constructor or proof capability is exposed.
+    #[cfg(test)]
+    pub(super) fn without_return_coverage_for_test(&self) -> Self {
+        let mut unit = self.unit.clone();
+        unit.sources.clear();
+        Self {
+            evidence: Arc::clone(&self.evidence),
+            unit,
+        }
+    }
     pub(super) fn origin(&self) -> &Arc<()> {
         self.evidence.origin()
     }
@@ -179,6 +190,7 @@ impl HeldMaterial {
 }
 
 #[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
 struct Unit {
     id: UnitId,
     sources: Vec<MaterialRef>,
