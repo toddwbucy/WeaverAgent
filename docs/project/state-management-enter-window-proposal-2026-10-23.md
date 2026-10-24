@@ -111,11 +111,11 @@ these clauses. This project document records the operator's approval and retains
 the alternatives. An unmerged draft remains no implementation authority; the
 MERGED header describes the eventual landing state only.
 
-Both #276 and #282 currently propose harness amendment version 0.30 from main
-version 0.29. Sequence the landings: the first may use 0.30; the second must
-incorporate the first's merged clauses and advance to 0.31. No order or merge
-is claimed by this document. Keep the approved EnterWindow election separate
-from #276's AuthorFailure/held-boundary election.
+Main now contains #285's harness amendment version 0.30. This draft and #276
+each propose 0.31 against that merged base. Later landings must retain all
+previously merged clauses and advance the shared version. No order or proposal
+merge is claimed here. Keep the approved EnterWindow election separate from
+#276's AuthorFailure/held-boundary election.
 
 The operator ruled that Date filed retains the first filing date. All three
 owning Spec headers therefore remain 2026-10-21; Version and Git identify
@@ -173,3 +173,20 @@ preflight proposals are outside this change.
 [harness]: ../crates/state-management/weaver-harness-Spec-amendment.md
 [cutover]: ../crates/state-management/state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 [approval]: https://github.com/toddwbucy/WeaverAgent/pull/282#issuecomment-6365805210
+
+## Integration with merged release-absence wording
+
+On 2026-10-23, main at f4482c60936efb6b7b38dd888fb61f25f8a953ed
+was joined into this proposal without rewriting its history. The header
+conflict keeps this proposal as Landing PR and advances the harness
+amendment from merged version 0.30 to proposed version 0.31. Date filed
+retains each owning document's date from main under the operator's
+first-filing convention. Both the proposed clauses and the merged
+HARNESS-RELEASE-ABSENT / TRACE-RELEASE-ABSENT wording are retained.
+
+Exact body comparisons preserve the previously reviewed Spec clause text;
+the harness body additionally contains the unchanged merged absence
+clause. Documentation checks accompany this conflict resolution. These
+five proposals remain separate main-based PRs; later landings must
+incorporate preceding merged clauses and advance shared versions again.
+The proposal remains unmerged and grants no implementation authority.
