@@ -74,7 +74,22 @@ HARNESS-RELEASE-ABSENT / TRACE-RELEASE-ABSENT wording are retained.
 
 Exact body comparisons preserve the previously reviewed Spec clause text;
 the harness body additionally contains the unchanged merged absence
-clause. Documentation checks accompany this conflict resolution. These
-five proposals remain separate main-based PRs; later landings must
-incorporate preceding merged clauses and advance shared versions again.
+clause. Documentation checks accompany this conflict resolution. At this
+checkpoint the five proposals were separate main-based PRs; later landings
+must incorporate preceding merged clauses and advance shared versions again.
 The proposal remains unmerged and grants no implementation authority.
+
+## Integration after the Enter-window merge
+
+On 2026-10-23, #282 merged as main commit
+8010e16e64e137a28c239800c1e9724ae80c27b5. This proposal now joins that
+exact base, retaining the merged Enter-window and release-absence clauses.
+The harness amendment advances from 0.31 to 0.32. Where this proposal
+also changes another shared amendment, its version advances from main
+likewise. Landing PR still names this proposal; filing dates stay fixed.
+
+The manual resolution changes only conflicting headers. The clause bodies
+match the clean three-way combined text byte-for-byte. Lock, document,
+ASCII and diff checks pass. No runtime source changes or proposal merge
+is claimed. Other proposals remain separate and need the same version
+sequencing as each preceding proposal actually lands.

@@ -4,7 +4,7 @@
 
 **Landing PR:** #260
 
-**Version:** 0.31 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.32 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -503,9 +503,11 @@ async runtime is introduced. [CLASS-6, CLASS-8, FLOW-4]
 give that same origin to Author and the pump. Record clock_source and origin_ns once in
 load under Spec 09's CLOCK. Envelope monotonic_ns remains elapsed from that origin.
 Cross-process observations use raw readings of the same Linux clock, never serialized
-Rust Instant values. The inherited admin load budget still starts at admin's load act,
-with remaining duration passed at enter. Gate wait starts at check intake. Cut wait
-starts at the between-turn filing barrier, after the preceding turn closed and before
+Rust Instant values. Under HARNESS-ENTER-WINDOW, the inherited admin load budget
+starts at ADMIN-ENTER-WINDOW's exact dispatch anchor and its original EnterWindow
+crosses Enter. Each stage uses only the time remaining before that same deadline.
+Gate wait starts at check intake. Cut wait starts at the between-turn filing barrier,
+after the preceding turn closed and before
 any decode work for the next turn. decision_wait comes from state_management.ste100 and
 starts when an output check, required send/terminal receipt or an ordinary placement
 measurement blocks the next decision. It ends only when that barrier's disposition is
@@ -522,6 +524,70 @@ Checked arithmetic rejects overflow. The fake implementation advances the same n
 clock and returns scheduled readiness or Timeout together. A fake clock never attempts
 to wake a real poll. Also exercise the real poll with a short test-only deadline and an
 outer test watchdog. [CLASS-8]
+
+**HARNESS-ENTER-WINDOW.** The replacement Serving receiver retains the
+required original EnterWindow and its existing exchange and descriptor custody. Sample
+received_ns from the common raw clock after the complete packet/descriptor receive and
+before JSON decoding. Structural/encoding violations of TYPES-ENTER-WINDOW follow the
+existing malformed-envelope channel fault; all received descriptors remain accounted
+for on that road. A structurally valid began_ns later than received_ns is malformed
+Enter, not an allowance to wait until that anchor: use the existing before-load
+Malformed refusal on its valid exchange, without state open or a fabricated load.
+The same clock domain is a producer/consumer precondition, not a promise that arbitrary
+foreign timestamps can be detected or translated. [CLASS-8, FLOW-3, SEAM-2]
+
+After decoding, and before and after every admission/boot work unit, compare the
+current raw reading with the retained deadline. At now >= deadline_ns a well-formed
+Enter is expired even if receipt was earlier. Queue, dispatch, parsing and constructor
+delay all consume the window. An expired Enter permits no new state-open/decode-Open
+byte, ordinary boot work, template grant or Ready. It is an elapsed wait, not by itself
+a component halt or configured-fit failure. Do not turn it into boot_failed,
+StateManagementInvalid, a new refusal code or a renewed interval. [CLASS-8, FLOW-3,
+PLACE-4]
+
+Before load, expiry follows the existing unadmitted/before-load cleanup and leaves no
+load or refusal record manufactured to explain a run that never stood. Account for and
+close only this unadmitted Enter's owned descriptors; retain the lifecycle position for
+its actual before-load rollback outcome. After load, retain the same context, original
+window and all actual owed author/read/pair/Open/process evidence in the entered
+bracket for explicit rollback. An expired exchange produces no substitute lifecycle
+answer. Admin owns its existing unanswered-load result and directs rollback under
+ADMIN-ENTER-WINDOW. Actual component failure still follows HARNESS-HALT with its first
+cause; expiry cannot erase it. Neither path fabricates Released, LastWord, process
+exit, Unload or successful cleanup. [CLASS-8, FLOW-3, FLOW-5, PERSIST-6]
+
+Initialize the private Enter bound from the validated original began_ns/deadline_ns,
+without reconstructing deadline_ns from a later trace origin or sampled remainder.
+Keep the trace's separately captured origin_ns and elapsed envelope semantics unchanged.
+A trace origin observed after deadline means expired Enter, not a reversed original
+interval. Preserve original bounds across every owner transfer. Only the actual
+accepted rollback Leave may invoke its existing independent cleanup authority; it
+never rewrites Enter to that allowance or admits a late Ready. Any already owed
+account is retained or settled under its existing applicable bound and disposition,
+not silently discarded to make expiry look complete. [CLASS-8, FLOW-3, FLOW-5]
+
+The existing harness Spec's rollback-Leave rule applies even if the worker sent
+Ready before the deadline and admin received it at or after the deadline. Admin's
+late-answer refusal does not turn that Ready into an accepted load. Once the actual
+forced Leave with rollback true is accepted, the worker follows rollback by the
+directive, regardless of its own entered position or earlier Ready send. No new
+ordinary work is admitted after that acceptance; retain and unwind actual owed work,
+run no wind-down, take no save point, and release only what stood. Where a load
+bracket stands, its existing terminal rules apply with the load's cause. The accepted
+Leave supplies its existing cleanup allowance, never a new Enter window.
+[FLOW-3, FLOW-5, PERSIST-6]
+
+| Enter observation and worker position | Event | Required disposition |
+| --- | --- | --- |
+| Before load; original window expired | Current time reaches the retained deadline | No load or substitute refusal; retain and close actual unadmitted resources under existing before-load rollback. |
+| Load bracket stands; boot has not answered Ready | Original window expires | Keep the same entered context and owed work for explicit rollback; no new ordinary boot work or Ready. |
+| Ready was sent before the cap; worker is Entered; admin receives it late | Actual forced Leave with rollback true is accepted | Follow the existing any-position rollback rule; no new ordinary work after acceptance, no wind-down or save point, and no renewal of Enter. |
+
+| Claim | Required instrument | Protective change that must fail |
+| --- | --- | --- |
+| TYPES/ADMIN/HARNESS-ENTER-WINDOW | Canonical closed carrier and real seqpacket/process fixture with original admin anchor, delayed preparation/carry/parse and actual descriptor ownership | Default a missing window, re-add sampled remaining time at receive, restart at trace origin or lose transferred descriptors |
+| Original expiry | Exact-deadline receive, before first work byte, after owner admission and late Ready controls, with actual rollback/account custody | Treat expiry as malformed or boot_failed, accept late Ready, renew the cap or fake completed cleanup |
+| Shared clock and bound | Real poll with outer watchdog plus controlled raw clock at wake/decode, including EINTR | Treat readiness as timely completion, accept a future anchor or wait on another full duration |
 
 **HARNESS-BARRIERS.** prepare_cut(required_ids) consumes FlowInbox and waits for pending
 authoring and each required source's disposition. prepare_save() freezes its own trace
