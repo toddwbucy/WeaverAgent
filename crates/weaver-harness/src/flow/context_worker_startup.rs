@@ -380,7 +380,10 @@ impl<'a> FoundationEnter<'a> {
         let Some(EnterState::Entered(owner)) = self.state.take() else {
             unreachable!()
         };
-        Ok(FoundationServing { owner })
+        Ok(FoundationServing {
+            owner,
+            gate_exchanges: Default::default(),
+        })
     }
 }
 
@@ -402,7 +405,11 @@ fn ports(listener: &mut Option<Box<LifecycleListener>>) -> LifecyclePorts<'_> {
 /// ```
 pub struct FoundationServing<'a> {
     owner: Box<EnteredServing<'a>>,
+    gate_exchanges: std::collections::HashSet<u64>,
 }
+
+#[path = "context_worker_input.rs"]
+pub(crate) mod input;
 
 #[cfg(test)]
 #[path = "context_worker_startup_tests.rs"]

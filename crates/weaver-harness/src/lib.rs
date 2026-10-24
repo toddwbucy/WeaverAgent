@@ -129,6 +129,16 @@ pub use channel::{
 };
 pub use engine::{Ports, TurnError, TurnOutcome};
 pub use failure::{AdoptionFault, ChannelFault, Outcome, UnlicensedMessage};
+pub use flow::context::worker_startup::input::generation::FoundationGeneration;
+pub use flow::context::worker_startup::input::generation::emission::{
+    FoundationEmission, FoundationOutbound, FoundationRepairAdmission, FoundationRestatement,
+};
+pub use flow::context::worker_startup::input::management::{
+    FoundationManagement, FoundationManagementProgress,
+};
+pub use flow::context::worker_startup::input::{
+    FoundationInput, FoundationInputProgress, FoundationInputResult, FoundationTurn,
+};
 pub use flow::context::worker_startup::{
     FoundationAdmission, FoundationAdmissionProgress, FoundationEnter, FoundationEnterProgress,
     FoundationProgram, FoundationRun, FoundationServing,

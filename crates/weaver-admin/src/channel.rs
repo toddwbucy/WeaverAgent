@@ -291,8 +291,11 @@ impl Coordination {
             });
         }
         let slices = [std::io::IoSlice::new(&body)];
-        sendmsg::<()>(self.fd.as_raw_fd(), &slices, &[], MsgFlags::empty(), None)
+        let sent = sendmsg::<()>(self.fd.as_raw_fd(), &slices, &[], MsgFlags::empty(), None)
             .map_err(|_| ChannelFault::Closed)?;
+        if sent != body.len() {
+            return Err(ChannelFault::Closed);
+        }
         Ok(())
     }
 
@@ -401,6 +404,42 @@ impl Coordination {
     /// unbounded, so the read waits on the descriptor for at most `bound` and
     /// answers `Unanswered` past it.
     pub fn recv_within(&self, bound: Duration) -> Result<OrganEnvelope, ChannelFault> {
+        self.wait_readable(bound)?;
+        self.recv()
+    }
+
+    /// The replacement observation keeps this invocation's sole channel reader.
+    pub(crate) fn recv_observation_within(
+        &self,
+        bound: Duration,
+    ) -> Result<weaver_types::state_flow::enter::ObservationEnvelope, ChannelFault> {
+        self.wait_readable(bound)?;
+        let mut buffer = vec![0u8; MAX_ENVELOPE_BYTES];
+        let mut slices = [std::io::IoSliceMut::new(&mut buffer)];
+        let message = nix::sys::socket::recvmsg::<()>(
+            self.fd.as_raw_fd(),
+            &mut slices,
+            None,
+            MsgFlags::empty(),
+        )
+        .map_err(|_| ChannelFault::Closed)?;
+        if message.flags.contains(MsgFlags::MSG_TRUNC) {
+            return Err(ChannelFault::Truncated {
+                bound: MAX_ENVELOPE_BYTES,
+            });
+        }
+        if message.flags.contains(MsgFlags::MSG_CTRUNC) {
+            return Err(ChannelFault::Undecodable);
+        }
+        let read = message.bytes;
+        if read == 0 {
+            return Err(ChannelFault::Closed);
+        }
+        weaver_types::state_flow::enter::ObservationEnvelope::decode(&buffer[..read])
+            .map_err(|_| ChannelFault::Undecodable)
+    }
+
+    fn wait_readable(&self, bound: Duration) -> Result<(), ChannelFault> {
         // A bound past what the clock can hold never panics: it waits as long
         // as poll's longest wait, again and again, which is the bound read
         // as written.
@@ -429,7 +468,7 @@ impl Coordination {
                 // so a timeout with time left waits again; the loop's head
                 // answers `Unanswered` once none is left.
                 0 => {}
-                n if n > 0 => return self.recv(),
+                n if n > 0 => return Ok(()),
                 _ if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted => {}
                 _ => return Err(ChannelFault::Closed),
             }

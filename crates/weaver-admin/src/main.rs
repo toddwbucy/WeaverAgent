@@ -54,6 +54,9 @@ mod serving_enter;
 // Dormant root startup composition; selected only with the qualified worker.
 #[allow(dead_code)]
 mod serving_load;
+#[allow(dead_code)]
+mod serving_observe;
+mod stop_exchange;
 // Complete replacement component, inactive until FOUNDATION-TRANSITION cutover.
 #[allow(dead_code)]
 mod seed;
@@ -3318,24 +3321,7 @@ fn stop(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
         channel::ChannelFault::WrongPeer { .. } => LifecycleRefusal::BoundaryUnverified,
         _ => LifecycleRefusal::NoResidency,
     })?;
-    let ordinal = coordination.next_ordinal();
-    coordination
-        .send_directive(
-            ordinal,
-            LifecycleDirective::Stop {
-                cause: invocation_cause(),
-            },
-        )
-        .map_err(|_| LifecycleRefusal::NoResidency)?;
-    match coordination.recv_within(STOP_BOUND) {
-        Ok(answer) => match answer.payload {
-            weaver_types::Payload::Answer(answer) => Ok(verbs::relay_stop_answer(answer)),
-            weaver_types::Payload::Refusal(refusal) => Err(refusal),
-            _ => Err(LifecycleRefusal::Malformed),
-        },
-        Err(channel::ChannelFault::Unanswered) => Err(LifecycleRefusal::Unanswered),
-        Err(_) => Err(LifecycleRefusal::NoResidency),
-    }
+    stop_exchange::ask(&mut coordination, invocation_cause())
 }
 
 /// **One line of the operations log**, per Spec section 8: the wall time,

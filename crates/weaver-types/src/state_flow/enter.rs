@@ -5,6 +5,10 @@ use super::{Digest, StartIdentity, StateManagementConfig};
 use crate::{ExchangeId, Lineage, Opener, Position, Reset, RunId, SessionId, SpuInstruction};
 use serde::{Deserialize, Serialize};
 
+#[path = "enter_observation.rs"]
+mod observation;
+pub use observation::{LoadFacts, ObservationAnswer, ObservationContent, ObservationEnvelope};
+
 super::codec::closed_object! {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EnterPayload {
@@ -131,6 +135,7 @@ pub enum CodecError {
     TooLarge,
     Malformed(serde_json::Error),
     WrongExchange,
+    InvalidLoadedState,
 }
 impl EnterEnvelope {
     pub fn new(ordinal: u64, payload: EnterPayload) -> Self {
