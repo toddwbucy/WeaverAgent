@@ -54,6 +54,7 @@ pub(in crate::flow) enum StartupStop {
 /// Returned alongside boot, so consumed observations do not disappear at the join.
 pub(in crate::flow) struct StartupEvidence {
     pub original_enter: Option<ReceivedEnter>,
+    pub loaded: Option<Box<weaver_types::state_flow::enter::LoadFacts>>,
     pub opened: StateCompletion,
     pub load: Sequence,
     pub initial_grants: InspectionCompletion,
@@ -443,6 +444,13 @@ impl<'a> StartupComposition<'a> {
             resources: self.resources,
             inventory: self.inventory,
             evidence: StartupEvidence {
+                loaded: self
+                    .enter_load
+                    .as_ref()
+                    .zip(self.original_enter.as_ref())
+                    .map(|(facts, original)| {
+                        Box::new(facts.observation(original.envelope().enter()))
+                    }),
                 original_enter: self.original_enter,
                 opened: self.opened.expect("actual recorded Open retained"),
                 load: self.load_sequence.expect("actual load retained"),

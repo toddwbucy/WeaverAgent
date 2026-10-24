@@ -61,7 +61,7 @@ fn gate_startup_child() {
                     ordinal: 1,
                 },
                 position: Position::Close,
-                payload: weaver_types::Payload::Answer(LifecycleAnswer::Ready),
+                payload: weaver_types::Payload::Answer(LifecycleAnswer::GateReady),
             },
         );
     }
@@ -110,21 +110,34 @@ fn gate_startup_child() {
             payload: if mode == "refuse" {
                 weaver_types::Payload::Refusal(weaver_types::LifecycleRefusal::BindFailed)
             } else if mode == "wrong-answer" {
-                weaver_types::Payload::Answer(LifecycleAnswer::Admitted)
-            } else {
                 weaver_types::Payload::Answer(LifecycleAnswer::Ready)
+            } else {
+                weaver_types::Payload::Answer(LifecycleAnswer::GateReady)
             },
         };
         if mode == "wrong-id" {
             answer.exchange.ordinal += 1;
         }
         packet(3, &answer);
+        if std::env::var("WEAVER_GATE_STARTUP_DRIVER").ok().as_deref()
+            == Some("entered-aggregate-plain-ready")
+        {
+            // The aggregate admission probe replaces only the retained reply,
+            // using a second real datagram on this same gate socket.
+            assert_eq!(
+                recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()).unwrap(),
+                1
+            );
+            assert_eq!(bytes[0], b'g');
+            answer.payload = weaver_types::Payload::Answer(LifecycleAnswer::Ready);
+            packet(3, &answer);
+        }
     }
     // The test owner closes the gate port before reaping; no live deployment.
     while recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()).unwrap_or(0) > 0 {}
 }
 
-struct CircuitIo<'a>(&'a mut FakePumpIo);
+pub(super) struct CircuitIo<'a>(pub(super) &'a mut FakePumpIo);
 impl PumpIo for CircuitIo<'_> {
     fn now(&mut self) -> std::io::Result<u64> {
         self.0.now()
@@ -543,6 +556,14 @@ pub(in crate::flow::context) fn drive(
             clock,
         ) {
             Ok(ready) => {
+                if resident_mode.starts_with("entered-aggregate-")
+                    || resident_mode == "resident-aggregate-missing"
+                {
+                    guard.0 = Some(super::ready::tests::drive(ready, clock, &resident_mode));
+                    drop(guard);
+                    let _ = std::fs::remove_dir_all(path);
+                    return;
+                }
                 assert_ne!(resident_mode, "entered-finish-eof");
                 assert_ne!(resident_mode, "entered-finish-expiry-eof");
                 assert_ne!(mode, "finish-expiry");
@@ -577,7 +598,7 @@ pub(in crate::flow::context) fn drive(
                 assert_eq!(ready.shell_granted(), mode == "shell");
                 assert!(matches!(
                     ready.reply().envelope().payload,
-                    weaver_types::Payload::Answer(LifecycleAnswer::Ready)
+                    weaver_types::Payload::Answer(LifecycleAnswer::GateReady)
                 ));
                 guard.0 = Some(ready.owner);
             }
@@ -782,4 +803,74 @@ scenario!(
 scenario!(
     gate_startup_composition_entered_finish_expiry_eof,
     "entered-finish-expiry-eof"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_ready,
+    "entered-aggregate-ready"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_pressure,
+    "entered-aggregate-pressure"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_stop,
+    "entered-aggregate-stop"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_stop_pressure,
+    "entered-aggregate-stop-pressure"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_eof,
+    "entered-aggregate-eof"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_expiry,
+    "entered-aggregate-expiry"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_gate_dead,
+    "entered-aggregate-gate-dead"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_spu_dead,
+    "entered-aggregate-spu-dead"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_clock_after_send,
+    "entered-aggregate-clock-after-send"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_expiry_after_send,
+    "entered-aggregate-expiry-after-send"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_busy,
+    "entered-aggregate-busy"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_missing,
+    "resident-aggregate-missing"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_gate_terminal,
+    "entered-aggregate-gate-terminal"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_rejects_plain_ready,
+    "entered-aggregate-plain-ready"
 );

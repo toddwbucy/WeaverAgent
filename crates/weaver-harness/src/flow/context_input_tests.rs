@@ -456,7 +456,7 @@ impl InputFixture {
     }
 }
 
-fn accepted(request: &s::Ste100Request) -> s::Ste100Reply {
+pub(super) fn accepted(request: &s::Ste100Request) -> s::Ste100Reply {
     assert!(request.text.starts_with("Read ") && request.text.ends_with('.'));
     let length = request.text.len() as u64;
     s::Ste100Reply {

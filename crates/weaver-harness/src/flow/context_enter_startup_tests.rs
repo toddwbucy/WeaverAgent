@@ -11,12 +11,12 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use weaver_types::state_flow::enter::{EnterBinding, EnterEnvelope};
 
-pub(super) fn adopt(
-    run: &mut Fixture,
+pub(in crate::flow::context) fn envelope(
+    declaration: &s::FlowConfig,
     load: &weaver_trace::serving::payloads::LoadRecord,
     bootstrap: &s::Ste100Bootstrap,
     binary: &std::path::Path,
-) -> (ReceivedEnter, OwnedFd) {
+) -> EnterEnvelope {
     let mut value: serde_json::Value = serde_json::from_slice(include_bytes!(
         "../../../weaver-types/tests/fixtures/state-enter.json"
     ))
@@ -39,11 +39,20 @@ pub(super) fn adopt(
     payload["binding"]["start"] = serde_json::to_value(&load.state_start).unwrap();
     payload["binding"]["ste100_scheme"] = serde_json::json!(bootstrap.scheme_text);
     payload["binding"]["state_management"] = serde_json::json!({
-        "flow":run.context.declaration,"start":{"dump_sha256":load.state_start.dump_sha256},
+        "flow":declaration,"start":{"dump_sha256":load.state_start.dump_sha256},
         "persistence":load.state_flow.persistence,"reads":load.state_flow.reads,
         "ste100":bootstrap.instruction,"tools":load.state_flow.tools,"placement":load.state_flow.placement,
     });
-    let envelope: EnterEnvelope = serde_json::from_value(value).unwrap();
+    serde_json::from_value(value).unwrap()
+}
+
+pub(super) fn adopt(
+    run: &mut Fixture,
+    load: &weaver_trace::serving::payloads::LoadRecord,
+    bootstrap: &s::Ste100Bootstrap,
+    binary: &std::path::Path,
+) -> (ReceivedEnter, OwnedFd) {
+    let envelope = envelope(&run.context.declaration, load, bootstrap, binary);
     let bytes = envelope.encode().unwrap();
     let (admin, peer) = socketpair(
         AddressFamily::Unix,
@@ -166,4 +175,12 @@ pub(in crate::flow::context) fn close_original_peer() {
         // The synchronous circuit retains this far-end owner above the child driver.
         nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
     });
+}
+
+pub(in crate::flow::context) fn original_peer_fd() -> i32 {
+    ORIGINAL_ADMIN.with(|slot| {
+        let fd = slot.get();
+        assert!(fd >= 0);
+        fd
+    })
 }

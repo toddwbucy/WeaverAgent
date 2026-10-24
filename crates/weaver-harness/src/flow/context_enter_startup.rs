@@ -109,6 +109,46 @@ impl<'a> StartupComposition<'a> {
 }
 
 impl EnterLoadFacts {
+    pub(super) fn observation(
+        &self,
+        payload: &EnterPayload,
+    ) -> weaver_types::state_flow::enter::LoadFacts {
+        use weaver_types::state_flow::enter::{LoadFacts, LoadedStateFacts};
+        let EnterBinding::Serving {
+            state_management,
+            start,
+            ste100_scheme,
+            ..
+        } = &payload.binding
+        else {
+            unreachable!("checked Serving Enter")
+        };
+        let decoder = &payload.spu_instruction.decoder;
+        LoadFacts {
+            session: payload.session.clone(),
+            run: payload.run.clone(),
+            declaration: payload.declaration.clone(),
+            artifact: decoder.model_binding.artifact.clone(),
+            residual_readout: decoder.residual_readout_election,
+            field: decoder.field_election.as_ref().map(|value| value.depth),
+            surprisal: decoder.surprisal_election,
+            state: LoadedStateFacts::Serving {
+                state_management: state_management.clone(),
+                start: start.clone(),
+                ste100_scheme: ste100_scheme.clone(),
+                ste100_binary_sha256: self.checker_digest.clone(),
+            },
+            state_store: payload.state_store.clone(),
+            state_member: true,
+            composer: weaver_types::Composer {
+                binary: self.composer.binary.clone(),
+                file: self.composer.file.as_ref().map(Into::into),
+                sha256: self.composer.sha256.clone(),
+            },
+            drain_bound: payload.drain_bound,
+            wind_down_bound: payload.wind_down_bound,
+        }
+    }
     pub(super) fn event(
         &self,
         payload: &EnterPayload,
