@@ -808,6 +808,10 @@ fn cancellation_recovers_a_lent_forbidden_correction_without_minting_completion(
         .unwrap();
     ledger.recorded_protocol_refusal(record(140)).unwrap();
     let correction = ledger.take_correction_accounting().unwrap();
+    assert_eq!(
+        ledger.outstanding_loan(),
+        Some(RepairError::OutstandingCorrectionLoan)
+    );
     ledger.cancel();
     assert!(ledger.take_cancelled().is_none());
     // The stopped owner may return before every pair is terminal. Custody still
@@ -847,9 +851,14 @@ fn cancellation_recovers_a_lent_exhaustion_account_without_erasing_its_pending_s
         .unwrap();
     ledger.recorded_exhausted(record(140)).unwrap();
     let account = ledger.take_exhausted_account().unwrap();
+    assert_eq!(
+        ledger.outstanding_loan(),
+        Some(RepairError::OutstandingAccountLoan)
+    );
     ledger.cancel();
     assert!(ledger.take_cancelled().is_none());
     ledger.finish_exhausted_account(account, &[]).unwrap();
+    assert_eq!(ledger.outstanding_loan(), None);
     assert!(ledger.take_exhausted().is_none());
     let cancelled = ledger.take_cancelled().unwrap();
     assert_eq!(cancelled.account().requests().len(), 1);

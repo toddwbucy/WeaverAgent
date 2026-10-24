@@ -257,7 +257,7 @@ fn plan_summary_unflagged_author_cannot_file_a_plan_effect_or_step_outcome() {
             RunFailure::PlanSummaryOwned
         );
         assert_eq!(
-            format!("{:?}", run.context.refused_author().unwrap()),
+            format!("{:?}", run.context.held_author().unwrap()),
             original
         );
         assert!(run.context.pending_author().is_none());
@@ -305,6 +305,8 @@ fn plan_summary_completed_refresh_keeps_its_exact_outcome_when_stop_revokes_futu
                     listener: None,
                     peer: Some(&mut admin),
                     residency: None,
+                    dial: None,
+                    leave_peer: None,
                 },
                 gate: None,
                 decode: None,
@@ -313,28 +315,38 @@ fn plan_summary_completed_refresh_keeps_its_exact_outcome_when_stop_revokes_futu
             })
             .unwrap();
         assert!(admin.held().is_some());
-        let outcome = run
-            .context
-            .take_plan_summary(&mut run.clock)
-            .unwrap()
-            .unwrap();
-        match outcome {
-            PlanSummaryCompletion::Boot(proof) if boot => assert_eq!(proof.read().raw_bytes(), raw),
-            PlanSummaryCompletion::Effect(proof) if !boot => {
-                assert_eq!(proof.read().raw_bytes(), raw)
-            }
-            other => panic!("Stop rewrote completed evidence: {other:?}"),
+        if boot {
+            assert_eq!(
+                run.context.take_plan_summary(&mut run.clock).unwrap_err(),
+                RunFailure::PlanSummaryOwned
+            );
+            let owner = run.context.plan_summary.as_ref().unwrap();
+            assert!(owner.disposition_for_test().complete);
+            assert!(!owner.disposition_for_test().cancelled);
+        } else {
+            let Some(PlanSummaryCompletion::Effect(proof)) =
+                run.context.take_plan_summary(&mut run.clock).unwrap()
+            else {
+                panic!("Stop rewrote completed effect evidence");
+            };
+            assert_eq!(proof.read().raw_bytes(), raw);
+            assert_eq!(
+                run.context.committed_plan_summary(),
+                Err(PlanSummaryUnavailable::Revoked)
+            );
         }
-        assert_eq!(
-            run.context.committed_plan_summary(),
-            Err(PlanSummaryUnavailable::Revoked)
-        );
         assert_eq!(admin.take_completion().unwrap().unwrap().envelope, stop);
         let (mut decode, peer) = fx._decode.take().unwrap();
         stage_generation(&mut decode, 1);
         pump_summary_decode(&mut fx, &mut decode).unwrap();
         assert!(decode.generation_not_started());
         assert!(receive(peer.as_fd()).is_none());
+        if boot {
+            let account = rollback_boot_summary(&mut fx);
+            assert_eq!(account.recorded_read().unwrap().raw_bytes(), raw);
+            assert!(account.disposition_for_test().complete);
+            assert!(!account.disposition_for_test().cancelled);
+        }
     }
 }
 
@@ -769,6 +781,8 @@ fn plan_summary_deferred_decode_custody_returns_even_when_another_pump_leg_fails
             listener: None,
             peer: Some(&mut admin),
             residency: None,
+            dial: None,
+            leave_peer: None,
         },
         gate: None,
         decode: Some(&mut decode),
@@ -795,3 +809,6 @@ fn plan_summary_deferred_decode_custody_returns_even_when_another_pump_leg_fails
         "caller retains the typed transport failure"
     );
 }
+
+#[path = "context_plan_summary_boot_rollback_tests.rs"]
+mod boot_rollback_tests;

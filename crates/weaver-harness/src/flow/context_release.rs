@@ -38,6 +38,7 @@ pub(in crate::flow) struct ReleaseAuthor<'a> {
     event: AuthoredEvent,
 }
 
+#[derive(Debug)]
 pub(in crate::flow) struct ReleaseTicket {
     barrier: Arc<()>,
     attempt: Arc<()>,
@@ -139,7 +140,7 @@ impl RecordingContext {
     }
 
     pub(super) fn resume_context_author<I: PumpIo>(&mut self, io: &mut I) -> RecordProgress {
-        if self.phase == RecordingPhase::Releasing || self.release_author.is_some() {
+        if self.release_author.is_some() {
             let scope = ReleaseScope {
                 barrier: self.barrier.author_identity(),
                 phase: &self.phase,
@@ -163,8 +164,6 @@ impl RecordingContext {
     pub(super) fn retain_release_recorded(&mut self, sequence: Sequence) {
         if let Some(attempt) = &mut self.release_author {
             attempt.recorded = Some(sequence);
-            self.last_author_sequence = Some(sequence);
-            self.completed_author = Some(sequence);
         }
     }
 

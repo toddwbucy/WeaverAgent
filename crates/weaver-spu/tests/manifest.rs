@@ -94,76 +94,18 @@ const TABLE: &[(&str, &[&str], &[&str])] = &[
 /// The prefix `markers.rs` builds its per-family names from.
 const VOCAB_PREFIX: &str = "WEAVER_VOCAB_";
 
-/// The `WEAVER_*` names appearing as string literals in one test source, and
-/// the features its file-level `cfg` gate names.
-///
-/// Read off disk rather than compiled in, because a `cfg`-gated target is not
-/// compiled on a host build and its variables would vanish from a compiled
-/// inventory exactly when the gate is what hid them. That is the failure this
-/// whole issue is about, and it would be reproduced here.
-///
-/// **The quote is what makes a name rather than prose.** An earlier form
-/// searched the bare text and read a doc comment's `WEAVER_VOCAB_<FAMILY>` as a
-/// variable no test asks the environment for. Requiring the surrounding quote
-/// leaves comments, documentation, and diagnostic prose out without a parser.
-///
-/// **Anchoring to `env::var` call sites was considered and rejected.** Two
-/// access shapes exist here: `loaded.rs` and its neighbours call `env::var_os`
-/// directly, while `markers.rs` and `selection.rs` carry the name as a field of
-/// a fixture table and look it up elsewhere. A scan anchored to the call site
-/// would miss eighteen of the twenty-four names, which is the under-reporting
-/// this test exists to prevent. A real token parse would reach both, and it
-/// would put a parser in the dependency set of a crate whose Spec section 1.1
-/// argues every dependency it takes.
+#[path = "manifest/source_scan.rs"]
+mod source_scan;
+
+/// Read the declared module tree even when the target is feature-disabled.
+/// Child fixture literals belong to the target; a child's inner cfg does not.
 fn read_target(path: &Path) -> (BTreeSet<String>, BTreeSet<String>) {
-    let source = fs::read_to_string(path).expect("the source reads");
-    let bytes = source.as_bytes();
-
-    let mut fixtures = BTreeSet::new();
-    // **This file is not a subject of its own scan.** It names fixtures in its
-    // table and in its own perturbation notes, and a scanner that read them
-    // would report the document's table as a finding against itself. Watched
-    // doing exactly that before this guard existed.
-    if path.file_name().is_none_or(|n| n != "manifest.rs") {
-        let mut at = 0;
-        // A name is `"WEAVER_..."`, quoted. Both access shapes in this crate put
-        // it in a string literal: a direct `env::var_os` argument, and a fixture
-        // table's field. Prose carries it in backticks or bare, and is left out
-        // by the opening quote alone.
-        while let Some(offset) = source[at..].find("\"WEAVER_") {
-            let start = at + offset + 1;
-            let mut end = start;
-            while end < bytes.len()
-                && (bytes[end].is_ascii_uppercase()
-                    || bytes[end].is_ascii_digit()
-                    || bytes[end] == b'_')
-            {
-                end += 1;
-            }
-            // The literal must close where the name ends, or the match is a
-            // longer string that merely begins with the prefix.
-            if bytes.get(end) == Some(&b'"') {
-                fixtures.insert(source[start..end].to_string());
-            }
-            at = end;
-        }
+    // The pin and its synthetic sources name the table's fixtures themselves.
+    if path.file_name().is_some_and(|name| name == "manifest.rs") {
+        return (BTreeSet::new(), BTreeSet::new());
     }
-
-    // The file-level gate, as the set of features it names. **A set rather than
-    // the text**, because the sources spell the same gate two ways: `loaded.rs`
-    // writes `cuda, gguf` and `two_card.rs` writes `gguf, cuda`, and a string
-    // comparison would call that a difference.
-    let mut gate = BTreeSet::new();
-    if let Some(line) = source.lines().find(|l| l.starts_with("#![cfg(")) {
-        let mut at = 0;
-        while let Some(offset) = line[at..].find("feature = \"") {
-            let start = at + offset + "feature = \"".len();
-            let end = start + line[start..].find('"').expect("the feature closes");
-            gate.insert(line[start..end].to_string());
-            at = end;
-        }
-    }
-    (fixtures, gate)
+    let inventory = source_scan::read(path);
+    (inventory.fixtures, inventory.target_gate)
 }
 
 /// Every test source on disk, by file name.
@@ -270,4 +212,70 @@ fn each_target_reads_its_documented_fixtures() {
             "{name} reads {found:?} and section 1.2 says {documented:?}"
         );
     }
+}
+
+/// The merged STE100 amendment adds one exact executable, preserving both older
+/// duty names and the library target used by the existing doctest instruments.
+#[test]
+fn ste100_binary_set() {
+    let manifest =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
+    let mut bins = Vec::new();
+    for section in manifest.split("[[bin]]").skip(1) {
+        let mut name = None;
+        let mut path = None;
+        let mut required = None;
+        for line in section.lines().map(str::trim) {
+            if line.starts_with('[') {
+                break;
+            }
+            if line.starts_with('#') {
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("name = ") {
+                name = Some(value.to_owned());
+            }
+            if let Some(value) = line.strip_prefix("path = ") {
+                path = Some(value.to_owned());
+            }
+            if let Some(value) = line.strip_prefix("required-features = ") {
+                required = Some(value.to_owned());
+            }
+        }
+        bins.push((name.unwrap(), path.unwrap(), required));
+    }
+    bins.sort();
+    assert_eq!(
+        bins,
+        vec![
+            ("\"weaver-spu\"".into(), "\"src/main.rs\"".into(), None),
+            (
+                "\"weaver-spu-classify\"".into(),
+                "\"src/bin/classify.rs\"".into(),
+                Some("[\"cuda\"]".into())
+            ),
+            (
+                "\"weaver-spu-ste100\"".into(),
+                "\"src/bin/ste100.rs\"".into(),
+                None
+            ),
+        ]
+    );
+    let library = manifest
+        .split("[lib]")
+        .nth(1)
+        .unwrap()
+        .split("[[bin]]")
+        .next()
+        .unwrap();
+    assert!(
+        library
+            .lines()
+            .any(|line| line.trim() == "name = \"weaver_spu\"")
+    );
+    assert!(
+        library
+            .lines()
+            .any(|line| line.trim() == "path = \"src/lib.rs\"")
+    );
 }

@@ -576,7 +576,7 @@ fn release_scope_binds_run_identity_and_completed_attempt_cannot_replay() {
     else {
         panic!("release record expected")
     };
-    fx.context.retain_release_recorded(sequence);
+    fx.context.retain_recorded_author(sequence);
     let before = fx.context.barrier.recorder().structure().len();
     assert!(matches!(
         fx.context.resume_context_author(&mut fx.clock),
@@ -727,3 +727,188 @@ fn release_second_caller_preserves_the_first_attempt_and_both_originals() {
     );
     assert_eq!(fx.context.barrier.recorder().structure().len(), before);
 }
+
+#[test]
+fn release_resume_routes_an_ordinary_pending_ticket_without_a_release_attempt() {
+    // Defensive owner test: public begin_releasing refuses a pending author.
+    // A context already in Releasing must still resume by the retained ticket.
+    let mut fx = releasing(false, true);
+    let original = shutdown(Kind::Fault);
+    let pointer = original_pointer(&original);
+    let before = fx.context.barrier.recorder().structure().len();
+    assert!(matches!(
+        fx.context.barrier.submit_authored_with_clock(
+            original,
+            RecordPurpose::Observation,
+            &fx.context.author,
+            1,
+            &mut fx.context.inbox,
+            &mut fx.context.budget,
+            &mut || fx.clock.now(),
+        ),
+        RecordProgress::Pending
+    ));
+    assert_eq!(fx.context.phase(), RecordingPhase::Releasing);
+    assert!(fx.context.release_author.is_none());
+    assert_eq!(
+        original_pointer(&fx.context.pending_author().unwrap().event),
+        pointer
+    );
+    drain(&mut fx);
+    assert!(matches!(
+        fx.context.resume_context_author(&mut fx.clock),
+        RecordProgress::Recorded { proof: None, .. }
+    ));
+    assert!(fx.context.barrier.failure().is_none());
+    assert!(fx.context.pending_author().is_none());
+    assert!(fx.context.release_author.is_none());
+    assert_eq!(fx.context.barrier.recorder().structure().len(), before + 1);
+}
+
+#[test]
+fn release_owed_boot_defense_returns_typed_refusal_without_admission_or_halt() {
+    for kind in [
+        Kind::Fault,
+        Kind::Refusal,
+        Kind::SessionClosed,
+        Kind::Unload,
+    ] {
+        let mut fx = releasing(true, false);
+        // Public admission refuses BootOpenOwned before reaching this defense.
+        fx.context.barrier.set_boot_open_owed(true);
+        let original = shutdown(kind);
+        let expected = format!("{original:?}");
+        let before = fx.context.barrier.recorder().structure().len();
+        let progress = fx.context.submit_context_author(
+            original,
+            RecordPurpose::Observation,
+            1,
+            &mut BrokenClock,
+        );
+        assert!(matches!(
+            &progress,
+            RecordProgress::BusyAuthored {
+                owed: Some(OwedAuthor::BootOpen),
+                purpose: RecordPurpose::Observation,
+                ..
+            }
+        ));
+        assert!(fx.context.pending_author().is_none());
+        assert!(fx.context.barrier.pending().is_none());
+        assert_eq!(
+            fx.context
+                .wait_recorded(&mut ports(&mut fx.clock), progress),
+            Err(RunFailure::BootOpenOwned)
+        );
+        assert_eq!(format!("{:?}", fx.context.held_author().unwrap()), expected);
+        assert!(fx.context.failure().is_none());
+        assert!(fx.context.barrier.failure().is_none());
+        assert!(!fx.context.budget.is_frozen());
+        assert!(fx.context.barrier.boot_open_owed());
+        assert!(fx.context.barrier.admitted_before_failure().is_none());
+        assert!(fx.context.release_author.is_none());
+        assert_eq!(fx.context.barrier.recorder().structure().len(), before);
+        fx.context.barrier.set_boot_open_owed(false);
+        let original = fx.context.take_held_author().unwrap();
+        fx.author(original).unwrap();
+        assert_eq!(fx.context.barrier.recorder().structure().len(), before + 1);
+    }
+}
+
+#[test]
+fn release_pending_mark_requires_its_scope_even_when_the_tap_is_live() {
+    let mut fx = releasing(false, true);
+    assert!(matches!(
+        submit(&mut fx, shutdown(Kind::Fault)),
+        RecordProgress::Pending
+    ));
+    let ticket = fx.context.pending_author().unwrap().ticket;
+    let before = fx.context.barrier.recorder().structure().len();
+    drain(&mut fx);
+    // Isolate scope validation from the stopped-tap check.
+    fx.context.phase = RecordingPhase::Entered;
+    assert!(matches!(
+        fx.context.resume_context_author(&mut fx.clock),
+        RecordProgress::Failed
+    ));
+    assert_eq!(fx.context.pending_author().unwrap().ticket, ticket);
+    assert_eq!(fx.context.barrier.recorder().structure().len(), before);
+    assert!(
+        matches!(fx.context.barrier.failure(), Some(RecordFailure::Protocol(detail))
+        if detail == "release author lost its exact scope or ticket")
+    );
+}
+
+#[test]
+fn release_returned_original_survives_a_failing_intake_before_the_hold_result() {
+    for owed in [false, true] {
+        let mut fx = releasing(true, false);
+        fx.context.barrier.set_boot_open_owed(owed);
+        let original = shutdown(Kind::Fault);
+        let pointer = original_pointer(&original);
+        let expected = format!("{original:?}");
+        let before = fx.context.barrier.recorder().structure().len();
+        let progress = fx.context.submit_context_author(
+            original,
+            if owed {
+                RecordPurpose::Observation
+            } else {
+                RecordPurpose::Content
+            },
+            1,
+            &mut fx.clock,
+        );
+        assert!(matches!(&progress, RecordProgress::BusyAuthored { .. }));
+        if owed {
+            // A real separate author fails its clock after the account hold
+            // returned the first original. The hold must not mask that failure.
+            assert!(matches!(
+                fx.context.barrier.submit_authored_with_clock(
+                    shutdown(Kind::Refusal),
+                    RecordPurpose::Observation,
+                    &fx.context.author,
+                    1,
+                    &mut fx.context.inbox,
+                    &mut fx.context.budget,
+                    &mut || Err(io::Error::other("later author clock")),
+                ),
+                RecordProgress::Failed
+            ));
+            assert!(matches!(
+                fx.context.barrier.failure(),
+                Some(RecordFailure::Clock(_))
+            ));
+        } else {
+            // The invalid release purpose really returns the sole original
+            // and latches the barrier failure before wait_recorded observes it.
+            assert!(matches!(
+                fx.context.barrier.failure(),
+                Some(RecordFailure::Protocol(_))
+            ));
+        }
+        let failure = fx
+            .context
+            .wait_recorded(&mut ports(&mut fx.clock), progress)
+            .unwrap_err();
+        assert!(matches!(&failure, RunFailure::Flow { reason, .. }
+            if *reason == if owed { FlowHaltReason::TraceFailed } else { FlowHaltReason::ProtocolFailed }));
+        assert_eq!(fx.context.failure(), Some(&failure));
+        assert_eq!(
+            original_pointer(fx.context.refused_author().unwrap()),
+            pointer
+        );
+        assert_eq!(
+            format!("{:?}", fx.context.refused_author().unwrap()),
+            expected
+        );
+        assert_eq!(fx.context.barrier.recorder().structure().len(), before);
+        assert!(fx.context.barrier.admitted_before_failure().is_none());
+        assert_eq!(fx.context.phase(), RecordingPhase::Failed);
+    }
+}
+
+#[path = "context_release_custody_tests.rs"]
+mod custody_tests;
+
+#[path = "context_author_admission_review_tests.rs"]
+mod author_admission_review_tests;

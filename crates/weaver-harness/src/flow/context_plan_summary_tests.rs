@@ -1721,6 +1721,8 @@ fn plan_summary_actual_held_stop_revokes_boot_without_stealing_lifecycle_complet
                 listener: None,
                 peer: Some(&mut admin),
                 residency: None,
+                dial: None,
+                leave_peer: None,
             },
             gate: None,
             decode: None,
@@ -2156,3 +2158,9 @@ mod release_integration_tests;
 #[path = "context_plan_summary_review_tests.rs"]
 mod review_followup_tests;
 use review_followup_tests::SummaryReadyClock;
+
+#[path = "context_place_tests.rs"]
+mod place_tests;
+
+#[path = "context_failed_enter_boot_tests.rs"]
+mod failed_enter_tests;

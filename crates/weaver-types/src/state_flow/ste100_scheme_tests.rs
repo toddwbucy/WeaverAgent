@@ -239,3 +239,261 @@ fn scheme_rule_disposition_requires_its_scalar_string_in_every_position() {
         assert_bad_value::<RuleDisposition>(&invalid);
     }
 }
+
+thread_local! {
+    static BLOB_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub(super) fn note_blob_decode() {
+    BLOB_DECODES.with(|calls| calls.set(calls.get() + 1));
+}
+
+fn counted<T>(operation: impl FnOnce() -> T) -> (T, usize) {
+    BLOB_DECODES.with(|calls| calls.set(0));
+    let result = operation();
+    (result, BLOB_DECODES.with(std::cell::Cell::get))
+}
+
+fn bootstrap() -> Value {
+    json!({
+        "protocol":STE100_PROTOCOL,
+        "scheme_text":serde_json::to_string(&scheme()).unwrap(),
+        "instruction":{
+            "model_binding":{"artifact":"/synthetic/manifest.json","devices":[2,0]},
+            "model_artifact_sha256":"0".repeat(64),
+            "instances":2,
+            "max_wire_bytes":"65536",
+            "measurement_ref":"synthetic-only",
+            "repair_cap":{"attempts":2,"measurement_ref":"synthetic-only"},
+            "decision_wait":{"elapsed_ns":"1000","measurement_ref":"synthetic-only"}
+        }
+    })
+}
+
+const BOOTSTRAP_FIELDS: &[&str] = &["protocol", "scheme_text", "instruction"];
+const INSTRUCTION_FIELDS: &[&str] = &[
+    "model_binding",
+    "model_artifact_sha256",
+    "instances",
+    "max_wire_bytes",
+    "measurement_ref",
+    "repair_cap",
+    "decision_wait",
+];
+const REPAIR_CAP_FIELDS: &[&str] = &["attempts", "measurement_ref"];
+const MODEL_BINDING_FIELDS: &[&str] = &["artifact", "devices"];
+
+#[test]
+fn ste100_bootstrap_object_is_closed_through_all_deserializers() {
+    let value = bootstrap();
+    let decoded: Ste100Bootstrap = serde_json::from_value(value.clone()).unwrap();
+    decoded.validate(DecimalU64(65536)).unwrap();
+    assert_object::<Ste100Bootstrap>(value, BOOTSTRAP_FIELDS);
+}
+
+#[test]
+fn ste100_instruction_object_is_closed_through_all_deserializers() {
+    assert_object::<Ste100Instruction>(bootstrap()["instruction"].clone(), INSTRUCTION_FIELDS);
+}
+
+#[test]
+fn ste100_repair_cap_object_is_closed_through_all_deserializers() {
+    assert_object::<RepairCap>(
+        bootstrap()["instruction"]["repair_cap"].clone(),
+        REPAIR_CAP_FIELDS,
+    );
+}
+
+#[test]
+fn ste100_model_binding_object_is_closed_through_all_deserializers() {
+    assert_object::<ModelBinding>(
+        bootstrap()["instruction"]["model_binding"].clone(),
+        MODEL_BINDING_FIELDS,
+    );
+    // This shared carrier still accepts the legacy relative locator and ordered devices.
+    assert_valid::<ModelBinding>(&json!({"artifact":"legacy-decoder-fixture","devices":[2,0]}));
+}
+
+#[test]
+fn ste100_bootstrap_rejects_each_newly_closed_nested_array_alias() {
+    let valid = bootstrap();
+    assert_valid::<Ste100Bootstrap>(&valid);
+    for (pointer, fields) in [
+        ("", BOOTSTRAP_FIELDS),
+        ("/instruction", INSTRUCTION_FIELDS),
+        ("/instruction/repair_cap", REPAIR_CAP_FIELDS),
+        ("/instruction/model_binding", MODEL_BINDING_FIELDS),
+    ] {
+        let mut malformed = valid.clone();
+        let object = malformed.pointer_mut(pointer).unwrap();
+        *object = sequence(object, fields);
+        assert_bad_value::<Ste100Bootstrap>(&malformed);
+    }
+    let decoded: Ste100Bootstrap = serde_json::from_value(valid.clone()).unwrap();
+    assert_eq!(
+        decoded.instruction.model_binding.devices,
+        vec![crate::DeviceOrdinal(2), crate::DeviceOrdinal(0)]
+    );
+    assert_eq!(decoded.scheme_text, valid["scheme_text"].as_str().unwrap());
+}
+
+#[test]
+fn scheme_disposition_rejects_unknown_spellings_directly_and_nested() {
+    for (variant, spelling) in [
+        (RuleDisposition::ApprovedWord, "approved_word"),
+        (RuleDisposition::TechnicalUse, "technical_use"),
+    ] {
+        assert_eq!(serde_json::to_value(variant).unwrap(), json!(spelling));
+        assert_eq!(
+            serde_json::from_value::<RuleDisposition>(json!(spelling)).unwrap(),
+            variant
+        );
+    }
+    for spelling in [
+        "technical",
+        "approved",
+        "technical-use",
+        "approved-word",
+        "TechnicalUse",
+        "",
+        "technical_use\0",
+    ] {
+        let invalid = json!(spelling);
+        assert_bad_value::<RuleDisposition>(&invalid);
+        for pointer in [
+            "/verbs/0/authority/disposition",
+            "/technical_names/0/authority/disposition",
+        ] {
+            let mut malformed = scheme();
+            *malformed.pointer_mut(pointer).unwrap() = invalid.clone();
+            assert_bad_value::<Ste100Scheme>(&malformed);
+        }
+    }
+}
+
+fn declared_scheme() -> (Ste100Scheme, Digest, SchemeDeclaration) {
+    let digest = Digest::new("0".repeat(64)).unwrap();
+    let declared = SchemeDeclaration {
+        scheme_id: format!("ste100:{}", digest.as_str()),
+        artifact_sha256: digest.clone(),
+        verbs: vec!["read".into()],
+    };
+    let mut scheme: Ste100Scheme = serde_json::from_value(scheme()).unwrap();
+    scheme.grammar.bytes_base64 = "YWJj".into();
+    scheme.conditions.bytes_base64 = "AAEC/w==".into();
+    (scheme, digest, declared)
+}
+
+#[test]
+fn scheme_validate_and_decode_returns_each_blob_once_with_legacy_validation_parity() {
+    let (scheme, digest, declared) = declared_scheme();
+    let (decoded, calls) = counted(|| scheme.validate_and_decode(&digest, &declared));
+    let (grammar, conditions) = decoded.unwrap();
+    assert_eq!(grammar, b"abc");
+    assert_eq!(conditions, [0, 1, 2, 255]);
+    assert_eq!(calls, 2, "each blob must be decoded exactly once");
+    let (old_result, old_calls) = counted(|| scheme.validate(&digest, &declared));
+    old_result.unwrap();
+    assert_eq!(old_calls, 2);
+    // Metadata/encoding validation does not pretend to verify cryptographic content.
+    let wrong = Digest::new("1".repeat(64)).unwrap();
+    assert!(scheme.verify_blobs(|_| wrong.clone()).is_err());
+    scheme.verify_blobs(|_| digest.clone()).unwrap();
+}
+
+#[test]
+fn scheme_validate_and_decode_rejects_metadata_before_allocating_blobs() {
+    let (scheme, digest, declared) = declared_scheme();
+    let mut cases = Vec::new();
+    let mut bad = scheme.clone();
+    bad.format = "wrong".into();
+    cases.push(bad);
+    let mut bad = scheme.clone();
+    bad.reference.edition.clear();
+    cases.push(bad);
+    let mut bad = scheme.clone();
+    bad.reference.rule_ids.clear();
+    cases.push(bad);
+    let mut bad = scheme.clone();
+    bad.qualification.checker_abi.clear();
+    cases.push(bad);
+    let mut bad = scheme.clone();
+    bad.recall_keys = vec!["foreign".into()];
+    cases.push(bad);
+    let mut bad = scheme.clone();
+    bad.verbs[0].forms.push("read".into());
+    cases.push(bad);
+    let mut bad = scheme.clone();
+    bad.technical_names[0].text.clear();
+    cases.push(bad);
+    for bad in cases {
+        let (result, calls) = counted(|| bad.validate_and_decode(&digest, &declared));
+        let error = result.unwrap_err();
+        assert_eq!(calls, 0);
+        assert_eq!(
+            bad.validate(&digest, &declared).unwrap_err().to_string(),
+            error.to_string()
+        );
+    }
+    let wrong_digest = Digest::new("1".repeat(64)).unwrap();
+    let (result, calls) = counted(|| scheme.validate_and_decode(&wrong_digest, &declared));
+    assert!(result.is_err());
+    assert_eq!(calls, 0);
+    let mut bad_declaration = declared;
+    bad_declaration.scheme_id = "ste100:foreign".into();
+    let (result, calls) = counted(|| scheme.validate_and_decode(&digest, &bad_declaration));
+    assert!(result.is_err());
+    assert_eq!(calls, 0);
+}
+
+#[test]
+fn scheme_validate_and_decode_preserves_canonical_encoding_failures() {
+    let (scheme, digest, declared) = declared_scheme();
+    for bad_encoding in ["", "YQ", "YR==", "YWJ=", "YQ==AAAA", "YQ?="] {
+        for conditions in [false, true] {
+            let mut bad = scheme.clone();
+            let blob = if conditions {
+                &mut bad.conditions
+            } else {
+                &mut bad.grammar
+            };
+            blob.bytes_base64 = bad_encoding.into();
+            let (result, calls) = counted(|| bad.validate_and_decode(&digest, &declared));
+            let error = result.unwrap_err();
+            assert_eq!(calls, if conditions { 2 } else { 1 });
+            assert_eq!(
+                bad.validate(&digest, &declared).unwrap_err().to_string(),
+                error.to_string()
+            );
+        }
+    }
+}
+
+super::super::codec::closed_object! {
+    /// Test the supported container spelling with a field which actually changes.
+    #[derive(Debug, PartialEq, Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    struct RenamedCarrier {
+        exact_value: String,
+        #[serde(deserialize_with = "super::super::required_option")]
+        prior_value: Option<String>,
+    }
+}
+
+#[test]
+fn closed_object_container_rename_is_shared_by_writer_and_named_map_reader() {
+    let value = json!({"exact-value":"retained", "prior-value":null});
+    assert_valid::<RenamedCarrier>(&value);
+    for bad in [
+        json!({"exact_value":"retained", "prior_value":null}),
+        json!({"exact-value":"retained"}),
+        json!({"exact-value":"retained", "prior-value":null, "extra":1}),
+        json!(["retained", null]),
+    ] {
+        assert_bad_value::<RenamedCarrier>(&bad);
+    }
+    assert_bad_json::<RenamedCarrier>(
+        r#"{"exact-value":"a","exact-value":"b","prior-value":null}"#,
+    );
+    assert_valid::<RenamedCarrier>(&json!({"exact-value":"retained", "prior-value":"previous"}));
+}

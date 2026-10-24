@@ -6,9 +6,9 @@ license.workspace = true
 publish.workspace = true
 description = "The organ that holds the model: residency, the decode submodule, and the family libraries"
 
-# The decoder and label duties have separate binaries, forked and exec'd by
-# the harness. Nothing links this crate: each process seam is a socket.
-# The STE100 protocol mechanics below do not activate its later executable.
+# The decoder, label and STE100 duties have separate binaries. Nothing links
+# this crate: each process seam is a socket. The STE100 entry is dormant in the
+# serving composition and refuses unsupported artifacts until its adapter exists.
 #
 # The lib target beside it is not an API for a consumer. It exists because four
 # of this Spec's named instruments are doctests (the shard-width set, the
@@ -38,6 +38,11 @@ cc = "1"
 name = "weaver-spu-classify"
 path = "src/bin/classify.rs"
 required-features = ["cuda"]
+
+[[bin]]
+# Standalone protocol entry; no fixture adapter or production readiness fallback.
+name = "weaver-spu-ste100"
+path = "src/bin/ste100.rs"
 
 [features]
 # **gguf carries the default and cuda does not**, per Spec section 1.1. The
