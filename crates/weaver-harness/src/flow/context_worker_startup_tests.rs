@@ -252,7 +252,12 @@ impl Member {
             let line: Vec<_> = self.bytes.drain(..=end).collect();
             let request = s::decode_state_line(&line, s::FrameDirection::Request).unwrap();
             self.ordinal += 1;
-            let observation = operation(&request, self.ordinal, now);
+            let observed = if mode.contains("-session-") {
+                MonotonicIo.now().unwrap()
+            } else {
+                now
+            };
+            let observation = operation(&request, self.ordinal, observed);
             let response = match &request {
                 s::StateFrame::Open {
                     schema_id,
@@ -314,10 +319,16 @@ impl Member {
                                 }
                                 s::ReadSelector::Marks {} if mode.contains("generation") => {
                                     self.requests.push("marks".into());
-                                    serde_json::to_vec(&s::QueryResult::Marks {
-                                        next_span_id: 1.into(),
-                                        current_task: None,
-                                        open_scopes: vec![],
+                                    serde_json::to_vec(&if mode.contains("-session-") {
+                                        super::input::generation::session_tests::marks(
+                                            &self.filings,
+                                        )
+                                    } else {
+                                        s::QueryResult::Marks {
+                                            next_span_id: 1.into(),
+                                            current_task: None,
+                                            open_scopes: vec![],
+                                        }
                                     })
                                     .unwrap()
                                 }
@@ -1862,4 +1873,64 @@ scenario!(
 scenario!(
     worker_final_composition_management_leave,
     "input-worker-generation-emission-final-return-round-once-management-leave"
+);
+
+scenario!(
+    worker_session_composition_two,
+    "input-worker-generation-emission-session-two"
+);
+
+scenario!(
+    worker_session_composition_three,
+    "input-worker-generation-emission-session-three"
+);
+
+scenario!(
+    worker_session_composition_refused,
+    "input-worker-generation-emission-session-refused"
+);
+
+scenario!(
+    worker_session_composition_queued,
+    "input-worker-generation-emission-session-queued"
+);
+
+scenario!(
+    worker_session_composition_observe,
+    "input-worker-generation-emission-session-observe"
+);
+
+scenario!(
+    worker_session_composition_stop_idle,
+    "input-worker-generation-emission-session-stop-idle"
+);
+
+scenario!(
+    worker_session_composition_stop_active,
+    "input-worker-generation-emission-session-stop-active"
+);
+
+scenario!(
+    worker_session_composition_leave,
+    "input-worker-generation-emission-session-leave"
+);
+
+scenario!(
+    worker_session_composition_duplicate,
+    "input-worker-generation-emission-session-duplicate"
+);
+
+scenario!(
+    worker_session_composition_observe_accepted,
+    "input-worker-generation-emission-session-observe-accepted"
+);
+
+scenario!(
+    worker_session_composition_stop_accepted,
+    "input-worker-generation-emission-session-stop-accepted"
+);
+
+scenario!(
+    worker_session_composition_decoder_failure,
+    "input-worker-generation-emission-session-decoder-failure"
 );

@@ -37,8 +37,8 @@ pub struct Workflow<'a> {
 }
 
 impl<'a> Workflow<'a> {
-    /// Begin at checked input acceptance. Starting a second task in an existing
-    /// task span can refuse; multi-turn plan/task continuation is a separate join.
+    /// Begin at checked input acceptance. The task primitive reads the actual
+    /// catalog and reuses its open task without creating another boundary.
     pub fn begin(
         input: Box<FoundationInput<'a>>,
         turn: TurnKey,
@@ -80,8 +80,21 @@ impl<'a> Workflow<'a> {
             _ => Progress::Pending,
         }
     }
-    pub fn detail(&self) -> Option<&str> {
-        self.detail.as_deref()
+    pub fn detail(&self) -> Option<String> {
+        self.detail.clone().or_else(|| {
+            self.input
+                .as_ref()
+                .and_then(|input| {
+                    input
+                        .detail()
+                        .or_else(|| input.operation_detail().map(str::to_owned))
+                })
+                .or_else(|| {
+                    self.management
+                        .as_ref()
+                        .and_then(|owner| owner.detail().map(str::to_owned))
+                })
+        })
     }
     pub fn rounds(&self) -> usize {
         self.rounds

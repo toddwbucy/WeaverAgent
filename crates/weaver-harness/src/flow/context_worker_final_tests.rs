@@ -112,7 +112,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         recorder.join().unwrap()
     });
     let progress = flow.progress();
-    let detail = flow.detail().map(str::to_owned);
+    let detail = flow.detail();
     let rounds = flow.rounds();
     if mode.ends_with("management-leave") {
         assert_eq!(progress, worker::turn::Progress::DirectivePending);

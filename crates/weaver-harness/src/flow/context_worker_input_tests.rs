@@ -102,6 +102,9 @@ fn worker_input_gate_child() {
             },
         );
     }
+    if mode.contains("-session-") {
+        return super::generation::session_tests::gate(&mode, &root, 3);
+    }
     packet(3, &frame(&mode, 101));
     if mode.contains("-external-") {
         return super::generation::emission::execution::external_tests::gate(&mode, &root, 3);

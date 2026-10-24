@@ -29,6 +29,10 @@ mod answer;
 #[path = "context_worker_final_tests.rs"]
 pub(in crate::flow::context) mod final_tests;
 
+#[cfg(test)]
+#[path = "context_worker_session_tests.rs"]
+pub(in crate::flow::context) mod session_tests;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EngineStage {
     StartTask,

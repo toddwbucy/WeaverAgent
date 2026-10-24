@@ -43,6 +43,9 @@ fn generated(mode: &str, finish: Finish) -> TokenAnswer {
     })
 }
 pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
+    if mode.contains("-session-") {
+        return super::session_tests::spu(mode, fd);
+    }
     if mode.contains("-return-") || mode.contains("-external-") {
         return super::return_tests::spu(mode, fd);
     }
@@ -401,6 +404,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if mode.contains("-session-") {
+        return super::session_tests::exercise(serving, member, reader, clock, socket, root, mode);
+    }
     if mode.contains("emission") {
         return super::emission::tests::exercise(
             serving, member, reader, clock, socket, root, mode,

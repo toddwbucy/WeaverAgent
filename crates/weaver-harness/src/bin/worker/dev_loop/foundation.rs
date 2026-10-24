@@ -9,6 +9,9 @@ use weaver_types::TurnKey;
 #[path = "foundation_turn.rs"]
 pub mod turn;
 
+#[path = "foundation_session.rs"]
+pub mod session;
+
 /// Workflow choices are separate from the harness's protocol transitions. The
 /// caller chooses when to start a task, select its source and use its placement.
 /// Management and refusal return the same owner for the loop's next decision.
