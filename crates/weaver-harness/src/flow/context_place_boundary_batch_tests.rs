@@ -3,6 +3,73 @@ use super::*;
 use crate::flow::context::held_input_tests::{HOLDS, hold};
 
 #[test]
+fn author_review_active_generation_excludes_invalid_placement_notice_owners() {
+    for foreign_prefix in [false, true] {
+        let mut other = PlaceFixture::new();
+        let foreign = other.text(8, "foreign");
+        let mut fx = PlaceFixture::new();
+        let units = fx.text(8, "record");
+        fx.turn("active-placement");
+        let mut request = fx.request(foreign);
+        if foreign_prefix {
+            request.prefix = other.prefix(None, s::CutMethod::Flush);
+        }
+        let selected = request.selection.as_ptr();
+        let boot = fx.records(Kind::StateMarkPosition).remove(0);
+        let mut cut: s::CutReference = s::CutReference {
+            span: serde_json::from_value(boot["payload"]["span"].clone()).unwrap(),
+            occurrence_id: serde_json::from_value(boot["payload"]["id"].clone()).unwrap(),
+        };
+        cut.occurrence_id.ordinal = 1000.into();
+        let grant = fx.grant(units, 3);
+        fx.start_generation(grant);
+        fx.sent_generation();
+        let before = fx.journal();
+        let run = &mut fx.summary.boot.member.run;
+        let generation = std::ptr::from_ref(run.context.generation.as_ref().unwrap());
+        let waits = format!("{:?}", run.context.deadlines);
+        let owed = run.context.barrier.place_owed_for_test();
+        assert_eq!(
+            run.context
+                .prepare_prefix(Some(cut), s::CutMethod::Flush, &mut run.clock)
+                .unwrap_err(),
+            PlaceError::Busy(None)
+        );
+        assert_eq!(
+            run.context.begin_place_measurement(
+                &request.prefix,
+                &request.selection,
+                &request.tool_schemas,
+                PumpDeadline::Decision,
+                &mut fx.decode,
+                &mut run.clock,
+            ),
+            Err(PlaceError::Busy(None))
+        );
+        assert!(run.context.measure.is_none());
+        let error = run
+            .context
+            .begin_place(request, &mut fx.decode, &mut run.clock)
+            .unwrap_err();
+        assert_eq!(error.refusal, PlaceError::Busy(None));
+        assert!(error.failure.is_none());
+        assert_eq!(error.input.selection.as_ptr(), selected);
+        assert!(run.context.place_notice.is_none());
+        assert!(run.context.place_close.is_none());
+        assert_eq!(run.context.barrier.place_owed_for_test(), owed);
+        assert_eq!(format!("{:?}", run.context.deadlines), waits);
+        assert!(run.context.deadlines.get(PumpDeadline::Cut).is_none());
+        assert_eq!(
+            std::ptr::from_ref(run.context.generation.as_ref().unwrap()),
+            generation
+        );
+        assert_eq!(fx.journal(), before);
+        assert!(fx.records(Kind::Refusal).is_empty());
+        assert!(fx.records(Kind::TurnClosed).is_empty());
+    }
+}
+
+#[test]
 fn boundary_batch_place_refused_unheld_release_revokes_generation() {
     for held in [
         None,
@@ -54,7 +121,7 @@ fn boundary_batch_place_refused_unheld_release_revokes_generation() {
 }
 
 #[test]
-fn boundary_batch_prefix_rejects_invalid_cut_before_custody_without_burning_ids() {
+fn boundary_batch_prefix_defers_invalid_cut_without_a_notice_or_new_wait() {
     for held in HOLDS {
         let mut fx = PlaceFixture::new();
         let boot = fx.records(Kind::StateMarkPosition).remove(0);
@@ -70,17 +137,23 @@ fn boundary_batch_prefix_rejects_invalid_cut_before_custody_without_burning_ids(
         let before = fx.journal();
         let run = fx.run();
         let assembly = run.context.boot_journal.as_ref().unwrap().next_assembly();
+        let waits = format!("{:?}", run.context.deadlines);
+        let owed = run.context.barrier.place_owed_for_test();
         let originals = hold(&mut run.context, held);
         assert_eq!(
             run.context
                 .prepare_prefix(Some(cut), s::CutMethod::Flush, &mut run.clock)
                 .unwrap_err(),
-            PlaceError::InvalidPrefix
+            PlaceError::Busy(Some(held))
         );
         assert_eq!(
             run.context.boot_journal.as_ref().unwrap().next_assembly(),
             assembly
         );
+        assert!(run.context.place_notice.is_none());
+        assert_eq!(run.context.barrier.place_owed_for_test(), owed);
+        assert_eq!(format!("{:?}", run.context.deadlines), waits);
+        assert!(run.context.deadlines.get(PumpDeadline::Cut).is_none());
         originals.assert_held(&run.context);
         assert_eq!(fx.journal(), before);
     }
@@ -156,11 +229,11 @@ fn boundary_batch_place_request_keeps_genuine_refusals_and_exact_selection() {
                 }
                 "prefix" => {
                     request.prefix = foreign.prefix(None, s::CutMethod::Flush);
-                    PlaceError::InvalidPrefix
+                    PlaceError::Busy(Some(held))
                 }
                 "units" => {
                     request.selection = foreign.text(8, "record");
-                    PlaceError::InvalidUnits
+                    PlaceError::Busy(Some(held))
                 }
                 _ => unreachable!(),
             };
@@ -169,6 +242,8 @@ fn boundary_batch_place_request_keeps_genuine_refusals_and_exact_selection() {
             let before = fx.journal();
             let run = &mut fx.summary.boot.member.run;
             let next = run.context.boot_journal.as_ref().unwrap().next_assembly();
+            let waits = format!("{:?}", run.context.deadlines);
+            let owed = run.context.barrier.place_owed_for_test();
             let originals = hold(&mut run.context, held);
             let error = run
                 .context
@@ -184,6 +259,10 @@ fn boundary_batch_place_request_keeps_genuine_refusals_and_exact_selection() {
             );
             assert!(run.context.place.is_none());
             assert!(run.context.measure.is_none());
+            assert!(run.context.place_notice.is_none());
+            assert_eq!(run.context.barrier.place_owed_for_test(), owed);
+            assert_eq!(format!("{:?}", run.context.deadlines), waits);
+            assert!(run.context.deadlines.get(PumpDeadline::Cut).is_none());
             originals.assert_held(&run.context);
             assert!(!fx.decode.send_pending());
             assert_eq!(fx.journal(), before);

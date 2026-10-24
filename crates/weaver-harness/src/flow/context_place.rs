@@ -136,6 +136,19 @@ enum AccountWork {
     Notice(Box<PlaceNotice>),
 }
 impl PlaceAccount {
+    pub(in crate::flow::context) fn refused_restatement(
+        &self,
+        context: &RecordingContext,
+        source: &SourceBlockId,
+    ) -> bool {
+        matches!(&self.work, AccountWork::Place(work)
+            if !work.close_on_refusal && work.done
+                && work.request.context.instruction.as_ref() == Some(source)
+                && work.units.len() == 1
+                && work.units.iter().all(|unit| unit.belongs_to(context))
+                && (!work.recorded_authors.is_empty()
+                    || matches!(&work.measurement, Some(MeasureCompletion::Refused(refused)) if refused.sources().1.0 > 0)))
+    }
     pub(in crate::flow) fn recorded_sequences(&self) -> &[Sequence] {
         match &self.work {
             AccountWork::Place(w) => &w.recorded_authors,
@@ -349,8 +362,12 @@ pub(super) struct PlaceTransaction {
     incomplete: Option<String>,
     started_ns: u64,
     close_pending: bool,
+    close_on_refusal: bool,
     account_deadline: Option<u64>,
     selected_count: usize,
+    return_author: Option<weaver_types::state_flow::CallId>,
+    next_return: usize,
+    placement_after_returns: Option<AuthoredEvent>,
 }
 #[derive(Debug)]
 pub(super) struct GenerationTransaction {
@@ -494,17 +511,14 @@ impl RecordingContext {
         });
         Ok(())
     }
-    pub(in crate::flow) fn hold_place_return(
+    pub(super) fn hold_place_return(
         &self,
         call: &weaver_types::state_flow::CallId,
-    ) -> Result<crate::flow::material::SelectedUnit, PlaceError> {
+    ) -> Result<crate::flow::material::SelectedUnit, pairs::PairError> {
         if self.place_engine.is_none() {
-            return Err(PlaceError::WrongProof);
+            return Err(pairs::PairError::WrongPhase);
         }
-        let pair = self
-            .pairs
-            .closed_for_material(call)
-            .ok_or(PlaceError::WrongProof)?;
+        let pair = self.pairs.closed_for_material(call)?;
         Ok(crate::flow::material::from_completed_pair(
             self.read_origin.clone(),
             pair,
@@ -525,10 +539,22 @@ impl RecordingContext {
         if self.place_admission_stopped() || self.phase != RecordingPhase::Entered {
             return Err(PlaceError::WrongPhase);
         }
+        if self.place_blocks_external()
+            || self
+                .place_engine
+                .as_ref()
+                .is_some_and(|e| e.staged.is_some())
+        {
+            return Err(PlaceError::Busy(self.held_input()));
+        }
         if self.place_engine.is_none() {
             return Err(PlaceError::WrongProof);
         }
         let journal = self.boot_journal.as_ref().ok_or(PlaceError::WrongProof)?;
+        // InvalidCut queues a notice owner, so custody must be clear first.
+        if self.caller_author_held() {
+            return Err(PlaceError::Busy(self.held_input()));
+        }
         let assembly = journal.next_assembly().into();
         let prefix = match journal.prepare(cut, method) {
             Ok(p) => p,
@@ -541,12 +567,6 @@ impl RecordingContext {
                 return Err(PlaceError::InvalidPrefix);
             }
         };
-        if self.caller_author_held()
-            || self.place_blocks_external()
-            || self.place_engine.as_ref().unwrap().staged.is_some()
-        {
-            return Err(PlaceError::Busy(self.held_input()));
-        }
         Ok(prefix)
     }
     pub(super) fn place_measurement_continuation(&self, key: PumpDeadline) -> bool {
@@ -626,6 +646,13 @@ impl RecordingContext {
         self.place_busy_except_reload() || self.reload.as_ref().is_some_and(|w| w.bound.is_some())
     }
     fn place_busy_except_reload(&self) -> bool {
+        self.caller_author_held() || self.place_owners_busy_except_reload()
+    }
+    fn place_owners_busy(&self) -> bool {
+        self.place_owners_busy_except_reload()
+            || self.reload.as_ref().is_some_and(|w| w.bound.is_some())
+    }
+    fn place_owners_busy_except_reload(&self) -> bool {
         self.place_notice.is_some()
             || self.native_marks.is_some()
             || self.place_close.is_some()
@@ -646,7 +673,6 @@ impl RecordingContext {
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()
-            || self.caller_author_held()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()
@@ -682,18 +708,26 @@ impl RecordingContext {
         }
         self.check_place_port(decode)
             .map_err(|_| PlaceError::WrongProof)?;
+        if self.place_owners_busy()
+            || self
+                .place_engine
+                .as_ref()
+                .is_some_and(|e| e.outstanding.is_some() || e.staged.is_some())
+        {
+            return Err(PlaceError::Busy(self.held_input()));
+        }
         let engine = self.place_engine.as_ref().ok_or(PlaceError::WrongProof)?;
         let journal = self.boot_journal.as_ref().ok_or(PlaceError::WrongProof)?;
         if journal.check_projection(&prefix.projection).is_err() {
             return Err(PlaceError::Stale);
         }
-        if schemas != engine.schemas || units.iter().any(|u| !u.belongs_to(self)) {
+        if schemas != engine.schemas || !self.place_units_valid(units.iter()) {
             return Err(PlaceError::InvalidUnits);
         }
         journal
             .validate_selection(&prefix.projection, units.iter())
             .map_err(|_| PlaceError::InvalidUnits)?;
-        if self.place_busy() || engine.outstanding.is_some() || engine.staged.is_some() {
+        if self.caller_author_held() {
             return Err(PlaceError::Busy(self.held_input()));
         }
         let mut delta = prefix.rebuild();
@@ -762,15 +796,26 @@ impl RecordingContext {
             || self.phase != RecordingPhase::Entered
         {
             Some(PlaceError::WrongPhase)
+        } else if self.place_owners_busy()
+            || self.place_engine.as_ref().is_some_and(|e| {
+                e.outstanding.is_some() || (e.staged.is_some() && staged.is_none())
+            })
+        {
+            Some(PlaceError::Busy(self.held_input()))
         } else if self.place_engine.is_none() || !self.native_place_cache_ready() {
             Some(PlaceError::WrongProof)
         } else if self.open_turn.is_none() || self.deadlines.get(PumpDeadline::Decision).is_none() {
             Some(PlaceError::MissingWait)
         } else if request.context.label.is_empty()
             || request.tool_schemas != self.place_engine.as_ref().unwrap().schemas
-            || !self.place_instruction_valid(&request.context)
+            || !(self.place_instruction_valid(&request.context)
+                || self.restatement_instruction_valid(&request))
         {
             Some(PlaceError::InvalidContext)
+        } else if self.caller_author_held() {
+            // Prefix/selection refusals below create a notice owner. Custody
+            // blocks those side effects as well as successful placement.
+            Some(PlaceError::Busy(self.held_input()))
         } else if request.prefix.cut.is_some()
             || self
                 .boot_journal
@@ -798,43 +843,22 @@ impl RecordingContext {
                 staged,
             });
         }
-        // Validate immutable material before custody, without burning IDs or
-        // moving any selection out of its caller-owned request.
-        let selected = staged
-            .iter()
-            .flat_map(|held| held.units.iter().map(Arc::as_ref))
-            .chain(request.selection.iter());
-        if let Err(error) = self
-            .boot_journal
-            .as_ref()
-            .unwrap()
-            .validate_selection(&request.prefix.projection, selected)
-        {
-            let code = if error == crate::flow::journal::JournalError::InvalidPair {
-                PlacementCode::InvalidPair
-            } else {
-                PlacementCode::InvalidSpan
-            };
+        // A previously minted selection is still a live grant, not permission
+        // to redeliver a result acknowledged by a later completed append.
+        if !self.place_units_valid(
+            request
+                .selection
+                .iter()
+                .chain(staged.iter().flat_map(|s| s.units.iter().map(Arc::as_ref))),
+        ) {
             let _ = self.queue_place_refusal(
                 request.prefix.assembly,
-                code,
-                "selected material cannot be placed at this prefix",
+                PlacementCode::InvalidPair,
+                "selected material has foreign, duplicate or already delivered result evidence",
             );
             return Err(PlaceBeginError {
                 input: request,
                 refusal: PlaceError::InvalidUnits,
-                failure: None,
-                staged,
-            });
-        }
-        if self.place_busy()
-            || self.place_engine.as_ref().is_some_and(|e| {
-                e.outstanding.is_some() || (e.staged.is_some() && staged.is_none())
-            })
-        {
-            return Err(PlaceBeginError {
-                input: request,
-                refusal: PlaceError::Busy(self.held_input()),
                 failure: None,
                 staged,
             });
@@ -916,8 +940,14 @@ impl RecordingContext {
             incomplete: None,
             started_ns: self.last_ns,
             close_pending: false,
+            // Repair retains original requests that still owe terminal facts.
+            // Its caller judges the refusal before any turn/world close.
+            close_on_refusal: self.repair.is_none(),
             account_deadline: None,
             selected_count,
+            return_author: None,
+            next_return: 0,
+            placement_after_returns: None,
         });
         let result = self.begin_measurement(measure, PumpDeadline::Decision, decode, io);
         self.place.as_mut().unwrap().driving = false;
@@ -993,6 +1023,10 @@ impl RecordingContext {
                     detail: "decode measurement refused".into(),
                     account: None,
                 });
+                if !work.close_on_refusal {
+                    work.done = true;
+                    return Ok(PlaceProgress::Complete);
+                }
                 work.author = Some(PlaceAuthor::new(place_event(
                     Kind::TurnClosed,
                     AuthoredSource::Runtime,
@@ -1019,7 +1053,7 @@ impl RecordingContext {
                     code,
                     detail: refusal.detail.clone(),
                 };
-                work.close_pending = true;
+                work.close_pending = work.close_on_refusal;
                 work.refusal = Some(refusal);
                 place_event(
                     Kind::Refusal,
@@ -1053,7 +1087,12 @@ impl RecordingContext {
                     ),
                 )
             };
-            self.place.as_mut().unwrap().author = Some(PlaceAuthor::new(event));
+            if event.kind == Kind::StatePlacement {
+                self.place.as_mut().unwrap().placement_after_returns = Some(event);
+                self.prepare_place_return_author(ports.io)?;
+            } else {
+                self.place.as_mut().unwrap().author = Some(PlaceAuthor::new(event));
+            }
         }
         if self
             .place
@@ -1064,7 +1103,16 @@ impl RecordingContext {
             .is_some_and(|a| a.sequence.is_some())
         {
             self.consume_place_completion()?;
-            if self.place.as_ref().unwrap().close_pending {
+            if self.place.as_ref().unwrap().return_author.is_some() {
+                self.retain_place_return_record(ports.io)?;
+                let work = self.place.as_mut().unwrap();
+                work.author = None;
+                if work.cancelled {
+                    work.done = true;
+                    return Ok(PlaceProgress::Complete);
+                }
+                self.prepare_place_return_author(ports.io)?;
+            } else if self.place.as_ref().unwrap().close_pending {
                 let work = self.place.as_mut().unwrap();
                 work.close_pending = false;
                 work.author = Some(PlaceAuthor::new(place_event(
@@ -1299,11 +1347,15 @@ impl RecordingContext {
                 .as_ref()
                 .is_some_and(|a| a.sequence == Some(sequence))
         {
+            if work.return_author.is_some() {
+                return;
+            }
             if work.refusal.is_none() {
                 work.recorded = Some(sequence);
             }
             work.done = !work.close_pending;
             if work.done
+                && work.close_on_refusal
                 && let Some(refusal) = &work.refusal
             {
                 let run = self
@@ -1380,6 +1432,108 @@ impl RecordingContext {
             return Err(self.place_fault(io, "placement completion has another author's ticket"));
         }
         Ok(())
+    }
+
+    fn prepare_place_return_author(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        while let Some(unit) = {
+            let work = self.place.as_mut().ok_or(RunFailure::PlaceOwned)?;
+            let unit = work.units.get(work.next_return).cloned();
+            work.next_return += usize::from(unit.is_some());
+            unit
+        } {
+            let Some(pair) = unit.completed_pair() else {
+                continue;
+            };
+            match self.pairs.result_record(pair) {
+                Ok(Some(_)) => continue,
+                Err(error) => return Err(self.place_fault(io, format!("result record: {error:?}"))),
+                Ok(None) => {}
+            }
+            let call = pair.started().call_id.clone();
+            let parent = Sequence(pair.terminal_source().sequence.0);
+            let message = Message {
+                role: weaver_traits::Role::ToolResult,
+                content: vec![weaver_traits::ContentBlock::ToolResult(
+                    pair.result().block(),
+                )],
+            };
+            let event = place_event(
+                Kind::MessageToolResult,
+                AuthoredSource::Tool,
+                Payload::Message(
+                    serde_json::value::to_raw_value(&message)
+                        .map_err(|e| self.place_fault(io, e.to_string()))?,
+                ),
+                self.open_turn.clone(),
+                Some(parent),
+            );
+            let work = self.place.as_mut().unwrap();
+            work.return_author = Some(call);
+            work.author = Some(PlaceAuthor::new(event));
+            return Ok(());
+        }
+        let work = self.place.as_mut().unwrap();
+        work.author = work.placement_after_returns.take().map(|mut event| {
+            if let Some(Payload::Placement(record)) = &mut event.payload {
+                record.wait_ns = self.last_ns.saturating_sub(work.started_ns).into();
+            }
+            PlaceAuthor::new(event)
+        });
+        if work.author.is_none() {
+            return Err(self.place_fault(io, "result author lost its placement record"));
+        }
+        Ok(())
+    }
+
+    fn place_units_valid<'a>(
+        &self,
+        units: impl IntoIterator<Item = &'a crate::flow::material::SelectedUnit>,
+    ) -> bool {
+        let mut returned = std::collections::HashSet::new();
+        units.into_iter().all(|unit| {
+            unit.belongs_to(self)
+                && unit.completed_pair().is_none_or(|pair| {
+                    self.pairs.result_record(pair).is_ok()
+                        && returned.insert((
+                            &pair.started().call_id.run,
+                            pair.started().call_id.sequence.0,
+                            pair.started().call_id.call.0,
+                        ))
+                })
+        })
+    }
+
+    pub(super) fn retain_place_return_record(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        let Some(work) = self.place.as_ref() else {
+            return Ok(());
+        };
+        let Some(call) = &work.return_author else {
+            return Ok(());
+        };
+        let sequence = work
+            .author
+            .as_ref()
+            .and_then(|a| a.sequence)
+            .ok_or(RunFailure::PlaceOwned)?;
+        self.pairs
+            .record_result(call, sequence)
+            .map_err(|e| self.place_fault(io, format!("result record receipt: {e:?}")))?;
+        self.place.as_mut().unwrap().return_author = None;
+        Ok(())
+    }
+
+    pub(super) fn acknowledge_delivery(
+        &mut self,
+        call: &weaver_types::state_flow::CallId,
+        proof: &ConfirmedGeneration,
+    ) -> Result<(), pairs::PairError> {
+        if !Arc::ptr_eq(&proof.grant.origin, &self.read_origin) {
+            return Err(pairs::PairError::WrongReceipt);
+        }
+        self.pairs.acknowledge_delivery(call, proof)
     }
 }
 fn place_event(

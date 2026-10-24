@@ -66,6 +66,7 @@ enum Fault {
     HoldPromptRelease,
     RejectTemplate,
     RefusePrompt,
+    ZeroGeneration,
     StopBeforeInstall,
     ExpireBeforeFinish,
 }
@@ -397,6 +398,29 @@ fn circuit_with_fixture(
                     assert!(boot.summary.is_some());
                     assert!(boot.context.place_engine.is_none());
                 }
+                Fault::ZeroGeneration => {
+                    assert!(matches!(
+                        boot.stopped(),
+                        Some(BootCompositionStop::Open(BootOpenProgress::Refused))
+                    ));
+                    assert_eq!(queries, ["prompt"]);
+                    assert_eq!(releases, 1);
+                    assert_eq!(opens, 1);
+                    assert!(boot.context.failure().is_none());
+                    assert!(boot.context.boot_journal.is_none());
+                    assert!(boot.context.place_engine.is_none());
+                    assert!(boot.prior.is_none());
+                    assert!(boot.repaired.is_none());
+                    assert!(boot.summary.is_none());
+                    assert!(matches!(
+                        boot.context.boot_open_refusal(),
+                        Some(weaver_types::LifecycleRefusal::StatePersistenceInvalid {
+                            stage: s::PersistenceStage::Boot,
+                            case: s::PersistenceCase::BootFailed,
+                            ..
+                        })
+                    ));
+                }
                 _ => panic!(
                     "unexpected stop at {:?}: {:?}",
                     boot.stage(),
@@ -657,7 +681,12 @@ fn circuit_with_fixture(
                 assert_eq!(messages.len(), 1);
                 opens += 1;
                 let rendered = "<system>Read caf\u{e9}.</system>";
-                let answer = TokenAnswer::Opened(Opened { session: SessionId("session".into()), prefix_tokens: 3, capacity: 16384, generation_limit: 16, terminal_tokens: 1,
+                let generation_limit = if matches!(fault, Fault::ZeroGeneration) {
+                    0
+                } else {
+                    16
+                };
+                let answer = TokenAnswer::Opened(Opened { session: SessionId("session".into()), prefix_tokens: 3, capacity: 16384, generation_limit, terminal_tokens: 1,
                     request: serde_json::value::to_raw_value(&serde_json::json!({"rendered":rendered,"template":"fixture"})).unwrap(),
                     measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap() });
                 let raw = serde_json::to_vec(&answer).unwrap();
@@ -681,6 +710,10 @@ fn circuit_with_fixture(
     );
 }
 
+#[test]
+fn boot_positive_composition_stops_before_pair_repair_summary_and_install() {
+    circuit(Fault::ZeroGeneration);
+}
 #[test]
 fn boot_composition_drives_the_whole_recorded_sequence_once() {
     circuit(Fault::None);

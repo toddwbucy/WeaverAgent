@@ -2,6 +2,50 @@
 use super::*;
 
 #[test]
+fn author_review_cancelled_unstarted_summary_settles_without_taking_held_input() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        let mut fx = SummaryFixture::new(vec![]);
+        fx.begin_boot();
+        let run = fx.run();
+        let leave = AbsoluteBound::after(run.clock.now().unwrap(), 100_000).unwrap();
+        assert_eq!(
+            run.context
+                .begin_boot_plan_summary_release(leave, &mut run.clock),
+            Err(RunFailure::PlanSummaryOwned)
+        );
+        assert!(
+            run.context
+                .plan_summary
+                .as_ref()
+                .unwrap()
+                .disposition_for_test()
+                .cancelled
+        );
+        assert!(run.context.read.is_none());
+        let originals = hold(&mut run.context, held);
+        let waits = format!("{:?}", run.context.deadlines);
+        assert_eq!(
+            run.context
+                .begin_boot_plan_summary_release(leave, &mut run.clock),
+            Err(RunFailure::PlanSummaryOwned)
+        );
+        assert_eq!(format!("{:?}", run.context.deadlines), waits);
+        originals.assert_held(&run.context);
+        assert_eq!(fx.advance().unwrap(), PlanSummaryProgress::Complete);
+        let run = fx.run();
+        assert!(run.context.read.is_none());
+        assert_eq!(
+            run.context
+                .begin_boot_plan_summary_release(leave, &mut run.clock),
+            Err(RunFailure::Busy(held))
+        );
+        assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());
+        originals.assert_held(&run.context);
+    }
+}
+
+#[test]
 fn boundary_batch_summary_refused_unheld_release_cancels_the_actual_read() {
     for foreign_turn in [false, true] {
         let mut fx = SummaryFixture::new(vec![]);

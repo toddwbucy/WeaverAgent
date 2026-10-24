@@ -547,7 +547,8 @@ impl RecordingContext {
                 };
                 let opened = validated.opened;
                 owner.fit = Some(
-                    opened.prefix_tokens <= owner.budget.c_head
+                    opened.generation_limit > 0
+                        && opened.prefix_tokens <= owner.budget.c_head
                         && owner.budget.c_head > 0
                         && owner.budget.c_tail > 0
                         && owner

@@ -385,6 +385,104 @@ fn boot_open_real_head_records_exact_evidence_then_installs_once_and_licenses_pa
 }
 
 #[test]
+fn boot_positive_zero_limit_records_before_refusal_and_never_grants() {
+    for pressure in [false, true] {
+        let mut fx = OpenFixture::new();
+        fx.begin();
+        fx.sent();
+        let enter = fx
+            .boot
+            .member
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::Enter);
+        let mut opened = fx.opened();
+        opened.generation_limit = 0;
+        let raw = fx.answer(opened);
+        fx.advance().unwrap();
+        if pressure {
+            fx.boot.member.fill_trace();
+            assert_eq!(fx.advance().unwrap(), BootOpenProgress::Pending);
+            let pending = fx.boot.member.run.context.pending_author().unwrap();
+            let ticket = pending.ticket;
+            let event = format!("{:?}", pending.event);
+            for _ in 0..2 {
+                assert_eq!(fx.advance().unwrap(), BootOpenProgress::Pending);
+                let pending = fx.boot.member.run.context.pending_author().unwrap();
+                assert_eq!(pending.ticket, ticket);
+                assert_eq!(format!("{:?}", pending.event), event);
+                assert!(fx.records(Kind::StatePlacement).is_empty());
+                assert!(fx.records(Kind::Refusal).is_empty());
+                assert!(fx.boot.member.run.context.boot_journal.is_none());
+                assert_eq!(
+                    fx.boot
+                        .member
+                        .run
+                        .context
+                        .deadlines
+                        .get(PumpDeadline::Enter),
+                    enter
+                );
+            }
+            fx.drain();
+        }
+        let mut progress = BootOpenProgress::Pending;
+        for _ in 0..16 {
+            progress = fx.advance().unwrap();
+            if progress == BootOpenProgress::Refused {
+                break;
+            }
+        }
+        assert_eq!(progress, BootOpenProgress::Refused);
+        let placements = fx.records(Kind::StatePlacement);
+        assert_eq!(placements.len(), 1);
+        assert_eq!(placements[0]["payload"]["generation_limit"], 0);
+        assert_eq!(placements[0]["payload"]["assembly_id"], "0");
+        assert_eq!(
+            fx.boot.member.run.context.boot_open_raw(),
+            Some(raw.as_slice())
+        );
+        let refusals = fx.records(Kind::Refusal);
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(refusals[0]["causal_parent"], placements[0]["sequence"]);
+        let refusal = &refusals[0]["payload"]["refusal"];
+        assert_eq!(refusal["kind"], "state_persistence_invalid");
+        assert_eq!(refusal["stage"], "boot");
+        assert_eq!(refusal["case"], "boot_failed");
+        assert!(fx.records(Kind::StateMarkPosition).is_empty());
+        let run = &mut fx.boot.member.run;
+        assert!(run.context.boot_journal.is_none());
+        assert!(run.context.failure().is_none());
+        assert_eq!(run.context.deadlines.get(PumpDeadline::Enter), enter);
+        assert_eq!(
+            run.context.take_boot_open(&mut run.clock).unwrap_err(),
+            RunFailure::BootOpenOwned
+        );
+        fx.release(1000);
+        assert!(fx.boot.member.run.context.boot_open_account_settled());
+    }
+}
+
+#[test]
+fn boot_positive_one_token_limit_can_complete_boot() {
+    let mut fx = OpenFixture::new();
+    fx.begin();
+    fx.sent();
+    let mut opened = fx.opened();
+    opened.generation_limit = 1;
+    fx.answer(opened);
+    let checked = fx.finish();
+    assert_eq!(checked.limits(), (2048, 6144, 1, 1));
+    let placements = fx.records(Kind::StatePlacement);
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0]["payload"]["generation_limit"], 1);
+    assert_eq!(fx.records(Kind::StateMarkPosition).len(), 1);
+    assert!(fx.records(Kind::Refusal).is_empty());
+    assert!(fx.boot.member.run.context.boot_journal.is_some());
+}
+
+#[test]
 fn boot_open_fit_failure_records_prefix_before_exact_boot_failed_without_journal() {
     for (capacity, generation, prefix_too_large) in [
         (8192, 16, false),

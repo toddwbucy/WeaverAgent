@@ -29,6 +29,57 @@ fn fixture(limit: u64) -> ReceiptFixture {
 
 #[test]
 fn author_failure_freshness_returns_the_previous_callers_original_without_restarting_it() {
+    freshness_withdrawal_return(false);
+}
+
+#[test]
+fn author_review_freshness_withdrawal_returns_through_the_owning_continuation() {
+    freshness_withdrawal_return(true);
+}
+
+#[test]
+fn author_review_nonfatal_withdrawn_slot_cannot_regain_admission() {
+    let mut fx = fixture(100);
+    let event = note();
+    let expected = format!("{event:?}");
+    let Some(Payload::ModelMeasurement(raw)) = &event.payload else {
+        unreachable!()
+    };
+    let pointer = raw.get().as_ptr();
+    // Isolate the nonfatal withdrawn-slot state. No ticket or successful proof
+    // is fabricated: this is the exact unadmitted event, owned by that slot.
+    // The adjacent test separately drives the real freshness withdrawal.
+    fx.input.run.context.waiting_content = Some(WaitingAuthor {
+        event,
+        claim: None,
+        withdrawn: Some(RunFailure::PlaceOwned),
+    });
+    let held =
+        crate::flow::context::held_input_tests::hold(&mut fx.input.run.context, HeldInput::Caller);
+    let before = fx.input.run.context.last_author_sequence;
+    let returned = fx
+        .input
+        .run
+        .context
+        .continue_waiting_content(&mut ports(&mut fx.input.run.clock))
+        .unwrap_err();
+    assert_eq!(returned.reason, RunFailure::PlaceOwned);
+    let event = returned.original.unwrap();
+    assert_eq!(format!("{event:?}"), expected);
+    let Some(Payload::ModelMeasurement(raw)) = &event.payload else {
+        unreachable!()
+    };
+    assert_eq!(raw.get().as_ptr(), pointer);
+    assert!(fx.input.run.context.pending_author().is_none());
+    assert!(fx.input.run.context.waiting_content.is_none());
+    assert!(fx.input.run.context.completed_author.is_none());
+    assert_eq!(fx.input.run.context.last_author_sequence, before);
+    assert!(fx.input.run.context.failure().is_none());
+    held.assert_held(&fx.input.run.context);
+    assert!(fx.input.records(Kind::ModelMeasurement).is_empty());
+}
+
+fn freshness_withdrawal_return(continuation: bool) {
     let mut fx = fixture(100);
     let wait = AbsoluteBound::after(fx.input.run.clock.now().unwrap(), 5).unwrap();
     fx.input
@@ -60,12 +111,21 @@ fn author_failure_freshness_returns_the_previous_callers_original_without_restar
     let waiting = fx.input.run.context.waiting_content.as_ref().unwrap();
     assert_eq!(waiting.withdrawn.as_ref(), Some(&failure));
     assert_eq!(format!("{:?}", waiting.event), original);
-    let returned = fx
-        .input
-        .run
-        .context
-        .resume_author_and_wait(&mut ports(&mut fx.input.run.clock))
-        .unwrap_err();
+    let before = fx.input.run.context.last_author_sequence;
+    // Filing/output/sort use the waiting-content continuation rather than the
+    // generic resume road. Both must return this same withdrawn input.
+    let returned = if continuation {
+        fx.input
+            .run
+            .context
+            .continue_waiting_content(&mut ports(&mut fx.input.run.clock))
+    } else {
+        fx.input
+            .run
+            .context
+            .resume_author_and_wait(&mut ports(&mut fx.input.run.clock))
+    }
+    .unwrap_err();
     assert_eq!(returned.reason, failure);
     let event = returned.original.unwrap();
     assert_eq!(format!("{event:?}"), original);
@@ -76,6 +136,7 @@ fn author_failure_freshness_returns_the_previous_callers_original_without_restar
     assert!(fx.input.run.context.waiting_content.is_none());
     assert!(fx.input.run.context.pending_author().is_none());
     assert!(fx.input.run.context.completed_author.is_none());
+    assert_eq!(fx.input.run.context.last_author_sequence, before);
     assert_eq!(
         fx.input.run.context.deadlines.get(PumpDeadline::Cut),
         Some(cut)

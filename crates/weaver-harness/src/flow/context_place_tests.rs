@@ -607,6 +607,7 @@ const _: fn() = || {
     let _ = <PreparedPrefix as Private<_>>::pin;
     let _ = <PlacementGrant as Private<_>>::pin;
     let _ = <ConfirmedGeneration as Private<_>>::pin;
+    let _ = <crate::flow::journal::AppendReceipt as Private<_>>::pin;
     let _ = <Staged as Private<_>>::pin;
     let _ = <PendingReloadText as Private<_>>::pin;
 };
