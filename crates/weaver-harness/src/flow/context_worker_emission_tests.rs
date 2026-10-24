@@ -147,6 +147,26 @@ fn text(words: &str) -> ContentBlock {
     ContentBlock::Text { text: words.into() }
 }
 pub(in crate::flow::context) fn content(mode: &str) -> Vec<ContentBlock> {
+    if mode.contains("-pairs-") {
+        if mode.ends_with("empty") {
+            return vec![];
+        }
+        let mut blocks = vec![];
+        if mode.contains("mixed") || mode.contains("external") {
+            blocks.push(text("Read file."));
+            blocks.push(ContentBlock::ToolCall(ToolCall {
+                name: "sh".into(),
+                arguments: "opaque original command".into(),
+            }));
+        }
+        blocks.push(text("Recall archive."));
+        blocks.push(text(if mode.contains("identical") {
+            "Recall archive."
+        } else {
+            "Recall ledger."
+        }));
+        return blocks;
+    }
     if mode.ends_with("empty") && !mode.contains("correction") {
         return vec![];
     }
@@ -379,6 +399,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         .place_task("worker-task".into(), CutMethod::Flush)
         .unwrap();
     until(input, member, clock, mode, FoundationInputProgress::Placed);
+    if mode.contains("pairs-held-statement") {
+        member.hold_kind = Some("message.assistant");
+    }
     input.generate().unwrap();
     until(
         input,
@@ -395,6 +418,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     );
     assert_eq!(input.progress(), FoundationInputProgress::Generated);
     let before = std::fs::read(root.join("appended.json")).unwrap();
+    if mode.contains("-pairs-") {
+        return super::execution::tests::exercise(guard, member, reader, clock, socket, root, mode);
+    }
     if mode.contains("correction") {
         return super::correction::tests::exercise(
             guard, member, reader, clock, socket, root, mode,
@@ -769,6 +795,20 @@ pub(super) fn stop(
         }
     }
     guard.management = Some(guard.input.take().unwrap().management().ok().unwrap());
+    if member.hold_control.is_some() {
+        for _ in 0..8 {
+            let management = guard.management.as_mut().unwrap();
+            assert_eq!(
+                management.advance_with_io(&mut CircuitIo(clock)),
+                FoundationManagementProgress::Pending
+            );
+            member.step(clock.now().unwrap(), mode);
+        }
+        assert!(member.held_control.is_some());
+        assert!(read_packet(&peer).is_none());
+        assert!(!root.join("closed.json").exists());
+        member.hold_control = None;
+    }
     if member.hold_kind.is_some() {
         for _ in 0..2000 {
             if member.held_file.is_some() {

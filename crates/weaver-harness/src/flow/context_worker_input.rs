@@ -29,6 +29,11 @@ pub enum FoundationInputProgress {
     CorrectionPlaced,
     Effective,
     Sorted,
+    /// The next selected request has both actual opening receipts. The worker
+    /// must explicitly elect its operation; readiness does not dispatch.
+    PairReady,
+    /// Every conforming request has its actual terminal filing proof.
+    PairsComplete,
     /// An operation refused. Its full account remains with this owner.
     OperationRefused,
     Refused,

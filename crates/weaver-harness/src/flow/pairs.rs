@@ -745,6 +745,29 @@ impl PairLedger {
         Ok(())
     }
 
+    /// Bar only the next fully opened request. Outbound selection does not
+    /// erase omitted calls or bar a selected suffix. Later cancellation may
+    /// still replace this cause until the terminal author owns it.
+    pub(super) fn refuse_dispatch(
+        &mut self,
+        call: &CallId,
+        cause: NonDispatchCause,
+    ) -> Result<(), PairError> {
+        self.live()?;
+        if self.next_ready().map(|ready| &ready.call_id) != Some(call) {
+            return Err(PairError::WrongPhase);
+        }
+        self.entry_mut(call)?.ending = Some(PairEnded {
+            call_id: call.clone(),
+            execution: None,
+            fate: TerminalPairFate::Failed,
+            reason: Some(PairFailure::NotDispatched { cause }),
+            outcome: None,
+            loaded_from: None,
+        });
+        Ok(())
+    }
+
     pub(super) fn set_retry_of(
         &mut self,
         call: &CallId,

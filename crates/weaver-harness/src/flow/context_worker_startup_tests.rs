@@ -222,9 +222,18 @@ pub(super) struct Member {
     pub(super) hold_kind: Option<&'static str>,
     pub(super) filings: Vec<s::StateFrame>,
     pub(super) held_file: Option<s::StateFrame>,
+    pub(super) hold_control: Option<&'static str>,
+    pub(super) held_control: Option<s::StateFrame>,
 }
 impl Member {
     pub(super) fn step(&mut self, now: u64, mode: &str) {
+        if self.hold_control.is_none()
+            && let Some(response) = self.held_control.take()
+        {
+            self.peer
+                .write_all(&s::encode_state_line(&response, s::FrameDirection::Response).unwrap())
+                .unwrap();
+        }
         if !self.hold_mark
             && self.hold_kind.is_none()
             && let Some(response) = self.held_file.take()
@@ -312,9 +321,28 @@ impl Member {
                                     })
                                     .unwrap()
                                 }
+                                s::ReadSelector::History {
+                                    noun,
+                                    verb: None,
+                                    condition: None,
+                                } if mode.contains("-pairs-")
+                                    || mode.ends_with("correction-inward") =>
+                                {
+                                    self.requests.push(format!("recall:{noun}"));
+                                    br#"{ "entries" : { "entries" : [] } }"#.to_vec()
+                                }
                                 _ => panic!("unexpected read {selector:?}"),
                             };
-                            if mode == "prompt-refusal"
+                            if mode.contains("-pairs-read-refused")
+                                && matches!(selector, s::ReadSelector::History { .. })
+                            {
+                                s::StateControlAnswer::ControlRefused {
+                                    code: s::ControlRefusalCode::Read(
+                                        s::ReadRefusalCode::ResultTooLarge,
+                                    ),
+                                    detail: "whole history exceeds the fixture bound".into(),
+                                }
+                            } else if mode == "prompt-refusal"
                                 || (mode.ends_with("read-refusal")
                                     && matches!(selector, s::ReadSelector::Marks {}))
                             {
@@ -367,6 +395,25 @@ impl Member {
                 }
                 _ => panic!("unexpected request {request:?}"),
             };
+            let hold_control = match &request {
+                s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::History { .. },
+                        },
+                    ..
+                } => self.hold_control == Some("read"),
+                s::StateFrame::Control {
+                    frame: s::StateControl::Release { .. },
+                    ..
+                } => self.hold_control == Some("release"),
+                _ => false,
+            };
+            if hold_control {
+                assert!(self.held_control.is_none());
+                self.held_control = Some(response);
+                continue;
+            }
             let hold = match &request {
                 s::StateFrame::File { filing, .. } => (self.hold_mark && filing.source.kind == "state.mark") || self.hold_kind == Some(filing.source.kind.as_str()),
                 s::StateFrame::FilePair { filing, .. } => self.hold_kind == Some(filing.source.kind.as_str()) && (!mode.contains("second-pair") || self.filings.iter().filter(|f| matches!(f, s::StateFrame::FilePair { filing, .. } if filing.source.kind == "tool.call.completed")).count() >= 2),
@@ -533,6 +580,8 @@ fn circuit(mode: &str) {
         hold_kind: None,
         filings: vec![],
         held_file: None,
+        hold_control: None,
+        held_control: None,
     };
     if mode == "worker" || mode.starts_with("input-worker") {
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1409,4 +1458,120 @@ scenario!(
 scenario!(
     worker_correction_composition_actual_worker_fit_refusal,
     "input-worker-generation-emission-correction-actual-worker-fit-refusal"
+);
+
+scenario!(
+    worker_inward_composition_ready,
+    "input-generation-emission-pairs-ready"
+);
+
+scenario!(
+    worker_inward_composition_identical,
+    "input-generation-emission-pairs-identical"
+);
+
+scenario!(
+    worker_inward_composition_reverse,
+    "input-generation-emission-pairs-reverse"
+);
+
+scenario!(
+    worker_inward_composition_empty,
+    "input-generation-emission-pairs-empty"
+);
+
+scenario!(
+    worker_inward_composition_barred,
+    "input-generation-emission-pairs-barred"
+);
+
+scenario!(
+    worker_inward_composition_omit_first,
+    "input-generation-emission-pairs-omit-first"
+);
+
+scenario!(
+    worker_inward_composition_mixed,
+    "input-generation-emission-pairs-mixed"
+);
+
+scenario!(
+    worker_inward_composition_external,
+    "input-generation-emission-pairs-external"
+);
+
+scenario!(
+    worker_inward_composition_held_statement,
+    "input-generation-emission-pairs-held-statement"
+);
+
+scenario!(
+    worker_inward_composition_held_opening,
+    "input-generation-emission-pairs-held-opening"
+);
+
+scenario!(
+    worker_inward_composition_held_read,
+    "input-generation-emission-pairs-held-read"
+);
+scenario!(
+    worker_inward_composition_read_expired,
+    "input-generation-emission-pairs-held-read-expired"
+);
+
+scenario!(
+    worker_inward_composition_held_release,
+    "input-generation-emission-pairs-held-release"
+);
+
+scenario!(
+    worker_inward_composition_held_terminal,
+    "input-generation-emission-pairs-held-terminal"
+);
+
+scenario!(
+    worker_inward_composition_read_refused,
+    "input-generation-emission-pairs-read-refused"
+);
+
+scenario!(
+    worker_inward_composition_stop_begin,
+    "input-generation-emission-pairs-stop-begin"
+);
+
+scenario!(
+    worker_inward_composition_stop_ready,
+    "input-generation-emission-pairs-stop-ready"
+);
+scenario!(
+    worker_inward_composition_stop_plan_break_prefix,
+    "input-generation-emission-pairs-omit-first-stop-ready"
+);
+scenario!(
+    worker_inward_composition_corrected,
+    "input-generation-emission-correction-inward"
+);
+scenario!(
+    worker_inward_composition_stop_elected,
+    "input-generation-emission-pairs-stop-elected"
+);
+
+scenario!(
+    worker_inward_composition_stop_read,
+    "input-generation-emission-pairs-stop-read"
+);
+
+scenario!(
+    worker_inward_composition_stop_terminal,
+    "input-generation-emission-pairs-stop-terminal"
+);
+
+scenario!(
+    worker_inward_composition_stop_complete,
+    "input-generation-emission-pairs-stop-complete"
+);
+
+scenario!(
+    worker_inward_composition_actual_worker,
+    "input-worker-generation-emission-pairs-actual-worker"
 );

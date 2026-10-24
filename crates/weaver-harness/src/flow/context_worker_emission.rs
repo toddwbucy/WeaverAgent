@@ -19,6 +19,10 @@ pub(in crate::flow::context) mod tests;
 pub(super) mod correction;
 use correction::CorrectionWork;
 
+#[path = "context_worker_pairs.rs"]
+pub(super) mod execution;
+use execution::WorkerPairs;
+
 /// A compiled worker choice of restatement family. The actual entered run's
 /// certificate, not this name, proves that the family can be used.
 pub struct FoundationRestatement {
@@ -50,6 +54,7 @@ enum EmissionStage {
     BeginOutbound,
     Outbound,
     Sorted,
+    Execution,
     Refused,
     RefusalAuthor,
     CancelAccount,
@@ -72,6 +77,7 @@ pub(super) struct EmissionWork {
     cancelled_repair: Option<RepairCancelled>,
     outbound: Option<OutboundInput>,
     result: Option<OutboundCompletion>,
+    execution: Option<WorkerPairs>,
     account: Option<RepairAccount>,
     refusal_evidence: Option<crate::flow::context::RepairRefusalEvidence>,
     pending_correction: Option<OriginalRequests>,
@@ -103,6 +109,7 @@ impl EmissionWork {
             cancelled_repair: None,
             outbound: None,
             result: None,
+            execution: None,
             account: None,
             refusal_evidence: None,
             pending_correction: None,
@@ -128,6 +135,7 @@ impl EmissionWork {
             EmissionStage::Correction => self.corrections.last().unwrap().progress(),
             EmissionStage::Effective => FoundationInputProgress::Effective,
             EmissionStage::Sorted => FoundationInputProgress::Sorted,
+            EmissionStage::Execution => self.execution.as_ref().unwrap().progress(),
             EmissionStage::Refused | EmissionStage::Cancelled => {
                 FoundationInputProgress::OperationRefused
             }
@@ -154,7 +162,9 @@ impl EmissionWork {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.cancelled = true;
-        if context.repair.is_some() {
+        if self.stage == EmissionStage::Execution {
+            self.execution.as_mut().unwrap().cancel(context, io)?;
+        } else if context.repair.is_some() {
             context.cancel_repair(NonDispatchCause::Stop, io)?;
             if self.stage == EmissionStage::Correction {
                 self.corrections
@@ -186,6 +196,13 @@ impl EmissionWork {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
         match self.stage {
+            EmissionStage::Execution => {
+                let work = self.execution.as_mut().unwrap();
+                work.advance(&self.selected.as_ref().unwrap().1, context, ports)?;
+                if self.cancelled && work.progress() == FoundationInputProgress::PairsComplete {
+                    self.stage = EmissionStage::Cancelled;
+                }
+            }
             EmissionStage::PlacementRefusal => {
                 let correction = self.corrections.last().unwrap();
                 self.account = Some(correction.finish_refusal(context, ports.io)?);

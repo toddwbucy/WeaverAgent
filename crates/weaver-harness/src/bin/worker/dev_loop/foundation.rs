@@ -68,6 +68,21 @@ pub fn generate_correction(mut input: Box<FoundationInput<'_>>) -> Box<Foundatio
     }
     input
 }
+pub fn pairs(mut input: Box<FoundationInput<'_>>) -> Box<FoundationInput<'_>> {
+    if input.begin_pairs().is_ok() {
+        drive(&mut input);
+    }
+    input
+}
+pub fn recall(
+    mut input: Box<FoundationInput<'_>>,
+    call: weaver_types::state_flow::CallId,
+) -> Box<FoundationInput<'_>> {
+    if input.recall(call).is_ok() {
+        drive(&mut input);
+    }
+    input
+}
 fn drive(input: &mut FoundationInput<'_>) {
     while input.progress() == FoundationInputProgress::Pending {
         input.advance();

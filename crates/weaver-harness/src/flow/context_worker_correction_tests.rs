@@ -420,7 +420,11 @@ pub(in crate::flow::context) fn exercise(
     assert_eq!(view.requests()[0].call_id.call.0, 0);
     assert_ne!(view.requests()[0].statement.block_id, source);
     assert_eq!(view.requests()[0].statement, view.statements()[0]);
-    let acts = selection(view);
+    let corrected_requests = view.requests().to_vec();
+    let mut acts = selection(view);
+    if mode.ends_with("correction-inward") {
+        acts.retain(|act| !matches!(act, SortAct::Tool { .. }));
+    }
     input.sort_outbound(acts).unwrap();
     until(input, member, clock, mode, FoundationInputProgress::Sorted);
     assert_eq!(
@@ -435,8 +439,58 @@ pub(in crate::flow::context) fn exercise(
             .len(),
         count
     );
+    if mode.ends_with("correction-inward") {
+        input.begin_pairs().unwrap();
+        until(
+            input,
+            member,
+            clock,
+            mode,
+            FoundationInputProgress::PairReady,
+        );
+        assert_eq!(input.ready_pair(), Some(&corrected_requests[1]));
+        input.recall(corrected_requests[1].call_id.clone()).unwrap();
+        until(
+            input,
+            member,
+            clock,
+            mode,
+            FoundationInputProgress::PairsComplete,
+        );
+        assert!(
+            input
+                .pair_outcome(&corrected_requests[0].call_id)
+                .unwrap()
+                .outcome
+                .is_none()
+        );
+        assert!(
+            input
+                .pair_outcome(&corrected_requests[1].call_id)
+                .unwrap()
+                .outcome
+                .is_some()
+        );
+    }
     stop(&mut guard, member, clock, mode, socket, root);
     let rows = trace(reader);
+    if mode.ends_with("correction-inward") {
+        let starts: Vec<_> = rows
+            .iter()
+            .filter(|r| r["kind"] == "tool.call.started")
+            .collect();
+        assert_eq!(starts.len(), corrected_requests.len());
+        for (row, request) in starts.iter().zip(corrected_requests) {
+            assert_eq!(
+                row["payload"]["call_id"],
+                serde_json::to_value(request.call_id).unwrap()
+            );
+            assert_eq!(
+                row["payload"]["statement"],
+                serde_json::to_value(request.statement).unwrap()
+            );
+        }
+    }
     let instructions: Vec<_> = rows
         .iter()
         .filter(|r| r["kind"] == "loop.instruction")
