@@ -682,6 +682,13 @@ fn exhausted_repair_accounts_original_call_before_returning_its_refusal() {
                 .is_none()
         );
     }
+    let bound = fx
+        .input
+        .run
+        .context
+        .deadlines
+        .get(PumpDeadline::Decision)
+        .unwrap();
     let mut exhausted = None;
     for _ in 0..512 {
         fx.step(true);
@@ -697,6 +704,11 @@ fn exhausted_repair_accounts_original_call_before_returning_its_refusal() {
     }
     let exhausted = exhausted.expect("original request accounting must finish the cap outcome");
     assert_eq!(exhausted.failed_corrections().0, 2);
+    fx.input
+        .run
+        .clock
+        .advance_to(bound.deadline_ns() + 1)
+        .unwrap();
     let completed = fx
         .input
         .run

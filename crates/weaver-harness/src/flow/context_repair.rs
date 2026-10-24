@@ -240,7 +240,7 @@ fn walk_pair_proofs<'a>(
 pub(super) struct RepairTransaction {
     ledger: RepairLedger,
     certificate: TemplateCertificate,
-    template: &'static RestatementTemplate,
+    template: Option<&'static RestatementTemplate>,
     internal: bool,
     bound: Option<AbsoluteBound>,
     author: Option<RepairAuthor>,
@@ -363,6 +363,31 @@ impl RecordingContext {
         template: &'static RestatementTemplate,
         io: &mut impl PumpIo,
     ) -> Result<(), RepairBeginError> {
+        self.begin_repair_owner(original, certificate, Some(template), false, io)
+    }
+
+    /// Stop may arrive before the loop chooses a restatement family. A complete
+    /// checked emission still owes refusal and pair accounting. This owner starts
+    /// cancelled and has no instruction family or successful emission path.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn begin_stopped_emission(
+        &mut self,
+        original: OriginalRequests,
+        certificate: TemplateCertificate,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RepairBeginError> {
+        self.begin_repair_owner(original, certificate, None, true, io)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn begin_repair_owner(
+        &mut self,
+        original: OriginalRequests,
+        certificate: TemplateCertificate,
+        template: Option<&'static RestatementTemplate>,
+        stopped: bool,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RepairBeginError> {
         if let Err(failure) = self.live(io) {
             return Err(RepairBeginError {
                 original,
@@ -414,7 +439,7 @@ impl RecordingContext {
             None
         };
         if let Some(refusal) = refusal {
-            let instruction_refusal = (refusal == RepairBeginRefusal::Certificate).then(|| RefusalRecord::Instruction {
+            let instruction_refusal = (refusal == RepairBeginRefusal::Certificate).then_some(template).flatten().map(|template| RefusalRecord::Instruction {
                 template_id: template.template_id().into(), case: weaver_types::state_flow::InstructionRefusal::InvalidContext,
                 detail: "restatement certificate differs from this run's recorded load and acceptance transcript".into(),
             });
@@ -428,17 +453,18 @@ impl RecordingContext {
         }
         // Validate the compiled family before transferring the original. The
         // expansion itself is created anew only when its instruction is owed.
-        if template
-            .expand(
-                &certificate,
-                ExpansionIdentity {
-                    run_id: certificate.run_id(),
-                    scheme: certificate.scheme(),
-                    checker_artifact_sha256: certificate.checker_artifact_sha256(),
-                    inventory_sha256: certificate.inventory_sha256(),
-                },
-            )
-            .is_err()
+        if let Some(template) = template
+            && template
+                .expand(
+                    &certificate,
+                    ExpansionIdentity {
+                        run_id: certificate.run_id(),
+                        scheme: certificate.scheme(),
+                        checker_artifact_sha256: certificate.checker_artifact_sha256(),
+                        inventory_sha256: certificate.inventory_sha256(),
+                    },
+                )
+                .is_err()
         {
             return Err(RepairBeginError {
                 original,
@@ -459,7 +485,7 @@ impl RecordingContext {
             .instruction
             .repair_cap
             .attempts;
-        let ledger = match RepairLedger::begin(original, cap) {
+        let mut ledger = match RepairLedger::begin(original, cap) {
             Ok(ledger) => ledger,
             Err((original, _)) => {
                 return Err(RepairBeginError {
@@ -471,6 +497,9 @@ impl RecordingContext {
                 });
             }
         };
+        if stopped {
+            ledger.cancel();
+        }
         self.repair = Some(RepairTransaction {
             ledger,
             certificate,
@@ -496,7 +525,7 @@ impl RecordingContext {
             rejection: None,
             refusal_record: None,
             refusal_source: None,
-            cancel: None,
+            cancel: stopped.then_some(NonDispatchCause::Stop),
             cancelled: None,
             incomplete_output: None,
         });
@@ -856,19 +885,26 @@ impl RecordingContext {
             RepairIntent::Instruction { source, attempt } => {
                 self.ensure_repair_wait(ports.io)?;
                 let work = self.repair.as_ref().unwrap();
-                let expanded = match work.template.expand(
-                    &work.certificate,
-                    ExpansionIdentity {
-                        run_id: work.certificate.run_id(),
-                        scheme: work.certificate.scheme(),
-                        checker_artifact_sha256: work.certificate.checker_artifact_sha256(),
-                        inventory_sha256: work.certificate.inventory_sha256(),
-                    },
-                ) {
+                let expanded = match work
+                    .template
+                    .expect("live repair has a compiled family")
+                    .expand(
+                        &work.certificate,
+                        ExpansionIdentity {
+                            run_id: work.certificate.run_id(),
+                            scheme: work.certificate.scheme(),
+                            checker_artifact_sha256: work.certificate.checker_artifact_sha256(),
+                            inventory_sha256: work.certificate.inventory_sha256(),
+                        },
+                    ) {
                     Ok(expanded) => expanded,
                     Err(error) => {
                         let refusal = RefusalRecord::Instruction {
-                            template_id: work.template.template_id().into(),
+                            template_id: work
+                                .template
+                                .expect("live repair has a compiled family")
+                                .template_id()
+                                .into(),
                             case: weaver_types::state_flow::InstructionRefusal::InvalidTemplate,
                             detail: format!("certified restatement expansion refused: {error:?}"),
                         };
@@ -1307,7 +1343,7 @@ impl RecordingContext {
                 && matches!(check.reply().result, Ste100Result::NotSte100 { .. })
             {
                 let account = serde_json::value::to_raw_value(&serde_json::json!({
-                    "template_id": self.repair.as_ref().unwrap().template.template_id(),
+                    "template_id": self.repair.as_ref().unwrap().template.expect("instruction has a compiled family").template_id(),
                     "source_id": check.instruction().block_id,
                     "result_source": check.source(), "result": check.reply(),
                 }))

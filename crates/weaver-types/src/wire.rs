@@ -517,6 +517,16 @@ pub struct Composer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LifecycleRefusal {
+    #[serde(deserialize_with = "deserialize_state_management_refusal")]
+    StateManagementInvalid {
+        stage: crate::state_flow::StateManagementStage,
+        code: crate::state_flow::StateManagementCode,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rule_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        detail: String,
+    },
     #[serde(deserialize_with = "deserialize_persistence_refusal")]
     StatePersistenceInvalid {
         stage: crate::state_flow::PersistenceStage,
@@ -577,6 +587,63 @@ pub enum LifecycleRefusal {
     /// gate with its connection standing (`weaver-admin-Spec` section 3, S4 x
     /// dialer request).
     Unloading,
+}
+
+type StateManagementRefusalFields = (
+    crate::state_flow::StateManagementStage,
+    crate::state_flow::StateManagementCode,
+    Option<String>,
+    Option<String>,
+    String,
+);
+
+// The same validated variant decoder runs inside recursive OrganRefused and
+// every Payload/OrganEnvelope, rather than relying on callers to revalidate.
+fn deserialize_state_management_refusal<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<StateManagementRefusalFields, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Fields {
+        #[serde(deserialize_with = "string_code")]
+        stage: crate::state_flow::StateManagementStage,
+        #[serde(deserialize_with = "string_code")]
+        code: crate::state_flow::StateManagementCode,
+        rule_id: Option<String>,
+        path: Option<String>,
+        detail: String,
+    }
+    fn string_code<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        let code = String::deserialize(deserializer)?;
+        T::deserialize(serde::de::value::StringDeserializer::<D::Error>::new(code))
+    }
+    struct Object;
+    impl<'de> serde::de::Visitor<'de> for Object {
+        type Value = Fields;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a state-management refusal object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Fields, A::Error> {
+            Fields::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    let fields = deserializer.deserialize_map(Object)?;
+    if !fields.code.permits_stage(fields.stage) {
+        return Err(serde::de::Error::custom(
+            "state-management code is invalid at this stage",
+        ));
+    }
+    Ok((
+        fields.stage,
+        fields.code,
+        fields.rule_id,
+        fields.path,
+        fields.detail,
+    ))
 }
 
 // The custom decoder belongs to this variant. It also runs when OrganRefused

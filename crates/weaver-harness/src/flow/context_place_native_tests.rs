@@ -2187,3 +2187,6 @@ mod return_review_tests;
 
 #[path = "context_place_drain_review_tests.rs"]
 mod drain_review_tests;
+
+#[path = "context_place_capability_review_tests.rs"]
+mod capability_review_tests;

@@ -17,7 +17,8 @@ use weaver_types::state_flow::{
 };
 
 use super::admission::{
-    AdapterAdmission, AdmissionIdentity, CheckBackend, ValidatedBootstrap, admit_from_path,
+    AdapterAdmission, AdmissionIdentity, Admitted, CheckBackend, ValidatedBootstrap,
+    admit_from_path,
 };
 use super::channel::Channel;
 pub(super) use super::dispatcher::Fault;
@@ -77,6 +78,14 @@ impl Drop for Notify {
     }
 }
 
+/// Fields drop in declaration order. Keep Notify first: disconnect and wake the
+/// reactor before an admitted backend destructor can block, on return or unwind.
+/// This ordering belongs to one owner and survives moving it through a helper.
+struct WorkerState<B> {
+    notify: Notify,
+    owner: Option<Admitted<B>>,
+}
+
 struct Worker {
     commands: SyncSender<Ste100Request>,
     completions: Receiver<Completion>,
@@ -98,12 +107,12 @@ impl Worker {
         let thread = thread::Builder::new()
             .name("weaver-ste100-check".into())
             .spawn(move || {
-                // Declare the admitted owner first: on check unwind Notify must
-                // disconnect and wake before a backend destructor can block.
-                let mut owner;
-                let mut notify = Notify {
-                    wake: wake_worker,
-                    completed: Some(completed),
+                let mut state = WorkerState {
+                    notify: Notify {
+                        wake: wake_worker,
+                        completed: Some(completed),
+                    },
+                    owner: None,
                 };
                 // B need not be Send: construction, every operation, and destruction
                 // all happen here. Admission owns exact file bytes throughout use.
@@ -114,19 +123,20 @@ impl Worker {
                         super::admission::admit_from_path_fixture(bootstrap, &adapter)
                     }
                 };
-                owner = match admission {
-                    Ok(owner) => owner,
+                state.owner = match admission {
+                    Ok(owner) => Some(owner),
                     Err(refusal) => {
-                        notify.send(Completion::Refused(refusal));
+                        state.notify.send(Completion::Refused(refusal));
                         return;
                     }
                 };
-                if !notify.send(Completion::Admitted(Box::new(owner.identity()))) {
+                let identity = state.owner.as_ref().unwrap().identity();
+                if !state.notify.send(Completion::Admitted(Box::new(identity))) {
                     return;
                 }
                 while let Ok(request) = work.recv() {
-                    let result = owner.check(&request);
-                    if !notify.send(Completion::Checked(result)) {
+                    let result = state.owner.as_mut().unwrap().check(&request);
+                    if !state.notify.send(Completion::Checked(result)) {
                         return;
                     }
                 }

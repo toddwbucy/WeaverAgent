@@ -80,6 +80,8 @@ impl PlaceFixture {
                         listener: None,
                         peer: Some(&mut admin),
                         residency: None,
+                        dial: None,
+                        leave_peer: None,
                     },
                     gate: None,
                     decode: Some(&mut self.decode),

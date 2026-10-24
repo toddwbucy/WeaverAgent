@@ -75,7 +75,7 @@ pub(super) struct PlaceEngine {
     pub schemas: Vec<String>,
     pub outstanding: Option<Arc<()>>,
     pub staged: Option<Arc<()>>,
-    pub native: super::context::NativeScopes,
+    pub native: Arc<super::context::NativeScopes>,
 }
 impl PlaceEngine {
     pub(super) fn limits(&self) -> (u64, u64, u64, u64) {

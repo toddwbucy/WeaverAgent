@@ -16,6 +16,7 @@ mod input;
 mod intake;
 mod journal;
 mod ledger;
+mod lifecycle_refusal;
 mod marks;
 mod material;
 mod mirror;

@@ -135,7 +135,9 @@ pub(in crate::flow) struct NativeMarkTransaction {
     registered: Vec<t::MarkPosition>,
     recorded: Vec<Sequence>,
     prerequisite: Arc<EffectPlanSummary>,
-    next: Option<NativeScopes>,
+    // The exact proposal remains with this owner even after engine adoption.
+    // Later engine edits use copy-on-write and cannot rewrite account evidence.
+    next: Arc<NativeScopes>,
 }
 
 fn current(read: &RecordedRead) -> Option<&s::PlanSnapshot> {
@@ -323,7 +325,7 @@ impl RecordingContext {
         let key = prerequisite.filing().wait_key();
         let prerequisite = Arc::new(prerequisite);
         let authority = Arc::new(NativeAuthority::Effect(prerequisite.clone()));
-        let mut next = engine.native.clone();
+        let mut next = engine.native.as_ref().clone();
         next.summary = prerequisite.summary().cloned();
         next.active = expected
             .into_iter()
@@ -390,7 +392,7 @@ impl RecordingContext {
             registered: vec![],
             recorded: vec![],
             prerequisite,
-            next: Some(next),
+            next: Arc::new(next),
         });
         Ok(())
     }
@@ -431,14 +433,11 @@ impl RecordingContext {
             return Ok(PlaceProgress::Progress);
         }
         let work = self.native_marks.as_mut().unwrap();
-        // All admitted positions have actual Recorded receipts. Entered adopts
-        // the owned proposal once. Only cancelled-account extraction later
-        // copies it for evidence; ordinary success needs no metadata clone.
+        // All admitted positions have actual Recorded receipts. The engine and
+        // owner share that exact immutable proposal, without cloning metadata or
+        // reconstructing a cancelled account from a later engine snapshot.
         if self.phase == RecordingPhase::Entered {
-            self.place_engine.as_mut().unwrap().native = work
-                .next
-                .take()
-                .expect("unsettled native work retains its proposal");
+            self.place_engine.as_mut().unwrap().native = Arc::clone(&work.next);
         }
         work.done = true;
         Ok(PlaceProgress::Complete)
@@ -486,11 +485,11 @@ impl RecordingContext {
             None,
         );
         let work = self.native_marks.as_mut().unwrap();
-        if let Some(next) = work.next.as_mut()
-            && next
-                .prompt
-                .as_ref()
-                .is_some_and(|license| license.span == *position.span())
+        let next = Arc::make_mut(&mut work.next);
+        if next
+            .prompt
+            .as_ref()
+            .is_some_and(|license| license.span == *position.span())
         {
             next.registered_prompt = Some((
                 position.span().clone(),
@@ -532,20 +531,7 @@ impl RecordingContext {
     }
 
     pub(super) fn take_native_account_work(&mut self) -> Option<NativeMarkTransaction> {
-        let mut work = self.native_marks.take()?;
-        if work.next.is_none() {
-            // No competing placement can change this engine while native work
-            // still owns the slot. The missing proposal was moved here at its
-            // actual Entered completion, before a later Stop/teardown.
-            work.next = Some(
-                self.place_engine
-                    .as_ref()
-                    .expect("native work retains its engine")
-                    .native
-                    .clone(),
-            );
-        }
-        Some(work)
+        self.native_marks.take()
     }
 
     /// A settled cancellation can leave Entered without resetting its original
@@ -589,7 +575,7 @@ impl RecordingContext {
         if !self.native_place_cache_ready() {
             return Err(PlaceError::WrongProof);
         }
-        let mut native = self.place_engine.as_ref().unwrap().native.clone();
+        let mut native = self.place_engine.as_ref().unwrap().native.as_ref().clone();
         for unit in &grant.units {
             let Some(task) = unit.task() else {
                 continue;
@@ -656,7 +642,7 @@ impl RecordingContext {
         self.place_engine
             .as_mut()
             .ok_or("native position lacks boot")?
-            .native = native;
+            .native = Arc::new(native);
         let end = self
             .boot_journal
             .as_ref()
@@ -666,16 +652,14 @@ impl RecordingContext {
             .place_engine
             .as_mut()
             .ok_or("native position lacks boot")?;
-        for scope in &mut engine.native.active {
+        let native = Arc::make_mut(&mut engine.native);
+        for scope in &mut native.active {
             scope.end = Some(end.clone());
         }
-        let Some(license) = engine.native.prompt.as_ref() else {
+        let Some(license) = native.prompt.as_ref() else {
             return Ok(vec![]);
         };
-        if engine
-            .native
-            .prompt_registered(self.boot_journal.as_ref().unwrap(), &license.span)
-        {
+        if native.prompt_registered(self.boot_journal.as_ref().unwrap(), &license.span) {
             return Ok(vec![]);
         }
         let Some((source, text)) =
@@ -704,7 +688,7 @@ impl RecordingContext {
             .unwrap()
             .native_mark(&position)
             .map_err(|_| "native prompt position is invalid")?;
-        engine.native.registered_prompt = Some((
+        native.registered_prompt = Some((
             license.span.clone(),
             record.id.run.clone(),
             record.id.ordinal.0,
@@ -783,7 +767,7 @@ impl PlaceAccount {
     }
     pub(in crate::flow) fn native_proposal(&self) -> Option<&NativeScopes> {
         match &self.work {
-            AccountWork::Native(work) => work.next.as_ref(),
+            AccountWork::Native(work) => Some(work.next.as_ref()),
             _ => None,
         }
     }

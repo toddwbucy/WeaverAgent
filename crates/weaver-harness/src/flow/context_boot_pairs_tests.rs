@@ -987,7 +987,7 @@ fn boot_pairs_recorded_terminal_transfer_never_yields_without_its_receipt_owner(
         run.context
             .advance_boot_pairs(&mut ports(&mut clock))
             .unwrap(),
-        BootPairsProgress::Pending
+        BootPairsProgress::Progress
     );
     let samples = usize::MAX - clock.remaining;
     assert!(samples > 0);
@@ -1018,7 +1018,7 @@ fn boot_pairs_recorded_terminal_transfer_never_yields_without_its_receipt_owner(
                 retained = true;
             }
             Ok(progress) => {
-                assert_eq!(progress, BootPairsProgress::Pending);
+                assert_eq!(progress, BootPairsProgress::Progress);
                 assert!(run.context.filing.is_none());
                 transferred = true;
             }
