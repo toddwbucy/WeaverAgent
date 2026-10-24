@@ -62,8 +62,9 @@ not an empty-history success. No gate tool schema or tool clock is introduced.
 Stop before read admission removes that election and accounts every request.
 During an admitted read, the same owner drains and releases it, retaining its
 actual result before the terminal. The suffix is barred. All terminal commits
-precede the outer Stop close; the prior plan_break or completed prefix keeps its
-original fate. Deadline expiry retains the failed read and pair owners and grants
+precede the outer Stop close; the instrumented prefix whose terminal was Filed
+before Stop keeps its original fate. Stop may replace an unclaimed plan_break
+terminal under Spec 05's existing precedence. Deadline expiry retains the failed read and pair owners and grants
 no PairsComplete. This is a failed handoff, not completed failed-run teardown.
 
 After every terminal commits, the original EffectiveEmission returns to the

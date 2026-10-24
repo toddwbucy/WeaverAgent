@@ -512,6 +512,7 @@ impl RecordingContext {
                     grant,
                     received,
                     output: None,
+                    append_receipt: None,
                 };
                 let result = self
                     .boot_journal
@@ -519,9 +520,16 @@ impl RecordingContext {
                     .unwrap()
                     .complete_generation(&proof);
                 self.generation.as_mut().unwrap().confirmed = Some(proof);
-                result.map_err(|e| {
+                let receipt = result.map_err(|e| {
                     self.place_fault(io, format!("generation journal confirmation: {e:?}"))
                 })?;
+                self.generation
+                    .as_mut()
+                    .unwrap()
+                    .confirmed
+                    .as_mut()
+                    .unwrap()
+                    .append_receipt = Some(receipt);
                 let proof = self
                     .generation
                     .as_ref()

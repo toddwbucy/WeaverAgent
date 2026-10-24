@@ -27,6 +27,8 @@ pub(super) enum PairError {
     WrongScheme,
     Busy,
     UnknownCall,
+    NotReady,
+    AlreadyDelivered,
     WrongPhase,
     DuplicateCall,
     DuplicateSource,
@@ -220,12 +222,24 @@ struct Batch {
     cause: Option<NonDispatchCause>,
 }
 
+struct RetainedPair {
+    pair: Arc<CompletedPair>,
+    result_record: Option<weaver_trace::Sequence>,
+    delivered: Option<weaver_trace::Sequence>,
+}
+impl std::ops::Deref for RetainedPair {
+    type Target = CompletedPair;
+    fn deref(&self) -> &CompletedPair {
+        &self.pair
+    }
+}
+
 pub(super) struct PairLedger {
     session: String,
     run: String,
     scheme: SchemeDeclaration,
     active: Option<Batch>,
-    closed: Vec<Arc<CompletedPair>>,
+    closed: Vec<RetainedPair>,
     frozen: bool,
     gate_failed: bool,
     rejected: Option<RejectedGateReturn>,
@@ -784,7 +798,7 @@ impl PairLedger {
             .into_iter()
             .flat_map(|batch| &batch.entries)
             .filter_map(|entry| entry.completed.as_ref())
-            .chain(self.closed.iter().map(Arc::as_ref))
+            .chain(self.closed.iter().map(|pair| pair.pair.as_ref()))
             .find(|pair| &pair.started.call_id == predecessor)
             .ok_or(PairError::InvalidLineage)?;
         if entry.opening_authoring
@@ -1313,7 +1327,7 @@ impl PairLedger {
         self.closed
             .iter()
             .find(|pair| &pair.started.call_id == call)
-            .map(|pair| Some(pair.as_ref()))
+            .map(|pair| Some(pair.pair.as_ref()))
             .ok_or(PairError::UnknownCall)
     }
 
@@ -1365,12 +1379,12 @@ impl PairLedger {
             return Err(PairError::WrongPhase);
         }
         let batch = self.active.take().unwrap();
-        self.closed.extend(
-            batch
-                .entries
-                .into_iter()
-                .map(|entry| Arc::new(entry.completed.unwrap())),
-        );
+        self.closed
+            .extend(batch.entries.into_iter().map(|entry| RetainedPair {
+                pair: Arc::new(entry.completed.unwrap()),
+                result_record: None,
+                delivered: None,
+            }));
         Ok(batch.proof)
     }
 
@@ -1583,7 +1597,85 @@ impl PairLedger {
     pub(super) fn closed_for_material(&self, call: &CallId) -> Option<Arc<CompletedPair>> {
         self.closed
             .iter()
+            .find(|p| &p.started.call_id == call && p.delivered.is_none())
+            .map(|p| Arc::clone(&p.pair))
+    }
+
+    /// The complete grant is borrowed. Delivery changes no terminal evidence.
+    pub(super) fn take_result(&self, call: &CallId) -> Result<&CompletedPair, PairError> {
+        self.live()?;
+        if let Some(pair) = self.closed.iter().find(|p| &p.started.call_id == call) {
+            if pair.delivered.is_some() {
+                return Err(PairError::AlreadyDelivered);
+            }
+            return Ok(&pair.pair);
+        }
+        self.completed(call)?.ok_or(PairError::NotReady)
+    }
+
+    pub(super) fn result_record(
+        &self,
+        pair: &CompletedPair,
+    ) -> Result<Option<weaver_trace::Sequence>, PairError> {
+        let retained = self
+            .closed
+            .iter()
+            .find(|p| std::ptr::eq(p.pair.as_ref(), pair))
+            .ok_or(PairError::WrongReceipt)?;
+        if retained.delivered.is_some() {
+            return Err(PairError::AlreadyDelivered);
+        }
+        Ok(retained.result_record)
+    }
+
+    pub(super) fn record_result(
+        &mut self,
+        call: &CallId,
+        sequence: weaver_trace::Sequence,
+    ) -> Result<(), PairError> {
+        let pair = self
+            .closed
+            .iter_mut()
             .find(|p| &p.started.call_id == call)
-            .cloned()
+            .ok_or(PairError::UnknownCall)?;
+        if pair.delivered.is_some() || pair.result_record.is_some_and(|old| old != sequence) {
+            return Err(PairError::WrongReceipt);
+        }
+        pair.result_record = Some(sequence);
+        Ok(())
+    }
+
+    pub(super) fn acknowledge_delivery(
+        &mut self,
+        call: &CallId,
+        proof: &crate::flow::place::ConfirmedGeneration,
+    ) -> Result<(), PairError> {
+        let pair = self
+            .closed
+            .iter_mut()
+            .find(|p| &p.started.call_id == call)
+            .ok_or(PairError::UnknownCall)?;
+        if pair.delivered.is_some() {
+            return Err(PairError::AlreadyDelivered);
+        }
+        if pair.result_record.is_none()
+            || !proof
+                .append_receipt
+                .as_ref()
+                .is_some_and(|receipt| receipt.matches(&proof.grant.pending))
+            || !proof.grant.units.iter().any(|unit| {
+                unit.completed_pair()
+                    .is_some_and(|p| std::ptr::eq(p, pair.pair.as_ref()))
+                    && unit
+                        .sources()
+                        .contains(&weaver_types::state_flow::MaterialRef::Returned {
+                            call_id: call.clone(),
+                        })
+            })
+        {
+            return Err(PairError::WrongReceipt);
+        }
+        pair.delivered = Some(proof.placement_sequence());
+        Ok(())
     }
 }

@@ -473,6 +473,7 @@ impl RecordingContext {
             // Retire only the exact priority owner whose author was resumed.
             // A queued cut can coexist with an earlier owner's owed records.
             if self.place.as_ref().is_some_and(|w| w.author.is_some()) {
+                self.retain_place_return_record(ports.io)?;
                 let w = self.place.as_mut().unwrap();
                 w.author = None;
                 w.done = true;

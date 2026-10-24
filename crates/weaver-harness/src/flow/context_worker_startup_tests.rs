@@ -333,7 +333,7 @@ impl Member {
                                 }
                                 _ => panic!("unexpected read {selector:?}"),
                             };
-                            if mode.contains("-pairs-read-refused")
+                            if (mode.contains("-pairs-") && mode.contains("read-refused"))
                                 && matches!(selector, s::ReadSelector::History { .. })
                             {
                                 s::StateControlAnswer::ControlRefused {
@@ -1574,4 +1574,64 @@ scenario!(
 scenario!(
     worker_inward_composition_actual_worker,
     "input-worker-generation-emission-pairs-actual-worker"
+);
+
+scenario!(
+    worker_return_composition_ready,
+    "input-generation-emission-pairs-return-ready"
+);
+
+scenario!(
+    worker_return_composition_identical,
+    "input-generation-emission-pairs-return-identical"
+);
+
+scenario!(
+    worker_return_composition_reverse,
+    "input-generation-emission-pairs-return-reverse"
+);
+
+scenario!(
+    worker_return_composition_barred,
+    "input-generation-emission-pairs-return-barred"
+);
+
+scenario!(
+    worker_return_composition_read_refused,
+    "input-generation-emission-pairs-return-read-refused"
+);
+
+scenario!(
+    worker_return_composition_subset,
+    "input-generation-emission-pairs-return-subset"
+);
+
+scenario!(
+    worker_return_composition_fit_refusal,
+    "input-generation-emission-pairs-return-fit-refusal"
+);
+
+scenario!(
+    worker_return_composition_stop_election,
+    "input-generation-emission-pairs-return-stop-election"
+);
+
+scenario!(
+    worker_return_composition_stop_placed,
+    "input-generation-emission-pairs-return-stop-placed"
+);
+
+scenario!(
+    worker_return_composition_stop_generating,
+    "input-generation-emission-pairs-return-stop-generating"
+);
+
+scenario!(
+    worker_return_composition_stop_generated,
+    "input-generation-emission-pairs-return-stop-generated"
+);
+
+scenario!(
+    worker_return_composition_actual_worker,
+    "input-worker-generation-emission-pairs-return-actual-worker"
 );

@@ -15,6 +15,10 @@ use weaver_types::state_flow::{CutMethod, PlacementContext};
 #[path = "context_worker_generation_tests.rs"]
 pub(in crate::flow::context) mod tests;
 
+#[cfg(test)]
+#[path = "context_worker_return_tests.rs"]
+pub(in crate::flow::context) mod return_tests;
+
 #[path = "context_worker_emission.rs"]
 pub(crate) mod emission;
 
@@ -45,6 +49,15 @@ pub(super) struct EngineWork {
     generation: Option<GenerationCompletion>,
     detail: Option<String>,
     emission: Option<Box<emission::EmissionWork>>,
+    return_calls: Vec<weaver_types::state_flow::CallId>,
+    return_units: Option<Vec<crate::flow::material::SelectedUnit>>,
+    rounds: Vec<RetainedRound>,
+}
+// A later model pass does not discard the decoder, repair, sort and pair
+// evidence of its predecessor. The service owner retains the whole chain.
+struct RetainedRound {
+    _generation: Option<GenerationCompletion>,
+    _emission: Option<Box<emission::EmissionWork>>,
 }
 impl EngineWork {
     pub(super) fn progress(&self) -> FoundationInputProgress {
@@ -80,6 +93,9 @@ impl<'a> FoundationInput<'a> {
             generation: None,
             detail: None,
             emission: None,
+            return_calls: vec![],
+            return_units: None,
+            rounds: vec![],
         }));
         Ok(())
     }
@@ -104,6 +120,43 @@ impl<'a> FoundationInput<'a> {
             return Err(self.progress());
         }
         self.engine.as_mut().unwrap().stage = EngineStage::StartGeneration;
+        Ok(())
+    }
+
+    /// Select complete retained results for the next pass. This chooses no
+    /// call, workflow or final answer, and generates nothing until generate().
+    /// The no-cut placement still requires each original request and statement.
+    pub fn place_results(
+        &mut self,
+        calls: Vec<weaver_types::state_flow::CallId>,
+        label: String,
+        method: CutMethod,
+    ) -> Result<(), Vec<weaver_types::state_flow::CallId>> {
+        if self.progress() != FoundationInputProgress::PairsComplete
+            || calls.is_empty()
+            || label.is_empty()
+        {
+            return Err(calls);
+        }
+        let mut units = vec![];
+        for (index, call) in calls.iter().enumerate() {
+            if calls[..index].contains(call) {
+                return Err(calls);
+            }
+            let Ok(unit) = self.serving.owner.context.hold_place_return(call) else {
+                return Err(calls);
+            };
+            units.push(unit);
+        }
+        let work = self.engine.as_mut().unwrap();
+        work.rounds.push(RetainedRound {
+            _generation: work.generation.take(),
+            _emission: work.emission.take(),
+        });
+        work.return_calls = calls;
+        work.selection = Some((label, method));
+        work.return_units = Some(units);
+        work.stage = EngineStage::Prepare;
         Ok(())
     }
 
@@ -217,7 +270,8 @@ impl<'a> FoundationInput<'a> {
             }
             EngineStage::Prepare => {
                 decision(context, ports.io)?;
-                if work.material.is_none() && work.request.is_none() {
+                if work.return_calls.is_empty() && work.material.is_none() && work.request.is_none()
+                {
                     let Some(TaskCompletion::Begun(task)) = work.task.take() else {
                         unreachable!("only a begun task grants selection")
                     };
@@ -237,12 +291,27 @@ impl<'a> FoundationInput<'a> {
                 }
                 if work.request.is_none() {
                     let (label, method) = work.selection.as_ref().unwrap();
-                    let prefix = context
-                        .prepare_prefix(None, *method, ports.io)
-                        .map_err(|e| fault(context, ports.io, format!("task prefix: {e:?}")))?;
+                    let prefix = match context.prepare_prefix(None, *method, ports.io) {
+                        Ok(prefix) => prefix,
+                        Err(PlaceError::Busy(_)) => {
+                            context.pump_once(&mut ports)?;
+                            return Ok(());
+                        }
+                        Err(error) => {
+                            return Err(fault(
+                                context,
+                                ports.io,
+                                format!("worker prefix: {error:?}"),
+                            ));
+                        }
+                    };
                     work.request = Some(PlaceRequest {
                         prefix,
-                        selection: work.material.take().unwrap().into_units(),
+                        selection: if work.return_calls.is_empty() {
+                            work.material.take().unwrap().into_units()
+                        } else {
+                            work.return_units.take().unwrap()
+                        },
                         tool_schemas: context.loaded_place_schemas().unwrap().to_vec(),
                         context: PlacementContext {
                             label: label.clone(),
@@ -287,6 +356,7 @@ impl<'a> FoundationInput<'a> {
                 }
             }
             EngineStage::StartGeneration => {
+                decision(context, ports.io)?;
                 let Some(PlacementCompletion::Granted(grant)) = work.placement.take() else {
                     unreachable!("only the retained private grant starts generation")
                 };
@@ -315,12 +385,27 @@ impl<'a> FoundationInput<'a> {
             EngineStage::Generation => {
                 let progress = context.advance_generation(&mut ports)?;
                 if let Some(done) = context.take_placed_generation(ports.io)? {
+                    let proof = match &done {
+                        GenerationCompletion::Generated(proof) => Some(proof.as_ref()),
+                        GenerationCompletion::Cancelled(account)
+                        | GenerationCompletion::Refused(account) => account.confirmed_generation(),
+                    };
+                    let acknowledgement = if let Some(proof) = proof {
+                        work.return_calls
+                            .iter()
+                            .try_for_each(|call| context.acknowledge_delivery(call, proof))
+                    } else {
+                        Ok(())
+                    };
                     work.stage = match &done {
                         GenerationCompletion::Generated(_) => EngineStage::Generated,
                         GenerationCompletion::Refused(_) => EngineStage::Refused,
                         GenerationCompletion::Cancelled(_) => EngineStage::Cancelled,
                     };
                     work.generation = Some(done);
+                    acknowledgement.map_err(|e| {
+                        fault(context, ports.io, format!("worker result delivery: {e:?}"))
+                    })?;
                 } else if progress == crate::flow::context::PlaceProgress::Pending {
                     context.pump_once(&mut ports)?;
                 }

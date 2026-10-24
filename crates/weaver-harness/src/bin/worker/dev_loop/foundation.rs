@@ -31,6 +31,17 @@ pub fn generate(mut input: Box<FoundationInput<'_>>) -> Box<FoundationInput<'_>>
     }
     input
 }
+pub fn place_results(
+    mut input: Box<FoundationInput<'_>>,
+    calls: Vec<weaver_types::state_flow::CallId>,
+    label: String,
+    method: weaver_types::state_flow::CutMethod,
+) -> Box<FoundationInput<'_>> {
+    if input.place_results(calls, label, method).is_ok() {
+        drive(&mut input);
+    }
+    input
+}
 pub fn repair<'a>(
     mut input: Box<FoundationInput<'a>>,
     family: &'static weaver_harness::FoundationRestatement,

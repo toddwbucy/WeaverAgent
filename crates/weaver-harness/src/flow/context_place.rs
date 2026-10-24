@@ -365,6 +365,8 @@ pub(super) struct PlaceTransaction {
     close_on_refusal: bool,
     account_deadline: Option<u64>,
     selected_count: usize,
+    return_author: Option<weaver_types::state_flow::CallId>,
+    placement_after_returns: Option<AuthoredEvent>,
 }
 #[derive(Debug)]
 pub(super) struct GenerationTransaction {
@@ -515,6 +517,9 @@ impl RecordingContext {
         if self.place_engine.is_none() {
             return Err(PlaceError::WrongProof);
         }
+        self.pairs
+            .take_result(call)
+            .map_err(|_| PlaceError::WrongProof)?;
         let pair = self
             .pairs
             .closed_for_material(call)
@@ -721,7 +726,13 @@ impl RecordingContext {
         if journal.check_projection(&prefix.projection).is_err() {
             return Err(PlaceError::Stale);
         }
-        if schemas != engine.schemas || units.iter().any(|u| !u.belongs_to(self)) {
+        if schemas != engine.schemas
+            || units.iter().any(|u| {
+                !u.belongs_to(self)
+                    || u.completed_pair()
+                        .is_some_and(|p| self.pairs.result_record(p).is_err())
+            })
+        {
             return Err(PlaceError::InvalidUnits);
         }
         journal
@@ -843,6 +854,26 @@ impl RecordingContext {
                 staged,
             });
         }
+        // A previously minted selection is still a live grant, not permission
+        // to redeliver a result acknowledged by a later completed append.
+        if request
+            .selection
+            .iter()
+            .chain(staged.iter().flat_map(|s| s.units.iter().map(Arc::as_ref)))
+            .any(|unit| {
+                !unit.belongs_to(self)
+                    || unit
+                        .completed_pair()
+                        .is_some_and(|pair| self.pairs.result_record(pair).is_err())
+            })
+        {
+            return Err(PlaceBeginError {
+                input: request,
+                refusal: PlaceError::InvalidUnits,
+                failure: None,
+                staged,
+            });
+        }
         let bound = self.deadlines.get(PumpDeadline::Decision).unwrap();
         let selected_count = request.selection.len();
         let mut units: Vec<_> = std::mem::take(&mut request.selection)
@@ -925,6 +956,8 @@ impl RecordingContext {
             close_on_refusal: self.repair.is_none(),
             account_deadline: None,
             selected_count,
+            return_author: None,
+            placement_after_returns: None,
         });
         let result = self.begin_measurement(measure, PumpDeadline::Decision, decode, io);
         self.place.as_mut().unwrap().driving = false;
@@ -1064,7 +1097,12 @@ impl RecordingContext {
                     ),
                 )
             };
-            self.place.as_mut().unwrap().author = Some(PlaceAuthor::new(event));
+            if event.kind == Kind::StatePlacement {
+                self.place.as_mut().unwrap().placement_after_returns = Some(event);
+                self.prepare_place_return_author(ports.io)?;
+            } else {
+                self.place.as_mut().unwrap().author = Some(PlaceAuthor::new(event));
+            }
         }
         if self
             .place
@@ -1075,7 +1113,16 @@ impl RecordingContext {
             .is_some_and(|a| a.sequence.is_some())
         {
             self.consume_place_completion()?;
-            if self.place.as_ref().unwrap().close_pending {
+            if self.place.as_ref().unwrap().return_author.is_some() {
+                self.retain_place_return_record(ports.io)?;
+                let work = self.place.as_mut().unwrap();
+                work.author = None;
+                if work.cancelled {
+                    work.done = true;
+                    return Ok(PlaceProgress::Complete);
+                }
+                self.prepare_place_return_author(ports.io)?;
+            } else if self.place.as_ref().unwrap().close_pending {
                 let work = self.place.as_mut().unwrap();
                 work.close_pending = false;
                 work.author = Some(PlaceAuthor::new(place_event(
@@ -1310,6 +1357,9 @@ impl RecordingContext {
                 .as_ref()
                 .is_some_and(|a| a.sequence == Some(sequence))
         {
+            if work.return_author.is_some() {
+                return;
+            }
             if work.refusal.is_none() {
                 work.recorded = Some(sequence);
             }
@@ -1392,6 +1442,81 @@ impl RecordingContext {
             return Err(self.place_fault(io, "placement completion has another author's ticket"));
         }
         Ok(())
+    }
+
+    fn prepare_place_return_author(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        let work = self.place.as_ref().ok_or(RunFailure::PlaceOwned)?;
+        for unit in &work.units {
+            let Some(pair) = unit.completed_pair() else {
+                continue;
+            };
+            match self.pairs.result_record(pair) {
+                Ok(Some(_)) => continue,
+                Err(error) => return Err(self.place_fault(io, format!("result record: {error:?}"))),
+                Ok(None) => {}
+            }
+            let call = pair.started().call_id.clone();
+            let parent = Sequence(pair.terminal_source().sequence.0);
+            let message = Message {
+                role: weaver_traits::Role::ToolResult,
+                content: vec![weaver_traits::ContentBlock::ToolResult(
+                    pair.result().block(),
+                )],
+            };
+            let event = place_event(
+                Kind::MessageToolResult,
+                AuthoredSource::Tool,
+                Payload::Message(
+                    serde_json::value::to_raw_value(&message)
+                        .map_err(|e| self.place_fault(io, e.to_string()))?,
+                ),
+                self.open_turn.clone(),
+                Some(parent),
+            );
+            let work = self.place.as_mut().unwrap();
+            work.return_author = Some(call);
+            work.author = Some(PlaceAuthor::new(event));
+            return Ok(());
+        }
+        let work = self.place.as_mut().unwrap();
+        work.author = work.placement_after_returns.take().map(PlaceAuthor::new);
+        if work.author.is_none() {
+            return Err(self.place_fault(io, "result author lost its placement record"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn retain_place_return_record(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        let Some(work) = self.place.as_ref() else {
+            return Ok(());
+        };
+        let Some(call) = &work.return_author else {
+            return Ok(());
+        };
+        let sequence = work
+            .author
+            .as_ref()
+            .and_then(|a| a.sequence)
+            .ok_or(RunFailure::PlaceOwned)?;
+        self.pairs
+            .record_result(call, sequence)
+            .map_err(|e| self.place_fault(io, format!("result record receipt: {e:?}")))?;
+        self.place.as_mut().unwrap().return_author = None;
+        Ok(())
+    }
+
+    pub(super) fn acknowledge_delivery(
+        &mut self,
+        call: &weaver_types::state_flow::CallId,
+        proof: &ConfirmedGeneration,
+    ) -> Result<(), pairs::PairError> {
+        if !Arc::ptr_eq(&proof.grant.origin, &self.read_origin) {
+            return Err(pairs::PairError::WrongReceipt);
+        }
+        self.pairs.acknowledge_delivery(call, proof)
     }
 }
 fn place_event(

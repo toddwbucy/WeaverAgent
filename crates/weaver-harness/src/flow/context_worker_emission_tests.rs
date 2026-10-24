@@ -18,7 +18,8 @@ use weaver_traits::{ContentBlock, ToolCall};
 use weaver_types::state_flow as s;
 use weaver_types::{LifecycleAnswer, LifecycleDirective};
 
-pub(super) static FAMILY: FoundationRestatement = FoundationRestatement::new("fixture.restatement");
+pub(in crate::flow::context) static FAMILY: FoundationRestatement =
+    FoundationRestatement::new("fixture.restatement");
 static MISSING: FoundationRestatement = FoundationRestatement::new("fixture.missing");
 
 #[test]
@@ -296,7 +297,7 @@ pub(in crate::flow::context) fn reply(request: &s::Ste100Request, mode: &str) ->
         result,
     }
 }
-pub(super) fn selection(view: FoundationEmission<'_>) -> Vec<SortAct> {
+pub(in crate::flow::context) fn selection(view: FoundationEmission<'_>) -> Vec<SortAct> {
     let mut acts: Vec<_> = view
         .requests()
         .iter()
@@ -319,7 +320,7 @@ pub(super) fn selection(view: FoundationEmission<'_>) -> Vec<SortAct> {
     }
     acts
 }
-pub(super) fn sequence(row: &serde_json::Value) -> u64 {
+pub(in crate::flow::context) fn sequence(row: &serde_json::Value) -> u64 {
     row["sequence"].as_str().unwrap().parse().unwrap()
 }
 
@@ -763,7 +764,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     }
 }
 
-pub(super) fn stop(
+pub(in crate::flow::context::worker_startup) fn stop(
     guard: &mut Guard<'_>,
     member: &mut Member,
     clock: &mut FakePumpIo,
