@@ -7,8 +7,9 @@ use std::collections::BTreeSet;
 use sha2::{Digest as _, Sha256};
 use weaver_traits::{ContentBlock, Role};
 use weaver_types::state_flow::{
-    CallId, Digest, PairLane, PairRequest, PairStarted, ProtocolRepairCase, SchemeDeclaration,
-    SourceBlockId, StatementRef, Ste100Result, Ste100Scheme, Ste100Target, decode_strict,
+    CallId, Digest, PairLane, PairRequest, PairStarted, ProtocolRepairCase, RecallRequestRefusal,
+    SchemeDeclaration, SourceBlockId, StatementRef, Ste100Result, Ste100Scheme, Ste100Target,
+    decode_strict,
 };
 
 use super::{CheckedGeneration, RecordedOutputBlock};
@@ -108,8 +109,7 @@ impl PendingAssociation {
 }
 
 /// The caller records external association refusals with ProtocolRepair.
-/// InvalidRecall preserves evidence but does not invent a wire refusal or subject.
-/// Its eventual terminal-account representation remains an owning-Spec question.
+/// InvalidRecall preserves the checked facts for the trace-only RECALL-REFUSAL.
 #[derive(Debug, PartialEq, Eq)]
 pub(in crate::flow) enum AssociationRefusal {
     External {
@@ -121,10 +121,36 @@ pub(in crate::flow) enum AssociationRefusal {
     },
     InvalidRecall {
         call_id: CallId,
+        call_block: u64,
         statement: StatementRef,
         noun_count: usize,
         has_condition: bool,
     },
+}
+
+impl AssociationRefusal {
+    pub(in crate::flow) fn recall_refusal(&self) -> Option<RecallRequestRefusal> {
+        let Self::InvalidRecall {
+            call_id,
+            call_block,
+            statement,
+            noun_count,
+            has_condition,
+        } = self
+        else {
+            return None;
+        };
+        Some(RecallRequestRefusal {
+            call_id: call_id.clone(),
+            call_block: (*call_block).into(),
+            statement: statement.clone(),
+            noun_count: u64::try_from(*noun_count)
+                .expect("checked binding count fits u64")
+                .into(),
+            has_condition: *has_condition,
+            detail: RecallRequestRefusal::DETAIL.into(),
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -252,6 +278,7 @@ fn associate(
                         if binding.nouns.len() != 1 || binding.condition.is_some() {
                             refusals.push(AssociationRefusal::InvalidRecall {
                                 call_id,
+                                call_block: index,
                                 statement,
                                 noun_count: binding.nouns.len(),
                                 has_condition: binding.condition.is_some(),

@@ -2132,10 +2132,14 @@
             "sequence": "11",
             "block": "2"
           },
+          "document_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "last_source": {
-            "run": "run",
-            "sequence": "12",
-            "block": "2"
+            "block_id": {
+              "run": "run",
+              "sequence": "12",
+              "block": "2"
+            },
+            "turn": "plan-turn"
           },
           "categories": [],
           "group_drafts": [],
@@ -2490,10 +2494,14 @@
             "sequence": "11",
             "block": "2"
           },
+          "document_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "last_source": {
-            "run": "run",
-            "sequence": "12",
-            "block": "2"
+            "block_id": {
+              "run": "run",
+              "sequence": "12",
+              "block": "2"
+            },
+            "turn": null
           },
           "categories": [],
           "group_drafts": [],

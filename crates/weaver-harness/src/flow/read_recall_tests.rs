@@ -438,7 +438,8 @@ fn plan_snapshot() -> s::PlanSnapshot {
         },
         operator_source: block(10),
         lock_source: Some(block(11)),
-        last_source: block(12),
+        document_sha256: s::Digest::new("c".repeat(64)).unwrap(),
+        last_source: position(12),
         categories: vec![],
         group_drafts: vec![],
         groups: vec![],
@@ -491,7 +492,7 @@ fn recall_plan_and_current_walk_only_documented_sources_in_first_encounter_order
     let mut shared = snapshot;
     shared.operator_source = block(13);
     shared.lock_source = None;
-    shared.last_source = block(13);
+    shared.last_source = position(13);
     shared.steps[0].work = None;
     shared.steps[0].closure_source = None;
     shared.steps[1].instruction = statement(13, 2);
@@ -512,6 +513,27 @@ fn recall_plan_and_current_walk_only_documented_sources_in_first_encounter_order
         },
     );
     assert_eq!(empty["sources"], json!([]));
+}
+
+#[test]
+fn plan_summary_digest_and_nullable_turn_add_no_recall_source_visit() {
+    let snapshot = plan_snapshot();
+    let expected = record(
+        s::ReadSelector::Plan { plan: plan_ref() },
+        s::QueryResult::Plan {
+            snapshot: snapshot.clone(),
+        },
+    );
+    for turn in [None, Some("another-turn".into())] {
+        let mut changed = snapshot.clone();
+        changed.document_sha256 = s::Digest::new("d".repeat(64)).unwrap();
+        changed.last_source.turn = turn;
+        let actual = record(
+            s::ReadSelector::Plan { plan: plan_ref() },
+            s::QueryResult::Plan { snapshot: changed },
+        );
+        assert_eq!(actual, expected);
+    }
 }
 
 #[test]

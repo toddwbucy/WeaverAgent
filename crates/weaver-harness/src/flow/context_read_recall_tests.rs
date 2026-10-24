@@ -149,6 +149,178 @@ fn released_read_retains_exact_provenance_and_original_bound_until_recorded() {
 }
 
 #[test]
+fn plan_summary_carrier_survives_release_and_recall_backpressure() {
+    let cases: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/recall-sources.json")).unwrap();
+    for name in ["plan_complete_traversal", "plan_current_populated"] {
+        let case = cases.iter().find(|case| case["case"] == name).unwrap();
+        let selector: s::ReadSelector = serde_json::from_value(case["selector"].clone()).unwrap();
+        let raw = serde_json::to_vec(&case["result"]).unwrap();
+        let mut member = Member::new();
+        member
+            .run
+            .context
+            .begin_read(selector, None, &mut member.run.clock)
+            .unwrap();
+        let request = member.next_request();
+        member.respond(&request, page(7, 0, raw.len(), &raw));
+        let release = member.next_request();
+        member.respond(
+            &release,
+            s::StateControlAnswer::Released {
+                snapshot_id: 7.into(),
+            },
+        );
+        member.record_completion_only();
+        member
+            .run
+            .context
+            .settle_recorded_read(&mut member.run.clock)
+            .unwrap();
+        member.no_result();
+        assert!(member.records(Kind::Recall).is_empty());
+        let bound = member.bound();
+        member.fill_trace();
+        assert_eq!(member.advance().unwrap(), ReadProgress::Pending);
+        let ticket = member.run.context.pending_author().unwrap().ticket;
+        for _ in 0..2 {
+            assert_eq!(member.advance().unwrap(), ReadProgress::Pending);
+            assert_eq!(member.run.context.pending_author().unwrap().ticket, ticket);
+            assert_eq!(member.bound(), bound);
+            member.no_result();
+        }
+        drain_admitted(&mut member);
+        let ReadCompletion::Recorded(read) = take(&mut member) else {
+            panic!("released plan read must become Recorded");
+        };
+        assert_eq!(read.raw_bytes(), raw);
+        assert_eq!(serde_json::to_value(read.result()).unwrap(), case["result"]);
+        assert_eq!(member.records(Kind::Recall).len(), 1);
+        assert_eq!(
+            member.records(Kind::Recall)[0]["sequence"],
+            read.recall_sequence().0.to_string()
+        );
+        assert_eq!(
+            recall_payload(&member)["sources"],
+            case["recall"]["read"]["sources"]
+        );
+        assert_eq!(
+            member.requests.len(),
+            2,
+            "the carrier requires no extra lookup"
+        );
+        member.no_result();
+        member.no_request();
+    }
+}
+
+#[test]
+fn malformed_plan_summary_carrier_retains_the_answer_without_release_or_recall() {
+    let cases: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/recall-sources.json")).unwrap();
+    for name in ["plan_complete_traversal", "plan_current_populated"] {
+        let case = cases.iter().find(|case| case["case"] == name).unwrap();
+        for defect in 0..8 {
+            let mut result = case["result"].clone();
+            let snapshot = if name == "plan_current_populated" {
+                &mut result["plan_current"]["current"]
+            } else {
+                &mut result["plan"]["snapshot"]
+            };
+            match defect {
+                0 => {
+                    snapshot.as_object_mut().unwrap().remove("document_sha256");
+                }
+                1 => snapshot["document_sha256"] = serde_json::json!("C".repeat(64)),
+                2 => snapshot["last_source"] = snapshot["last_source"]["block_id"].clone(),
+                3 => {
+                    snapshot["last_source"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("turn");
+                }
+                4 => snapshot["last_source"]["extra"] = serde_json::Value::Null,
+                5 => {
+                    snapshot["last_source"] = serde_json::json!([
+                        snapshot["last_source"]["block_id"],
+                        snapshot["last_source"]["turn"]
+                    ])
+                }
+                6 => snapshot["last_source"]["block_id"] = serde_json::json!(["run", "12", "2"]),
+                7 => {
+                    *snapshot = serde_json::Value::Array(
+                        [
+                            "plan",
+                            "task",
+                            "status",
+                            "review",
+                            "operator_source",
+                            "lock_source",
+                            "document_sha256",
+                            "last_source",
+                            "categories",
+                            "group_drafts",
+                            "groups",
+                            "steps",
+                            "broken",
+                        ]
+                        .map(|name| snapshot[name].clone())
+                        .into(),
+                    )
+                }
+                _ => unreachable!(),
+            }
+            let mut member = Member::new();
+            let selector = serde_json::from_value(case["selector"].clone()).unwrap();
+            member
+                .run
+                .context
+                .begin_read(selector, None, &mut member.run.clock)
+                .unwrap();
+            let request = member.next_request();
+            let raw = serde_json::to_vec(&result).unwrap();
+            let answer = member.answer(&request, page(7, 0, raw.len(), &raw));
+            // The transport envelope is valid. The completed page is decoded
+            // only after the actual operation measurement has been Recorded.
+            member.receive(&answer).expect("valid transport envelope");
+            let failure = (0..128)
+                .find_map(|_| member.advance().err())
+                .expect("malformed complete result must fail after its measurement");
+            assert!(
+                matches!(&failure, RunFailure::Flow {
+                reason: FlowHaltReason::ProtocolFailed,
+                point: HaltPoint::StateReply,
+                detail,
+            } if detail == "malformed complete read result"),
+                "{name}/{defect}: {failure:?}"
+            );
+            member.assert_protocol_failure(failure);
+            let OperationCompletion::State { completion, .. } = member
+                .run
+                .context
+                .read
+                .as_ref()
+                .unwrap()
+                .rejected_for_test()
+                .unwrap()
+            else {
+                panic!("retained malformed carrier answer");
+            };
+            assert_eq!(
+                serde_json::to_value(&completion.answer).unwrap(),
+                serde_json::to_value(&answer).unwrap()
+            );
+            assert!(member.records(Kind::Recall).is_empty());
+            assert_eq!(
+                member.requests.len(),
+                1,
+                "malformed carrier must not issue Release"
+            );
+        }
+    }
+}
+
+#[test]
 fn recall_pressure_retains_one_ticket_and_cancelled_read_drains_without_consumption() {
     let mut member = Member::new();
     released(&mut member);

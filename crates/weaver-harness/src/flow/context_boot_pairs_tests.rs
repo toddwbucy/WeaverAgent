@@ -36,7 +36,7 @@ const _: fn() = || {
     let _ = <RepairedBootPairs as MustNotFromPairs<_>>::pin;
 };
 
-fn old_pair(run: &str) -> s::ReadPair {
+pub(super) fn old_pair(run: &str) -> s::ReadPair {
     let corpus: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("fixtures/recall-sources.json")).unwrap();
     let mut pair = corpus
@@ -69,7 +69,7 @@ enum Hold {
     Terminal(usize),
 }
 
-struct RepairFixture {
+pub(super) struct RepairFixture {
     boot: BootFixture,
     prior: Option<PriorBootOpen>,
     initial: Vec<u8>,
@@ -85,13 +85,23 @@ struct RepairFixture {
 }
 
 impl RepairFixture {
-    fn new(pairs: Vec<s::ReadPair>) -> Self {
+    pub(super) fn new(pairs: Vec<s::ReadPair>) -> Self {
         let mut boot = BootFixture::new(true);
         let entry = boot.entry();
         let request = boot.begin();
         boot.released(&request, entry);
         assert!(matches!(boot.finish(), BootReadCompletion::Seated));
         let prior = PriorBootOpen::assume_checked_open_for_test(&boot.member.run.context);
+        Self::from_boot(boot, prior, pairs)
+    }
+    pub(super) fn from_checked(
+        boot: BootFixture,
+        checked: CheckedBootOpen,
+        pairs: Vec<s::ReadPair>,
+    ) -> Self {
+        Self::from_boot(boot, PriorBootOpen::from_checked(checked), pairs)
+    }
+    fn from_boot(boot: BootFixture, prior: PriorBootOpen, pairs: Vec<s::ReadPair>) -> Self {
         let initial = s::QueryResult::OpenPairs { pairs };
         crate::flow::read_validate::validate(&s::ReadSelector::OpenPairs {}, &initial).unwrap();
         boot.member.run.state.set_nonblocking(true).unwrap();
@@ -113,7 +123,7 @@ impl RepairFixture {
     fn run(&mut self) -> &mut Fixture {
         &mut self.boot.member.run
     }
-    fn begin(&mut self) {
+    pub(super) fn begin(&mut self) {
         let prior = self.prior.take().unwrap();
         let run = self.run();
         run.context.begin_boot_pairs(prior, &mut run.clock).unwrap();
@@ -302,7 +312,7 @@ impl RepairFixture {
         }
         panic!("missing held {held:?}");
     }
-    fn complete(&mut self) -> BootPairsCompletion {
+    pub(super) fn complete(&mut self) -> BootPairsCompletion {
         for _ in 0..512 {
             if self.step().unwrap() == BootPairsProgress::Complete {
                 let run = self.run();
@@ -314,6 +324,9 @@ impl RepairFixture {
             }
         }
         panic!("boot repair did not finish");
+    }
+    pub(super) fn into_boot(self) -> BootFixture {
+        self.boot
     }
     fn records(&self, kind: Kind) -> Vec<serde_json::Value> {
         self.boot.member.records(kind)
@@ -586,7 +599,7 @@ fn boot_pairs_foreign_prior_open_and_retired_enter_do_not_admit() {
 
 #[test]
 fn boot_pairs_owns_read_author_and_waits_until_completion_is_taken() {
-    let mut fx = RepairFixture::new(vec![]);
+    let mut fx = RepairFixture::new(vec![old_pair("held-author-prior")]);
     fx.begin();
     let run = fx.run();
     let event = AuthoredEvent {
@@ -599,13 +612,18 @@ fn boot_pairs_owns_read_author_and_waits_until_completion_is_taken() {
             serde_json::value::to_raw_value(&serde_json::json!({"other":"owner"})).unwrap(),
         )),
     };
+    let Some(Payload::ModelMeasurement(raw)) = &event.payload else {
+        unreachable!()
+    };
+    let pointer = raw.get().as_ptr();
+    let original = format!("{event:?}");
     assert_eq!(
         run.context
             .author_and_wait(&mut ports(&mut run.clock), event)
             .unwrap_err(),
         RunFailure::BootPairsOwned
     );
-    assert!(run.context.refused_author().is_some());
+    assert!(run.context.held_author().is_some());
     for active_read in [false, true] {
         if active_read {
             fx.until_held(Hold::Release(1));
@@ -661,6 +679,15 @@ fn boot_pairs_owns_read_author_and_waits_until_completion_is_taken() {
         run.context.take_boot_pairs(&mut run.clock).unwrap(),
         Some(BootPairsCompletion::Repaired(_))
     ));
+    // Both reads and the actual abandoned-pair terminal completed while the
+    // caller's exact unadmitted original remained owned. New external work
+    // still waits for that original to return.
+    let returned = run.context.take_held_author().unwrap();
+    let Some(Payload::ModelMeasurement(raw)) = &returned.payload else {
+        unreachable!()
+    };
+    assert_eq!(raw.get().as_ptr(), pointer);
+    assert_eq!(format!("{returned:?}"), original);
     assert!(
         run.context
             .begin_read(s::ReadSelector::OpenPairs {}, None, &mut run.clock)
@@ -960,7 +987,7 @@ fn boot_pairs_recorded_terminal_transfer_never_yields_without_its_receipt_owner(
         run.context
             .advance_boot_pairs(&mut ports(&mut clock))
             .unwrap(),
-        BootPairsProgress::Pending
+        BootPairsProgress::Progress
     );
     let samples = usize::MAX - clock.remaining;
     assert!(samples > 0);
@@ -991,7 +1018,7 @@ fn boot_pairs_recorded_terminal_transfer_never_yields_without_its_receipt_owner(
                 retained = true;
             }
             Ok(progress) => {
-                assert_eq!(progress, BootPairsProgress::Pending);
+                assert_eq!(progress, BootPairsProgress::Progress);
                 assert!(run.context.filing.is_none());
                 transferred = true;
             }

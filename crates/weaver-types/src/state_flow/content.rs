@@ -4,21 +4,53 @@ use serde_json::value::RawValue;
 use super::{DecimalU64, MarkEffect, PairRecord, PlanEffect, ValidationError};
 
 /// An event block's identity before any partition decision.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SourceBlockId {
     pub run: String,
     pub sequence: DecimalU64,
     pub block: DecimalU64,
 }
 
+impl<'de> Deserialize<'de> for SourceBlockId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            run: String,
+            sequence: DecimalU64,
+            block: DecimalU64,
+        }
+        let fields: Fields = super::codec::deserialize_object(deserializer)?;
+        Ok(Self {
+            run: fields.run,
+            sequence: fields.sequence,
+            block: fields.block,
+        })
+    }
+}
+
 /// A held source frontier, including its exact nullable turn attribution.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SourcePosition {
     pub block_id: SourceBlockId,
-    #[serde(deserialize_with = "super::required_option")]
     pub turn: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for SourcePosition {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            block_id: SourceBlockId,
+            #[serde(deserialize_with = "super::required_option")]
+            turn: Option<String>,
+        }
+        let fields: Fields = super::codec::deserialize_object(deserializer)?;
+        Ok(Self {
+            block_id: fields.block_id,
+            turn: fields.turn,
+        })
+    }
 }
 
 /// The complete source envelope. Vocabulary judgment belongs to the trace.

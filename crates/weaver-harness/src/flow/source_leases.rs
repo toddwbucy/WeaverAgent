@@ -202,6 +202,18 @@ impl SourceLeases {
             .ok_or(LedgerError("source is outside this lease"))
     }
 
+    /// The immutable terminal slot retains its original whole Text even after
+    /// the live ledger entry has released its charge. Taken/released slots are
+    /// never accepted as another consumer's input.
+    pub(super) fn retained_whole_text(&self, lease: &SourceLease, source: &SourceBlockId) -> bool {
+        self.registration(lease).ok().and_then(|r|r.slots.iter().find(|s|s.source==*source))
+            .filter(|slot|slot.status==LeaseSlotStatus::Ready)
+            .and_then(|slot|slot.disposition.as_ref()).is_some_and(|d|match d{
+                SourceDisposition::Committed(source)=>matches!(source.file(),super::LedgerFile::Statement(file) if !file.text.is_empty()),
+                SourceDisposition::CorrectlyRejected(source)=>!source.file().text.is_empty(),
+            })
+    }
+
     pub(super) fn slot_available(&self, key: LeaseSlotKey) -> bool {
         self.registrations
             .iter()
@@ -275,6 +287,45 @@ impl SourceLeases {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(super) fn review_set_taken_status(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+        status: LeaseSlotStatus,
+    ) {
+        let slot = self
+            .registration_mut(lease)
+            .unwrap()
+            .slots
+            .iter_mut()
+            .find(|slot| slot.source == *source)
+            .unwrap();
+        assert_eq!(slot.status, LeaseSlotStatus::Taken);
+        assert!(slot.disposition.is_none());
+        assert!(matches!(
+            status,
+            LeaseSlotStatus::Pending | LeaseSlotStatus::Ready
+        ));
+        // Defensive status-only corruption of an actual consumed slot. It
+        // manufactures no terminal proof or disposition, including for Ready.
+        slot.status = status;
+    }
+
+    /// Validate the complete move-owned caller batch before removing any registration.
+    /// The caller retains all handles on failure and drops them only after success.
+    pub(super) fn release_batch(&mut self, leases: &[&SourceLease]) -> Result<(), LedgerError> {
+        for (index, lease) in leases.iter().enumerate() {
+            self.registration(lease)?;
+            if leases[..index].iter().any(|prior| prior.id == lease.id) {
+                return Err(LedgerError("source lease appears twice in release batch"));
+            }
+        }
+        self.registrations
+            .retain(|registration| !leases.iter().any(|lease| lease.id == registration.id));
+        Ok(())
+    }
+
     pub(super) fn release(&mut self, lease: SourceLease) -> Result<(), (SourceLease, LedgerError)> {
         self.prune_abandoned();
         if let Err(error) = self.registration(&lease) {
@@ -287,6 +338,52 @@ impl SourceLeases {
             .unwrap();
         self.registrations.remove(index);
         Ok(())
+    }
+}
+
+impl SourceLeases {
+    /// Transfer an existing slot; neither register a copied ID nor duplicate custody.
+    pub(super) fn split(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<SourceLease, LedgerError> {
+        let registration = self.registration(lease)?;
+        let index = registration
+            .slots
+            .iter()
+            .position(|slot| {
+                slot.source == *source
+                    && matches!(
+                        slot.status,
+                        LeaseSlotStatus::Pending | LeaseSlotStatus::Ready
+                    )
+            })
+            .ok_or(LedgerError("source slot is not transferable"))?;
+        let id = self
+            .next_id
+            .ok_or(LedgerError("source lease identity exhausted"))?;
+        self.registrations
+            .try_reserve(1)
+            .map_err(|_| LedgerError("source lease allocation failed"))?;
+        let mut slots = Vec::new();
+        slots
+            .try_reserve_exact(1)
+            .map_err(|_| LedgerError("source slot allocation failed"))?;
+        let slot = self.registration_mut(lease)?.slots.remove(index);
+        slots.push(slot);
+        let life = Arc::new(());
+        self.registrations.push(Registration {
+            id,
+            life: Arc::downgrade(&life),
+            slots,
+        });
+        self.next_id = id.checked_add(1);
+        Ok(SourceLease {
+            identity: self.identity.clone(),
+            id,
+            _life: life,
+        })
     }
 }
 
@@ -327,5 +424,71 @@ mod tests {
         );
         leases.prune_abandoned();
         assert!(leases.registrations.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod batch_release_review_tests {
+    use super::*;
+
+    fn source(block: u64) -> SourceBlockId {
+        SourceBlockId {
+            run: "lease-batch".into(),
+            sequence: 1.into(),
+            block: block.into(),
+        }
+    }
+
+    #[test]
+    fn source_lease_review_batch_rejects_foreign_late_entry_without_releasing_earlier_handles() {
+        let mut actual = SourceLeases::new();
+        let mut other = SourceLeases::new();
+        let first = actual.register(vec![source(0)]).unwrap();
+        let second = actual.register(vec![source(1)]).unwrap();
+        // Different real registration IDs keep duplicate detection from masking
+        // the foreign-ledger guard when it is deliberately removed.
+        let _other_first = other.register(vec![source(10)]).unwrap();
+        let _other_second = other.register(vec![source(11)]).unwrap();
+        let foreign = other.register(vec![source(2)]).unwrap();
+        let first_error = actual.release_batch(&[&first, &foreign]).unwrap_err();
+        assert_eq!(
+            first_error,
+            LedgerError("source lease belongs to another ledger")
+        );
+        assert_eq!(actual.len(), 2);
+        assert_eq!(
+            actual.status(&first, &source(0)).unwrap(),
+            LeaseSlotStatus::Pending
+        );
+        assert_eq!(
+            actual.status(&second, &source(1)).unwrap(),
+            LeaseSlotStatus::Pending
+        );
+        assert_eq!(
+            other.status(&foreign, &source(2)).unwrap(),
+            LeaseSlotStatus::Pending
+        );
+        actual.release_batch(&[&first, &second]).unwrap();
+        assert!(actual.is_empty());
+        assert!(actual.status(&first, &source(0)).is_err());
+        assert!(actual.status(&second, &source(1)).is_err());
+        other.release(foreign).unwrap();
+    }
+
+    #[test]
+    fn source_lease_review_batch_rejects_duplicate_handle_before_any_release() {
+        let mut actual = SourceLeases::new();
+        let first = actual.register(vec![source(0)]).unwrap();
+        assert_eq!(
+            actual.release_batch(&[&first, &first]).unwrap_err(),
+            LedgerError("source lease appears twice in release batch")
+        );
+        assert_eq!(actual.len(), 1);
+        assert_eq!(
+            actual.status(&first, &source(0)).unwrap(),
+            LeaseSlotStatus::Pending
+        );
+        actual.release_batch(&[&first]).unwrap();
+        assert!(actual.is_empty());
     }
 }

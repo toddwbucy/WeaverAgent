@@ -29,6 +29,7 @@ fn journal() -> Journal {
         resident: 10,
         capacity: 1000,
         layout: vec![],
+        emissions: vec![],
         boundaries: vec![],
         pairs: vec![],
         marks: vec![],
@@ -51,7 +52,7 @@ fn cursor(id: u64, block: u64, byte: Option<u64>) -> ArgumentCursor {
 }
 fn assistant(journal: &mut Journal, message: Message, resident: u64) -> DecimalU64 {
     let prefix = journal.project(None).unwrap();
-    let pending = journal.reserve(prefix, &[]).unwrap();
+    let pending = journal.reserve(&prefix, &[]).unwrap();
     let id = pending.assistant_id;
     journal
         .complete(
@@ -222,10 +223,10 @@ fn journal_rejects_byte_cursors_on_whole_call_return_and_unrecovered_blocks() {
 fn journal_cancel_burns_ids_but_installs_nothing_and_rejects_duplicate_completion() {
     let mut j = journal();
     let before = j.project(None).unwrap();
-    let pending = j.reserve(j.project(None).unwrap(), &[]).unwrap();
+    let pending = j.reserve(&j.project(None).unwrap(), &[]).unwrap();
     assert_eq!(pending.assistant_id.0, 1);
     assert_eq!(
-        j.reserve(j.project(None).unwrap(), &[]).unwrap_err(),
+        j.reserve(&j.project(None).unwrap(), &[]).unwrap_err(),
         JournalError::Busy
     );
     j.cancel(&pending).unwrap();
@@ -254,7 +255,7 @@ fn journal_overflow_and_bad_confirmation_leave_pending_state_unchanged() {
     let mut j = journal();
     j.next_message = u64::MAX;
     assert_eq!(
-        j.reserve(j.project(None).unwrap(), &[]).unwrap_err(),
+        j.reserve(&j.project(None).unwrap(), &[]).unwrap_err(),
         JournalError::Exhausted
     );
     assert_eq!(j.next_assembly, 1);
@@ -262,12 +263,12 @@ fn journal_overflow_and_bad_confirmation_leave_pending_state_unchanged() {
     j.next_message = 1;
     j.next_assembly = u64::MAX;
     assert_eq!(
-        j.reserve(j.project(None).unwrap(), &[]).unwrap_err(),
+        j.reserve(&j.project(None).unwrap(), &[]).unwrap_err(),
         JournalError::Exhausted
     );
     assert_eq!(j.next_message, 1);
     j.next_assembly = 1;
-    let pending = j.reserve(j.project(None).unwrap(), &[]).unwrap();
+    let pending = j.reserve(&j.project(None).unwrap(), &[]).unwrap();
     for (assembly, resident, capacity) in
         [(99, 20, 1000), (1, 10, 1000), (1, 1001, 1000), (1, 20, 99)]
     {
@@ -482,12 +483,13 @@ pub(super) fn exercise_material(units: Vec<SelectedUnit>, foreign: SelectedUnit)
     let read_sequence = unit.reads()[0].recall_sequence();
     let foreign = Arc::new(foreign);
     assert_eq!(
-        j.reserve(j.project(None).unwrap(), &[foreign]).unwrap_err(),
+        j.reserve(&j.project(None).unwrap(), &[foreign])
+            .unwrap_err(),
         JournalError::ForeignMaterial
     );
     assert_eq!(j.next_message, 1);
     let pending = j
-        .reserve(j.project(None).unwrap(), &[unit.clone(), unit.clone()])
+        .reserve(&j.project(None).unwrap(), &[unit.clone(), unit.clone()])
         .unwrap();
     assert_eq!(pending.new_messages.len(), original.len() * 2);
     assert_eq!(pending.new_pairs.len(), 2);
@@ -616,7 +618,7 @@ pub(super) fn exercise_material_map_order(unit: SelectedUnit) {
     let mut j = journal();
     j.origin = unit.origin().clone();
     let pending = j
-        .reserve(j.project(None).unwrap(), std::slice::from_ref(&unit))
+        .reserve(&j.project(None).unwrap(), std::slice::from_ref(&unit))
         .unwrap();
     assert_eq!(pending.new_pairs.len(), 2);
     // The counterexample is real: message walking relocates the later recall
@@ -737,7 +739,7 @@ fn journal_request_text_is_indivisible_and_numeric_counts_never_round_n_forward(
         &MaterialRef::Returned { call_id: call }
     ));
     assert_eq!(
-        j.reserve(prefix, &[]).unwrap_err(),
+        j.reserve(&prefix, &[]).unwrap_err(),
         JournalError::InvalidFacts
     );
     assert!(j.pending.is_none());
@@ -786,12 +788,12 @@ fn journal_equal_facts_do_not_authorize_another_journals_projection() {
     let before = format!("{second:?}");
     assert_eq!(
         second
-            .reserve(first.project(None).unwrap(), &[])
+            .reserve(&first.project(None).unwrap(), &[])
             .unwrap_err(),
         JournalError::Stale
     );
     assert_eq!(format!("{second:?}"), before);
-    let pending = second.reserve(second.project(None).unwrap(), &[]).unwrap();
+    let pending = second.reserve(&second.project(None).unwrap(), &[]).unwrap();
     second.cancel(&pending).unwrap();
 }
 
@@ -842,7 +844,7 @@ fn journal_cut_rejects_wrong_confirmed_n_without_changing_any_state() {
 #[test]
 fn journal_assistant_tool_result_cannot_consume_the_pending_completion() {
     let mut j = journal();
-    let pending = j.reserve(j.project(None).unwrap(), &[]).unwrap();
+    let pending = j.reserve(&j.project(None).unwrap(), &[]).unwrap();
     let before = format!("{j:?}");
     assert_eq!(
         j.complete(
@@ -882,7 +884,7 @@ fn journal_cut_cannot_change_a_matching_active_reservation() {
     assistant(&mut j, text("first"), 30);
     assistant(&mut j, text("second"), 70);
     let prefix = j.project(Some(&cursor(1, 1, None))).unwrap();
-    let pending = j.reserve(j.project(None).unwrap(), &[]).unwrap();
+    let pending = j.reserve(&j.project(None).unwrap(), &[]).unwrap();
     assert_eq!(j.check_projection(&prefix), Ok(()));
     assert_eq!(prefix.n, 30);
     let before = format!("{j:?}");
@@ -969,7 +971,7 @@ pub(super) fn exercise_material_guard(unit: SelectedUnit, guard: MaterialGuard) 
     let mut j = journal();
     j.origin = unit.origin().clone();
     let pending = j
-        .reserve(j.project(None).unwrap(), std::slice::from_ref(&unit))
+        .reserve(&j.project(None).unwrap(), std::slice::from_ref(&unit))
         .unwrap();
     let sources: Vec<_> = pending
         .new_messages
@@ -1060,7 +1062,7 @@ pub(super) fn exercise_step_query(unit: SelectedUnit) {
     let mut j = journal();
     j.origin = unit.origin().clone();
     let pending = j
-        .reserve(j.project(None).unwrap(), std::slice::from_ref(&unit))
+        .reserve(&j.project(None).unwrap(), std::slice::from_ref(&unit))
         .unwrap();
     let id = pending.new_messages[0].id.0;
     j.complete(

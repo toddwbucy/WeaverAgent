@@ -599,6 +599,9 @@ fn validate_pair_source(source: &EventSource, kind: &str) -> Result<(), Validati
 fn validate_plan(snapshot: &PlanSnapshot) -> Result<(), ValidationError> {
     // The store owns transition legality. Here retain the read's documented step
     // ordering and seed qualification without turning a snapshot into authority.
+    // Strict decoding requires the operator digest and complete last-source
+    // position, including explicit null turn. Their provenance cannot be inferred
+    // from the response itself; a plan owner must compare its own held expectations.
     validate_plan_ref(&snapshot.plan)?;
     validate_span_ref(&snapshot.task.task)?;
     validate_span_ref(&snapshot.task.prompt)?;

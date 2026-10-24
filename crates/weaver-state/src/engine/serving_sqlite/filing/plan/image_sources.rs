@@ -74,7 +74,7 @@ pub(super) fn verify_sources(db: &Connection, seed: &str) -> Result<(), FileFaul
                 review,
             } => {
                 let old = snapshot(db, seed, expected)?;
-                if old.status != PlanStatus::Superseded || old.last_source != source {
+                if old.status != PlanStatus::Superseded || old.last_source.block_id != source {
                     return Err(invalid_effect("replacement lost its retired predecessor"));
                 }
                 authorizations.remove(&expected.plan_id.local_id.0);
@@ -206,7 +206,7 @@ fn allocate_plan(plan: &PlanRef, next: &mut Option<u64>) -> Result<(), FileFault
 }
 
 fn snapshot(db: &Connection, seed: &str, plan: &PlanRef) -> Result<PlanSnapshot, FileFault> {
-    reads::plan_snapshot(db, seed, plan, u64::MAX.into()).map_err(read_fault)
+    reads::plan_snapshot(db, seed, plan).map_err(read_fault)
 }
 
 fn held_step<'a>(p: &'a PlanSnapshot, id: &StepId) -> Result<&'a PlanStep, FileFault> {
