@@ -439,6 +439,7 @@ impl RecordingContext {
         let failure = self.live(io).err();
         let valid = self.boot_proof_current(boot.repaired())
             && self.committed_plan_summary().is_ok()
+            && !self.caller_author_held()
             && self.place_engine.is_none()
             && self.load_duty.is_some()
             && !self.place_admission_stopped()
@@ -500,7 +501,10 @@ impl RecordingContext {
         if self.place_engine.is_none() {
             return Err(PlaceError::WrongProof);
         }
-        if self.place_blocks_external() || self.place_engine.as_ref().unwrap().staged.is_some() {
+        if self.caller_author_held()
+            || self.place_blocks_external()
+            || self.place_engine.as_ref().unwrap().staged.is_some()
+        {
             return Err(PlaceError::Busy);
         }
         let journal = self.boot_journal.as_ref().ok_or(PlaceError::WrongProof)?;
@@ -516,6 +520,27 @@ impl RecordingContext {
                 Err(PlaceError::InvalidPrefix)
             }
         }
+    }
+    pub(super) fn place_measurement_continuation(&self, key: PumpDeadline) -> bool {
+        match key {
+            PumpDeadline::Decision => self.place.as_ref().is_some_and(|work| {
+                work.driving
+                    && work.measurement.is_none()
+                    && self.deadlines.get(key) == Some(work.bound)
+            }),
+            PumpDeadline::Cut => self.reload.as_ref().is_some_and(|work| {
+                work.driving
+                    && work.measurement.is_none()
+                    && work.bound.is_some()
+                    && self.deadlines.get(key) == work.bound
+            }),
+            _ => false,
+        }
+    }
+    pub(super) fn generation_output_continuation(&self) -> bool {
+        self.generation
+            .as_ref()
+            .is_some_and(|work| work.driving && work.confirmed.is_some() && !work.output_started)
     }
     pub(super) fn place_blocks_external(&self) -> bool {
         self.place_notice.is_some()
@@ -593,6 +618,7 @@ impl RecordingContext {
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()
+            || self.caller_author_held()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()

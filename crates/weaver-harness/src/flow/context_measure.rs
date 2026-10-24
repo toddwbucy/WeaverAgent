@@ -321,6 +321,7 @@ impl RecordingContext {
             || self.inspection.is_some()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()
+            || (self.held_author.is_some() && !self.place_measurement_continuation(wait))
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()

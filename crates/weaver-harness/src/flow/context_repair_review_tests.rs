@@ -1,6 +1,9 @@
 //! PR 261 refusal-account custody. Defensive overlap fixtures name their scope.
 use super::*;
 
+#[path = "context_repair_accounting_review_tests.rs"]
+mod accounting_review_tests;
+
 fn finish_refused(fx: &mut RepairFixture) -> RepairRefused {
     for _ in 0..512 {
         if fx.step(true) == RepairProgress::Refused {

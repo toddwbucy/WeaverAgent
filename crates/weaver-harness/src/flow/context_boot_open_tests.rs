@@ -1093,6 +1093,60 @@ fn unload() -> AuthoredEvent {
     }
 }
 #[test]
+fn boot_open_held_author_blocks_release_without_cancelling_owned_open() {
+    for failed in [false, true] {
+        let mut fx = OpenFixture::new();
+        fx.begin();
+        let original = unload();
+        let Some(Payload::Unload(payload)) = &original.payload else {
+            unreachable!()
+        };
+        let pointer = std::ptr::from_ref(payload.as_ref()) as usize;
+        let expected = format!("{original:?}");
+        let run = &mut fx.boot.member.run;
+        let enter = run.context.deadlines.get(PumpDeadline::Enter).unwrap();
+        assert_eq!(run.author(original), Err(RunFailure::BootOpenOwned));
+        let failure = failed.then(|| {
+            run.context.fail(
+                &mut run.clock,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                "held Open first cause",
+            )
+        });
+        let leave = AbsoluteBound::after(run.clock.now().unwrap(), 100_000).unwrap();
+        assert_eq!(
+            run.context.begin_boot_open_release(leave, &mut run.clock),
+            Err(failure.clone().unwrap_or(RunFailure::BootOpenOwned))
+        );
+        assert_eq!(run.context.failure(), failure.as_ref());
+        assert_eq!(
+            run.context.phase(),
+            if failed {
+                RecordingPhase::Failed
+            } else {
+                RecordingPhase::Entered
+            }
+        );
+        assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());
+        if !failed {
+            assert!(matches!(fx.sent(), TokenDirective::Open { .. }));
+            fx.answer(fx.opened());
+            let proof = fx.finish();
+            assert_eq!(proof.enter(), enter);
+        }
+        let run = &mut fx.boot.member.run;
+        assert!(run.clock.now().unwrap() < enter.deadline_ns());
+        let returned = run.context.take_held_author().unwrap();
+        let Some(Payload::Unload(payload)) = &returned.payload else {
+            unreachable!()
+        };
+        assert_eq!(std::ptr::from_ref(payload.as_ref()) as usize, pointer);
+        assert_eq!(format!("{returned:?}"), expected);
+    }
+}
+
+#[test]
 fn boot_open_full_stopped_release_accounts_then_retires_unloads_and_drains() {
     for expired in [false, true] {
         let mut fx = OpenFixture::new();

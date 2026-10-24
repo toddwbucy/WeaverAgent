@@ -606,20 +606,24 @@ impl RecordBarrier {
                 );
             }
         };
-        if released && let Some(owed) = self.owed_author() {
-            // The exact scope and ticket were validated first. CapacityPending
+        if (released || event.envelope.kind == Kind::Unload)
+            && let Some(owed) = self.owed_author()
+        {
+            // Any release scope and ticket were validated first. CapacityPending
             // never admitted a sequence; return both preparations' ownership
             // together instead of retaining a detached release mark or renewing
-            // a wait. Public owner admission currently prevents this debt rise.
-            let (_, purpose) = self.pending.take().expect("validated pending event");
-            let original = self
-                .pending_author
-                .take()
-                .expect("validated release ticket");
-            return RecordProgress::BusyAuthored {
-                event: original.event,
-                purpose,
-                owed: Some(owed),
+            // a wait. Ordinary Unload has the same debt check at submit and
+            // resume. Public owner admission currently prevents this debt rise.
+            let (event, purpose) = self.pending.take().expect("validated pending event");
+            return match self.pending_author.take() {
+                Some(original) => RecordProgress::BusyAuthored {
+                    event: original.event,
+                    purpose,
+                    owed: Some(owed),
+                },
+                // Raw submit never allocated an AuthoredEvent ticket. Return
+                // the same prepared event without inventing either identity.
+                None => RecordProgress::Busy { event, purpose },
             };
         }
         if self.recorder.tap_stopped() && !released {
