@@ -1141,6 +1141,10 @@ scenario!(
     "input-generation-ready"
 );
 scenario!(
+    worker_generation_composition_slow_decode,
+    "input-generation-slow-decode"
+);
+scenario!(
     worker_generation_composition_elide_without_cut,
     "input-generation-elide"
 );
@@ -1594,6 +1598,10 @@ scenario!(
 scenario!(
     worker_return_composition_ready,
     "input-generation-emission-pairs-return-ready"
+);
+scenario!(
+    worker_return_composition_slow_decode,
+    "input-generation-emission-pairs-return-slow-decode"
 );
 
 scenario!(
