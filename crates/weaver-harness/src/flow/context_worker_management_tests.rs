@@ -13,9 +13,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use weaver_types::{Cause, ExchangeId};
 
-pub(super) struct Guard<'a> {
-    pub(super) input: Option<Box<FoundationInput<'a>>>,
-    pub(super) management: Option<Box<FoundationManagement<'a>>>,
+pub(in crate::flow::context::worker_startup) struct Guard<'a> {
+    pub(in crate::flow::context::worker_startup) input: Option<Box<FoundationInput<'a>>>,
+    pub(in crate::flow::context::worker_startup) management: Option<Box<FoundationManagement<'a>>>,
 }
 impl Drop for Guard<'_> {
     fn drop(&mut self) {
@@ -28,7 +28,7 @@ impl Drop for Guard<'_> {
         }
     }
 }
-pub(super) fn dial(path: &Path) -> OwnedFd {
+pub(in crate::flow::context::worker_startup) fn dial(path: &Path) -> OwnedFd {
     let fd = socket(
         AddressFamily::Unix,
         SockType::SeqPacket,
@@ -39,7 +39,7 @@ pub(super) fn dial(path: &Path) -> OwnedFd {
     connect(fd.as_raw_fd(), &UnixAddr::new(path).unwrap()).unwrap();
     fd
 }
-pub(super) fn read_packet(fd: &OwnedFd) -> Option<Vec<u8>> {
+pub(in crate::flow::context::worker_startup) fn read_packet(fd: &OwnedFd) -> Option<Vec<u8>> {
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
     match recv(fd.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
         Ok(n) if n > 0 => {
@@ -50,7 +50,9 @@ pub(super) fn read_packet(fd: &OwnedFd) -> Option<Vec<u8>> {
         Err(e) => panic!("{e}"),
     }
 }
-pub(super) fn trace(reader: &mut UnixStream) -> Vec<serde_json::Value> {
+pub(in crate::flow::context::worker_startup) fn trace(
+    reader: &mut UnixStream,
+) -> Vec<serde_json::Value> {
     reader.set_nonblocking(true).unwrap();
     let mut bytes = vec![];
     let end = Instant::now() + Duration::from_millis(40);
