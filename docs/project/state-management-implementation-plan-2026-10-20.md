@@ -49,7 +49,8 @@ The next drafts stack from this baseline, each on its preceding carrier:
 | #280 code/state-failed-enter-cleanup | Bounded Failed pre-input context/resource cleanup: actual fork custody, owed Boot accounts, descriptorless retirement, exact Release/reap/Unload and original-cap drain. Eighteen source paths reviewed; harness 1,779/18 ignored, trace 160 and final 21 owner/lint gates pass. All 20 unique compiled protective failures and restores pass, plus three separate ownership compiler pins. Initial survivor/instrument error remain preserved. Healthy refusal and complete lifecycle composition remain owed. |
 | #281 code/state-author-claims | #275 rows 1-9: exact waiting-original/claim carrier, actual allocated ticket, immediate trace-only witness binding, immutable refusal identity and separate settled-cancel accounting. Harness 1,793/18 ignored, trace 160 and affected gates pass. All 23 unique compiled controls and restores pass after a filter-only rerun of the preserved A9 survivor; two separate non-Clone pins pass. Defensive caller and redundant-cache limits remain explicit. |
 | #283 code/state-management-refusal | Elected closed lifecycle refusal vocabulary and dormant exact admission mapping, full-envelope bounds and original value custody. Types 171/229, harness 1,798/18 ignored, trace 160, admin 498/37 ignored and downstream checks pass; final affected lint/fmt/lock pass after an exact private tuple alias. All 15 compiled protective failures and exact restores pass. Full healthy rollback remains owed. |
-| code/state-spu-admission-ownership | #277 seven followups: unsafe first-ownership entry APIs, recursive scoped fixture inventory, adapter-owned precheck refusal, structural notification-before-backend-drop and distinct repeated-adoption diagnostics. SPU cuda,gguf 407, affected lint/fmt/lock gates, eleven compiled named control failures/restores and four separate E0133 pins pass. Full lifecycle and production qualification remain owed. |
+| #284 code/state-spu-admission-ownership | #277 seven followups: unsafe first-ownership entry APIs, recursive scoped fixture inventory, adapter-owned precheck refusal, structural notification-before-backend-drop and distinct repeated-adoption diagnostics. SPU cuda,gguf 407, affected lint/fmt/lock gates, eleven compiled named control failures/restores and four separate E0133 pins pass. Full lifecycle and production qualification remain owed. |
+| code/state-place-capability | #278 eight followups: Entered-only capability return, complete registration disposal, single-source leases and shared immutable native proposals. Harness 1,811/18 inherited ignored and trace 160 pass; affected lint/fmt/lock, all seventeen compiled protective failures/restores and the separate E0594 pin pass. Initial test-only corrections are preserved. Full lifecycle/qualification stays open. |
 
 These are implementation branches under author validation, not merged authority or
 production qualification. Their scoped records carry the exact gate results.
@@ -134,18 +135,25 @@ parallel observation issue has already been repaired.
 
 Separate draft #276 on main proposes a move-owned author rejection result to
 return an unaccepted original while preserving earlier held/fatal custody.
-Revision 03e8f8e8 also makes the #279 held-boundary choice explicit: recoverable
+Revision a8c5793e makes the #279 held-boundary choice explicit: recoverable
 Busy is recommended for held-only admission/release/Enter rollback/capture/Closed,
 with current fatal caller-error treatment as the alternative. The revised
 operator election, review and merge remain pending. Its caller migration is
 not implementation authority yet. Independent cleanup rows proceed without a
 new overflow queue, ticket or halt-account field.
 
-Separate draft #282 at 544ebde3 proposes the missing required Serving EnterWindow,
+Separate draft #282 at 2dbaa828 proposes the missing required Serving EnterWindow,
 original pre-preparation load anchor and distinct malformed/expired paths across
 Types/Admin/Harness. Its four docs and source checks are independently clear;
 the operator election, review and merge are pending. It changes no code or
 active serving selection and gives no new timeout grace or cleanup proof.
+
+Separate draft #285 at 0abef1b6 proposes the absent-SPU Unload representation:
+outer release remains required, while inner spu is omitted only for actual child
+noncreation. A successfully forked child remains present despite failed exec,
+port retirement or reap. Its four documents and evidence are verified; operator
+ruling, Planner review and merge remain pending. It elects no terminal ordering
+algorithm, extra time or successful lifecycle result.
 
 The Planner graded #255 at b26420e5 with no fix-bucket findings and reproduced
 its gates and 17 protective mutations. Its TRACE-PLACEMENT claim is limited to

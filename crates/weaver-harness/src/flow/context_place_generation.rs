@@ -634,7 +634,9 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<GenerationCompletion>, RunFailure> {
         self.live(io)?;
-        if !self.generation.as_ref().is_some_and(|w| w.done) {
+        if self.phase != RecordingPhase::Entered
+            || !self.generation.as_ref().is_some_and(|w| w.done)
+        {
             return Ok(None);
         }
         self.consume_place_completion()?;

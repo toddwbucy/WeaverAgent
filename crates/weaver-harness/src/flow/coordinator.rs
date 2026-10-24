@@ -1064,6 +1064,24 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.ledger.release_source_lease(lease)
     }
 
+    #[cfg(test)]
+    pub(super) fn review_set_taken_source_status(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+        status: super::ledger::LeaseSlotStatus,
+    ) {
+        self.ledger
+            .review_set_taken_source_status(lease, source, status);
+    }
+
+    pub(super) fn release_source_leases(
+        &mut self,
+        leases: &[&SourceLease],
+    ) -> Result<(), super::ledger::LedgerError> {
+        self.ledger.release_source_leases(leases)
+    }
+
     /// Reserve the only consumer before its original author is submitted.
     /// This is not a source lookup or a way to recover a disposed receipt.
     pub(super) fn reserve_filing_receipts(
@@ -3755,6 +3773,101 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
             || self.stopped_plan_read.as_ref().is_some_and(|owner| {
                 owner._state.failure().is_some() || owner.close_error.is_some()
             })
+    }
+
+    /// Prove that every retained control/measurement slot belongs to this
+    /// actual turnless Grants owner. This neither reads nor releases the channel.
+    pub(super) fn stopped_grants_record(
+        &self,
+        expected: Option<DecimalU64>,
+        complete: bool,
+        barrier: &RecordBarrier,
+    ) -> Result<Option<u64>, &'static str> {
+        let state = self
+            .state
+            .as_ref()
+            .ok_or("Grants lost its original state channel")?;
+        let matches_id = |id| expected == Some(id);
+        if state.outstanding().iter().any(|exchange| {
+            !matches_id(exchange.common.request_id)
+                || exchange.common.run_id != self.run
+                || exchange.common.session_id != state.identity().0
+                || exchange.operation != (StateControl::Grants {}).operation()
+        }) {
+            return Err("Grants retains a foreign state exchange");
+        }
+        if self
+            .state_operation
+            .as_ref()
+            .is_some_and(|(request, turn)| {
+                expected.is_none() || *request != (StateControl::Grants {}) || turn.is_some()
+            })
+        {
+            return Err("Grants retains a foreign control owner");
+        }
+        if self
+            .operation_completion
+            .as_ref()
+            .is_some_and(|completion| {
+                !matches!(completion,OperationCompletion::State {request,turn,completion,..}
+                if *request==(StateControl::Grants {}) && turn.is_none()
+                    && matches_id(completion.answer.common().request_id)
+                    && completion.answer.common().run_id==self.run
+                    && completion.answer.common().session_id==state.identity().0
+                    && !completion.discard_capture_result)
+            })
+        {
+            return Err("Grants retains a foreign completion");
+        }
+        if complete
+            && (self.state_operation.is_some()
+                || self.operation_completion.is_some()
+                || !state.outstanding().is_empty()
+                || state.held_measurement().is_some())
+        {
+            return Err("completed Grants has unrelated remaining work");
+        }
+        if expected.is_none()
+            && (self.state_operation.is_some()
+                || self.operation_completion.is_some()
+                || !state.outstanding().is_empty()
+                || state.held_measurement().is_some()
+                || self.pending_record.is_some())
+        {
+            return Err("unallocated Grants has foreign retained state work");
+        }
+        if let Some(measurement) = state.held_measurement()
+            && (!matches_id(measurement.observation.request_id)
+                || measurement.observation.operation != (StateControl::Grants {}).operation())
+        {
+            return Err("Grants held measurement differs from its request");
+        }
+        match self.pending_record {
+            Some(PendingRecord::State) => {
+                let measurement = state
+                    .held_measurement()
+                    .ok_or("Grants measurement is absent")?;
+                if !matches_id(measurement.observation.request_id)
+                    || !barrier.pending_state_measurement_matches(measurement)
+                {
+                    return Err("Grants pending author differs from its measurement");
+                }
+                Ok(Some(
+                    barrier
+                        .pending_author()
+                        .ok_or("Grants has no author ticket")?
+                        .ticket,
+                ))
+            }
+            Some(PendingRecord::StateRelease) if expected.is_some() => {
+                if barrier.pending().is_some() || barrier.pending_author().is_some() {
+                    return Err("Grants final probe has a foreign author");
+                }
+                Ok(None)
+            }
+            None if barrier.pending().is_none() && barrier.pending_author().is_none() => Ok(None),
+            _ => Err("Grants cannot claim another record"),
+        }
     }
 
     pub(super) fn preinput_failed_owner(&self) -> bool {

@@ -52,20 +52,12 @@ fn place_phase_review_abandoned_reload_keeps_inputs_as_evidence_only() {
         };
         assert_eq!(Arc::as_ptr(unit), held);
         assert!(account.take_staged().is_none());
-        if expired {
-            assert!(account.take_reload_inputs().is_none());
-            assert!(account.reload_prefix().is_some());
-        } else {
-            let returned = account
-                .take_reload_inputs()
-                .expect("completed no-mutation Leave returns inputs");
-            assert_eq!(returned.prefix().assembly_id(), assembly);
-            let ReloadItem::Held(unit) = &returned.original_tail().items[0] else {
-                unreachable!()
-            };
-            assert_eq!(Arc::as_ptr(unit), held);
-            assert!(account.take_reload_inputs().is_none());
-        }
+        assert!(account.take_reload_inputs().is_none());
+        assert_eq!(account.reload_prefix().unwrap().assembly_id(), assembly);
+        let ReloadItem::Held(unit) = &account.reload_tail().unwrap().items[0] else {
+            unreachable!()
+        };
+        assert_eq!(Arc::as_ptr(unit), held);
         assert!(fx.run().context.failure().is_none());
         assert_eq!(fx.run().context.deadlines.get(PumpDeadline::Cut), Some(cut));
         assert!(receive(fx.peer.as_fd()).is_none());

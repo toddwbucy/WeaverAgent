@@ -7,6 +7,7 @@
 pub(crate) mod codec;
 mod content;
 mod declaration;
+pub mod enter;
 mod frame;
 mod lifecycle_refusal;
 mod marks;
