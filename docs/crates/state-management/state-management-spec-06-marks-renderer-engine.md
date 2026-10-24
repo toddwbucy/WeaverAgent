@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #232
+**Landing PR:** #260
 
-**Version:** 0.12 **Date filed:** 2026-10-21 **Document ID:** `state-management-spec-06`
+**Version:** 0.13 **Date filed:** 2026-10-21 **Document ID:** `state-management-spec-06`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -296,14 +296,21 @@ the planned suffix cut and administrative cancellation. Any other resident mutat
 invalidates the measured result. [PLACE-5, PLACE-6]
 
 **CAPACITY.** StateManagementConfig gains placement {c-head, c-tail, measurement-ref},
-positive u64 token counts. c-head bounds the prefix at load. The qualified tuple must
-satisfy c-head + c-tail + generation_limit + terminal_tokens <= capacity, with checked
-arithmetic and the actual Opened facts. The current single-token terminator is an
-existing seam fact, not an invented measured value. C_tail includes every delta token,
-tool schemas, framing and generation openers, and all generated work already resident
-outside the prefix. No separate uncounted schema allowance exists. A different
-terminator convention requires an explicit amendment to the session contract before
-admission. Reason: the universal tail limit cannot spend the same memory twice.
+positive u64 token counts. c-head bounds the prefix at load. For foundation serving,
+the actual Opened.generation_limit must be greater than zero. The qualified tuple must
+also satisfy c-head + c-tail + generation_limit + terminal_tokens <= capacity, with
+checked arithmetic and the actual Opened facts. A zero generation_limit is a failed
+configured fit, not malformed Opened evidence. The harness records the truthful boot
+placement before StatePersistenceInvalid {stage:boot,case:boot_failed}, releases no
+journal or boot-mark readiness and follows failed-enter teardown. The Opened carrier
+still represents zero, and the SPU reports its resolved limit unchanged. This condition
+does not change diagnostic generation or the general session stop rule. The current
+single-token terminator is an existing seam fact, not an invented measured value.
+C_tail includes every delta token, tool schemas, framing and generation openers,
+and all generated work already resident outside the prefix. No separate uncounted
+schema allowance exists. A different terminator convention requires an explicit
+amendment to the session contract before admission. Reason: the universal tail
+limit cannot spend the same memory twice.
 [PLACE-3, PLACE-4, COST-2]
 
 At place, require prefix_tokens <= c-head, and keep - prefix_tokens + input_tokens <=
@@ -755,7 +762,7 @@ demonstrate that a bad N or dangling mark is refused. [MARK-4, PLACE-5]
 | PLACE-CALLS | Private grant, no-decode spy, stale grant and matching-completion fixture | Start decode during preparation, reuse grant or install prospective IDs without completion |
 | OPEN-FACTS | Real SPU open and harness transport fixtures, exact render/tokens/partition, session/port/send correlation and one prior boot recall | Reappend head, tokenize twice, accept stale/partial/wrong-session facts, change boxes or omit prefix count |
 | MEASURE-DELTA | SPU fixture, measure leaves resident tokens and sampler untouched | Decode during measure or use different render path |
-| CAPACITY | Boundary fixtures include schemas, opener, generation and terminator reserve | Omit any counted part |
+| CAPACITY | Boundary fixtures include schemas, opener, positive effective generation and terminator reserve; zero-limit boot retains truthful placement then refuses | Omit any counted part, accept a zero-limit foundation boot, lose its actual placement or misclassify valid zero evidence as protocol failure |
 | POSITION, N | Session fixture with inside-message mark, repeats and multiple tool rounds | Round N forward or use text token equality |
 | MESSAGE-MAP, COVERAGE-JOURNAL | Mixed Text/call/result and repeated-span fixture | Map by equal text, split a whole return or lose a repeated source location |
 | MARK-POSITION | Native closure with unplaced review records and replayed-span fixture | Use the last stored member as the argument position or permit preview as a mark |

@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #232
+**Landing PR:** #260
 
-**Version:** 0.7 **Date filed:** 2026-10-21 **Parent:** weaver-spu-PRD
+**Version:** 0.8 **Date filed:** 2026-10-21 **Parent:** weaver-spu-PRD
 
 ## 0. Scope and owning clauses
 
@@ -53,8 +53,11 @@ Session::prefix_len, capacity from Session::capacity, generation_limit from the 
 max_tokens_per_turn and terminal_tokens equal to one. Use checked u64 conversion. The
 current renderer supplies one promoted terminator token under SPU Spec 4.3. A different
 convention is outside this wire's admitted behavior. The harness checks its measured
-head/tail budget against these facts before enter can succeed. A failed fit closes this
-residency by existing failed-enter teardown, not a second Open. Reason: a resolved
+head/tail budget and foundation serving's positive effective generation requirement
+against these facts before enter can succeed. Report a resolved zero unchanged; it is
+valid Opened evidence and fails that harness fit check. This adds no SPU-side zero-limit
+refusal or change to diagnostic generation. A failed fit closes this residency by
+existing failed-enter teardown, not a second Open. Reason: a resolved
 OperatorTunable generation limit is an SPU fact even when no declaration key carries it.
 [PLACE-1, PLACE-3, PLACE-5, PERSIST-6]
 

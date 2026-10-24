@@ -1,0 +1,107 @@
+# Foundation boot generation limit proposal
+
+Date: 2026-10-22. Issue: #146. Approved election; Spec merge remains pending.
+Source: #258 Planner review 5622585660, row 5.
+Draft PR: https://github.com/toddwbucy/WeaverAgent/pull/260
+Branch: docs/state-positive-generation.
+Original main base: 45f8483393ce25af4ade3f0fa7bd96c1e8ed78f1.
+
+The operator approved positive generation for boot in comment 6354978619.
+Planner review 5622765455 found no fix-bucket rows and recommended this election.
+Its two prose-wrap findings are corrected without changing the Spec words.
+Implementation still waits for merge by the operator.
+
+## Proposed decision
+
+Require the actual Opened.generation_limit to be positive for successful
+foundation serving boot. Treat zero as a failed configured fit, using the
+existing StatePersistenceInvalid {stage:boot,case:boot_failed} after the truthful
+boot placement. Release no journal, boot mark or serving readiness and run the
+existing failed-enter teardown. Keep the original Enter bound.
+
+The SPU continues to report its actual resolved limit, including zero. The
+Opened wire remains u64 and zero remains valid evidence. Do not relabel it a
+protocol error, normalize it to one, reject unrelated diagnostic operation or
+invent a refusal code. Admin cannot infer every frozen/tunable effective limit;
+the harness judges the actual Opened fact at the existing fit boundary.
+
+The alternative is to retain successful zero-limit foundation boot explicitly.
+That preserves current behavior and permits an agent that can never draw a
+generated token under that loaded limit. Either election needs an explicit
+record; this draft proposes the first.
+
+## Existing behavior and rationale
+
+Merged Spec 06 OPEN-FACTS carries the resolved max-tokens-per-turn; CAPACITY
+requires positive head and tail budgets but does not require a positive
+generation limit. The SPU count resolver accepts zero. Its escaping/evidence
+unit fixture also constructs zero counts; that fixture tests carrier spelling,
+not a qualified boot.
+
+The first append is not necessarily refused. When its delta and terminator fit,
+the existing Session::append_and_generate prefills the delta and checks the
+zero limit before sampling, producing LimitReached with no sampled token under
+the ordinary termination rule. This proposal therefore prevents unusable
+foundation serving admission rather than repairing an overflow check. It
+preserves the general SPU zero-limit behavior for other admitted uses.
+
+## Paired scope and required evidence
+
+The draft changes Spec 06 CAPACITY and its protective instrument,
+HARNESS-OPEN's fit judgment, and SPU-OPEN's producer/consumer responsibility.
+The field set, terminal convention, existing refusal vocabulary and counted
+placement remain unchanged. No code depends on the proposal until operator
+approval, Planner review and merge.
+
+Implementation must distinguish a valid zero-limit Opened from malformed
+evidence, retain its exact raw boxes, record one truthful placement before
+boot_failed and grant no journal/mark. Positive boundary controls must still
+succeed. Exercise trace pressure, cancellation and original-bound expiry
+without losing the failed fit's owed account. A mutation that admits zero must
+fail that actual owner test. Keep carrier zero roundtrips and diagnostic session
+zero-limit behavior valid. The operator has approved this proposal; it does not
+complete #146 or qualify serving.
+
+## Integration with merged release-absence wording
+
+On 2026-10-23, main at f4482c60936efb6b7b38dd888fb61f25f8a953ed
+was joined into this proposal without rewriting its history. The header
+conflict keeps this proposal as Landing PR and advances the harness
+amendment from merged version 0.30 to proposed version 0.31. Date filed
+retains each owning document's date from main under the operator's
+first-filing convention. Both the proposed clauses and the merged
+HARNESS-RELEASE-ABSENT / TRACE-RELEASE-ABSENT wording are retained.
+
+Exact body comparisons preserve the previously reviewed Spec clause text;
+the harness body additionally contains the unchanged merged absence
+clause. Documentation checks accompany this conflict resolution. At this
+checkpoint the five proposals were separate main-based PRs; later landings
+must incorporate preceding merged clauses and advance shared versions again.
+The proposal remains unmerged and grants no implementation authority.
+
+## Integration after the Enter-window merge
+
+On 2026-10-23, #282 merged as main commit
+8010e16e64e137a28c239800c1e9724ae80c27b5. This proposal now joins that
+exact base, retaining the merged Enter-window and release-absence clauses.
+The harness amendment advances from 0.31 to 0.32. Where this proposal
+also changes another shared amendment, its version advances from main
+likewise. Landing PR still names this proposal; filing dates stay fixed.
+
+The manual resolution changes only conflicting headers. The clause bodies
+match the clean three-way combined text byte-for-byte. Lock, document,
+ASCII and diff checks pass. No runtime source changes or proposal merge
+is claimed. Other proposals remain separate and need the same version
+sequencing as each preceding proposal actually lands.
+
+## Integration with main 8e011774
+
+On 2026-10-23, this proposal joins main commit
+8e011774e1e488666f32ed81533fcadb73d4b489. Both parents are retained. The
+manual Spec resolution changes only the landing/version header; all clause
+bodies match the clean three-way combined text byte-for-byte. Each affected
+shared version advances from the actual merged main version. First-filing
+dates remain fixed. Earlier integration notes record their own checkpoints.
+
+Lock, three DocsMirror tests, ASCII and diff checks pass. No runtime source
+changes or proposal merge is claimed; the operator controls the landing.
