@@ -38,7 +38,7 @@ impl PumpIo for CircuitIo<'_> {
     }
 }
 
-fn prompt(seed: &str) -> Vec<u8> {
+pub(in crate::flow::context) fn prompt(seed: &str) -> Vec<u8> {
     let corpus: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("fixtures/recall-sources.json")).unwrap();
     let mut result = corpus

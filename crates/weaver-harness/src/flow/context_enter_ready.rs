@@ -37,7 +37,7 @@ pub(in crate::flow) struct EnteredServing<'a> {
     pub context: &'a mut RecordingContext,
     pub decode: &'a mut DecodePort,
     pub(in crate::flow::context) resident: ResidentBootResources<'a>,
-    pub certificate: TemplateCertificate,
+    pub certificate: Option<TemplateCertificate>,
     pub listener: LifecycleListener,
     pub gate: OrganPort,
     pub(in crate::flow::context) gate_child: OwnedChild,
@@ -84,7 +84,7 @@ impl<'a> RaisedBoot<'a> {
                     .is_some_and(|port| reply.belongs_to(port))
                     && matches!(
                         reply.envelope().payload,
-                        weaver_types::Payload::Answer(LifecycleAnswer::Ready)
+                        weaver_types::Payload::Answer(LifecycleAnswer::GateReady)
                     )
             })
         {
@@ -103,6 +103,10 @@ impl<'a> RaisedBoot<'a> {
     }
 }
 impl EnterReady<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn test_gate_child(&mut self) -> Option<&mut OwnedChild> {
+        self.raised.test_gate_child()
+    }
     pub(in crate::flow) fn stage(&self) -> ReadyStage {
         self.stage
     }
@@ -264,7 +268,7 @@ impl<'a> EnterReady<'a> {
         Ok(EnteredServing {
             context,
             decode,
-            certificate,
+            certificate: Some(certificate),
             resident: resident.expect("actual resident arms"),
             listener: owner.listener,
             gate: owner.port.expect("actual gate"),

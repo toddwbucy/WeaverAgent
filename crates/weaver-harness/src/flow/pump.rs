@@ -197,6 +197,13 @@ impl LifecycleListener {
         self.failure.as_ref()
     }
 
+    /// Before a recording context exists, accept through this same credential
+    /// check. Transfer the untouched peer to its sole Enter recvmsg owner.
+    pub(super) fn accept_enter(&mut self) -> Result<Option<LifecyclePeer>, Failure> {
+        self.advance()?;
+        Ok(self.take_connection())
+    }
+
     fn interest(&self) -> (BorrowedFd<'_>, PollFlags) {
         if let Some(peer) = &self.held {
             (peer.fd(), terminal_flags())
@@ -353,6 +360,26 @@ impl LifecyclePeer {
         let result = self.stage_tracked(envelope)?;
         if matches!(result, super::pump_transport::TrackedStage::Queued(_)) {
             self.enter_ready_guard = true;
+        }
+        Ok(result)
+    }
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_observation(
+        &mut self,
+        envelope: weaver_types::state_flow::enter::ObservationEnvelope,
+    ) -> Result<
+        super::pump_transport::TrackedStage<weaver_types::state_flow::enter::ObservationEnvelope>,
+        StageFailure<weaver_types::state_flow::enter::ObservationEnvelope>,
+    > {
+        if let Err(failure) = self.live() {
+            return Err(StageFailure {
+                input: envelope,
+                failure,
+            });
+        }
+        let result = self.sender.stage_observation(envelope)?;
+        if matches!(result, super::pump_transport::TrackedStage::Queued(_)) {
+            self.enter_ready_guard = false;
         }
         Ok(result)
     }
@@ -640,9 +667,23 @@ impl CommonPump {
     pub(super) fn step<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
+        coordinator: Option<&mut FlowCoordinator<SocketPort>>,
+        cx: &mut FlowRecording<'_>,
+        deadlines: &DeadlineRegistry<PumpDeadline>,
+    ) -> Result<PumpStep, PumpFailure> {
+        self.step_with_wait(ports, coordinator, cx, deadlines, true)
+    }
+
+    /// The same bounded observation and transport work, with an optional wait
+    /// when nothing is ready. A local decision may observe without inventing a
+    /// protocol deadline or substituting a clock/wait provider.
+    pub(super) fn step_with_wait<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
         mut coordinator: Option<&mut FlowCoordinator<SocketPort>>,
         cx: &mut FlowRecording<'_>,
         deadlines: &DeadlineRegistry<PumpDeadline>,
+        wait: bool,
     ) -> Result<PumpStep, PumpFailure> {
         if let Some(expired) = self.deadline(ports.io, deadlines)? {
             return Ok(expired);
@@ -701,6 +742,13 @@ impl CommonPump {
                 .transpose()
                 .map_err(PumpFailure::Flow)?
                 .flatten();
+            if !wait {
+                return Ok(if observation.is_some_and(|tick| self.previous >= tick) {
+                    PumpStep::Observation
+                } else {
+                    PumpStep::Idle
+                });
+            }
             let wake = deadlines.nearest().into_iter().chain(observation).min();
             let mut interests = Vec::new();
             let mut sources = Vec::new();
