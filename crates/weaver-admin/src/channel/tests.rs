@@ -456,3 +456,64 @@ fn the_dial_refuses_a_listener_of_the_workers_uid_that_holds_no_run_lock() {
 
     drop((impostor, worker));
 }
+
+#[test]
+fn replacement_enter_sender_bounds_whole_packet_before_transferring_descriptors() {
+    use nix::sys::socket::{recv, socketpair};
+    use std::os::fd::AsFd;
+    use weaver_types::state_flow::enter::EnterEnvelope;
+    for case in ["exact", "over", "escaped", "missing-state"] {
+        let (end, peer) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let owner = Coordination::adopt(end);
+        let (sink, _sink_peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (state, _state_peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../weaver-types/tests/fixtures/state-enter.json"
+        ))
+        .unwrap();
+        value["payload"]["body"]["payload"]["binding"]["ste100_scheme"] = serde_json::json!("");
+        let base = serde_json::to_vec(&value).unwrap().len();
+        let text = match case {
+            "exact" => "x".repeat(MAX_ENVELOPE_BYTES - base),
+            "over" => "x".repeat(MAX_ENVELOPE_BYTES - base + 1),
+            "escaped" => "\n".repeat(MAX_ENVELOPE_BYTES / 2),
+            _ => String::new(),
+        };
+        value["payload"]["body"]["payload"]["binding"]["ste100_scheme"] = serde_json::json!(text);
+        let envelope: EnterEnvelope = serde_json::from_value(value).unwrap();
+        let result = owner.send_replacement_enter(
+            &envelope,
+            sink.as_fd(),
+            (case != "missing-state").then(|| state.as_fd()),
+        );
+        let mut bytes = vec![0; MAX_ENVELOPE_BYTES + 1];
+        if case == "exact" {
+            result.unwrap();
+            let count = recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT).unwrap();
+            assert_eq!(count, MAX_ENVELOPE_BYTES);
+            assert_eq!(EnterEnvelope::decode(&bytes[..count]).unwrap(), envelope);
+        } else {
+            if case == "missing-state" {
+                assert_eq!(result, Err(ChannelFault::Undecodable));
+            } else {
+                assert_eq!(
+                    result,
+                    Err(ChannelFault::Truncated {
+                        bound: MAX_ENVELOPE_BYTES
+                    })
+                );
+            }
+            assert_eq!(
+                recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
+                Err(nix::errno::Errno::EAGAIN),
+                "no prefix or handles sent for {case}"
+            );
+        }
+    }
+}

@@ -15,6 +15,11 @@
 use weaver_harness::{Ports, Recalled, SessionShape, TurnError, TurnOutcome};
 use weaver_traits::{ContentBlock, Message, Role};
 
+// The coupled foundation dispatcher will select this owner after qualification.
+// Its caller supplies the compiled inventory and the real original Enter budget.
+#[allow(dead_code)]
+pub mod foundation;
+
 /// The system prompt, the loop's own content, per the operator's direction
 /// of 2026-08-18: contained with the control loop's code rather than the
 /// agent declaration, injected as the first contribution, and thereby
