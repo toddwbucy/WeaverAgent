@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #282.
+**Landing PR:** #268
 
-**Version:** 0.30 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.31 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -751,10 +751,21 @@ classifier-component halt. [FLOW-8, CLASS-2]
 LifecycleAnswer::PlanUpdated with Spec 07's PLAN-EXCHANGE fields, using the existing
 internal kind tag. Add LifecycleAsk::PlanUpdate with no body. Operation refusal is
 LifecycleRefusal::PlanUpdateRefused {case:PlanUpdateCase,detail:String,
-rejected_blocks:Vec<DecimalU64>}, inside the existing Payload::Refusal. The cases are
-defined once in Spec 07. No new adjacent response wrapper or untyped Value is admitted.
+rejected_blocks:Vec<DecimalU64>,read_code:ReadRefusalCode-or-null}, inside the existing
+Payload::Refusal. The cases are defined once in Spec 07, including read_refused.
+read_code is required nonnull for read_refused and required null for all other cases.
+rejected_blocks is empty for read_refused. The same exact shape is used by the shared
+PlanUpdateRefused record and by RefusalRecord::Lifecycle with ask plan_update.
+Unknown or omitted fields and an incompatible case/read_code combination refuse.
+PLAN-PREFLIGHT-READ checks the selector and leg before this typed outcome is authored.
+The codec accepts only its code union: not_found, counter_exhausted, unknown_snapshot,
+wrong_offset, result_too_large, result_unavailable and answer_too_large. It does not
+infer which leg occurred from the code. No new adjacent response wrapper or untyped
+Value is admitted.
 Exhaustive consumers include admin dispatch, worker coordination and CLI answer
-rendering. The schema fixture must decode both ends and reject unknown fields. [PLAN-6,
+rendering. The schema fixture must decode both ends and reject unknown fields, missing
+read_code, read_refused/null, another case with nonnull read_code, and a code outside
+the admitted union. All existing plan cases encode explicit read_code:null. [PLAN-6,
 FLOW-7]
 
 PlanSummary is {plan:PlanRef,status:PlanStatus,document_sha256:Digest,
