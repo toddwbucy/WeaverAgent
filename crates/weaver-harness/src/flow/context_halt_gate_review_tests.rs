@@ -227,7 +227,7 @@ fn halt_gate_closed_exchange_rejection_does_not_block_the_current_terminal() {
         .unwrap()
         .record();
     assert_eq!(rejection.reason, "duplicate_return");
-    assert_eq!(rejection.raw_envelope.get().as_bytes(), late_raw);
+    assert_eq!(rejection.raw_envelope.as_bytes(), late_raw);
     let mut terminal = killed();
     terminal.exchange = exchange(72);
     let raw = reply(&peer, &terminal);
@@ -241,7 +241,6 @@ fn halt_gate_closed_exchange_rejection_does_not_block_the_current_terminal() {
             .unwrap()
             .record()
             .raw_envelope
-            .get()
             .as_bytes(),
         late_raw
     );
@@ -277,7 +276,6 @@ fn halt_gate_foreign_answers_keep_one_rejection_and_hold_the_next_packet() {
                 .unwrap()
                 .record()
                 .raw_envelope
-                .get()
                 .as_bytes(),
             raw
         );
@@ -295,7 +293,6 @@ fn halt_gate_foreign_answers_keep_one_rejection_and_hold_the_next_packet() {
                 .unwrap()
                 .record()
                 .raw_envelope
-                .get()
                 .as_bytes(),
             raw
         );

@@ -5,9 +5,11 @@
 **Date filed:** 2026-08-24
 **Document ID:** `weaver-analysis-state-contract`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #325
+**Landing PR:** #312
 **Copies:** this WeaverAgent copy is authoritative by the operator's ruling of
-2026-10-20. WeaverAnalysis mirrors it; this act changes the WeaverAgent copy only.
+2026-10-20. WeaverAnalysis mirrors it, tracked by
+[WeaverAnalysis#7](https://github.com/toddwbucy/WeaverAnalysis/issues/7) and
+[WeaverAnalysis#15](https://github.com/toddwbucy/WeaverAnalysis/issues/15).
 
 ---
 
@@ -86,6 +88,10 @@ shapes of tool.return_rejected.raw_envelope under the trace amendment's
 TRACE-REJECTED-RETURN. Preserve historical records without rewriting their shape or
 claiming an object recovers the original payload bytes. This event remains forbidden
 from state projection; accepting its trace representation grants no preload traffic.
+WeaverAgent #312 carries this authoritative contract and the String producer;
+WeaverAnalysis#15 carries the mirror and reader implementation to the other party.
+That issue must be satisfied before the foundation cutover; filing it does not
+establish reader compatibility.
 
 **From `weaver-types`.** Nothing crosses. The binding kind conditions this
 door's existence and never rides it, the declaration having done its work at

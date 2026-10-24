@@ -56,7 +56,9 @@ pub struct RejectedReturn {
     pub call_id: Option<CallId>,
     pub execution: ExchangeId,
     pub reason: String,
-    pub raw_envelope: Box<RawValue>,
+    /// Exact UTF-8 organ frame payload. Outer JSON string escaping keeps the
+    /// record on one line without normalizing the received evidence.
+    pub raw_envelope: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

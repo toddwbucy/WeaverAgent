@@ -1,18 +1,20 @@
-# Rejected-return raw packet representation proposal
+# Rejected-return raw packet representation
 
 Date filed: 2026-10-24
-Issue: #146. Parent: #324 at
-`5fc27ead205637465c60f86ee34ac13655401b12`.
-Branch: `docs/state-rejected-return-wire`.
+Issue: #146. PR: #312, folded parent
+`47506ac04a1bb941ac27750e05917934bd2cb7d3`.
+Branch: `code/state-author-custody-composition`.
 
-This is a design proposal for operator election, Planner review and merge before
-implementation. No runtime source changes. The active serving path stays active.
+The operator elected String on 2026-10-24 and directed that the Spec and code
+travel together in #312. This act implements the producer and trace payload in
+that PR. The foundation dispatcher remains unselected. The external reader work
+and production qualification remain prerequisites to its cutover.
 
 ## Concrete finding
 
 The #324 process instrument `worker_external_composition_multiline` sends a valid
 pretty-printed ToolAnswer on an unexpected exchange. The harness retains its
-complete raw packet in `pairs::RejectedGateReturn`. The current RawValue trace
+complete raw packet in `pairs::RejectedGateReturn`. The RawValue trace
 field embeds literal newlines, and the recorder refuses the authoring attempt as
 PayloadMalformed. The flow halts with the exact source still held. No malformed
 JSON or lost transport byte is needed to reproduce the conflict.
@@ -22,9 +24,9 @@ The trace's canonical record and reader both require one event per line. A
 string carrier satisfies both obligations without changing the organ protocol,
 event kind, outcome/correlation rules or forbidden state projection.
 
-## Proposed election
+## Operator election
 
-Change only RejectedReturn.raw_envelope from RawValue to String in Spec 05 and
+RejectedReturn.raw_envelope changes from RawValue to String in Spec 05 and
 its trace mirror. The producer copies the exact valid UTF-8 packet into that
 string. The trace's outer JSON encoding escapes the packet's quotes, backslashes
 and literal control characters. One outer JSON decode recovers exactly the
@@ -47,57 +49,72 @@ New publishers use the string shape. Historical object-valued records stay
 unchanged. Readers distinguish both shapes without rewriting history or treating
 a reconstructed object as byte-exact evidence. Harness, trace and every external
 reader must change together before the held foundation cutover. This includes
-WeaverAnalysis's canonical reader and diagnostic/preload converter. This act
-changes this repository's Spec 05, trace amendment and authoritative
-weaver-analysis-state contract copies. The contract draws the two-shape reader
-rule from trace; no new preload encoding is defined. WeaverAnalysis's mirror
-and implementation remain owed. No external consumer is claimed updated.
+WeaverAnalysis's canonical reader and diagnostic/preload converter. The contract
+draws the two-shape reader rule from trace; no new preload encoding is defined.
+[WeaverAnalysis#15][reader] carries the mirror and reader implementation to that
+party and preserves [WeaverAnalysis#7][mirror]'s earlier mirror work. Filing the
+issue does not establish compatibility. DIAGNOSTIC-STATE now distinguishes this
+specific cutover requirement from other diagnostic/preload counterpart work.
 
 Alternatives considered:
 
 | Choice | Consequence |
 | --- | --- |
-| Escaped UTF-8 string, proposed | Exact packet round trip in one trace line; the field type and consumers must change. |
+| Escaped UTF-8 string, elected | Exact packet round trip in one trace line; the field type and consumers must change. |
 | Normalize the object | Preserves semantic JSON but loses the promised whitespace/escape/member-order evidence; requires weakening PAIR-MATCH. |
 | Base64 packet bytes | Lossless and handles arbitrary bytes, but expands scope to a byte carrier even though this event already requires a decoded valid envelope. |
 | Forbid multiline organ packets | Changes the existing organ acceptance contract and still needs a raw protocol-fault account; does not repair the stated evidence requirement. |
 
-## Paired implementation and review obligations
+## Implementation and remaining obligations
 
-| Site | Required follow-through |
+| Site | Disposition in #312 |
 | --- | --- |
-| harness flow/pairs.rs | Build from received.raw_bytes without parsing, trimming or lossy conversion; retain existing source-port/exchange and late/duplicate mapping. |
-| harness pair execution and halt account | Use the same exact record through ordinary and trace-only authoring, capacity, cancellation and first-fatal retention. |
-| trace serving payloads/records.rs | Serialize-only String mirror, outer escaping and one final newline. No internal-crate dependency. |
-| trace payload/recorder instruments | Whole-record round trip with CR/LF, tabs, surrounding whitespace, quotes, backslashes, Unicode and original JSON escapes. |
-| harness primitive/process instruments | Exact bytes before/after Recorded, no early discard, no changed terminal or forged result, and multiline regression now records successfully. |
-| WeaverAnalysis canonical reader and diagnostic/preload converter | Historical object and new string cases, unchanged diagnostic refusal and forbidden state projection; update its contract mirror and audit other external consumers before cutover. |
-| qualification | Escaped line size, retained memory and authoring latency against the actual declared limits and transport maximum. |
+| harness flow/pairs.rs | Copies received.raw_bytes with checked UTF-8 and no parsing, trimming or lossy conversion. Source-port/exchange and late/duplicate mapping remain in the same owner. |
+| harness pair execution and halt account | Carry the String through the existing ordinary and trace-only author. Original receive custody, original bounds and the Recorded acknowledgement remain unchanged. |
+| trace serving payloads/records.rs | Serialize-only String field; normal outer escaping and one final newline. No new internal-crate dependency. |
+| trace payload/recorder instruments | Real writer/sink checks recover exact CR/LF, tabs, outer whitespace, quotes, backslashes, UTF-8 and original JSON escapes. Golden files supply old object and new string cases. They do not implement an external reader. |
+| harness primitive/process instruments | Exact bytes remain before/after Recorded and across capacity pressure plus an intervening Leave wait. The multiline process case now requires Recorded rejection followed by the legitimate tool completion. Late, duplicate and unexpected dispositions keep their prior identities and fates. |
+| maximum payload | The harness receives exactly MAX_ENVELOPE_BYTES through an actual organ socket. The trace instrument records a 64 KiB escaped sample whose line exceeds the packet bound. This is a regression instrument, not production size/memory/latency qualification. |
+| WeaverAnalysis canonical reader and diagnostic/preload converter | Open in [WeaverAnalysis#15][reader]: both shapes, unchanged diagnostic refusal and forbidden state projection, contract mirror and external consumer audit before cutover. |
+| qualification | Open in #146: full escaped event size, all retained copies and authoring latency under the selected limits and deployment tuple. The recorder still has no per-record byte ceiling. |
 
 The trace registry references Spec 05 for this payload. The analysis-state
 contract draws its reader rule from trace rather than defining another wire.
-Version advances from 0.11 to 0.12 in Spec 05 and 0.26 to 0.27 in the trace
-amendment. First filing dates stay 2026-10-20 and
-2026-10-21. Landing PR names #325 in each changed normative document; their first
-filing dates remain unchanged.
+Spec 05 remains version 0.12 and the trace amendment 0.27, the versions proposed
+in folded #325. DIAGNOSTIC-STATE's clarification advances its amendment to 0.9.
+Landing PR names #312 in the affected normative documents; their first filing
+dates remain unchanged.
 
 ## Evidence and completion boundary
 
-Planner review 5638105018 at b600ee88 graded zero fix and four batch, and marked
-the proposal ready without electing it. This revision answers all four rows:
-Landing PR names #325; raw_bytes defines the payload boundary; WeaverAnalysis
-and its authoritative contract are named; the organ bound and recorder's lack
-of a per-record byte ceiling are explicit. The corrected #324 parent is joined
-without changing its tested runtime. The proposal now changes four documents.
+Planner review 5639469233 at 47506ac0 identified the producer/Spec mismatch as
+P1 and the missing external-party tracking as P2. The operator's String election
+and this producer implementation answer P1 in #312 itself. P2 is carried by the
+contract header/body, the diagnostic clarification and WeaverAnalysis#15.
+The earlier #325 proposal grade 5638105018 was not implementation authority;
+the explicit 2026-10-24 instruction supplies the election for this combined act.
 
 The exact #324 reproduction and source are deposited in
 `worker-external-b5f48f6a-20261024` under the approved #146 evidence root. Its
 manifest SHA256 is
 `1419473b3ab2241959fc843eecc3ac95baac1a42cd1b29bfffdf357faea83946`.
-This proposal's mechanical checks and small JSON round-trip illustration are
-separate evidence, not a runtime implementation or Rust conformance test.
+That source reproduces the old multiline refusal. The #312 body names the new
+source revision and its restored-source gates, protective controls and evidence
+deposit. Neither the earlier #324 result nor the folded tree's #329 gates is
+substituted for testing this code change.
 
-The operator has not yet elected this representation. Implementation waits for
-that election, Planner review and merge. The schema clock/certification and gate
-input routing blockers from #324 remain independent, as do full lifecycle,
-workflow, artifact and deployment qualification. No #146 checkbox closes.
+The six activation blockers and other batch findings in the folded #312 grade
+remain tracked under #146. [WeaverAgent#330][retention] carries the separately
+filed CompletedPair retention design and reported growth measurement. The String
+change does not settle those lifecycle, routing, ownership or retention findings.
+Foundation activation, production language artifacts, reader compatibility and
+coupled cutover remain held. No #146 checkbox closes here.
+
+The implementation lesson is to exercise the actual recorder with the received
+payload spelling: parsed JSON equality cannot establish exact packet evidence.
+The new checks compare bytes after one outer decode and keep the backpressure
+continuation in the same test.
+
+[reader]: https://github.com/toddwbucy/WeaverAnalysis/issues/15
+[mirror]: https://github.com/toddwbucy/WeaverAnalysis/issues/7
+[retention]: https://github.com/toddwbucy/WeaverAgent/issues/330

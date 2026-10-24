@@ -137,6 +137,103 @@ fn fixture(kind: Kind) -> Event {
     event(k, c, o, t, Some(p))
 }
 
+fn rejected_return_line(payload: &str) -> String {
+    let (mut recorder, reader) = recorder();
+    let sink = std::thread::spawn(move || bytes(reader));
+    let mut source = event(
+        Kind::ToolReturnRejected,
+        Channel::Tool,
+        Origin::Tool,
+        true,
+        Some(Payload::RejectedReturn(Box::new(
+            payloads::RejectedReturn {
+                call_id: None,
+                execution: payloads::ExchangeId {
+                    opener: payloads::Opener::Harness,
+                    ordinal: 97,
+                },
+                reason: "unexpected_exchange".into(),
+                raw_envelope: payload.to_owned(),
+            },
+        ))),
+    );
+    source.envelope.subsystem = Subsystem::Gate;
+    let submitted = recorded(recorder.submit(source));
+    assert_eq!(submitted.sequence, Sequence(1));
+    assert_eq!(submitted.tap, TapOutcome::Unselected);
+    let line = recorder.structure().iter().last().unwrap().line.to_string();
+    assert!(line.ends_with('\n'));
+    assert_eq!(line.bytes().filter(|b| *b == b'\n').count(), 1);
+    assert!(!line.contains('\r'));
+    let decoded: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(
+        decoded["payload"]["raw_envelope"]
+            .as_str()
+            .unwrap()
+            .as_bytes(),
+        payload.as_bytes()
+    );
+    drained(&mut recorder);
+    drop(recorder);
+    let written = sink.join().unwrap();
+    assert_eq!(written.lines().count(), 2);
+    assert!(written.ends_with(&line));
+    line
+}
+
+#[test]
+fn rejected_return_string_records_exact_multiline_payload_in_one_line() {
+    let expected = include_str!("../../tests/fixtures/rejected-return-string.jsonl");
+    let fixture: serde_json::Value = serde_json::from_str(expected).unwrap();
+    let payload = fixture["payload"]["raw_envelope"].as_str().unwrap();
+    assert_eq!(rejected_return_line(payload), expected);
+
+    let historical = include_str!("../../tests/fixtures/rejected-return-historical-object.jsonl");
+    let old: serde_json::Value = serde_json::from_str(historical).unwrap();
+    assert!(old["payload"]["raw_envelope"].is_object());
+    assert_eq!(
+        old["payload"]["raw_envelope"],
+        serde_json::from_str::<serde_json::Value>(payload).unwrap()
+    );
+    // Compatibility corpus for readers; the new publisher emits only String.
+    // An old object establishes JSON content, not original packet spelling.
+    assert_ne!(
+        serde_json::to_vec(&old["payload"]["raw_envelope"]).unwrap(),
+        payload.as_bytes()
+    );
+}
+
+#[test]
+fn rejected_return_escaped_line_can_exceed_the_64_kib_packet_bound() {
+    // The trace crate deliberately has no weaver-types dependency. The harness
+    // companion test admits exactly its actual MAX_ENVELOPE_BYTES over a socket.
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/rejected-return-string.jsonl"
+    ))
+    .unwrap();
+    let mut payload = fixture["payload"]["raw_envelope"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    payload.extend(
+        ['\r', '\n', '\t', ' ']
+            .into_iter()
+            .cycle()
+            .take(64 * 1024 - payload.len()),
+    );
+    assert_eq!(payload.len(), 64 * 1024);
+    serde_json::from_str::<serde_json::Value>(&payload).unwrap();
+    let began = Instant::now();
+    let line = rejected_return_line(&payload);
+    assert!(line.len() > payload.len());
+    eprintln!(
+        "rejected-return sample: payload_bytes={} trace_line_bytes={} elapsed_ns={}",
+        payload.len(),
+        line.len(),
+        began.elapsed().as_nanos()
+    );
+}
+
 #[test]
 fn canonical_record_is_shared_by_working_structure_tap_and_sink() {
     let (mut recorder, reader) = recorder();

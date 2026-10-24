@@ -638,12 +638,12 @@ impl PairLedger {
             _ => "unexpected_exchange",
         };
         let call_id = known.map(|(call, _)| call.clone());
-        let raw = match std::str::from_utf8(received.raw_bytes())
-            .ok()
-            .and_then(|text| serde_json::value::RawValue::from_string(text.to_owned()).ok())
-        {
-            Some(raw) => raw,
-            None => return Err((received, PairError::Protocol)),
+        // ReceivedOrgan already owns a decoded envelope. Copy its complete
+        // payload text, including surrounding whitespace and original escapes;
+        // parsing it again would normalize the evidence or trim its boundary.
+        let raw = match std::str::from_utf8(received.raw_bytes()) {
+            Ok(text) => text.to_owned(),
+            Err(_) => return Err((received, PairError::Protocol)),
         };
         use weaver_trace::serving::payloads as trace;
         let record = trace::RejectedReturn {

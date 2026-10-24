@@ -4,7 +4,7 @@ use super::*;
 use crate::flow::clock::testing::FakePumpIo;
 use crate::flow::context::worker_startup::input::generation::tests::{step, until};
 use crate::flow::context::worker_startup::input::management::tests::{Guard, trace};
-use crate::flow::context::worker_startup::tests::{Member, worker};
+use crate::flow::context::worker_startup::tests::{Member, trace_through, worker};
 use nix::sys::socket::{MsgFlags, recv, send};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -110,11 +110,17 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                                     },
                                     position: Position::Close,
                                     payload: Payload::ToolAnswer(ToolOutcome::Result {
-                                        content: "unrelated result".into(),
+                                        content: "unrelated \"result\" \\\n caf\u{e9}".into(),
                                     }),
                                 });
                             let raw = if mode.contains("multiline") {
-                                serde_json::to_string_pretty(&rejected).unwrap()
+                                format!(
+                                    " \t\r\n{}\n\t ",
+                                    serde_json::to_string_pretty(&rejected)
+                                        .unwrap()
+                                        .replace('\n', "\r\n")
+                                        .replace("unrelated", r"\u0075nrelated")
+                                )
                             } else {
                                 serde_json::to_string(&rejected)
                                     .unwrap()
@@ -327,7 +333,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             assert!(!root.join("external-3.json").exists());
             return; // Reproduces the held-input routing carry, not a completed turn.
         }
-        if mode.contains("gate-death") || mode.contains("multiline") {
+        if mode.contains("gate-death") {
             for _ in 0..1000 {
                 if step(input, member, clock, mode) == FoundationInputProgress::Stopped {
                     break;
@@ -339,26 +345,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             assert!(input.serving.owner.context.pairs.executing().is_some());
             assert!(!root.join("external-3.json").exists());
             assert!(!root.join("closed.json").exists());
-            if mode.contains("multiline") {
-                let raw = std::fs::read_to_string(root.join("rejected.json")).unwrap();
-                assert_eq!(
-                    input
-                        .serving
-                        .owner
-                        .context
-                        .pairs
-                        .pending_rejection()
-                        .unwrap()
-                        .record()
-                        .raw_envelope
-                        .get(),
-                    raw
-                );
-                assert!(input.detail().unwrap().contains("PayloadMalformed"));
-            }
             return;
         }
-        if (mode.contains("wrong-return") && ordinal == 2)
+        if ((mode.contains("wrong-return") || mode.contains("multiline")) && ordinal == 2)
             || (mode.contains("duplicate") && ordinal == 3)
         {
             for _ in 0..1000 {
@@ -388,7 +377,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                     .unwrap()
                     .record()
                     .raw_envelope
-                    .get(),
+                    .as_str(),
                 raw
             );
             assert!(input.pair_outcome(&request.call_id).is_none());
@@ -570,8 +559,16 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     );
     // This reads the whole trace only once, in the shared return instrument.
     // Rejection evidence is also retained by the ledger's completed rejection.
-    if mode.contains("wrong-return") || mode.contains("duplicate") {
-        let rows = trace(reader);
+    if mode.contains("wrong-return") || mode.contains("duplicate") || mode.contains("multiline") {
+        reader.set_nonblocking(true).unwrap();
+        let last = input.serving.owner.context.last_author_sequence.unwrap();
+        let rows = trace_through(
+            reader,
+            Vec::new(),
+            last,
+            Instant::now() + Duration::from_secs(3),
+        )
+        .unwrap();
         let rejected: Vec<_> = rows
             .iter()
             .filter(|r| r["kind"] == "tool.return_rejected")
@@ -585,11 +582,14 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 "unexpected_exchange"
             }
         );
-        // Check original whitespace against the recorder's retained wire copy.
+        // Decoding the outer string must recover every original payload byte.
         let raw = std::fs::read_to_string(root.join("rejected.json")).unwrap();
         assert_eq!(
-            rejected[0]["payload"]["raw_envelope"],
-            serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+            rejected[0]["payload"]["raw_envelope"]
+                .as_str()
+                .unwrap()
+                .as_bytes(),
+            raw.as_bytes()
         );
         return;
     }

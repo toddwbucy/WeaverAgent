@@ -1462,7 +1462,25 @@ fn rejected_reply_retains_its_exact_author_across_trace_pressure_and_leave_wait(
     let call = ready(&mut fx);
     let (mut gate, peer) = gate();
     sent(&mut fx, &mut gate, &peer, &call);
-    answer(&mut gate, &peer, 99);
+    let rejected = OrganEnvelope {
+        exchange: exchange(99),
+        position: Position::Close,
+        payload: OrganPayload::ToolAnswer(ToolOutcome::Result {
+            content: "whole \"result\" \\\n caf\u{e9}".into(),
+        }),
+    };
+    let raw = format!(
+        " \t\r\n{}\n\t ",
+        serde_json::to_string_pretty(&rejected)
+            .unwrap()
+            .replace('\n', "\r\n")
+            .replace("whole", r"\u0077hole")
+    );
+    assert_eq!(
+        send(peer.as_raw_fd(), raw.as_bytes(), MsgFlags::MSG_NOSIGNAL).unwrap(),
+        raw.len()
+    );
+    gate.try_receive().unwrap();
     assert_eq!(
         observe(&mut fx, &mut gate),
         super::super::ExecutionProgress::Rejected
@@ -1489,15 +1507,16 @@ fn rejected_reply_retains_its_exact_author_across_trace_pressure_and_leave_wait(
         }
     );
     assert!(fx.output.input.run.context.pair_rejected_authoring);
-    assert!(
-        fx.output
-            .input
-            .run
-            .context
-            .pairs
-            .pending_rejection()
-            .is_some()
-    );
+    let retained = fx
+        .output
+        .input
+        .run
+        .context
+        .pairs
+        .pending_rejection()
+        .unwrap();
+    assert_eq!(retained.raw_bytes(), raw.as_bytes());
+    assert_eq!(retained.record().raw_envelope.as_bytes(), raw.as_bytes());
     let original_bound = fx.output.input.run.context.pair_rejection_wait.unwrap().0;
     assert!(
         fx.output
@@ -1530,7 +1549,15 @@ fn rejected_reply_retains_its_exact_author_across_trace_pressure_and_leave_wait(
             .pending_rejection()
             .is_none()
     );
-    assert_eq!(fx.output.input.records(Kind::ToolReturnRejected).len(), 1);
+    let records = fx.output.input.records(Kind::ToolReturnRejected);
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0]["payload"]["raw_envelope"]
+            .as_str()
+            .unwrap()
+            .as_bytes(),
+        raw.as_bytes()
+    );
     assert!(fx.output.input.run.clock.now().unwrap() < original_bound.deadline_ns());
 }
 
