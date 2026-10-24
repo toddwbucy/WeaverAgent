@@ -95,7 +95,9 @@ impl Files {
                 headroom_bytes: Some("123456".into()),
             },
             composer: LoopIdentity::compiled("worker"),
-            templates: if mode.contains("generation") {
+            templates: if mode.contains("emission") {
+                super::input::generation::emission::tests::templates(mode)
+            } else if mode.contains("generation") {
                 super::input::generation::tests::templates()
             } else {
                 template_tests::templates()
@@ -217,11 +219,14 @@ pub(super) struct Member {
     ordinal: u64,
     pub(super) requests: Vec<String>,
     pub(super) hold_mark: bool,
+    pub(super) hold_kind: Option<&'static str>,
+    pub(super) filings: Vec<s::StateFrame>,
     pub(super) held_file: Option<s::StateFrame>,
 }
 impl Member {
     pub(super) fn step(&mut self, now: u64, mode: &str) {
         if !self.hold_mark
+            && self.hold_kind.is_none()
             && let Some(response) = self.held_file.take()
         {
             self.peer
@@ -344,6 +349,16 @@ impl Member {
                 }
                 s::StateFrame::File { common, filing } => {
                     self.requests.push("file".into());
+                    self.filings.push(request.clone());
+                    s::StateFrame::Filed {
+                        common: common.clone(),
+                        block_id: filing.block_id.clone(),
+                        observation,
+                    }
+                }
+                s::StateFrame::FilePair { common, filing } => {
+                    self.requests.push("pair-file".into());
+                    self.filings.push(request.clone());
                     s::StateFrame::Filed {
                         common: common.clone(),
                         block_id: filing.block_id.clone(),
@@ -352,9 +367,12 @@ impl Member {
                 }
                 _ => panic!("unexpected request {request:?}"),
             };
-            if self.hold_mark
-                && matches!(&request, s::StateFrame::File { filing, .. } if filing.source.kind == "state.mark")
-            {
+            let hold = match &request {
+                s::StateFrame::File { filing, .. } => (self.hold_mark && filing.source.kind == "state.mark") || self.hold_kind == Some(filing.source.kind.as_str()),
+                s::StateFrame::FilePair { filing, .. } => self.hold_kind == Some(filing.source.kind.as_str()) && (!mode.contains("second-pair") || self.filings.iter().filter(|f| matches!(f, s::StateFrame::FilePair { filing, .. } if filing.source.kind == "tool.call.completed")).count() >= 2),
+                _ => false,
+            };
+            if hold {
                 assert!(self.held_file.is_none());
                 self.held_file = Some(response);
                 continue;
@@ -384,9 +402,23 @@ fn circuit(mode: &str) {
     let peer = dial(&path);
     let (sink, mut reader) = UnixStream::pair().unwrap();
     let (state, member) = UnixStream::pair().unwrap();
-    let (mut bootstrap, scheme, _) = classifier_fixture();
+    let (mut bootstrap, mut scheme, _) = classifier_fixture();
+    if mode.contains("emission") {
+        super::input::generation::emission::tests::scheme(&mut bootstrap, &mut scheme);
+    }
     let mut config = super::super::tests::config();
     config.scheme = scheme;
+    if mode.contains("emission") && !mode.ends_with("unselected") {
+        let mut rule = config
+            .partition
+            .iter()
+            .find(|r| r.kind == "loop.instruction")
+            .unwrap()
+            .clone();
+        rule.id = "outbound".into();
+        rule.kind = "sort.decision".into();
+        config.partition.push(rule);
+    }
     if mode.starts_with("input-worker") {
         // The ordinary fixture's 1 ms bound is for paired fake I/O. This real
         // socket/clock circuit declares its own ample, unqualified test budget.
@@ -398,6 +430,7 @@ fn circuit(mode: &str) {
     let Some(weaver_trace::serving::Payload::Elections(mut load)) = event.payload else {
         panic!()
     };
+    load.ste100_scheme = bootstrap.scheme_text.clone();
     load.state_flow.gate_wait.elapsed_ns = config.gate_wait.elapsed_ns.0.into();
     if mode.starts_with("input-worker") {
         load.state_flow.ste100.decision_wait.elapsed_ns = 5_000_000_000.into();
@@ -497,6 +530,8 @@ fn circuit(mode: &str) {
         ordinal: 0,
         requests: vec![],
         hold_mark: false,
+        hold_kind: None,
+        filings: vec![],
         held_file: None,
     };
     if mode == "worker" || mode.starts_with("input-worker") {
@@ -798,8 +833,14 @@ fn assert_serving(
         ["--headroom-bytes", "123456"]
     );
     assert_eq!(
-        owner.certificate.accepted().len(),
-        owner.certificate.inventory().templates().len()
+        owner.certificate.as_ref().unwrap().accepted().len(),
+        owner
+            .certificate
+            .as_ref()
+            .unwrap()
+            .inventory()
+            .templates()
+            .len()
     );
     assert!(owner.context.place_engine.is_some());
     assert!(owner.context.committed_plan_summary().is_ok());
@@ -1112,4 +1153,148 @@ scenario!(
 scenario!(
     worker_generation_composition_observe_measurement,
     "input-generation-observe-measure"
+);
+
+scenario!(
+    worker_emission_composition_ready,
+    "input-generation-emission-ready"
+);
+
+scenario!(
+    worker_emission_composition_no_answer,
+    "input-generation-emission-no-answer"
+);
+
+scenario!(
+    worker_emission_composition_unselected,
+    "input-generation-emission-unselected"
+);
+
+scenario!(
+    worker_emission_composition_empty,
+    "input-generation-emission-empty"
+);
+
+scenario!(
+    worker_emission_composition_invalid_recall,
+    "input-generation-emission-invalid-recall"
+);
+
+scenario!(
+    worker_emission_composition_duplicate,
+    "input-generation-emission-duplicate"
+);
+
+scenario!(
+    worker_emission_composition_foreign,
+    "input-generation-emission-foreign"
+);
+
+scenario!(
+    worker_emission_composition_wrong_statement,
+    "input-generation-emission-wrong-statement"
+);
+
+scenario!(
+    worker_emission_composition_wrong_lane,
+    "input-generation-emission-wrong-lane"
+);
+
+scenario!(
+    worker_emission_composition_held,
+    "input-generation-emission-held"
+);
+
+scenario!(
+    worker_emission_composition_held_observe,
+    "input-generation-emission-held-observe"
+);
+
+scenario!(
+    worker_emission_composition_stop_held,
+    "input-generation-emission-stop-held"
+);
+
+scenario!(
+    worker_emission_composition_stop_held_eof,
+    "input-generation-emission-stop-held-eof"
+);
+
+scenario!(
+    worker_emission_composition_stop_begin,
+    "input-generation-emission-stop-begin"
+);
+
+scenario!(
+    worker_emission_composition_stop_effective,
+    "input-generation-emission-stop-effective"
+);
+
+scenario!(
+    worker_emission_composition_stop_outbound_begin,
+    "input-generation-emission-stop-outbound-begin"
+);
+
+scenario!(
+    worker_emission_composition_stop_sorted,
+    "input-generation-emission-stop-sorted"
+);
+
+scenario!(
+    worker_emission_composition_restatement,
+    "input-generation-emission-restatement"
+);
+
+scenario!(
+    worker_emission_composition_repair_refusal,
+    "input-generation-emission-repair-refusal"
+);
+
+scenario!(
+    worker_emission_composition_sort_refusal,
+    "input-generation-emission-sort-refusal"
+);
+
+scenario!(
+    worker_emission_composition_no_sort,
+    "input-generation-emission-no-sort"
+);
+
+scenario!(
+    worker_emission_composition_actual_worker,
+    "input-worker-generation-emission-actual-worker"
+);
+
+scenario!(
+    worker_emission_composition_stop_generated,
+    "input-generation-emission-stop-generated"
+);
+scenario!(
+    worker_emission_composition_stop_generated_invalid_recall,
+    "input-generation-emission-stop-generated-invalid-recall"
+);
+
+scenario!(
+    worker_emission_composition_bindings,
+    "input-generation-emission-bindings"
+);
+
+scenario!(
+    worker_emission_composition_held_deadline,
+    "input-generation-emission-held-deadline"
+);
+
+scenario!(
+    worker_emission_composition_stop_pair_receipt,
+    "input-generation-emission-stop-pair-receipt"
+);
+
+scenario!(
+    worker_emission_composition_stop_second_pair_receipt,
+    "input-generation-emission-stop-second-pair-receipt"
+);
+
+scenario!(
+    worker_emission_composition_answer_order,
+    "input-generation-emission-answer-order"
 );

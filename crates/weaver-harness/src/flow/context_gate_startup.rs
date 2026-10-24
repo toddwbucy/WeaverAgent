@@ -406,7 +406,7 @@ impl<'a> GateStartup<'a> {
             return Err(self.protocol(io, "gate response did not close its exact whole-sent Raise"));
         }
         match &reply.envelope().payload {
-            weaver_types::Payload::Answer(LifecycleAnswer::Ready) => {
+            weaver_types::Payload::Answer(LifecycleAnswer::GateReady) => {
                 self.stage = GateStartupStage::Complete
             }
             weaver_types::Payload::Refusal(_) => {

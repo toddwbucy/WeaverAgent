@@ -65,7 +65,7 @@ impl PumpIo for SendClock<'_> {
 }
 
 pub(in crate::flow::context::boot_composition::gate_startup) fn drive<'a>(
-    raised: RaisedBoot<'a>,
+    mut raised: RaisedBoot<'a>,
     clock: &mut FakePumpIo,
     mode: &str,
 ) -> GateStartup<'a> {
@@ -74,6 +74,31 @@ pub(in crate::flow::context::boot_composition::gate_startup) fn drive<'a>(
             Err(raised) => raised.owner,
             Ok(_) => panic!("missing original granted aggregate"),
         };
+    }
+    if mode == "entered-aggregate-plain-ready" {
+        let port = raised.owner.port.as_mut().unwrap();
+        assert_eq!(
+            send(port.fd().as_raw_fd(), b"g", MsgFlags::MSG_NOSIGNAL),
+            Ok(1)
+        );
+        for _ in 0..1000 {
+            port.try_receive().unwrap();
+            if let Some(reply) = port.take_received().unwrap() {
+                assert!(reply.belongs_to(port));
+                assert!(matches!(
+                    reply.envelope().payload,
+                    weaver_types::Payload::Answer(LifecycleAnswer::Ready)
+                ));
+                raised.owner.reply = Some(reply);
+                assert!(receive(original_peer_fd()).is_none());
+                return match raised.into_ready() {
+                    Err(raised) => raised.owner,
+                    Ok(_) => panic!("plain Ready from the gate granted aggregate admission"),
+                };
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!("same gate did not supply the plain Ready probe");
     }
     let mut ready = raised
         .into_ready()
@@ -333,7 +358,7 @@ pub(in crate::flow::context::boot_composition::gate_startup) fn drive<'a>(
             resident: Some(entered.resident),
             context: entered.context,
             decode: entered.decode,
-            certificate: entered.certificate,
+            certificate: entered.certificate.unwrap(),
         },
         request: entered.gate_request,
         listener: entered.listener,

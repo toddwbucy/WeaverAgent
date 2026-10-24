@@ -60,6 +60,16 @@ fn startup_composition_child() {
                         serde_json::from_slice(&message.payload).unwrap();
                     let (_, _, mut ready) = classifier_fixture();
                     ready.max_wire_bytes = bootstrap.instruction.max_wire_bytes;
+                    if mode.contains("emission") {
+                        use sha2::{Digest as _, Sha256};
+                        let digest = s::Digest::new(format!(
+                            "{:x}",
+                            Sha256::digest(bootstrap.scheme_text.as_bytes())
+                        ))
+                        .unwrap();
+                        ready.scheme_id = format!("ste100:{digest}");
+                        ready.artifact_sha256 = digest;
+                    }
                     if mode == "refuse" {
                         refusing = true;
                         channel
@@ -103,7 +113,13 @@ fn startup_composition_child() {
                     } else if mode.contains("generation")
                         && matches!(request.target, s::Ste100Target::Source(_))
                     {
-                        let mut reply = super::super::input_tests::accepted(&request);
+                        let mut reply = if mode.contains("emission") {
+                            super::super::worker_startup::input::generation::emission::tests::reply(
+                                &request, &mode,
+                            )
+                        } else {
+                            super::super::input_tests::accepted(&request)
+                        };
                         if mode.ends_with("output-refusal") && request.text == "Read result." {
                             reply.result = s::Ste100Result::NotSte100 {
                                 code: s::Ste100DefectCode::NonSte100,

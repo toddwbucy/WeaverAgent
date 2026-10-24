@@ -82,7 +82,7 @@ fn worker_input_gate_child() {
         &OrganEnvelope {
             exchange: raise.exchange,
             position: Position::Close,
-            payload: Payload::Answer(LifecycleAnswer::Ready),
+            payload: Payload::Answer(LifecycleAnswer::GateReady),
         },
     );
     if mode == "input-fault" {
@@ -259,6 +259,7 @@ pub(in super::super) fn exercise(
             Ok(FoundationInputResult::Aborted(serving)) => Held::Serving(serving),
             Ok(FoundationInputResult::Turn(turn)) => Held::Turn(turn),
             Ok(FoundationInputResult::Generated(output)) => Held::Input(output.into_service()),
+            Ok(FoundationInputResult::Sorted(output)) => Held::Input(output.into_service()),
             Err(input) => Held::Input(input),
         });
         assert!(matches!(

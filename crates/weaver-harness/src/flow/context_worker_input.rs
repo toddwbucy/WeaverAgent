@@ -25,6 +25,9 @@ pub enum FoundationInputProgress {
     Task,
     Placed,
     Generated,
+    Restatement,
+    Effective,
+    Sorted,
     /// An operation refused. Its full account remains with this owner.
     OperationRefused,
     Refused,
@@ -419,6 +422,9 @@ impl<'a> FoundationInput<'a> {
             FoundationInputProgress::Generated => Ok(FoundationInputResult::Generated(
                 generation::FoundationGeneration { input: self },
             )),
+            FoundationInputProgress::Sorted => Ok(FoundationInputResult::Sorted(
+                generation::emission::FoundationOutbound { input: self },
+            )),
             _ => Err(self),
         }
     }
@@ -429,6 +435,7 @@ pub enum FoundationInputResult<'a> {
     Aborted(FoundationServing<'a>),
     Turn(Box<FoundationTurn<'a>>),
     Generated(generation::FoundationGeneration<'a>),
+    Sorted(generation::emission::FoundationOutbound<'a>),
 }
 
 /// Actual checked source and the still-open gate exchange, beside the original
