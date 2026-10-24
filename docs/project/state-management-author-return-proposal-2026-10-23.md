@@ -1,12 +1,13 @@
 # Proposed author rejection custody
 
-Date: 2026-10-23. Status: proposed; the operator's revised election, review and
-merge are pending. This clarifies draft #276 at exact
+Date: 2026-10-23. Status: operator approved, subject to review and merge.
+This clarifies draft #276 at exact
 11e96da3dcfac5fb7a3b2de407632836d9d4ddb0 after the #279 Planner review at
 5f7a337256a4693d97900efffa1d8a38d0aa337e. It addresses #274 rows 1-2 and
 #279's carried row 1 election for issue #146. It changes no code and is not
-implementation authority. The earlier author-result choice and the new explicit
-boundary choice must be considered together before this proposal is elected.
+implementation authority. The operator approved both the author-result and
+recoverable held-boundary choices together on 2026-10-23; the [ruling][approval]
+retains the review and merge requirements.
 
 The current owner retains one nonfatal held original and one immutable
 first-fatal original. A third call consumes its AuthoredEvent but returns only
@@ -93,8 +94,8 @@ original permits evidence recovery and bounded fatal teardown only; healthy
 release, rollback, capture and Closed cannot be retried on that context.
 The earlier retry wording must then be removed. This is consistent with the
 current merged convention, but makes a correctable held-input ordering mistake
-terminate the run. The operator must choose explicitly; this draft recommends
-the recoverable alternative and does not implement either choice.
+terminate the run. The operator elected the recoverable alternative, subject
+to review and merge. This proposal does not implement either choice.
 
 The #279 admission work and this draft remain distinct: its current fatal
 boundary behavior is accurately described above, while the last-wins author
@@ -105,12 +106,10 @@ review/test rows by changing this prose.
 ## Landing form and sequence
 
 The owning Spec is written in the prospective landing form for this draft's
-recommended Busy election: Landing PR #276, normative clauses, and no proposal
-banner or losing alternative inside the Spec. That form does not record an
-operator election. This project proposal retains the alternative and the
-pending operator ruling, review and merge; no implementation is authorized
-before all three. If the operator chooses the fatal-boundary alternative,
-revise the owning clause and its instruments before landing.
+approved Busy election: Landing PR #276, normative clauses, and no proposal
+banner or losing alternative inside the Spec. This project proposal records
+the operator's ruling and retains the alternative for comparison. Approval
+alone does not authorize implementation; review and merge remain required.
 
 Both this draft and #282 currently propose harness amendment version 0.30 from
 main version 0.29. Sequence their landings. The first may land as 0.30; the
@@ -118,10 +117,9 @@ second must incorporate the first's actual merged clauses and advance to 0.31.
 Do not resolve that join by dropping either the author-custody or EnterWindow
 clause. The merge order remains the operator's; no merge is claimed here.
 
-The header's Date filed convention remains open: 2026-10-21 was the first
-filing, while these revisions currently say 2026-10-23. No convention is
-elected by this prose correction. Keep the original pending combined
-AuthorFailure/held-boundary question unchanged.
+The operator ruled that Date filed retains the first filing date. The owning
+Spec header therefore remains 2026-10-21; Version and Git identify revisions.
+This header correction changes no proposed clause or implementation authority.
 
 ## Author-result alternative and caller migration
 
@@ -164,3 +162,5 @@ This does not enlarge HARNESS-HALT-ACCOUNT. Only a real allocated pending
 ticket belongs in AuthorAtHalt; no unaccepted original is encoded there by
 fabricating an identity. This proposal closes no issue, changes no deployment
 and leaves full failed-run composition and qualification open.
+
+[approval]: https://github.com/toddwbucy/WeaverAgent/pull/276#issuecomment-6365802749
