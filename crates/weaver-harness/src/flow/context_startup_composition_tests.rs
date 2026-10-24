@@ -1,5 +1,7 @@
 //! Actual startup sockets and fork custody; child protocol replies are scripted.
 use super::*;
+#[path = "context_enter_startup_tests.rs"]
+pub(in crate::flow::context) mod entered_tests;
 use crate::flow::clock::{ReadyFd, WaitInterest, WaitOutcome, testing::FakePumpIo};
 use crate::flow::context::edge_tests::classifier_fixture;
 use crate::flow::context::failed_enter_driver::ChildState;
@@ -14,7 +16,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 use weaver_types::state_flow as s;
 
-pub(super) struct CircuitIo<'a>(pub(super) &'a mut FakePumpIo);
+pub(in crate::flow::context) struct CircuitIo<'a>(pub(in crate::flow::context) &'a mut FakePumpIo);
 impl PumpIo for CircuitIo<'_> {
     fn now(&mut self) -> std::io::Result<u64> {
         self.0.now()
@@ -58,6 +60,16 @@ fn startup_composition_child() {
                         serde_json::from_slice(&message.payload).unwrap();
                     let (_, _, mut ready) = classifier_fixture();
                     ready.max_wire_bytes = bootstrap.instruction.max_wire_bytes;
+                    if mode.contains("emission") {
+                        use sha2::{Digest as _, Sha256};
+                        let digest = s::Digest::new(format!(
+                            "{:x}",
+                            Sha256::digest(bootstrap.scheme_text.as_bytes())
+                        ))
+                        .unwrap();
+                        ready.scheme_id = format!("ste100:{digest}");
+                        ready.artifact_sha256 = digest;
+                    }
                     if mode == "refuse" {
                         refusing = true;
                         channel
@@ -81,11 +93,48 @@ fn startup_composition_child() {
                     assert_eq!(message.tag, Tag::Request);
                     let request: s::Ste100Request =
                         serde_json::from_slice(&message.payload).unwrap();
-                    let reply = s::Ste100Reply {
-                        request_id: request.request_id,
-                        target: request.target,
-                        scheme_id: request.scheme_id,
-                        result: s::Ste100Result::Accepted { bindings: vec![] },
+                    let reply = if let s::Ste100Target::Input { .. } = request.target {
+                        assert!(mode.starts_with("input-"), "unexpected input check");
+                        if mode == "input-check-eof" {
+                            return;
+                        }
+                        if mode == "input-silent" {
+                            continue;
+                        }
+                        let mut reply = super::super::input_tests::accepted(&request);
+                        if mode == "input-language" {
+                            reply.result = s::Ste100Result::NotSte100 {
+                                code: s::Ste100DefectCode::NonSte100,
+                                detail: "fixture refusal".into(),
+                                spans: vec![],
+                            };
+                        }
+                        reply
+                    } else if mode.contains("generation")
+                        && matches!(request.target, s::Ste100Target::Source(_))
+                    {
+                        let mut reply = if mode.contains("emission") {
+                            super::super::worker_startup::input::generation::emission::tests::reply(
+                                &request, &mode,
+                            )
+                        } else {
+                            super::super::input_tests::accepted(&request)
+                        };
+                        if mode.ends_with("output-refusal") && request.text == "Read result." {
+                            reply.result = s::Ste100Result::NotSte100 {
+                                code: s::Ste100DefectCode::NonSte100,
+                                detail: "fixture output refusal".into(),
+                                spans: vec![],
+                            };
+                        }
+                        reply
+                    } else {
+                        s::Ste100Reply {
+                            request_id: request.request_id,
+                            target: request.target,
+                            scheme_id: request.scheme_id,
+                            result: s::Ste100Result::Accepted { bindings: vec![] },
+                        }
                     };
                     channel
                         .begin_send(Tag::Reply, message.id, serde_json::to_vec(&reply).unwrap())
@@ -165,6 +214,7 @@ enum Case {
     ThroughBoot,
     RefuseOpen,
     Residency(&'static str),
+    Entered(&'static str),
 }
 
 fn circuit(case: Case) {
@@ -206,6 +256,13 @@ fn circuit(case: Case) {
     record.origin_ns = 999.into();
     record.state_member_observation.pid = 999;
     let start = serde_json::from_value(serde_json::to_value(&record.state_start).unwrap()).unwrap();
+    let mut original = None;
+    let mut original_peer = None;
+    if matches!(case, Case::Entered(_)) {
+        let (source, peer) = entered_tests::adopt(&mut run, record, &bootstrap, &child.path);
+        original = Some(source);
+        original_peer = Some(peer);
+    }
     let mut resources = ResourceFixture(Some(run.context.failed_enter_resources().unwrap()));
     let request = StartupRequest {
         start,
@@ -218,7 +275,68 @@ fn circuit(case: Case) {
         classifier_binary: child.path.clone(),
         inventory,
     };
-    let mut owner = StartupComposition::new(&mut run.context, &mut resources, request);
+    let mut owner = if let Some(original) = original {
+        let mut inputs = EnterStartupInputs {
+            original,
+            composer: weaver_trace::LoopIdentity::compiled("worker"),
+            classifier_binary: child.path.clone(),
+            inventory: request.inventory,
+        };
+        if let Case::Entered(mode @ ("foreign-context" | "foreign-resources" | "missing-checker")) =
+            case
+        {
+            let mut foreign = Fixture::new(config());
+            let mut foreign_resources = foreign.context.failed_enter_resources().unwrap();
+            if mode == "missing-checker" {
+                inputs.classifier_binary = PathBuf::from("/synthetic/not-in-stack");
+            }
+            let result = match mode {
+                "foreign-context" => StartupComposition::from_enter(
+                    &mut foreign.context,
+                    &mut foreign_resources,
+                    inputs,
+                ),
+                "foreign-resources" => {
+                    StartupComposition::from_enter(&mut run.context, &mut foreign_resources, inputs)
+                }
+                _ => StartupComposition::from_enter(&mut run.context, &mut resources, inputs),
+            };
+            let (returned, reason) = result.err().expect("unrelated Enter input accepted");
+            assert!(!reason.is_empty());
+            assert!(returned.original.adopted_by(&run.context));
+            assert_eq!(run.context.phase(), RecordingPhase::Preflight);
+            assert!(resources.classifier_child().is_none());
+            return;
+        }
+        match StartupComposition::from_enter(&mut run.context, &mut resources, inputs) {
+            Ok(owner) => owner,
+            Err((_, reason)) => panic!("Enter join refused: {reason}"),
+        }
+    } else {
+        StartupComposition::new(&mut run.context, &mut resources, request)
+    };
+    if matches!(case, Case::Entered("eof")) {
+        drop(original_peer.take());
+    }
+    if matches!(case, Case::Entered("stop")) {
+        let stop = weaver_types::OrganEnvelope {
+            exchange: weaver_types::ExchangeId {
+                opener: weaver_types::Opener::Admin,
+                ordinal: 8,
+            },
+            position: weaver_types::Position::Open,
+            payload: weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Stop {
+                cause: weaver_types::Cause { uid: 73 },
+            }),
+        };
+        use std::os::fd::AsRawFd;
+        nix::sys::socket::send(
+            original_peer.as_ref().unwrap().as_raw_fd(),
+            &serde_json::to_vec(&stop).unwrap(),
+            nix::sys::socket::MsgFlags::MSG_NOSIGNAL,
+        )
+        .unwrap();
+    }
     run.state.set_nonblocking(true).unwrap();
     let mut bytes = Vec::new();
     let mut opened = None;
@@ -255,6 +373,30 @@ fn circuit(case: Case) {
             return;
         }
         if stage == StartupStage::Stopped {
+            if let Case::Entered(mode @ ("eof" | "stop")) = case {
+                if mode == "eof" {
+                    assert!(matches!(
+                        owner.stopped(),
+                        Some(StartupStop::Run(RunFailure::Transport {
+                            source: PumpSource::Admin,
+                            ..
+                        }))
+                    ));
+                } else {
+                    assert!(matches!(owner.stopped(), Some(StartupStop::Interrupted)));
+                }
+                let cause = format!("{:?}", owner.stopped());
+                drop(original_peer.take());
+                // SAFETY: a stopped owner performs no fork, and this thread owns cleanup.
+                unsafe { owner.advance(LifecyclePorts::default(), &mut run.clock) };
+                assert_eq!(format!("{:?}", owner.stopped()), cause);
+                let (_, children, account) = owner.into_stopped().ok().unwrap();
+                assert!(account.original_enter.is_some());
+                assert!(account.enter_load.is_some());
+                assert!(account.load_sequence.is_none());
+                assert!(children.classifier_child().is_none());
+                return;
+            }
             match case {
                 Case::ExpireGrants | Case::ReplaceGrantsEnter => {
                     assert!(matches!(owner.stopped(), Some(StartupStop::Run(_))));
@@ -326,6 +468,19 @@ fn circuit(case: Case) {
             break;
         }
         if stage == StartupStage::Complete {
+            if let Some(original) = owner.original_enter.as_ref() {
+                entered_tests::assert_record(owner.context, original, &mut run._reader);
+                let weaver_types::state_flow::enter::EnterBinding::Serving {
+                    state_management,
+                    ste100_scheme,
+                    ..
+                } = &original.envelope().enter().binding
+                else {
+                    panic!()
+                };
+                assert_eq!(&owner.bootstrap.instruction, &state_management.ste100);
+                assert_eq!(&owner.bootstrap.scheme_text, ste100_scheme);
+            }
             assert_eq!(opens, 1);
             assert_eq!(grants, 1);
             let initial = owner
@@ -368,7 +523,38 @@ fn circuit(case: Case) {
                     Ok(prepared) => prepared,
                     Err(owner) => panic!("startup finish refused {:?}", owner.stopped()),
                 };
-                if let Case::Residency(mode) = case {
+                if matches!(case, Case::Entered("wrong-spu")) {
+                    let mut instruction = prepared
+                        .original_enter()
+                        .unwrap()
+                        .envelope()
+                        .enter()
+                        .spu_instruction
+                        .clone();
+                    instruction
+                        .decoder
+                        .model_binding
+                        .artifact
+                        .0
+                        .push_str("-substitute");
+                    let residency = super::super::residency_composition::ResidencyComposition::new(
+                        prepared,
+                        super::super::residency_composition::ResidencyRequest {
+                            binary: PathBuf::from("/not-executed"),
+                            arguments: vec![],
+                            instruction,
+                        },
+                    );
+                    assert_eq!(
+                        residency.stage(),
+                        super::super::residency_composition::ResidencyStage::Stopped
+                    );
+                    let (_, children, account) = residency.into_stopped().ok().unwrap();
+                    assert!(children.spu_child().is_none());
+                    assert!(account.startup.original_enter.is_some());
+                    return;
+                }
+                if let Case::Residency(mode) | Case::Entered(mode @ "full") = case {
                     let mut stopped = None;
                     if let Some(admitted) = super::super::residency_composition::tests::drive(
                         prepared,
@@ -685,4 +871,41 @@ fn startup_grants_composition_replaced_enter_cannot_extend_inspection() {
 #[test]
 fn startup_grants_composition_trace_pressure_holds_classifier_until_recorded() {
     circuit(Case::GrantsPressure);
+}
+
+#[test]
+fn enter_startup_composition_records_actual_received_configuration() {
+    circuit(Case::Entered("ready"));
+}
+#[test]
+fn enter_startup_composition_preserves_original_peer_eof_and_first_cause() {
+    circuit(Case::Entered("eof"));
+}
+#[test]
+fn enter_startup_composition_holds_stop_from_the_original_peer() {
+    circuit(Case::Entered("stop"));
+}
+#[test]
+fn enter_startup_composition_keeps_the_original_through_residency_and_boot() {
+    circuit(Case::Entered("full"));
+}
+pub(in crate::flow::context) fn entered_full() {
+    circuit(Case::Entered("full"));
+}
+
+#[test]
+fn enter_startup_composition_refuses_a_foreign_recording_context() {
+    circuit(Case::Entered("foreign-context"));
+}
+#[test]
+fn enter_startup_composition_refuses_a_foreign_resource_owner() {
+    circuit(Case::Entered("foreign-resources"));
+}
+#[test]
+fn enter_startup_composition_requires_root_checker_digest() {
+    circuit(Case::Entered("missing-checker"));
+}
+#[test]
+fn enter_startup_composition_refuses_substituted_spu_instruction_before_fork() {
+    circuit(Case::Entered("wrong-spu"));
 }

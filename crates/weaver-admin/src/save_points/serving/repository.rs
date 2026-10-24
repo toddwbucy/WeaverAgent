@@ -585,4 +585,4 @@ fn hash_dump(file: &mut File) -> Result<Digest, Fault> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

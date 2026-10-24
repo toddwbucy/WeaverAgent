@@ -4,6 +4,7 @@ use super::failed_enter_driver::ResidentBootResources;
 use super::residency_composition::ResidencyEvidence;
 use super::*;
 use crate::flow::pump::LifecyclePorts;
+use crate::flow::pump::enter::{probe_enter_peer, with_enter};
 use crate::flow::pump_transport::DecodePort;
 use crate::flow::templates::{CompiledInventory, TemplateCertificate};
 
@@ -115,7 +116,13 @@ impl<'a> BootComposition<'a> {
             ResidencyEvidence,
         ),
     > {
-        if !resources.can_boot(context, &evidence) {
+        if !resources.can_boot(context, &evidence)
+            || evidence
+                .startup
+                .original_enter
+                .as_ref()
+                .is_some_and(|original| !original.adopted_by(context))
+        {
             return Err((context, resources, inventory, evidence));
         }
         let (resident, decode) = resources.split_for_boot(evidence);
@@ -175,14 +182,57 @@ impl<'a> BootComposition<'a> {
         if let Some(failure) = self.context.failure().cloned() {
             return self.stop(BootCompositionStop::Run(failure));
         }
+        let mut resident = self.resident.take();
+        let mut lifecycle = lifecycle;
+        let progress = if resident.is_some() && lifecycle.residency.is_some() {
+            let failure = self.context.fail(
+                io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                "resident boot received a substitute residency port",
+            );
+            self.stop(BootCompositionStop::Run(failure))
+        } else {
+            let inherited_enter = resident.as_ref().map(|arms| arms.evidence.enter);
+            let original = resident.as_mut().and_then(|arms| {
+                lifecycle.residency = Some(&mut *arms.residency);
+                arms.evidence.startup.original_enter.as_mut()
+            });
+            match with_enter(original, lifecycle, |ports, payload| {
+                self.advance_retained(ports, inherited_enter, payload.is_some(), io)
+            }) {
+                Ok(progress) => progress,
+                Err(failure) => self.stop(BootCompositionStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                })),
+            }
+        };
+        self.resident = resident;
+        progress
+    }
+
+    fn advance_retained<I: PumpIo>(
+        &mut self,
+        mut lifecycle: LifecyclePorts<'_>,
+        inherited_enter: Option<AbsoluteBound>,
+        has_original: bool,
+        io: &mut I,
+    ) -> BootCompositionProgress {
+        if self.stage == BootStage::Stopped {
+            return BootCompositionProgress::Stopped;
+        }
+        if let Some(failure) = self.context.failure().cloned() {
+            return self.stop(BootCompositionStop::Run(failure));
+        }
         self.context.observe_boot_lifecycle(&lifecycle);
         self.context.observe_place_lifecycle(&lifecycle);
         if self.context.boot_enter_cancelled || self.context.place_admission_stopped() {
             return self.stop(BootCompositionStop::Interrupted);
         }
-        if self.resident.as_ref().is_some_and(|arms| {
-            self.context.deadlines.get(PumpDeadline::Enter) != Some(arms.evidence.enter)
-        }) {
+        if inherited_enter
+            .is_some_and(|enter| self.context.deadlines.get(PumpDeadline::Enter) != Some(enter))
+        {
             let failure = self.context.fail(
                 io,
                 FlowHaltReason::ProtocolFailed,
@@ -194,22 +244,13 @@ impl<'a> BootComposition<'a> {
         if let Err(failure) = self.context.live(io) {
             return self.stop(BootCompositionStop::Run(failure));
         }
-        if self.resident.is_some() && lifecycle.residency.is_some() {
-            let failure = self.context.fail(
-                io,
-                FlowHaltReason::ProtocolFailed,
-                HaltPoint::Barrier,
-                "resident boot received a substitute residency port",
-            );
-            return self.stop(BootCompositionStop::Run(failure));
-        }
-        let mut resident = self.resident.take();
-        let mut lifecycle = lifecycle;
-        if let Some(arms) = resident.as_mut() {
-            lifecycle.residency = Some(&mut *arms.residency);
+        if has_original && let Err(failure) = probe_enter_peer(&mut lifecycle) {
+            return self.stop(BootCompositionStop::Run(RunFailure::Transport {
+                source: PumpSource::Admin,
+                failure,
+            }));
         }
         let result = self.step(lifecycle, io);
-        self.resident = resident;
         match result {
             Ok(progress) => progress,
             Err(failure) => self.stop(BootCompositionStop::Run(failure)),
