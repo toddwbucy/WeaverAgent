@@ -91,6 +91,8 @@ fn revoke_completed_boot(fx: &mut SummaryFixture, cause: &str) {
                 listener: None,
                 peer: Some(&mut admin),
                 residency: None,
+                dial: None,
+                leave_peer: None,
             },
             gate: None,
             decode: None,

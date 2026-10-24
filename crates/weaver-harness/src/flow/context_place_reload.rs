@@ -46,7 +46,12 @@ impl RecordingContext {
         lease: SourceLease,
         source: SourceBlockId,
     ) -> Result<PendingReloadText, (SourceLease, SourceBlockId)> {
-        if !self.flow.ledger().owned_pending_text(&lease, &source) {
+        let single = self
+            .flow
+            .ledger()
+            .source_lease_sources(&lease)
+            .is_ok_and(|mut sources| sources.next() == Some(&source) && sources.next().is_none());
+        if !single || !self.flow.ledger().owned_pending_text(&lease, &source) {
             return Err((lease, source));
         }
         Ok(PendingReloadText {
@@ -107,34 +112,26 @@ impl RecordingContext {
                 staged: None,
             });
         }
-        // Every consumed slot was checked against the same ledger and its
-        // exact retained Held receipt before mutating any custody. The Held
-        // material owns the commit proof; these subscriptions are now redundant.
-        while let Some((index, pending)) = tail.filed_sources.pop() {
-            let PendingReloadText {
-                origin,
-                source,
-                lease,
-            } = pending;
-            if let Err((lease, error)) = self.flow.release_source_lease(lease) {
-                tail.filed_sources.push((
-                    index,
-                    PendingReloadText {
-                        origin,
-                        source,
-                        lease,
-                    },
-                ));
-                let failure =
-                    self.place_fault(io, format!("reload consumed receipt cleanup: {error}"));
-                return Err(PlaceBeginError {
-                    input: (prefix, tail),
-                    refusal: PlaceError::WrongProof,
-                    failure: Some(failure),
-                    staged: None,
-                });
-            }
+        // All registrations are validated before any is removed. On rejection
+        // the complete original tail still owns every lease, including siblings
+        // before the invalid entry; no partially released input is returned.
+        let leases: Vec<_> = tail
+            .filed_sources
+            .iter()
+            .map(|(_, pending)| &pending.lease)
+            .collect();
+        let released = self.flow.release_source_leases(&leases);
+        drop(leases);
+        if let Err(error) = released {
+            let failure = self.place_fault(io, format!("reload consumed receipt cleanup: {error}"));
+            return Err(PlaceBeginError {
+                input: (prefix, tail),
+                refusal: PlaceError::WrongProof,
+                failure: Some(failure),
+                staged: None,
+            });
         }
+        tail.filed_sources.clear();
         self.barrier.set_place_owed(true);
         self.reload = Some(ReloadTransaction {
             prefix: Some(prefix),
@@ -170,6 +167,13 @@ impl RecordingContext {
             .all(|pair| pair[0].0 < pair[1].0)
             && tail.filed_sources.iter().all(|(index, pending)| {
                 Arc::ptr_eq(&pending.origin, &self.read_origin)
+                    && self
+                        .flow
+                        .ledger()
+                        .source_lease_sources(&pending.lease)
+                        .is_ok_and(|mut sources| {
+                            sources.next() == Some(&pending.source) && sources.next().is_none()
+                        })
                     && self
                         .flow
                         .source_receipt_status(&pending.lease, &pending.source)
@@ -667,8 +671,7 @@ impl RecordingContext {
             }
             match &work.live_tail().items[index] {
                 ReloadItem::Held(unit) => {
-                    let held = unit.clone();
-                    work.units.push(held);
+                    work.units.push(Arc::clone(unit));
                 }
                 ReloadItem::Pending(pending) => {
                     let status = self
@@ -863,6 +866,15 @@ impl RecordingContext {
             return Ok(None);
         }
         self.consume_place_completion()?;
+        if self.reload.as_ref().is_some_and(|work| {
+            !work.cancelled
+                && work
+                    .staged
+                    .as_ref()
+                    .is_some_and(|staged| staged.recorded.is_none())
+        }) {
+            return Err(self.place_fault(io, "completed reload lost its Recorded staged receipt"));
+        }
         let mut work = self.reload.take().unwrap();
         self.barrier.set_place_owed(self.place_owed());
         self.deadlines.disarm(PumpDeadline::Cut);

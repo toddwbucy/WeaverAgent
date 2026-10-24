@@ -44,7 +44,10 @@ fn ste100_entry_review_idle_child() {
     }
     // This exact test filter is the only fixture selector; it is absent from
     // the production executable. Adoption and the entry loop are production code.
-    let fd = crate::channel::adopt_ste100().expect("child inherits only its real duty seam");
+    // SAFETY: the exact child was exec'd with one raw inherited seam and has
+    // not created another descriptor owner or runtime worker.
+    let fd =
+        unsafe { crate::channel::adopt_ste100() }.expect("child inherits only its real duty seam");
     let channel = Channel::from_owned(fd, fixture::LIMIT).unwrap();
     let exit = drive(Runtime::new_fixture(channel, IdleAdapter));
     std::process::exit(if exit == ExitCode::SUCCESS { 0 } else { 1 });
@@ -196,5 +199,42 @@ fn ste100_entry_review_static_absence_preserves_prepath_refusal_precedence() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn ste100_entry_review_absent_adapter_keeps_one_refusal_for_supplied_and_path_routes() {
+    use crate::ste100::admission::{SuppliedArtifacts, admit, admit_from_path, validate_bootstrap};
+    let mut fixture = fixture::Fixture::new(false);
+    fixture.bootstrap.instruction.model_binding.artifact.0 = fixture
+        .root
+        .join("missing-precheck-manifest")
+        .to_str()
+        .unwrap()
+        .into();
+    let bytes = serde_json::to_vec(&fixture.bootstrap).unwrap();
+    let limit = DecimalU64(fixture::LIMIT as u64);
+    let path = admit_from_path(
+        validate_bootstrap(limit, &bytes).unwrap(),
+        &NoCompiledAdapter,
+    );
+    let supplied = admit(
+        limit,
+        &bytes,
+        SuppliedArtifacts {
+            manifest: b"invalid manifest must remain untouched after static refusal",
+            files: &[],
+        },
+        &NoCompiledAdapter,
+    );
+    let expected = NoCompiledAdapter.precheck().unwrap_err();
+    for result in [path, supplied] {
+        let refusal = match result {
+            Err(refusal) => refusal,
+            Ok(_) => panic!("the absent production adapter cannot produce Ready"),
+        };
+        assert_eq!(refusal.protocol, expected.protocol);
+        assert_eq!(refusal.code, expected.code);
+        assert_eq!(refusal.detail, expected.detail);
     }
 }
