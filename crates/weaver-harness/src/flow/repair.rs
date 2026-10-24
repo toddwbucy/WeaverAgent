@@ -29,6 +29,8 @@ pub(in crate::flow) enum RepairError {
     InvalidExpansion,
     WrongAccounting,
     InvalidStatement,
+    OutstandingCorrectionLoan,
+    OutstandingAccountLoan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -759,7 +761,9 @@ impl RepairLedger {
     pub(super) fn next_association_refusal(&self) -> Option<(usize, RefusalRecord)> {
         let account = self.account.as_ref()?;
         let index = account.association_refusals.len();
-        let refusal = account
+        // Traverse borrowed descriptions first. Only the selected frontier
+        // allocates an owned refusal, including on repeated pending polls.
+        let (source, case, detail) = account
             .original
             .refusals()
             .iter()
@@ -773,23 +777,21 @@ impl RepairLedger {
                 else {
                     return None;
                 };
-                Some(RefusalRecord::ProtocolRepair {
-                    source_id: source.clone(),
-                    case: *case,
-                    detail: (*detail).into(),
-                })
+                Some((source, *case, *detail))
             })
-            .chain(
-                self.associations
-                    .iter()
-                    .map(|refusal| RefusalRecord::ProtocolRepair {
-                        source_id: refusal.source().clone(),
-                        case: refusal.case(),
-                        detail: "repaired external send requires exactly one non-recall statement"
-                            .into(),
-                    }),
-            )
+            .chain(self.associations.iter().map(|refusal| {
+                (
+                    refusal.source(),
+                    refusal.case(),
+                    "repaired external send requires exactly one non-recall statement",
+                )
+            }))
             .nth(index)?;
+        let refusal = RefusalRecord::ProtocolRepair {
+            source_id: source.clone(),
+            case,
+            detail: detail.into(),
+        };
         Some((index, refusal))
     }
 
@@ -942,6 +944,16 @@ impl RepairLedger {
             self.stage = Stage::Cancelled;
         }
     }
+    pub(super) fn outstanding_loan(&self) -> Option<RepairError> {
+        if self.correction_out.is_some() {
+            Some(RepairError::OutstandingCorrectionLoan)
+        } else if self.account_out.is_some() {
+            Some(RepairError::OutstandingAccountLoan)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn take_cancelled(&mut self) -> Option<RepairCancellation> {
         if self.stage != Stage::Cancelled
             || self.correction_out.is_some()
@@ -1135,6 +1147,43 @@ pub(super) fn validate_accounted<'a>(
         {
             return Err(RepairError::WrongAccounting);
         }
+    }
+    Ok(())
+}
+
+/// A terminal already admitted by one purpose remains immutable when Stop and
+/// then Unload claim the remaining suffix. Public pair ownership cannot reorder
+/// that prefix; this check also refuses corrupted or wrongly composed proofs.
+pub(super) fn validate_refused_accounted<'a>(
+    requests: impl ExactSizeIterator<Item = &'a PairStarted>,
+    completed: &[&CompletedPair],
+    cancel: Option<NonDispatchCause>,
+) -> Result<(), RepairError> {
+    let ceiling = match cancel {
+        None => 0,
+        Some(NonDispatchCause::Stop) => 1,
+        Some(NonDispatchCause::Unload) => 2,
+        Some(_) => return Err(RepairError::WrongAccounting),
+    };
+    if requests.len() != completed.len() {
+        return Err(RepairError::WrongAccounting);
+    }
+    let mut previous = 0;
+    for (request, proof) in requests.zip(completed) {
+        let Some(PairFailure::NotDispatched { cause }) = &proof.ended().reason else {
+            return Err(RepairError::WrongAccounting);
+        };
+        let rank = match cause {
+            NonDispatchCause::PassPurpose => 0,
+            NonDispatchCause::Stop => 1,
+            NonDispatchCause::Unload => 2,
+            _ => return Err(RepairError::WrongAccounting),
+        };
+        if rank < previous || rank > ceiling {
+            return Err(RepairError::WrongAccounting);
+        }
+        validate_accounted(std::iter::once(request), &[*proof], *cause)?;
+        previous = rank;
     }
     Ok(())
 }

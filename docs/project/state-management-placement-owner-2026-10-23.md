@@ -2,7 +2,8 @@
 
 Date: 2026-10-23. Parent: exact #267
 e4dbb002440e3d651f31c080d530d713982a962e. Issue: #146.
-Branch: code/state-placement-owner. Draft number awaits publication.
+Branch: code/state-placement-owner. Draft PR #269, head
+d2896bcd336b1b1ec78f370a6ff657b6ae9bcbef.
 
 ## Implemented scope
 
@@ -121,8 +122,11 @@ They do not establish one live SQL circuit or qualify a production model.
 Local gate history: /tmp/state-placement-owner-gates/.
 Root corrections: /tmp/state-placement-owner-root-corrections.md.
 Independent source and join reviews, mutation recipes and exact final source
-will accompany publication. Shared evidence deposition awaits the pending
-operator destination authorization; local evidence remains available. Only compiled behavioral failures
+accompany publication. The operator approved the shared destination on
+2026-10-23. The deposit at
+/bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/placement-owner-e4dbb002/
+contains 292 verified evidence files and 567 source hashes. Archive SHA256:
+97f9c489d1b78f0c2f6875f350277b7ed6a9826635baf53a683ee8339acca8f3. Only compiled behavioral failures
 with exact restored passes count as protective controls.
 
 Recorded Load retains the schema election, not a ready-gate proof. Production

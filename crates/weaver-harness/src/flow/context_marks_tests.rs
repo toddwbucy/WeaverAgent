@@ -745,6 +745,34 @@ fn begin_task_rejects_foreign_or_crossed_mark_catalogs() {
 }
 
 #[test]
+fn begin_task_held_author_keeps_input_read_and_mark_continuations_live() {
+    let mut fx = TaskFixture::new();
+    fx.begin();
+    let original = tests::event(Kind::Fault, None);
+    let expected = format!("{original:?}");
+    let run = &mut fx.input.run;
+    assert_eq!(
+        run.context
+            .author_and_wait(&mut ports(&mut run.clock), original),
+        Err(RunFailure::MarksOwned)
+    );
+    let TaskCompletion::Begun(task) = fx.finish() else {
+        panic!("actual admitted task stalled");
+    };
+    assert!(task.mark().is_some());
+    assert!(task.belongs_to(&fx.input.run.context));
+    assert_eq!(fx.input.records(Kind::Recall).len(), 1);
+    assert_eq!(fx.input.records(Kind::StateMark).len(), 1);
+    let run = &mut fx.input.run;
+    assert!(run.clock.now().unwrap() < fx.bound.deadline_ns());
+    assert!(run.context.failure().is_none());
+    assert_eq!(
+        format!("{:?}", run.context.take_held_author().unwrap()),
+        expected
+    );
+}
+
+#[test]
 fn begin_task_excludes_public_read_author_and_preserves_original_deadline() {
     let mut fx = TaskFixture::new();
     fx.hold_input = true;

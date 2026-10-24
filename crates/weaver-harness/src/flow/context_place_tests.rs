@@ -66,6 +66,37 @@ impl PlaceFixture {
         run.author(started).unwrap();
         assert_eq!(run.context.open_turn.as_ref().unwrap().0, name);
     }
+    fn observe_place_command(&mut self, payload: weaver_types::LifecycleDirective) {
+        let command = directive(payload);
+        let (admin, peer) = OrganChannel::pair().unwrap();
+        let mut admin = LifecyclePeer::from_channel(admin).unwrap();
+        send_bytes(peer.as_fd(), &serde_json::to_vec(&command).unwrap());
+        for _ in 0..8 {
+            let run = &mut self.summary.boot.member.run;
+            let mut io = SummaryReadyClock(&mut run.clock);
+            run.context
+                .pump_once(&mut PumpPorts {
+                    lifecycle: LifecyclePorts {
+                        listener: None,
+                        peer: Some(&mut admin),
+                        residency: None,
+                    },
+                    gate: None,
+                    decode: Some(&mut self.decode),
+                    label: None,
+                    io: &mut io,
+                })
+                .unwrap();
+            if admin.held().is_some() {
+                break;
+            }
+        }
+        assert_eq!(admin.take_completion().unwrap().unwrap().envelope, command);
+        assert!(
+            receive(peer.as_fd()).is_none(),
+            "fixture consumes command, not an invented reply"
+        );
+    }
     fn close_turn(&mut self) {
         let run = self.run();
         let turn = run.context.open_turn.clone().unwrap();
@@ -982,3 +1013,6 @@ mod cut_tests;
 mod material_tests;
 #[path = "context_place_native_tests.rs"]
 mod native_tests;
+
+#[path = "context_place_append_review_tests.rs"]
+mod append_review_tests;

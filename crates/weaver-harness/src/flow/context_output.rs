@@ -105,6 +105,7 @@ impl RecordingContext {
             || self.flow.has_filing_consumer()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()
+            || (self.held_author.is_some() && !self.generation_output_continuation())
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()

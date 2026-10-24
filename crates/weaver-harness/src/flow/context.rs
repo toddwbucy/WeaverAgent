@@ -17,7 +17,7 @@ use super::coordinator::{
 };
 use super::intake::{FlowInbox, RetentionBudget};
 use super::pump::{CommonPump, PumpDeadline, PumpFailure, PumpPorts, PumpSource, PumpStep};
-use super::recording::{RecordBarrier, RecordFailure, RecordProgress, RecordPurpose};
+use super::recording::{OwedAuthor, RecordBarrier, RecordFailure, RecordProgress, RecordPurpose};
 use super::report::{FlowHaltReason, HaltPoint, SecondaryFailure, WaitAtHalt};
 use super::ste100_socket::SocketPort;
 
@@ -98,6 +98,13 @@ struct LoadDuty {
     tools: serving::payloads::ToolPolicies,
 }
 
+/// A private owner's original is queued under this exact identity, never
+/// inferred from event shape or from another owner's empty completion slot.
+enum AuthorClaim {
+    Placement(std::sync::Arc<()>),
+    Measurement(std::sync::Arc<()>),
+}
+
 pub(crate) struct RecordingContext {
     phase: RecordingPhase,
     origin: ClockOrigin,
@@ -137,6 +144,7 @@ pub(crate) struct RecordingContext {
     place_close: Option<weaver_types::TurnFrame>,
     plan_cache: super::plan::PlanSummaryCache,
     plan_summary: Option<plan_summary_driver::PlanSummaryTransaction>,
+    retired_enter: Option<AbsoluteBound>,
     inspection: Option<inspection_driver::InspectionTransaction>,
     marks: Option<marks_driver::MarksTransaction>,
     // Pointer identity survives moves and is never recreated from trace IDs.
@@ -165,7 +173,9 @@ pub(crate) struct RecordingContext {
     open_turn: Option<weaver_trace::TurnRef>,
     /// A caller's source remains owned if refusal happens before a ticket.
     /// It is distinct from the recorder's first pending author.
+    // First fatal original is immutable; retryable holds have separate custody.
     refused_author: Option<AuthoredEvent>,
+    held_author: Option<AuthoredEvent>,
     waiting_content: Option<AuthoredEvent>,
     // An initial lifecycle wait retained a valid original before admission.
     // Its retry must pass the generic admission checks again.
@@ -266,6 +276,7 @@ impl RecordingContext {
             place_notice: None,
             plan_cache: super::plan::PlanSummaryCache::default(),
             plan_summary: None,
+            retired_enter: None,
             inspection: None,
             marks: None,
             read_origin: std::sync::Arc::new(()),
@@ -292,6 +303,7 @@ impl RecordingContext {
             author_turn: None,
             open_turn: None,
             refused_author: None,
+            held_author: None,
             waiting_content: None,
             author_admission_pending: false,
             completed_author: None,
@@ -315,8 +327,27 @@ impl RecordingContext {
     pub(super) fn pending_author(&self) -> Option<&super::recording::AuthorTicket> {
         self.barrier.pending_author()
     }
+    /// Original associated with the first fatal author refusal. Never retryable.
     pub(super) fn refused_author(&self) -> Option<&AuthoredEvent> {
         self.refused_author.as_ref()
+    }
+
+    /// Latest nonfatal owner hold. A later held attempt replaces only this slot;
+    /// callers needing an earlier original must take it before another attempt.
+    pub(super) fn held_author(&self) -> Option<&AuthoredEvent> {
+        self.held_author.as_ref()
+    }
+
+    /// Return the exact unadmitted original. Taking it does not grant admission:
+    /// retry must pass the same owner/phase/deadline checks as any new attempt.
+    pub(super) fn take_held_author(&mut self) -> Option<AuthoredEvent> {
+        self.held_author.take()
+    }
+
+    /// Caller input has not returned to its owner yet. It is not a pending
+    /// ticket, and cannot be dropped by starting another owner or closing.
+    fn caller_author_held(&self) -> bool {
+        self.held_author.is_some() || self.template_blocked_author.is_some()
     }
 
     pub(super) fn halt(&self) -> Option<&super::report::HaltLatch> {
@@ -540,7 +571,11 @@ impl RecordingContext {
                 HaltPoint::Barrier,
                 error.to_string(),
             )
-        })
+        })?;
+        if key == PumpDeadline::Enter {
+            self.retired_enter = None;
+        }
+        Ok(())
     }
 
     pub(super) fn complete_wait(&mut self, key: PumpDeadline) -> Option<AbsoluteBound> {
@@ -571,7 +606,19 @@ impl RecordingContext {
         {
             return None;
         }
-        self.deadlines.disarm(key)
+        self.disarm_wait(key)
+    }
+
+    /// A retired Enter receipt proves the original registered cap was actually
+    /// removed. A no-op disarm cannot invent or erase retirement evidence.
+    fn disarm_wait(&mut self, key: PumpDeadline) -> Option<AbsoluteBound> {
+        let retired = self.deadlines.disarm(key);
+        if key == PumpDeadline::Enter
+            && let Some(bound) = retired
+        {
+            self.retired_enter = Some(bound);
+        }
+        retired
     }
 
     pub(super) fn begin_releasing(
@@ -580,7 +627,8 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
-        if self.place_owed()
+        if self.caller_author_held()
+            || self.place_owed()
             || self.boot_open_blocks_external()
             || self.plan_summary.is_some()
             || self.output.is_some()
@@ -637,7 +685,10 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Advance, RunFailure> {
         self.live(io)?;
-        if self.phase != RecordingPhase::Entered || !self.barrier.is_refused() {
+        if self.caller_author_held()
+            || self.phase != RecordingPhase::Entered
+            || !self.barrier.is_refused()
+        {
             return Err(self.fail(
                 io,
                 FlowHaltReason::ProtocolFailed,
@@ -712,7 +763,10 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
         self.live(ports.io)?;
-        if self.phase != RecordingPhase::Releasing || !self.barrier.is_closed() {
+        if self.caller_author_held()
+            || self.phase != RecordingPhase::Releasing
+            || !self.barrier.is_closed()
+        {
             return Err(self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
@@ -781,45 +835,45 @@ impl RecordingContext {
         if self.place_blocks_external()
             || (self.place_admission_stopped() && event.kind == Kind::TurnStarted)
         {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::PlaceOwned);
         }
         if (self.plan_summary_blocks_external() && !self.plan_summary_allows_turn_close(&event))
             || (receipt_driver::is_plan_effect_event(&event) && !self.plan_effect_inflight())
         {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::PlanSummaryOwned);
         }
         if self.boot_open_blocks_external() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::BootOpenOwned);
         }
         if self.boot_pairs_blocks_external() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::BootPairsOwned);
         }
         if self.marks_blocks_external() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::MarksOwned);
         }
         if self.freshness.is_some() && !retained_retry {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::FreshnessOwned);
         }
         if self.inspection.is_some() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::InspectionOwned);
         }
         if self.read.is_some() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::ReadOwned);
         }
         if self.repair_blocks_external() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::RepairOwned);
         }
         if self.measure_blocks_external() {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::MeasureOwned);
         }
         if self.filing.is_some()
@@ -858,7 +912,7 @@ impl RecordingContext {
             return Err(RunFailure::TemplateBlocked);
         }
         if matches!(event.kind, Kind::ToolCallStarted | Kind::ToolCallCompleted) {
-            self.retain_refused(event);
+            self.held_author = Some(event);
             return Err(RunFailure::PairOwned);
         }
         if !self.author_allowed(&event) {
@@ -895,6 +949,14 @@ impl RecordingContext {
     fn continue_waiting_content<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
+    ) -> Result<Sequence, RunFailure> {
+        self.continue_claimed_content(ports, None)
+    }
+
+    fn continue_claimed_content<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+        claim: Option<AuthorClaim>,
     ) -> Result<Sequence, RunFailure> {
         if self.author_admission_pending {
             let event = self
@@ -954,7 +1016,46 @@ impl RecordingContext {
             }
         };
         self.author_turn = Some((event.kind, event.turn.clone()));
-        let progress = self.submit_context_author(event, purpose, wall_ms, ports.io);
+        let progress = if let Some(claim) = claim {
+            let queued = self.barrier.queue_authored_with_clock(
+                event,
+                purpose,
+                &self.author,
+                wall_ms,
+                &mut self.inbox,
+                &mut self.budget,
+                &mut || ports.io.now(),
+            );
+            // Failed preparation may already own its allocated original too.
+            // Busy returns the new original and must never claim an older slot.
+            if matches!(&queued, RecordProgress::Pending | RecordProgress::Failed)
+                && let Some(ticket) = self.barrier.pending_author().map(|a| a.ticket)
+            {
+                let retained = match claim {
+                    AuthorClaim::Placement(identity) => {
+                        self.claim_place_author_ticket(&identity, ticket)
+                    }
+                    AuthorClaim::Measurement(identity) => {
+                        self.claim_measure_author_ticket(&identity, ticket)
+                    }
+                };
+                if !retained {
+                    return Err(self.fail(
+                        ports.io,
+                        FlowHaltReason::ProtocolFailed,
+                        HaltPoint::Author,
+                        "queued author lost its exact private owner",
+                    ));
+                }
+            }
+            if matches!(&queued, RecordProgress::Pending) {
+                self.resume_context_author(ports.io)
+            } else {
+                queued
+            }
+        } else {
+            self.submit_context_author(event, purpose, wall_ms, ports.io)
+        };
         self.wait_recorded(ports, progress)
     }
 
@@ -1017,6 +1118,14 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<Sequence, RunFailure> {
+        self.resume_claimed_author_and_wait(ports, None)
+    }
+
+    fn resume_claimed_author_and_wait<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+        claim: Option<AuthorClaim>,
+    ) -> Result<Sequence, RunFailure> {
         if let Some(sequence) = self.completed_author.take() {
             self.finish_release_author();
             return Ok(sequence);
@@ -1025,7 +1134,7 @@ impl RecordingContext {
             // A backlog wait can suspend before the caller owns a trace ticket.
             // Continue that original input, including any coordinator-owned
             // measurement which must record before the backlog can move.
-            return self.continue_waiting_content(ports);
+            return self.continue_claimed_content(ports, claim);
         }
         if self.flow.has_pending_record() || self.barrier.pending_author().is_none() {
             return Err(self.fail(
@@ -1045,26 +1154,43 @@ impl RecordingContext {
         mut progress: RecordProgress,
     ) -> Result<Sequence, RunFailure> {
         loop {
-            // Record identity before any fallible intake, clock or deadline hook.
+            // Retain this exact owner's actual admission even when the recorder
+            // subsequently reports an observer failure. The failure remains
+            // terminal; this witness cannot mint ordinary caller completion.
+            if matches!(&progress, RecordProgress::Failed)
+                && let Some(sequence) = self.barrier.admitted_before_failure()
+            {
+                self.bind_place_measure_author(sequence);
+                self.bind_place_author(sequence)?;
+            }
+            // Other completion hooks keep their existing successful boundary.
             if let RecordProgress::Recorded {
                 sequence,
                 proof: None,
             } = &progress
             {
-                self.retain_release_recorded(*sequence);
+                if self.release_author.is_some() {
+                    self.retain_recorded_author(*sequence);
+                }
                 self.bind_place_measure_author(*sequence);
                 self.bind_place_author(*sequence)?;
                 self.bind_marks_author(*sequence, ports.io)?;
                 self.bind_repair_author(*sequence, ports.io)?;
                 self.bind_pair_author(*sequence, ports.io)?;
             }
-            self.drain_intake(ports.io)?;
+            // A returned original has no other owner until the BusyAuthored
+            // arm retains it. Intake may fail immediately on the same refusal.
+            if !matches!(&progress, RecordProgress::BusyAuthored { .. }) {
+                self.drain_intake(ports.io)?;
+            }
             match progress {
                 RecordProgress::Recorded {
                     sequence,
                     proof: None,
                 } => {
-                    self.last_author_sequence = Some(sequence);
+                    if self.release_author.is_none() {
+                        self.retain_recorded_author(sequence);
+                    }
                     if let Some((kind, turn)) = self.author_turn.take() {
                         if kind == Kind::TurnStarted {
                             self.open_turn = turn;
@@ -1076,7 +1202,6 @@ impl RecordingContext {
                     if self.phase == RecordingPhase::Preflight {
                         self.phase = RecordingPhase::Entered;
                     }
-                    self.completed_author = Some(sequence);
                     self.bind_filing_author(sequence, ports.io)?;
                     self.bind_output_author(sequence, ports.io)?;
                     self.live(ports.io)?;
@@ -1092,8 +1217,27 @@ impl RecordingContext {
                         return Err(RunFailure::Wait { key, bound });
                     }
                 }
-                RecordProgress::BusyAuthored { event, .. } => {
+                RecordProgress::BusyAuthored { event, owed, .. } => {
+                    if let Some(owed) = owed {
+                        // The barrier returns this exact unadmitted attempt,
+                        // including withdrawing its pending ticket on resume.
+                        // Retain it before any fallible observer and retire only
+                        // this attempt's turn/release bookkeeping.
+                        self.held_author = Some(event);
+                        self.author_turn = None;
+                        self.finish_release_author();
+                        if let Err(failure) = self.drain_intake(ports.io) {
+                            let original = self.held_author.take().expect("returned original");
+                            self.retain_refused(original);
+                            return Err(failure);
+                        }
+                        return Err(match owed {
+                            OwedAuthor::BootOpen => RunFailure::BootOpenOwned,
+                            OwedAuthor::Placement => RunFailure::PlaceOwned,
+                        });
+                    }
                     self.retain_refused(event);
+                    self.drain_intake(ports.io)?;
                     return Err(self.record_failed(ports.io));
                 }
                 RecordProgress::Failed => return Err(self.record_failed(ports.io)),
@@ -1108,6 +1252,14 @@ impl RecordingContext {
             }
             progress = self.resume_context_author(ports.io);
         }
+    }
+
+    /// One writer owns the caller result at its existing completion boundary.
+    /// Release retains it before observers; content owners first bind their proof.
+    fn retain_recorded_author(&mut self, sequence: Sequence) {
+        self.last_author_sequence = Some(sequence);
+        self.completed_author = Some(sequence);
+        self.retain_release_recorded(sequence);
     }
 
     fn author_allowed(&self, event: &AuthoredEvent) -> bool {

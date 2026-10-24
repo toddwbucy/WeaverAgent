@@ -262,6 +262,7 @@ fn second_owned_author_returns_original_without_replacing_first_ticket() {
         RecordProgress::BusyAuthored {
             event,
             purpose: RecordPurpose::Content,
+            owed: None,
         } => same_original(&event, &second),
         other => panic!("{other:?}"),
     }
@@ -514,6 +515,7 @@ fn whole_copy_backlog_returns_next_original_before_preparation_without_halting()
         RecordProgress::BusyAuthored {
             event,
             purpose: RecordPurpose::Content,
+            owed: None,
         } => same_original(&event, &original),
         other => panic!("{other:?}"),
     }

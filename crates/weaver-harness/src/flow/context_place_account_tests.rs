@@ -281,28 +281,68 @@ fn place_join_owed_account_blocks_release_scope_without_consuming_shutdown_origi
     assert_eq!(run.context.phase(), RecordingPhase::Releasing);
     assert!(run.context.place_owed());
     assert!(run.context.pending_author().is_none());
+    let first = crate::flow::context::tests::event(
+        Kind::Fault,
+        Some(Payload::Fault(
+            serde_json::value::to_raw_value(&weaver_types::FaultReport {
+                case: weaver_types::FaultCase::OrganDeathObserved,
+                account: serde_json::value::to_raw_value(
+                    &serde_json::json!({"fixture":"first held original"}),
+                )
+                .unwrap(),
+            })
+            .unwrap(),
+        )),
+    );
     let event = crate::flow::context::tests::event(
         Kind::Refusal,
         Some(Payload::Refusal(
             serde_json::value::to_raw_value(&weaver_types::LifecycleRefusal::OutOfOrder).unwrap(),
         )),
     );
+    let Payload::Fault(raw) = first.payload.as_ref().unwrap() else {
+        unreachable!()
+    };
+    let first_pointer = raw.get().as_ptr();
+    assert_eq!(
+        run.context
+            .author_and_wait(&mut ports(&mut run.clock), first),
+        Err(RunFailure::PlaceOwned)
+    );
+    let Payload::Fault(raw) = run.context.held_author().unwrap().payload.as_ref().unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(raw.get().as_ptr(), first_pointer);
+    assert!(run.context.refused_author().is_none());
     let Payload::Refusal(original) = event.payload.as_ref().unwrap() else {
         unreachable!()
     };
     let pointer = original.get().as_ptr();
+    assert_ne!(pointer, first_pointer);
     let original_text = original.get().to_owned();
     let prior_sequence = run.context.last_author_sequence;
     // Exercise the real context-issued private release scope directly, so the
     // new barrier debt guard is not masked by the outer PlaceOwned admission or
     // the older Unload-only guard. This Refusal has valid shutdown shape.
-    let RecordProgress::BusyAuthored { event, purpose } =
+    let progress =
         run.context
-            .submit_context_author(event, RecordPurpose::Observation, 1, &mut run.clock)
-    else {
-        panic!("owed placement evidence must retain the shutdown original");
-    };
-    assert!(matches!(purpose, RecordPurpose::Observation));
+            .submit_context_author(event, RecordPurpose::Observation, 1, &mut run.clock);
+    assert!(matches!(
+        &progress,
+        RecordProgress::BusyAuthored {
+            purpose: RecordPurpose::Observation,
+            owed: Some(crate::flow::recording::OwedAuthor::Placement),
+            ..
+        }
+    ));
+    assert_eq!(
+        run.context
+            .wait_recorded(&mut ports(&mut run.clock), progress),
+        Err(RunFailure::PlaceOwned)
+    );
+    // The consumer must retain the actual returned original before observing
+    // fallible intake, and retire only this unadmitted shutdown attempt.
+    let event = run.context.take_held_author().unwrap();
     let Payload::Refusal(returned) = event.payload.as_ref().unwrap() else {
         unreachable!()
     };
@@ -310,11 +350,16 @@ fn place_join_owed_account_blocks_release_scope_without_consuming_shutdown_origi
     assert_eq!(returned.get(), original_text);
     assert_eq!(run.context.last_author_sequence, prior_sequence);
     assert!(run.context.pending_author().is_none());
+    assert!(run.context.barrier.pending().is_none());
     assert!(run.context.barrier.failure().is_none());
+    assert!(run.context.barrier.admitted_before_failure().is_none());
     assert!(run.context.failure().is_none());
-    // The private call returned its event before any ticket existed. Retire that
-    // unadmitted attempt; the actual placement account remains untouched.
-    run.context.finish_release_author();
+    assert!(run.context.release_author.is_none());
+    assert!(run.context.author_turn.is_none());
+    assert!(run.context.refused_author().is_none());
+    assert!(run.context.take_held_author().is_none());
+    assert!(run.context.place_owed());
+    assert_eq!(run.context.deadlines.get(PumpDeadline::Leave), Some(leave));
     assert!(fx.records(Kind::Refusal).is_empty());
     let raw = fx.answer(&fx.measured(keep, 3));
     let account = fx.settled_account();
@@ -351,4 +396,42 @@ fn place_join_owed_account_blocks_release_scope_without_consuming_shutdown_origi
         .unwrap();
     assert_eq!(run.context.phase(), RecordingPhase::Closed);
     assert_eq!(account.raw_bytes(), Some(raw.as_slice()));
+}
+
+#[test]
+fn release_custody_actual_prepared_material_cannot_raise_place_or_reload_debt() {
+    let mut fx = PlaceFixture::new();
+    let units = fx.text(8, "record");
+    fx.turn("closed-before-release");
+    let request = fx.request(units);
+    let n = request.prefix.n();
+    fx.close_turn();
+    let run = &mut fx.summary.boot.member.run;
+    let leave = AbsoluteBound::after(run.clock.now().unwrap(), PLACE_WAIT / 2).unwrap();
+    run.context.begin_releasing(leave, &mut run.clock).unwrap();
+    let before = run.context.barrier.recorder().structure().len();
+    let error = run
+        .context
+        .begin_place(request, &mut fx.decode, &mut run.clock)
+        .unwrap_err();
+    assert_eq!(error.refusal, PlaceError::WrongPhase);
+    assert!(error.failure.is_none());
+    assert_eq!(error.input.prefix.n(), n);
+    let PlaceRequest {
+        prefix, selection, ..
+    } = error.input;
+    let refused = run
+        .context
+        .begin_cut_and_reload(prefix, ReloadTail::held(selection), &mut run.clock)
+        .unwrap_err();
+    assert_eq!(refused.refusal, PlaceError::InvalidTail);
+    assert!(refused.failure.is_none());
+    assert_eq!(refused.input.0.n(), n);
+    assert!(!run.context.place_owed());
+    assert!(run.context.place.is_none());
+    assert!(run.context.reload.is_none());
+    assert!(run.context.failure().is_none());
+    assert_eq!(run.context.deadlines.get(PumpDeadline::Leave), Some(leave));
+    assert_eq!(run.context.barrier.recorder().structure().len(), before);
+    assert!(receive(fx.peer.as_fd()).is_none());
 }

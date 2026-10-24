@@ -181,8 +181,16 @@ pub(super) enum RecordProgress {
     BusyAuthored {
         event: AuthoredEvent,
         purpose: RecordPurpose,
+        owed: Option<OwedAuthor>,
     },
     Failed,
+}
+
+/// An existing account owns release admission; this is not a trace failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OwedAuthor {
+    BootOpen,
+    Placement,
 }
 
 #[derive(Debug)]
@@ -201,6 +209,8 @@ pub(super) enum RecordFailure {
 pub(super) struct AuthorTicket {
     pub ticket: u64,
     pub event: AuthoredEvent,
+    // The release mark cannot outlive the original author it authorizes.
+    release: Option<ReleaseTicket>,
 }
 
 #[derive(Debug)]
@@ -218,11 +228,11 @@ pub(super) struct RecordBarrier {
     pending: Option<(Event, RecordPurpose)>,
     pending_author: Option<AuthorTicket>,
     author_identity: Arc<()>,
-    pending_release: Option<ReleaseTicket>,
     boot_open_owed: bool,
     place_owed: bool,
     next_ticket: Option<u64>,
     admitted_before_failure: Option<Sequence>,
+    recorded_author: Option<(u64, Sequence)>,
     last_trace_only_sequence: Option<Sequence>,
     failure: Option<RecordFailure>,
 }
@@ -246,11 +256,11 @@ impl RecordBarrier {
             pending: None,
             pending_author: None,
             author_identity: Arc::new(()),
-            pending_release: None,
             boot_open_owed: false,
             place_owed: false,
             next_ticket: Some(0),
             admitted_before_failure: None,
+            recorded_author: None,
             last_trace_only_sequence: None,
             failure: None,
         }
@@ -306,7 +316,27 @@ impl RecordBarrier {
         budget: &mut RetentionBudget,
         now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
-        self.submit_authored_inner(event, purpose, None, author, wall_ms, inbox, budget, now)
+        self.submit_authored_inner(
+            event, purpose, None, author, wall_ms, inbox, budget, now, false,
+        )
+    }
+
+    /// Allocate and prepare the exact original without admitting it. The
+    /// private caller binds this real ticket to its owner before first resume.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn queue_authored_with_clock(
+        &mut self,
+        event: AuthoredEvent,
+        purpose: RecordPurpose,
+        author: &ServingAuthor,
+        wall_ms: u64,
+        inbox: &mut FlowInbox,
+        budget: &mut RetentionBudget,
+        now: &mut impl FnMut() -> std::io::Result<u64>,
+    ) -> RecordProgress {
+        self.submit_authored_inner(
+            event, purpose, None, author, wall_ms, inbox, budget, now, true,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -330,6 +360,7 @@ impl RecordBarrier {
             inbox,
             budget,
             now,
+            false,
         )
     }
 
@@ -344,10 +375,15 @@ impl RecordBarrier {
         inbox: &mut FlowInbox,
         budget: &mut RetentionBudget,
         now: &mut impl FnMut() -> std::io::Result<u64>,
+        queue_only: bool,
     ) -> RecordProgress {
         if let Some(scope) = release {
-            if self.boot_open_owed || self.place_owed {
-                return RecordProgress::BusyAuthored { event, purpose };
+            if let Some(owed) = self.owed_author() {
+                return RecordProgress::BusyAuthored {
+                    event,
+                    purpose,
+                    owed: Some(owed),
+                };
             }
             if !scope.allows(&self.author_identity)
                 || !shutdown_kind(event.kind)
@@ -357,20 +393,34 @@ impl RecordBarrier {
                     RecordFailure::Protocol("invalid release author scope".into()),
                     budget,
                 );
-                return RecordProgress::BusyAuthored { event, purpose };
+                return RecordProgress::BusyAuthored {
+                    event,
+                    purpose,
+                    owed: None,
+                };
             }
         }
-        // Unload is held by the owed boot account, not by a competing author.
+        // Unload is held by an owed boot or placement account, not a competing author.
         // Return its original intact without poisoning the still-live barrier.
-        if event.kind == Kind::Unload && (self.boot_open_owed || self.place_owed) {
-            return RecordProgress::BusyAuthored { event, purpose };
+        if event.kind == Kind::Unload
+            && let Some(owed) = self.owed_author()
+        {
+            return RecordProgress::BusyAuthored {
+                event,
+                purpose,
+                owed: Some(owed),
+            };
         }
         if self.pending.is_some() || self.pending_author.is_some() {
             self.remember_failure(
                 RecordFailure::Protocol("second author while a ticket is pending".into()),
                 budget,
             );
-            return RecordProgress::BusyAuthored { event, purpose };
+            return RecordProgress::BusyAuthored {
+                event,
+                purpose,
+                owed: None,
+            };
         }
         if let Some(failure) = inbox.failure() {
             self.remember_failure(RecordFailure::Intake(failure.detail), budget);
@@ -379,18 +429,30 @@ impl RecordBarrier {
             || budget.is_frozen()
             || (budget.waiting_copy().is_some() && matches!(purpose, RecordPurpose::Content))
         {
-            return RecordProgress::BusyAuthored { event, purpose };
+            return RecordProgress::BusyAuthored {
+                event,
+                purpose,
+                owed: None,
+            };
         }
         let Some(ticket) = self.next_ticket else {
             self.remember_failure(
                 RecordFailure::Protocol("author ticket overflow".into()),
                 budget,
             );
-            return RecordProgress::BusyAuthored { event, purpose };
+            return RecordProgress::BusyAuthored {
+                event,
+                purpose,
+                owed: None,
+            };
         };
         self.next_ticket = ticket.checked_add(1);
-        self.pending_release = release.map(|scope| scope.ticket(ticket, event.kind));
-        self.pending_author = Some(AuthorTicket { ticket, event });
+        let release_mark = release.map(|scope| scope.ticket(ticket, event.kind));
+        self.pending_author = Some(AuthorTicket {
+            ticket,
+            event,
+            release: release_mark,
+        });
         let raw_ns = match now() {
             Ok(value) => value,
             Err(error) => return self.fail(RecordFailure::Clock(error.to_string()), budget),
@@ -401,7 +463,11 @@ impl RecordBarrier {
             Err(error) => return self.fail(RecordFailure::Author(error), budget),
         };
         self.pending = Some((prepared, purpose));
-        self.resume_inner(release, inbox, budget, now)
+        if queue_only {
+            RecordProgress::Pending
+        } else {
+            self.resume_inner(release, inbox, budget, now)
+        }
     }
 
     pub(super) fn submit(
@@ -428,7 +494,7 @@ impl RecordBarrier {
         budget: &mut RetentionBudget,
         now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
-        if event.envelope.kind == Kind::Unload && (self.boot_open_owed || self.place_owed) {
+        if event.envelope.kind == Kind::Unload && self.owed_author().is_some() {
             return RecordProgress::Busy { event, purpose };
         }
         // Busy returns ownership before admission. Observation progress remains
@@ -516,17 +582,21 @@ impl RecordBarrier {
                 budget,
             );
         }
-        let released = match (&self.pending_release, release) {
-            (Some(ticket), Some(scope)) => {
-                !self.boot_open_owed
-                    && !self.place_owed
-                    && ticket.matches(
-                        scope,
-                        &self.author_identity,
-                        self.pending_author.as_ref(),
-                        event,
-                        purpose,
-                    )
+        let release_mark = self
+            .pending_author
+            .as_ref()
+            .and_then(|held| held.release.as_ref());
+        let released = match (release_mark, release) {
+            (Some(ticket), Some(scope))
+                if ticket.matches(
+                    scope,
+                    &self.author_identity,
+                    self.pending_author.as_ref(),
+                    event,
+                    purpose,
+                ) =>
+            {
+                true
             }
             (None, None) => false,
             _ => {
@@ -536,7 +606,27 @@ impl RecordBarrier {
                 );
             }
         };
-        if (self.pending_release.is_some() || self.recorder.tap_stopped()) && !released {
+        if (released || event.envelope.kind == Kind::Unload)
+            && let Some(owed) = self.owed_author()
+        {
+            // Any release scope and ticket were validated first. CapacityPending
+            // never admitted a sequence; return both preparations' ownership
+            // together instead of retaining a detached release mark or renewing
+            // a wait. Ordinary Unload has the same debt check at submit and
+            // resume. Public owner admission currently prevents this debt rise.
+            let (event, purpose) = self.pending.take().expect("validated pending event");
+            return match self.pending_author.take() {
+                Some(original) => RecordProgress::BusyAuthored {
+                    event: original.event,
+                    purpose,
+                    owed: Some(owed),
+                },
+                // Raw submit never allocated an AuthoredEvent ticket. Return
+                // the same prepared event without inventing either identity.
+                None => RecordProgress::Busy { event, purpose },
+            };
+        }
+        if self.recorder.tap_stopped() && !released {
             return self.fail(
                 RecordFailure::Protocol("ordinary author has no live release scope".into()),
                 budget,
@@ -553,8 +643,10 @@ impl RecordBarrier {
             }
             Ok(SubmitAttempt::Recorded(submission)) => {
                 let (recorded_event, purpose) = self.pending.take().expect("pending event");
-                self.pending_author = None;
-                self.pending_release = None;
+                self.recorded_author = self
+                    .pending_author
+                    .take()
+                    .map(|original| (original.ticket, submission.sequence));
                 // Failure below is after trace admission. It must not be
                 // reported as an unadmitted author in the halt account.
                 self.admitted_before_failure = Some(submission.sequence);
@@ -659,6 +751,20 @@ impl RecordBarrier {
     pub(super) fn set_place_owed(&mut self, owed: bool) {
         self.place_owed = owed;
     }
+    #[cfg(test)]
+    pub(super) fn place_owed_for_test(&self) -> bool {
+        self.place_owed
+    }
+    // Match context admission's precedence if defensive debt flags overlap.
+    fn owed_author(&self) -> Option<OwedAuthor> {
+        if self.place_owed {
+            Some(OwedAuthor::Placement)
+        } else if self.boot_open_owed {
+            Some(OwedAuthor::BootOpen)
+        } else {
+            None
+        }
+    }
     pub(super) fn set_boot_open_owed(&mut self, owed: bool) {
         self.boot_open_owed = owed;
     }
@@ -688,6 +794,13 @@ impl RecordBarrier {
             .expect("real pending author")
             .ticket = ticket;
         ticket
+    }
+    /// Private factual witness, derived only from an actually admitted ticket.
+    /// Raw prepared events carry no authored ticket and clear this witness.
+    pub(super) fn recorded_author_ticket(&self, sequence: Sequence) -> Option<u64> {
+        self.recorded_author
+            .filter(|(_, recorded)| *recorded == sequence)
+            .map(|(ticket, _)| ticket)
     }
     pub(super) fn admitted_before_failure(&self) -> Option<Sequence> {
         self.admitted_before_failure
@@ -721,8 +834,14 @@ impl RecordBarrier {
         raw_ns: u64,
         wall_ms: u64,
     ) -> Result<Sequence, String> {
-        if event.kind == Kind::Unload && (self.boot_open_owed || self.place_owed) {
-            return Err("boot Open account must settle before unload".into());
+        if event.kind == Kind::Unload
+            && let Some(owed) = self.owed_author()
+        {
+            return Err(match owed {
+                OwedAuthor::BootOpen => "boot Open account must settle before unload",
+                OwedAuthor::Placement => "placement account must settle before unload",
+            }
+            .into());
         }
         author
             .prepare(event, raw_ns, wall_ms)
@@ -775,7 +894,11 @@ impl RecordBarrier {
             }
         };
         self.next_ticket = ticket.checked_add(1);
-        self.pending_author = Some(AuthorTicket { ticket, event });
+        self.pending_author = Some(AuthorTicket {
+            ticket,
+            event,
+            release: None,
+        });
         self.pending = Some((prepared, RecordPurpose::Observation));
         Ok(())
     }
@@ -816,7 +939,11 @@ impl RecordBarrier {
             }
         };
         self.next_ticket = ticket.checked_add(1);
-        self.pending_author = Some(AuthorTicket { ticket, event });
+        self.pending_author = Some(AuthorTicket {
+            ticket,
+            event,
+            release: None,
+        });
         self.pending = Some((prepared, RecordPurpose::Observation));
         Ok(())
     }
@@ -844,6 +971,7 @@ impl RecordBarrier {
         self.pending_author = Some(AuthorTicket {
             ticket,
             event: event.clone(),
+            release: None,
         });
         self.pending = Some((prepared, RecordPurpose::Observation));
         Ok(())
@@ -871,7 +999,6 @@ impl RecordBarrier {
         {
             self.pending = None;
             self.pending_author = None;
-            self.pending_release = None;
             true
         } else {
             false
@@ -898,8 +1025,10 @@ impl RecordBarrier {
             SubmitAttempt::CapacityPending(_) => Ok(None),
             SubmitAttempt::Recorded(submission) => {
                 self.pending = None;
-                self.pending_author = None;
-                self.pending_release = None;
+                self.recorded_author = self
+                    .pending_author
+                    .take()
+                    .map(|original| (original.ticket, submission.sequence));
                 self.last_trace_only_sequence = Some(submission.sequence);
                 Ok(Some(submission.sequence))
             }
@@ -1030,7 +1159,11 @@ impl RecordBarrier {
             }
         };
         self.next_ticket = ticket.checked_add(1);
-        self.pending_author = Some(AuthorTicket { ticket, event });
+        self.pending_author = Some(AuthorTicket {
+            ticket,
+            event,
+            release: None,
+        });
         self.pending = Some((prepared, RecordPurpose::Observation));
         Ok(())
     }
