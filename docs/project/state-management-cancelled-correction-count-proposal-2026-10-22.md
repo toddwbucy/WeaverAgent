@@ -134,3 +134,15 @@ match the clean three-way combined text byte-for-byte. Lock, document,
 ASCII and diff checks pass. No runtime source changes or proposal merge
 is claimed. Other proposals remain separate and need the same version
 sequencing as each preceding proposal actually lands.
+
+## Integration with main 8e011774
+
+On 2026-10-23, this proposal joins main commit
+8e011774e1e488666f32ed81533fcadb73d4b489. Both parents are retained. The
+manual Spec resolution changes only the landing/version header; all clause
+bodies match the clean three-way combined text byte-for-byte. Each affected
+shared version advances from the actual merged main version. First-filing
+dates remain fixed. Earlier integration notes record their own checkpoints.
+
+Lock, three DocsMirror tests, ASCII and diff checks pass. No runtime source
+changes or proposal merge is claimed; the operator controls the landing.
