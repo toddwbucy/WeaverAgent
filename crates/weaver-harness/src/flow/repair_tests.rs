@@ -197,6 +197,30 @@ fn request(ledger: &mut RepairLedger, first: u64) -> RestatementRequest {
 }
 
 #[test]
+fn restatement_continuation_requires_exact_ledger_attempt_and_live_stage() {
+    let make =
+        || RepairLedger::begin(original_at(10, vec![text("bad")], vec![rejected()]), 2).unwrap();
+    let mut first = make();
+    let mut foreign = make();
+    let issued = request(&mut first, 40);
+    let same_ids = request(&mut foreign, 40);
+    assert_eq!(issued.source(), same_ids.source());
+    assert_eq!(issued.recorded(), same_ids.recorded());
+    assert!(first.owns_restatement(&issued));
+    assert!(!first.owns_restatement(&same_ids));
+    let failed = original_at(100, vec![text("bad")], vec![rejected()]);
+    first.observe_correction(&source(10, 0), failed).unwrap();
+    assert!(!first.owns_restatement(&issued));
+    let next = request(&mut first, 140);
+    assert!(first.owns_restatement(&next));
+    assert!(!first.owns_restatement(&issued));
+    first.cancel();
+    assert!(!first.owns_restatement(&next));
+    foreign.freeze();
+    assert!(!foreign.owns_restatement(&same_ids));
+}
+
+#[test]
 fn accepted_generation_releases_one_effective_list_with_original_identity_and_request_order() {
     let original = original_at(
         10,

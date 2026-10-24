@@ -224,10 +224,13 @@ impl RepairAccount {
 
 #[derive(Debug)]
 pub(in crate::flow) struct RestatementRequest {
+    nonce: Arc<()>,
     source: SourceBlockId,
     attempt: DecimalU64,
     instruction: TemplateExpansion,
     recorded: SourcePosition,
+    pub(super) lease: Option<crate::flow::ledger::SourceLease>,
+    pub(super) filed: Option<crate::flow::ledger::SourceDisposition>,
 }
 impl RestatementRequest {
     pub(in crate::flow) fn source(&self) -> &SourceBlockId {
@@ -272,6 +275,39 @@ impl EffectiveEmission {
     }
     pub(in crate::flow) fn text(&self) -> &str {
         &self.text
+    }
+    /// Render selected effective blocks from their checked statement spans.
+    /// Corrections retain their own source identities at the original logical
+    /// position. Neither opaque emission text nor unselected blocks contribute.
+    pub(in crate::flow) fn answer_text(
+        &self,
+        acts: &[weaver_types::state_flow::SortAct],
+    ) -> Result<String, RepairError> {
+        let mut text = Vec::new();
+        for statement in &self.statements {
+            if !acts.iter().any(|act| matches!(act,
+                weaver_types::state_flow::SortAct::Answer { source } if source == &statement.block_id
+            )) {
+                continue;
+            }
+            let check = self.account.generations().flat_map(|g| g.blocks()).find(|check| {
+                matches!(&check.request().target, Ste100Target::Source(source) if source == &statement.block_id)
+            }).ok_or(RepairError::InvalidStatement)?;
+            let Ste100Result::Accepted { bindings } = &check.reply().result else {
+                return Err(RepairError::InvalidStatement);
+            };
+            let binding = usize::try_from(statement.binding.0)
+                .ok()
+                .and_then(|index| bindings.get(index))
+                .ok_or(RepairError::InvalidStatement)?;
+            text.push(
+                binding
+                    .statement_span
+                    .slice(&check.request().text)
+                    .map_err(|_| RepairError::InvalidStatement)?,
+            );
+        }
+        Ok(text.join("\n"))
     }
     pub(in crate::flow) fn attempted_call(&self) -> bool {
         self.attempted_call
@@ -691,11 +727,27 @@ impl RepairLedger {
             .push(recorded.clone());
         self.stage = Stage::Awaiting;
         Ok(RestatementRequest {
+            nonce: Arc::clone(&self.account.as_ref().unwrap().nonce),
             source: self.context().source.clone(),
             attempt: self.attempt(),
             instruction,
             recorded,
+            lease: None,
+            filed: None,
         })
+    }
+
+    /// A placement continuation belongs to this exact issued attempt, even
+    /// when another run has identical serialized source and instruction IDs.
+    pub(super) fn owns_restatement(&self, request: &RestatementRequest) -> bool {
+        self.require(Stage::Awaiting).is_ok()
+            && self
+                .account
+                .as_ref()
+                .is_some_and(|account| Arc::ptr_eq(&account.nonce, &request.nonce))
+            && request.source == self.context().source
+            && request.attempt == self.attempt()
+            && self.context().instructions.last() == Some(&request.recorded)
     }
 
     #[allow(clippy::result_large_err)]
