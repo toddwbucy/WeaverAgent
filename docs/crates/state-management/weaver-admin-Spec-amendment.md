@@ -4,7 +4,7 @@
 
 **Landing PR:** #268
 
-**Version:** 0.16 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
+**Version:** 0.17 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -107,10 +107,45 @@ opened. Admin verifies configuration before spawn. The worker confirms enter onl
 template checks, boot read, placement and any required pair-load repair and committed
 plan-summary read. [PERSIST-3, PERSIST-6, SEAM-1]
 
-Keep the existing load-bound-seconds budget and its start anchor. Opening, template
-checking, reading the prompt and opening decoder/gate share its remaining duration. No
-stage grants another full budget. Failure rolls back the same process set and never
-reports loaded. [CLASS-8, PERSIST-6, GATE-1]
+**ADMIN-ENTER-WINDOW.** For a replacement Serving Load request only, admit the
+request and root configuration first, then sample began_ns once in dispatch after
+admissible and immediately before prepare_run_directory. That preparation is shared
+by every verb; only Load samples this Enter anchor there. The point precedes
+run-directory preparation, invocation/run-lock acquisition, inventory and artifact
+selection, channel creation, child start and Enter carry. Root argument/configuration
+admission precedes the window; all subsequent load preparation and waits spend it.
+Entry to load after that shared preparation, or the later Enter send, is too late
+for this anchor. [CLASS-8, PERSIST-6, GATE-1]
+
+Keep load-bound-seconds positive and root-owned. Convert it to nanoseconds with checked
+multiplication and compute deadline_ns = began_ns + budget_ns with checked addition.
+If that interval cannot be represented, return ConfigInvalid attributed to
+load-bound-seconds before Enter is sent. No saturated deadline, declaration override
+or caller-supplied window is accepted. Carry that exact EnterWindow in the required
+Serving binding. The existing launch preserves the common Linux CLOCK_MONOTONIC domain;
+a different time namespace or remote clock is outside this carrier's contract.
+[CLASS-8, FLOW-3, SEAM-2]
+
+Admin retains that same deadline through encoding, descriptor carry, socket pressure,
+worker scheduling and the answer. Bound those operations by the original deadline;
+check it before and after each work unit and after receipt/decode before accepting the
+matching Ready. A readable socket or a completed send is not a timely Enter answer.
+At now >= deadline_ns the load is expired: admit no further ordinary load work or late
+Ready, report the existing unanswered-load NoResidency outcome unless an actual
+failure already determines the result, and run the existing rollback of what this
+invocation stood. That local timeout is not a fabricated peer refusal. A rollback
+containment failure retains its existing precedence over the load's refusal.
+[CLASS-8, PERSIST-6, FLOW-3]
+
+Opening, template checking, prompt reads and decoder/gate boot all share this remaining
+time. Any duration needed by a local primitive is derived from the original deadline
+at that operation's current observation; the duration is not re-added to a later clock
+sample. The worker receives the original window, never only a sampled remaining value.
+No stage, partial result, carry retry or parse grants a fresh budget. Later explicit
+rollback Leave retains its existing independent cleanup allowance and cause; it does
+not extend Enter or permit loaded/Ready. Existing component failure and escalation
+remain distinct from ordinary budget expiry. A failed clock observation cannot mint a
+window or imply successful cleanup. [CLASS-8, PERSIST-6, GATE-1]
 
 ## 2. Seed and rebind, destinations sections 4, 6 and 9
 
