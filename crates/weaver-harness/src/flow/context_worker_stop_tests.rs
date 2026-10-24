@@ -12,7 +12,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use weaver_types::ExchangeId;
 
-fn fill_trace(
+pub(in crate::flow::context::worker_startup) fn fill_trace(
     context: &mut crate::flow::context::RecordingContext,
     clock: &mut FakePumpIo,
 ) -> usize {
@@ -57,6 +57,21 @@ struct TraceWait<'a> {
     eof: bool,
     seen: bool,
 }
+
+struct NoWaitBeforeAnswer<'a>(&'a mut FakePumpIo);
+impl PumpIo for NoWaitBeforeAnswer<'_> {
+    fn now(&mut self) -> std::io::Result<u64> {
+        self.0.now()
+    }
+    fn wait(
+        &mut self,
+        _: &[crate::flow::clock::WaitInterest<'_>],
+        _: Option<u64>,
+    ) -> std::io::Result<crate::flow::clock::WaitOutcome> {
+        panic!("Stop must queue its answer before waiting on the full world gate")
+    }
+}
+
 impl PumpIo for TraceWait<'_> {
     fn now(&mut self) -> std::io::Result<u64> {
         self.clock.now()
@@ -102,7 +117,7 @@ impl PumpIo for TraceWait<'_> {
     }
 }
 
-fn fill(fd: i32) {
+pub(in crate::flow::context::worker_startup) fn fill(fd: i32) {
     let mut count = 0;
     loop {
         match send(
@@ -153,14 +168,11 @@ fn prepare(
             "{:?}",
             input.detail()
         );
-        member.step(
-            if real {
-                MonotonicIo.now().unwrap()
-            } else {
-                clock.now().unwrap()
-            },
-            "ready",
-        );
+        if real {
+            member.step_live("ready");
+        } else {
+            member.step(clock.now().unwrap(), "ready");
+        }
         std::thread::sleep(Duration::from_millis(1));
     }
     panic!("input never reached target");
@@ -299,7 +311,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             let responder = scope.spawn(|| {
                 let end = Instant::now() + Duration::from_secs(8);
                 while !done.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
-                    member.step(MonotonicIo.now().unwrap(), "ready");
+                    member.step_live("ready");
                     std::thread::sleep(Duration::from_millis(1));
                 }
             });
@@ -330,11 +342,58 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     } else {
         guard.management = Some(guard.input.take().unwrap().management().ok().unwrap());
         let m = guard.management.as_mut().unwrap();
+        if mode.ends_with("inherited-deadline") {
+            use crate::flow::clock::AbsoluteBound;
+            let bound = AbsoluteBound::after(clock.now().unwrap(), 1_000_000).unwrap();
+            m.input
+                .serving
+                .owner
+                .context
+                .arm(PumpDeadline::Decision, bound, clock)
+                .unwrap();
+            let mut stop =
+                StopWork::begin(&mut m.input, weaver_types::Cause { uid: 73 }, clock).unwrap();
+            assert_eq!(
+                m.input
+                    .serving
+                    .owner
+                    .context
+                    .complete_wait(PumpDeadline::Decision),
+                Some(bound)
+            );
+            clock.advance_to(bound.deadline_ns() + 1).unwrap();
+            // Management samples liveness before advancing Stop. Refresh that
+            // observation here so a mistakenly renewed close cap is distinguishable
+            // from the retired operation's original deadline.
+            m.input.serving.owner.context.live(clock).unwrap();
+            let failure = stop
+                .advance(&mut m.input, None, &mut CircuitIo(clock))
+                .unwrap_err();
+            assert!(matches!(
+                failure,
+                RunFailure::Flow {
+                    reason: FlowHaltReason::DecisionBound,
+                    ..
+                }
+            ));
+            assert_eq!(m.input.serving.owner.context.failure(), Some(&failure));
+            assert!(!stop.close_recorded());
+            assert!(stop.gate_send().is_none());
+            assert!(m.input.serving.owner.context.open_turn.is_some());
+            assert!(!root.join("closed.json").exists());
+            return;
+        }
         if mode.ends_with("admin-pressure") {
             fill(m.peer.fd().as_raw_fd());
         }
         if mode.ends_with("gate-pressure") {
             fill(m.input.serving.owner.gate.fd().as_raw_fd());
+            assert_eq!(
+                m.advance_with_io(&mut NoWaitBeforeAnswer(clock)),
+                FoundationManagementProgress::Pending
+            );
+            assert!(m.stop.as_ref().unwrap().close_recorded());
+            assert!(m.send.is_some(), "Recorded Stop answer is queued");
         }
         if mode.ends_with("early-eof") {
             shutdown(peer.as_ref().unwrap().as_raw_fd(), Shutdown::Both).unwrap();
@@ -374,7 +433,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             let p = m.advance_with_io(&mut CircuitIo(clock));
             if m.send.is_some() && !before_turn {
                 assert!(
-                    m.stop.as_ref().unwrap().close_sequence.is_some(),
+                    m.stop.as_ref().unwrap().close_recorded(),
                     "no answer before Recorded close"
                 );
                 assert!(m.input.serving.owner.context.open_turn.is_none());
@@ -403,7 +462,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 && mode.ends_with("gate-pressure")
                 && m.stop
                     .as_ref()
-                    .and_then(|s| s.gate_send.as_ref())
+                    .and_then(|s| s.gate_send())
                     .is_some_and(|s| !s.sent())
             {
                 for _ in 0..3 {

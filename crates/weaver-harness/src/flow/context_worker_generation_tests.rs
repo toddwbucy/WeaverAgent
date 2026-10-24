@@ -43,6 +43,9 @@ fn generated(mode: &str, finish: Finish) -> TokenAnswer {
     })
 }
 pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
+    if mode.contains("-session-") {
+        return super::session_tests::spu(mode, fd);
+    }
     if mode.contains("-return-") || mode.contains("-external-") {
         return super::return_tests::spu(mode, fd);
     }
@@ -127,7 +130,19 @@ pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
                             }
                         }
                         if !mode.ends_with("stop-generation") {
-                            packet(fd, &generated(mode, Finish::Completed));
+                            packet(
+                                fd,
+                                &generated(
+                                    mode,
+                                    if mode.ends_with("final-model-stop") {
+                                        Finish::Stopped
+                                    } else if mode.ends_with("final-length") {
+                                        Finish::Length
+                                    } else {
+                                        Finish::Completed
+                                    },
+                                ),
+                            );
                         }
                     }
                     TokenDirective::Cancel { turn } => {
@@ -158,14 +173,11 @@ pub(super) fn step(
     } else {
         input.advance_with_io(&mut CircuitIo(clock))
     };
-    member.step(
-        if mode.starts_with("input-worker-generation") {
-            MonotonicIo.now().unwrap()
-        } else {
-            clock.now().unwrap()
-        },
-        mode,
-    );
+    if mode.starts_with("input-worker-generation") {
+        member.step_live(mode);
+    } else {
+        member.step(clock.now().unwrap(), mode);
+    }
     std::thread::sleep(Duration::from_millis(1));
     p
 }
@@ -391,6 +403,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if mode.contains("-session-") {
+        return super::session_tests::exercise(serving, member, reader, clock, socket, root, mode);
+    }
     if mode.contains("emission") {
         return super::emission::tests::exercise(
             serving, member, reader, clock, socket, root, mode,
@@ -741,7 +756,7 @@ fn exercise_worker(
         let responder = scope.spawn(|| {
             let end = Instant::now() + Duration::from_secs(8);
             while !done.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
-                member.step(MonotonicIo.now().unwrap(), mode);
+                member.step_live(mode);
                 std::thread::sleep(Duration::from_millis(1));
             }
         });
