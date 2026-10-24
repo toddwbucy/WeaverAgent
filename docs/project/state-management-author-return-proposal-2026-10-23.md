@@ -111,11 +111,11 @@ banner or losing alternative inside the Spec. This project proposal records
 the operator's ruling and retains the alternative for comparison. Approval
 alone does not authorize implementation; review and merge remain required.
 
-Main now contains #285's harness amendment version 0.30. This draft and #282
-each propose 0.31 against that merged base. Sequence their landings: later
-landings must retain all previously merged clauses and advance the version.
-Preserve the author-custody, EnterWindow and release-absence clauses at each
-join. The merge order remains the operator's; no proposal merge is claimed here.
+Main now contains #285 and #282, with harness amendment version 0.31. This
+draft proposes 0.32 and retains both merged rules. Later proposal landings
+must retain preceding merged clauses and advance shared versions again.
+The author-custody election still requires its own review and merge.
+No proposal merge or implementation is claimed here.
 
 The operator ruled that Date filed retains the first filing date. The owning
 Spec header therefore remains 2026-10-21; Version and Git identify revisions.
@@ -177,7 +177,22 @@ HARNESS-RELEASE-ABSENT / TRACE-RELEASE-ABSENT wording are retained.
 
 Exact body comparisons preserve the previously reviewed Spec clause text;
 the harness body additionally contains the unchanged merged absence
-clause. Documentation checks accompany this conflict resolution. These
-five proposals remain separate main-based PRs; later landings must
-incorporate preceding merged clauses and advance shared versions again.
+clause. Documentation checks accompany this conflict resolution. At this
+checkpoint the five proposals were separate main-based PRs; later landings
+must incorporate preceding merged clauses and advance shared versions again.
 The proposal remains unmerged and grants no implementation authority.
+
+## Integration after the Enter-window merge
+
+On 2026-10-23, #282 merged as main commit
+8010e16e64e137a28c239800c1e9724ae80c27b5. This proposal now joins that
+exact base, retaining the merged Enter-window and release-absence clauses.
+The harness amendment advances from 0.31 to 0.32. Where this proposal
+also changes another shared amendment, its version advances from main
+likewise. Landing PR still names this proposal; filing dates stay fixed.
+
+The manual resolution changes only conflicting headers. The clause bodies
+match the clean three-way combined text byte-for-byte. Lock, document,
+ASCII and diff checks pass. No runtime source changes or proposal merge
+is claimed. Other proposals remain separate and need the same version
+sequencing as each preceding proposal actually lands.
