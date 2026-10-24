@@ -138,6 +138,16 @@ pub(super) struct OrganSend {
 }
 
 impl OrganSend {
+    #[cfg(test)]
+    pub(super) fn sent_probe_for_test(&self) -> Box<dyn Fn() -> bool> {
+        let tracked = Arc::clone(&self.tracked);
+        Box::new(move || {
+            matches!(
+                tracked.status.load(Ordering::Acquire),
+                SEND_SENT | SEND_OBSERVED
+            )
+        })
+    }
     pub(super) fn sent(&self) -> bool {
         matches!(
             self.tracked.status.load(Ordering::Acquire),

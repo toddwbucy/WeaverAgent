@@ -2,6 +2,7 @@
 //! Dispatch requires a sealed effective emission and both real commits. A gate
 //! answer remains owned until its exact terminal commits, never itself a grant.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use weaver_traits::ContentBlock;
@@ -27,6 +28,8 @@ pub(super) enum PairError {
     WrongScheme,
     Busy,
     UnknownCall,
+    NotReady,
+    AlreadyDelivered,
     WrongPhase,
     DuplicateCall,
     DuplicateSource,
@@ -220,12 +223,29 @@ struct Batch {
     cause: Option<NonDispatchCause>,
 }
 
+fn call_key(call: &CallId) -> (String, u64, u64) {
+    (call.run.clone(), call.sequence.0, call.call.0)
+}
+
+struct RetainedPair {
+    pair: Arc<CompletedPair>,
+    result_record: Option<weaver_trace::Sequence>,
+    delivered: Option<weaver_trace::Sequence>,
+}
+impl std::ops::Deref for RetainedPair {
+    type Target = CompletedPair;
+    fn deref(&self) -> &CompletedPair {
+        &self.pair
+    }
+}
+
 pub(super) struct PairLedger {
     session: String,
     run: String,
     scheme: SchemeDeclaration,
     active: Option<Batch>,
-    closed: Vec<Arc<CompletedPair>>,
+    closed: Vec<RetainedPair>,
+    closed_by_call: HashMap<(String, u64, u64), usize>,
     frozen: bool,
     gate_failed: bool,
     rejected: Option<RejectedGateReturn>,
@@ -293,6 +313,19 @@ impl PairLedger {
             panic!("fixture requires a ready recall");
         };
         subject.clear();
+    }
+
+    /// Isolate a defensive delivery gate after real pair and append receipts.
+    /// This corruption instrument is absent from production builds.
+    #[cfg(test)]
+    pub(super) fn remove_result_record_for_test(
+        &mut self,
+        call: &CallId,
+    ) -> weaver_trace::Sequence {
+        self.closed[*self.closed_by_call.get(&call_key(call)).unwrap()]
+            .result_record
+            .take()
+            .unwrap()
     }
 
     pub(super) fn start_inward(&mut self, call: &CallId) -> Result<(), PairError> {
@@ -745,6 +778,29 @@ impl PairLedger {
         Ok(())
     }
 
+    /// Bar only the next fully opened request. Outbound selection does not
+    /// erase omitted calls or bar a selected suffix. Later cancellation may
+    /// still replace this cause until the terminal author owns it.
+    pub(super) fn refuse_dispatch(
+        &mut self,
+        call: &CallId,
+        cause: NonDispatchCause,
+    ) -> Result<(), PairError> {
+        self.live()?;
+        if self.next_ready().map(|ready| &ready.call_id) != Some(call) {
+            return Err(PairError::WrongPhase);
+        }
+        self.entry_mut(call)?.ending = Some(PairEnded {
+            call_id: call.clone(),
+            execution: None,
+            fate: TerminalPairFate::Failed,
+            reason: Some(PairFailure::NotDispatched { cause }),
+            outcome: None,
+            loaded_from: None,
+        });
+        Ok(())
+    }
+
     pub(super) fn set_retry_of(
         &mut self,
         call: &CallId,
@@ -761,7 +817,7 @@ impl PairLedger {
             .into_iter()
             .flat_map(|batch| &batch.entries)
             .filter_map(|entry| entry.completed.as_ref())
-            .chain(self.closed.iter().map(Arc::as_ref))
+            .chain(self.closed.iter().map(|pair| pair.pair.as_ref()))
             .find(|pair| &pair.started.call_id == predecessor)
             .ok_or(PairError::InvalidLineage)?;
         if entry.opening_authoring
@@ -819,6 +875,7 @@ impl PairLedger {
             scheme,
             active: None,
             closed: Vec::new(),
+            closed_by_call: HashMap::new(),
             frozen: false,
             gate_failed: false,
             rejected: None,
@@ -893,6 +950,9 @@ impl PairLedger {
                 .try_reserve_exact(count)
                 .map_err(|_| PairError::Allocation)?;
             self.closed
+                .try_reserve(count)
+                .map_err(|_| PairError::Allocation)?;
+            self.closed_by_call
                 .try_reserve(count)
                 .map_err(|_| PairError::Allocation)?;
             for started in proof.requests() {
@@ -1290,7 +1350,7 @@ impl PairLedger {
         self.closed
             .iter()
             .find(|pair| &pair.started.call_id == call)
-            .map(|pair| Some(pair.as_ref()))
+            .map(|pair| Some(pair.pair.as_ref()))
             .ok_or(PairError::UnknownCall)
     }
 
@@ -1342,12 +1402,15 @@ impl PairLedger {
             return Err(PairError::WrongPhase);
         }
         let batch = self.active.take().unwrap();
-        self.closed.extend(
-            batch
-                .entries
-                .into_iter()
-                .map(|entry| Arc::new(entry.completed.unwrap())),
-        );
+        for entry in batch.entries {
+            self.closed_by_call
+                .insert(call_key(&entry.started.call_id), self.closed.len());
+            self.closed.push(RetainedPair {
+                pair: Arc::new(entry.completed.unwrap()),
+                result_record: None,
+                delivered: None,
+            });
+        }
         Ok(batch.proof)
     }
 
@@ -1557,10 +1620,102 @@ impl PairLedger {
             batch.proof.original(),
         ))
     }
-    pub(super) fn closed_for_material(&self, call: &CallId) -> Option<Arc<CompletedPair>> {
-        self.closed
-            .iter()
-            .find(|p| &p.started.call_id == call)
-            .cloned()
+    pub(super) fn closed_for_material(
+        &self,
+        call: &CallId,
+    ) -> Result<Arc<CompletedPair>, PairError> {
+        self.live()?;
+        if let Some(index) = self.closed_by_call.get(&call_key(call)) {
+            let retained = &self.closed[*index];
+            if retained.delivered.is_some() {
+                return Err(PairError::AlreadyDelivered);
+            }
+            return Ok(Arc::clone(&retained.pair));
+        }
+        self.completed(call)?;
+        Err(PairError::NotReady)
+    }
+
+    /// The complete grant is borrowed. Delivery changes no terminal evidence.
+    pub(super) fn take_result(&self, call: &CallId) -> Result<&CompletedPair, PairError> {
+        self.live()?;
+        if let Some(pair) = self.closed.iter().find(|p| &p.started.call_id == call) {
+            if pair.delivered.is_some() {
+                return Err(PairError::AlreadyDelivered);
+            }
+            return Ok(&pair.pair);
+        }
+        self.completed(call)?.ok_or(PairError::NotReady)
+    }
+
+    pub(super) fn result_record(
+        &self,
+        pair: &CompletedPair,
+    ) -> Result<Option<weaver_trace::Sequence>, PairError> {
+        self.live()?;
+        let retained = self
+            .closed_by_call
+            .get(&call_key(&pair.started.call_id))
+            .map(|index| &self.closed[*index])
+            .filter(|p| std::ptr::eq(p.pair.as_ref(), pair))
+            .ok_or(PairError::WrongReceipt)?;
+        if retained.delivered.is_some() {
+            return Err(PairError::AlreadyDelivered);
+        }
+        Ok(retained.result_record)
+    }
+
+    pub(super) fn record_result(
+        &mut self,
+        call: &CallId,
+        sequence: weaver_trace::Sequence,
+    ) -> Result<(), PairError> {
+        // Retaining an already-authored receipt is owed even after fail()
+        // freezes the ledger. This grants neither another author nor delivery.
+        let index = *self
+            .closed_by_call
+            .get(&call_key(call))
+            .ok_or(PairError::UnknownCall)?;
+        let pair = &mut self.closed[index];
+        if pair.delivered.is_some() || pair.result_record.is_some_and(|old| old != sequence) {
+            return Err(PairError::WrongReceipt);
+        }
+        pair.result_record = Some(sequence);
+        Ok(())
+    }
+
+    pub(super) fn acknowledge_delivery(
+        &mut self,
+        call: &CallId,
+        proof: &crate::flow::place::ConfirmedGeneration,
+    ) -> Result<(), PairError> {
+        self.live()?;
+        let index = *self
+            .closed_by_call
+            .get(&call_key(call))
+            .ok_or(PairError::UnknownCall)?;
+        let pair = &mut self.closed[index];
+        if pair.delivered.is_some() {
+            return Err(PairError::AlreadyDelivered);
+        }
+        if pair.result_record.is_none()
+            || !proof
+                .append_receipt
+                .as_ref()
+                .is_some_and(|receipt| receipt.matches(&proof.grant.pending))
+            || !proof.grant.units.iter().any(|unit| {
+                unit.completed_pair()
+                    .is_some_and(|p| std::ptr::eq(p, pair.pair.as_ref()))
+                    && unit
+                        .sources()
+                        .contains(&weaver_types::state_flow::MaterialRef::Returned {
+                            call_id: call.clone(),
+                        })
+            })
+        {
+            return Err(PairError::WrongReceipt);
+        }
+        pair.delivered = Some(proof.placement_sequence());
+        Ok(())
     }
 }
