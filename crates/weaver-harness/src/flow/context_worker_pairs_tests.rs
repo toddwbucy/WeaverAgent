@@ -41,7 +41,7 @@ pub(in crate::flow::context) fn exercise(
 ) {
     let input = guard.input.as_mut().unwrap();
     assert_eq!(input.begin_pairs(), Err(FoundationInputProgress::Generated));
-    if mode.contains("actual-worker") {
+    if mode.contains("actual-worker") && !mode.contains("-return-") {
         return actual_worker(guard, member, reader, mode);
     }
     input.repair(&FAMILY).unwrap();
@@ -350,6 +350,18 @@ pub(in crate::flow::context) fn exercise(
             .requests(),
         &requests
     );
+    if mode.contains("-return-") {
+        return crate::flow::context::worker_startup::input::generation::return_tests::exercise(
+            guard,
+            member,
+            reader,
+            clock,
+            socket,
+            root,
+            mode,
+            requests.iter().map(|r| r.call_id.clone()).collect(),
+        );
+    }
     if mode.contains("stop-complete") {
         stop(&mut guard, member, clock, mode, socket, root);
         assert_close(&trace(reader), requests.len());
@@ -393,7 +405,7 @@ fn actual_worker(mut guard: Guard<'_>, member: &mut Member, reader: &mut UnixStr
         let responder = scope.spawn(|| {
             let end = Instant::now() + Duration::from_secs(8);
             while !done.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
-                member.step(MonotonicIo.now().unwrap(), mode);
+                member.step_live(mode);
                 std::thread::sleep(Duration::from_millis(1));
             }
         });

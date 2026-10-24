@@ -43,6 +43,12 @@ fn generated(mode: &str, finish: Finish) -> TokenAnswer {
     })
 }
 pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
+    if mode.contains("-session-") {
+        return super::session_tests::spu(mode, fd);
+    }
+    if mode.contains("-return-") || mode.contains("-external-") {
+        return super::return_tests::spu(mode, fd);
+    }
     if mode.contains("correction") {
         return super::emission::correction::tests::spu(mode, fd);
     }
@@ -117,8 +123,26 @@ pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
                         assert_eq!(tool_schemas, schemas);
                         std::fs::write(root.join("appended.json"), &bytes[..n]).unwrap();
                         appended = true;
+                        if mode.contains("slow-decode") {
+                            while !root.join("release-generation").exists() {
+                                assert!(Instant::now() < end);
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                        }
                         if !mode.ends_with("stop-generation") {
-                            packet(fd, &generated(mode, Finish::Completed));
+                            packet(
+                                fd,
+                                &generated(
+                                    mode,
+                                    if mode.ends_with("final-model-stop") {
+                                        Finish::Stopped
+                                    } else if mode.ends_with("final-length") {
+                                        Finish::Length
+                                    } else {
+                                        Finish::Completed
+                                    },
+                                ),
+                            );
                         }
                     }
                     TokenDirective::Cancel { turn } => {
@@ -149,16 +173,72 @@ pub(super) fn step(
     } else {
         input.advance_with_io(&mut CircuitIo(clock))
     };
-    member.step(
-        if mode.starts_with("input-worker-generation") {
-            MonotonicIo.now().unwrap()
-        } else {
-            clock.now().unwrap()
-        },
-        mode,
-    );
+    if mode.starts_with("input-worker-generation") {
+        member.step_live(mode);
+    } else {
+        member.step(clock.now().unwrap(), mode);
+    }
     std::thread::sleep(Duration::from_millis(1));
     p
+}
+
+/// Hold a real decoder packet while the common numeric clock crosses the old
+/// admission deadline. OUTPUT must then receive its own complete budget.
+pub(super) fn slow_generation(
+    input: &mut FoundationInput<'_>,
+    member: &mut Member,
+    clock: &mut FakePumpIo,
+    root: &Path,
+    mode: &str,
+    appended: &str,
+) {
+    for _ in 0..2000 {
+        step(input, member, clock, mode);
+        if root.join(appended).exists() {
+            break;
+        }
+    }
+    assert!(root.join(appended).exists());
+    let wait = input
+        .serving
+        .owner
+        .context
+        .load_duty
+        .as_ref()
+        .unwrap()
+        .instruction
+        .decision_wait
+        .elapsed_ns
+        .0;
+    let delayed = clock.now().unwrap() + 2 * wait;
+    clock.advance_to(delayed).unwrap();
+    for _ in 0..4 {
+        assert_eq!(
+            step(input, member, clock, mode),
+            FoundationInputProgress::Pending
+        );
+        assert!(
+            input
+                .serving
+                .owner
+                .context
+                .deadlines
+                .get(PumpDeadline::Decision)
+                .is_none()
+        );
+    }
+    std::fs::write(root.join("release-generation"), []).unwrap();
+    for _ in 0..2000 {
+        step(input, member, clock, mode);
+        let context = &input.serving.owner.context;
+        if context.output.is_some() {
+            let bound = context.deadlines.get(PumpDeadline::Decision).unwrap();
+            assert!(bound.began_ns() >= delayed);
+            assert_eq!(bound.deadline_ns() - bound.began_ns(), wait);
+            return;
+        }
+    }
+    panic!("delayed decode did not reach a fresh OUTPUT barrier");
 }
 pub(super) fn until(
     input: &mut FoundationInput<'_>,
@@ -323,6 +403,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if mode.contains("-session-") {
+        return super::session_tests::exercise(serving, member, reader, clock, socket, root, mode);
+    }
     if mode.contains("emission") {
         return super::emission::tests::exercise(
             serving, member, reader, clock, socket, root, mode,
@@ -564,6 +647,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         }
     }
     input.generate().unwrap();
+    if mode.contains("slow-decode") {
+        slow_generation(input, member, clock, root, mode, "appended.json");
+    }
     if mode.ends_with("stop-unsent") {
         input.advance_engine(None, &mut CircuitIo(clock)).unwrap();
         assert!(input.serving.owner.context.generation.is_some());
@@ -670,7 +756,7 @@ fn exercise_worker(
         let responder = scope.spawn(|| {
             let end = Instant::now() + Duration::from_secs(8);
             while !done.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
-                member.step(MonotonicIo.now().unwrap(), mode);
+                member.step_live(mode);
                 std::thread::sleep(Duration::from_millis(1));
             }
         });

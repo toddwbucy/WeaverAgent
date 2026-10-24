@@ -20,7 +20,7 @@ pub(super) mod correction;
 use correction::CorrectionWork;
 
 #[path = "context_worker_pairs.rs"]
-pub(super) mod execution;
+pub(in crate::flow::context::worker_startup) mod execution;
 use execution::WorkerPairs;
 
 /// A compiled worker choice of restatement family. The actual entered run's
@@ -93,6 +93,13 @@ pub(super) struct EmissionWork {
 }
 
 impl EmissionWork {
+    pub(super) fn selected_answer(&self) -> Option<(String, weaver_types::Finish)> {
+        let effective = self.execution.as_ref()?.completed_effective()?;
+        // A decoder's own stop token/capacity finish is a checked model answer.
+        // An operator Stop cancels the owner before reaching this selection.
+        let (_, acts) = self.selected.as_ref()?;
+        Some((effective.answer_text(acts).ok()?, *effective.finish()))
+    }
     fn new(template: Option<&'static RestatementTemplate>) -> Self {
         Self {
             template,
@@ -159,11 +166,12 @@ impl EmissionWork {
         &mut self,
         context: &mut RecordingContext,
         decode: Option<&mut crate::flow::pump_transport::DecodePort>,
+        gate: Option<&mut crate::flow::pump_transport::OrganPort>,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.cancelled = true;
         if self.stage == EmissionStage::Execution {
-            self.execution.as_mut().unwrap().cancel(context, io)?;
+            self.execution.as_mut().unwrap().cancel(context, gate, io)?;
         } else if context.repair.is_some() {
             context.cancel_repair(NonDispatchCause::Stop, io)?;
             if self.stage == EmissionStage::Correction {
