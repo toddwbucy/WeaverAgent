@@ -1,7 +1,10 @@
 # State management: original Enter window proposal
 
-Date: 2026-10-23. Status: proposed; operator ruling, review and merge are pending.
+Date: 2026-10-23. Status: operator approved, subject to review and merge.
 Issue: #146. This document changes no code and authorizes no deployment.
+
+The operator [approved this EnterWindow election][approval] on 2026-10-23,
+subject to review and merge. That approval does not activate the proposal.
 
 The merged HARNESS-CLOCK rule already gives boot the remainder of admin's original
 load-act budget. The required replacement Serving Enter shape has no field carrying
@@ -12,7 +15,7 @@ representation gap and names the start point and expiry behavior explicitly.
 The proposal is based on main 45f8483393ce25af4ade3f0fa7bd96c1e8ed78f1. The owning
 changes are [TYPES-ENTER-WINDOW][types], [ADMIN-ENTER-WINDOW][admin] and
 [HARNESS-ENTER-WINDOW][harness]. Their prior merged clauses remain authority until
-this proposal is elected, reviewed and merged. Existing Serving remains applicable
+this proposal is reviewed and merged. Existing Serving remains applicable
 until the complete [foundation cutover][cutover]; a required future field is not an
 additive deployment plan.
 
@@ -97,26 +100,26 @@ separate activation choice: for example a paired positive-acknowledgement
 handshake that keeps admission closed, with its own states and failure paths.
 That protocol is not elected here. Retain the current any-position rollback
 semantics and test the race with actual admitted resources; do not infer the
-stronger guarantee from timing-carrier fields. The pending timing question is
-unchanged.
+stronger guarantee from timing-carrier fields. The approval does not elect
+that stronger handshake.
 
 ## Landing form and review dispositions
 
 The three owning Specs now use the prospective landing form: Landing PR #282,
 normative clause names and no proposal-only banners or open-election notes for
-these clauses. This project document retains the alternatives and the pending
-operator ruling, review and merge. An unmerged draft remains no implementation
-authority; the MERGED header describes the eventual landing state only.
+these clauses. This project document records the operator's approval and retains
+the alternatives. An unmerged draft remains no implementation authority; the
+MERGED header describes the eventual landing state only.
 
 Both #276 and #282 currently propose harness amendment version 0.30 from main
 version 0.29. Sequence the landings: the first may use 0.30; the second must
 incorporate the first's merged clauses and advance to 0.31. No order or merge
-is claimed by this document. Keep the pending EnterWindow election separate
+is claimed by this document. Keep the approved EnterWindow election separate
 from #276's AuthorFailure/held-boundary election.
 
-The Date filed convention remains open. First filing was 2026-10-21; these
-revision headers currently say 2026-10-23. No convention is chosen by this
-source-only revision. The original draft's separate EnterWindow and SaveWindow
+The operator ruled that Date filed retains the first filing date. All three
+owning Spec headers therefore remain 2026-10-21; Version and Git identify
+revisions. No proposed clause changes. The separate EnterWindow and SaveWindow
 domain types remain the recommendation. Sharing a private validation helper
 could avoid rule duplication without allowing the wrong domain type; this
 optional implementation detail is not a new timing election or code change.
@@ -159,8 +162,8 @@ original deadline, defaulting a missing window, renewing after a partial result,
 accepting late Ready, losing received descriptors or inventing completed rollback.
 Arithmetic-only tests cannot establish process timing or cleanup.
 
-No implementation is authorized by this document before operator election, review and
-merge. The complete healthy-refusal/failed-Enter composition, process/LastWord custody,
+Implementation remains held until review and merge. The complete
+healthy-refusal/failed-Enter composition, process/LastWord custody,
 production artifacts and measured limits remain separate implementation and
 qualification duties. The unmerged positive-generation, correction-counting and read
 preflight proposals are outside this change.
@@ -169,3 +172,4 @@ preflight proposals are outside this change.
 [admin]: ../crates/state-management/weaver-admin-Spec-amendment.md
 [harness]: ../crates/state-management/weaver-harness-Spec-amendment.md
 [cutover]: ../crates/state-management/state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
+[approval]: https://github.com/toddwbucy/WeaverAgent/pull/282#issuecomment-6365805210
