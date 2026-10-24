@@ -4,8 +4,9 @@ Date filed: 2026-10-24
 
 Issue: #146. Branch: `code/state-worker-session`, based on
 `code/state-worker-final` at
-`b0c639987dab901a987267c830c109c99deee5e4` (#327), joined with both
-parents retained above the original session head `97564492`.
+`bb6f27b247ace7f16e25dac35536389b3b420cef` (#327), joined with both
+parents retained above the previous session head `07f5bd95`. The original
+session head `97564492` remains in the ancestry.
 
 The worker now retains one entered serving seat across explicitly elected turns.
 Each turn uses its own accepted input and caller-supplied identity. Successful
@@ -65,7 +66,8 @@ Twelve process cases use actual worker startup, gate, classifier, decoder,
 recorder and lifecycle sockets. Model and store responses are scripted. The
 fixture derives each later marks catalog from its actual earlier filed begin_task
 effect and samples its operation timestamp after receiving the request. This does
-not resolve the four separately filed #313 fixtures.
+not establish production member qualification. The shared #313 fixture
+correction is inherited and validated below.
 
 The cases cover two and three turns, malformed input followed by a valid turn,
 an already queued next frame, Observe/Stop at idle, Observe/Stop after acceptance,
@@ -76,7 +78,7 @@ the exact successive resident prefixes and full original-owner return after an
 unfinished refusal or failure. The fixture's emitted world closes retain the
 actual gate exchange and turn.
 
-Lock, formatting and strict harness lint passed. The harness suite passed 2,030
+Lock, formatting and strict harness lint passed. The harness suite passed 2,033
 tests, including 22 doctests. Its 293 ignored cases comprise 275 delegated process
 cases passed separately and serially, including the 12 session cases, and 18
 inherited ignores. The eight privileged admin startup instruments were not run.
@@ -95,18 +97,32 @@ SHA256 at that head:
 `3b263c033eae72cdc1050724641a68762417c4c96f2081df28ba250163590fa6`.
 These are historical controls, not a new mutation round for the parent join.
 
-Logs, commands, source snapshots, mutation patches and restoration results are
-under `/tmp/state-146-worker-session/`. The immutable bulk evidence leaf and exact
-published revision are recorded in the draft PR after deposit verification.
-The current parent join passed lock, formatting, strict harness lint, 2,030
-harness tests and all 275 serial delegated cases (including 20 final and 12
-session cases). Its 675-file source manifest was verified after the gates; SHA256:
-`946a8229abade0708f7a90440dd77ec2678a070a70fa9ea56259497a21769bd9`.
-The parent-join gates and current 675-file manifest are under
-`/tmp/state-146-worker-session-parent-join/`. The final and session responders now
-both use the parent's explicit step_live path; the mode-specific clock override
-is removed. Other shared-fixture callers still use their earlier clock entry,
-including simulated-clock callers, so this join does not close #313.
+Current evidence is `/tmp/state-146-session-fixture-join/`. All 675
+source/configuration hashes were verified after the full gates and repetitions.
+Current manifest SHA256:
+`06ac455f3466c3e1c96fc88d89add1d50a91ea4f70db90918300af7e5d3edb6d`.
+
+The current final and session families passed five consecutive idle pairs,
+**160/160 cases**, followed by one four-thread run of each family, **32/32 cases**.
+All 275 delegated cases also passed serially in the joined gates. The three new
+fixture regressions passed in the ordinary suite. Their three compiled mutation
+controls are inherited evidence at parent bb6f27b2, not a new child mutation round.
+
+All shared real-clock responders now use step_live (17 live sites here);
+the 17 supplied-clock sites are simulated. Final and session trace reads wait
+through the retained owner's actual last Recorded sequence under a fixture
+deadline, preserving partial lines. The session extracts its existing owner into
+the teardown Guard before that wait. This changes test collection, not production
+handoff, accounting or Stop policy. Missing rows fail instead of returning a
+partial trace. The parent's source audit separately checked the real member's
+post-receipt/pre-parser timestamp boundary without claiming runtime qualification.
+
+Original session controls and initial failures remain under
+`/tmp/state-146-worker-session/`. The previous join evidence remains under
+`/tmp/state-146-worker-session-parent-join/`. Current immutable deposit details and
+exact revision are in the PR body. #313's fixture correction passed its parent
+Planner grade and awaits stack merge; this child awaits regrade. Earlier
+resource-load EAGAIN failures remain separate evidence.
 
 Initial evidence retains one compile failure from an unavailable direct serde
 trait import (replaced by a local serialization macro), the first scripted
@@ -120,11 +136,19 @@ are author evidence, not those skill invocations or an independent Planner grade
 
 ## Planner review dispositions
 
-Planner review 5638632959 at 97564492 found 0 own fixes and 10 batch rows,
-leaving the PR draft on #327's inherited clock-race gate. This join carries
-#327's b0c63998 correction with its original ancestry and reruns the joined gates.
-The parent's five idle and five loaded final-family passes and its surviving F3
-control are parent evidence, not a new repetition round on this joined head.
+Planner review 5638632959 at 97564492 found 0 own fixes and 10 batch rows.
+Regrade 5638695377 at 07f5bd95 kept draft on the shared startup clock race and
+a second sighting of the final trace-reader race. This merge preserves both the
+previous child head and corrected #327 bb6f27b2, and applies the same trace
+collection to the session. Five consecutive final/session pairs and the current
+gates answer the inherited rows for a new Planner regrade.
+
+Parent regrade 5638774925 at bb6f27b2 found 0 fix/9 batch and the Planner
+marked it ready after five independent final/startup pairs passed.
+
+The parent's F3 guard remains independently unpinned; its clean survivor and
+failure-path explanation are historical/source evidence, not a new mutation
+result here. Original own-row dispositions follow.
 
 | Row | Disposition |
 | --- | --- |
@@ -135,7 +159,7 @@ control are parent evidence, not a new repetition round on this joined head.
 | 5 | Activation blocker: FoundationInput::finish can drop a retained engine/account on post-Stop handoff. Transfer any owed account to lifecycle or refuse that handoff. #316's complete failed/Stop exit remains owed. |
 | 6 | Open: operation_detail can appear even on Completed. Restrict the fallback to refused/failed owners and assert exact failure text. |
 | 7 | Open: share progress/management owner helpers and remove unreachable arms. |
-| 8 | Partly addressed by the inherited explicit step_live path for final/session responders. Migrating every shared live responder remains #313 work; simulated-clock tests need their explicit supplied readings. |
+| 8 | Corrected across all shared real-clock responders by parent bb6f27b2. Explicit simulated-clock sites retain their readings; serial/parallel and repeated final/session evidence is above. Parent review cleared; stack merge remains owed for #313. |
 | 9 | Open: S1/S2's redundant guards remain, enforced again by Workflow::begin/start_task and finish. S3 is unverified because its startup hit #313. No independent enforcement claim is made for those guard lines. Comments or removal remain owed. |
 | 10 | Required self-check skills remain unavailable and are not claimed as invoked. |
 

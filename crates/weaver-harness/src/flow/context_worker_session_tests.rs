@@ -4,7 +4,7 @@ use super::emission::tests::FAMILY;
 use super::*;
 use crate::flow::clock::testing::FakePumpIo;
 use crate::flow::context::worker_startup::input::management::tests::{Guard, dial, read_packet};
-use crate::flow::context::worker_startup::tests::{Member, worker};
+use crate::flow::context::worker_startup::tests::{Member, trace_through, worker};
 use nix::sys::socket::{MsgFlags, recv, send};
 use std::io::Read;
 use std::os::fd::AsRawFd;
@@ -305,7 +305,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     assert!(session.start_turn(TurnKey("early".into())).is_err());
     let done = AtomicBool::new(false);
     reader.set_nonblocking(true).unwrap();
-    let rows = std::thread::scope(|scope| {
+    let bytes = std::thread::scope(|scope| {
         let responder = scope.spawn(|| {
             let end = Instant::now() + Duration::from_secs(45);
             while !done.load(Ordering::SeqCst) && Instant::now() < end {
@@ -322,10 +322,6 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             }
             let _ = reader.read_to_end(&mut bytes);
             bytes
-                .split(|b| *b == b'\n')
-                .filter(|s| !s.is_empty())
-                .map(|s| serde_json::from_slice::<serde_json::Value>(s).unwrap())
-                .collect::<Vec<_>>()
         });
         let _stop_threads = StopThreads(&done);
         for index in 0..turns(mode) {
@@ -531,6 +527,48 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         recorder.join().unwrap()
     });
     let failed = mode.ends_with("decoder-failure");
+    let final_progress = session.progress();
+    let session = guard.0.take().unwrap();
+    let mut retained = Guard {
+        input: None,
+        management: None,
+    };
+    match session.into_owner() {
+        Ok(input) => {
+            assert_eq!(
+                std::ptr::from_ref(&*input.serving.owner.context),
+                context_identity
+            );
+            if failed {
+                assert!(input.serving.owner.context.failure().is_some());
+                assert!(input.serving.owner.context.generation.is_some());
+                assert!(input.received.is_some());
+            }
+            if mode.ends_with("duplicate") {
+                assert!(
+                    input.token.is_some(),
+                    "refused election retains the new accepted input"
+                );
+                assert!(input.received.is_some());
+            }
+            retained.input = Some(input);
+        }
+        Err(owner) => {
+            assert!(mode.ends_with("leave"));
+            assert_eq!(
+                owner.progress(),
+                super::super::management::FoundationManagementProgress::DirectivePending
+            );
+            retained.management = Some(owner);
+        }
+    }
+    let rows = trace_through(
+        reader,
+        bytes,
+        retained.recorded_sequence(),
+        Instant::now() + Duration::from_secs(3),
+    )
+    .unwrap();
     let special = mode.ends_with("leave") || mode.ends_with("duplicate") || failed;
     let expected_turns = if special || mode.ends_with("refused") {
         1
@@ -577,10 +615,10 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         matches!(marks, s::QueryResult::Marks { current_task: Some(_), open_scopes, .. } if open_scopes.len() == 1)
     );
     if mode.ends_with("leave") {
-        assert_eq!(session.progress(), Progress::DirectivePending);
+        assert_eq!(final_progress, Progress::DirectivePending);
         assert!(!root.join("session-generation-1.json").exists());
     } else if !mode.ends_with("duplicate") && !failed {
-        assert_eq!(session.progress(), Progress::Pending);
+        assert_eq!(final_progress, Progress::Pending);
     }
     let closes: Vec<_> = rows.iter().filter(|r| r["kind"] == "turn.closed").collect();
     let offers: Vec<_> = rows
@@ -601,39 +639,5 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 > super::emission::tests::sequence(closes[0]),
             "queued input intake waits for the old world close"
         );
-    }
-    let session = guard.0.take().unwrap();
-    let mut retained = Guard {
-        input: None,
-        management: None,
-    };
-    match session.into_owner() {
-        Ok(input) => {
-            assert_eq!(
-                std::ptr::from_ref(&*input.serving.owner.context),
-                context_identity
-            );
-            if failed {
-                assert!(input.serving.owner.context.failure().is_some());
-                assert!(input.serving.owner.context.generation.is_some());
-                assert!(input.received.is_some());
-            }
-            if mode.ends_with("duplicate") {
-                assert!(
-                    input.token.is_some(),
-                    "refused election retains the new accepted input"
-                );
-                assert!(input.received.is_some());
-            }
-            retained.input = Some(input);
-        }
-        Err(owner) => {
-            assert!(mode.ends_with("leave"));
-            assert_eq!(
-                owner.progress(),
-                super::super::management::FoundationManagementProgress::DirectivePending
-            );
-            retained.management = Some(owner);
-        }
     }
 }

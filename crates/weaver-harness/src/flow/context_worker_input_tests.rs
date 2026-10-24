@@ -261,7 +261,7 @@ pub(in super::super) fn exercise(
             let responder = scope.spawn(move || {
                 let end = Instant::now() + Duration::from_secs(8);
                 while !flag.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
-                    member.step(MonotonicIo.now().unwrap(), "ready");
+                    member.step_live("ready");
                     std::thread::sleep(Duration::from_millis(1));
                 }
             });

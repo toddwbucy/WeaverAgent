@@ -5,7 +5,7 @@ use super::tests::until;
 use super::*;
 use crate::flow::clock::testing::FakePumpIo;
 use crate::flow::context::worker_startup::input::management::tests::Guard;
-use crate::flow::context::worker_startup::tests::{Member, worker};
+use crate::flow::context::worker_startup::tests::{Member, trace_through, worker};
 use std::io::Read;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -48,7 +48,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     let done = AtomicBool::new(false);
     let mut peer = None;
     reader.set_nonblocking(true).unwrap();
-    let rows = std::thread::scope(|scope| {
+    let bytes = std::thread::scope(|scope| {
         let responder = scope.spawn(|| {
             let end = Instant::now() + Duration::from_secs(45);
             while !done.load(Ordering::SeqCst) && Instant::now() < end {
@@ -65,10 +65,6 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             }
             let _ = reader.read_to_end(&mut bytes);
             bytes
-                .split(|b| *b == b'\n')
-                .filter(|s| !s.is_empty())
-                .map(|s| serde_json::from_slice::<serde_json::Value>(s).unwrap())
-                .collect::<Vec<_>>()
         });
         let end = Instant::now() + Duration::from_secs(30);
         while flow.progress() == worker::turn::Progress::Pending && Instant::now() < end {
@@ -126,6 +122,14 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 .err()
                 .expect("actual management owner retained"),
         );
+        let through = guard.recorded_sequence();
+        let rows = trace_through(
+            reader,
+            bytes,
+            through,
+            Instant::now() + Duration::from_secs(3),
+        )
+        .unwrap();
         assert!(!rows.iter().any(|r| r["kind"] == "turn.closed"));
         assert!(!root.join("closed.json").exists());
         return;
@@ -139,6 +143,13 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         }
     }
     let input = guard.input.as_mut().unwrap();
+    let rows = trace_through(
+        reader,
+        bytes,
+        input.serving.owner.context.last_author_sequence.unwrap(),
+        Instant::now() + Duration::from_secs(3),
+    )
+    .unwrap();
     if mode.ends_with("management-stop-before") {
         use crate::flow::context::worker_startup::input::management::tests::read_packet;
         assert_eq!(
@@ -305,7 +316,7 @@ fn manual(
     use crate::flow::context::worker_startup::input::management::{
         FoundationManagementProgress,
         stop::tests::{fill, fill_trace},
-        tests::{dial, read_packet, trace},
+        tests::{dial, read_packet},
     };
     use nix::sys::socket::{MsgFlags, send};
     use std::os::fd::AsRawFd;
@@ -377,7 +388,14 @@ fn manual(
         FoundationInputProgress::PairsComplete,
     );
     assert!(!member.requests.iter().any(|r| r.starts_with("recall:")));
-    let mut rows = trace(reader);
+    reader.set_nonblocking(true).unwrap();
+    let mut rows = trace_through(
+        reader,
+        vec![],
+        input.serving.owner.context.last_author_sequence.unwrap(),
+        Instant::now() + Duration::from_secs(3),
+    )
+    .unwrap();
     let pressure = mode.ends_with("gate-pressure")
         || mode.ends_with("stop-after")
         || mode.ends_with("deadline")
@@ -389,7 +407,23 @@ fn manual(
     assert!(input.close_answer().is_err());
     if mode.ends_with("stop-before") {
         stop(&mut guard, member, clock, mode, socket, root);
-        rows.extend(trace(reader));
+        rows.extend(
+            trace_through(
+                reader,
+                vec![],
+                guard
+                    .input
+                    .as_ref()
+                    .unwrap()
+                    .serving
+                    .owner
+                    .context
+                    .last_author_sequence
+                    .unwrap(),
+                Instant::now() + Duration::from_secs(3),
+            )
+            .unwrap(),
+        );
         assert_eq!(
             rows.iter().filter(|r| r["kind"] == "turn.closed").count(),
             1
@@ -619,7 +653,15 @@ fn manual(
         mode,
         FoundationInputProgress::Completed,
     );
-    rows.extend(trace(reader));
+    rows.extend(
+        trace_through(
+            reader,
+            vec![],
+            input.serving.owner.context.last_author_sequence.unwrap(),
+            Instant::now() + Duration::from_secs(3),
+        )
+        .unwrap(),
+    );
     assert_eq!(
         rows.iter().filter(|r| r["kind"] == "turn.closed").count(),
         1
