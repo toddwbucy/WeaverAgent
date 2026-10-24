@@ -1,4 +1,6 @@
 use super::*;
+#[path = "context_rollback_listener_tests.rs"]
+mod listener_tests;
 use crate::channel::OrganChannel;
 use crate::flow::clock::{WaitInterest, WaitOutcome, testing::FakePumpIo};
 use crate::flow::context::startup_composition::tests::CircuitIo;
@@ -121,6 +123,8 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
     state: &mut UnixStream,
     mode: &str,
 ) {
+    let (mut door, listener) = listener_tests::Door::new();
+    let mut listener = Some(listener);
     let sequence = recorded.sequence();
     let source = recorded.source().detail.as_ptr();
     let original = recorded.owner.bound;
@@ -228,7 +232,7 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
         );
         let (peer, _far) = delivered(&leave(), false);
         let bound = AbsoluteBound::after(io.now().unwrap(), 100000).unwrap();
-        let mut rollback = match response.accept_rollback(peer, bound) {
+        let mut rollback = match response.accept_rollback(peer, listener.take().unwrap(), bound) {
             Ok(x) => x,
             Err(_) => panic!("retain actual Leave"),
         };
@@ -294,7 +298,7 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
             }
             let (peer, _far) = delivered(&invalid, variant == 5);
             let bound = AbsoluteBound::after(io.now().unwrap(), 100000).unwrap();
-            let rejected = match response.accept_rollback(peer, bound) {
+            let rejected = match response.accept_rollback(peer, listener.take().unwrap(), bound) {
                 Err(error) => error,
                 Ok(_) => panic!("invalid Leave accepted, variant {variant}"),
             };
@@ -315,6 +319,7 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
                     .get(PumpDeadline::Enter),
                 Some(original)
             );
+            listener = Some(rejected.listener);
             response = rejected.response;
         }
         return;
@@ -344,6 +349,29 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
             )
             .unwrap();
     }
+    if mode == "response-listener-silent" {
+        door.early = Some(door.connect());
+        let context = &mut response.refusal.owner.startup.context;
+        context
+            .pump_once(&mut PumpPorts {
+                lifecycle: LifecyclePorts {
+                    listener: listener.as_mut(),
+                    ..Default::default()
+                },
+                gate: None,
+                decode: None,
+                label: None,
+                io: &mut CircuitIo(io),
+            })
+            .unwrap();
+        let accepted = listener
+            .as_ref()
+            .unwrap()
+            .accepted_ns()
+            .expect("actual clocked accept");
+        door.accepted = Some(accepted);
+        io.advance_to(accepted + 500_000_000).unwrap();
+    }
     let mut directive = leave();
     if mode == "response-wire-unforced"
         && let weaver_types::Payload::Directive(LifecycleDirective::Leave { forced, .. }) =
@@ -353,9 +381,16 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
     }
     let (peer, rollback_far) = delivered(&directive, false);
     let mut rollback_far = Some(rollback_far);
-    let leave_bound = AbsoluteBound::after(io.now().unwrap(), 100000).unwrap();
+    let allowance = if mode == "response-listener-leave-expiry" {
+        1_000_000_000
+    } else if mode.starts_with("response-listener-") || mode.starts_with("response-halt-") {
+        5_000_000_000
+    } else {
+        100000
+    };
+    let leave_bound = AbsoluteBound::after(io.now().unwrap(), allowance).unwrap();
     if mode == "response-replaced-enter" {
-        let rejected = match response.accept_rollback(peer, leave_bound) {
+        let rejected = match response.accept_rollback(peer, listener.take().unwrap(), leave_bound) {
             Err(x) => x,
             Ok(_) => panic!("replaced Enter accepted"),
         };
@@ -364,7 +399,7 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
         assert_eq!(rejected.response.refusal.sequence(), sequence);
         return;
     }
-    let rollback = match response.accept_rollback(peer, leave_bound) {
+    let rollback = match response.accept_rollback(peer, listener.take().unwrap(), leave_bound) {
         Ok(x) => x,
         Err(e) => panic!("rollback join: {:?}", e.reason),
     };
@@ -436,6 +471,29 @@ pub(in crate::flow::context::startup_composition::refusal) fn drive(
         );
         assert_eq!(rollback.leave(), leave_bound);
         assert_eq!(rollback.directive().envelope, directive);
+        return;
+    }
+    if mode.starts_with("response-halt-") {
+        super::halt::tests::drive(
+            rollback,
+            io,
+            reader,
+            state,
+            mode,
+            rollback_far.as_ref().unwrap(),
+        );
+        return;
+    }
+    if mode.starts_with("response-listener-") {
+        listener_tests::drive(
+            rollback,
+            &mut door,
+            io,
+            reader,
+            state,
+            mode,
+            rollback_far.as_ref().unwrap(),
+        );
         return;
     }
     state.set_nonblocking(true).unwrap();
@@ -803,4 +861,52 @@ scenario!(
 scenario!(
     rollback_readback_composition_state_loss_does_not_grant_preparation,
     "response-state-gone"
+);
+
+scenario!(rollback_halt_composition_state_eof, "response-halt-eof");
+
+scenario!(
+    rollback_halt_composition_state_timeout,
+    "response-halt-timeout"
+);
+
+scenario!(
+    rollback_halt_composition_partial_response,
+    "response-halt-partial"
+);
+
+scenario!(
+    rollback_halt_composition_pending_measurement_retained,
+    "response-halt-pressure"
+);
+
+scenario!(
+    rollback_halt_composition_pending_measurement_records_once,
+    "response-halt-record"
+);
+
+scenario!(rollback_halt_composition_expired_leave, "response-halt-cap");
+
+scenario!(
+    rollback_halt_composition_broken_clock,
+    "response-halt-clock"
+);
+
+scenario!(
+    rollback_halt_composition_foreign_wait_rejected,
+    "response-halt-foreign"
+);
+
+scenario!(
+    rollback_halt_composition_original_peer_input_retained,
+    "response-halt-extra"
+);
+
+scenario!(
+    rollback_halt_composition_recorded_before_clock_failure,
+    "response-halt-record-clock"
+);
+scenario!(
+    rollback_halt_composition_owed_measurement_keeps_original_cap,
+    "response-halt-record-expiry"
 );

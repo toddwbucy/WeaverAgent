@@ -238,6 +238,14 @@ pub(super) struct StateChannel<S = UnixStream> {
 }
 
 impl<S> StateChannel<S> {
+    pub(super) fn outstanding(&self) -> Vec<ExchangeProgress> {
+        self.exchanges.iter().map(Exchange::progress).collect()
+    }
+
+    pub(super) fn held_measurement(&self) -> Option<&StateStoreMeasurement> {
+        self.held.as_ref().map(|held| &held.measurement)
+    }
+
     /// Read-only frozen framing evidence; no descriptor is required or restored.
     pub(super) fn retained_received_bytes(&self) -> &[u8] {
         &self.received
@@ -369,14 +377,6 @@ impl StateChannel {
     /// Keep all local request and answer evidence for the halt account.
     pub(super) fn close_failed_read(&self) -> io::Result<()> {
         self.stream.shutdown(std::net::Shutdown::Both)
-    }
-
-    pub(super) fn outstanding(&self) -> Vec<ExchangeProgress> {
-        self.exchanges.iter().map(Exchange::progress).collect()
-    }
-
-    pub(super) fn held_measurement(&self) -> Option<&StateStoreMeasurement> {
-        self.held.as_ref().map(|held| &held.measurement)
     }
 
     /// A cancellation may queue fresh release behind this already-recorded
