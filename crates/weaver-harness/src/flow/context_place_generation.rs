@@ -39,6 +39,7 @@ impl RecordingContext {
         self.place_engine.as_mut().unwrap().outstanding = None;
         self.barrier.set_place_owed(self.place_owed());
         Ok(PlaceAccount {
+            phase: self.phase,
             work: AccountWork::Generation(Box::new(GenerationTransaction {
                 grant: Some(grant),
                 native_admission: None,
@@ -183,6 +184,12 @@ impl RecordingContext {
         };
         if !reservation.belongs_to(decode) {
             return Err(RunFailure::PlaceOwned);
+        }
+        // A consumed terminal already settles this request. Starting another
+        // Cancel would create a new AtRest obligation after a complete refusal.
+        // A previously queued Cancel remains unsettled until its own answer.
+        if decode.reservation_settled(reservation) {
+            return Ok(());
         }
         if !reservation.sent() {
             if decode.placement_not_started() {
@@ -644,6 +651,7 @@ impl RecordingContext {
         }
         let cancelled = work.cancelled;
         let account = PlaceAccount {
+            phase: self.phase,
             work: AccountWork::Generation(Box::new(work)),
             measure: None,
         };

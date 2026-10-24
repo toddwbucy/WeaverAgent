@@ -20,6 +20,7 @@
 //! surface rather than a rule a caller is asked to keep.
 
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use nix::dir::Dir;
 use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl};
@@ -44,8 +45,9 @@ pub enum EntryFault {
     /// continue past it. The count is reported rather than the identity, since
     /// this crate cannot know what a stray descriptor refers to.
     DescriptorCountWrong { found: usize },
-    /// An inherited number is not an open descriptor, or the enumeration the
-    /// count check needs could not be performed.
+    /// An inherited number is not an open descriptor, the enumeration could
+    /// not be performed, or an inherited adoption already owns this process's
+    /// descriptor numbers. A repeated adoption cannot create another owner.
     DescriptorsUnusable,
     /// A hygiene set failed. Both sets are sets and never checks, so a failure
     /// here is a refusal rather than a report: a step that finds a flag wrong
@@ -99,14 +101,14 @@ pub fn adopt() -> Result<Inherited, EntryFault> {
     // first and failing second would drop a half-adopted pair through the
     // OwnedFd close, which is a close of a descriptor this process may not own.
     for fd in [LIFECYCLE_FD, DECODE_FD] {
-        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-        fcntl(borrowed, FcntlArg::F_GETFD).map_err(|_| EntryFault::DescriptorsUnusable)?;
+        inherited_number_open(fd)?;
     }
 
-    // SAFETY: both numbers were confirmed open above, the count check confirmed
-    // there are exactly two beyond the standard streams, and this is the one
-    // place in the crate that constructs an owned handle from an inherited
-    // number. Every later use flows from these two values.
+    claim_inherited_descriptors()?;
+    // SAFETY: both inherited numbers were confirmed open above, and the count
+    // check confirmed exactly two beyond the standard streams. The shared
+    // process-wide claim excludes every other safe inherited adoption path.
+    // Every later use flows from these two values.
     let lifecycle = unsafe { OwnedFd::from_raw_fd(LIFECYCLE_FD) };
     let decode = unsafe { OwnedFd::from_raw_fd(DECODE_FD) };
 
@@ -118,6 +120,27 @@ pub fn adopt() -> Result<Inherited, EntryFault> {
         lifecycle: LifecycleChannel { end: lifecycle },
         decode: DecodeSocket { end: decode },
     })
+}
+
+// Every inherited adoption includes fd3, including the legacy two-end decoder.
+// Once wrapping starts the claim is permanent, even if a hygiene step fails or
+// the owned handle is dropped and the OS later reuses the descriptor number.
+static INHERITED_DESCRIPTORS_CLAIMED: AtomicBool = AtomicBool::new(false);
+
+fn inherited_number_open(fd: RawFd) -> Result<(), EntryFault> {
+    // Check the inherited raw number without first manufacturing a BorrowedFd
+    // whose safety contract would already require that number to be open.
+    if unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) } < 0 {
+        return Err(EntryFault::DescriptorsUnusable);
+    }
+    Ok(())
+}
+
+fn claim_inherited_descriptors() -> Result<(), EntryFault> {
+    INHERITED_DESCRIPTORS_CLAIMED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map(|_| ())
+        .map_err(|_| EntryFault::DescriptorsUnusable)
 }
 
 /// A set and never a check, per `weaver-organ-channel` section 2.
@@ -321,10 +344,10 @@ fn adopt_single() -> Result<OwnedFd, EntryFault> {
     if held != 1 {
         return Err(EntryFault::DescriptorCountWrong { found: held });
     }
-    let borrowed = unsafe { BorrowedFd::borrow_raw(CLASSIFY_FD) };
-    fcntl(borrowed, FcntlArg::F_GETFD).map_err(|_| EntryFault::DescriptorsUnusable)?;
-    // SAFETY: fd3 is open and the only nonstandard descriptor. This executable
-    // calls adoption exactly once before constructing any other owned handle.
+    inherited_number_open(CLASSIFY_FD)?;
+    claim_inherited_descriptors()?;
+    // SAFETY: inherited fd3 is open and the only nonstandard descriptor. The
+    // shared process-wide claim excludes a second single- or two-end adoption.
     let end = unsafe { OwnedFd::from_raw_fd(CLASSIFY_FD) };
     set_close_on_exec(end.as_fd())?;
     clear_dumpable()?;
@@ -452,3 +475,6 @@ mod tests;
 
 #[cfg(test)]
 mod series_tests;
+
+#[cfg(test)]
+mod adoption_tests;

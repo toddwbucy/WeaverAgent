@@ -56,6 +56,46 @@ fn a_complete_config_parses() {
     assert!(!decoder.residual_readout_election);
 }
 
+/// ModelBinding is a closed object on the live operator TOML path too. The
+/// positional form was accepted by the previous derived struct deserializer;
+/// this pins the already-landed narrowing without changing parser policy.
+#[test]
+fn live_toml_model_binding_refuses_positional_array_as_bad_value() {
+    let table = "[spu-instruction.decoder.model-binding]\nartifact = \"qwen3-4b-instruct\"\ndevices = [0]\n";
+    let source = full_config().replace(table, "").replace(
+        "tunable-values = {}\n",
+        "tunable-values = {}\nmodel-binding = [\"/m\", [0]]\n",
+    );
+    let error =
+        parse(&source).expect_err("the live admin parser refuses a positional ModelBinding");
+    assert_eq!(error.kind, ConfigErrorKind::BadValue);
+    assert_eq!(error.field, None);
+    // The public parser returns the typed error above. Pin the current lower
+    // layer's wording separately; it names JSON even when invoked from TOML.
+    let raw = toml::from_str::<weaver_types::AgentConfig>(&source).unwrap_err();
+    assert!(raw.message().contains("expected a JSON object"), "{raw}");
+}
+
+#[test]
+fn live_toml_model_binding_accepts_table_and_inline_object_controls() {
+    let table = "[spu-instruction.decoder.model-binding]\nartifact = \"qwen3-4b-instruct\"\ndevices = [0]\n";
+    let inline = full_config().replace(table, "").replace(
+        "tunable-values = {}\n",
+        "tunable-values = {}\nmodel-binding = { artifact = \"qwen3-4b-instruct\", devices = [0] }\n",
+    );
+    for source in [full_config(), inline] {
+        let config = parse(&source).expect("both named object spellings remain admitted");
+        assert_eq!(
+            config.spu_instruction.decoder.model_binding.artifact.0,
+            "qwen3-4b-instruct"
+        );
+        assert_eq!(
+            config.spu_instruction.decoder.model_binding.devices,
+            vec![weaver_types::DeviceOrdinal(0)]
+        );
+    }
+}
+
 /// **Both earlier forms of the identity refuse by name**, per
 /// `weaver-types-Spec` section 2 on the operator's ruling of 2026-10-06 that
 /// the system prompt is state: the inline `identity` table of before

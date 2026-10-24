@@ -318,6 +318,16 @@ impl RecordingContext {
                 || (matches!(purpose, ReadPurpose::Marks) && self.marks.is_some())
                 || inward.is_some()
         });
+        // A returned competing author does not stop this admitted owner's
+        // exact private continuation. Ordinary and foundation reads still
+        // require that caller to retrieve its held original first.
+        let owned_continuation = match &purpose {
+            ReadPurpose::Marks => self.marks_read_allowed(turn.as_ref()),
+            ReadPurpose::Inward(_) => inward.is_some(),
+            ReadPurpose::BootPairs => self.boot_pairs_read_allowed(),
+            ReadPurpose::PlanSummary => self.plan_summary_read_allowed(),
+            _ => false,
+        };
         if (self.place_blocks_external() && cut_drain_bound.is_none())
             || self.plan_summary_blocks_external()
             || (matches!(purpose, ReadPurpose::PlanSummary) && !self.plan_summary_read_allowed())
@@ -338,6 +348,8 @@ impl RecordingContext {
             || self.input_author.is_some()
             || self.input_turn.is_some()
             || self.repair_blocks_external()
+            || self.template_blocked_author.is_some()
+            || (self.held_author.is_some() && !owned_continuation)
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()

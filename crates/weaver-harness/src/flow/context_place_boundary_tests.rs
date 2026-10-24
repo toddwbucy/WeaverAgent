@@ -1,6 +1,78 @@
 //! Origin, recorder custody and lifecycle first-byte boundaries.
 use super::*;
 
+#[test]
+fn place_held_author_allows_confirmed_output_but_blocks_release() {
+    let mut fx = PlaceFixture::new();
+    let units = fx.text(8, "record");
+    fx.turn("held-output");
+    let before = fx.journal();
+    let grant = fx.grant(units, 3);
+    fx.start_generation(grant);
+    fx.sent_generation();
+    let original = crate::flow::context::tests::event(Kind::Fault, None);
+    let expected = format!("{original:?}");
+    let run = fx.run();
+    assert_eq!(run.author(original), Err(RunFailure::PlaceOwned));
+    let leave = AbsoluteBound::after(run.clock.now().unwrap(), PLACE_WAIT).unwrap();
+    assert_eq!(
+        run.context.begin_place_release(leave, &mut run.clock),
+        Err(RunFailure::PlaceOwned)
+    );
+    assert_eq!(run.context.phase(), RecordingPhase::Entered);
+    assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());
+    fx.answer(&TokenAnswer::Generated(generated(
+        before.1,
+        3,
+        1,
+        "Read result.",
+        Finish::Completed,
+        before.2,
+    )));
+    assert!(matches!(
+        fx.finish_generation(),
+        GenerationCompletion::Generated(_)
+    ));
+    assert_eq!(fx.records(Kind::MessageAssistant).len(), 1);
+    assert!(fx.run().context.failure().is_none());
+    assert_eq!(
+        format!("{:?}", fx.run().context.take_held_author().unwrap()),
+        expected
+    );
+}
+
+#[test]
+fn place_held_author_allows_already_queued_reload_measurement() {
+    let mut fx = PlaceFixture::new();
+    let units = fx.text(8, "record");
+    fx.turn("held-reload");
+    fx.generation(units, 3, 1, "Read result.", Finish::Completed);
+    fx.close_turn();
+    let prefix = fx.prefix(None, s::CutMethod::Elide);
+    let resident = prefix.n();
+    assert_eq!(prefix.resident_before(), resident);
+    fx.begin_reload(prefix, ReloadTail::held(vec![]));
+    // A queued Reload has not yet started its Cut wait. This real reserved
+    // pair-kind refusal gives the caller held custody before the first step.
+    let original = crate::flow::context::tests::event(Kind::ToolCallStarted, None);
+    let expected = format!("{original:?}");
+    assert_eq!(fx.run().author(original), Err(RunFailure::PairOwned));
+    let TokenDirective::MeasureDelta { keep, .. } = fx.reload_packet() else {
+        panic!("admitted reload did not measure");
+    };
+    assert_eq!(keep, resident);
+    let bound = fx.run().context.deadlines.get(PumpDeadline::Cut).unwrap();
+    fx.answer(&fx.measured(keep, 0));
+    assert!(matches!(fx.finish_reload(), ReloadCompletion::Staged(_)));
+    let run = fx.run();
+    assert!(run.clock.now().unwrap() < bound.deadline_ns());
+    assert!(run.context.failure().is_none());
+    assert_eq!(
+        format!("{:?}", run.context.take_held_author().unwrap()),
+        expected
+    );
+}
+
 struct PlacementPressureClock<'a> {
     clock: &'a mut FakePumpIo,
     fd: RawFd,
@@ -863,6 +935,7 @@ fn place_extracted_grant_stop_retains_refused_authority_until_original_turn_clos
                 RunFailure::PlaceOwned
             );
             assert_eq!(run.context.held_author().unwrap().turn, early.turn);
+            assert_eq!(run.context.take_held_author().unwrap().turn, early.turn);
             assert_eq!(run.context.open_turn.as_ref().unwrap().0, "extracted-grant");
             assert_eq!(
                 run.context
@@ -1426,3 +1499,6 @@ fn place_extracted_boot_proof_cannot_install_after_held_enter_cancellation() {
 
 #[path = "context_place_returned_boot_tests.rs"]
 mod returned_boot_tests;
+
+#[path = "context_place_custody_review_tests.rs"]
+mod custody_review_tests;
