@@ -413,6 +413,11 @@ impl RecordingContext {
         })
     }
 
+    /// Shared private identity for adoption joins; only the actual receiver can
+    /// attach it to its retained original Enter.
+    pub(in crate::flow) fn enter_origin(&self) -> &std::sync::Arc<()> {
+        &self.read_origin
+    }
     pub(super) fn phase(&self) -> RecordingPhase {
         self.phase
     }
@@ -1517,6 +1522,21 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<PumpStep, RunFailure> {
+        self.pump_with_wait(ports, true)
+    }
+
+    fn observe_ready<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<PumpStep, RunFailure> {
+        self.pump_with_wait(ports, false)
+    }
+
+    fn pump_with_wait<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+        wait: bool,
+    ) -> Result<PumpStep, RunFailure> {
         if let Some(decode) = ports.decode.as_deref() {
             self.check_measure_port(decode)?;
             self.check_boot_open_port(decode)?;
@@ -1569,7 +1589,7 @@ impl RecordingContext {
         } else {
             None
         };
-        let step = self.pump.step(
+        let step = self.pump.step_with_wait(
             ports,
             Some(&mut self.flow),
             &mut FlowRecording {
@@ -1579,6 +1599,7 @@ impl RecordingContext {
                 author: &self.author,
             },
             &self.deadlines,
+            wait,
         );
         // Restore before every fallible continuation, including a failed step.
         if let Some(previous) = previous_generation_hold {
@@ -2024,6 +2045,9 @@ pub(in crate::flow) mod residency_composition;
 
 #[path = "context_startup_composition.rs"]
 pub(in crate::flow) mod startup_composition;
+
+#[path = "context_worker_startup.rs"]
+pub(crate) mod worker_startup;
 
 #[path = "context_boot_composition.rs"]
 pub(in crate::flow) mod boot_composition;

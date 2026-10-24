@@ -17,7 +17,8 @@ the fixed sibling of the owned coordination listener.
 One tracked Raise survives send backpressure. A passive receive before write keeps
 an early Ready from borrowing a later send. Completion requires the actual source
 port, exact exchange, Close, complete send and send time inside the original Enter.
-Only Ready confirms this arm. A typed refusal keeps its original envelope; EOF,
+Only GateReady confirms this arm. The response vocabulary was corrected in
+`code/state-worker-outbound-composition` to match the production gate. A typed refusal keeps its original envelope; EOF,
 invalid vocabulary, expiry or cancellation stops the owner with its actual child,
 port, listener, request and send/reply evidence intact. Every step and final handoff
 checks the original Enter, without a new timer. The common pump services the owned
