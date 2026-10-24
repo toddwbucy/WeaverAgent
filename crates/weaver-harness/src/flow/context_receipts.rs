@@ -279,7 +279,7 @@ impl RecordingContext {
         });
         // The unchanged original remains in the context's established pre-ticket
         // custody slot, including when older filings delay this author.
-        self.waiting_content = Some(event);
+        self.waiting_content = Some(WaitingAuthor::ordinary(event));
         Ok(())
     }
 
@@ -312,7 +312,7 @@ impl RecordingContext {
         {
             return None;
         }
-        let event = self.waiting_content.take();
+        let event = self.waiting_content.take().map(WaitingAuthor::into_event);
         self.flow.cancel_filing_receipts();
         self.filing = None;
         event
@@ -600,7 +600,7 @@ impl RecordingContext {
         {
             return None;
         }
-        let event = self.waiting_content.take();
+        let event = self.waiting_content.take().map(WaitingAuthor::into_event);
         self.flow.cancel_filing_receipts();
         self.filing = None;
         event
@@ -628,7 +628,7 @@ impl RecordingContext {
         }
         if unstarted {
             // No author ticket was allocated. Return the unchanged caller input.
-            owner.cancelled_event = self.waiting_content.take();
+            owner.cancelled_event = self.waiting_content.take().map(WaitingAuthor::into_event);
             owner.author_done = true;
         }
     }

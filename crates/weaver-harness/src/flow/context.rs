@@ -68,6 +68,7 @@ pub(super) enum RunFailure {
     BootOpenOwned,
     PlanSummaryOwned,
     PlaceOwned,
+    EnterRefusalOwned,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -100,9 +101,92 @@ struct LoadDuty {
 
 /// A private owner's original is queued under this exact identity, never
 /// inferred from event shape or from another owner's empty completion slot.
+#[derive(Debug, Clone)]
 enum AuthorClaim {
     Placement(std::sync::Arc<()>),
     Measurement(std::sync::Arc<()>),
+    EnterRefusal(std::sync::Arc<()>),
+}
+
+impl AuthorClaim {
+    fn matches(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Placement(a), Self::Placement(b))
+            | (Self::Measurement(a), Self::Measurement(b))
+            | (Self::EnterRefusal(a), Self::EnterRefusal(b)) => std::sync::Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+/// The exact waiting original and its private owner travel in one carrier.
+/// Ordinary authors have no claim and cannot be adopted by an owner later.
+#[derive(Debug)]
+struct WaitingAuthor {
+    event: AuthoredEvent,
+    claim: Option<AuthorClaim>,
+}
+impl WaitingAuthor {
+    fn ordinary(event: AuthoredEvent) -> Self {
+        Self { event, claim: None }
+    }
+    fn claimed(event: AuthoredEvent, claim: AuthorClaim) -> Self {
+        Self {
+            event,
+            claim: Some(claim),
+        }
+    }
+    fn matches(&self, claim: Option<&AuthorClaim>) -> bool {
+        match (&self.claim, claim) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.matches(b),
+            _ => false,
+        }
+    }
+    fn into_event(self) -> AuthoredEvent {
+        self.event
+    }
+}
+impl std::ops::Deref for WaitingAuthor {
+    type Target = AuthoredEvent;
+    fn deref(&self) -> &AuthoredEvent {
+        &self.event
+    }
+}
+
+/// Shared custody facts; only a real owner's constructor mints identity, and
+/// only the barrier's allocated/Recorded ticket can advance these fields.
+#[derive(Debug)]
+struct AuthorRecord {
+    identity: std::sync::Arc<()>,
+    ticket: Option<u64>,
+    sequence: Option<Sequence>,
+}
+impl AuthorRecord {
+    fn new() -> Self {
+        Self {
+            identity: std::sync::Arc::new(()),
+            ticket: None,
+            sequence: None,
+        }
+    }
+    fn claim(&mut self, identity: &std::sync::Arc<()>, ticket: u64) -> bool {
+        if !std::sync::Arc::ptr_eq(&self.identity, identity)
+            || self.sequence.is_some()
+            || self.ticket.is_some_and(|held| held != ticket)
+        {
+            return false;
+        }
+        self.ticket = Some(ticket);
+        true
+    }
+    fn bind(&mut self, ticket: Option<u64>, sequence: Sequence) -> bool {
+        if self.ticket.is_none() || self.ticket != ticket || self.sequence.is_some() {
+            return false;
+        }
+        self.sequence = Some(sequence);
+        true
+    }
 }
 
 pub(crate) struct RecordingContext {
@@ -120,6 +204,7 @@ pub(crate) struct RecordingContext {
     open_start: Option<StartIdentity>,
     open_limits: Option<ReadLimits>,
     load_duty: Option<LoadDuty>,
+    enter_refusal_record: Option<AuthorRecord>,
     template_checks: Option<template_driver::TemplateChecks>,
     template_setup_refusal: Option<super::templates::TemplateError>,
     template_blocked_author: Option<AuthoredEvent>,
@@ -178,7 +263,11 @@ pub(crate) struct RecordingContext {
     // First fatal original is immutable; retryable holds have separate custody.
     refused_author: Option<AuthoredEvent>,
     held_author: Option<AuthoredEvent>,
-    waiting_content: Option<AuthoredEvent>,
+    waiting_content: Option<WaitingAuthor>,
+    #[cfg(test)]
+    reject_queued_claim_for_test: bool,
+    #[cfg(test)]
+    pause_claim_queue_for_test: bool,
     // An initial lifecycle wait retained a valid original before admission.
     // Its retry must pass the generic admission checks again.
     author_admission_pending: bool,
@@ -254,6 +343,7 @@ impl RecordingContext {
             open_start: None,
             open_limits: None,
             load_duty: None,
+            enter_refusal_record: None,
             template_checks: None,
             template_setup_refusal: None,
             template_blocked_author: None,
@@ -309,6 +399,10 @@ impl RecordingContext {
             refused_author: None,
             held_author: None,
             waiting_content: None,
+            #[cfg(test)]
+            reject_queued_claim_for_test: false,
+            #[cfg(test)]
+            pause_claim_queue_for_test: false,
             author_admission_pending: false,
             completed_author: None,
             release_author: None,
@@ -319,6 +413,11 @@ impl RecordingContext {
         })
     }
 
+    /// Shared private identity for adoption joins; only the actual receiver can
+    /// attach it to its retained original Enter.
+    pub(in crate::flow) fn enter_origin(&self) -> &std::sync::Arc<()> {
+        &self.read_origin
+    }
     pub(super) fn phase(&self) -> RecordingPhase {
         self.phase
     }
@@ -942,7 +1041,7 @@ impl RecordingContext {
                 "second author while a ticket is pending",
             ));
         }
-        self.waiting_content = Some(event);
+        self.waiting_content = Some(WaitingAuthor::ordinary(event));
         if let Some(failure) = initial_wait {
             self.author_admission_pending = true;
             return Err(failure);
@@ -957,16 +1056,55 @@ impl RecordingContext {
         self.continue_claimed_content(ports, None)
     }
 
+    fn take_claimed_waiting_author(&mut self, claim: &AuthorClaim) -> Option<AuthoredEvent> {
+        if !self
+            .waiting_content
+            .as_ref()
+            .is_some_and(|waiting| waiting.matches(Some(claim)))
+        {
+            return None;
+        }
+        self.waiting_content.take().map(WaitingAuthor::into_event)
+    }
+
     fn continue_claimed_content<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
         claim: Option<AuthorClaim>,
     ) -> Result<Sequence, RunFailure> {
+        if claim.is_some() && self.phase != RecordingPhase::Entered {
+            return Err(match claim {
+                Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
+                Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
+                _ => RunFailure::MeasureOwned,
+            });
+        }
+        if !self
+            .waiting_content
+            .as_ref()
+            .is_some_and(|waiting| waiting.matches(claim.as_ref()))
+        {
+            return Err(self.fail(
+                ports.io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Author,
+                "waiting author does not belong to the exact private claim",
+            ));
+        }
+        #[cfg(test)]
+        if claim.is_some() && std::mem::take(&mut self.pause_claim_queue_for_test) {
+            return Err(match claim {
+                Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
+                Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
+                _ => RunFailure::MeasureOwned,
+            });
+        }
         if self.author_admission_pending {
             let event = self
                 .waiting_content
                 .take()
-                .expect("deferred author keeps its original");
+                .expect("deferred author keeps its original")
+                .into_event();
             self.author_admission_pending = false;
             return self.admit_author_and_wait(ports, event, true);
         }
@@ -994,7 +1132,8 @@ impl RecordingContext {
         let event = self
             .waiting_content
             .take()
-            .expect("caller input remained owned");
+            .expect("caller input remained owned")
+            .into_event();
         if let Some(Payload::Elections(load)) = &event.payload {
             // Only Recorded load can advance the phase and permit admission.
             // Keep its precise duty even across a trace-capacity interruption.
@@ -1032,17 +1171,24 @@ impl RecordingContext {
             );
             // Failed preparation may already own its allocated original too.
             // Busy returns the new original and must never claim an older slot.
-            if matches!(&queued, RecordProgress::Pending | RecordProgress::Failed)
-                && let Some(ticket) = self.barrier.pending_author().map(|a| a.ticket)
-            {
-                let retained = match claim {
-                    AuthorClaim::Placement(identity) => {
-                        self.claim_place_author_ticket(&identity, ticket)
-                    }
-                    AuthorClaim::Measurement(identity) => {
-                        self.claim_measure_author_ticket(&identity, ticket)
-                    }
-                };
+            if let Some(ticket) = queued.ticket {
+                #[cfg(not(test))]
+                let reject_claim = false;
+                #[cfg(test)]
+                let reject_claim = std::mem::take(&mut self.reject_queued_claim_for_test);
+                let retained = !reject_claim
+                    && match claim {
+                        AuthorClaim::Placement(identity) => {
+                            self.claim_place_author_ticket(&identity, ticket)
+                        }
+                        AuthorClaim::EnterRefusal(identity) => self
+                            .enter_refusal_record
+                            .as_mut()
+                            .is_some_and(|record| record.claim(&identity, ticket)),
+                        AuthorClaim::Measurement(identity) => {
+                            self.claim_measure_author_ticket(&identity, ticket)
+                        }
+                    };
                 if !retained {
                     return Err(self.fail(
                         ports.io,
@@ -1052,10 +1198,10 @@ impl RecordingContext {
                     ));
                 }
             }
-            if matches!(&queued, RecordProgress::Pending) {
+            if matches!(&queued.progress, RecordProgress::Pending) {
                 self.resume_context_author(ports.io)
             } else {
-                queued
+                queued.progress
             }
         } else {
             self.submit_context_author(event, purpose, wall_ms, ports.io)
@@ -1152,6 +1298,19 @@ impl RecordingContext {
         self.wait_recorded(ports, progress)
     }
 
+    /// Bind the actual ticket while this admission still owns the barrier's
+    /// witness. No later trace-only author may replace it before its owner
+    /// retains the admitted facts. Boot/read callers retain their own proofs.
+    fn resume_trace_only_and_bind(&mut self) -> Result<Option<Sequence>, weaver_trace::Failure> {
+        let recorded = self.barrier.resume_trace_only()?;
+        if let Some(sequence) = recorded {
+            self.bind_place_measure_author(sequence);
+            self.bind_place_author(sequence);
+            self.bind_enter_refusal_author(sequence);
+        }
+        Ok(recorded)
+    }
+
     fn wait_recorded<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
@@ -1160,12 +1319,15 @@ impl RecordingContext {
         loop {
             // Retain this exact owner's actual admission even when the recorder
             // subsequently reports an observer failure. The failure remains
-            // terminal; this witness cannot mint ordinary caller completion.
+            // terminal. Binding may complete admitted factual state (including
+            // TurnClosed), but cannot return successful caller continuation or
+            // clear the Failed phase.
             if matches!(&progress, RecordProgress::Failed)
                 && let Some(sequence) = self.barrier.admitted_before_failure()
             {
                 self.bind_place_measure_author(sequence);
-                self.bind_place_author(sequence)?;
+                self.bind_place_author(sequence);
+                self.bind_enter_refusal_author(sequence);
             }
             // Other completion hooks keep their existing successful boundary.
             if let RecordProgress::Recorded {
@@ -1177,7 +1339,8 @@ impl RecordingContext {
                     self.retain_recorded_author(*sequence);
                 }
                 self.bind_place_measure_author(*sequence);
-                self.bind_place_author(*sequence)?;
+                self.bind_place_author(*sequence);
+                self.bind_enter_refusal_author(*sequence);
                 self.bind_marks_author(*sequence, ports.io)?;
                 self.bind_repair_author(*sequence, ports.io)?;
                 self.bind_pair_author(*sequence, ports.io)?;
@@ -1359,6 +1522,21 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<PumpStep, RunFailure> {
+        self.pump_with_wait(ports, true)
+    }
+
+    fn observe_ready<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<PumpStep, RunFailure> {
+        self.pump_with_wait(ports, false)
+    }
+
+    fn pump_with_wait<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+        wait: bool,
+    ) -> Result<PumpStep, RunFailure> {
         if let Some(decode) = ports.decode.as_deref() {
             self.check_measure_port(decode)?;
             self.check_boot_open_port(decode)?;
@@ -1411,7 +1589,7 @@ impl RecordingContext {
         } else {
             None
         };
-        let step = self.pump.step(
+        let step = self.pump.step_with_wait(
             ports,
             Some(&mut self.flow),
             &mut FlowRecording {
@@ -1421,6 +1599,7 @@ impl RecordingContext {
                 author: &self.author,
             },
             &self.deadlines,
+            wait,
         );
         // Restore before every fallible continuation, including a failed step.
         if let Some(previous) = previous_generation_hold {
@@ -1605,6 +1784,7 @@ impl RecordingContext {
             PumpDeadline::Enter
             | PumpDeadline::Leave
             | PumpDeadline::Label
+            | PumpDeadline::AdminRead
             | PumpDeadline::CaptureResult
             | PumpDeadline::CaptureWindow => {
                 return RunFailure::Wait { key, bound };
@@ -1859,6 +2039,18 @@ pub(super) use capture_driver::{CaptureAnswer, CaptureProgress};
 #[cfg(test)]
 #[path = "context_capture_tests.rs"]
 mod capture_tests;
+
+#[path = "context_residency_composition.rs"]
+pub(in crate::flow) mod residency_composition;
+
+#[path = "context_startup_composition.rs"]
+pub(in crate::flow) mod startup_composition;
+
+#[path = "context_worker_startup.rs"]
+pub(crate) mod worker_startup;
+
+#[path = "context_boot_composition.rs"]
+pub(in crate::flow) mod boot_composition;
 
 #[path = "context_templates.rs"]
 mod template_driver;

@@ -15,6 +15,13 @@ use super::context::release_driver::{ReleaseAuthor, ReleaseScope, ReleaseTicket,
 use super::intake::{FlowInbox, IntakeFailure, IntakeOutcome, RetentionBudget};
 use weaver_trace::serving::payloads::{FlowObservation, FlowPhase};
 
+/// The ticket is filled at the actual allocation site, even if preparation
+/// then fails. Busy/unadmitted returns never borrow an older pending ticket.
+pub(super) struct QueuedAuthor {
+    pub progress: RecordProgress,
+    pub ticket: Option<u64>,
+}
+
 /// None of these receipts is Clone or publicly constructible. In production,
 /// only RecordBarrier's successful Recorded arm constructs one.
 #[derive(Debug)]
@@ -233,6 +240,8 @@ pub(super) struct RecordBarrier {
     next_ticket: Option<u64>,
     admitted_before_failure: Option<Sequence>,
     recorded_author: Option<(u64, Sequence)>,
+    #[cfg(test)]
+    fail_recorded_observer_for_test: bool,
     last_trace_only_sequence: Option<Sequence>,
     failure: Option<RecordFailure>,
 }
@@ -261,6 +270,8 @@ impl RecordBarrier {
             next_ticket: Some(0),
             admitted_before_failure: None,
             recorded_author: None,
+            #[cfg(test)]
+            fail_recorded_observer_for_test: false,
             last_trace_only_sequence: None,
             failure: None,
         }
@@ -317,7 +328,7 @@ impl RecordBarrier {
         now: &mut impl FnMut() -> std::io::Result<u64>,
     ) -> RecordProgress {
         self.submit_authored_inner(
-            event, purpose, None, author, wall_ms, inbox, budget, now, false,
+            event, purpose, None, author, wall_ms, inbox, budget, now, false, &mut None,
         )
     }
 
@@ -333,10 +344,21 @@ impl RecordBarrier {
         inbox: &mut FlowInbox,
         budget: &mut RetentionBudget,
         now: &mut impl FnMut() -> std::io::Result<u64>,
-    ) -> RecordProgress {
-        self.submit_authored_inner(
-            event, purpose, None, author, wall_ms, inbox, budget, now, true,
-        )
+    ) -> QueuedAuthor {
+        let mut ticket = None;
+        let progress = self.submit_authored_inner(
+            event,
+            purpose,
+            None,
+            author,
+            wall_ms,
+            inbox,
+            budget,
+            now,
+            true,
+            &mut ticket,
+        );
+        QueuedAuthor { progress, ticket }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -361,6 +383,7 @@ impl RecordBarrier {
             budget,
             now,
             false,
+            &mut None,
         )
     }
 
@@ -376,6 +399,7 @@ impl RecordBarrier {
         budget: &mut RetentionBudget,
         now: &mut impl FnMut() -> std::io::Result<u64>,
         queue_only: bool,
+        allocated_ticket: &mut Option<u64>,
     ) -> RecordProgress {
         if let Some(scope) = release {
             if let Some(owed) = self.owed_author() {
@@ -447,6 +471,7 @@ impl RecordBarrier {
             };
         };
         self.next_ticket = ticket.checked_add(1);
+        *allocated_ticket = Some(ticket);
         let release_mark = release.map(|scope| scope.ticket(ticket, event.kind));
         self.pending_author = Some(AuthorTicket {
             ticket,
@@ -650,6 +675,13 @@ impl RecordBarrier {
                 // Failure below is after trace admission. It must not be
                 // reported as an unadmitted author in the halt account.
                 self.admitted_before_failure = Some(submission.sequence);
+                #[cfg(test)]
+                if std::mem::take(&mut self.fail_recorded_observer_for_test) {
+                    return self.fail(
+                        RecordFailure::Protocol("injected post-Recorded observer failure".into()),
+                        budget,
+                    );
+                }
                 match submission.tap {
                     TapOutcome::Selected(copy) => match match now() {
                         Ok(intake_ns) => inbox.accept_at(copy, budget, Some(intake_ns)),
@@ -801,6 +833,10 @@ impl RecordBarrier {
         self.recorded_author
             .filter(|(_, recorded)| *recorded == sequence)
             .map(|(ticket, _)| ticket)
+    }
+    #[cfg(test)]
+    pub(super) fn fail_next_recorded_observer_for_test(&mut self) {
+        self.fail_recorded_observer_for_test = true;
     }
     pub(super) fn admitted_before_failure(&self) -> Option<Sequence> {
         self.admitted_before_failure
@@ -975,6 +1011,18 @@ impl RecordBarrier {
         });
         self.pending = Some((prepared, RecordPurpose::Observation));
         Ok(())
+    }
+
+    pub(super) fn pending_state_measurement_matches(
+        &self,
+        measurement: &weaver_types::state_flow::StateStoreMeasurement,
+    ) -> bool {
+        matches!(&self.pending, Some((event, RecordPurpose::State(expected)))
+            if expected == measurement && event.envelope.turn.is_none())
+            && self
+                .pending_author
+                .as_ref()
+                .is_some_and(|author| author.event.turn.is_none())
     }
 
     pub(super) fn retain_summary_rollback_record(

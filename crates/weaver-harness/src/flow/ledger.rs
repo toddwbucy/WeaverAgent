@@ -732,6 +732,24 @@ impl Ledger {
         self.source_leases.release(lease)
     }
 
+    #[cfg(test)]
+    pub(super) fn review_set_taken_source_status(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+        status: LeaseSlotStatus,
+    ) {
+        self.source_leases
+            .review_set_taken_status(lease, source, status);
+    }
+
+    pub(super) fn release_source_leases(
+        &mut self,
+        leases: &[&SourceLease],
+    ) -> Result<(), LedgerError> {
+        self.source_leases.release_batch(leases)
+    }
+
     /// Retained consumer facts are separate from owed filing gauges and barriers.
     pub(super) fn has_source_leases(&self) -> bool {
         !self.source_leases.is_empty()

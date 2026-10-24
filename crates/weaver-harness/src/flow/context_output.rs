@@ -177,7 +177,7 @@ impl RecordingContext {
             author_done: false,
             cancelled: false,
         });
-        self.waiting_content = Some(event);
+        self.waiting_content = Some(WaitingAuthor::ordinary(event));
         self.repair_note_output_started();
         Ok(())
     }
@@ -388,7 +388,7 @@ impl RecordingContext {
         if owner.sequence.is_none() && self.waiting_content.is_some() {
             // No trace ticket or copy exists. The core returns the unchanged
             // original Message. There is nothing to file or to undo.
-            self.waiting_content.take();
+            self.waiting_content.take().map(WaitingAuthor::into_event);
             owner.author_done = true;
         }
     }

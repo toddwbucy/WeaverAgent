@@ -1,4 +1,4 @@
-//! Safe inherited adopters share one ownership claim, exercised after exec.
+//! Inherited adopters share one ownership claim, exercised after isolated exec.
 use super::*;
 use std::io::Read;
 use std::process::{Command, Stdio};
@@ -20,22 +20,24 @@ impl Held {
         }
     }
 }
-fn adopt_named(name: &str) -> Result<Held, EntryFault> {
+unsafe fn adopt_named(name: &str) -> Result<Held, EntryFault> {
+    // SAFETY: caller provides uniquely inherited raw ends for the first claim,
+    // or proves the permanent claim already exists for a refused repeat.
     match name {
-        "ste100" => adopt_ste100().map(Held::Single),
-        "classify" => adopt_classify().map(Held::Classify),
-        "decoder" => adopt().map(Held::Decoder),
+        "ste100" => unsafe { adopt_ste100() }.map(Held::Single),
+        "classify" => unsafe { adopt_classify() }.map(Held::Classify),
+        "decoder" => unsafe { adopt() }.map(Held::Decoder),
         _ => panic!("unknown isolated adoption case"),
     }
 }
 fn require_repeat_refusal(result: Result<Held, EntryFault>) {
     match result {
-        Err(error) => assert_eq!(error, EntryFault::DescriptorsUnusable),
+        Err(error) => assert_eq!(error, EntryFault::AlreadyAdopted),
         Ok(duplicate) => {
             // A deliberately removed guard must fail this assertion without
             // dropping a second owner of the original fd on the unwind path.
             std::mem::forget(duplicate);
-            panic!("a second safe inherited adopter created another owner");
+            panic!("a second inherited adopter created another owner");
         }
     }
 }
@@ -81,13 +83,15 @@ fn probe_child(test: &str, key: &str, case: &str, count: usize, complete: &str) 
 }
 
 #[test]
-fn inherited_adoption_is_once_only_across_all_safe_entry_points_and_fd_reuse() {
+fn inherited_adoption_is_once_only_across_all_entry_points_and_fd_reuse() {
     const KEY: &str = "SPU_INHERITED_ADOPTION_CASE";
     const COMPLETE: &str = "SPU_SHARED_INHERITED_CLAIM_CONFIRMED";
     if let Some(case) = std::env::var_os(KEY) {
         let case = case.to_str().unwrap();
         let (first, second) = case.split_once(':').unwrap();
-        let mut owned = adopt_named(first).unwrap();
+        // SAFETY: this isolated exec receives only the raw ends placed by
+        // probe_child; no owner has wrapped either inherited number yet.
+        let mut owned = unsafe { adopt_named(first) }.unwrap();
         assert_eq!(owned.fd().as_raw_fd(), 3);
         let mut extra = None;
         if first == "decoder" && second != "decoder" {
@@ -101,7 +105,8 @@ fn inherited_adoption_is_once_only_across_all_safe_entry_points_and_fd_reuse() {
             assert_eq!(file.as_raw_fd(), 4);
             extra = Some(file);
         }
-        require_repeat_refusal(adopt_named(second));
+        // SAFETY: the successful first call permanently holds the claim.
+        require_repeat_refusal(unsafe { adopt_named(second) });
         still_open(owned.fd());
         if let Some(file) = &extra {
             still_open(file.as_fd());
@@ -125,7 +130,9 @@ fn inherited_adoption_is_once_only_across_all_safe_entry_points_and_fd_reuse() {
         // nor close it, even though the old inherited socket has been dropped.
         let reused = std::fs::File::open("/dev/null").unwrap();
         assert_eq!(reused.as_raw_fd(), 3);
-        require_repeat_refusal(adopt_ste100().map(Held::Single));
+        // SAFETY: the earlier adoption permanently holds the claim, so this
+        // retry cannot wrap or close the genuinely owned reused descriptor.
+        require_repeat_refusal(unsafe { adopt_ste100() }.map(Held::Single));
         still_open(reused.as_fd());
         println!("\n{COMPLETE}");
         return;
@@ -142,7 +149,7 @@ fn inherited_adoption_is_once_only_across_all_safe_entry_points_and_fd_reuse() {
         "classify:decoder",
     ] {
         probe_child(
-            "channel::adoption_tests::inherited_adoption_is_once_only_across_all_safe_entry_points_and_fd_reuse",
+            "channel::adoption_tests::inherited_adoption_is_once_only_across_all_entry_points_and_fd_reuse",
             KEY,
             case,
             if case.starts_with("decoder:") { 2 } else { 1 },
@@ -158,7 +165,9 @@ fn refused_preownership_descriptor_validation_does_not_consume_the_first_claim()
     if let Some(case) = std::env::var_os(KEY) {
         if case == "count" {
             assert!(matches!(
-                adopt_ste100(),
+                // SAFETY: only raw inherited ends exist; count refusal occurs
+                // before ownership of either can be transferred.
+                unsafe { adopt_ste100() },
                 Err(EntryFault::DescriptorCountWrong { found: 2 })
             ));
             assert_eq!(unsafe { nix::libc::close(4) }, 0);
@@ -166,13 +175,17 @@ fn refused_preownership_descriptor_validation_does_not_consume_the_first_claim()
             assert_eq!(unsafe { nix::libc::dup2(3, 4) }, 4);
             assert_eq!(unsafe { nix::libc::close(3) }, 0);
             assert!(matches!(
-                adopt_classify(),
+                // SAFETY: the raw inherited end was moved to fd4 without a
+                // Rust owner; validation rejects the now-closed fd3.
+                unsafe { adopt_classify() },
                 Err(EntryFault::DescriptorsUnusable)
             ));
             assert_eq!(unsafe { nix::libc::dup2(4, 3) }, 3);
             assert_eq!(unsafe { nix::libc::close(4) }, 0);
         }
-        let owned = adopt_ste100().unwrap();
+        // SAFETY: the raw inherited fd3 has no other owner; both preceding
+        // malformed-layout cases refused before consuming the claim.
+        let owned = unsafe { adopt_ste100() }.unwrap();
         still_open(owned.as_fd());
         assert_eq!(
             send(

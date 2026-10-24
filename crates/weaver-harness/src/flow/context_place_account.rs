@@ -314,8 +314,12 @@ impl RecordingContext {
                 author.event = event;
             }
         }
+        let waiting_claim = self
+            .active_place_author()
+            .map(|a| AuthorClaim::Placement(Arc::clone(&a.identity)));
         if self.place_owns_pending_author()
-            && let Some(event) = self.waiting_content.take()
+            && let Some(claim) = waiting_claim
+            && let Some(event) = self.take_claimed_waiting_author(&claim)
             && let Some(a) = self.active_place_author_mut()
         {
             a.event = Some(event);
@@ -373,6 +377,7 @@ impl RecordingContext {
             self.consume_place_completion()?;
             return Ok(true);
         }
+        let claim = AuthorClaim::Placement(Arc::clone(&a.identity));
         if let Some(ticket) = a.ticket {
             if self.barrier.pending_author().map(|a| a.ticket) != Some(ticket) {
                 return Err(RunFailure::PlaceOwned);
@@ -390,7 +395,7 @@ impl RecordingContext {
                 .unwrap()
                 .event
                 .take()
-                .or_else(|| self.waiting_content.take())
+                .or_else(|| self.take_claimed_waiting_author(&claim))
                 .ok_or(RunFailure::PlaceOwned)?;
             let permit = OwedPlaceAuthor { event };
             if let Err(error) =
@@ -403,9 +408,9 @@ impl RecordingContext {
             self.active_place_author_mut().unwrap().ticket =
                 self.barrier.pending_author().map(|a| a.ticket);
         }
-        match self.barrier.resume_trace_only() {
+        match self.resume_trace_only_and_bind() {
             Ok(Some(sequence)) => {
-                self.bind_place_author(sequence)?;
+                self.bind_place_author(sequence);
                 Ok(true)
             }
             Ok(None) => Ok(false),

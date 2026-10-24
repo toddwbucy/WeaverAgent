@@ -53,6 +53,7 @@ impl RecordingContext {
                 confirmed: None,
                 cancelled: true,
                 cancel_sent: false,
+                cancel_settled: false,
                 driving: false,
                 done: true,
                 output_started: false,
@@ -157,6 +158,7 @@ impl RecordingContext {
             confirmed: None,
             cancelled: false,
             cancel_sent: false,
+            cancel_settled: false,
             driving: false,
             done: false,
             output_started: false,
@@ -176,7 +178,7 @@ impl RecordingContext {
             return Err(RunFailure::PlaceOwned);
         };
         work.cancelled = true;
-        if work.done || work.cancel_sent {
+        if work.done || work.cancel_sent || work.cancel_settled {
             return Ok(());
         }
         let Some(reservation) = work.reservation.as_ref() else {
@@ -189,6 +191,7 @@ impl RecordingContext {
         // Cancel would create a new AtRest obligation after a complete refusal.
         // A previously queued Cancel remains unsettled until its own answer.
         if decode.reservation_settled(reservation) {
+            work.cancel_settled = true;
             return Ok(());
         }
         if !reservation.sent() {
@@ -238,6 +241,7 @@ impl RecordingContext {
         }
         if self.generation.as_ref().unwrap().cancelled
             && !self.generation.as_ref().unwrap().cancel_sent
+            && !self.generation.as_ref().unwrap().cancel_settled
         {
             self.cancel_generation(
                 ports.decode.as_deref_mut().ok_or(RunFailure::PlaceOwned)?,
@@ -630,7 +634,9 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<GenerationCompletion>, RunFailure> {
         self.live(io)?;
-        if !self.generation.as_ref().is_some_and(|w| w.done) {
+        if self.phase != RecordingPhase::Entered
+            || !self.generation.as_ref().is_some_and(|w| w.done)
+        {
             return Ok(None);
         }
         self.consume_place_completion()?;

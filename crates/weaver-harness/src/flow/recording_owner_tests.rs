@@ -525,3 +525,6 @@ fn whole_copy_backlog_returns_next_original_before_preparation_without_halting()
     assert_eq!(barrier.next_ticket, Some(2));
     assert_eq!(barrier.recorder().structure().len(), 3);
 }
+
+#[path = "recording_queue_review_tests.rs"]
+mod queue_review_tests;

@@ -6,7 +6,7 @@
 //! successful member and containment cleanup. No serving trace or classifier is
 //! started by this operation.
 
-mod preparation;
+pub(crate) mod preparation;
 mod process;
 mod transport;
 

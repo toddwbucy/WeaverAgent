@@ -3,6 +3,9 @@ use super::*;
 use crate::flow::pump_transport::DecodeStage;
 use weaver_types::TokenRefusal;
 
+#[path = "context_author_claim_review_tests.rs"]
+mod claim_review_tests;
+
 #[test]
 fn place_refusal_after_failed_measure_admission_names_the_actual_retry_reservation() {
     for malformed in [false, true] {
@@ -115,7 +118,7 @@ fn record_replacement_author(fx: &mut PlaceFixture, ticket: u64) -> (u64, Sequen
         &mut run.context.budget,
         &mut || run.clock.now(),
     );
-    assert!(matches!(progress, RecordProgress::Pending));
+    assert!(matches!(progress.progress, RecordProgress::Pending));
     let foreign = run.context.pending_author().unwrap().ticket;
     assert_ne!(foreign, ticket);
     let progress = run.context.barrier.resume_with_clock(
@@ -182,7 +185,7 @@ fn place_binding_ignores_a_different_actual_recorded_ticket_before_any_completio
         let turn = fx.run().context.open_turn.clone();
         let (_, sequence) = record_replacement_author(&mut fx, ticket);
         let run = fx.run();
-        run.context.bind_place_author(sequence).unwrap();
+        run.context.bind_place_author(sequence);
         assert_eq!(run.context.place_author_record_state(), Some(owned));
         assert_eq!(run.context.open_turn, turn);
         assert!(
