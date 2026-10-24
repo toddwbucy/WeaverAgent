@@ -2089,3 +2089,29 @@ scenario!(
     worker_session_composition_decoder_failure,
     "input-worker-generation-emission-session-decoder-failure"
 );
+
+scenario!(
+    worker_final_composition_model_stop,
+    "input-worker-generation-emission-final-model-stop"
+);
+scenario!(
+    worker_session_composition_model_stop,
+    "input-worker-generation-emission-session-model-stop"
+);
+scenario!(
+    worker_session_composition_read_refusal,
+    "input-worker-generation-emission-session-read-refusal"
+);
+scenario!(
+    worker_session_composition_generation_refusal,
+    "input-worker-generation-emission-session-generation-refusal"
+);
+scenario!(
+    worker_session_composition_election_management,
+    "input-worker-generation-emission-session-election"
+);
+
+scenario!(
+    worker_stop_composition_inherited_deadline,
+    "input-stop-inherited-deadline"
+);

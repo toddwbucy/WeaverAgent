@@ -33,7 +33,16 @@ fn wait_file(root: &Path, name: &str) {
     }
 }
 fn turns(mode: &str) -> usize {
-    if mode.ends_with("three") { 3 } else { 2 }
+    if mode.ends_with("election") {
+        1
+    } else if mode.ends_with("three") {
+        3
+    } else {
+        2
+    }
+}
+fn operation_refusal(mode: &str) -> bool {
+    mode.ends_with("read-refusal") || mode.ends_with("generation-refusal")
 }
 fn frame(index: usize, malformed: bool) -> OrganEnvelope {
     OrganEnvelope {
@@ -79,7 +88,11 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
             value["kind"],
             if index == 0 && mode.ends_with("refused") {
                 "refused"
-            } else if index == 0 && mode.ends_with("stop-active") {
+            } else if index == 0
+                && (mode.ends_with("stop-active")
+                    || mode.ends_with("election")
+                    || operation_refusal(mode))
+            {
                 "stopped"
             } else {
                 "answered"
@@ -148,7 +161,8 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
             } => {
                 assert_eq!(delta, measured.take().unwrap());
                 assert!(tool_schemas.is_empty());
-                let index = generated + usize::from(mode.ends_with("refused"));
+                let index = generated
+                    + usize::from(mode.ends_with("refused") || mode.ends_with("read-refusal"));
                 assert_eq!(turn.0, format!("session-{index}"));
                 std::fs::write(
                     root.join(format!("session-generation-{index}.json")),
@@ -158,10 +172,19 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                 if mode.ends_with("decoder-failure") {
                     return;
                 }
+                if index == 0 && mode.ends_with("generation-refusal") {
+                    generated += 1;
+                    packet!(fd, &weaver_types::TokenRefusal::MalformedDelta);
+                    continue;
+                }
                 resident += 5;
                 let generation = Generation {
                     emission: "Read file.".into(),
-                    finish: Finish::Completed,
+                    finish: if index == 0 && mode.ends_with("model-stop") {
+                        Finish::Stopped
+                    } else {
+                        Finish::Completed
+                    },
                     content: vec![ContentBlock::Text {
                         text: "Read file.".into(),
                     }],
@@ -263,7 +286,8 @@ fn drive(session: &mut Session<'_>, wanted: Progress) {
     let end = Instant::now() + Duration::from_secs(20);
     while session.progress() != wanted && Instant::now() < end {
         assert!(
-            matches!(session.progress(), Progress::Pending | Progress::Accepted),
+            matches!(session.progress(), Progress::Pending | Progress::Accepted)
+                || (session.progress() == Progress::ElectionRefused && wanted == Progress::Aborted),
             "{:?}: {:?}",
             session.progress(),
             session.detail()
@@ -299,7 +323,17 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     mode: &str,
 ) {
     let context_identity = std::ptr::from_ref(&*serving.owner.context);
-    let mut guard = SessionGuard(Some(Session::begin(serving, &FAMILY, CutMethod::Flush)));
+    static MISSING: weaver_harness::FoundationRestatement =
+        weaver_harness::FoundationRestatement::new("fixture.missing");
+    let mut guard = SessionGuard(Some(Session::begin(
+        serving,
+        if mode.ends_with("election") {
+            &MISSING
+        } else {
+            &FAMILY
+        },
+        CutMethod::Flush,
+    )));
     let session = guard.0.as_mut().unwrap();
     assert!(session.next_input().is_err());
     assert!(session.start_turn(TurnKey("early".into())).is_err());
@@ -309,7 +343,14 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         let responder = scope.spawn(|| {
             let end = Instant::now() + Duration::from_secs(45);
             while !done.load(Ordering::SeqCst) && Instant::now() < end {
-                member.step_live(mode);
+                member.step_live(
+                    if mode.ends_with("read-refusal") && root.join("session-close-0.json").exists()
+                    {
+                        "input-worker-generation-emission-session-two"
+                    } else {
+                        mode
+                    },
+                );
                 std::thread::sleep(Duration::from_millis(1));
             }
         });
@@ -327,6 +368,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         for index in 0..turns(mode) {
             if index > 0 {
                 if mode.ends_with("observe")
+                    || operation_refusal(mode)
                     || mode.ends_with("stop-idle")
                     || mode.ends_with("leave")
                 {
@@ -364,7 +406,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                             session.detail()
                         );
                     };
-                    if mode.ends_with("observe") {
+                    if mode.ends_with("observe") || operation_refusal(mode) {
                         let answer: weaver_types::state_flow::enter::ObservationEnvelope =
                             serde_json::from_slice(&raw).unwrap();
                         assert!(matches!(
@@ -449,11 +491,18 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 );
             }
             let duplicate = index == 1 && mode.ends_with("duplicate");
+            if duplicate {
+                let original = TurnKey("session-0".into());
+                assert_eq!(session.start_turn(original.clone()), Err(original));
+                assert_eq!(
+                    session.progress(),
+                    Progress::Accepted,
+                    "reused identity retains accepted input"
+                );
+                assert!(!root.join("session-generation-1.json").exists());
+            }
             session
-                .start_turn(TurnKey(format!(
-                    "session-{}",
-                    if duplicate { 0 } else { index }
-                )))
+                .start_turn(TurnKey(format!("session-{index}")))
                 .unwrap();
             assert!(session.start_turn(TurnKey("overlap".into())).is_err());
             assert!(session.next_input().is_err());
@@ -464,19 +513,68 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 assert!(!root.join("session-close-0.json").exists());
                 break;
             }
-            if duplicate {
+            if index == 0 && operation_refusal(mode) {
                 drive(session, Progress::Refused);
-                assert_eq!(
-                    session.next_input(),
-                    Err(Progress::Refused),
-                    "unfinished refusal cannot discard its input"
+                let detail = session.detail().expect("exact refused operation detail");
+                assert!(
+                    detail.contains(if mode.ends_with("read-refusal") {
+                        "InvalidSelector"
+                    } else {
+                        "MalformedDelta"
+                    }),
+                    "{detail}"
                 );
-                assert!(!root.join("session-generation-1.json").exists());
-                assert!(!root.join("session-close-1.json").exists());
-                break;
+                wait_file(root, "session-close-0.json");
+                assert_eq!(session.next_input(), Ok(Progress::Refused));
+                continue;
             }
-            let active_stop = index == 0 && mode.ends_with("stop-active");
-            if active_stop {
+            let active_stop =
+                index == 0 && (mode.ends_with("stop-active") || mode.ends_with("election"));
+            if mode.ends_with("election") {
+                drive(session, Progress::ElectionRefused);
+                assert_eq!(session.next_input(), Err(Progress::ElectionRefused));
+                assert_eq!(
+                    session.detail().as_deref(),
+                    Some("repair election: UncertifiedFamily")
+                );
+                let peer = management(socket, LifecycleDirective::Observe);
+                let end = Instant::now() + Duration::from_secs(3);
+                let raw = loop {
+                    session.advance();
+                    if let Some(raw) = read_packet(&peer) {
+                        break raw;
+                    }
+                    assert!(
+                        Instant::now() < end,
+                        "refused election must service Observe"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                };
+                let answer: weaver_types::state_flow::enter::ObservationEnvelope =
+                    serde_json::from_slice(&raw).unwrap();
+                assert!(matches!(
+                    answer.payload,
+                    weaver_types::state_flow::enter::ObservationContent::Answer(
+                        weaver_types::state_flow::enter::ObservationAnswer::State {
+                            state: weaver_types::AgentState::Active,
+                            ..
+                        }
+                    )
+                ));
+                let stop = management(
+                    socket,
+                    LifecycleDirective::Stop {
+                        cause: weaver_types::Cause { uid: 73 },
+                    },
+                );
+                drive(session, Progress::Aborted);
+                let answer: OrganEnvelope =
+                    serde_json::from_slice(&read_packet(&stop).unwrap()).unwrap();
+                assert!(matches!(
+                    answer.payload,
+                    Payload::Answer(LifecycleAnswer::TurnAborted { .. })
+                ));
+            } else if active_stop {
                 let stopper = scope.spawn(|| {
                     wait_file(root, "session-generation-0.json");
                     management(
@@ -496,6 +594,10 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 ));
             } else {
                 drive(session, Progress::Completed);
+                assert!(
+                    session.detail().is_none(),
+                    "successful turn has no failure detail"
+                );
             }
             wait_file(root, &format!("session-close-{index}.json"));
             for _ in 0..3 {
@@ -544,13 +646,6 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 assert!(input.serving.owner.context.generation.is_some());
                 assert!(input.received.is_some());
             }
-            if mode.ends_with("duplicate") {
-                assert!(
-                    input.token.is_some(),
-                    "refused election retains the new accepted input"
-                );
-                assert!(input.received.is_some());
-            }
             retained.input = Some(input);
         }
         Err(owner) => {
@@ -569,7 +664,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         Instant::now() + Duration::from_secs(3),
     )
     .unwrap();
-    let special = mode.ends_with("leave") || mode.ends_with("duplicate") || failed;
+    let special = mode.ends_with("leave") || failed;
     let expected_turns = if special || mode.ends_with("refused") {
         1
     } else {
@@ -617,10 +712,30 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     if mode.ends_with("leave") {
         assert_eq!(final_progress, Progress::DirectivePending);
         assert!(!root.join("session-generation-1.json").exists());
-    } else if !mode.ends_with("duplicate") && !failed {
+    } else if !failed {
         assert_eq!(final_progress, Progress::Pending);
     }
     let closes: Vec<_> = rows.iter().filter(|r| r["kind"] == "turn.closed").collect();
+    if operation_refusal(mode) {
+        assert_eq!(closes.len(), 2);
+        assert_eq!(closes[0]["payload"]["reason"], "refused");
+        assert!(closes[0]["payload"]["cause"].is_null());
+        let refusal = rows
+            .iter()
+            .find(|r| {
+                if mode.ends_with("read-refusal") {
+                    r["kind"] == "state.store.measurement"
+                        && r["turn"] == "session-0"
+                        && r["payload"]["observation"]["operation"] == "read"
+                } else {
+                    r["kind"] == "refusal"
+                }
+            })
+            .expect("the actual refusing operation is accounted before close");
+        assert!(
+            super::emission::tests::sequence(refusal) < super::emission::tests::sequence(closes[0])
+        );
+    }
     let offers: Vec<_> = rows
         .iter()
         .filter(|r| r["kind"] == "input.offered")

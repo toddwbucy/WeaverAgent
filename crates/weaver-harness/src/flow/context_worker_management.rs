@@ -91,7 +91,7 @@ impl<'a> FoundationManagement<'a> {
                 || self
                     .stop
                     .as_ref()
-                    .and_then(|stop| stop.gate_send.as_ref())
+                    .and_then(|stop| stop.gate_send())
                     .is_some_and(|send| send.sent() && send.sent_at().is_none())
             {
                 failure = self.input.serving.owner.context.fail(
@@ -300,32 +300,6 @@ impl<'a> FoundationManagement<'a> {
                     failure,
                 }))?,
             }
-        }
-        if self
-            .stop
-            .as_ref()
-            .is_some_and(|stop| stop.close_sequence.is_some() && !stop.gate_done)
-        {
-            // After EAGAIN the gate needs the sole pump's ordinary writable
-            // wait. Nonblocking lifecycle observation alone would strand the
-            // owed close once the admin answer is sent or its peer departs.
-            // Before the close exists, the engine owns its own waits. A local
-            // pair/repair transition may have no descriptor ready yet; adding
-            // an outer blocking poll here would strand that transition.
-            let owner = &mut self.input.serving.owner;
-            let pumped = owner.context.pump_once(&mut PumpPorts {
-                lifecycle: LifecyclePorts {
-                    listener: Some(&mut owner.listener),
-                    dial: (!self.peer_unavailable).then_some(&mut self.peer),
-                    residency: Some(owner.resident.residency),
-                    ..Default::default()
-                },
-                gate: Some(&mut owner.gate),
-                decode: Some(owner.decode),
-                label: None,
-                io,
-            });
-            self.keep_dial_failure(pumped)?;
         }
         Ok(())
     }

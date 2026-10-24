@@ -95,9 +95,8 @@ pub(super) struct EmissionWork {
 impl EmissionWork {
     pub(super) fn selected_answer(&self) -> Option<(String, weaver_types::Finish)> {
         let effective = self.execution.as_ref()?.completed_effective()?;
-        if *effective.finish() == weaver_types::Finish::Stopped {
-            return None;
-        }
+        // A decoder's own stop token/capacity finish is a checked model answer.
+        // An operator Stop cancels the owner before reaching this selection.
         let (_, acts) = self.selected.as_ref()?;
         Some((effective.answer_text(acts).ok()?, *effective.finish()))
     }
