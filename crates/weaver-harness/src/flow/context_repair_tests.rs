@@ -15,6 +15,8 @@ use std::io::{Read, Write};
 use weaver_traits::{ContentBlock, ToolCall};
 use weaver_types::state_flow as s;
 
+#[path = "context_repair_custody_tests.rs"]
+mod custody_tests;
 #[path = "context_empty_correction_tests.rs"]
 mod empty_correction_tests;
 #[path = "context_recall_refusal_tests.rs"]
@@ -680,6 +682,13 @@ fn exhausted_repair_accounts_original_call_before_returning_its_refusal() {
                 .is_none()
         );
     }
+    let bound = fx
+        .input
+        .run
+        .context
+        .deadlines
+        .get(PumpDeadline::Decision)
+        .unwrap();
     let mut exhausted = None;
     for _ in 0..512 {
         fx.step(true);
@@ -695,6 +704,11 @@ fn exhausted_repair_accounts_original_call_before_returning_its_refusal() {
     }
     let exhausted = exhausted.expect("original request accounting must finish the cap outcome");
     assert_eq!(exhausted.failed_corrections().0, 2);
+    fx.input
+        .run
+        .clock
+        .advance_to(bound.deadline_ns() + 1)
+        .unwrap();
     let completed = fx
         .input
         .run
@@ -1308,6 +1322,11 @@ fn generic_author_and_resume_cannot_steal_the_pending_repair_record() {
             serde_json::value::to_raw_value(&serde_json::json!({"fixture":"unrelated"})).unwrap(),
         )),
     );
+    let Some(Payload::ModelMeasurement(raw)) = event.payload.as_ref() else {
+        unreachable!()
+    };
+    let original_bytes = raw.get().to_owned();
+    let original_pointer = raw.get().as_ptr();
     assert!(matches!(
         fx.input
             .run
@@ -1329,6 +1348,15 @@ fn generic_author_and_resume_cannot_steal_the_pending_repair_record() {
     assert!(fx.input.run.context.failure().is_none());
     fx.input.drain_trace();
     let request = fx.restatement(true);
+    // The admitted repair progresses with its competing caller still held.
+    // A new correction output requires the caller to take that exact input.
+    let held = fx.input.run.context.take_held_author().unwrap();
+    assert_eq!(held.kind, Kind::ModelMeasurement);
+    let Some(Payload::ModelMeasurement(raw)) = held.payload else {
+        panic!("the held unrelated original must remain unchanged");
+    };
+    assert_eq!(raw.get(), original_bytes);
+    assert_eq!(raw.get().as_ptr(), original_pointer);
     let correction = fx.generation(vec![text("Read replacement.")], true);
     fx.observe(request.source(), correction);
     assert_eq!(fx.effective(true).text(), "Read replacement.");

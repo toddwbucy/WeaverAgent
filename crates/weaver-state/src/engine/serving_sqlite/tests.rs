@@ -863,6 +863,7 @@ pub(super) mod filing {
             (false, true, "item"),
             (true, true, "item"),
             (false, false, "other"),
+            (false, false, "Item"),
         ] {
             let mut store = store();
             let mut send = statement(1, "message.assistant");

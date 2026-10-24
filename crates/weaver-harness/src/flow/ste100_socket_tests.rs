@@ -27,7 +27,7 @@ fn fixture() -> (Ste100Bootstrap, SchemeDeclaration, Ste100Ready) {
     };
     let instruction = Ste100Instruction {
         model_binding: ModelBinding {
-            artifact: ArtifactRef("synthetic-checker-artifact".into()),
+            artifact: ArtifactRef("/synthetic/checker-manifest.json".into()),
             devices: vec![DeviceOrdinal(0)],
         },
         model_artifact_sha256: Digest::new("1".repeat(64)).unwrap(),

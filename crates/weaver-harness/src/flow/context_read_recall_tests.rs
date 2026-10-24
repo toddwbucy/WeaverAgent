@@ -280,10 +280,21 @@ fn malformed_plan_summary_carrier_retains_the_answer_without_release_or_recall()
             let request = member.next_request();
             let raw = serde_json::to_vec(&result).unwrap();
             let answer = member.answer(&request, page(7, 0, raw.len(), &raw));
-            match member.receive(&answer) {
-                Ok(()) => member.assert_component_failure(),
-                Err(failure) => member.assert_protocol_failure(failure),
-            }
+            // The transport envelope is valid. The completed page is decoded
+            // only after the actual operation measurement has been Recorded.
+            member.receive(&answer).expect("valid transport envelope");
+            let failure = (0..128)
+                .find_map(|_| member.advance().err())
+                .expect("malformed complete result must fail after its measurement");
+            assert!(
+                matches!(&failure, RunFailure::Flow {
+                reason: FlowHaltReason::ProtocolFailed,
+                point: HaltPoint::StateReply,
+                detail,
+            } if detail == "malformed complete read result"),
+                "{name}/{defect}: {failure:?}"
+            );
+            member.assert_protocol_failure(failure);
             let OperationCompletion::State { completion, .. } = member
                 .run
                 .context

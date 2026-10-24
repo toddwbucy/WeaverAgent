@@ -41,7 +41,7 @@ fn ready_classifier() -> (Classifier<SocketPort>, Channel, Ste100Request) {
     };
     let instruction = Ste100Instruction {
         model_binding: ModelBinding {
-            artifact: ArtifactRef("synthetic-wire-fixture".into()),
+            artifact: ArtifactRef("/synthetic/wire-manifest.json".into()),
             devices: vec![DeviceOrdinal(0)],
         },
         model_artifact_sha256: seed.checker_artifact_sha256.clone(),

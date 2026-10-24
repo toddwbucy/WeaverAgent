@@ -154,6 +154,9 @@ impl RecordingContext {
             || self.marks.is_some()
             || self.boot_pairs.is_some()
             || self.read.is_some()
+            || self.boot_open_blocks_external()
+            || self.plan_summary_blocks_external()
+            || self.place_blocks_external()
             || self.measure.is_some()
             || self.member_capture.is_some()
             || self.freshness.is_some()
@@ -163,7 +166,7 @@ impl RecordingContext {
             || self.pair_rejected_authoring
             || self.pairs.pending_rejection().is_some()
             || self.templates_block_content()
-            || self.template_blocked_author.is_some()
+            || self.caller_author_held()
             || self.input.snapshot().is_some()
             || self.input_author.is_some()
             || self.input_turn.is_some()
@@ -333,6 +336,40 @@ impl RecordingContext {
             _ => unreachable!("settlement checked inspection response vocabulary"),
         };
         Ok(Some(completion))
+    }
+
+    /// Validate this retained turnless Grants owner without moving any evidence
+    /// or doing I/O after failure. The caller already owns the accepted rollback.
+    pub(in crate::flow::context) fn stopped_rollback_grants(
+        &self,
+        leave: AbsoluteBound,
+    ) -> Result<(AbsoluteBound, Option<DecimalU64>, Option<u64>), &'static str> {
+        let owner = self.inspection.as_ref().ok_or("no retained Grants owner")?;
+        if owner.kind != InspectionKind::Grants
+            || owner.turn.is_some()
+            || owner.bound.deadline_ns() > leave.deadline_ns()
+            || owner.bound.began_ns() < leave.began_ns()
+        {
+            return Err("rollback inspection differs from its accepted window");
+        }
+        let expected = (!owner.recorded && !owner.withdrawn()).then_some(owner.bound);
+        if self.deadlines.get(PumpDeadline::StateControl) != expected {
+            return Err("rollback Grants lost its original control bound");
+        }
+        if let Some(evidence) = &owner.completion
+            && (evidence.request != (StateControl::Grants {})
+                || evidence.turn.is_some()
+                || evidence.bound != owner.bound
+                || Some(evidence.answer.common().request_id) != owner.request_id)
+        {
+            return Err("rollback Grants completion differs from its owner");
+        }
+        let ticket = self.flow.stopped_grants_record(
+            owner.request_id,
+            owner.completion.is_some(),
+            &self.barrier,
+        )?;
+        Ok((owner.bound, owner.request_id, ticket))
     }
 
     pub(super) fn inspection_wait_still_owned(&self, key: PumpDeadline) -> bool {

@@ -259,15 +259,16 @@ pub enum PlanInputOperation {
     },
 }
 
-/// Operator provenance retained on block zero without instruction text.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanInputContext {
-    pub document_sha256: Digest,
-    pub cause: crate::Cause,
-    #[serde(deserialize_with = "super::required_option")]
-    pub expected: Option<PlanRef>,
-    pub operation: PlanInputOperation,
+super::codec::closed_object! {
+    /// Operator provenance retained on block zero without instruction text.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct PlanInputContext {
+        pub document_sha256: Digest,
+        pub cause: crate::Cause,
+        #[serde(deserialize_with = "super::required_option")]
+        pub expected: Option<PlanRef>,
+        pub operation: PlanInputOperation,
+    }
 }
 
 /// The held provenance of a lock, not a model-supplied authority grant.
@@ -377,84 +378,50 @@ pub struct PlanBreakRecord {
     pub source: SourceBlockId,
 }
 
-/// One complete committed revision, independent of argument placement.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PlanSnapshot {
-    pub plan: PlanRef,
-    pub task: TaskScopeRef,
-    pub status: PlanStatus,
-    pub review: ReviewSetupRef,
-    pub operator_source: SourceBlockId,
-    pub lock_source: Option<SourceBlockId>,
-    pub document_sha256: Digest,
-    pub last_source: SourcePosition,
-    pub categories: Vec<Category>,
-    pub group_drafts: Vec<GroupDraft>,
-    pub groups: Vec<PlanGroup>,
-    pub steps: Vec<PlanStep>,
-    pub broken: Option<PlanBreakRecord>,
-}
-
-impl<'de> Deserialize<'de> for PlanSnapshot {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            plan: PlanRef,
-            task: TaskScopeRef,
-            status: PlanStatus,
-            review: ReviewSetupRef,
-            operator_source: SourceBlockId,
-            #[serde(deserialize_with = "super::required_option")]
-            lock_source: Option<SourceBlockId>,
-            document_sha256: Digest,
-            last_source: SourcePosition,
-            categories: Vec<Category>,
-            group_drafts: Vec<GroupDraft>,
-            groups: Vec<PlanGroup>,
-            steps: Vec<PlanStep>,
-            #[serde(deserialize_with = "super::required_option")]
-            broken: Option<PlanBreakRecord>,
-        }
-        let fields: Fields = super::codec::deserialize_object(deserializer)?;
-        Ok(Self {
-            plan: fields.plan,
-            task: fields.task,
-            status: fields.status,
-            review: fields.review,
-            operator_source: fields.operator_source,
-            lock_source: fields.lock_source,
-            document_sha256: fields.document_sha256,
-            last_source: fields.last_source,
-            categories: fields.categories,
-            group_drafts: fields.group_drafts,
-            groups: fields.groups,
-            steps: fields.steps,
-            broken: fields.broken,
-        })
+super::codec::closed_object! {
+    /// One complete committed revision, independent of argument placement.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct PlanSnapshot {
+        pub plan: PlanRef,
+        pub task: TaskScopeRef,
+        pub status: PlanStatus,
+        pub review: ReviewSetupRef,
+        pub operator_source: SourceBlockId,
+        #[serde(deserialize_with = "super::required_option")]
+        pub lock_source: Option<SourceBlockId>,
+        pub document_sha256: Digest,
+        pub last_source: SourcePosition,
+        pub categories: Vec<Category>,
+        pub group_drafts: Vec<GroupDraft>,
+        pub groups: Vec<PlanGroup>,
+        pub steps: Vec<PlanStep>,
+        #[serde(deserialize_with = "super::required_option")]
+        pub broken: Option<PlanBreakRecord>,
     }
 }
 
-/// One fixed plan and content frontier for forward-flag counts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanFlagSnapshot {
-    pub plan: PlanRef,
-    pub after: SourceBlockId,
-    pub through: SourcePosition,
-    pub total_flags: DecimalU64,
-    pub matched_flags: DecimalU64,
-    pub unmatched_flags: DecimalU64,
+super::codec::closed_object! {
+    /// One fixed plan and content frontier for forward-flag counts.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct PlanFlagSnapshot {
+        pub plan: PlanRef,
+        pub after: SourceBlockId,
+        pub through: SourcePosition,
+        pub total_flags: DecimalU64,
+        pub matched_flags: DecimalU64,
+        pub unmatched_flags: DecimalU64,
+    }
 }
 
-/// Committed plan account carried by lifecycle observation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanSummary {
-    pub plan: PlanRef,
-    pub status: PlanStatus,
-    pub document_sha256: Digest,
-    pub last_source: SourcePosition,
+super::codec::closed_object! {
+    /// Committed plan account carried by lifecycle observation.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct PlanSummary {
+        pub plan: PlanRef,
+        pub status: PlanStatus,
+        pub document_sha256: Digest,
+        pub last_source: SourcePosition,
+    }
 }
 
 /// An ordinary plan operation refusal, never a component halt.
@@ -742,6 +709,110 @@ mod tests {
                     super::super::decode_strict::<super::super::QueryResult>(&duplicate).is_err()
                 );
             }
+        }
+    }
+
+    fn assert_closed_object<T>(object: serde_json::Value, fields: &[&str])
+    where
+        T: serde::de::DeserializeOwned + Serialize,
+    {
+        let raw = object.to_string();
+        let value: T = serde_json::from_str(&raw).unwrap();
+        assert_eq!(serde_json::to_value(value).unwrap(), object);
+        let value: T = super::super::decode_strict(&raw).unwrap();
+        assert_eq!(serde_json::to_value(value).unwrap(), object);
+        let mut decoder = serde_json::Deserializer::from_str(&raw);
+        let value = T::deserialize(&mut decoder).unwrap();
+        assert_eq!(serde_json::to_value(value).unwrap(), object);
+
+        let mut invalid = vec![
+            serde_json::Value::Array(fields.iter().map(|key| object[*key].clone()).collect())
+                .to_string(),
+        ];
+        let mut unknown = object.clone();
+        unknown["unknown"] = serde_json::Value::Null;
+        invalid.push(unknown.to_string());
+        for key in fields {
+            let mut missing = object.clone();
+            missing.as_object_mut().unwrap().remove(*key);
+            invalid.push(missing.to_string());
+            let encoded_key = serde_json::to_string(key).unwrap();
+            invalid.push(format!("{{{encoded_key}:{},{}", object[*key], &raw[1..]));
+        }
+        for raw in invalid {
+            assert!(serde_json::from_str::<T>(&raw).is_err(), "direct: {raw}");
+            assert!(
+                super::super::decode_strict::<T>(&raw).is_err(),
+                "strict: {raw}"
+            );
+            let mut decoder = serde_json::Deserializer::from_str(&raw);
+            assert!(T::deserialize(&mut decoder).is_err(), "visitor: {raw}");
+        }
+    }
+
+    #[test]
+    fn plan_input_context_requires_a_closed_named_object_at_every_decoder() {
+        let object = serde_json::json!({
+            "document_sha256":"1".repeat(64),
+            "cause":{"uid":0},
+            "expected":null,
+            "operation":{"authorize":{
+                "task":"0","categories":[],"groups":[],
+                "review":{"setup_id":"review","sha256":"0".repeat(64)}
+            }}
+        });
+        assert_closed_object::<PlanInputContext>(
+            object,
+            &["document_sha256", "cause", "expected", "operation"],
+        );
+    }
+
+    #[test]
+    fn plan_summary_requires_a_closed_named_object_at_every_decoder() {
+        for turn in [serde_json::Value::Null, serde_json::json!("original-turn")] {
+            let snapshot = snapshot_json();
+            let mut object = serde_json::json!({
+                "plan":snapshot["plan"],"status":snapshot["status"],
+                "document_sha256":snapshot["document_sha256"],
+                "last_source":snapshot["last_source"]
+            });
+            object["last_source"]["turn"] = turn;
+            assert_closed_object::<PlanSummary>(
+                object,
+                &["plan", "status", "document_sha256", "last_source"],
+            );
+        }
+    }
+
+    #[test]
+    fn plan_flag_snapshot_requires_a_closed_named_object_at_every_decoder() {
+        for turn in [serde_json::Value::Null, serde_json::json!("original-turn")] {
+            let snapshot = snapshot_json();
+            let mut object = serde_json::json!({
+                "plan":snapshot["plan"],"after":snapshot["operator_source"],
+                "through":snapshot["last_source"],
+                "total_flags":"3","matched_flags":"2","unmatched_flags":"1"
+            });
+            object["through"]["turn"] = turn;
+            let fields = [
+                "plan",
+                "after",
+                "through",
+                "total_flags",
+                "matched_flags",
+                "unmatched_flags",
+            ];
+            assert_closed_object::<PlanFlagSnapshot>(object.clone(), &fields);
+            let wire = serde_json::json!({"plan_flags":{"snapshot":object}});
+            assert!(
+                super::super::decode_strict::<super::super::QueryResult>(&wire.to_string()).is_ok()
+            );
+            let array = serde_json::Value::Array(fields.map(|name| object[name].clone()).into());
+            let wire = serde_json::json!({"plan_flags":{"snapshot":array}});
+            assert!(
+                super::super::decode_strict::<super::super::QueryResult>(&wire.to_string())
+                    .is_err()
+            );
         }
     }
 

@@ -171,6 +171,17 @@ impl ReceiptSet {
         })
     }
 
+    /// Immutable actual dispositions, even before consumer release or after
+    /// cancellation. This inspection grants nothing; mandatory post-effect
+    /// invalidation must see committed facts before a caller retrieves them.
+    pub(in crate::flow) fn recorded_dispositions(
+        &self,
+    ) -> impl Iterator<Item = &SourceDisposition> {
+        self.slots
+            .iter()
+            .filter_map(|slot| slot.disposition.as_ref())
+    }
+
     /// Evidence for the frozen halt account. This never releases a receipt or
     /// changes consumer ownership, including when its enclosing wait has failed.
     pub(in crate::flow) fn has_recorded_commit(&self, source: &SourceBlockId) -> bool {

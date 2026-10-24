@@ -5,12 +5,12 @@
 use std::sync::Arc;
 
 use weaver_trace::TurnRef;
-use weaver_types::Finish;
 use weaver_types::state_flow::{
     CallId, DecimalU64, NonDispatchCause, PairFailure, PairLane, PairStarted, ProtocolRepairCase,
     RecallRequestRefusal, SchemeDeclaration, SourceBlockId, SourcePosition, StatementRef,
     Ste100Result, Ste100Target, TerminalPairFate,
 };
+use weaver_types::{Finish, RefusalRecord};
 
 use super::pairs::CompletedPair;
 use crate::flow::coordinator::{AssociationRefusal, CheckedGeneration, OriginalRequests};
@@ -29,6 +29,8 @@ pub(in crate::flow) enum RepairError {
     InvalidExpansion,
     WrongAccounting,
     InvalidStatement,
+    OutstandingCorrectionLoan,
+    OutstandingAccountLoan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +118,40 @@ impl RecordedRecallRefusal {
     }
 }
 
+/// Actual association records survive a partial batch and cancellation.
+#[derive(Debug)]
+pub(in crate::flow) struct RecordedAssociationRefusal {
+    refusal: RefusalRecord,
+    source: SourcePosition,
+}
+impl RecordedAssociationRefusal {
+    pub(in crate::flow) fn refusal(&self) -> &RefusalRecord {
+        &self.refusal
+    }
+    pub(in crate::flow) fn source(&self) -> &SourcePosition {
+        &self.source
+    }
+}
+
+/// An empty pass counts only after its attributed refusal is Recorded.
+#[derive(Debug)]
+pub(in crate::flow) struct RecordedEmptyCorrection {
+    correction: SourcePosition,
+    source: SourcePosition,
+    failed_corrections: u32,
+}
+impl RecordedEmptyCorrection {
+    pub(in crate::flow) fn correction(&self) -> &SourcePosition {
+        &self.correction
+    }
+    pub(in crate::flow) fn source(&self) -> &SourcePosition {
+        &self.source
+    }
+    pub(in crate::flow) fn failed_corrections(&self) -> u32 {
+        self.failed_corrections
+    }
+}
+
 /// The original and every correction keep their exact source leases alive.
 /// Requests are derived by this owner only, never accepted from a caller vector.
 #[derive(Debug)]
@@ -124,6 +160,8 @@ pub(in crate::flow) struct RepairAccount {
     corrections: Vec<OriginalRequests>,
     requests: Vec<PairStarted>,
     recall_refusals: Vec<RecordedRecallRefusal>,
+    association_refusals: Vec<RecordedAssociationRefusal>,
+    empty_corrections: Vec<RecordedEmptyCorrection>,
     nonce: Arc<()>,
 }
 impl RepairAccount {
@@ -151,6 +189,12 @@ impl RepairAccount {
     }
     pub(in crate::flow) fn recall_refusals(&self) -> &[RecordedRecallRefusal] {
         &self.recall_refusals
+    }
+    pub(in crate::flow) fn association_refusals(&self) -> &[RecordedAssociationRefusal] {
+        &self.association_refusals
+    }
+    pub(in crate::flow) fn empty_corrections(&self) -> &[RecordedEmptyCorrection] {
+        &self.empty_corrections
     }
 }
 
@@ -350,6 +394,8 @@ impl RepairLedger {
                 corrections: vec![],
                 requests,
                 recall_refusals: vec![],
+                association_refusals: vec![],
+                empty_corrections: vec![],
                 nonce: Arc::new(()),
             }),
             contexts,
@@ -417,9 +463,11 @@ impl RepairLedger {
     pub(super) fn original(&self) -> Option<&OriginalRequests> {
         self.account.as_ref().map(|account| &account.original)
     }
+    #[cfg(test)]
     pub(super) fn associations(&self) -> &[RepairAssociationRefusal] {
         &self.associations
     }
+    #[cfg(test)]
     pub(super) fn original_refusals(&self) -> &[AssociationRefusal] {
         self.account
             .as_ref()
@@ -433,6 +481,11 @@ impl RepairLedger {
         self.account
             .as_ref()
             .map_or(&[], RepairAccount::recall_refusals)
+    }
+
+    #[cfg(test)]
+    pub(super) fn account_for_test(&self) -> &RepairAccount {
+        self.account.as_ref().unwrap()
     }
 
     /// Only checked association evidence supplies a refusal. The account's
@@ -454,12 +507,16 @@ impl RepairLedger {
 
     pub(super) fn recorded_recall_refusal(
         &mut self,
+        expected: &RecallRequestRefusal,
         source: SourcePosition,
     ) -> Result<(), RepairError> {
         if self.stage == Stage::Frozen {
             return Err(RepairError::Frozen);
         }
         let refusal = self.next_recall_refusal().ok_or(RepairError::WrongPhase)?;
+        if &refusal != expected {
+            return Err(RepairError::WrongAccounting);
+        }
         self.record(source.clone())?;
         self.account
             .as_mut()
@@ -567,6 +624,7 @@ impl RepairLedger {
         }
         if correction.generation().blocks().is_empty() {
             self.pending = Some(correction);
+            self.pending_protocol_recorded = false;
             self.stage = Stage::EmptyRefusal;
             return Ok(CorrectionProgress::EmptyCorrectionRefusal);
         }
@@ -616,16 +674,35 @@ impl RepairLedger {
         &mut self,
         recorded: SourcePosition,
     ) -> Result<(), RepairError> {
-        self.require(Stage::EmptyRefusal)?;
-        self.record(recorded)?;
-        let correction = self
-            .pending
-            .take()
-            .expect("empty refusal retains its correction");
+        let cancelled = self.stage == Stage::Cancelled;
+        if !cancelled {
+            self.require(Stage::EmptyRefusal)?;
+        }
+        let correction = self.pending.as_ref().ok_or(RepairError::WrongPhase)?;
+        if correction.attempted_call() || !correction.generation().blocks().is_empty() {
+            return Err(RepairError::WrongPhase);
+        }
+        self.record(recorded.clone())?;
+        let correction = self.pending.take().expect("validated empty correction");
+        self.pending_protocol_recorded = false;
+        let correction_source = correction.generation().source().clone();
         self.account.as_mut().unwrap().corrections.push(correction);
-        // The refusal's actual record is the only transition that counts this
-        // attempt. No pair or replacement statement is created for empty output.
+        // Count at Recorded even when cancellation wins the completion race.
+        // A late receipt must never reopen a cancelled retry/exhaustion path.
         self.failed_attempt();
+        if cancelled {
+            self.stage = Stage::Cancelled;
+        }
+        let failed_corrections = self.contexts[self.current].failed;
+        self.account
+            .as_mut()
+            .unwrap()
+            .empty_corrections
+            .push(RecordedEmptyCorrection {
+                correction: correction_source,
+                source: recorded,
+                failed_corrections,
+            });
         Ok(())
     }
 
@@ -634,6 +711,7 @@ impl RepairLedger {
             return None;
         }
         let correction = self.pending.take()?;
+        self.pending_protocol_recorded = false;
         self.correction_out = Some(correction.generation().source().clone());
         self.stage = Stage::CorrectionOut;
         Some(correction)
@@ -678,15 +756,73 @@ impl RepairLedger {
         Ok(self.failed_attempt())
     }
 
-    pub(super) fn recorded_association_refusals(
+    /// The original checked requests and repaired associations are the only
+    /// authority for this frontier; no caller supplies a refusal or final flag.
+    pub(super) fn next_association_refusal(&self) -> Option<(usize, RefusalRecord)> {
+        let account = self.account.as_ref()?;
+        let index = account.association_refusals.len();
+        // Traverse borrowed descriptions first. Only the selected frontier
+        // allocates an owned refusal, including on repeated pending polls.
+        let (source, case, detail) = account
+            .original
+            .refusals()
+            .iter()
+            .filter_map(|refusal| {
+                let AssociationRefusal::External {
+                    source,
+                    case,
+                    detail,
+                    ..
+                } = refusal
+                else {
+                    return None;
+                };
+                Some((source, *case, *detail))
+            })
+            .chain(self.associations.iter().map(|refusal| {
+                (
+                    refusal.source(),
+                    refusal.case(),
+                    "repaired external send requires exactly one non-recall statement",
+                )
+            }))
+            .nth(index)?;
+        let refusal = RefusalRecord::ProtocolRepair {
+            source_id: source.clone(),
+            case,
+            detail: detail.into(),
+        };
+        Some((index, refusal))
+    }
+
+    pub(super) fn recorded_association_refusal(
         &mut self,
+        expected_index: usize,
         source: SourcePosition,
     ) -> Result<(), RepairError> {
-        self.require(Stage::Association)?;
-        self.record(source)?;
-        self.association_recorded = true;
-        self.original_refusals_recorded = true;
-        self.stage = self.finished_stage();
+        let cancelled = self.stage == Stage::Cancelled;
+        if !cancelled {
+            self.require(Stage::Association)?;
+        }
+        let (index, refusal) = self
+            .next_association_refusal()
+            .ok_or(RepairError::WrongPhase)?;
+        if index != expected_index {
+            return Err(RepairError::WrongAccounting);
+        }
+        self.record(source.clone())?;
+        self.account
+            .as_mut()
+            .unwrap()
+            .association_refusals
+            .push(RecordedAssociationRefusal { refusal, source });
+        if self.next_association_refusal().is_none() {
+            self.association_recorded = true;
+            self.original_refusals_recorded = true;
+            if !cancelled {
+                self.stage = self.finished_stage();
+            }
+        }
         Ok(())
     }
 
@@ -808,6 +944,16 @@ impl RepairLedger {
             self.stage = Stage::Cancelled;
         }
     }
+    pub(super) fn outstanding_loan(&self) -> Option<RepairError> {
+        if self.correction_out.is_some() {
+            Some(RepairError::OutstandingCorrectionLoan)
+        } else if self.account_out.is_some() {
+            Some(RepairError::OutstandingAccountLoan)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn take_cancelled(&mut self) -> Option<RepairCancellation> {
         if self.stage != Stage::Cancelled
             || self.correction_out.is_some()
@@ -819,6 +965,7 @@ impl RepairLedger {
         }
         let account = self.account.take()?;
         self.stage = Stage::Transferred;
+        self.pending_protocol_recorded = false;
         Some(RepairCancellation {
             account,
             pending: self.pending.take(),
@@ -980,7 +1127,7 @@ fn append_statements(
     Ok(())
 }
 
-fn validate_accounted<'a>(
+pub(super) fn validate_accounted<'a>(
     requests: impl Iterator<Item = &'a PairStarted>,
     completed: &[&CompletedPair],
     cause: NonDispatchCause,
@@ -1000,6 +1147,43 @@ fn validate_accounted<'a>(
         {
             return Err(RepairError::WrongAccounting);
         }
+    }
+    Ok(())
+}
+
+/// A terminal already admitted by one purpose remains immutable when Stop and
+/// then Unload claim the remaining suffix. Public pair ownership cannot reorder
+/// that prefix; this check also refuses corrupted or wrongly composed proofs.
+pub(super) fn validate_refused_accounted<'a>(
+    requests: impl ExactSizeIterator<Item = &'a PairStarted>,
+    completed: &[&CompletedPair],
+    cancel: Option<NonDispatchCause>,
+) -> Result<(), RepairError> {
+    let ceiling = match cancel {
+        None => 0,
+        Some(NonDispatchCause::Stop) => 1,
+        Some(NonDispatchCause::Unload) => 2,
+        Some(_) => return Err(RepairError::WrongAccounting),
+    };
+    if requests.len() != completed.len() {
+        return Err(RepairError::WrongAccounting);
+    }
+    let mut previous = 0;
+    for (request, proof) in requests.zip(completed) {
+        let Some(PairFailure::NotDispatched { cause }) = &proof.ended().reason else {
+            return Err(RepairError::WrongAccounting);
+        };
+        let rank = match cause {
+            NonDispatchCause::PassPurpose => 0,
+            NonDispatchCause::Stop => 1,
+            NonDispatchCause::Unload => 2,
+            _ => return Err(RepairError::WrongAccounting),
+        };
+        if rank < previous || rank > ceiling {
+            return Err(RepairError::WrongAccounting);
+        }
+        validate_accounted(std::iter::once(request), &[*proof], *cause)?;
+        previous = rank;
     }
     Ok(())
 }

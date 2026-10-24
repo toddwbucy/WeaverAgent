@@ -147,7 +147,7 @@ fn plan_summary_carrier_uses_each_revisions_operator_digest_and_keeps_flag_block
 
 #[test]
 fn plan_summary_carrier_refuses_invalid_held_operator_context_on_reads_and_adoption() {
-    for defect in 0..9 {
+    for defect in 0..10 {
         let mut fixture = Fixture::new();
         fixture.begin(false);
         let id = source_id(&fixture.store.connection, &block(1, 0))
@@ -210,6 +210,16 @@ fn plan_summary_carrier_refuses_invalid_held_operator_context_on_reads_and_adopt
                         .map(|name| context[name].clone())
                         .into(),
                 )
+            }
+            9 => {
+                fixture
+                    .store
+                    .connection
+                    .execute(
+                        "UPDATE content_block SET scheme_id='another-scheme' WHERE id=?1",
+                        [id],
+                    )
+                    .unwrap();
             }
             _ => unreachable!(),
         }
@@ -274,5 +284,176 @@ fn plan_summary_carrier_bytes_are_included_in_the_existing_result_ceiling() {
             reads::query_encoded(&fixture.store, &selector, None),
             Err(reads::ReadFailure::Refused(ReadRefusalCode::ResultTooLarge))
         ));
+    }
+}
+
+#[test]
+fn plan_input_array_context_refuses_admission_without_committing_content() {
+    let mut fixture = Fixture::new();
+    let ctx = context(
+        PlanInputOperation::Authorize {
+            task: 0.into(),
+            categories: categories(false),
+            groups: vec![],
+            review: setup(),
+        },
+        None,
+    );
+    let object = serde_json::to_value(&ctx).unwrap();
+    let array = serde_json::Value::Array(
+        ["document_sha256", "cause", "expected", "operation"]
+            .map(|key| object[key].clone())
+            .into(),
+    );
+    let mut filing = input(1, 0, &ctx);
+    filing.scheme_id = fixture.store.context.scheme_id.clone();
+    filing.context.as_mut().unwrap().raw = RawValue::from_string(array.to_string()).unwrap();
+    let before = fixture.store.image().unwrap();
+    let error = fixture.store.file(&filing).unwrap_err();
+    assert_eq!(error.code, StateRefusalCode::InvalidEffect);
+    assert_eq!(error.detail, "invalid operator plan context");
+    assert_eq!(fixture.store.image().unwrap(), before);
+    // The refusal left no content, mark or revision behind. The same source
+    // identity can still begin a valid plan and survive ordinary adoption.
+    fixture.begin(true);
+    fixture.adopt(&fixture.store.image().unwrap()).unwrap();
+}
+
+#[test]
+fn plan_operator_context_scheme_check_is_shared_by_filing_reads_and_adoption() {
+    let mut fixture = Fixture::new();
+    fixture.begin(true);
+    let id = source_id(&fixture.store.connection, &block(1, 0))
+        .unwrap()
+        .unwrap();
+    fixture
+        .store
+        .connection
+        .execute(
+            "UPDATE content_block SET scheme_id='another-scheme' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+    for selector in [
+        ReadSelector::PlanCurrent {},
+        ReadSelector::Plan { plan: plan(1) },
+    ] {
+        assert!(matches!(
+            reads::query(&fixture.store, &selector),
+            Err(reads::ReadFailure::ComponentCorruption(
+                "invalid plan operator source"
+            ))
+        ));
+    }
+    assert_eq!(
+        fixture
+            .adopt(&fixture.store.image().unwrap())
+            .err()
+            .unwrap()
+            .code,
+        StateRefusalCode::OpenFailed
+    );
+
+    // Exercise operator_input before any current-plan snapshot can perform the
+    // same check: the input is held, but its authorizing effect is not filed yet.
+    let mut fixture = Fixture::new();
+    let ctx = context(
+        PlanInputOperation::Authorize {
+            task: 0.into(),
+            categories: categories(false),
+            groups: vec![],
+            review: setup(),
+        },
+        None,
+    );
+    fixture.file(input(1, 0, &ctx));
+    let id = source_id(&fixture.store.connection, &block(1, 0))
+        .unwrap()
+        .unwrap();
+    fixture
+        .store
+        .connection
+        .execute(
+            "UPDATE content_block SET scheme_id='another-scheme' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+    let mut filing = effect(
+        2,
+        PlanEffect::Authorize {
+            plan: plan(1),
+            source: block(1, 0),
+            task: TaskScopeRef {
+                task: span(1),
+                prompt: span(2),
+            },
+            review: setup(),
+        },
+    );
+    filing.scheme_id = fixture.store.context.scheme_id.clone();
+    let before = fixture.store.image().unwrap();
+    let error = fixture.store.file(&filing).unwrap_err();
+    assert_eq!(error.code, StateRefusalCode::InvalidEffect);
+    assert!(error.detail.contains("invalid plan operator source"));
+    assert_eq!(fixture.store.image().unwrap(), before);
+    fixture
+        .store
+        .connection
+        .execute(
+            "UPDATE content_block SET scheme_id=?1 WHERE id=?2",
+            params![fixture.store.context.scheme_id, id],
+        )
+        .unwrap();
+    fixture.store.file(&filing).unwrap();
+    fixture.adopt(&fixture.store.image().unwrap()).unwrap();
+}
+
+#[test]
+fn plan_transition_source_distinguishes_absence_from_a_held_non_event() {
+    for missing in [false, true] {
+        let mut fixture = Fixture::new();
+        fixture.begin(false);
+        let (id, detail) = if missing {
+            // Model a damaged foreign key, then restore the enforcement gate
+            // before exercising reads. Healthy writes cannot create this state.
+            fixture
+                .store
+                .connection
+                .pragma_update(None, "foreign_keys", false)
+                .unwrap();
+            (i64::MAX, "missing plan transition source")
+        } else {
+            let seed: i64 = fixture
+                .store
+                .connection
+                .query_row(
+                    "SELECT id FROM content_block WHERE source_kind='seed' LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            (seed, "plan transition source is not an event")
+        };
+        fixture
+            .store
+            .connection
+            .execute("UPDATE plan_revision SET last_source=?1", [id])
+            .unwrap();
+        if missing {
+            fixture
+                .store
+                .connection
+                .pragma_update(None, "foreign_keys", true)
+                .unwrap();
+        }
+        for selector in [
+            ReadSelector::PlanCurrent {},
+            ReadSelector::Plan { plan: plan(1) },
+        ] {
+            match reads::query(&fixture.store, &selector) {
+                Err(reads::ReadFailure::ComponentCorruption(actual)) => assert_eq!(actual, detail),
+                other => panic!("missing={missing}: {other:?}"),
+            }
+        }
     }
 }

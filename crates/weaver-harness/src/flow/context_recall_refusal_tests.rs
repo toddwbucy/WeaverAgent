@@ -62,7 +62,7 @@ fn checked_reply(request: &s::Ste100Request) -> s::Ste100Reply {
     }
 }
 
-fn generation(fx: &mut RepairFixture, content: Vec<ContentBlock>) -> OriginalRequests {
+pub(super) fn generation(fx: &mut RepairFixture, content: Vec<ContentBlock>) -> OriginalRequests {
     fx.arm();
     fx.input
         .run
@@ -146,7 +146,7 @@ fn assert_account(
     }
 }
 
-fn expected(original: &OriginalRequests) -> Vec<s::RecallRequestRefusal> {
+pub(super) fn expected(original: &OriginalRequests) -> Vec<s::RecallRequestRefusal> {
     original
         .refusals()
         .iter()
