@@ -61,7 +61,7 @@ fn gate_startup_child() {
                     ordinal: 1,
                 },
                 position: Position::Close,
-                payload: weaver_types::Payload::Answer(LifecycleAnswer::Ready),
+                payload: weaver_types::Payload::Answer(LifecycleAnswer::GateReady),
             },
         );
     }
@@ -110,15 +110,28 @@ fn gate_startup_child() {
             payload: if mode == "refuse" {
                 weaver_types::Payload::Refusal(weaver_types::LifecycleRefusal::BindFailed)
             } else if mode == "wrong-answer" {
-                weaver_types::Payload::Answer(LifecycleAnswer::Admitted)
-            } else {
                 weaver_types::Payload::Answer(LifecycleAnswer::Ready)
+            } else {
+                weaver_types::Payload::Answer(LifecycleAnswer::GateReady)
             },
         };
         if mode == "wrong-id" {
             answer.exchange.ordinal += 1;
         }
         packet(3, &answer);
+        if std::env::var("WEAVER_GATE_STARTUP_DRIVER").ok().as_deref()
+            == Some("entered-aggregate-plain-ready")
+        {
+            // The aggregate admission probe replaces only the retained reply,
+            // using a second real datagram on this same gate socket.
+            assert_eq!(
+                recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()).unwrap(),
+                1
+            );
+            assert_eq!(bytes[0], b'g');
+            answer.payload = weaver_types::Payload::Answer(LifecycleAnswer::Ready);
+            packet(3, &answer);
+        }
     }
     // The test owner closes the gate port before reaping; no live deployment.
     while recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()).unwrap_or(0) > 0 {}
@@ -585,7 +598,7 @@ pub(in crate::flow::context) fn drive(
                 assert_eq!(ready.shell_granted(), mode == "shell");
                 assert!(matches!(
                     ready.reply().envelope().payload,
-                    weaver_types::Payload::Answer(LifecycleAnswer::Ready)
+                    weaver_types::Payload::Answer(LifecycleAnswer::GateReady)
                 ));
                 guard.0 = Some(ready.owner);
             }
@@ -855,4 +868,9 @@ scenario!(
 scenario!(
     gate_startup_composition_aggregate_gate_terminal,
     "entered-aggregate-gate-terminal"
+);
+
+scenario!(
+    gate_startup_composition_aggregate_rejects_plain_ready,
+    "entered-aggregate-plain-ready"
 );

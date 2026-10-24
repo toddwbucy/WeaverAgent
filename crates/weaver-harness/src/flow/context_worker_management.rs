@@ -1,9 +1,17 @@
 //! Management owns the accepted root connection and suspends, never replaces,
-//! its input owner. Observe reads only retained run facts and authors nothing.
+//! its input owner. Observe reads retained facts; Stop owns its recorded close.
 use super::*;
 use crate::flow::pump::{LifecycleMessage, LifecyclePeer};
 use weaver_types::state_flow::enter::{ObservationAnswer, ObservationContent, ObservationEnvelope};
-use weaver_types::{AgentState, LifecycleDirective};
+use weaver_types::{AgentState, LifecycleAnswer, LifecycleDirective};
+#[path = "context_worker_stop.rs"]
+pub(in crate::flow::context::worker_startup) mod stop;
+use stop::StopWork;
+
+enum ManagementAnswer {
+    Observation(ObservationEnvelope),
+    Lifecycle(OrganEnvelope),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoundationManagementProgress {
@@ -28,7 +36,9 @@ pub struct FoundationManagement<'a> {
     input: Box<FoundationInput<'a>>,
     peer: LifecyclePeer,
     message: Option<LifecycleMessage>,
-    answer: Option<ObservationEnvelope>,
+    answer: Option<ManagementAnswer>,
+    stop: Option<StopWork>,
+    peer_unavailable: bool,
     send: Option<OrganSend>,
     progress: FoundationManagementProgress,
     detail: Option<String>,
@@ -50,6 +60,8 @@ impl<'a> FoundationInput<'a> {
             peer,
             message: None,
             answer: None,
+            stop: None,
+            peer_unavailable: false,
             send: None,
             progress: FoundationManagementProgress::Pending,
             detail: None,
@@ -66,7 +78,7 @@ impl<'a> FoundationManagement<'a> {
     pub fn advance(&mut self) -> FoundationManagementProgress {
         self.advance_with_io(&mut MonotonicIo)
     }
-    fn advance_with_io(&mut self, io: &mut impl PumpIo) -> FoundationManagementProgress {
+    pub(super) fn advance_with_io(&mut self, io: &mut impl PumpIo) -> FoundationManagementProgress {
         if self.progress != FoundationManagementProgress::Pending {
             return self.progress;
         }
@@ -75,6 +87,11 @@ impl<'a> FoundationManagement<'a> {
                 .send
                 .as_ref()
                 .is_some_and(|send| send.sent() && send.sent_at().is_none())
+                || self
+                    .stop
+                    .as_ref()
+                    .and_then(|stop| stop.gate_send.as_ref())
+                    .is_some_and(|send| send.sent() && send.sent_at().is_none())
             {
                 failure = self.input.serving.owner.context.fail(
                     io,
@@ -111,25 +128,27 @@ impl<'a> FoundationManagement<'a> {
         self.progress
     }
     fn step(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
-        let owner = &mut self.input.serving.owner;
-        owner.context.live(io)?;
-        if let Some(send) = &self.send
-            && send.sent()
-            && self.peer.owns_send(send)
-            && self
-                .message
-                .as_ref()
-                .is_some_and(|message| send.matches_exchange(&message.envelope.exchange))
-        {
-            self.progress = FoundationManagementProgress::Answered;
-            return Ok(());
+        self.input.serving.owner.context.live(io)?;
+        let done = self.stop.as_ref().is_none_or(|stop| stop.gate_done);
+        if done && let Some(message) = &self.message {
+            if self.peer_unavailable {
+                self.progress = FoundationManagementProgress::Dropped;
+                return Ok(());
+            }
+            if let Some(send) = &self.send
+                && send.sent()
+                && self.peer.owns_send(send)
+                && send.matches_exchange(&message.envelope.exchange)
+            {
+                self.progress = FoundationManagementProgress::Answered;
+                return Ok(());
+            }
         }
-        owner.context.observe_ready(&mut PumpPorts {
+        let owner = &mut self.input.serving.owner;
+        let pumped = owner.context.observe_ready(&mut PumpPorts {
             lifecycle: LifecyclePorts {
-                // The active dial suppresses a second listener accept. It is
-                // not an original Enter peer or a granted Leave owner.
                 listener: Some(&mut owner.listener),
-                dial: Some(&mut self.peer),
+                dial: (!self.peer_unavailable).then_some(&mut self.peer),
                 residency: Some(owner.resident.residency),
                 ..Default::default()
             },
@@ -137,10 +156,15 @@ impl<'a> FoundationManagement<'a> {
             decode: Some(owner.decode),
             label: None,
             io,
-        })?;
-        if self.message.is_none()
-            && let Some(message) = self.peer.held()
-        {
+        });
+        self.keep_dial_failure(pumped)?;
+        if self.message.is_none() {
+            let Some(message) = self.peer.held() else {
+                if self.peer_unavailable {
+                    self.progress = FoundationManagementProgress::Dropped;
+                }
+                return Ok(());
+            };
             let envelope = &message.envelope;
             if envelope.exchange.opener != Opener::Admin
                 || envelope.position != Position::Open
@@ -157,9 +181,21 @@ impl<'a> FoundationManagement<'a> {
             }
             if !matches!(
                 envelope.payload,
-                Payload::Directive(LifecycleDirective::Observe)
+                Payload::Directive(LifecycleDirective::Observe | LifecycleDirective::Stop { .. })
             ) {
                 self.progress = FoundationManagementProgress::DirectivePending;
+                return Ok(());
+            }
+            // An earlier measured refusal owns its close. Settle that exact
+            // transaction before deciding whether this Stop has a turn left;
+            // two owners must never author competing turn.closed events.
+            if matches!(
+                envelope.payload,
+                Payload::Directive(LifecycleDirective::Stop { .. })
+            ) && !self.input.settle_refusal_before_stop(
+                (!self.peer_unavailable).then_some(&mut self.peer),
+                io,
+            )? {
                 return Ok(());
             }
             self.message =
@@ -169,44 +205,145 @@ impl<'a> FoundationManagement<'a> {
                         source: PumpSource::AdminDial,
                         failure,
                     })?;
-            let Some(load) = owner.resident.evidence.startup.loaded.as_ref() else {
-                return Err(owner.context.fail(
-                    io,
-                    FlowHaltReason::ProtocolFailed,
-                    HaltPoint::Barrier,
-                    "entered worker lacks its original recorded load facts",
-                ));
-            };
-            self.answer = Some(ObservationEnvelope {
-                exchange: self.message.as_ref().unwrap().envelope.exchange.clone(),
-                position: Position::Close,
-                payload: ObservationContent::Answer(ObservationAnswer::State {
-                    state: if owner.context.open_turn.is_some() {
-                        AgentState::Active
-                    } else {
-                        AgentState::Idle
-                    },
-                    load: Some(load.clone()),
-                    constituents: Vec::new(),
-                }),
-            });
-        }
-        if self.send.is_none()
-            && let Some(answer) = self.answer.take()
-        {
-            match self.peer.stage_observation(answer) {
-                Ok(TrackedStage::Queued(send)) => self.send = Some(send),
-                Ok(TrackedStage::Busy(answer)) => self.answer = Some(answer),
-                Err(error) => {
-                    self.answer = Some(error.input);
-                    return Err(RunFailure::Transport {
-                        source: PumpSource::AdminDial,
-                        failure: error.failure,
-                    });
+            let message = self.message.as_ref().unwrap();
+            let owner = &mut self.input.serving.owner;
+            match &message.envelope.payload {
+                Payload::Directive(LifecycleDirective::Observe) => {
+                    let Some(load) = owner.resident.evidence.startup.loaded.as_ref() else {
+                        return Err(owner.context.fail(
+                            io,
+                            FlowHaltReason::ProtocolFailed,
+                            HaltPoint::Barrier,
+                            "entered worker lacks its original recorded load facts",
+                        ));
+                    };
+                    self.answer = Some(ManagementAnswer::Observation(ObservationEnvelope {
+                        exchange: message.envelope.exchange.clone(),
+                        position: Position::Close,
+                        payload: ObservationContent::Answer(ObservationAnswer::State {
+                            state: if owner.context.open_turn.is_some() {
+                                AgentState::Active
+                            } else {
+                                AgentState::Idle
+                            },
+                            load: Some(load.clone()),
+                            constituents: Vec::new(),
+                        }),
+                    }));
                 }
+                Payload::Directive(LifecycleDirective::Stop { cause }) => {
+                    if owner.context.open_turn.is_none() {
+                        self.answer = Some(ManagementAnswer::Lifecycle(OrganEnvelope {
+                            exchange: message.envelope.exchange.clone(),
+                            position: Position::Close,
+                            payload: Payload::Answer(LifecycleAnswer::AtRest),
+                        }));
+                    } else {
+                        self.stop = Some(StopWork::begin(&mut self.input, *cause, io)?);
+                    }
+                }
+                _ => unreachable!("judged management directive"),
             }
         }
+        if let Some(stop) = &mut self.stop {
+            let progress = stop.advance(
+                &mut self.input,
+                (!self.peer_unavailable).then_some(&mut self.peer),
+                io,
+            );
+            self.keep_dial_failure(progress)?;
+            if self.answer.is_none()
+                && self.send.is_none()
+                && let Some(answer) = self.stop.as_ref().unwrap().answer()
+            {
+                self.answer = Some(ManagementAnswer::Lifecycle(OrganEnvelope {
+                    exchange: self.message.as_ref().unwrap().envelope.exchange.clone(),
+                    position: Position::Close,
+                    payload: Payload::Answer(answer),
+                }));
+            }
+        }
+        if !self.peer_unavailable
+            && self.send.is_none()
+            && let Some(answer) = self.answer.take()
+        {
+            let staged = match answer {
+                ManagementAnswer::Observation(answer) => {
+                    match self.peer.stage_observation(answer) {
+                        Ok(TrackedStage::Queued(send)) => Ok(TrackedStage::Queued(send)),
+                        Ok(TrackedStage::Busy(answer)) => {
+                            Ok(TrackedStage::Busy(ManagementAnswer::Observation(answer)))
+                        }
+                        Err(error) => {
+                            self.answer = Some(ManagementAnswer::Observation(error.input));
+                            Err(error.failure)
+                        }
+                    }
+                }
+                ManagementAnswer::Lifecycle(answer) => match self.peer.stage_tracked(answer) {
+                    Ok(TrackedStage::Queued(send)) => Ok(TrackedStage::Queued(send)),
+                    Ok(TrackedStage::Busy(answer)) => {
+                        Ok(TrackedStage::Busy(ManagementAnswer::Lifecycle(answer)))
+                    }
+                    Err(error) => {
+                        self.answer = Some(ManagementAnswer::Lifecycle(error.input));
+                        Err(error.failure)
+                    }
+                },
+            };
+            match staged {
+                Ok(TrackedStage::Queued(send)) => self.send = Some(send),
+                Ok(TrackedStage::Busy(answer)) => self.answer = Some(answer),
+                Err(failure) => self.keep_dial_failure::<()>(Err(RunFailure::Transport {
+                    source: PumpSource::AdminDial,
+                    failure,
+                }))?,
+            }
+        }
+        if self.stop.as_ref().is_some_and(|stop| !stop.gate_done) {
+            // After EAGAIN the gate needs the sole pump's ordinary writable
+            // wait. Nonblocking lifecycle observation alone would strand the
+            // owed close once the admin answer is sent or its peer departs.
+            let owner = &mut self.input.serving.owner;
+            let pumped = owner.context.pump_once(&mut PumpPorts {
+                lifecycle: LifecyclePorts {
+                    listener: Some(&mut owner.listener),
+                    dial: (!self.peer_unavailable).then_some(&mut self.peer),
+                    residency: Some(owner.resident.residency),
+                    ..Default::default()
+                },
+                gate: Some(&mut owner.gate),
+                decode: Some(owner.decode),
+                label: None,
+                io,
+            });
+            self.keep_dial_failure(pumped)?;
+        }
         Ok(())
+    }
+
+    fn keep_dial_failure<T>(&mut self, result: Result<T, RunFailure>) -> Result<(), RunFailure> {
+        match result {
+            Ok(_) => Ok(()),
+            Err(
+                failure @ RunFailure::Transport {
+                    source: PumpSource::AdminDial,
+                    ..
+                },
+            ) if !self
+                .send
+                .as_ref()
+                .is_some_and(|s| s.sent() && s.sent_at().is_none()) =>
+            {
+                // Once a Stop has been accepted, root departure cannot abandon
+                // its close or the original gate response. Even a complete
+                // request followed immediately by EOF is judged before disposal.
+                self.peer_unavailable = true;
+                self.detail = Some(format!("{failure:?}"));
+                Ok(())
+            }
+            Err(failure) => Err(failure),
+        }
     }
     /// Return the exact suspended input after an actual answer or a dropped
     /// connection. Pending directives and stopped owners remain wholly owned.

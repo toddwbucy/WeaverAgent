@@ -82,7 +82,7 @@ fn worker_input_gate_child() {
         &OrganEnvelope {
             exchange: raise.exchange,
             position: Position::Close,
-            payload: Payload::Answer(LifecycleAnswer::Ready),
+            payload: Payload::Answer(LifecycleAnswer::GateReady),
         },
     );
     if mode == "input-fault" {
@@ -106,7 +106,7 @@ fn worker_input_gate_child() {
     if mode == "input-queued" {
         packet(3, &frame(&mode, 102));
     }
-    if mode == "input-pressure" {
+    if mode == "input-pressure" || mode == "input-stop-gate-pressure" {
         let end = Instant::now() + Duration::from_secs(5);
         while !root.join("drain").exists() && Instant::now() < end {
             std::thread::sleep(Duration::from_millis(1));
@@ -124,17 +124,37 @@ fn worker_input_gate_child() {
         let reply: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
         assert_eq!(reply.exchange, frame(&mode, 101).exchange);
         assert_eq!(reply.position, Position::Close);
-        assert_eq!(
-            reply.payload,
-            Payload::Frame(TurnFrame::carry(
-                br#"{"kind":"refused","reason":"Restate the input in STE100."}"#
-            ))
-        );
+        if mode.contains("generation") {
+            let Payload::Frame(frame) = &reply.payload else {
+                panic!("actual operation close")
+            };
+            let value: serde_json::Value =
+                serde_json::from_slice(&frame.octets().unwrap()).unwrap();
+            assert_eq!(value["kind"], "stopped");
+            assert_eq!(value["turn"], "generation-turn");
+        } else if mode.contains("stop-") {
+            let Payload::Frame(frame) = &reply.payload else {
+                panic!("actual stopped frame")
+            };
+            let value: serde_json::Value =
+                serde_json::from_slice(&frame.octets().unwrap()).unwrap();
+            assert_eq!(value["kind"], "stopped");
+            assert_eq!(value["reason"], "the operator stopped the turn");
+            assert_eq!(value["turn"], "stopped-turn");
+            assert!(value["run"].as_str().is_some_and(|run| !run.is_empty()));
+        } else {
+            assert_eq!(
+                reply.payload,
+                Payload::Frame(TurnFrame::carry(
+                    br#"{"kind":"refused","reason":"Restate the input in STE100."}"#
+                ))
+            );
+        }
         std::fs::write(root.join("closed.json"), &bytes[..n]).unwrap();
         if mode == "input-duplicate" {
             packet(3, &frame(&mode, 101));
         }
-        if mode == "input-two" {
+        if mode == "input-two" || mode == "input-stop-next" {
             packet(3, &frame(&mode, 102));
         }
     }
@@ -236,7 +256,10 @@ pub(in super::super) fn exercise(
         }
         guard.0 = Some(match result {
             Ok(FoundationInputResult::Refused(serving)) => Held::Serving(serving),
+            Ok(FoundationInputResult::Aborted(serving)) => Held::Serving(serving),
             Ok(FoundationInputResult::Turn(turn)) => Held::Turn(turn),
+            Ok(FoundationInputResult::Generated(output)) => Held::Input(output.into_service()),
+            Ok(FoundationInputResult::Sorted(output)) => Held::Input(output.into_service()),
             Err(input) => Held::Input(input),
         });
         assert!(matches!(
