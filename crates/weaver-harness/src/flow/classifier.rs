@@ -102,6 +102,39 @@ pub(crate) struct Classifier<P> {
 }
 
 impl<P: Ste100Port> Classifier<P> {
+    /// Move original semantic evidence with a consuming transport retirement.
+    /// Q implements no live port trait in the failed cleanup road.
+    pub(super) fn retire_into<Q>(self, retire: impl FnOnce(P) -> Q) -> Classifier<Q> {
+        let Self {
+            port,
+            scheme,
+            run,
+            state,
+            next_id,
+            outstanding,
+            held,
+            recorded_proof,
+            terminal_interrupted,
+            failure,
+            #[cfg(test)]
+            interrupted_terminal_probes,
+        } = self;
+        Classifier {
+            port: retire(port),
+            scheme,
+            run,
+            state,
+            next_id,
+            outstanding,
+            held,
+            recorded_proof,
+            terminal_interrupted,
+            failure,
+            #[cfg(test)]
+            interrupted_terminal_probes,
+        }
+    }
+
     pub(crate) fn new(
         port: P,
         scheme: SchemeDeclaration,

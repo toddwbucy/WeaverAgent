@@ -239,10 +239,11 @@ pub trait AdapterAdmission: SealedAdapter {
 
     fn kind(&self) -> AdapterKind;
 
-    /// Static absence of an implementation can refuse before artifact acquisition.
-    /// This does not certify compatibility or replace actual adapter admission.
-    fn is_available(&self) -> bool {
-        true
+    /// Refuse known unsupported operation before acquiring or parsing artifacts.
+    /// The adapter owns this refusal. Success certifies neither compatibility nor
+    /// admission, which still checks the exact retained files and grammars.
+    fn precheck(&self) -> Result<(), Ste100AdmissionRefused> {
+        Ok(())
     }
 
     fn admit(
@@ -401,6 +402,7 @@ fn admit_checked<A: AdapterAdmission>(
 ) -> Result<Admitted<A::Backend>, Ste100AdmissionRefused> {
     let bootstrap = validate_bootstrap(launch_limit, bootstrap_bytes)?;
     let scheme = verify_scheme(bootstrap.bootstrap, fixture)?;
+    adapter.precheck().map_err(checked_adapter_refusal)?;
     let manifest_bytes = Arc::new(supplied.manifest.to_vec());
     let manifest = verify_manifest(&scheme.bootstrap.instruction, &manifest_bytes)?;
     verify_compatibility(&scheme, &manifest, fixture)?;
@@ -450,12 +452,7 @@ fn admit_validated_path<A: AdapterAdmission>(
     fixture: bool,
 ) -> Result<Admitted<A::Backend>, Ste100AdmissionRefused> {
     let scheme = verify_scheme(bootstrap.bootstrap, fixture)?;
-    if !adapter.is_available() {
-        return Err(refused(
-            Ste100AdmissionCode::UnsupportedArtifact,
-            "no compatible STE100 adapter is compiled into this executable",
-        ));
-    }
+    adapter.precheck().map_err(checked_adapter_refusal)?;
     // The opaque owner checked this exact immutable instruction. Cheap scheme
     // checks precede filesystem access; compatibility precedes named input reads.
     let acquired = super::artifacts::AcquiredArtifacts::acquire_compatible(
@@ -487,9 +484,21 @@ pub(super) fn admit_acquired_fixture<A: AdapterAdmission>(
         ));
     }
     let scheme = verify_scheme(bootstrap, true)?;
+    adapter.precheck().map_err(checked_adapter_refusal)?;
     verify_compatibility(&scheme, &acquired.manifest, true)?;
     let artifacts = scheme.with_manifest(acquired.manifest);
     finish_admission(artifacts, acquired.files, acquired.manifest_bytes, adapter)
+}
+
+fn checked_adapter_refusal(error: Ste100AdmissionRefused) -> Ste100AdmissionRefused {
+    if error.validate().is_ok() {
+        error
+    } else {
+        refused(
+            Ste100AdmissionCode::UnsupportedArtifact,
+            "compiled adapter returned an invalid admission refusal",
+        )
+    }
 }
 
 fn finish_admission<A: AdapterAdmission>(
@@ -498,16 +507,9 @@ fn finish_admission<A: AdapterAdmission>(
     manifest_bytes: Arc<Vec<u8>>,
     adapter: &A,
 ) -> Result<Admitted<A::Backend>, Ste100AdmissionRefused> {
-    let backend = adapter.admit(&artifacts, &files).map_err(|error| {
-        if error.validate().is_ok() {
-            error
-        } else {
-            refused(
-                Ste100AdmissionCode::UnsupportedArtifact,
-                "compiled adapter returned an invalid admission refusal",
-            )
-        }
-    })?;
+    let backend = adapter
+        .admit(&artifacts, &files)
+        .map_err(checked_adapter_refusal)?;
     let ready = Ste100Ready {
         protocol: STE100_PROTOCOL.into(),
         scheme_id: artifacts.declaration.scheme_id.clone(),

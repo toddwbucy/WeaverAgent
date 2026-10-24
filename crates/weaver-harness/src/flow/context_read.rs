@@ -166,6 +166,17 @@ impl ReadTransaction {
     pub(super) fn plan_expected(&self) -> Option<&(DecimalU64, StateControl)> {
         self.expected.as_ref()
     }
+    pub(super) fn is_boot_cleanup_read(&self, context: &RecordingContext) -> bool {
+        match self.purpose {
+            ReadPurpose::Boot { .. } => context.boot_read_started,
+            ReadPurpose::BootPairs => context.boot_pairs.is_some(),
+            ReadPurpose::PlanSummary => {
+                context.plan_summary.is_some() && context.plan_summary_is_boot_cleanup()
+            }
+            ReadPurpose::Ordinary | ReadPurpose::Marks | ReadPurpose::Inward(_) => false,
+        }
+    }
+
     pub(super) fn is_summary(&self) -> bool {
         matches!(self.purpose, ReadPurpose::PlanSummary)
     }

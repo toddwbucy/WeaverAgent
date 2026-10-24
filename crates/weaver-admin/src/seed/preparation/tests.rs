@@ -7,10 +7,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use weaver_types::state_flow::{Binding, NounBinding, PromptDuty, Span};
 
-pub(in crate::seed) struct Fixture {
-    pub(in crate::seed) config: ServiceConfig,
+pub(crate) struct Fixture {
+    pub(crate) config: ServiceConfig,
     pub(in crate::seed) prepared: PreparedSeed,
-    boundary: inventory::Boundary,
+    pub(crate) boundary: inventory::Boundary,
     _scratch: crate::scratch::Scratch,
 }
 
@@ -33,7 +33,7 @@ impl Fixture {
     }
 }
 
-pub(in crate::seed) fn fixture() -> Fixture {
+pub(crate) fn fixture() -> Fixture {
     let uid = nix::unistd::geteuid().as_raw();
     let gid = nix::unistd::getegid().as_raw();
     fixture_with_member(inventory::MemberAccount {
@@ -44,7 +44,7 @@ pub(in crate::seed) fn fixture() -> Fixture {
 
 /// Test-only host identity input. The same private preparation validates it,
 /// and root host instruments can exercise an actual distinct credential drop.
-pub(in crate::seed) fn fixture_with_member(member: inventory::MemberAccount) -> Fixture {
+pub(crate) fn fixture_with_member(member: inventory::MemberAccount) -> Fixture {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let base = std::env::temp_dir().join(format!(
         "weaver-seed-preparation-{}-{}",

@@ -258,7 +258,9 @@ fn ste100_entry_adopts_fd_once_with_cloexec_and_real_close_in_isolated_child() {
     const COMPLETE: &str = "STE100_OWNED_FD_CLOEXEC_DUMPABLE_CLOSED";
     if std::env::var_os(CHILD).is_some() {
         use std::os::fd::AsFd;
-        let owned = weaver_spu::channel::adopt_ste100().unwrap();
+        // SAFETY: the isolated child exec inherited raw fd3 through
+        // place_inherited; no Rust owner or worker has adopted it.
+        let owned = unsafe { weaver_spu::channel::adopt_ste100() }.unwrap();
         assert_eq!(owned.as_raw_fd(), 3);
         let flags = nix::fcntl::fcntl(owned.as_fd(), nix::fcntl::FcntlArg::F_GETFD).unwrap();
         assert_ne!(flags & libc::FD_CLOEXEC, 0);

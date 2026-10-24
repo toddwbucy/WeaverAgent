@@ -137,7 +137,7 @@ impl RecordingContext {
             // boot continuation before any fallible clock/lifecycle hook.
             HaltTraceProgress::Pending
         } else if self.barrier.pending().is_some() {
-            match self.barrier.resume_trace_only() {
+            match self.resume_trace_only_and_bind() {
                 Ok(Some(sequence)) => HaltTraceProgress::TraceRecorded(sequence),
                 Ok(None) => HaltTraceProgress::Pending,
                 Err(error) => {

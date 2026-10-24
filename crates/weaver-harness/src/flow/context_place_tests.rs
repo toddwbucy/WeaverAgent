@@ -80,6 +80,8 @@ impl PlaceFixture {
                         listener: None,
                         peer: Some(&mut admin),
                         residency: None,
+                        dial: None,
+                        leave_peer: None,
                     },
                     gate: None,
                     decode: Some(&mut self.decode),
@@ -1016,3 +1018,6 @@ mod native_tests;
 
 #[path = "context_place_append_review_tests.rs"]
 mod append_review_tests;
+
+#[path = "context_place_refusal_boundary_tests.rs"]
+mod refusal_boundary_tests;

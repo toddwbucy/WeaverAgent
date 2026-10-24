@@ -94,87 +94,18 @@ const TABLE: &[(&str, &[&str], &[&str])] = &[
 /// The prefix `markers.rs` builds its per-family names from.
 const VOCAB_PREFIX: &str = "WEAVER_VOCAB_";
 
-/// The `WEAVER_*` names appearing as string literals in one test source, and
-/// the features its file-level `cfg` gate names.
-///
-/// Read off disk rather than compiled in, because a `cfg`-gated target is not
-/// compiled on a host build and its variables would vanish from a compiled
-/// inventory exactly when the gate is what hid them. That is the failure this
-/// whole issue is about, and it would be reproduced here.
-///
-/// **The quote is what makes a name rather than prose.** An earlier form
-/// searched the bare text and read a doc comment's `WEAVER_VOCAB_<FAMILY>` as a
-/// variable no test asks the environment for. Requiring the surrounding quote
-/// leaves comments, documentation, and diagnostic prose out without a parser.
-///
-/// **Anchoring to `env::var` call sites was considered and rejected.** Two
-/// access shapes exist here: `loaded.rs` and its neighbours call `env::var_os`
-/// directly, while `markers.rs` and `selection.rs` carry the name as a field of
-/// a fixture table and look it up elsewhere. A scan anchored to the call site
-/// would miss eighteen of the twenty-four names, which is the under-reporting
-/// this test exists to prevent. A real token parse would reach both, and it
-/// would put a parser in the dependency set of a crate whose Spec section 1.1
-/// argues every dependency it takes.
+#[path = "manifest/source_scan.rs"]
+mod source_scan;
+
+/// Read the declared module tree even when the target is feature-disabled.
+/// Child fixture literals belong to the target; a child's inner cfg does not.
 fn read_target(path: &Path) -> (BTreeSet<String>, BTreeSet<String>) {
-    let mut source = fs::read_to_string(path).expect("the source reads");
-    if path.file_name().is_some_and(|name| name == "entry.rs") {
-        // These modules compile in the entry target, so section 1.2's entry
-        // row must account for their fixture reads and feature gates too.
-        for child in ["entry/ste100.rs", "common/ste100_fixture.rs"] {
-            source.push('\n');
-            source.push_str(
-                &fs::read_to_string(path.parent().unwrap().join(child))
-                    .expect("the entry child source reads"),
-            );
-        }
+    // The pin and its synthetic sources name the table's fixtures themselves.
+    if path.file_name().is_some_and(|name| name == "manifest.rs") {
+        return (BTreeSet::new(), BTreeSet::new());
     }
-    let bytes = source.as_bytes();
-
-    let mut fixtures = BTreeSet::new();
-    // **This file is not a subject of its own scan.** It names fixtures in its
-    // table and in its own perturbation notes, and a scanner that read them
-    // would report the document's table as a finding against itself. Watched
-    // doing exactly that before this guard existed.
-    if path.file_name().is_none_or(|n| n != "manifest.rs") {
-        let mut at = 0;
-        // A name is `"WEAVER_..."`, quoted. Both access shapes in this crate put
-        // it in a string literal: a direct `env::var_os` argument, and a fixture
-        // table's field. Prose carries it in backticks or bare, and is left out
-        // by the opening quote alone.
-        while let Some(offset) = source[at..].find("\"WEAVER_") {
-            let start = at + offset + 1;
-            let mut end = start;
-            while end < bytes.len()
-                && (bytes[end].is_ascii_uppercase()
-                    || bytes[end].is_ascii_digit()
-                    || bytes[end] == b'_')
-            {
-                end += 1;
-            }
-            // The literal must close where the name ends, or the match is a
-            // longer string that merely begins with the prefix.
-            if bytes.get(end) == Some(&b'"') {
-                fixtures.insert(source[start..end].to_string());
-            }
-            at = end;
-        }
-    }
-
-    // The file-level gate, as the set of features it names. **A set rather than
-    // the text**, because the sources spell the same gate two ways: `loaded.rs`
-    // writes `cuda, gguf` and `two_card.rs` writes `gguf, cuda`, and a string
-    // comparison would call that a difference.
-    let mut gate = BTreeSet::new();
-    for line in source.lines().filter(|line| line.starts_with("#![cfg(")) {
-        let mut at = 0;
-        while let Some(offset) = line[at..].find("feature = \"") {
-            let start = at + offset + "feature = \"".len();
-            let end = start + line[start..].find('"').expect("the feature closes");
-            gate.insert(line[start..end].to_string());
-            at = end;
-        }
-    }
-    (fixtures, gate)
+    let inventory = source_scan::read(path);
+    (inventory.fixtures, inventory.target_gate)
 }
 
 /// Every test source on disk, by file name.
@@ -347,52 +278,4 @@ fn ste100_binary_set() {
             .lines()
             .any(|line| line.trim() == "path = \"src/lib.rs\"")
     );
-}
-
-struct NestedEntrySources(std::path::PathBuf);
-impl NestedEntrySources {
-    fn new(entry: &str, fixture: &str) -> Self {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let root = std::env::temp_dir().join(format!(
-            "weaver-spu-manifest-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        fs::create_dir_all(root.join("entry")).unwrap();
-        fs::create_dir_all(root.join("common")).unwrap();
-        fs::write(root.join("entry.rs"), "// entry target\n").unwrap();
-        fs::write(root.join("entry/ste100.rs"), entry).unwrap();
-        fs::write(root.join("common/ste100_fixture.rs"), fixture).unwrap();
-        Self(root)
-    }
-}
-impl Drop for NestedEntrySources {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-#[test]
-fn entry_manifest_includes_fixture_reads_from_both_nested_sources() {
-    let files = NestedEntrySources::new(
-        "const MODEL: &str = \"WEAVER_ENTRY_MODEL\";\n",
-        "const CORPUS: &str = \"WEAVER_ENTRY_CORPUS\";\n",
-    );
-    let (fixtures, gates) = read_target(&files.0.join("entry.rs"));
-    assert_eq!(
-        fixtures,
-        BTreeSet::from(["WEAVER_ENTRY_MODEL".into(), "WEAVER_ENTRY_CORPUS".into()])
-    );
-    assert!(gates.is_empty());
-}
-
-#[test]
-fn entry_manifest_includes_each_nested_source_feature_gate() {
-    let files = NestedEntrySources::new(
-        "#![cfg(feature = \"cuda\")]\n",
-        "#![cfg(feature = \"gguf\")]\n",
-    );
-    let (fixtures, gates) = read_target(&files.0.join("entry.rs"));
-    assert!(fixtures.is_empty());
-    assert_eq!(gates, BTreeSet::from(["cuda".into(), "gguf".into()]));
 }

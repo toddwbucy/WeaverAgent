@@ -257,6 +257,16 @@ impl OwedPlanRecall {
 }
 
 impl RecordingContext {
+    pub(super) fn boot_summary_proof_extracted(&self) -> bool {
+        self.plan_cache.boot_started
+            && self.plan_cache.committed.is_some()
+            && self.plan_summary.is_none()
+    }
+
+    pub(super) fn plan_summary_is_boot_cleanup(&self) -> bool {
+        self.plan_summary.as_ref().is_none_or(|work| !work.effect())
+    }
+
     pub(super) fn plan_summary_blocks_external(&self) -> bool {
         self.plan_summary
             .as_ref()
@@ -690,7 +700,11 @@ impl RecordingContext {
         self.plan_summary.as_mut().unwrap().rollback.driving = false;
         let progress = result.map_err(|failure| self.plan_summary_failure(ports.io, failure))?;
         if progress != ReadProgress::Complete {
-            return Ok(PlanSummaryProgress::Pending);
+            return Ok(if progress == ReadProgress::Progress {
+                PlanSummaryProgress::Progress
+            } else {
+                PlanSummaryProgress::Pending
+            });
         }
         // The successful proof is already retained by the Recorded hook. A
         // typed refusal remains exact evidence, never a committed-none cache.
@@ -1178,7 +1192,7 @@ impl RecordingContext {
             }
             self.retain_read_author_ticket();
         }
-        match self.barrier.resume_trace_only() {
+        match self.resume_trace_only_and_bind() {
             Ok(Some(sequence)) => {
                 if let Err(detail) = self.retain_read_recorded(sequence) {
                     self.abandon_plan_summary_account(detail);

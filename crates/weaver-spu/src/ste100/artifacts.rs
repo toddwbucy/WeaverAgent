@@ -298,9 +298,6 @@ fn read_owned(
         if size > remaining {
             return Err(failure(name, "artifact size changed after precheck"));
         }
-        bytes
-            .try_reserve(size)
-            .map_err(|error| failure(name, error))?;
         hash.update(&chunk[..size]);
         bytes.extend_from_slice(&chunk[..size]);
     }

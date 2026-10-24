@@ -1064,6 +1064,24 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.ledger.release_source_lease(lease)
     }
 
+    #[cfg(test)]
+    pub(super) fn review_set_taken_source_status(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+        status: super::ledger::LeaseSlotStatus,
+    ) {
+        self.ledger
+            .review_set_taken_source_status(lease, source, status);
+    }
+
+    pub(super) fn release_source_leases(
+        &mut self,
+        leases: &[&SourceLease],
+    ) -> Result<(), super::ledger::LedgerError> {
+        self.ledger.release_source_leases(leases)
+    }
+
     /// Reserve the only consumer before its original author is submitted.
     /// This is not a source lookup or a way to recover a disposed receipt.
     pub(super) fn reserve_filing_receipts(
@@ -3724,7 +3742,173 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     }
 }
 
+/// Retained failed transport evidence has no descriptors or live port methods.
+pub(super) struct FailedFlowResources {
+    pub(super) state: Option<StateChannel<()>>,
+    _classifier: Option<Classifier<super::ste100_socket::RetiredSocketPort>>,
+    _starting_classifier: Option<super::ste100_socket::RetiredSocketPort>,
+    _stopped_plan_read: Option<StoppedPlanRead<StateChannel<()>>>,
+}
+
+impl FailedFlowResources {
+    #[cfg(test)]
+    pub(super) fn has_stopped_plan_read(&self) -> bool {
+        self._stopped_plan_read.is_some()
+    }
+}
+
 impl FlowCoordinator<super::ste100_socket::SocketPort> {
+    #[cfg(test)]
+    pub(super) fn has_stopped_plan_read_transport(&self) -> bool {
+        self.stopped_plan_read.is_some()
+    }
+
+    pub(super) fn failed_cleanup_state_stood(&self) -> bool {
+        self.state.is_some() || self.state_retired || self.stopped_plan_read.is_some()
+    }
+    pub(super) fn failed_cleanup_state_failed(&self) -> bool {
+        self.state
+            .as_ref()
+            .is_some_and(|state| state.failure().is_some())
+            || self.stopped_plan_read.as_ref().is_some_and(|owner| {
+                owner._state.failure().is_some() || owner.close_error.is_some()
+            })
+    }
+
+    /// Prove that every retained control/measurement slot belongs to this
+    /// actual turnless Grants owner. This neither reads nor releases the channel.
+    pub(super) fn stopped_grants_record(
+        &self,
+        expected: Option<DecimalU64>,
+        complete: bool,
+        barrier: &RecordBarrier,
+    ) -> Result<Option<u64>, &'static str> {
+        let state = self
+            .state
+            .as_ref()
+            .ok_or("Grants lost its original state channel")?;
+        let matches_id = |id| expected == Some(id);
+        if state.outstanding().iter().any(|exchange| {
+            !matches_id(exchange.common.request_id)
+                || exchange.common.run_id != self.run
+                || exchange.common.session_id != state.identity().0
+                || exchange.operation != (StateControl::Grants {}).operation()
+        }) {
+            return Err("Grants retains a foreign state exchange");
+        }
+        if self
+            .state_operation
+            .as_ref()
+            .is_some_and(|(request, turn)| {
+                expected.is_none() || *request != (StateControl::Grants {}) || turn.is_some()
+            })
+        {
+            return Err("Grants retains a foreign control owner");
+        }
+        if self
+            .operation_completion
+            .as_ref()
+            .is_some_and(|completion| {
+                !matches!(completion,OperationCompletion::State {request,turn,completion,..}
+                if *request==(StateControl::Grants {}) && turn.is_none()
+                    && matches_id(completion.answer.common().request_id)
+                    && completion.answer.common().run_id==self.run
+                    && completion.answer.common().session_id==state.identity().0
+                    && !completion.discard_capture_result)
+            })
+        {
+            return Err("Grants retains a foreign completion");
+        }
+        if complete
+            && (self.state_operation.is_some()
+                || self.operation_completion.is_some()
+                || !state.outstanding().is_empty()
+                || state.held_measurement().is_some())
+        {
+            return Err("completed Grants has unrelated remaining work");
+        }
+        if expected.is_none()
+            && (self.state_operation.is_some()
+                || self.operation_completion.is_some()
+                || !state.outstanding().is_empty()
+                || state.held_measurement().is_some()
+                || self.pending_record.is_some())
+        {
+            return Err("unallocated Grants has foreign retained state work");
+        }
+        if let Some(measurement) = state.held_measurement()
+            && (!matches_id(measurement.observation.request_id)
+                || measurement.observation.operation != (StateControl::Grants {}).operation())
+        {
+            return Err("Grants held measurement differs from its request");
+        }
+        match self.pending_record {
+            Some(PendingRecord::State) => {
+                let measurement = state
+                    .held_measurement()
+                    .ok_or("Grants measurement is absent")?;
+                if !matches_id(measurement.observation.request_id)
+                    || !barrier.pending_state_measurement_matches(measurement)
+                {
+                    return Err("Grants pending author differs from its measurement");
+                }
+                Ok(Some(
+                    barrier
+                        .pending_author()
+                        .ok_or("Grants has no author ticket")?
+                        .ticket,
+                ))
+            }
+            Some(PendingRecord::StateRelease) if expected.is_some() => {
+                if barrier.pending().is_some() || barrier.pending_author().is_some() {
+                    return Err("Grants final probe has a foreign author");
+                }
+                Ok(None)
+            }
+            None if barrier.pending().is_none() && barrier.pending_author().is_none() => Ok(None),
+            _ => Err("Grants cannot claim another record"),
+        }
+    }
+
+    pub(super) fn preinput_failed_owner(&self) -> bool {
+        self.phase == CoordinatorPhase::Failed
+            && self.halt.is_some()
+            && self.last_input_id == 0
+            && self.input_account.is_none()
+            && self.reuse.is_none()
+            && self.capture.is_none()
+            && self.output_checks.is_none()
+            && self.output_receipts.is_none()
+            && self.instruction_check.is_none()
+            && self.repair_measurement.is_none()
+    }
+
+    /// Only a failed context's consuming cleanup calls this after freezing its
+    /// account. Frozen ledgers/completions remain here; no empty-ledger fiction.
+    pub(super) fn retire_failed_ports(&mut self) -> Option<FailedFlowResources> {
+        if !self.preinput_failed_owner() {
+            return None;
+        }
+        let retired = FailedFlowResources {
+            state: self.state.take().map(StateChannel::retire_failed),
+            _stopped_plan_read: self
+                .stopped_plan_read
+                .take()
+                .map(|owner| (*owner).retire_failed()),
+            _classifier: self
+                .classifier
+                .take()
+                .map(|owner| owner.retire_into(super::ste100_socket::SocketPort::retire_failed)),
+            _starting_classifier: self
+                .starting_classifier
+                .take()
+                .map(super::ste100_socket::SocketPort::retire_failed),
+        };
+        self.state_retired = true;
+        self.classifier_retired = true;
+        Some(retired)
+    }
+
     pub(super) fn begin_classifier_admission(
         &mut self,
         cx: &mut FlowRecording<'_>,
@@ -4134,8 +4318,8 @@ mod capture_tests;
 
 /// Retired evidence, never a second stream reader. Fields stay owned through
 /// ordinary failed-Enter unload and cannot return to the active coordinator.
-struct StoppedPlanRead {
-    _state: StateChannel,
+struct StoppedPlanRead<S = StateChannel> {
+    _state: S,
     _operation: Option<(StateControl, Option<TurnRef>)>,
     _completion: Option<OperationCompletion>,
     _pending_record: Option<PendingRecord>,
@@ -4143,6 +4327,31 @@ struct StoppedPlanRead {
     _release_timing: Option<(u64, u64)>,
     _record: super::recording::StoppedReadRecord,
     close_error: Option<String>,
+}
+
+impl StoppedPlanRead {
+    fn retire_failed(self) -> StoppedPlanRead<StateChannel<()>> {
+        let Self {
+            _state,
+            _operation,
+            _completion,
+            _pending_record,
+            _recorded_ns,
+            _release_timing,
+            _record,
+            close_error,
+        } = self;
+        StoppedPlanRead {
+            _state: _state.retire_failed(),
+            _operation,
+            _completion,
+            _pending_record,
+            _recorded_ns,
+            _release_timing,
+            _record,
+            close_error,
+        }
+    }
 }
 
 impl<P: Ste100Port> FlowCoordinator<P> {

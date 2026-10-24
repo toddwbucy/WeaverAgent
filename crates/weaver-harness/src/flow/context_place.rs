@@ -177,14 +177,17 @@ impl PlaceAccount {
         }
         .or_else(|| self.measure.as_ref().and_then(|m| m.raw_bytes()))
     }
+    fn can_return_inputs(&self) -> bool {
+        self.phase == RecordingPhase::Entered
+    }
     pub(in crate::flow) fn take_staged(&mut self) -> Option<Staged> {
+        if !self.can_return_inputs() {
+            return None;
+        }
         match &mut self.work {
-            AccountWork::Place(w) => w.staged.take(),
+            AccountWork::Place(w) if w.done && w.incomplete.is_none() => w.staged.take(),
             AccountWork::Reload(w)
-                if matches!(
-                    self.phase,
-                    RecordingPhase::Entered | RecordingPhase::Releasing
-                ) && w.done
+                if w.done
                     && w.incomplete.is_none()
                     && w.staged
                         .as_ref()
@@ -192,7 +195,12 @@ impl PlaceAccount {
             {
                 w.staged.take()
             }
-            AccountWork::Generation(w) if w.confirmed.is_none() && w.reservation.is_none() => {
+            AccountWork::Generation(w)
+                if w.done
+                    && w.incomplete.is_none()
+                    && w.confirmed.is_none()
+                    && w.reservation.is_none() =>
+            {
                 w.grant.as_mut().and_then(|g| g.staged.take())
             }
             _ => None,
@@ -211,15 +219,15 @@ impl PlaceAccount {
         }
     }
     pub(in crate::flow) fn take_reload_inputs(&mut self) -> Option<ReturnedReloadInputs> {
+        if !self.can_return_inputs() {
+            return None;
+        }
         let AccountWork::Reload(work) = &mut self.work else {
             return None;
         };
         // A confirmed cut owns Staged, even after that capability is taken.
         // Failed/incomplete exchange custody remains trace-only.
-        if !matches!(
-            self.phase,
-            RecordingPhase::Entered | RecordingPhase::Releasing
-        ) || !work.done
+        if !work.done
             || work.cut_confirmed
             || work.incomplete.is_some()
             || work.prefix.is_none()
@@ -237,6 +245,9 @@ impl PlaceAccount {
     pub(in crate::flow) fn take_unplaced_selection(
         &mut self,
     ) -> Option<Vec<crate::flow::material::SelectedUnit>> {
+        if !self.can_return_inputs() {
+            return None;
+        }
         let AccountWork::Place(work) = &mut self.work else {
             return None;
         };
@@ -292,23 +303,30 @@ impl PlaceAccount {
 }
 #[derive(Debug)]
 struct PlaceAuthor {
-    identity: Arc<()>,
+    record: AuthorRecord,
     event: Option<AuthoredEvent>,
-    ticket: Option<u64>,
-    sequence: Option<Sequence>,
     kind: Kind,
     turn: Option<TurnRef>,
 }
 impl PlaceAuthor {
     fn new(event: AuthoredEvent) -> Self {
         Self {
-            identity: Arc::new(()),
+            record: AuthorRecord::new(),
             kind: event.kind,
             turn: event.turn.clone(),
             event: Some(event),
-            ticket: None,
-            sequence: None,
         }
+    }
+}
+impl std::ops::Deref for PlaceAuthor {
+    type Target = AuthorRecord;
+    fn deref(&self) -> &AuthorRecord {
+        &self.record
+    }
+}
+impl std::ops::DerefMut for PlaceAuthor {
+    fn deref_mut(&mut self) -> &mut AuthorRecord {
+        &mut self.record
     }
 }
 #[derive(Debug)]
@@ -348,6 +366,9 @@ pub(super) struct GenerationTransaction {
     confirmed: Option<ConfirmedGeneration>,
     cancelled: bool,
     cancel_sent: bool,
+    // Terminal evidence settled the original reservation; no Cancel was sent.
+    // This does not settle still-owed model/output/placement authors.
+    cancel_settled: bool,
     driving: bool,
     done: bool,
     output_started: bool,
@@ -457,7 +478,7 @@ impl RecordingContext {
         } else {
             vec![]
         };
-        let native = NativeScopes::from_boot(&boot);
+        let native = Arc::new(NativeScopes::from_boot(&boot));
         self.place_engine = Some(PlaceEngine {
             native,
             boot,
@@ -930,12 +951,7 @@ impl RecordingContext {
             }
             if let Some(MeasureCompletion::Refused(refused)) = &work.measurement {
                 work.refusal = Some(PlaceRefused {
-                    assembly_id: work
-                        .pending
-                        .as_ref()
-                        .expect("measured reservation")
-                        .assembly()
-                        .into(),
+                    assembly_id: work.measurement.as_ref().unwrap().request().assembly_id,
                     code: refused.code(),
                     detail: "decode measurement refused".into(),
                     account: None,
@@ -956,12 +972,7 @@ impl RecordingContext {
             let limits = self.place_engine.as_ref().unwrap().limits();
             let event = if let Err(code) = crate::flow::place::fit(&facts, limits) {
                 let refusal = PlaceRefused {
-                    assembly_id: work
-                        .pending
-                        .as_ref()
-                        .expect("measured reservation")
-                        .assembly()
-                        .into(),
+                    assembly_id: work.measurement.as_ref().unwrap().request().assembly_id,
                     code,
                     detail: "measured argument exceeds declared placement budget".into(),
                     account: None,
@@ -1046,7 +1057,7 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<PlacementCompletion>, RunFailure> {
         self.live(io)?;
-        if !self.place.as_ref().is_some_and(|w| w.done) {
+        if self.phase != RecordingPhase::Entered || !self.place.as_ref().is_some_and(|w| w.done) {
             return Ok(None);
         }
         self.consume_place_completion()?;
@@ -1108,6 +1119,14 @@ impl RecordingContext {
         } else {
             None
         }
+    }
+    /// A measured refusal already owns its refusal/turn-close transaction.
+    /// Enclosing lifecycle composition settles that transaction before judging
+    /// whether Stop still has an open turn to abort.
+    pub(in crate::flow) fn placement_refusing(&self) -> bool {
+        self.place
+            .as_ref()
+            .is_some_and(|work| work.refusal.is_some())
     }
     pub(in crate::flow) fn place_response_sent(
         &mut self,
@@ -1173,6 +1192,10 @@ impl RecordingContext {
         self.active_place_author()
             .map(|a| (a.ticket, a.sequence, a.kind))
     }
+    #[cfg(test)]
+    pub(super) fn place_author_identity_for_test(&self) -> Option<Arc<()>> {
+        self.active_place_author().map(|a| Arc::clone(&a.identity))
+    }
     pub(super) fn place_owns_pending_author(&self) -> bool {
         self.active_place_author()
             .is_some_and(|a| a.sequence.is_none() && (a.ticket.is_some() || a.event.is_none()))
@@ -1181,31 +1204,30 @@ impl RecordingContext {
         let Some(author) = self.active_place_author_mut() else {
             return false;
         };
-        if !Arc::ptr_eq(&author.identity, identity)
-            || author.event.is_some()
-            || author.sequence.is_some()
-            || author.ticket.is_some_and(|held| held != ticket)
-        {
+        if author.event.is_some() {
             return false;
         }
-        author.ticket = Some(ticket);
-        true
+        author.record.claim(identity, ticket)
     }
 
-    pub(super) fn bind_place_author(&mut self, sequence: Sequence) -> Result<(), RunFailure> {
+    pub(super) fn bind_place_author(&mut self, sequence: Sequence) {
         let Some(author) = self.active_place_author() else {
-            return Ok(());
+            return;
         };
         if author.sequence == Some(sequence) {
-            return Ok(());
+            return;
         }
         let recorded_ticket = self.barrier.recorded_author_ticket(sequence);
-        if author.event.is_some()
-            || author.sequence.is_some()
-            || author.ticket.is_none()
-            || author.ticket != recorded_ticket
+        if author.event.is_some() {
+            return;
+        }
+        if !self
+            .active_place_author_mut()
+            .unwrap()
+            .record
+            .bind(recorded_ticket, sequence)
         {
-            return Ok(());
+            return;
         }
         let closing = self
             .active_place_author()
@@ -1216,12 +1238,6 @@ impl RecordingContext {
             self.place_turn_stopped = false;
         }
 
-        if let Some(author) = self.active_place_author_mut()
-            && author.event.is_none()
-            && author.sequence.is_none()
-        {
-            author.sequence = Some(sequence);
-        }
         macro_rules! retain {
             ($work:expr) => {
                 if let Some(work) = $work.as_mut() {
@@ -1271,7 +1287,6 @@ impl RecordingContext {
                     Some(weaver_types::TurnFrame::carry(frame.to_string().as_bytes()));
             }
         }
-        Ok(())
     }
     fn consume_place_completion(&mut self) -> Result<(), RunFailure> {
         if let Some(sequence) = self.completed_author {
@@ -1300,19 +1315,28 @@ impl RecordingContext {
         }
         let identity = Arc::clone(&author.identity);
         if let Some(event) = self.active_place_author_mut().unwrap().event.take() {
-            self.waiting_content = Some(event);
+            self.waiting_content = Some(WaitingAuthor::claimed(
+                event,
+                AuthorClaim::Placement(Arc::clone(&identity)),
+            ));
         }
         let result =
             self.resume_claimed_author_and_wait(ports, Some(AuthorClaim::Placement(identity)));
         if let Ok(sequence) = result {
-            self.bind_place_author(sequence)?;
-            if self.active_place_author().and_then(|a| a.sequence) != Some(sequence) {
-                return Err(
-                    self.place_fault(ports.io, "placement completion has another author's ticket")
-                );
-            }
+            self.complete_place_author(sequence, ports.io)?;
         }
         result.map(|_| ())
+    }
+    pub(super) fn complete_place_author(
+        &mut self,
+        sequence: Sequence,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        self.bind_place_author(sequence);
+        if self.active_place_author().and_then(|a| a.sequence) != Some(sequence) {
+            return Err(self.place_fault(io, "placement completion has another author's ticket"));
+        }
+        Ok(())
     }
 }
 fn place_event(
@@ -1380,5 +1404,32 @@ fn cut_mirror(cut: &CutReference) -> t::CutReference {
             run: cut.occurrence_id.run.clone(),
             ordinal: cut.occurrence_id.ordinal.0.into(),
         },
+    }
+}
+
+#[cfg(test)]
+impl RecordingContext {
+    /// Defensive consumer-corruption probes start with a genuinely completed cut.
+    /// No fixture can manufacture a Staged, receipt, completion or phase here.
+    pub(super) fn review_mark_completed_reload_incomplete(&mut self) {
+        let work = self.reload.as_mut().expect("actual reload");
+        assert!(work.done && work.incomplete.is_none());
+        assert!(
+            work.staged
+                .as_ref()
+                .is_some_and(|staged| staged.recorded.is_some())
+        );
+        work.incomplete = Some("defensive completed-account interruption".into());
+    }
+
+    pub(super) fn review_remove_completed_reload_record(&mut self) -> Sequence {
+        let work = self.reload.as_mut().expect("actual reload");
+        assert!(work.done && work.incomplete.is_none());
+        work.staged
+            .as_mut()
+            .expect("actual confirmed cut")
+            .recorded
+            .take()
+            .expect("actual Recorded")
     }
 }

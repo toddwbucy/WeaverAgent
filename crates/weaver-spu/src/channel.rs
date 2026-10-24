@@ -45,10 +45,11 @@ pub enum EntryFault {
     /// continue past it. The count is reported rather than the identity, since
     /// this crate cannot know what a stray descriptor refers to.
     DescriptorCountWrong { found: usize },
-    /// An inherited number is not an open descriptor, the enumeration could
-    /// not be performed, or an inherited adoption already owns this process's
-    /// descriptor numbers. A repeated adoption cannot create another owner.
+    /// An inherited number is not open, or descriptor enumeration failed.
     DescriptorsUnusable,
+    /// An inherited adoption already claimed this process's descriptor numbers.
+    /// The claim remains held even after hygiene failure or descriptor retirement.
+    AlreadyAdopted,
     /// A hygiene set failed. Both sets are sets and never checks, so a failure
     /// here is a refusal rather than a report: a step that finds a flag wrong
     /// and continues leaves the process attachable, which is the condition the
@@ -91,7 +92,20 @@ pub struct DecodeSocket {
 ///
 /// The close-on-exec set matters even though this crate forks nothing, because
 /// `execve` clears the flag and the requirement is stated against the last exec.
-pub fn adopt() -> Result<Inherited, EntryFault> {
+///
+/// # Safety
+///
+/// Before this process's first successful inherited ownership claim, the caller
+/// must own fd3 and fd4 exclusively as unwrapped inherited descriptors. No Rust
+/// or foreign owner may close, replace or use them concurrently. A malformed
+/// inherited layout may be refused by validation without transferring ownership.
+/// Once any adopter has claimed the process, further calls only refuse and do
+/// not require ownership of the still-live or reused descriptor numbers.
+///
+/// ```compile_fail
+/// let _ = weaver_spu::channel::adopt();
+/// ```
+pub unsafe fn adopt() -> Result<Inherited, EntryFault> {
     let held = descriptors_beyond_the_standard_streams()?;
     if held != 2 {
         return Err(EntryFault::DescriptorCountWrong { found: held });
@@ -105,10 +119,10 @@ pub fn adopt() -> Result<Inherited, EntryFault> {
     }
 
     claim_inherited_descriptors()?;
-    // SAFETY: both inherited numbers were confirmed open above, and the count
-    // check confirmed exactly two beyond the standard streams. The shared
-    // process-wide claim excludes every other safe inherited adoption path.
-    // Every later use flows from these two values.
+    // SAFETY: the caller transfers exclusive ownership of these inherited raw
+    // descriptors. Validation proves they are open, and the permanent shared
+    // claim excludes every other inherited adoption. Validation alone would
+    // not prove absence of an existing File/OwnedFd owner.
     let lifecycle = unsafe { OwnedFd::from_raw_fd(LIFECYCLE_FD) };
     let decode = unsafe { OwnedFd::from_raw_fd(DECODE_FD) };
 
@@ -130,6 +144,8 @@ static INHERITED_DESCRIPTORS_CLAIMED: AtomicBool = AtomicBool::new(false);
 fn inherited_number_open(fd: RawFd) -> Result<(), EntryFault> {
     // Check the inherited raw number without first manufacturing a BorrowedFd
     // whose safety contract would already require that number to be open.
+    // SAFETY: F_GETFD accepts a raw integer, dereferences no pointer and returns
+    // EBADF for a closed number. It neither borrows nor takes descriptor ownership.
     if unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFD) } < 0 {
         return Err(EntryFault::DescriptorsUnusable);
     }
@@ -140,7 +156,7 @@ fn claim_inherited_descriptors() -> Result<(), EntryFault> {
     INHERITED_DESCRIPTORS_CLAIMED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .map(|_| ())
-        .map_err(|_| EntryFault::DescriptorsUnusable)
+        .map_err(|_| EntryFault::AlreadyAdopted)
 }
 
 /// A set and never a check, per `weaver-organ-channel` section 2.
@@ -328,26 +344,52 @@ impl ClassifySocket {
 /// Adopt the classify process's one end and perform the same sets the
 /// two-end adoption performs, in the same order: count, wrap, close-on-exec,
 /// dumpable clear.
-pub fn adopt_classify() -> Result<ClassifySocket, EntryFault> {
-    adopt_single().map(|end| ClassifySocket { end })
+///
+/// # Safety
+///
+/// Before the first successful inherited ownership claim, fd3 must be an
+/// exclusively owned, unwrapped inherited descriptor, with no concurrent close,
+/// replacement or other Rust/foreign owner. Invalid layouts may refuse before
+/// taking ownership. After a successful claim, retries only refuse.
+///
+/// ```compile_fail
+/// let _ = weaver_spu::channel::adopt_classify();
+/// ```
+pub unsafe fn adopt_classify() -> Result<ClassifySocket, EntryFault> {
+    // SAFETY: this function's caller supplies adopt_single's ownership contract.
+    unsafe { adopt_single() }.map(|end| ClassifySocket { end })
 }
 
 /// Adopt fd3 for the separate STE100 duty, before starting any runtime worker.
 /// The STE100 Channel then verifies connected SEQPACKET identity without cloning
 /// the descriptor or adding an organ envelope.
-pub fn adopt_ste100() -> Result<OwnedFd, EntryFault> {
-    adopt_single()
+///
+/// # Safety
+///
+/// Before the first successful inherited ownership claim, fd3 must be an
+/// exclusively owned, unwrapped inherited descriptor, with no concurrent close,
+/// replacement or other Rust/foreign owner. Invalid layouts may refuse before
+/// taking ownership. After a successful claim, retries only refuse.
+///
+/// ```compile_fail
+/// let _ = weaver_spu::channel::adopt_ste100();
+/// ```
+pub unsafe fn adopt_ste100() -> Result<OwnedFd, EntryFault> {
+    // SAFETY: this function's caller supplies adopt_single's ownership contract.
+    unsafe { adopt_single() }
 }
 
-fn adopt_single() -> Result<OwnedFd, EntryFault> {
+// SAFETY contract: on the first claim, fd3 has no other owner; see both public
+// callers. Invalid layouts refuse before wrapping, and later claims never wrap.
+unsafe fn adopt_single() -> Result<OwnedFd, EntryFault> {
     let held = descriptors_beyond_the_standard_streams()?;
     if held != 1 {
         return Err(EntryFault::DescriptorCountWrong { found: held });
     }
     inherited_number_open(CLASSIFY_FD)?;
     claim_inherited_descriptors()?;
-    // SAFETY: inherited fd3 is open and the only nonstandard descriptor. The
-    // shared process-wide claim excludes a second single- or two-end adoption.
+    // SAFETY: the caller transfers unique ownership of inherited fd3; the open
+    // check and permanent shared claim exclude invalid and repeated wrapping.
     let end = unsafe { OwnedFd::from_raw_fd(CLASSIFY_FD) };
     set_close_on_exec(end.as_fd())?;
     clear_dumpable()?;

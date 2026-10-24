@@ -7,7 +7,9 @@
 pub(crate) mod codec;
 mod content;
 mod declaration;
+pub mod enter;
 mod frame;
+mod lifecycle_refusal;
 mod marks;
 mod observation;
 mod pair;
@@ -23,6 +25,7 @@ pub use codec::*;
 pub use content::*;
 pub use declaration::*;
 pub use frame::*;
+pub use lifecycle_refusal::*;
 pub use marks::*;
 pub use observation::*;
 pub use pair::*;

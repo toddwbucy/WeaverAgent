@@ -1478,3 +1478,6 @@ fn artifact_review_second_pass_shrink_refuses_before_material_is_used() {
     assert_eq!(refusal.code, Ste100AdmissionCode::UnsupportedArtifact);
     assert!(refusal.detail.contains("size changed after precheck"));
 }
+
+#[path = "artifacts_precheck_tests.rs"]
+mod precheck_review_tests;
