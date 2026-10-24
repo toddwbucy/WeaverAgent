@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #282.
+**Landing PR:** #276.
 
-**Version:** 0.31 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.32 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -130,12 +130,22 @@ progress path. [FLOW-2, FLOW-3, CLASS-8]
 **HARNESS-RECORD-LIFETIME.** record.rs::RecordingContext owns Author, Record,
 FlowCoordinator, RetentionBudget and the completion slots for one serving run. Its
 method is author_and_wait(&mut self, ports: &mut PumpPorts, event: AuthoredEvent) ->
-Result<Sequence, RunFailure>. PumpPorts borrows the currently standing lifecycle, gate,
-decode and legacy-label transports and PumpIo. Each absent transport is None. The state
-and STE100 transports are the coordinator's. The pump never reads a second handle for
-one transport. Reason: enter authors load before the current Run constructor, and leave
-authors unload after releasing members. Neither site can require a fully standing Run.
-[FLOW-2, FLOW-3, FLOW-5]
+Result<Sequence, AuthorFailure>. Both resume_author_and_wait and
+resume_claimed_author_and_wait also return Result<Sequence, AuthorFailure>, preserving
+their existing ticket, claim and transport arguments. AuthorFailure is a move-owned
+result containing the RunFailure and an optional returned original AuthoredEvent. It is
+not Clone. A returned original owns no live recorder ticket and has no trace sequence,
+and remains the caller's custody. An absent returned original means the context retains
+that exact original in an existing author slot, or the original has already reached
+Recorded; it never means the original was discarded. RunFailure retains its existing
+failure, wait and nonfatal admission reasons, not event custody. An already-latched
+fatal cause remains immutable and takes precedence over later admission reasons.
+PumpPorts borrows the currently standing lifecycle, gate, decode and legacy-label
+transports and PumpIo. Each absent transport is None. The state and STE100 transports
+are the coordinator's. The pump never reads a second handle for one transport. Reason:
+enter authors load before the current Run constructor, and leave authors unload after
+releasing members. Neither site can require a fully standing Run. [FLOW-2, FLOW-3,
+FLOW-5]
 
 Construct this context when enter establishes the serving recorder and common clock.
 Move it, without reinitializing its clock, tickets, latch or slots, into Run after load.
@@ -166,8 +176,9 @@ alone invokes Author::author and Record::resume. Retire author_identity from ser
 with the seeding turn. Existing diagnostic wrappers remain on their diagnostic arm.
 [FLOW-2, FLOW-3, PROMPT-1, STORE-8]
 
-Every ignored-result site in the disposition table must now propagate RunFailure or
-enter the already-latched teardown. Neither a void helper nor an is_ok test can resume a
+Every ignored-result site in the disposition table must propagate its failure reason or
+enter the already-latched teardown while preserving any returned original in its
+caller's owner. Neither a void helper nor an is_ok test can resume a
 decision after failed or pending authoring. Refactor report_pressure to return an
 optional prepared fault, and submit it from the owning context. Set its reported flag
 only after Recorded. Retire record_enter_ask's record-failed-then-author-fault fallback
@@ -182,8 +193,84 @@ frame, observe deadlines and terminal faults, and wake on trace capacity. It can
 author or release a completion into model work. Reduction occurs only after the pending
 author completes. Every completion's required trace record must complete before its
 effect, including a ledger transition. Thus a pump-generated observation never competes
-for the single pending Event. A second submit is a caller error, reported as
-protocol_failed without discarding the returned Event. [FLOW-2, FLOW-3, FLOW-4, SORT-4]
+for the single pending Event. A second submit is a caller error. When no fatal cause is
+already latched, it latches protocol_failed as the first fatal cause without discarding
+the returned Event. When a fatal cause is already latched, that cause remains unchanged
+and takes precedence over the later caller error. If the context's held caller original
+or immutable first-fatal original prevents taking another original, return that new
+original in AuthorFailure. Never replace either earlier original, clone an event merely
+to fit an error value, allocate an overflow queue, or invent a ticket. Keep the first
+latched failure unchanged; a later rejected call returns that failure with its own
+untouched original. This return grants neither retry nor continuation. [FLOW-2, FLOW-3,
+FLOW-4, SORT-4]
+
+Ownership transfer and recording admission are separate facts. An original accepted into
+the one pending author keeps its allocated ticket and original wait through
+CapacityPending and resume; no returned original may duplicate that pending owner. An
+early owner hold remains unadmitted and may occupy the context's existing single held
+slot. Its caller takes it unchanged before another attempt. If a resumed pending author
+is withdrawn because an existing account owns admission, return that original through
+the same move-owned result when the held slot is occupied, after releasing only that
+attempt's unadmitted preparation and bookkeeping. A withdrawal assigns no trace sequence
+and renews no wait. Existing mandatory account settlement continues; no return permits
+skipping it. [FLOW-2, FLOW-3, FLOW-4, FLOW-5]
+
+**HARNESS-HELD-BOUNDARY.** New owner admission, release, Enter rollback,
+member-capture preparation and Closed refuse while the held caller slot or the
+template-blocked caller slot is occupied, including an original held after release
+began. Return a recoverable Busy refusal when the held original is the blocking
+condition; do not latch protocol_failed for that condition alone. The separate
+second-submit caller-error rule above remains unchanged. [FLOW-2, FLOW-3, FLOW-5]
+
+Use one shared private held-input predicate and reason across these admission roads.
+The Busy reason identifies the occupied caller-held or template-blocked slot; if both
+are occupied, both originals remain owed. The method's existing result family may carry
+that private reason, but may not translate held input into WrongProof, MissingHead or
+TemplateBlocked. In particular, completed_template_enter cannot claim a template
+failure merely because an ordinary caller original is held, and install_place must
+return the same offered proof with Busy rather than claiming it mismatched. Genuine
+incomplete/rejected certification retains its own TemplateBlocked reason. Neither Busy
+nor TemplateBlocked by itself creates a trace refusal or a new wire vocabulary.
+[FLOW-2, FLOW-3, CLASS-8]
+
+Held input at begin_releasing, begin_enter_rollback, close_after_drain and
+prepare_member_capture returns recoverable Busy, not a new fatal ProtocolFailed. Other
+invalid phase, missing proof, wrong bound or unmet protocol preconditions keep their
+existing rules. A held
+refusal leaves phase, pending ticket, exact originals, resources and original deadlines
+unchanged; it neither arms a replacement wait nor starts release or capture. Taking the
+exact originals only removes this hold. A subsequent attempt must still pass all
+ordinary phase, proof, ownership and deadline checks; it is not a promise that retry
+succeeds and it grants no ordinary author retry permission. [FLOW-2, FLOW-3, FLOW-5]
+
+An already latched fatal cause remains first and is returned before a nonfatal held
+reason. Existing clock/deadline and independent failure checks still run where required;
+Busy must not mask an observed failure, renew a bound or revive Failed. Taking an
+original in Failed does not make these healthy boundary APIs available. Independently
+bounded fatal teardown remains required under HARNESS-HALT-BOUND: the existing context
+or caller evidence owner retains each untaken or returned original, settles only real
+owed work, and closes/exits failed at the original cap without claiming successful
+Closed or successful Left. No held-input recovery wait extends that cap, and no original
+is dropped just to satisfy close. [FLOW-2, FLOW-3, FLOW-5]
+
+Existing admitted owners may complete their exact private continuations; held input
+grants none of its own. This rule adds no halt-account member, fabricated ticket,
+implicit submission, overflow queue or successful close that loses an original.
+[FLOW-2, FLOW-3, FLOW-5]
+
+Every caller handles both ownership outcomes explicitly. A returned original goes back
+to that caller's existing event or stopped-evidence owner; a caller may not use an error
+conversion that drops it. In particular, no From<AuthorFailure> for RunFailure is
+permitted: propagation with ? must not silently discard a returned original.
+Compile-time negative pins must prove that AuthorFailure is not Clone and RunFailure
+does not implement From<AuthorFailure>. Input offered/refusal/turn/message authoring,
+mark-refusal authoring, repair authoring and retained retries preserve their original
+stage and source identities. They mark an attempt started only when the context actually
+takes custody, and never rebuild a returned event from current state. After failure,
+returned custody joins the caller's bounded teardown under the existing deadline. It
+neither enlarges the fixed halt-account schema nor adds a trace record. Halt reporting
+still names only the real pending ticket; an unaccepted original must not be represented
+as a ticketed AuthorAtHalt. [FLOW-2, FLOW-3, FLOW-5, FLOW-6]
 
 The first fatal account uses the trace writer's fault reserve. It may bypass an event
 that has no trace identity, after stopping the tap. Record the pending ticket in the
@@ -818,7 +905,7 @@ a fresh observation or blocks teardown on that read. [FLOW-3, FLOW-5]
 | Gate, cut, decision or undisputed control bound expires | Corresponding bound reason, barrier | Wait stage, original start/deadline and observation time, source or input where known |
 | Whole-copy backlog still blocks next model request at decision_wait expiry | queue_limit, barrier | Waiting copy, original decision deadline and current backlog sample, never an immediate-full failure |
 | Harness counter overflow | protocol_failed, counter | Counter domain in detail, current source/request where known, no wrapped ID |
-| Busy misuse, invalid ticket or unknown barrier source | protocol_failed, author or barrier | Pending author or supplied source identity, detail names the failed check |
+| Busy misuse (excluding the HARNESS-HELD-BOUNDARY recovery refusal), invalid ticket or unknown barrier source | protocol_failed, author or barrier | Pending author or supplied source identity, detail names the failed check |
 | Trace admission, render, append, queue or sink failure | trace_failed, author | Pending author where present, source event only after admission. Keep existing StreamWriteFailed fault case |
 
 R20-6 keeps missing snapshot/finished answers on the retry path after PERSIST-CLEANUP.
