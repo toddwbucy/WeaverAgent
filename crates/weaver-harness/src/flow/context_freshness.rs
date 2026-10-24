@@ -118,7 +118,7 @@ impl RecordingContext {
             || self.place_blocks_external()
             || self.measure.is_some()
             || self.templates_block_content()
-            || self.template_blocked_author.is_some()
+            || self.caller_author_held()
             || self.flow.pending_control().is_some()
             || self.flow.pending_check().is_some()
             || self.flow.operation_completion().is_some()

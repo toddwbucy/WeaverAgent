@@ -599,7 +599,7 @@ fn boot_pairs_foreign_prior_open_and_retired_enter_do_not_admit() {
 
 #[test]
 fn boot_pairs_owns_read_author_and_waits_until_completion_is_taken() {
-    let mut fx = RepairFixture::new(vec![]);
+    let mut fx = RepairFixture::new(vec![old_pair("held-author-prior")]);
     fx.begin();
     let run = fx.run();
     let event = AuthoredEvent {
@@ -612,13 +612,18 @@ fn boot_pairs_owns_read_author_and_waits_until_completion_is_taken() {
             serde_json::value::to_raw_value(&serde_json::json!({"other":"owner"})).unwrap(),
         )),
     };
+    let Some(Payload::ModelMeasurement(raw)) = &event.payload else {
+        unreachable!()
+    };
+    let pointer = raw.get().as_ptr();
+    let original = format!("{event:?}");
     assert_eq!(
         run.context
             .author_and_wait(&mut ports(&mut run.clock), event)
             .unwrap_err(),
         RunFailure::BootPairsOwned
     );
-    assert!(run.context.refused_author().is_some());
+    assert!(run.context.held_author().is_some());
     for active_read in [false, true] {
         if active_read {
             fx.until_held(Hold::Release(1));
@@ -674,6 +679,15 @@ fn boot_pairs_owns_read_author_and_waits_until_completion_is_taken() {
         run.context.take_boot_pairs(&mut run.clock).unwrap(),
         Some(BootPairsCompletion::Repaired(_))
     ));
+    // Both reads and the actual abandoned-pair terminal completed while the
+    // caller's exact unadmitted original remained owned. New external work
+    // still waits for that original to return.
+    let returned = run.context.take_held_author().unwrap();
+    let Some(Payload::ModelMeasurement(raw)) = &returned.payload else {
+        unreachable!()
+    };
+    assert_eq!(raw.get().as_ptr(), pointer);
+    assert_eq!(format!("{returned:?}"), original);
     assert!(
         run.context
             .begin_read(s::ReadSelector::OpenPairs {}, None, &mut run.clock)

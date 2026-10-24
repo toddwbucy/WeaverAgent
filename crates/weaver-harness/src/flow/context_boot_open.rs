@@ -387,7 +387,7 @@ impl RecordingContext {
             || self.templates_block_content()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
-            || self.template_blocked_author.is_some()
+            || self.caller_author_held()
             || self.barrier.pending().is_some()
             || self.barrier.pending_author().is_some()
             || self.flow.has_pending_record()
@@ -876,6 +876,9 @@ impl RecordingContext {
     ) -> Result<(), RunFailure> {
         if self.boot_open.is_none() {
             return Err(RunFailure::BootOpenOwned);
+        }
+        if self.caller_author_held() {
+            return Err(self.failure.clone().unwrap_or(RunFailure::BootOpenOwned));
         }
         self.cancel_boot_open()?;
         if let Some(failure) = &self.failure {

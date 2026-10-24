@@ -1,6 +1,9 @@
 //! Load-template certification through real packet and recorder owners.
 //! The compiled fixture inventory and scripted checker are not language qualification.
 
+#[path = "context_template_return_review_tests.rs"]
+mod return_review_tests;
+
 use super::super::coordinator::TransportSource;
 use super::super::ste100_channel::{Fault, Receive, Tag};
 use super::super::templates::{CompiledInventory, TemplateCertificate};

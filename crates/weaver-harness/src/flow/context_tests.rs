@@ -620,7 +620,14 @@ fn initial_author_wait_never_promotes_an_invalid_original() {
             ));
         }
         assert_eq!(
-            format!("{:?}", fx.context.refused_author.as_ref().unwrap()),
+            format!(
+                "{:?}",
+                if kind == Kind::ToolCallStarted {
+                    fx.context.held_author().unwrap()
+                } else {
+                    fx.context.refused_author().unwrap()
+                }
+            ),
             format!("{original:?}")
         );
         assert!(fx.context.waiting_content.is_none());

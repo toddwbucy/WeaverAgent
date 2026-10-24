@@ -59,7 +59,7 @@ impl RecordingContext {
     pub(in crate::flow) fn begin_cut_and_reload(
         &mut self,
         prefix: PreparedPrefix,
-        tail: ReloadTail,
+        mut tail: ReloadTail,
         io: &mut impl PumpIo,
     ) -> Result<(), PlaceBeginError<(PreparedPrefix, ReloadTail)>> {
         let failure = self.live(io).err();
@@ -77,6 +77,7 @@ impl RecordingContext {
                     j.check_projection(&prefix.projection).is_ok()
                 }
             })
+            && self.consumed_reload_sources_valid(&tail)
             && tail.items.iter().all(|item| match item {
                 ReloadItem::Held(u) => u.belongs_to(self),
                 ReloadItem::Pending(p) => {
@@ -106,10 +107,38 @@ impl RecordingContext {
                 staged: None,
             });
         }
+        // Every consumed slot was checked against the same ledger and its
+        // exact retained Held receipt before mutating any custody. The Held
+        // material owns the commit proof; these subscriptions are now redundant.
+        while let Some((index, pending)) = tail.filed_sources.pop() {
+            let PendingReloadText {
+                origin,
+                source,
+                lease,
+            } = pending;
+            if let Err((lease, error)) = self.flow.release_source_lease(lease) {
+                tail.filed_sources.push((
+                    index,
+                    PendingReloadText {
+                        origin,
+                        source,
+                        lease,
+                    },
+                ));
+                let failure =
+                    self.place_fault(io, format!("reload consumed receipt cleanup: {error}"));
+                return Err(PlaceBeginError {
+                    input: (prefix, tail),
+                    refusal: PlaceError::WrongProof,
+                    failure: Some(failure),
+                    staged: None,
+                });
+            }
+        }
         self.barrier.set_place_owed(true);
         self.reload = Some(ReloadTransaction {
-            prefix,
-            tail,
+            prefix: Some(prefix),
+            tail: Some(tail),
             units: vec![],
             frozen_sources: vec![],
             bound: None,
@@ -121,6 +150,7 @@ impl RecordingContext {
             author: None,
             recorded_authors: vec![],
             staged: None,
+            cut_confirmed: false,
             driving: false,
             cancelled: false,
             done: false,
@@ -134,6 +164,28 @@ impl RecordingContext {
         });
         Ok(())
     }
+    fn consumed_reload_sources_valid(&self, tail: &ReloadTail) -> bool {
+        tail.filed_sources
+            .windows(2)
+            .all(|pair| pair[0].0 < pair[1].0)
+            && tail.filed_sources.iter().all(|(index, pending)| {
+                Arc::ptr_eq(&pending.origin, &self.read_origin)
+                    && self
+                        .flow
+                        .source_receipt_status(&pending.lease, &pending.source)
+                        == Ok(LeaseSlotStatus::Taken)
+                    && tail.items.get(*index).is_some_and(|item| match item {
+                        ReloadItem::Held(unit) => {
+                            unit.belongs_to(self)
+                                && unit
+                                    .filed_source()
+                                    .is_some_and(|source| source.source() == &pending.source)
+                        }
+                        ReloadItem::Pending(_) => false,
+                    })
+            })
+    }
+
     pub(in crate::flow) fn cancel_reload(
         &mut self,
         _io: &mut impl PumpIo,
@@ -186,9 +238,9 @@ impl RecordingContext {
                 .boot_journal
                 .as_ref()
                 .unwrap()
-                .reprepare_queued(&self.reload.as_ref().unwrap().prefix)
+                .reprepare_queued(self.reload.as_ref().unwrap().live_prefix())
             {
-                Ok(fresh) => self.reload.as_mut().unwrap().prefix = fresh,
+                Ok(fresh) => self.reload.as_mut().unwrap().prefix = Some(fresh),
                 Err(_) => {
                     self.refuse_reload_placement(
                         PlacementCode::InvalidCut,
@@ -288,7 +340,7 @@ impl RecordingContext {
             }
             let work = self.reload.as_ref().unwrap();
             let reply = work.received.as_ref().unwrap().reply();
-            let counts = match (work.prefix.method.unwrap(), reply) {
+            let counts = match (work.live_prefix().method.unwrap(), reply) {
                 (
                     CutMethod::Flush,
                     DecodeReply::Answer(TokenAnswer::Flushed {
@@ -399,9 +451,9 @@ impl RecordingContext {
                     .boot_journal
                     .as_ref()
                     .unwrap()
-                    .refresh_drained_prefix(&self.reload.as_ref().unwrap().prefix)
+                    .refresh_drained_prefix(self.reload.as_ref().unwrap().live_prefix())
                 {
-                    Ok(fresh) => self.reload.as_mut().unwrap().prefix = fresh,
+                    Ok(fresh) => self.reload.as_mut().unwrap().prefix = Some(fresh),
                     Err(_) => {
                         self.refuse_reload_placement(
                             PlacementCode::StalePosition,
@@ -415,7 +467,10 @@ impl RecordingContext {
                 let work = self.reload.as_ref().unwrap();
                 let journal = self.boot_journal.as_ref().unwrap();
                 if journal
-                    .validate_selection(&work.prefix.projection, work.units.iter().map(Arc::as_ref))
+                    .validate_selection(
+                        &work.live_prefix().projection,
+                        work.units.iter().map(Arc::as_ref),
+                    )
                     .is_err()
                 {
                     self.refuse_reload_placement(
@@ -426,14 +481,14 @@ impl RecordingContext {
                     )?;
                     return Ok(PlaceProgress::Progress);
                 }
-                let mut delta = work.prefix.rebuild();
+                let mut delta = work.live_prefix().rebuild();
                 for unit in &work.units {
                     delta.extend(unit.messages().iter().cloned());
                 }
                 let request = MeasureRequest {
-                    assembly_id: work.prefix.assembly,
-                    revision: work.prefix.revision(),
-                    keep: work.prefix.n(),
+                    assembly_id: work.live_prefix().assembly,
+                    revision: work.live_prefix().revision(),
+                    keep: work.live_prefix().n(),
                     delta,
                     tool_schemas: self.place_engine.as_ref().unwrap().schemas.clone(),
                     turn: None,
@@ -501,7 +556,7 @@ impl RecordingContext {
             .boot_journal
             .as_ref()
             .unwrap()
-            .check_projection(&work.prefix.projection)
+            .check_projection(&work.live_prefix().projection)
             .is_err()
         {
             self.refuse_reload_placement(
@@ -512,7 +567,7 @@ impl RecordingContext {
             )?;
             return Ok(PlaceProgress::Progress);
         }
-        let directive = match work.prefix.method.unwrap() {
+        let directive = match work.live_prefix().method.unwrap() {
             CutMethod::Flush => TokenDirective::Flush { keep: facts.keep },
             CutMethod::Elide if facts.keep == facts.resident => {
                 self.confirm_reload_cut(facts.resident, facts.keep, false, ports.io)?;
@@ -541,13 +596,13 @@ impl RecordingContext {
             return Err(RunFailure::PlaceOwned);
         };
         let fatal = matches!(refusal, TokenRefusal::NotOpen | TokenRefusal::OutOfOrder);
-        let asked = match work.prefix.method.unwrap() {
+        let asked = match work.live_prefix().method.unwrap() {
             CutMethod::Flush => TokenAsk::Flush {
-                keep: work.prefix.n(),
+                keep: work.live_prefix().n(),
             },
             CutMethod::Elide => TokenAsk::Elide {
-                from: work.prefix.n(),
-                to: work.prefix.resident_before(),
+                from: work.live_prefix().n(),
+                to: work.live_prefix().resident_before(),
             },
         };
         let record = RefusalRecord::Decode {
@@ -584,7 +639,7 @@ impl RecordingContext {
         work.reload_code = Some(reload_code);
         work.reload_detail = Some(detail.into());
         let record = RefusalRecord::Placement {
-            assembly_id: work.prefix.assembly,
+            assembly_id: work.live_prefix().assembly,
             code,
             detail: detail.into(),
         };
@@ -606,12 +661,15 @@ impl RecordingContext {
     }
     fn reload_tail_ready(&mut self, io: &mut impl PumpIo) -> Result<bool, RunFailure> {
         let work = self.reload.as_mut().unwrap();
-        for index in 0..work.tail.items.len() {
+        for index in 0..work.live_tail().items.len() {
             if index < work.units.len() {
                 continue;
             }
-            match &work.tail.items[index] {
-                ReloadItem::Held(unit) => work.units.push(unit.clone()),
+            match &work.live_tail().items[index] {
+                ReloadItem::Held(unit) => {
+                    let held = unit.clone();
+                    work.units.push(held);
+                }
                 ReloadItem::Pending(pending) => {
                     let status = self
                         .flow
@@ -671,7 +729,7 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         let work = self.reload.as_ref().unwrap();
-        let method = work.prefix.method.unwrap();
+        let method = work.live_prefix().method.unwrap();
         let actual = if mutated {
             work.received
                 .as_ref()
@@ -698,8 +756,8 @@ impl RecordingContext {
         let measured = matches!(work.measurement.as_ref(),Some(MeasureCompletion::Measured(m)) if m.facts().resident==before&&m.facts().keep==after);
         if !actual
             || !measured
-            || before != work.prefix.resident_before()
-            || after != work.prefix.n()
+            || before != work.live_prefix().resident_before()
+            || after != work.live_prefix().n()
         {
             return Err(self.place_fault(
                 io,
@@ -707,7 +765,7 @@ impl RecordingContext {
             ));
         }
         let checked = CheckedCut {
-            prefix: &work.prefix,
+            prefix: work.live_prefix(),
             before,
             after,
         };
@@ -726,17 +784,18 @@ impl RecordingContext {
         };
         let facts = *measured.facts();
         let identity = Arc::new(());
-        let method = work.prefix.method.unwrap();
+        let method = work.live_prefix().method.unwrap();
         work.staged = Some(Staged {
             identity: identity.clone(),
             origin: self.read_origin.clone(),
-            assembly: work.prefix.assembly,
+            assembly: work.live_prefix().assembly,
             units: work.units.clone(),
             measured: facts,
             resident_after: after,
             recorded: None,
             method,
         });
+        work.cut_confirmed = true;
         self.place_engine.as_mut().unwrap().staged = Some(identity);
         if mutated {
             let (kind, payload) = match method {
@@ -767,10 +826,10 @@ impl RecordingContext {
         }
         let limits = self.place_engine.as_ref().unwrap().limits();
         let record = t::PlacementRecord {
-            assembly_id: work.prefix.assembly.0.into(),
+            assembly_id: work.live_prefix().assembly.0.into(),
             phase: t::PlacementPhase::Cut,
             context: None,
-            cut: work.prefix.cut.as_ref().map(cut_mirror),
+            cut: work.live_prefix().cut.as_ref().map(cut_mirror),
             method: Some(method_mirror(method)),
             n: after,
             prefix_tokens: facts.prefix_tokens,
@@ -782,7 +841,7 @@ impl RecordingContext {
             unit_map: vec![],
             message_ids: vec![],
             assistant_message_id: None,
-            recomputed_messages: (work.prefix.rebuild().len() as u64).into(),
+            recomputed_messages: (work.live_prefix().rebuild().len() as u64).into(),
             wait_ns: self.last_ns.saturating_sub(work.started_ns.unwrap()).into(),
             open_evidence: None,
         };
@@ -800,20 +859,38 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<ReloadCompletion>, RunFailure> {
         self.live(io)?;
-        if !self.reload.as_ref().is_some_and(|w| w.done) {
+        if self.phase != RecordingPhase::Entered || !self.reload.as_ref().is_some_and(|w| w.done) {
             return Ok(None);
         }
         self.consume_place_completion()?;
         let mut work = self.reload.take().unwrap();
         self.barrier.set_place_owed(self.place_owed());
         self.deadlines.disarm(PumpDeadline::Cut);
-        if !work.cancelled
-            && let Some(staged) = work.staged.take()
+        // A confirmed cut returns its actual capability directly, including
+        // turn-scoped Stop. It must not be hidden inside a trace-only account.
+        if work.incomplete.is_none()
+            && work
+                .staged
+                .as_ref()
+                .is_some_and(|staged| staged.recorded.is_some())
         {
-            return Ok(Some(ReloadCompletion::Staged(staged)));
+            let staged = work.staged.take().unwrap();
+            return Ok(Some(if work.cancelled {
+                ReloadCompletion::CancelledStaged {
+                    staged,
+                    account: PlaceAccount {
+                        phase: self.phase,
+                        work: AccountWork::Reload(Box::new(work)),
+                        measure: None,
+                    },
+                }
+            } else {
+                ReloadCompletion::Staged(staged)
+            }));
         }
         let cancelled = work.cancelled;
         let account = PlaceAccount {
+            phase: self.phase,
             work: AccountWork::Reload(Box::new(work)),
             measure: None,
         };

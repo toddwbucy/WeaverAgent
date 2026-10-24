@@ -2181,3 +2181,9 @@ fn place_queued_cut_preserves_actual_interrupted_input_turn_before_turn_started(
     assert!(receive(fx.peer.as_fd()).is_none());
     assert!(fx.run().context.failure().is_none());
 }
+
+#[path = "context_place_native_return_tests.rs"]
+mod return_review_tests;
+
+#[path = "context_place_drain_review_tests.rs"]
+mod drain_review_tests;
