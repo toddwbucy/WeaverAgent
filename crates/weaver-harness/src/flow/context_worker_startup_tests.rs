@@ -1298,3 +1298,20 @@ scenario!(
     worker_emission_composition_answer_order,
     "input-generation-emission-answer-order"
 );
+
+scenario!(
+    worker_emission_composition_completed_observe_sorted,
+    "input-generation-emission-completed-observe-sorted"
+);
+scenario!(
+    worker_emission_composition_completed_observe_unselected,
+    "input-generation-emission-completed-observe-unselected"
+);
+scenario!(
+    worker_emission_composition_completed_observe_sort_refusal,
+    "input-generation-emission-completed-observe-sort-refusal"
+);
+scenario!(
+    worker_emission_composition_completed_observe_repair_refusal,
+    "input-generation-emission-completed-observe-repair-refusal"
+);

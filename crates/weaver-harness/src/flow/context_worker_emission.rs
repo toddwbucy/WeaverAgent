@@ -309,8 +309,12 @@ impl EmissionWork {
                 let progress = context.advance_outbound(ports)?;
                 if let Some(result) = context.take_outbound(ports.io)? {
                     self.stage = match &result {
-                        OutboundCompletion::Sorted(_) => EmissionStage::Sorted,
+                        OutboundCompletion::Sorted(_) => {
+                            context.complete_wait(PumpDeadline::Decision);
+                            EmissionStage::Sorted
+                        }
                         OutboundCompletion::Refused { .. } => {
+                            context.complete_wait(PumpDeadline::Decision);
                             self.detail = Some("outbound instruction refused".into());
                             EmissionStage::Refused
                         }

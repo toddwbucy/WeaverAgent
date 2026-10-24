@@ -237,6 +237,49 @@ fn sequence(row: &serde_json::Value) -> u64 {
     row["sequence"].as_str().unwrap().parse().unwrap()
 }
 
+fn await_decision_bound(
+    input: &mut FoundationInput<'_>,
+    member: &mut Member,
+    clock: &mut FakePumpIo,
+    mode: &str,
+) -> AbsoluteBound {
+    for _ in 0..2000 {
+        let progress = step(input, member, clock, mode);
+        if let Some(bound) = input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision)
+        {
+            return bound;
+        }
+        assert_eq!(progress, FoundationInputProgress::Pending);
+    }
+    panic!("the exercised operation must arm a real Decision wait");
+}
+
+fn observe_completed_after_bound(
+    guard: &mut Guard<'_>,
+    clock: &mut FakePumpIo,
+    socket: &Path,
+    bound: AbsoluteBound,
+) {
+    clock.advance_to(bound.deadline_ns() + 1).unwrap();
+    super::super::tests::observe(guard, clock, socket);
+    let input = guard.input.as_ref().unwrap();
+    assert!(input.serving.owner.context.failure().is_none());
+    assert_eq!(
+        input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision),
+        None
+    );
+}
+
 pub(in crate::flow::context::worker_startup) fn exercise(
     serving: FoundationServing<'_>,
     member: &mut Member,
@@ -308,6 +351,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         return;
     }
     if mode.contains("restatement") || mode.contains("repair-refusal") {
+        let completed_bound = mode
+            .contains("completed-observe")
+            .then(|| await_decision_bound(input, member, clock, mode));
         let target = if mode.contains("repair-refusal") {
             FoundationInputProgress::OperationRefused
         } else {
@@ -324,6 +370,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             assert!(input.serving.owner.certificate.is_some());
         }
         assert_eq!(std::fs::read(root.join("appended.json")).unwrap(), before);
+        if let Some(bound) = completed_bound {
+            observe_completed_after_bound(&mut guard, clock, socket, bound);
+        }
         stop(&mut guard, member, clock, mode, socket, root);
         let rows = trace(reader);
         assert_eq!(
@@ -551,6 +600,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     }
     let input = guard.input.as_mut().unwrap();
     let refused = invalid || mode.contains("sort-refusal") || mode.contains("no-sort");
+    let completed_bound = mode
+        .contains("completed-observe")
+        .then(|| await_decision_bound(input, member, clock, mode));
     until(
         input,
         member,
@@ -583,6 +635,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         if mode.contains("sort-refusal") {
             assert!(rows.iter().any(|r| r["kind"] == "fault"));
         }
+        if let Some(bound) = completed_bound {
+            observe_completed_after_bound(&mut guard, clock, socket, bound);
+        }
         stop(&mut guard, member, clock, mode, socket, root);
         assert_terminals(reader, 2);
         return;
@@ -602,7 +657,10 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     };
     assert_eq!(sorted.acts(), expected);
     guard.input = Some(sorted.into_service());
-    if mode.ends_with("stop-sorted") {
+    if let Some(bound) = completed_bound {
+        observe_completed_after_bound(&mut guard, clock, socket, bound);
+    }
+    if mode.ends_with("stop-sorted") || completed_bound.is_some() {
         stop(&mut guard, member, clock, mode, socket, root);
         assert_terminals(reader, 2);
     }

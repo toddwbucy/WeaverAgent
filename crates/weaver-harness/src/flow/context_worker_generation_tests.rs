@@ -721,6 +721,7 @@ pub(super) fn observe(guard: &mut Guard<'_>, clock: &mut FakePumpIo, socket: &Pa
     use weaver_types::state_flow::enter::{
         ObservationAnswer, ObservationContent, ObservationEnvelope,
     };
+    let progress_before = guard.input.as_ref().unwrap().progress();
     let bound = guard
         .input
         .as_ref()
@@ -729,8 +730,7 @@ pub(super) fn observe(guard: &mut Guard<'_>, clock: &mut FakePumpIo, socket: &Pa
         .owner
         .context
         .deadlines
-        .get(PumpDeadline::Decision)
-        .unwrap();
+        .get(PumpDeadline::Decision);
     let peer = dial(socket);
     let request = OrganEnvelope {
         exchange: weaver_types::ExchangeId {
@@ -770,9 +770,9 @@ pub(super) fn observe(guard: &mut Guard<'_>, clock: &mut FakePumpIo, socket: &Pa
             .context
             .deadlines
             .get(PumpDeadline::Decision),
-        Some(bound)
+        bound
     );
-    assert_eq!(input.progress(), FoundationInputProgress::Pending);
+    assert_eq!(input.progress(), progress_before);
     let answer = ObservationEnvelope::decode(&read_packet(&peer).unwrap()).unwrap();
     assert_eq!(answer.exchange, request.exchange);
     assert!(matches!(

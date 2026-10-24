@@ -2,6 +2,7 @@
 
 Date filed: 2026-10-23
 Branch: `code/state-worker-outbound-composition`
+PR: #308
 Issue: #146
 Parent: #307 `e23f318273ecb9ac2388e04dac465ce4d4589c07`
 Status: completed implementation slice for draft review; goal incomplete.
@@ -31,7 +32,7 @@ Implements, graded by the author against merged authority:
 | Spec 02 section 6 OUTPUT-UNIT, DECISION-BARRIER, REPAIR, EFFECTIVE-EMISSION and RECALL-REFUSAL | Conforms for consuming the original complete checked output, ordinary effective release, held recorded restatement, runtime instruction refusal and Stop accounting. Correction placement/decode/re-entry and exhaustion through that composed decoder remain owed. |
 | Spec 08 SUBJECTS and OUTBOUND | Conforms for checked effective binding ordinals, exact compound/UTF-8 noun bytes, caller-selected ordered acts, certified template filing and trace-before-use. Corrected references remain carried by the private primitive; this act does not claim a composed correction circuit. |
 | Spec 05 PAIR-IDENTITY, PAIR-OPEN, PAIR-END, COMPLETED-PAIR and PAIR-FILE | Conforms for the exercised non-dispatch join, original CallIds/StatementRefs, exact terminal filings and both call receipts before Stop closes. Execution remains a later explicit operation. |
-| HARNESS-OWNERS, HARNESS-AUTHOR and HARNESS-PUMP | Conforms for retained generation/repair/sort ownership, common transport progress, original Decision bounds, runtime faults and root EOF during Stop. General nested lifecycle and failure teardown remain owed. |
+| HARNESS-OWNERS, HARNESS-AUTHOR, HARNESS-PUMP and HARNESS-CLOCK | Conforms for retained generation/repair/sort ownership, common transport progress, completion of recorded Decision waits, original cancellation bounds, runtime faults and root EOF during Stop. General nested lifecycle and failure teardown remain owed. |
 | Harness Spec sections 2.2 and 6; harness-gate contract sections 1-3; admin-harness contract sections 2-4 | Conforms for the corrected GateReady/aggregate Ready seam and the exercised Stop/Observe boundary. Complete serving lifecycle remains owed. |
 
 Approved unmerged proposals remain held. Existing serving stays selected.
@@ -68,26 +69,51 @@ requests receive their exact stopped terminals and actual filing receipts before
 the world close or admin answer. Earlier sort records, runtime faults and all
 original evidence remain retained. Root EOF does not revoke an accepted Stop.
 
+## Decision completion review correction
+
+The Planner's corrected review 5635948652 and Codex thread 4365400570 identify
+one blocking omission in the initial head `e882f988`: the composition did not
+retire its Decision wait after taking a completed Sorted or runtime Refused
+result. Spec 02 section 6 DECISION-BARRIER and HARNESS-CLOCK govern this wait.
+The plan-update execution-disarms rule does not apply to this completed result.
+
+Both non-cancelled outbound arms now complete the wait after the existing owner
+proves the recorded disposition and required filing. Cancelled still keeps its
+original bound through pair settlement. The same-class sweep found that repair
+Refused already finishes the wait before exposing its ready refusal, and taking
+repair Exhausted already finishes it. Immediate admission and recorded expansion
+refusals also already finish their wait.
+
+Four new composed circuits hold selected Sorted, unselected Sorted, runtime
+Refused and repair Refused past the actual prior deadline, then complete root
+Observe and Stop. Before the correction, the first three fail specifically with
+DecisionBound and repair Refused passes. The existing exhaustion test now holds
+its completed account past its prior deadline and reads the pair through the live
+context. Separate compiled removals of each of the four disarm sites make their
+corresponding test fail with DecisionBound. All source is restored afterward.
+
 ## Verification
 
 All Cargo was serial with `--locked`, lock gate first, and private target
 `/tmp/weaver-146-boot-composition-target`.
 
-- Harness: 1,946 passed (including 22 doctests), 179 ignored in the normal Cargo
+- Harness after the correction: 1,946 passed (including 22 doctests), 183 ignored in the normal Cargo
   gate. Counts exclude duplicate summaries from fixture child re-execution.
-- All 29 new emission circuits and the new aggregate GateReady negative circuit
+- All 33 emission circuits and the new aggregate GateReady negative circuit
   pass separately, alongside all 131 prior generation/Stop/Observe/input/startup
-  circuits. The 161 exercised delegated cases leave 18 inherited harness ignores.
-- The production gate's targeted Raise/Lower test passes.
-- Fifteen compiled protective mutations fail as intended. All 603 workspace Rust
-  source hashes are restored and rebuilt; the exact controls are listed below.
-- External compiler pins accept the consuming public handoff and reject private
+  circuits. The 165 exercised delegated cases leave 18 inherited harness ignores.
+- Four focused Decision-completion mutations fail as intended. All 603 workspace
+  Rust source hashes are restored and rebuilt before the final gates.
+- At initial head `e882f988`, the production gate's targeted Raise/Lower test and
+  fifteen separate protective mutations pass their intended checks. These are
+  retained initial-head evidence; they were not rerun for the deadline correction.
+- At that initial head, external compiler pins accept the consuming public handoff and reject private
   input access (E0616), borrowing it to consume (E0507), Clone and Default (E0277).
 - Affected harness clippy with warnings denied, formatting, initial/final lock,
   diff and three DocsMirror checks pass. Full regression and delegated suites ran
   after restoration, using the rebuilt source.
 
-The final compiled controls below each fail their named circuit. `emission/`
+The initial-head compiled controls below each fail their named circuit. `emission/`
 means `flow::context::worker_startup::tests::worker_emission_composition_`;
 `gate/` means `flow::context::boot_composition::gate_startup::tests::gate_startup_composition_`.
 
