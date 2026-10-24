@@ -224,10 +224,13 @@ impl RepairAccount {
 
 #[derive(Debug)]
 pub(in crate::flow) struct RestatementRequest {
+    nonce: Arc<()>,
     source: SourceBlockId,
     attempt: DecimalU64,
     instruction: TemplateExpansion,
     recorded: SourcePosition,
+    pub(super) lease: Option<crate::flow::ledger::SourceLease>,
+    pub(super) filed: Option<crate::flow::ledger::SourceDisposition>,
 }
 impl RestatementRequest {
     pub(in crate::flow) fn source(&self) -> &SourceBlockId {
@@ -691,11 +694,27 @@ impl RepairLedger {
             .push(recorded.clone());
         self.stage = Stage::Awaiting;
         Ok(RestatementRequest {
+            nonce: Arc::clone(&self.account.as_ref().unwrap().nonce),
             source: self.context().source.clone(),
             attempt: self.attempt(),
             instruction,
             recorded,
+            lease: None,
+            filed: None,
         })
+    }
+
+    /// A placement continuation belongs to this exact issued attempt, even
+    /// when another run has identical serialized source and instruction IDs.
+    pub(super) fn owns_restatement(&self, request: &RestatementRequest) -> bool {
+        self.require(Stage::Awaiting).is_ok()
+            && self
+                .account
+                .as_ref()
+                .is_some_and(|account| Arc::ptr_eq(&account.nonce, &request.nonce))
+            && request.source == self.context().source
+            && request.attempt == self.attempt()
+            && self.context().instructions.last() == Some(&request.recorded)
     }
 
     #[allow(clippy::result_large_err)]

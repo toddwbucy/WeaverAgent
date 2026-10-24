@@ -49,6 +49,25 @@ pub fn outbound<'a>(
     }
     input
 }
+pub fn place_restatement<'a>(
+    mut input: Box<FoundationInput<'a>>,
+    label: String,
+    method: weaver_types::state_flow::CutMethod,
+) -> Box<FoundationInput<'a>> {
+    if input.place_restatement(label, method).is_ok() {
+        drive(&mut input);
+        if input.close_correction_refusal().is_ok() {
+            drive(&mut input);
+        }
+    }
+    input
+}
+pub fn generate_correction(mut input: Box<FoundationInput<'_>>) -> Box<FoundationInput<'_>> {
+    if input.generate_correction().is_ok() {
+        drive(&mut input);
+    }
+    input
+}
 fn drive(input: &mut FoundationInput<'_>) {
     while input.progress() == FoundationInputProgress::Pending {
         input.advance();

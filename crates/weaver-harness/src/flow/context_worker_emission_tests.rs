@@ -18,7 +18,7 @@ use weaver_traits::{ContentBlock, ToolCall};
 use weaver_types::state_flow as s;
 use weaver_types::{LifecycleAnswer, LifecycleDirective};
 
-static FAMILY: FoundationRestatement = FoundationRestatement::new("fixture.restatement");
+pub(super) static FAMILY: FoundationRestatement = FoundationRestatement::new("fixture.restatement");
 static MISSING: FoundationRestatement = FoundationRestatement::new("fixture.missing");
 
 #[test]
@@ -58,7 +58,7 @@ fn author_failure_worker_emission_keeps_exact_refusal_after_cancel() {
     assert!(!work.refusal_started);
     assert!(work.refusal_record.is_none());
     assert!(work.refusal_author.is_none());
-    work.cancel(&mut fx.context, ports.io).unwrap();
+    work.cancel(&mut fx.context, None, ports.io).unwrap();
     assert!(work.stage == EmissionStage::RefusalAuthor);
     assert_eq!(
         work.advance(&mut None, &mut None, &mut fx.context, &mut ports),
@@ -147,7 +147,7 @@ fn text(words: &str) -> ContentBlock {
     ContentBlock::Text { text: words.into() }
 }
 pub(in crate::flow::context) fn content(mode: &str) -> Vec<ContentBlock> {
-    if mode.ends_with("empty") {
+    if mode.ends_with("empty") && !mode.contains("correction") {
         return vec![];
     }
     if mode.ends_with("bindings") {
@@ -155,7 +155,10 @@ pub(in crate::flow::context) fn content(mode: &str) -> Vec<ContentBlock> {
     }
     vec![
         text(
-            if mode.contains("restatement") || mode.contains("repair-refusal") {
+            if mode.contains("restatement")
+                || mode.contains("repair-refusal")
+                || mode.contains("correction")
+            {
                 "Read bad."
             } else {
                 "Read blue file."
@@ -273,7 +276,7 @@ pub(in crate::flow::context) fn reply(request: &s::Ste100Request, mode: &str) ->
         result,
     }
 }
-fn selection(view: FoundationEmission<'_>) -> Vec<SortAct> {
+pub(super) fn selection(view: FoundationEmission<'_>) -> Vec<SortAct> {
     let mut acts: Vec<_> = view
         .requests()
         .iter()
@@ -296,7 +299,7 @@ fn selection(view: FoundationEmission<'_>) -> Vec<SortAct> {
     }
     acts
 }
-fn sequence(row: &serde_json::Value) -> u64 {
+pub(super) fn sequence(row: &serde_json::Value) -> u64 {
     row["sequence"].as_str().unwrap().parse().unwrap()
 }
 
@@ -392,6 +395,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     );
     assert_eq!(input.progress(), FoundationInputProgress::Generated);
     let before = std::fs::read(root.join("appended.json")).unwrap();
+    if mode.contains("correction") {
+        return super::correction::tests::exercise(
+            guard, member, reader, clock, socket, root, mode,
+        );
+    }
     if mode.contains("actual-worker") {
         return actual_worker(guard, member, reader, mode, raw);
     }
@@ -729,7 +737,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     }
 }
 
-fn stop(
+pub(super) fn stop(
     guard: &mut Guard<'_>,
     member: &mut Member,
     clock: &mut FakePumpIo,
@@ -819,17 +827,28 @@ fn stop(
     guard.input = Some(guard.management.take().unwrap().finish().ok().unwrap());
     assert_eq!(
         guard.input.as_ref().unwrap().progress(),
-        FoundationInputProgress::Aborted
+        if mode.contains("refusal-close") {
+            FoundationInputProgress::Refused
+        } else {
+            FoundationInputProgress::Aborted
+        }
     );
     assert!(guard.input.as_ref().unwrap().sorted_acts().is_none());
     assert!(guard.input.as_ref().unwrap().effective_emission().is_none());
     if !mode.ends_with("eof") {
         let answer: OrganEnvelope = serde_json::from_slice(&read_packet(&peer).unwrap()).unwrap();
         assert_eq!(answer.exchange, request.exchange);
-        assert!(matches!(
-            answer.payload,
-            Payload::Answer(LifecycleAnswer::TurnAborted { .. })
-        ));
+        if mode.contains("refusal-close") {
+            assert!(matches!(
+                answer.payload,
+                Payload::Answer(LifecycleAnswer::AtRest)
+            ));
+        } else {
+            assert!(matches!(
+                answer.payload,
+                Payload::Answer(LifecycleAnswer::TurnAborted { .. })
+            ));
+        }
     }
 }
 fn assert_terminals(reader: &mut UnixStream, count: usize) {

@@ -26,6 +26,7 @@ pub enum FoundationInputProgress {
     Placed,
     Generated,
     Restatement,
+    CorrectionPlaced,
     Effective,
     Sorted,
     /// An operation refused. Its full account remains with this owner.

@@ -138,8 +138,15 @@ impl<'a> FoundationInput<'a> {
         io: &mut impl PumpIo,
     ) -> Result<bool, RunFailure> {
         if self.stage == Stage::Engine
-            && self.engine.as_ref().unwrap().stage == EngineStage::Place
-            && self.serving.owner.context.placement_refusing()
+            && ((self.engine.as_ref().unwrap().stage == EngineStage::Place
+                && self.serving.owner.context.placement_refusing())
+                || self
+                    .engine
+                    .as_ref()
+                    .unwrap()
+                    .emission
+                    .as_ref()
+                    .is_some_and(|work| work.closing_correction()))
         {
             self.advance_engine(peer, io)?;
             return Ok(false);
@@ -325,10 +332,20 @@ impl<'a> FoundationInput<'a> {
                     context,
                     &mut ports,
                 )?;
+                if work.emission.as_ref().unwrap().correction_close().is_some() {
+                    work.stage = EngineStage::Closing;
+                }
             }
             EngineStage::Closing => {
                 if self.close.is_none() && self.send.is_none() {
-                    let frame = context.place_close().ok_or(RunFailure::PlaceOwned)?;
+                    let frame = context
+                        .place_close()
+                        .or_else(|| {
+                            work.emission
+                                .as_ref()
+                                .and_then(|work| work.correction_close())
+                        })
+                        .ok_or(RunFailure::PlaceOwned)?;
                     self.close = Some(OrganEnvelope {
                         exchange: self.received.as_ref().unwrap().envelope().exchange.clone(),
                         position: Position::Close,
@@ -354,7 +371,9 @@ impl<'a> FoundationInput<'a> {
                         && send
                             .matches_exchange(&self.received.as_ref().unwrap().envelope().exchange)
                 }) {
-                    context.place_response_sent(ports.io)?;
+                    if context.place_close().is_some() {
+                        context.place_response_sent(ports.io)?;
+                    }
                     self.stage = Stage::Refused;
                 } else {
                     context.pump_once(&mut ports)?;
@@ -378,7 +397,11 @@ impl<'a> FoundationInput<'a> {
             work.stage = EngineStage::Emission;
         }
         if work.stage == EngineStage::Emission {
-            return work.emission.as_mut().unwrap().cancel(owner.context, io);
+            return work
+                .emission
+                .as_mut()
+                .unwrap()
+                .cancel(owner.context, Some(owner.decode), io);
         }
         owner.context.cancel_task();
         owner.context.revoke_place();

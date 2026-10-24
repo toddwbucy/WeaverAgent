@@ -1315,3 +1315,98 @@ scenario!(
     worker_emission_composition_completed_observe_repair_refusal,
     "input-generation-emission-completed-observe-repair-refusal"
 );
+
+scenario!(
+    worker_correction_composition_ready,
+    "input-generation-emission-correction-ready"
+);
+
+scenario!(
+    worker_correction_composition_held_filing,
+    "input-generation-emission-correction-held-filing"
+);
+
+scenario!(
+    worker_correction_composition_retry_text,
+    "input-generation-emission-correction-retry-text"
+);
+
+scenario!(
+    worker_correction_composition_retry_empty,
+    "input-generation-emission-correction-retry-empty"
+);
+
+scenario!(
+    worker_correction_composition_retry_call,
+    "input-generation-emission-correction-retry-call"
+);
+
+scenario!(
+    worker_correction_composition_stop_restatement,
+    "input-generation-emission-correction-stop-restatement"
+);
+
+scenario!(
+    worker_correction_composition_stop_placed,
+    "input-generation-emission-correction-stop-placed"
+);
+
+scenario!(
+    worker_correction_composition_stop_generation,
+    "input-generation-emission-correction-stop-generation"
+);
+
+scenario!(
+    worker_correction_composition_stop_checks,
+    "input-generation-emission-correction-stop-checks"
+);
+
+scenario!(
+    worker_correction_composition_retry_text_stop_checks,
+    "input-generation-emission-correction-retry-text-stop-checks"
+);
+
+scenario!(
+    worker_correction_composition_retry_empty_stop_checks,
+    "input-generation-emission-correction-retry-empty-stop-checks"
+);
+
+scenario!(
+    worker_correction_composition_retry_call_stop_checks,
+    "input-generation-emission-correction-retry-call-stop-checks"
+);
+
+scenario!(
+    worker_correction_composition_fit_refusal,
+    "input-generation-emission-correction-fit-refusal"
+);
+
+scenario!(
+    worker_correction_composition_measure_refusal,
+    "input-generation-emission-correction-measure-refusal"
+);
+
+scenario!(
+    worker_correction_composition_actual_worker,
+    "input-worker-generation-emission-correction-actual-worker"
+);
+
+scenario!(
+    worker_correction_composition_cap,
+    "input-generation-emission-correction-cap"
+);
+
+scenario!(
+    worker_correction_composition_held_decode,
+    "input-generation-emission-correction-held-decode"
+);
+
+scenario!(
+    worker_correction_composition_fit_refusal_close_stop,
+    "input-generation-emission-correction-fit-refusal-close-stop"
+);
+
+scenario!(
+    worker_correction_composition_actual_worker_fit_refusal,
+    "input-worker-generation-emission-correction-actual-worker-fit-refusal"
+);

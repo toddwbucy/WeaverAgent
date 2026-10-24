@@ -23,6 +23,9 @@ use weaver_types::state_flow::{
 };
 use weaver_types::{FaultCase, FaultReport, RefusalRecord};
 
+#[path = "context_restatement.rs"]
+mod restatement;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::flow) enum RepairBeginRefusal {
     WrongPhase,
@@ -252,6 +255,8 @@ pub(super) struct RepairTransaction {
     issued: bool,
     output_started: bool,
     issued_source: Option<SourceBlockId>,
+    issued_instruction: Option<SourcePosition>,
+    instruction_lease: Option<crate::flow::ledger::SourceLease>,
     expected_correction: Option<SourcePosition>,
     held_output: Option<CheckedGeneration>,
     accounting: Option<Accounting>,
@@ -545,6 +550,8 @@ impl RecordingContext {
             issued: false,
             output_started: false,
             issued_source: None,
+            issued_instruction: None,
+            instruction_lease: None,
             expected_correction: None,
             held_output: None,
             accounting: None,
@@ -1495,31 +1502,32 @@ impl RecordingContext {
             if instruction != expected {
                 return Err(self.repair_fault(ports.io, "instruction check names another author"));
             }
-            if let InstructionCheck::Checked(check) = check
-                && matches!(check.reply().result, Ste100Result::NotSte100 { .. })
-            {
-                let account = serde_json::value::to_raw_value(&serde_json::json!({
+            if let InstructionCheck::Checked(mut check) = check {
+                self.repair.as_mut().unwrap().instruction_lease = check.take_lease();
+                if matches!(check.reply().result, Ste100Result::NotSte100 { .. }) {
+                    let account = serde_json::value::to_raw_value(&serde_json::json!({
                     "template_id": self.repair.as_ref().unwrap().template.expect("instruction has a compiled family").template_id(),
                     "source_id": check.instruction().block_id,
                     "result_source": check.source(), "result": check.reply(),
                 }))
                 .map_err(|error| self.repair_fault(ports.io, error.to_string()))?;
-                let fault = FaultReport {
-                    case: FaultCase::StateTemplateRejected,
-                    account,
-                };
-                let payload = serde_json::value::to_raw_value(&fault)
-                    .map_err(|error| self.repair_fault(ports.io, error.to_string()))?;
-                self.repair.as_mut().unwrap().rejection = Some(check);
-                self.stage_repair_author(
-                    AuthorPurpose::TemplateFault,
-                    Kind::Fault,
-                    AuthoredSource::Runtime,
-                    None,
-                    Payload::Fault(payload),
-                    None,
-                );
-                return Ok(RepairProgress::Progress);
+                    let fault = FaultReport {
+                        case: FaultCase::StateTemplateRejected,
+                        account,
+                    };
+                    let payload = serde_json::value::to_raw_value(&fault)
+                        .map_err(|error| self.repair_fault(ports.io, error.to_string()))?;
+                    self.repair.as_mut().unwrap().rejection = Some(*check);
+                    self.stage_repair_author(
+                        AuthorPurpose::TemplateFault,
+                        Kind::Fault,
+                        AuthoredSource::Runtime,
+                        None,
+                        Payload::Fault(payload),
+                        None,
+                    );
+                    return Ok(RepairProgress::Progress);
+                }
             }
         }
         // A recorded instruction is still ordinary selected content. Even
@@ -1541,7 +1549,8 @@ impl RecordingContext {
                     .ledger
                     .recorded_instruction(expanded, source);
                 match result {
-                    Ok(request) => {
+                    Ok(mut request) => {
+                        request.lease = self.repair.as_mut().unwrap().instruction_lease.take();
                         self.repair.as_mut().unwrap().restatement = Some(request);
                         self.finish_repair_wait();
                         return Ok(RepairProgress::Restatement);
@@ -1747,6 +1756,7 @@ impl RecordingContext {
             work.issued = true;
             work.output_started = false;
             work.issued_source = Some(request.source().clone());
+            work.issued_instruction = Some(request.recorded().clone());
             work.expected_correction = None;
         }
         Ok(request)

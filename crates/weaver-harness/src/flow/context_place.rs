@@ -136,6 +136,19 @@ enum AccountWork {
     Notice(Box<PlaceNotice>),
 }
 impl PlaceAccount {
+    pub(in crate::flow::context) fn refused_restatement(
+        &self,
+        context: &RecordingContext,
+        source: &SourceBlockId,
+    ) -> bool {
+        matches!(&self.work, AccountWork::Place(work)
+            if !work.close_on_refusal && work.done
+                && work.request.context.instruction.as_ref() == Some(source)
+                && work.units.len() == 1
+                && work.units.iter().all(|unit| unit.belongs_to(context))
+                && (!work.recorded_authors.is_empty()
+                    || matches!(&work.measurement, Some(MeasureCompletion::Refused(refused)) if refused.sources().1.0 > 0)))
+    }
     pub(in crate::flow) fn recorded_sequences(&self) -> &[Sequence] {
         match &self.work {
             AccountWork::Place(w) => &w.recorded_authors,
@@ -349,6 +362,7 @@ pub(super) struct PlaceTransaction {
     incomplete: Option<String>,
     started_ns: u64,
     close_pending: bool,
+    close_on_refusal: bool,
     account_deadline: Option<u64>,
     selected_count: usize,
 }
@@ -794,7 +808,8 @@ impl RecordingContext {
             Some(PlaceError::MissingWait)
         } else if request.context.label.is_empty()
             || request.tool_schemas != self.place_engine.as_ref().unwrap().schemas
-            || !self.place_instruction_valid(&request.context)
+            || !(self.place_instruction_valid(&request.context)
+                || self.restatement_instruction_valid(&request))
         {
             Some(PlaceError::InvalidContext)
         } else if self.caller_author_held() {
@@ -905,6 +920,9 @@ impl RecordingContext {
             incomplete: None,
             started_ns: self.last_ns,
             close_pending: false,
+            // Repair retains original requests that still owe terminal facts.
+            // Its caller judges the refusal before any turn/world close.
+            close_on_refusal: self.repair.is_none(),
             account_deadline: None,
             selected_count,
         });
@@ -982,6 +1000,10 @@ impl RecordingContext {
                     detail: "decode measurement refused".into(),
                     account: None,
                 });
+                if !work.close_on_refusal {
+                    work.done = true;
+                    return Ok(PlaceProgress::Complete);
+                }
                 work.author = Some(PlaceAuthor::new(place_event(
                     Kind::TurnClosed,
                     AuthoredSource::Runtime,
@@ -1008,7 +1030,7 @@ impl RecordingContext {
                     code,
                     detail: refusal.detail.clone(),
                 };
-                work.close_pending = true;
+                work.close_pending = work.close_on_refusal;
                 work.refusal = Some(refusal);
                 place_event(
                     Kind::Refusal,
@@ -1293,6 +1315,7 @@ impl RecordingContext {
             }
             work.done = !work.close_pending;
             if work.done
+                && work.close_on_refusal
                 && let Some(refusal) = &work.refusal
             {
                 let run = self

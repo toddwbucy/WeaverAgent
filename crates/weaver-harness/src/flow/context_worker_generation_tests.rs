@@ -43,6 +43,9 @@ fn generated(mode: &str, finish: Finish) -> TokenAnswer {
     })
 }
 pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
+    if mode.contains("correction") {
+        return super::emission::correction::tests::spu(mode, fd);
+    }
     let root = std::path::PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
     let end = Instant::now() + Duration::from_secs(10);
