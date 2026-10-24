@@ -3,9 +3,20 @@
 use super::*;
 use crate::flow::channel::StateCompletion;
 use crate::flow::pump::LifecyclePorts;
+use crate::flow::pump::enter::{ReceivedEnter, probe_enter_peer, with_enter};
 use crate::flow::ste100_socket::AdmissionPoll;
 use crate::flow::templates::CompiledInventory;
 use std::path::PathBuf;
+#[path = "context_enter_startup.rs"]
+mod entered;
+use entered::EnterLoadFacts;
+
+pub(in crate::flow) struct EnterStartupInputs {
+    pub original: ReceivedEnter,
+    pub composer: weaver_trace::LoopIdentity,
+    pub classifier_binary: PathBuf,
+    pub inventory: CompiledInventory,
+}
 
 pub(in crate::flow) struct StartupRequest {
     pub start: StartIdentity,
@@ -22,6 +33,7 @@ pub(in crate::flow) enum StartupStage {
     Load,
     Activate,
     OpenMeasurement,
+    InitialGrants,
     Classifier,
     Complete,
     Stopped,
@@ -34,23 +46,30 @@ pub(in crate::flow) enum StartupStop {
     InvalidEntry,
     OpenRefused(weaver_types::state_flow::StateRefusalCode, String),
     Activation(ActivationFailure),
+    InitialGrants(InspectionBeginError),
     ClassifierStart(String),
     ClassifierRefused(weaver_types::state_flow::Ste100AdmissionRefused),
 }
 
 /// Returned alongside boot, so consumed observations do not disappear at the join.
 pub(in crate::flow) struct StartupEvidence {
+    pub original_enter: Option<ReceivedEnter>,
+    pub loaded: Option<Box<weaver_types::state_flow::enter::LoadFacts>>,
     pub opened: StateCompletion,
     pub load: Sequence,
+    pub initial_grants: InspectionCompletion,
     pub classifier: weaver_types::state_flow::Ste100Ready,
 }
 
 pub(in crate::flow) struct StartupComposition<'a> {
     context: &'a mut RecordingContext,
+    enter_bound: Option<AbsoluteBound>,
     resources: &'a mut FailedEnterResources,
     start: StartIdentity,
     limits: ReadLimits,
     load: Option<AuthoredEvent>,
+    original_enter: Option<ReceivedEnter>,
+    enter_load: Option<EnterLoadFacts>,
     bootstrap: Ste100Bootstrap,
     binary: PathBuf,
     inventory: CompiledInventory,
@@ -58,6 +77,7 @@ pub(in crate::flow) struct StartupComposition<'a> {
     started: bool,
     load_sequence: Option<Sequence>,
     opened: Option<StateCompletion>,
+    initial_grants: Option<InspectionCompletion>,
     classifier: Option<weaver_types::state_flow::Ste100Ready>,
     stop: Option<StartupStop>,
 }
@@ -73,18 +93,26 @@ pub(in crate::flow) struct PreparedStartup<'a> {
 /// This account grants neither a retry nor a healthy lifecycle answer.
 pub(in crate::flow) struct StoppedStartupAccount {
     pub cause: StartupStop,
+    pub enter_bound: Option<AbsoluteBound>,
     pub start: StartIdentity,
     pub limits: ReadLimits,
     pub load: Option<AuthoredEvent>,
+    pub original_enter: Option<ReceivedEnter>,
+    pub enter_load: Option<EnterLoadFacts>,
     pub bootstrap: Ste100Bootstrap,
     pub binary: PathBuf,
     pub inventory: CompiledInventory,
     pub load_sequence: Option<Sequence>,
     pub opened: Option<StateCompletion>,
+    pub initial_grants: Option<InspectionCompletion>,
     pub classifier: Option<weaver_types::state_flow::Ste100Ready>,
 }
 
 impl<'a> PreparedStartup<'a> {
+    pub(in crate::flow) fn original_enter(&self) -> Option<&ReceivedEnter> {
+        self.evidence.original_enter.as_ref()
+    }
+
     pub(in crate::flow) fn into_parts(
         self,
     ) -> (
@@ -109,12 +137,16 @@ impl<'a> StartupComposition<'a> {
             || resources.classifier_child().is_some()
             || resources.spu_child().is_some()
             || request.load.kind != Kind::Load;
+        let enter_bound = context.deadlines.get(PumpDeadline::Enter);
         Self {
             context,
+            enter_bound,
             resources,
             start: request.start,
             limits: request.limits,
             load: Some(request.load),
+            original_enter: None,
+            enter_load: None,
             bootstrap: request.bootstrap,
             binary: request.classifier_binary,
             inventory: request.inventory,
@@ -126,6 +158,7 @@ impl<'a> StartupComposition<'a> {
             started: false,
             load_sequence: None,
             opened: None,
+            initial_grants: None,
             classifier: None,
             stop: invalid.then_some(StartupStop::InvalidEntry),
         }
@@ -158,6 +191,18 @@ impl<'a> StartupComposition<'a> {
             self.stop(StartupStop::Interrupted);
             return false;
         }
+        if self.enter_bound.is_none()
+            || self.context.deadlines.get(PumpDeadline::Enter) != self.enter_bound
+        {
+            let failure = self.context.fail(
+                io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                "startup lost original Enter wait",
+            );
+            self.stop(StartupStop::Run(failure));
+            return false;
+        }
         if let Err(error) = self.context.live(io) {
             self.stop(StartupStop::Run(error));
             return false;
@@ -173,12 +218,37 @@ impl<'a> StartupComposition<'a> {
         lifecycle: LifecyclePorts<'_>,
         io: &mut impl PumpIo,
     ) -> StartupStage {
-        if !self.check(&lifecycle, io) {
+        if self.stage == StartupStage::Stopped {
             return self.stage;
         }
-        // SAFETY: forwarded from this driver's serving-thread lifetime contract.
-        if let Err(error) = unsafe { self.step(lifecycle, io) } {
-            self.stop(StartupStop::Run(error));
+        if let Some(failure) = self.context.failure().cloned() {
+            return self.stop(StartupStop::Run(failure));
+        }
+        let mut original = self.original_enter.take();
+        let result = with_enter(original.as_mut(), lifecycle, |mut lifecycle, payload| {
+            if !self.check(&lifecycle, io) {
+                return;
+            }
+            if payload.is_some()
+                && let Err(failure) = probe_enter_peer(&mut lifecycle)
+            {
+                self.stop(StartupStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return;
+            }
+            // SAFETY: forwarded from this driver's serving-thread lifetime contract.
+            if let Err(error) = unsafe { self.step(lifecycle, payload, io) } {
+                self.stop(StartupStop::Run(error));
+            }
+        });
+        self.original_enter = original;
+        if let Err(failure) = result {
+            self.stop(StartupStop::Run(RunFailure::Transport {
+                source: PumpSource::Admin,
+                failure,
+            }));
         }
         self.stage
     }
@@ -186,6 +256,7 @@ impl<'a> StartupComposition<'a> {
     unsafe fn step(
         &mut self,
         lifecycle: LifecyclePorts<'_>,
+        payload: Option<&weaver_types::state_flow::enter::EnterPayload>,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         let mut ports = PumpPorts {
@@ -211,7 +282,21 @@ impl<'a> StartupComposition<'a> {
                 }
             }
             StartupStage::Load => {
-                let mut event = self.load.take().expect("one retained load input");
+                let mut event = match self.load.take() {
+                    Some(event) => event,
+                    None => self
+                        .enter_load
+                        .as_ref()
+                        .expect("retained Enter load facts")
+                        .event(
+                            payload.expect("original Enter accompanies every advance"),
+                            &self.inventory,
+                            self.context.origin_ns(),
+                            self.context
+                                .opened_identity()
+                                .expect("actual Open before load"),
+                        ),
+                };
                 if let Some(Payload::Elections(load)) = &mut event.payload {
                     load.origin_ns = self.context.origin_ns().into();
                     load.state_member_observation = crate::flow::mirror::member(
@@ -238,13 +323,44 @@ impl<'a> StartupComposition<'a> {
                     Some(OperationCompletion::Opened(opened)) => {
                         self.opened = Some(opened);
                         self.started = false;
-                        self.stage = StartupStage::Classifier;
+                        self.stage = StartupStage::InitialGrants;
                     }
                     None if progress == Advance::Pending => {
                         self.context.pump_once(&mut ports)?;
                     }
                     None => {}
                     Some(_) => unreachable!("exclusive startup admits only Open"),
+                }
+            }
+            StartupStage::InitialGrants => {
+                if !self.started {
+                    if let Err(error) =
+                        self.context
+                            .begin_inspection(InspectionKind::Grants, None, ports.io)
+                    {
+                        self.stop(StartupStop::InitialGrants(error));
+                        return Ok(());
+                    }
+                    self.started = true;
+                }
+                let progress = self.context.advance_inspection(&mut ports)?;
+                if let Some(completion) = self.context.take_inspection(ports.io)? {
+                    // A measured read refusal is an unavailable initial reading,
+                    // not an empty surface or a component failure. Preserve it
+                    // intact for the terminal comparison, just like a success.
+                    let usable = matches!(
+                        completion,
+                        InspectionCompletion::Grants { .. } | InspectionCompletion::Refused { .. }
+                    );
+                    self.initial_grants = Some(completion);
+                    if usable {
+                        self.started = false;
+                        self.stage = StartupStage::Classifier;
+                    } else {
+                        self.stop(StartupStop::Interrupted);
+                    }
+                } else if progress == InspectionProgress::Pending {
+                    self.context.pump_once(&mut ports)?;
                 }
             }
             StartupStage::Classifier => {
@@ -288,16 +404,57 @@ impl<'a> StartupComposition<'a> {
         lifecycle: LifecyclePorts<'_>,
         io: &mut impl PumpIo,
     ) -> Result<PreparedStartup<'a>, Self> {
-        if self.stage != StartupStage::Complete || !self.check(&lifecycle, io) {
+        if self.stage != StartupStage::Complete {
             return Err(self);
+        }
+        if let Some(failure) = self.context.failure().cloned() {
+            self.stop(StartupStop::Run(failure));
+            return Err(self);
+        }
+        let mut original = self.original_enter.take();
+        let checked = with_enter(original.as_mut(), lifecycle, |mut ports, payload| {
+            if !self.check(&ports, io) {
+                return false;
+            }
+            if payload.is_some()
+                && let Err(failure) = probe_enter_peer(&mut ports)
+            {
+                self.stop(StartupStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return false;
+            }
+            true
+        });
+        self.original_enter = original;
+        match checked {
+            Ok(true) => (),
+            Ok(false) => return Err(self),
+            Err(failure) => {
+                self.stop(StartupStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return Err(self);
+            }
         }
         Ok(PreparedStartup {
             context: self.context,
             resources: self.resources,
             inventory: self.inventory,
             evidence: StartupEvidence {
+                loaded: self
+                    .enter_load
+                    .as_ref()
+                    .zip(self.original_enter.as_ref())
+                    .map(|(facts, original)| {
+                        Box::new(facts.observation(original.envelope().enter()))
+                    }),
+                original_enter: self.original_enter,
                 opened: self.opened.expect("actual recorded Open retained"),
                 load: self.load_sequence.expect("actual load retained"),
+                initial_grants: self.initial_grants.expect("actual initial Grants retained"),
                 classifier: self.classifier.expect("actual classifier Ready retained"),
             },
         })
@@ -322,14 +479,18 @@ impl<'a> StartupComposition<'a> {
             self.resources,
             StoppedStartupAccount {
                 cause: self.stop.expect("stopped cause retained"),
+                enter_bound: self.enter_bound,
                 start: self.start,
                 limits: self.limits,
                 load: self.load,
+                original_enter: self.original_enter,
+                enter_load: self.enter_load,
                 bootstrap: self.bootstrap,
                 binary: self.binary,
                 inventory: self.inventory,
                 load_sequence: self.load_sequence,
                 opened: self.opened,
+                initial_grants: self.initial_grants,
                 classifier: self.classifier,
             },
         ))
@@ -339,3 +500,6 @@ impl<'a> StartupComposition<'a> {
 #[cfg(test)]
 #[path = "context_startup_composition_tests.rs"]
 pub(super) mod tests;
+
+#[path = "context_enter_refusal_composition.rs"]
+pub(in crate::flow) mod refusal;

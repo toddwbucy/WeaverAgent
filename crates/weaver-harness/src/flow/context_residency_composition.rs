@@ -2,6 +2,7 @@
 use super::*;
 use crate::flow::context::startup_composition::{PreparedStartup, StartupEvidence};
 use crate::flow::pump::LifecyclePorts;
+use crate::flow::pump::enter::{probe_enter_peer, with_enter};
 use crate::flow::pump_transport::{OrganSend, ReceivedOrgan};
 use crate::flow::templates::CompiledInventory;
 use std::path::PathBuf;
@@ -33,18 +34,20 @@ pub(in crate::flow) enum ResidencyStop {
 }
 
 pub(in crate::flow) struct ResidencyEvidence {
+    pub(in crate::flow::context) origin: std::sync::Arc<()>,
+    pub(in crate::flow::context) enter: AbsoluteBound,
     pub startup: StartupEvidence,
     pub request: ResidencyRequest,
-    pub send: OrganSend,
     pub reply: ReceivedOrgan,
 }
 
 pub(in crate::flow) struct StoppedResidency {
+    origin: std::sync::Arc<()>,
+    pub enter: Option<AbsoluteBound>,
     pub cause: ResidencyStop,
     pub startup: StartupEvidence,
     pub request: ResidencyRequest,
     pub inventory: CompiledInventory,
-    pub send: Option<OrganSend>,
     pub reply: Option<ReceivedOrgan>,
     pub returned_directive: Option<LifecycleDirective>,
 }
@@ -57,6 +60,26 @@ pub(in crate::flow) struct AdmittedStartup<'a> {
 }
 
 impl<'a> AdmittedStartup<'a> {
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn into_boot(
+        self,
+    ) -> Result<super::boot_composition::BootComposition<'a>, Self> {
+        match super::boot_composition::BootComposition::from_residency(
+            self.context,
+            self.resources,
+            self.inventory,
+            self.evidence,
+        ) {
+            Ok(boot) => Ok(boot),
+            Err((context, resources, inventory, evidence)) => Err(Self {
+                context,
+                resources,
+                inventory,
+                evidence,
+            }),
+        }
+    }
+
     pub(in crate::flow) fn into_parts(
         self,
     ) -> (
@@ -77,7 +100,6 @@ pub(in crate::flow) struct ResidencyComposition<'a> {
     request: ResidencyRequest,
     enter: Option<AbsoluteBound>,
     stage: ResidencyStage,
-    send: Option<OrganSend>,
     reply: Option<ReceivedOrgan>,
     returned_directive: Option<LifecycleDirective>,
     stop: Option<ResidencyStop>,
@@ -88,7 +110,11 @@ impl<'a> ResidencyComposition<'a> {
         let (context, resources, inventory, startup) = startup.into_parts();
         let invalid = context.phase != RecordingPhase::Entered
             || !resources.matches(context)
-            || resources.spu_child().is_some();
+            || resources.spu_child().is_some()
+            || startup.original_enter.as_ref().is_some_and(|original| {
+                !original.adopted_by(context)
+                    || request.instruction != original.envelope().enter().spu_instruction
+            });
         let enter = context.deadlines.get(PumpDeadline::Enter);
         Self {
             context,
@@ -102,11 +128,16 @@ impl<'a> ResidencyComposition<'a> {
             } else {
                 ResidencyStage::Fork
             },
-            send: None,
             reply: None,
             returned_directive: None,
             stop: invalid.then_some(ResidencyStop::InvalidEntry),
         }
+    }
+
+    fn send(&self) -> Option<&OrganSend> {
+        self.resources
+            .residency_request()
+            .map(|request| request.send())
     }
 
     pub(in crate::flow) fn stage(&self) -> ResidencyStage {
@@ -165,12 +196,37 @@ impl<'a> ResidencyComposition<'a> {
         lifecycle: LifecyclePorts<'_>,
         io: &mut impl PumpIo,
     ) -> ResidencyStage {
-        if !self.check(&lifecycle, io) {
+        if self.stage == ResidencyStage::Stopped {
             return self.stage;
         }
-        // SAFETY: forwarded from this driver's caller contract.
-        if let Err(failure) = unsafe { self.step(lifecycle, io) } {
-            self.stop(ResidencyStop::Run(failure));
+        if let Some(failure) = self.context.failure().cloned() {
+            return self.stop(ResidencyStop::Run(failure));
+        }
+        let mut original = self.startup.original_enter.take();
+        let result = with_enter(original.as_mut(), lifecycle, |mut lifecycle, payload| {
+            if !self.check(&lifecycle, io) {
+                return;
+            }
+            if payload.is_some()
+                && let Err(failure) = probe_enter_peer(&mut lifecycle)
+            {
+                self.stop(ResidencyStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return;
+            }
+            // SAFETY: forwarded from this driver's caller contract.
+            if let Err(failure) = unsafe { self.step(lifecycle, io) } {
+                self.stop(ResidencyStop::Run(failure));
+            }
+        });
+        self.startup.original_enter = original;
+        if let Err(failure) = result {
+            self.stop(ResidencyStop::Run(RunFailure::Transport {
+                source: PumpSource::Admin,
+                failure,
+            }));
         }
         self.stage
     }
@@ -200,12 +256,12 @@ impl<'a> ResidencyComposition<'a> {
                 }
             }
             ResidencyStage::Admit => {
-                if self.send.is_none() {
+                if self.send().is_none() {
                     let directive = LifecycleDirective::Admit {
                         instruction: self.request.instruction.clone(),
                     };
                     match self.resources.stage_residency(directive) {
-                        Ok(send) => self.send = Some(send),
+                        Ok(()) => {}
                         Err((original, detail)) => {
                             self.returned_directive = Some(original);
                             self.stop(ResidencyStop::Stage(detail));
@@ -256,6 +312,8 @@ impl<'a> ResidencyComposition<'a> {
                     listener: lifecycle.listener.take(),
                     peer: lifecycle.peer.take(),
                     residency: Some(residency),
+                    dial: lifecycle.dial.take(),
+                    leave_peer: lifecycle.leave_peer.take(),
                 };
                 self.context.pump_once(&mut PumpPorts {
                     lifecycle: ports,
@@ -289,9 +347,9 @@ impl<'a> ResidencyComposition<'a> {
             .expect("reply retained before validation");
         let port = self
             .resources
-            .residency_mut()
+            .residency_port()
             .expect("original residency port");
-        let send = self.send.as_ref().expect("original Admit ticket");
+        let send = self.send().expect("original Admit ticket");
         let envelope = reply.envelope();
         if !reply.belongs_to(port)
             || !send.belongs_to(port)
@@ -308,7 +366,9 @@ impl<'a> ResidencyComposition<'a> {
             weaver_types::Payload::Answer(LifecycleAnswer::Admitted) => {
                 self.stage = ResidencyStage::Complete;
             }
-            weaver_types::Payload::Refusal(_) => {
+            weaver_types::Payload::Refusal(_)
+                if super::failed_enter_driver::admit_reply_is_terminal(envelope) =>
+            {
                 self.stop(ResidencyStop::Refused);
             }
             _ => return Err(self.protocol(io, "Admit reply has the wrong terminal arm")),
@@ -322,17 +382,51 @@ impl<'a> ResidencyComposition<'a> {
         lifecycle: LifecyclePorts<'_>,
         io: &mut impl PumpIo,
     ) -> Result<AdmittedStartup<'a>, Self> {
-        if self.stage != ResidencyStage::Complete || !self.check(&lifecycle, io) {
+        if self.stage != ResidencyStage::Complete {
             return Err(self);
         }
+        if let Some(failure) = self.context.failure().cloned() {
+            self.stop(ResidencyStop::Run(failure));
+            return Err(self);
+        }
+        let mut original = self.startup.original_enter.take();
+        let checked = with_enter(original.as_mut(), lifecycle, |mut ports, payload| {
+            if !self.check(&ports, io) {
+                return false;
+            }
+            if payload.is_some()
+                && let Err(failure) = probe_enter_peer(&mut ports)
+            {
+                self.stop(ResidencyStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return false;
+            }
+            true
+        });
+        self.startup.original_enter = original;
+        match checked {
+            Ok(true) => (),
+            Ok(false) => return Err(self),
+            Err(failure) => {
+                self.stop(ResidencyStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                }));
+                return Err(self);
+            }
+        }
+        let origin = self.resources.origin_for_boot();
         Ok(AdmittedStartup {
             context: self.context,
             resources: self.resources,
             inventory: self.inventory,
             evidence: ResidencyEvidence {
+                origin,
+                enter: self.enter.expect("checked original Enter"),
                 startup: self.startup,
                 request: self.request,
-                send: self.send.expect("actual sent Admit"),
                 reply: self.reply.expect("actual Admitted"),
             },
         })
@@ -352,15 +446,17 @@ impl<'a> ResidencyComposition<'a> {
         if self.stage != ResidencyStage::Stopped {
             return Err(self);
         }
+        let origin = std::sync::Arc::clone(&self.context.read_origin);
         Ok((
             self.context,
             self.resources,
             StoppedResidency {
+                origin,
+                enter: self.enter,
                 cause: self.stop.expect("stopped cause"),
                 startup: self.startup,
                 request: self.request,
                 inventory: self.inventory,
-                send: self.send,
                 reply: self.reply,
                 returned_directive: self.returned_directive,
             },
@@ -371,3 +467,6 @@ impl<'a> ResidencyComposition<'a> {
 #[cfg(test)]
 #[path = "context_residency_composition_tests.rs"]
 pub(super) mod tests;
+
+#[path = "context_residency_cleanup.rs"]
+pub(in crate::flow) mod cleanup;
