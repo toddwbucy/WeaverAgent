@@ -1013,6 +1013,18 @@ impl RecordBarrier {
         Ok(())
     }
 
+    pub(super) fn pending_state_measurement_matches(
+        &self,
+        measurement: &weaver_types::state_flow::StateStoreMeasurement,
+    ) -> bool {
+        matches!(&self.pending, Some((event, RecordPurpose::State(expected)))
+            if expected == measurement && event.envelope.turn.is_none())
+            && self
+                .pending_author
+                .as_ref()
+                .is_some_and(|author| author.event.turn.is_none())
+    }
+
     pub(super) fn retain_summary_rollback_record(
         &mut self,
         permit: &super::context::plan_summary_driver::PlanReadRollbackPermit,

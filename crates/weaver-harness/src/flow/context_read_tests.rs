@@ -71,7 +71,12 @@ fn base64(bytes: &[u8]) -> String {
     encoded
 }
 
-fn page(snapshot: u64, offset: usize, total: usize, bytes: &[u8]) -> s::StateControlAnswer {
+pub(super) fn page(
+    snapshot: u64,
+    offset: usize,
+    total: usize,
+    bytes: &[u8],
+) -> s::StateControlAnswer {
     s::StateControlAnswer::ReadPage(s::ReadPage {
         snapshot_id: snapshot.into(),
         offset: (offset as u64).into(),
