@@ -85,6 +85,39 @@ impl PairTransaction {
 }
 
 impl RecordingContext {
+    /// Retain an already committed terminal before a later flow error freezes
+    /// the pair owner. This narrow repair road performs no continuation, new
+    /// authoring, filing, wait or send and never releases a FilingCompletion.
+    pub(super) fn retain_repair_pair_terminal(&mut self) -> Result<(), super::pairs::PairError> {
+        let Some(leg) = self.pair_work.as_ref().and_then(|work| work.leg.as_ref()) else {
+            return Ok(());
+        };
+        if leg.phase != PairRecordPhase::Terminal || self.pairs.has_effective() {
+            return Ok(());
+        }
+        let Some(source) = &leg.recorded else {
+            return Ok(());
+        };
+        if !self
+            .filing
+            .as_ref()
+            .is_some_and(|owner| owner.owns_recorded_pair_terminal(source))
+        {
+            return Ok(());
+        }
+        let Some(receipt) = self.flow.take_recorded_pair_terminal(source) else {
+            return Ok(());
+        };
+        if let Err((receipt, error)) = self.pairs.install_terminal(&leg.call, receipt) {
+            self.pair_work.as_mut().unwrap().refused_receipt =
+                Some(SourceDisposition::Committed(receipt));
+            return Err(error);
+        }
+        self.filing = None;
+        self.pair_work.as_mut().unwrap().leg = None;
+        Ok(())
+    }
+
     /// Account all accepted requests, including accepted siblings of blocks still
     /// awaiting repair. Return the original ownership unchanged on caller refusal.
     #[allow(clippy::result_large_err)]

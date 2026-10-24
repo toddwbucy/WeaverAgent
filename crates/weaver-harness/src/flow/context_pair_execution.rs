@@ -36,6 +36,21 @@ pub(in crate::flow) enum ExecutionProgress {
 }
 
 impl RecordingContext {
+    /// Apply the caller's bar to one ready request without consuming the
+    /// remaining ordered batch. Opening and statement receipts are required.
+    pub(in crate::flow) fn refuse_pair_dispatch(
+        &mut self,
+        call: &CallId,
+        cause: NonDispatchCause,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        self.live(io)?;
+        self.pair_wait_matches(io)?;
+        self.pairs
+            .refuse_dispatch(call, cause)
+            .map_err(|error| self.pair_fault(io, format!("per-call dispatch bar: {error:?}")))
+    }
+
     /// Only the successful repair owner's sealed result permits execution.
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn begin_pair_execution(

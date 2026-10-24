@@ -816,7 +816,14 @@ impl RecordingContext {
     pub(super) fn complete_wait(&mut self, key: PumpDeadline) -> Option<AbsoluteBound> {
         self.freeze_plan_summary_account_bound();
         self.freeze_place_account_bound();
-        if self.failure.is_some()
+        if self.wait_still_owned(key) {
+            return None;
+        }
+        self.disarm_wait(key)
+    }
+
+    fn wait_still_owned(&self, key: PumpDeadline) -> bool {
+        self.failure.is_some()
             || self.phase == RecordingPhase::Closed
             || self.filing_wait_still_owned(key)
             || self.output_wait_still_owned(key)
@@ -838,10 +845,6 @@ impl RecordingContext {
                     .template_checks
                     .as_ref()
                     .is_some_and(|owner| owner.can_certify()))
-        {
-            return None;
-        }
-        self.disarm_wait(key)
     }
 
     /// A retired Enter receipt proves the original registered cap was actually
@@ -1930,6 +1933,8 @@ impl RecordingContext {
             io,
             wall_ms,
         );
+        self.observe_repair_text_count();
+        self.observe_repair_call_count();
         let advance = result.map_err(|failure| self.flow_failed(io, failure))?;
         self.settle_recorded_input(io)?;
         self.settle_recorded_capture(io)?;
@@ -1966,6 +1971,7 @@ impl RecordingContext {
     }
 
     fn live(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        self.observe_repair_text_count();
         self.observe_plan_effect_receipts();
         if self.failure.is_none()
             && let Some(detail) = self.plan_cache.invalid
@@ -1988,6 +1994,14 @@ impl RecordingContext {
         }
         if self.barrier.failure().is_some() || self.barrier.standing_failure().is_some() {
             return Err(self.record_failed(io));
+        }
+        if let Some(error) = self.repair_count_failure() {
+            return Err(self.fail(
+                io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                format!("recorded correction count: {error:?}"),
+            ));
         }
         // A read can own the recorder and prevent ordinary flow reduction.
         // Inspect an already observed channel failure without consuming that
@@ -2251,6 +2265,7 @@ impl RecordingContext {
             owner.revoke();
         }
         // Revoke before sampling or reporting. A broken clock cannot grant work.
+        self.observe_repair_text_count();
         self.observe_plan_effect_receipts();
         self.plan_cache.fail();
         self.revoke_place();

@@ -218,6 +218,7 @@ pub(super) struct RecordedInstructionCheck {
     reply: Ste100Reply,
     source: SourcePosition,
     recorded_ns: u64,
+    lease: Option<SourceLease>,
 }
 
 impl RecordedInstructionCheck {
@@ -233,12 +234,15 @@ impl RecordedInstructionCheck {
     pub(super) fn recorded_ns(&self) -> u64 {
         self.recorded_ns
     }
+    pub(super) fn take_lease(&mut self) -> Option<SourceLease> {
+        self.lease.take()
+    }
 }
 
 #[derive(Debug)]
 pub(super) enum InstructionCheck {
     Unselected { source: SourcePosition },
-    Checked(RecordedInstructionCheck),
+    Checked(Box<RecordedInstructionCheck>),
 }
 
 struct InstructionCheckWatch {
@@ -247,6 +251,7 @@ struct InstructionCheckWatch {
     source: Option<SourcePosition>,
     selected: bool,
     completion: Option<InstructionCheck>,
+    lease: Option<SourceLease>,
 }
 
 impl RecordedCheck {
@@ -687,6 +692,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             source: None,
             selected: false,
             completion: None,
+            lease: None,
         });
         Ok(())
     }
@@ -775,6 +781,36 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.instruction_check = None;
     }
 
+    fn register_instruction_receipt(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        sequence: u64,
+        sources: &[SourceBlockId],
+    ) -> Result<(), FlowFailure> {
+        let Some(watch) = self.instruction_check.as_ref() else {
+            return Ok(());
+        };
+        let Some(source) = watch.source.as_ref() else {
+            return Ok(());
+        };
+        if source.block_id.sequence.0 != sequence {
+            return Ok(());
+        }
+        if !watch.selected || watch.lease.is_some() || sources != [source.block_id.clone()] {
+            return Err(self.fail(
+                cx,
+                "instruction_check",
+                "instruction receipt source differs",
+            ));
+        }
+        let lease = self
+            .ledger
+            .register_source_lease(sources.to_vec())
+            .map_err(|error| self.fail(cx, "instruction_check", error.error))?;
+        self.instruction_check.as_mut().unwrap().lease = Some(lease);
+        Ok(())
+    }
+
     fn observe_instruction_check(
         &mut self,
         cx: &mut FlowRecording<'_>,
@@ -813,9 +849,10 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             reply: reply.clone(),
             source: source.clone(),
             recorded_ns,
+            lease: self.instruction_check.as_mut().unwrap().lease.take(),
         };
         self.instruction_check.as_mut().unwrap().completion =
-            Some(InstructionCheck::Checked(completion));
+            Some(InstructionCheck::Checked(Box::new(completion)));
         Ok(())
     }
     /// Reserve complete model content before authoring. Source identity belongs
@@ -1189,6 +1226,15 @@ impl<P: Ste100Port> FlowCoordinator<P> {
 
     pub(super) fn filing_receipts(&self) -> Option<&super::ledger::ReceiptSet> {
         self.ledger.receipts()
+    }
+
+    pub(super) fn take_recorded_pair_terminal(
+        &mut self,
+        source: &SourceBlockId,
+    ) -> Option<super::ledger::CommittedSource> {
+        let receipt = self.ledger.take_recorded_pair_terminal(source)?;
+        self.receipt_reservation = None;
+        Some(receipt)
     }
 
     pub(super) fn filing_recorded_ns(&self) -> Option<u64> {
@@ -2812,6 +2858,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                         installed.source_sequence,
                         &installed.sources,
                     )?;
+                    self.register_instruction_receipt(
+                        cx,
+                        installed.source_sequence,
+                        &installed.sources,
+                    )?;
                     copied.try_reserve(1).map_err(|_| {
                         self.fail(cx, "counter", "copied transition reservation failed")
                     })?;
@@ -3331,6 +3382,22 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 }
             }
             (Some(PendingRecord::Classifier), RecordProof::Classifier(proof)) => {
+                if let Some(request) = self.classifier().outstanding()
+                    && self
+                        .output_checks
+                        .as_ref()
+                        .is_some_and(|output| output.observes(request))
+                {
+                    let classifier = self.classifier.as_ref().expect("standing classifier");
+                    let reply = classifier
+                        .held()
+                        .expect("Recorded classifier reply remains held");
+                    self.output_checks
+                        .as_mut()
+                        .unwrap()
+                        .observe_recorded(classifier.outstanding().unwrap(), reply, &proof)
+                        .map_err(|error| self.fail(cx, "output", error))?;
+                }
                 self.classifier_release = Some(ClassifierRelease {
                     source: proof.source().clone(),
                     recorded_ns: io.now().map_err(|error| self.fail(cx, "clock", error))?,

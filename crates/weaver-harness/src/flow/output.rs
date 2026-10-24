@@ -11,7 +11,9 @@ use weaver_types::state_flow::{
     Ste100Target,
 };
 
+use super::RequestScheme;
 use crate::flow::ledger::SourceLease;
+use crate::flow::recording::RecordedSte100;
 
 #[derive(Debug)]
 pub(in crate::flow) struct OutputOriginal {
@@ -106,6 +108,14 @@ struct Slot {
     recorded: Option<RecordedOutputBlock>,
 }
 
+/// One actual Recorded reply awaiting the classifier's terminal release probe.
+/// This is evidence only; it cannot complete OutputChecks or yield a grant.
+#[derive(Debug)]
+struct ObservedOutputBlock {
+    reply: Ste100Reply,
+    result_source: SourcePosition,
+}
+
 #[derive(Debug)]
 pub(in crate::flow) struct OutputChecks {
     original: OutputOriginal,
@@ -114,6 +124,7 @@ pub(in crate::flow) struct OutputChecks {
     source: Option<SourcePosition>,
     slots: Vec<Slot>,
     in_flight: Option<Ste100Request>,
+    observed: Option<ObservedOutputBlock>,
     author_recorded_ns: Option<u64>,
     cancelled: bool,
     frozen: bool,
@@ -166,6 +177,7 @@ impl OutputChecks {
             source: None,
             slots,
             in_flight: None,
+            observed: None,
             author_recorded_ns: None,
             cancelled: false,
             frozen: false,
@@ -177,6 +189,61 @@ impl OutputChecks {
     }
     pub(in crate::flow) fn source(&self) -> Option<&SourcePosition> {
         self.source.as_ref()
+    }
+
+    /// Factual completion survives a later probe, clock failure or cancellation.
+    /// Empty corrections and all attempted calls owe additional refusal/pair facts.
+    pub(in crate::flow) fn recorded_failed_text_only(&self, scheme: &RequestScheme) -> bool {
+        if !self.is_bound() || self.slots.is_empty() || self.scheme.scheme_id != scheme.scheme_id()
+        {
+            return false;
+        }
+        let replies = self.slots.iter().map(|slot| {
+            slot.recorded
+                .as_ref()
+                .map(|block| block.reply())
+                .or_else(|| {
+                    self.observed
+                        .as_ref()
+                        .filter(|block| {
+                            matches!(&block.reply.target, Ste100Target::Source(source)
+                        if source.block.0 == slot.index)
+                        })
+                        .map(|block| &block.reply)
+                })
+        });
+        if replies.clone().any(|reply| reply.is_none()) {
+            return false;
+        }
+        let replies = replies.flatten();
+        replies
+            .clone()
+            .any(|reply| matches!(reply.result, Ste100Result::NotSte100 { .. }))
+            && !scheme.attempted_call(&self.original.message, replies)
+    }
+
+    /// Called with the actual recorder proof, before any fallible release probe
+    /// or clock sample. At most the classifier's one outstanding reply is copied.
+    pub(super) fn observe_recorded(
+        &mut self,
+        request: &Ste100Request,
+        reply: &Ste100Reply,
+        proof: &RecordedSte100,
+    ) -> Result<(), &'static str> {
+        if self.observed.is_some() || !proof.matches(reply) {
+            return Err("output Recorded proof differs from its reply");
+        }
+        // Component failure retains its existing classifier fatal path. It is
+        // neither a complete language check nor an attempted correction.
+        if matches!(reply.result, Ste100Result::ComponentFailed { .. }) {
+            return Ok(());
+        }
+        self.validate_record(request, reply, proof.source())?;
+        self.observed = Some(ObservedOutputBlock {
+            reply: reply.clone(),
+            result_source: proof.source().clone(),
+        });
+        Ok(())
     }
     pub(in crate::flow) fn is_bound(&self) -> bool {
         self.source.is_some()
@@ -306,7 +373,50 @@ impl OutputChecks {
         recorded_ns: u64,
         selected: bool,
     ) -> Result<(), &'static str> {
-        if self.frozen || !self.observes(&request) {
+        self.validate_record(&request, &reply, &result_source)?;
+        let Ste100Target::Source(source) = &request.target else {
+            unreachable!()
+        };
+        let slot = self
+            .slots
+            .iter()
+            .find(|slot| slot.index == source.block.0)
+            .unwrap();
+        if slot.selected != selected
+            || recorded_ns < self.author_recorded_ns.unwrap()
+            || (!selected && !self.owns_unselected(&request))
+            || self.observed.as_ref().is_some_and(|observed| {
+                observed.reply != reply || observed.result_source != result_source
+            })
+        {
+            return Err("released output check differs from its Recorded evidence");
+        }
+        let index = slot.index;
+        if !selected {
+            self.in_flight = None;
+        }
+        self.observed = None;
+        self.slots
+            .iter_mut()
+            .find(|slot| slot.index == index)
+            .unwrap()
+            .recorded = Some(RecordedOutputBlock {
+            request,
+            reply,
+            result_source,
+            recorded_ns,
+            selected,
+        });
+        Ok(())
+    }
+
+    fn validate_record(
+        &self,
+        request: &Ste100Request,
+        reply: &Ste100Reply,
+        result_source: &SourcePosition,
+    ) -> Result<(), &'static str> {
+        if self.frozen || !self.observes(request) {
             return Err("recorded output result has no live source owner");
         }
         let Ste100Target::Source(source) = &request.target else {
@@ -320,35 +430,17 @@ impl OutputChecks {
             unreachable!("slots enumerate original Text blocks");
         };
         if slot.recorded.is_some()
-            || slot.selected != selected
             || request.text != *text
             || request.scheme_id != self.scheme.scheme_id
             || result_source.block_id.run != self.run
             || result_source.block_id.sequence <= source.sequence
             || result_source.block_id.block.0 != 0
             || result_source.turn.as_deref() != Some(self.original.turn.0.as_str())
-            || recorded_ns < self.author_recorded_ns.unwrap()
-            || (!selected && !self.owns_unselected(&request))
-            || reply.validate_for(&request, &self.scheme.verbs).is_err()
+            || reply.validate_for(request, &self.scheme.verbs).is_err()
             || matches!(reply.result, Ste100Result::ComponentFailed { .. })
         {
             return Err("recorded output check differs from its reserved exact source");
         }
-        let index = slot.index;
-        if !selected {
-            self.in_flight = None;
-        }
-        self.slots
-            .iter_mut()
-            .find(|slot| slot.index == index)
-            .unwrap()
-            .recorded = Some(RecordedOutputBlock {
-            request,
-            reply,
-            result_source,
-            recorded_ns,
-            selected,
-        });
         Ok(())
     }
 

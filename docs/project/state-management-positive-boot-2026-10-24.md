@@ -31,9 +31,24 @@ stays active until the separately qualified coupled cutover.
 | Spec scope | Author assessment |
 | --- | --- |
 | Spec 06 CAPACITY, foundation positive effective limit | Conforms for runtime admission: zero fails configured fit; one and the existing larger limits can pass the unchanged checked budget. |
-| HARNESS-OPEN, truthful placement before boot_failed | Conforms for the changed case: exact zero evidence, one Recorded placement before its attributed refusal, original Enter bound and no readiness grant. |
+| HARNESS-OPEN | Conforms for placement and refusal: exact zero evidence, one Recorded placement before its attributed refusal, original Enter bound and no readiness grant. Failed-enter teardown remains carried under #146. |
 | OPEN-FACTS and PLACEMENT-RECORD | Existing carrier and raw-box rules retained; zero is decoded and recorded without changing its value or inventing a new wire outcome. |
 | Full lifecycle and production qualification | Remain incomplete under #146. Scripted SPU/member/checker peers prove composition mechanics, not actual model, language artifacts or measured production limits. |
+
+## Current Planner disposition
+
+[Review 5637420568 of #318 at 1d82867e](https://github.com/toddwbucy/WeaverAgent/pull/318#pullrequestreview-5637420568)
+reports zero fix and six batch rows. The Planner marked #318 ready; all three
+independent mutations were detected. Its reviewed code remains unchanged.
+
+| #318 row | Current disposition |
+| --- | --- |
+| 1 | Explicit cutover carry: lifecycle.rs open_session_with_diagnostic still validates Opened evidence alone and accepts resolved zero in the active legacy serving path. This act protects dormant BootComposition only. |
+| 2 | Open batch: give zero a precise refusal detail; the current capacity-fit detail is misleading for this case. |
+| 3 | Corrected the HARNESS-OPEN grade above: placement/refusal conforms; bounded failed-enter teardown is carried. |
+| 4 | Open test gap: explicitly assert the pressured pending event is StatePlacement. |
+| 5 | Open composed test gap: inspect placement-before-refusal trace and the stopped owner's final Open(Refused) cause. |
+| 6 | The unavailable Executor self-check skills remain a disclosed process carry. |
 
 ## Caller and evidence boundaries
 
@@ -95,8 +110,9 @@ teardown, production artifacts, measured limits, security disposition and
 qualified coupled cutover remain open under #146.
 
 The code-review and verification-before-completion skills remain unavailable;
-no invocation or independent grade is claimed. All new PRs remain drafts for
-review. Only the operator merges, deploys or requests CodeRabbit reviews.
+no invocation is claimed. New PRs are published as drafts; the Planner has
+subsequently marked #318 ready after the grade above. Only the operator merges,
+deploys or requests CodeRabbit reviews.
 
 The integration boundary matters here: a truthful resolved zero must survive
 evidence validation and recording before configured boot admission fails.
