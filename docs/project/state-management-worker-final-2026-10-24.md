@@ -99,21 +99,31 @@ Observe 14, Stop 16, generation 21, emission 33, correction 19, inward 24, retur
 13, external 21 and final workflow 20. The admin fixture binary was rebuilt for
 those joins; the eight privileged admin startup instruments were not run.
 
-All **ten compiled protective mutations** failed at their intended regression:
-unselected text leaked, a statement binding was omitted, the round limit was
-shortened, the non-dispatch cause changed, a queued send completed prematurely,
-the final wait retired before delivery, Stop overtook the owed clean reply,
-a post-send clock failure was misclassified, a reply was sent before Recorded,
-and management blocked the local Stop transition. The last reproduces the real
-DecisionBound stall above. Every original source was restored and verified, then
-the restored 20 final scenarios and lock/fmt/diff checks passed again.
+The corrected final family passed **five idle runs and five loaded runs**, 20
+cases per run, **200/200 cases**. Load was four low-priority SHA256 workers;
+each consumed 42.78-42.79 CPU seconds during the five loaded families. This is
+measured fixture repetition, not production capacity qualification.
 
-The final 673-file source/configuration manifest SHA256 is
-`b3d353718e016fbeacc251e98c2a89a03bfa64ba1d95b50253699485940e0c75`.
-Local evidence is `/tmp/state-146-worker-final/`; final gates are in
-`gates-published/` and final mutations/restoration in `final-protection/`.
-The private target is `/var/tmp/weaver-state-146-worker-final-target`.
-The PR body links the immutable publication deposit and exact committed source.
+The review controls produced two distinct results. Reintroducing a clock sampled
+before request receipt, with a 2 ms delay to expose that ordering, reproduced the
+exact store-measurement clock refusal in the round-limit case. Planner F3,
+removing only AnswerWork's sent_at guard, **survived all 20 final cases**. That
+individual guard is not independently pinned. Source reading explains the extra
+defense: a failed send-clock observation exits pump_once with an error; the input
+or management owner latches TraceFailed and Stopped before AnswerWork can advance
+again. No malformed owner state was injected to manufacture a mutation failure.
+The original ten author mutations remain evidence at bb02de61, not rerun claims
+for this correction; the review discovered that old fixture's unreliable clock.
+
+All **673 source/configuration hashes were restored and verified**, followed by
+another **20/20 restored final cases** and lock/fmt/diff checks. Current manifest
+SHA256: `249aa8a61d60ae5f5953698f731f497611e098c51f8367cfb9fc93a572b01313`.
+Current local evidence is `/tmp/state-146-worker-final-clock-review/`, including
+gates, repetitions, load accounting, controls and restoration. The initial sandbox
+attempt could not start sudo and is retained separately, not counted as a test.
+Original author evidence remains `/tmp/state-146-worker-final/`. The private
+target is `/var/tmp/weaver-state-146-worker-final-target`; the PR body records the
+new immutable deposit and exact committed source.
 
 The first author runs retained two fixture failures: the new recall modes were
 not admitted by the scripted member, and final Decision expiry was incorrectly
@@ -121,13 +131,37 @@ asserted as a lifecycle Wait rather than DecisionBound. Build/lint attempts also
 recorded an exhaustive-match update, a private-helper visibility correction and
 a lazy bool closure lint. They are not passed instruments or perturbations.
 
+## Planner review dispositions
+
+Review 5638580573 at bb02de61 found one fix and nine batch rows. The new head
+requires a Planner regrade; author evidence is not that grade. The current
+correction routes the concurrent final-workflow responder through step_live,
+which samples its clock after each complete request is decoded. Simulated-clock
+responders retain their caller-supplied reading. Production observation validation
+is unchanged. The test-only send probe now uses one atomic load with the same
+Sent/Observed alternatives as sent().
+
+| Row | Disposition |
+| --- | --- |
+| 1 | Corrected responder; idle/loaded repetition counts and exact-source rerun evidence are recorded above. Earlier one-off green author gates remain historical evidence, not proof that the old responder was reliable. |
+| 2 | Open before activation: model-side Finish::Stopped currently refuses the answer election instead of following the existing clean-close road. No elected replacement behavior is claimed. |
+| 3 | Current policy is explicit: a round-limit pass answers from all its selected checked Text, including request statements whose calls are barred. Thus the fixture answers Read/Recall request text while recording not_dispatched/round_limit; it claims no dispatch. Clarifying basic-inference-loop section 6 remains owed. |
+| 4 | Refused still combines answered refusal and unfinished election. The exact finish result keeps custody; splitting the progress states remains owed. The child session layer rejects next_input while the underlying owner cannot finish. |
+| 5 | Stop's gate-send pumping still belongs to the outer management special case. Moving that duty into StopWork, including pre-close waiting, remains owed. |
+| 6 | Observe currently derives Active/Idle from the recorded open_turn. After the close records it can report Idle while world delivery remains owed. The semantic review remains open; no changed election is made here. |
+| 7 | selected_answer still erases answer_text's RepairError. Exact fault/detail propagation remains owed. |
+| 8 | AnswerWork and StopWork still duplicate close-and-carry ownership. A shared owner and uniform complete-send observation remain owed. |
+| 9 | Corrected: the test probe observes status once with the same alternatives as sent(). |
+| 10 | Unavailable self-check skills remain disclosed; no invocation is claimed. |
+
 ## Open boundaries and review carries
 
 - #323 at 89e301d5 was regraded by the Planner in 5638369691: 0 fix, 7 batch,
   1 file, and marked ready. Its residual-owner Busy test/internal repair nuance,
   retirement assertion/factoring, frozen WrongReceipt/delivered tests, record
-  cleanup and unavailable self-check skills remain open. The pre-existing OUTPUT
-  cleanup-bound issue is #326; no fix to that mechanism is claimed here.
+  cleanup and unavailable self-check skills remain open. The reported OUTPUT
+  cleanup-bound issue is #326; its source counterevidence is pending review,
+  and no fix to that mechanism is claimed here.
 - #313 now includes the fourth parallel timestamp fixture. Loaded-run residency
   EAGAIN failures remain separate failures; passing serial runs do not close them.
 - #324 at 5fc27ead was regraded in 5638375910: 0 own fix, 10 batch,

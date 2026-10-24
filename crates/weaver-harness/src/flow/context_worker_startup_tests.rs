@@ -227,6 +227,16 @@ pub(super) struct Member {
 }
 impl Member {
     pub(super) fn step(&mut self, now: u64, mode: &str) {
+        self.step_observed(mode, || now);
+    }
+
+    /// The concurrent worker can send after this responder starts its step.
+    /// Sample a fresh reading only after each complete request is received.
+    pub(super) fn step_live(&mut self, mode: &str) {
+        self.step_observed(mode, || MonotonicIo.now().unwrap());
+    }
+
+    fn step_observed(&mut self, mode: &str, mut now: impl FnMut() -> u64) {
         if self.hold_control.is_none()
             && let Some(response) = self.held_control.take()
         {
@@ -252,7 +262,7 @@ impl Member {
             let line: Vec<_> = self.bytes.drain(..=end).collect();
             let request = s::decode_state_line(&line, s::FrameDirection::Request).unwrap();
             self.ordinal += 1;
-            let observation = operation(&request, self.ordinal, now);
+            let observation = operation(&request, self.ordinal, now());
             let response = match &request {
                 s::StateFrame::Open {
                     schema_id,
