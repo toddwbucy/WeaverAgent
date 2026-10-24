@@ -1963,6 +1963,39 @@ scenario!(
 );
 
 scenario!(
+    worker_final_composition_task_admission_refusal,
+    "input-worker-generation-emission-final-operation-refusal-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_busy,
+    "input-generation-task-admission-busy"
+);
+scenario!(
+    worker_generation_composition_task_admission_busy_deadline,
+    "input-generation-task-admission-busy-deadline"
+);
+scenario!(
+    worker_generation_composition_task_admission_refusal_proof,
+    "input-generation-emission-task-admission-operation-refusal-proof-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_revoked_election,
+    "input-generation-emission-task-admission-operation-refusal-revoked-election-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_revoked_use,
+    "input-generation-emission-task-admission-operation-refusal-revoked-use-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_refusal_gate_pressure,
+    "input-generation-emission-task-admission-operation-refusal-gate-pressure-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_refusal_gate_deadline,
+    "input-generation-emission-task-admission-operation-refusal-gate-deadline-no-task"
+);
+
+scenario!(
     worker_final_composition_operation_repair_refusal,
     "input-worker-generation-emission-final-operation-refusal-repair-refusal"
 );

@@ -29,8 +29,9 @@ impl StopWork {
         self.close.recorded().is_some()
     }
     pub(super) fn answer(&self) -> Option<LifecycleAnswer> {
-        self.close.recorded().map(|_| LifecycleAnswer::TurnAborted {
-            turn: TurnKey(self.close.turn().0.clone()),
+        self.close.recorded()?;
+        Some(LifecycleAnswer::TurnAborted {
+            turn: TurnKey(self.close.turn()?.0.clone()),
         })
     }
     pub(super) fn advance(

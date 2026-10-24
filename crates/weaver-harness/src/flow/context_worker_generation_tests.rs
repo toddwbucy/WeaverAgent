@@ -403,6 +403,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if mode.contains("task-admission-") {
+        return super::admission_tests::exercise(serving, member, reader, clock, root, mode);
+    }
     if mode.contains("-session-") {
         return super::session_tests::exercise(serving, member, reader, clock, socket, root, mode);
     }

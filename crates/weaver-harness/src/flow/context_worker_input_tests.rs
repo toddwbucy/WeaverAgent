@@ -119,6 +119,7 @@ fn worker_input_gate_child() {
         || mode.contains("final-manual-deadline")
         || mode.contains("final-manual-send-clock")
         || mode.contains("refusal-boundary-gate-")
+        || mode.contains("task-admission-operation-refusal-gate-")
     {
         let end = Instant::now() + Duration::from_secs(5);
         while !root.join("drain").exists() && Instant::now() < end {
@@ -155,7 +156,12 @@ fn worker_input_gate_child() {
                     "stopped"
                 }
             );
-            assert_eq!(value["turn"], "generation-turn");
+            if mode.contains("no-task") {
+                assert!(value.get("turn").is_none());
+                assert!(value.get("run").is_none());
+            } else {
+                assert_eq!(value["turn"], "generation-turn");
+            }
         } else if mode.contains("stop-") {
             let Payload::Frame(frame) = &reply.payload else {
                 panic!("actual stopped frame")

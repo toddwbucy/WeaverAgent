@@ -205,6 +205,12 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             })
         ));
     }
+    if mode.contains("no-task") {
+        assert_eq!(progress, worker::turn::Progress::Refused, "{detail:?}");
+        super::admission_tests::assert_refused(input, root, &rows);
+        super::admission_tests::next_input(&mut guard, member, clock, mode);
+        return;
+    }
     if mode.contains("operation-refusal") {
         if progress != worker::turn::Progress::Refused {
             eprintln!(
