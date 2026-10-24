@@ -18,6 +18,32 @@ use weaver_types::{Opened, SessionId, TokenAnswer, TokenDirective, TokenRefusal}
 mod plan_summary_tests;
 
 #[test]
+fn boundary_batch_boot_release_uses_common_clock_failure_with_or_without_custody() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in std::iter::once(None).chain(HOLDS.into_iter().map(Some)) {
+        let mut fx = OpenFixture::new();
+        fx.begin();
+        let run = &mut fx.boot.member.run;
+        let leave = AbsoluteBound::after(run.clock.now().unwrap(), 1000).unwrap();
+        let originals = held.map(|held| hold(&mut run.context, held));
+        run.clock = FakePumpIo::new(0);
+        let failure = run
+            .context
+            .begin_boot_open_release(leave, &mut run.clock)
+            .unwrap_err();
+        assert!(matches!(&failure, RunFailure::Flow {
+            reason: FlowHaltReason::TraceFailed, point: HaltPoint::Author, detail,
+        } if detail == "common clock reversed"));
+        assert_eq!(run.context.failure(), Some(&failure));
+        assert_eq!(run.context.phase(), RecordingPhase::Failed);
+        assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());
+        if let Some(originals) = originals {
+            originals.assert_held(&run.context);
+        }
+    }
+}
+
+#[test]
 fn held_boundary_boot_open_reports_busy_with_the_actual_boot_head_intact() {
     use crate::flow::context::held_input_tests::{HOLDS, hold};
     for held in HOLDS {

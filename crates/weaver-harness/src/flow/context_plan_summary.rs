@@ -903,6 +903,22 @@ impl RecordingContext {
         leave: AbsoluteBound,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
+        // An unheld release attempt already revokes future use, even when a
+        // later prerequisite refuses the transition. Custody alone must not
+        // initiate that cancellation; admitted reads keep their continuation.
+        if !self.caller_author_held()
+            && self.phase == RecordingPhase::Entered
+            && self
+                .plan_summary
+                .as_ref()
+                .is_some_and(|work| !work.effect())
+        {
+            if !self.plan_summary.as_ref().unwrap().rollback.complete {
+                self.plan_summary.as_mut().unwrap().rollback.cancelled = true;
+                self.cancel_plan_summary_read();
+            }
+            self.plan_cache.revoke();
+        }
         self.release_live(io)?;
         let Some(work) = self.plan_summary.as_ref() else {
             return Err(RunFailure::PlanSummaryOwned);
@@ -916,6 +932,7 @@ impl RecordingContext {
                 work.rollback.account_deadline.min(bound)
             });
         let account_ready = work.rollback.account_settled || self.last_ns >= account_deadline;
+        let read_started = work.rollback.started;
         if self.filing.is_some()
             || self.output.is_some()
             || self.pair_work.is_some()
@@ -945,16 +962,13 @@ impl RecordingContext {
         // An unfinished account is an independent ownership refusal. Held
         // input still excludes starting its cancellation as a release side effect;
         // the already admitted read may continue through its private owner.
-        if !account_ready && self.caller_author_held() {
+        if !account_ready
+            && self.caller_author_held()
+            && (read_started || self.held_input() == Some(HeldInput::Caller))
+        {
             return Err(RunFailure::PlanSummaryOwned);
         }
         self.check_held_input()?;
-        let work = self.plan_summary.as_mut().unwrap();
-        if !work.rollback.complete {
-            work.rollback.cancelled = true;
-            self.cancel_plan_summary_read();
-        }
-        self.plan_cache.revoke();
         self.freeze_plan_summary_account_bound();
         if !account_ready {
             return Err(RunFailure::PlanSummaryOwned);

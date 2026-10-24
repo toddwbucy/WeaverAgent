@@ -898,7 +898,7 @@ impl RecordingContext {
             ));
         }
         self.flow
-            .check_releasing(&mut FlowRecording {
+            .require_releasing(&mut FlowRecording {
                 barrier: &mut self.barrier,
                 inbox: &mut self.inbox,
                 budget: &mut self.budget,
@@ -948,7 +948,7 @@ impl RecordingContext {
             ));
         }
         self.flow
-            .check_enter_rollback(&mut FlowRecording {
+            .require_enter_rollback(&mut FlowRecording {
                 barrier: &mut self.barrier,
                 inbox: &mut self.inbox,
                 budget: &mut self.budget,
@@ -1024,7 +1024,7 @@ impl RecordingContext {
         }
         if self.flow.phase() != CoordinatorPhase::Closed {
             self.flow
-                .check_close(&mut FlowRecording {
+                .require_close(&mut FlowRecording {
                     barrier: &mut self.barrier,
                     inbox: &mut self.inbox,
                     budget: &mut self.budget,

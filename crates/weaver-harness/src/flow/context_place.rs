@@ -528,25 +528,26 @@ impl RecordingContext {
         if self.place_engine.is_none() {
             return Err(PlaceError::WrongProof);
         }
-        if self.caller_author_held()
-            || self.place_blocks_external()
-            || self.place_engine.as_ref().unwrap().staged.is_some()
-        {
-            return Err(PlaceError::Busy(self.held_input()));
-        }
         let journal = self.boot_journal.as_ref().ok_or(PlaceError::WrongProof)?;
         let assembly = journal.next_assembly().into();
-        match journal.prepare(cut, method) {
-            Ok(p) => Ok(p),
+        let prefix = match journal.prepare(cut, method) {
+            Ok(p) => p,
             Err(_) => {
                 self.queue_place_refusal(
                     assembly,
                     PlacementCode::InvalidCut,
                     "cut address is not an active occurrence",
                 )?;
-                Err(PlaceError::InvalidPrefix)
+                return Err(PlaceError::InvalidPrefix);
             }
+        };
+        if self.caller_author_held()
+            || self.place_blocks_external()
+            || self.place_engine.as_ref().unwrap().staged.is_some()
+        {
+            return Err(PlaceError::Busy(self.held_input()));
         }
+        Ok(prefix)
     }
     pub(super) fn place_measurement_continuation(&self, key: PumpDeadline) -> bool {
         match key {
@@ -681,14 +682,6 @@ impl RecordingContext {
         }
         self.check_place_port(decode)
             .map_err(|_| PlaceError::WrongProof)?;
-        if self.place_busy()
-            || self
-                .place_engine
-                .as_ref()
-                .is_some_and(|e| e.outstanding.is_some() || e.staged.is_some())
-        {
-            return Err(PlaceError::Busy(self.held_input()));
-        }
         let engine = self.place_engine.as_ref().ok_or(PlaceError::WrongProof)?;
         let journal = self.boot_journal.as_ref().ok_or(PlaceError::WrongProof)?;
         if journal.check_projection(&prefix.projection).is_err() {
@@ -700,6 +693,9 @@ impl RecordingContext {
         journal
             .validate_selection(&prefix.projection, units.iter())
             .map_err(|_| PlaceError::InvalidUnits)?;
+        if self.place_busy() || engine.outstanding.is_some() || engine.staged.is_some() {
+            return Err(PlaceError::Busy(self.held_input()));
+        }
         let mut delta = prefix.rebuild();
         for unit in units {
             delta.extend(unit.messages().iter().cloned());
@@ -722,7 +718,7 @@ impl RecordingContext {
                 if e.failure.is_some() {
                     PlaceError::WrongPhase
                 } else {
-                    PlaceError::Busy(self.held_input())
+                    PlaceError::Busy(None)
                 }
             })
     }
@@ -766,12 +762,6 @@ impl RecordingContext {
             || self.phase != RecordingPhase::Entered
         {
             Some(PlaceError::WrongPhase)
-        } else if self.place_busy()
-            || self.place_engine.as_ref().is_some_and(|e| {
-                e.outstanding.is_some() || (e.staged.is_some() && staged.is_none())
-            })
-        {
-            Some(PlaceError::Busy(self.held_input()))
         } else if self.place_engine.is_none() || !self.native_place_cache_ready() {
             Some(PlaceError::WrongProof)
         } else if self.open_turn.is_none() || self.deadlines.get(PumpDeadline::Decision).is_none() {
@@ -805,6 +795,47 @@ impl RecordingContext {
                 input: request,
                 refusal,
                 failure,
+                staged,
+            });
+        }
+        // Validate immutable material before custody, without burning IDs or
+        // moving any selection out of its caller-owned request.
+        let selected = staged
+            .iter()
+            .flat_map(|held| held.units.iter().map(Arc::as_ref))
+            .chain(request.selection.iter());
+        if let Err(error) = self
+            .boot_journal
+            .as_ref()
+            .unwrap()
+            .validate_selection(&request.prefix.projection, selected)
+        {
+            let code = if error == crate::flow::journal::JournalError::InvalidPair {
+                PlacementCode::InvalidPair
+            } else {
+                PlacementCode::InvalidSpan
+            };
+            let _ = self.queue_place_refusal(
+                request.prefix.assembly,
+                code,
+                "selected material cannot be placed at this prefix",
+            );
+            return Err(PlaceBeginError {
+                input: request,
+                refusal: PlaceError::InvalidUnits,
+                failure: None,
+                staged,
+            });
+        }
+        if self.place_busy()
+            || self.place_engine.as_ref().is_some_and(|e| {
+                e.outstanding.is_some() || (e.staged.is_some() && staged.is_none())
+            })
+        {
+            return Err(PlaceBeginError {
+                input: request,
+                refusal: PlaceError::Busy(self.held_input()),
+                failure: None,
                 staged,
             });
         }
@@ -908,7 +939,7 @@ impl RecordingContext {
             self.barrier.set_place_owed(self.place_owed());
             return Err(PlaceBeginError {
                 input,
-                refusal: PlaceError::Busy(self.held_input()),
+                refusal: PlaceError::Busy(None),
                 failure: error.failure,
                 staged: work.staged,
             });

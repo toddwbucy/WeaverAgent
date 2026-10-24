@@ -1455,7 +1455,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
 
     /// Existing admin rollback, after an actual preactivation enter refusal.
     /// No tee was installed and this Open can never authorize boot or filing.
-    pub(super) fn check_enter_rollback(
+    pub(super) fn require_enter_rollback(
         &mut self,
         cx: &mut FlowRecording<'_>,
     ) -> Result<(), FlowFailure> {
@@ -1489,10 +1489,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         cx: &mut FlowRecording<'_>,
         _io: &mut impl PumpIo,
     ) -> Result<Advance, FlowFailure> {
-        self.check_enter_rollback(cx)?;
-        let Some(owner) = &mut self.state else {
-            return Err(self.fail(cx, "barrier", "enter rollback lost its state owner"));
-        };
+        self.require_enter_rollback(cx)?;
+        let owner = self.state.as_mut().expect("required rollback state owner");
         let unused = owner
             .abandon_unactivated_open()
             .map_err(|error| self.fail(cx, "state_reply", error))?;
@@ -1659,7 +1657,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             .and_then(|account| account.close_error.as_deref())
     }
 
-    pub(super) fn check_releasing(
+    pub(super) fn require_releasing(
         &mut self,
         cx: &mut FlowRecording<'_>,
     ) -> Result<(), FlowFailure> {
@@ -1685,7 +1683,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         &mut self,
         cx: &mut FlowRecording<'_>,
     ) -> Result<(), FlowFailure> {
-        self.check_releasing(cx)?;
+        self.require_releasing(cx)?;
         self.phase = CoordinatorPhase::Releasing;
         Ok(())
     }
@@ -1757,7 +1755,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         Ok(Advance::Progress)
     }
 
-    pub(super) fn check_close(&mut self, cx: &mut FlowRecording<'_>) -> Result<(), FlowFailure> {
+    pub(super) fn require_close(&mut self, cx: &mut FlowRecording<'_>) -> Result<(), FlowFailure> {
         self.observe_failures(cx)?;
         if self.phase != CoordinatorPhase::Releasing
             || !self.state_retired
@@ -1774,7 +1772,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     }
 
     pub(super) fn close(&mut self, cx: &mut FlowRecording<'_>) -> Result<(), FlowFailure> {
-        self.check_close(cx)?;
+        self.require_close(cx)?;
         self.phase = CoordinatorPhase::Closed;
         Ok(())
     }
@@ -1845,7 +1843,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
 
     /// The context has frozen ordinary admission at a turn boundary. Existing
     /// owed copies still drain through their actual classification and receipts.
-    pub(super) fn check_capture_barrier(
+    pub(super) fn require_capture_barrier(
         &mut self,
         cx: &mut FlowRecording<'_>,
         capture_id: DecimalU64,
@@ -1865,7 +1863,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         capture_id: DecimalU64,
         frontier: u64,
     ) -> Result<(), FlowFailure> {
-        self.check_capture_barrier(cx, capture_id, frontier)?;
+        self.require_capture_barrier(cx, capture_id, frontier)?;
         self.capture = Some(CaptureOwner {
             snapshot: CaptureSnapshot {
                 capture_id,
