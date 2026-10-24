@@ -38,3 +38,11 @@ pub mod readout;
 pub mod residency;
 pub mod sampling;
 pub mod ste100;
+
+// One copy of shared helpers per unit-test binary, including isolated children.
+#[cfg(test)]
+#[path = "../tests/common/ste100_fixture.rs"]
+mod ste100_test_fixture;
+#[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod test_common;

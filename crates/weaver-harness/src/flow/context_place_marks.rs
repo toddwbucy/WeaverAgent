@@ -431,12 +431,14 @@ impl RecordingContext {
             return Ok(PlaceProgress::Progress);
         }
         let work = self.native_marks.as_mut().unwrap();
-        // All admitted positions now have their actual Recorded receipts. Stop
-        // revokes continuation, not these committed facts. Preserve the original
-        // proposal until extraction (Stop may arrive after completion), while
-        // publishing the same scope proof. Teardown uses its trace-only path.
+        // All admitted positions have actual Recorded receipts. Entered adopts
+        // the owned proposal once. Only cancelled-account extraction later
+        // copies it for evidence; ordinary success needs no metadata clone.
         if self.phase == RecordingPhase::Entered {
-            self.place_engine.as_mut().unwrap().native = work.next.as_ref().unwrap().clone();
+            self.place_engine.as_mut().unwrap().native = work
+                .next
+                .take()
+                .expect("unsettled native work retains its proposal");
         }
         work.done = true;
         Ok(PlaceProgress::Complete)
@@ -512,10 +514,11 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<NativeMarkCompletion>, RunFailure> {
         self.live(io)?;
-        if !self
-            .native_marks
-            .as_ref()
-            .is_some_and(|work| work.done && !work.cancelled)
+        if self.phase != RecordingPhase::Entered
+            || !self
+                .native_marks
+                .as_ref()
+                .is_some_and(|work| work.done && !work.cancelled)
         {
             return Ok(None);
         }
@@ -526,6 +529,23 @@ impl RecordingContext {
             positions: work.registered,
             recorded: work.recorded,
         }))
+    }
+
+    pub(super) fn take_native_account_work(&mut self) -> Option<NativeMarkTransaction> {
+        let mut work = self.native_marks.take()?;
+        if work.next.is_none() {
+            // No competing placement can change this engine while native work
+            // still owns the slot. The missing proposal was moved here at its
+            // actual Entered completion, before a later Stop/teardown.
+            work.next = Some(
+                self.place_engine
+                    .as_ref()
+                    .expect("native work retains its engine")
+                    .native
+                    .clone(),
+            );
+        }
+        Some(work)
     }
 
     /// A settled cancellation can leave Entered without resetting its original
@@ -547,9 +567,10 @@ impl RecordingContext {
         {
             return Ok(None);
         }
-        let work = self.native_marks.take().unwrap();
+        let work = self.take_native_account_work().unwrap();
         self.barrier.set_place_owed(self.place_owed());
         Ok(Some(PlaceAccount {
+            phase: self.phase,
             work: AccountWork::Native(Box::new(work)),
             measure: None,
         }))

@@ -1013,3 +1013,6 @@ mod cut_tests;
 mod material_tests;
 #[path = "context_place_native_tests.rs"]
 mod native_tests;
+
+#[path = "context_place_append_review_tests.rs"]
+mod append_review_tests;

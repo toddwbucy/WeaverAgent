@@ -19,7 +19,9 @@ these dormant owner boundaries, subject to Planner verification.
 A cancelled reload account can now transfer its exact fully Recorded Staged
 reservation once. Confirmed cut remains a persistent fact after extraction,
 so the old pre-cut inputs cannot be returned even after a no-op Elide. A
-complete no-mutation account can instead return its original prefix and tail.
+complete no-mutation account can instead return its retained prefix and original
+tail. The prefix may have been re-prepared or refreshed during queue/drain, so
+it is not necessarily the caller's initial prefix value.
 Returned custody distinguishes the original tail, already filed ordered units
 and the actual rejected source disposition. A genuine rejection refuses retry
 conversion and returns the same object. Otherwise conversion retains each
@@ -38,7 +40,9 @@ The original Decision remains unchanged. Stop during a turn still bars work
 until its actual TurnClosed records. At-rest Stop creates no run-wide latch.
 Leave and JoinLeave continue to refuse later append and turn admission.
 Settling recorded facts grants neither placement nor generation. Failed and
-Releasing extraction remains trace-only and cannot revive the engine.
+Releasing accounts can expose retained input or Staged objects, but later begin
+paths refuse their use and teardown clears the live reservation. These objects
+do not revive the engine or provide usable generation authority.
 
 ## Callers and validation
 
@@ -54,7 +58,9 @@ independent Leave refusal with a real turn and Decision. Four native tests
 cover Stop during and after recording, next-turn measured generation,
 Leave/JoinLeave and recorder pressure. The existing pending-source rejection
 fixture now checks the real rejected disposition and refused conversion.
-The existing Releasing test still forbids native cache adoption.
+The existing Releasing test ran, but the later Planner M2 mutation survived it:
+it does not independently prove the native-adoption phase guard. That distinct
+test gap remains tracked.
 
 Serialized author gates used the pinned toolchain, --locked and private target
 /tmp/weaver-146-place-stop-returns-target, with lock.sh first:

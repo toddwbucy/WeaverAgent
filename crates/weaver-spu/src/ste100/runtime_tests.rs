@@ -14,8 +14,7 @@ use weaver_types::state_flow::{
     Ste100Reply, Ste100Target, decode_strict,
 };
 
-#[path = "../../tests/common/ste100_fixture.rs"]
-mod fixture;
+use crate::ste100_test_fixture as fixture;
 
 #[derive(Debug)]
 enum Event {
@@ -29,9 +28,11 @@ enum Event {
         thread: thread::ThreadId,
         files_alive: bool,
     },
+    DropWaiting,
     Dropped {
         thread: thread::ThreadId,
         files_alive: bool,
+        grammars_alive: bool,
     },
 }
 enum AdmissionStep {
@@ -42,6 +43,7 @@ enum AdmissionStep {
 enum CheckStep {
     Result(Ste100Result),
     Panic,
+    PanicHoldingDrop(Receiver<()>),
 }
 struct Adapter {
     admission: Mutex<Receiver<AdmissionStep>>,
@@ -79,6 +81,8 @@ impl AdapterAdmission for Adapter {
         match self.admission.lock().unwrap().recv() {
             Ok(AdmissionStep::Proceed) => Ok(Backend {
                 files,
+                grammars: artifacts.grammar_lifetime(),
+                drop_gate: None,
                 checks: self.checks.lock().unwrap().take().unwrap(),
                 events: self.events.clone(),
                 _not_send: Rc::new(()),
@@ -94,6 +98,8 @@ impl AdapterAdmission for Adapter {
 }
 struct Backend {
     files: Vec<Weak<Vec<u8>>>,
+    grammars: Weak<()>,
+    drop_gate: Option<Receiver<()>>,
     checks: Receiver<CheckStep>,
     events: Sender<Event>,
     // A future device adapter may be thread-affine. The runtime must construct,
@@ -129,15 +135,24 @@ impl CheckBackend for Backend {
                 result
             }
             Ok(CheckStep::Panic) => panic!("test-only checker panic"),
+            Ok(CheckStep::PanicHoldingDrop(gate)) => {
+                self.drop_gate = Some(gate);
+                panic!("test-only checker panic with blocked destructor");
+            }
             Err(_) => component(Ste100ComponentCode::NoResult, "test controller retired"),
         }
     }
 }
 impl Drop for Backend {
     fn drop(&mut self) {
+        if let Some(gate) = self.drop_gate.take() {
+            let _ = self.events.send(Event::DropWaiting);
+            let _ = gate.recv();
+        }
         let _ = self.events.send(Event::Dropped {
             thread: thread::current().id(),
             files_alive: self.inputs_alive(),
+            grammars_alive: self.grammars.upgrade().is_some(),
         });
     }
 }
@@ -384,12 +399,17 @@ fn assert_dropped(control: &Control, owner: thread::ThreadId, files: &[Weak<Vec<
     let Event::Dropped {
         thread,
         files_alive,
+        grammars_alive,
     } = control.event()
     else {
         panic!("actual backend destructor expected");
     };
     assert_eq!(thread, owner);
     assert!(files_alive, "all checked bytes outlive backend destructor");
+    assert!(
+        grammars_alive,
+        "actual admitted grammar owner outlives backend destructor"
+    );
     let deadline = Instant::now() + Duration::from_secs(30);
     while files.iter().any(|file| file.strong_count() != 0) {
         assert!(Instant::now() < deadline, "retired file ownership leaked");
@@ -1006,4 +1026,132 @@ fn ste100_runtime_production_constructor_cannot_select_a_test_adapter_even_for_v
         assert_eq!(runtime.position(), Position::Closed);
         assert!(peer.try_receive().is_err());
     }
+}
+
+#[test]
+fn ste100_runtime_review_panic_notifies_before_a_blocked_backend_destructor() {
+    let (fixture, mut peer, mut runtime, control, owner, files) = ready();
+    let request = request(&fixture.bootstrap, 1);
+    submit(&mut runtime, &mut peer, &control, &request, owner);
+    let (release, gate) = channel();
+    control
+        .checks
+        .as_ref()
+        .unwrap()
+        .send(CheckStep::PanicHoldingDrop(gate))
+        .unwrap();
+    assert!(matches!(control.event(), Event::DropWaiting));
+    // This sender stays held through the actual terminal reply. Dropping it on
+    // a test assertion also releases the fixture worker; there is no leaked wait.
+    assert!(matches!(
+        reply(&mut runtime, &mut peer, &request).result,
+        Ste100Result::ComponentFailed {
+            code: Ste100ComponentCode::NoResult,
+            ..
+        }
+    ));
+    assert_eq!(runtime.position(), Position::Closed);
+    assert!(
+        matches!(control.events.try_recv(), Err(TryRecvError::Empty)),
+        "backend destruction remains blocked while the reactor already answered"
+    );
+    release.send(()).unwrap();
+    assert_dropped(&control, owner, &files);
+}
+
+#[test]
+fn ste100_runtime_review_backend_drop_precedes_grammar_owner_retirement() {
+    let (_fixture, peer, mut runtime, control, owner, files) = ready();
+    drop(peer);
+    assert_eq!(
+        runtime.advance().unwrap(),
+        RuntimeProgress::Stopped(Stop::PeerClosed)
+    );
+    // The cfg(test) Weak token observes actual VerifiedArtifacts destruction.
+    // This is an ownership-order instrument, not a deferred grammar-byte read.
+    assert_dropped(&control, owner, &files);
+}
+
+#[test]
+fn ste100_runtime_review_actual_wait_wakes_for_reply_writability() {
+    let limit = 1_000_000;
+    let (fixture, peer, mut runtime, control, owner, files) = ready_with_limit(limit);
+    let mut peer = Some(peer);
+    nix::sys::socket::setsockopt(
+        &runtime.dispatcher.readiness(),
+        nix::sys::socket::sockopt::SndBuf,
+        &65_536_usize,
+    )
+    .unwrap();
+    let request = request(&fixture.bootstrap, 1);
+    submit(
+        &mut runtime,
+        peer.as_mut().unwrap(),
+        &control,
+        &request,
+        owner,
+    );
+    let expected = defect_with_encoded_length(&request, limit);
+    control.result(expected.clone());
+    wait_worker_ready(&runtime);
+    runtime.advance().unwrap();
+    let mut pressure = false;
+    for _ in 0..64 {
+        if runtime.advance().unwrap() == RuntimeProgress::Pending {
+            pressure = true;
+            break;
+        }
+    }
+    assert!(pressure && runtime.dispatcher.wants_write());
+    assert_eq!(runtime.position(), Position::ReplyPending);
+    assert!(
+        matches!(runtime.worker.as_mut().unwrap().completion(), Ok(None)),
+        "completion wake was drained; only socket writability can release this wait"
+    );
+    let (started, checkpoint) = channel();
+    let (finished, result) = channel();
+    let driver = thread::spawn(move || {
+        started.send(()).unwrap();
+        let waited = runtime.wait();
+        assert!(finished.send((runtime, waited)).is_ok());
+    });
+    checkpoint.recv_timeout(Duration::from_secs(30)).unwrap();
+    let mut fragments = 0;
+    loop {
+        match peer.as_mut().unwrap().try_receive().unwrap() {
+            Receive::Fragment => fragments += 1,
+            Receive::Pending => break,
+            Receive::Complete(_) => panic!("fixture must keep an unsent reply fragment"),
+        }
+    }
+    assert!(fragments > 0);
+    let timely = result.recv_timeout(Duration::from_secs(5));
+    let woke_for_write = timely.is_ok();
+    let (mut runtime, waited) = match timely {
+        Ok(result) => result,
+        Err(_) => {
+            // Rescue the real poll only after measuring the missing wake. No
+            // peer packet or worker completion is used as the positive signal.
+            drop(peer.take());
+            result
+                .recv_timeout(Duration::from_secs(30))
+                .expect("peer close releases failed poll")
+        }
+    };
+    driver.join().unwrap();
+    assert!(
+        woke_for_write,
+        "pending reply never woke on actual socket writability"
+    );
+    waited.unwrap();
+    assert_eq!(
+        reply(&mut runtime, peer.as_mut().unwrap(), &request).result,
+        expected
+    );
+    drop(peer.take());
+    assert_eq!(
+        runtime.advance().unwrap(),
+        RuntimeProgress::Stopped(Stop::PeerClosed)
+    );
+    assert_dropped(&control, owner, &files);
 }

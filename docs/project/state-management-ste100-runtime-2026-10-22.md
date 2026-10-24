@@ -7,8 +7,14 @@ It is stacked above exact #271, head
 4c7f2304ca51f1afd40716fc5510d451eb779328. The source archive SHA-256 is
 12ee67f9b13fa9de87b0a40b91490f1fb28aac52e0cc667872f904da43ab3a67.
 Each of the 22 runtime paths matched its reviewed immutable base before
-integration. Parent harness and serving source remain unchanged. Earlier
+integration. Parent harness and worker serving source remain unchanged. Earlier
 source snapshots and independent reviews remain in the evidence deposit.
+
+The shared ModelBinding decoder does narrow live admin TOML parsing: positional
+arrays such as model-binding = ["/m", [0]], previously accepted by serde, now
+refuse. Canonical object bindings remain supported. The refusal remains BadValue,
+although its type-mismatch text now says "expected a JSON object". Planner
+review of #272 at 044d1049 names this as finding 10. No serving activation follows.
 
 ## Authority and boundary
 

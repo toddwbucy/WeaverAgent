@@ -836,7 +836,7 @@ fn matching_manifest_reuses_the_descriptor_and_rechecks_materialized_bytes() {
     std::fs::write(fixture.path(), &raw).unwrap();
     let mut file = regular_file(File::open(fixture.path()).unwrap(), "manifest").unwrap();
     let mut changed = fixture.manifest.clone();
-    changed.encoder.family = "different-but-valid-family".into();
+    changed.encoder.family = "x".repeat(changed.encoder.family.len());
     let changed = serde_json::to_vec(&changed).unwrap();
     let refusal = read_matching_manifest(&mut file, &fixture.bootstrap.instruction, || {
         std::fs::write(fixture.path(), &changed).unwrap();
@@ -864,12 +864,13 @@ fn regular_kind_check_clears_nonblocking_before_reading_data() {
         !OFlag::from_bits_truncate(fcntl(&file, FcntlArg::F_GETFL).unwrap())
             .contains(OFlag::O_NONBLOCK)
     );
+    let expected = std::fs::read(fixture.path()).unwrap();
     assert_eq!(
-        read_owned(&mut file, 0, "manifest")
+        read_owned(&mut file, expected.len() as u64, "manifest")
             .unwrap()
             .bytes
             .as_slice(),
-        std::fs::read(fixture.path()).unwrap()
+        expected
     );
 }
 
@@ -1285,14 +1286,14 @@ fn retained_reference_hashes_the_same_descriptor_bytes_and_refuses_in_place_chan
     std::fs::write(&path, INPUTS[4].1).unwrap();
     let mut file = regular_file(File::open(&path).unwrap(), "head.bin").unwrap();
     let refusal = read_matching_bytes(&mut file, &expected, "head.bin", || {
-        std::fs::write(&path, b"in-place replacement").unwrap();
+        std::fs::write(&path, vec![b'x'; INPUTS[4].1.len()]).unwrap();
     })
     .unwrap_err();
     assert!(refusal.detail.contains("retained artifact digest differs"));
 }
 
 #[test]
-fn retained_read_hash_covers_growth_short_reads_and_interrupted_reads() {
+fn retained_read_hash_covers_exact_length_short_reads_and_interrupted_reads() {
     struct ShortRead {
         data: std::io::Cursor<Vec<u8>>,
         interrupt: bool,
@@ -1315,7 +1316,7 @@ fn retained_read_hash_covers_growth_short_reads_and_interrupted_reads() {
         data: std::io::Cursor::new(bytes.clone()),
         interrupt: true,
     };
-    let held = read_owned(&mut reader, 1, "growing-ref").unwrap();
+    let held = read_owned(&mut reader, bytes.len() as u64, "matching-ref").unwrap();
     assert_eq!(held.bytes.as_slice(), bytes);
     assert_eq!(held.digest, sha256(&bytes));
 }
@@ -1420,4 +1421,60 @@ fn each_manifest_fixture_tag_refuses_before_a_missing_reference() {
         );
         assert_eq!(adapter.calls.get(), 0);
     }
+}
+
+#[test]
+fn artifact_review_second_pass_growth_stops_at_the_prechecked_length_plus_one() {
+    struct Counted {
+        file: File,
+        bytes: u64,
+    }
+    impl Read for Counted {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.file.read(out)?;
+            self.bytes += count as u64;
+            Ok(count)
+        }
+    }
+    impl Seek for Counted {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.file.seek(pos)
+        }
+    }
+    let fixture = Fixture::new();
+    let path = fixture.root.join("head.bin");
+    let original = INPUTS[4].1;
+    let mut reader = Counted {
+        file: File::open(&path).unwrap(),
+        bytes: 0,
+    };
+    let refusal = read_matching_bytes(&mut reader, &sha256(original), "head.bin", || {
+        use std::io::Write;
+        let mut writer = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writer.write_all(&vec![b'x'; READ_CHUNK * 4]).unwrap();
+    })
+    .unwrap_err();
+    assert_eq!(refusal.code, Ste100AdmissionCode::UnsupportedArtifact);
+    assert!(refusal.detail.contains("size changed after precheck"));
+    assert_eq!(
+        reader.bytes,
+        original.len() as u64 * 2 + 1,
+        "the retained pass consumes only its admitted length plus one growth witness"
+    );
+}
+
+#[test]
+fn artifact_review_second_pass_shrink_refuses_before_material_is_used() {
+    let fixture = Fixture::new();
+    let path = fixture.root.join("head.bin");
+    let mut reader = File::open(&path).unwrap();
+    let refusal = read_matching_bytes(&mut reader, &sha256(INPUTS[4].1), "head.bin", || {
+        std::fs::write(&path, &INPUTS[4].1[..2]).unwrap();
+    })
+    .unwrap_err();
+    assert_eq!(refusal.code, Ste100AdmissionCode::UnsupportedArtifact);
+    assert!(refusal.detail.contains("size changed after precheck"));
 }

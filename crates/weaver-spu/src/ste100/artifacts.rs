@@ -119,7 +119,12 @@ fn acquire_compatible_with(
         .chain([&manifest.tokenizer, &manifest.span_head])
     {
         // validate() already checked all names before the first reference open.
-        if !files.contains_key(&reference.name) {
+        if let Some(held) = files.get(&reference.name) {
+            // A repeated declaration shares one allocation, but must name its digest.
+            if held.digest != reference.sha256 {
+                return Err(failure(&reference.name, "manifest file digest differs"));
+            }
+        } else {
             let descriptor = retry_confined_open(|| {
                 // BENEATH currently also disables magic links on Linux. Keep the
                 // explicit NO_MAGICLINKS requirement if that kernel behavior changes;
@@ -135,11 +140,6 @@ fn acquire_compatible_with(
                 acquired(Acquired::Materialize(&reference.name))
             })?;
             files.insert(reference.name.clone(), held);
-        }
-        // Compare each declaration to the digest of the same retained allocation.
-        // A repeated name neither reopens the path nor rehashes the payload.
-        if files[&reference.name].digest != reference.sha256 {
-            return Err(failure(&reference.name, "manifest file digest differs"));
         }
         acquired(Acquired::Reference(&reference.name));
     }
@@ -284,9 +284,19 @@ fn read_owned(
         .map_err(|error| failure(name, error))?;
     let mut chunk = [0u8; READ_CHUNK];
     loop {
-        let size = read_chunk(reader, &mut chunk, name)?;
+        // The observed precheck length is the admitted input size, not a policy cap.
+        // Read at most its remaining bytes plus one sentinel to detect growth.
+        let remaining = len - bytes.len();
+        let read_limit = remaining.saturating_add(1).min(chunk.len());
+        let size = read_chunk(reader, &mut chunk[..read_limit], name)?;
         if size == 0 {
+            if bytes.len() != len {
+                return Err(failure(name, "artifact size changed after precheck"));
+            }
             break;
+        }
+        if size > remaining {
+            return Err(failure(name, "artifact size changed after precheck"));
         }
         bytes
             .try_reserve(size)

@@ -800,10 +800,7 @@ fn release_owed_boot_defense_returns_typed_refusal_without_admission_or_halt() {
                 .wait_recorded(&mut ports(&mut fx.clock), progress),
             Err(RunFailure::BootOpenOwned)
         );
-        assert_eq!(
-            format!("{:?}", fx.context.refused_author().unwrap()),
-            expected
-        );
+        assert_eq!(format!("{:?}", fx.context.held_author().unwrap()), expected);
         assert!(fx.context.failure().is_none());
         assert!(fx.context.barrier.failure().is_none());
         assert!(!fx.context.budget.is_frozen());
@@ -812,7 +809,8 @@ fn release_owed_boot_defense_returns_typed_refusal_without_admission_or_halt() {
         assert!(fx.context.release_author.is_none());
         assert_eq!(fx.context.barrier.recorder().structure().len(), before);
         fx.context.barrier.set_boot_open_owed(false);
-        fx.author(shutdown(kind)).unwrap();
+        let original = fx.context.take_held_author().unwrap();
+        fx.author(original).unwrap();
         assert_eq!(fx.context.barrier.recorder().structure().len(), before + 1);
     }
 }
@@ -908,3 +906,9 @@ fn release_returned_original_survives_a_failing_intake_before_the_hold_result() 
         assert_eq!(fx.context.phase(), RecordingPhase::Failed);
     }
 }
+
+#[path = "context_release_custody_tests.rs"]
+mod custody_tests;
+
+#[path = "context_author_admission_review_tests.rs"]
+mod author_admission_review_tests;

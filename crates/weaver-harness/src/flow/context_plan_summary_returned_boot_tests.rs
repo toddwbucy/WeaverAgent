@@ -14,13 +14,13 @@ fn take_completed_boot(
     assert!(run.context.plan_summary.is_none());
     assert_eq!(
         proof.disposition_for_test(),
-        (
-            true,
-            false,
-            PumpDeadline::Enter,
-            evidence.enter,
-            evidence.enter.deadline_ns()
-        )
+        PlanSummaryDisposition {
+            complete: true,
+            cancelled: false,
+            key: PumpDeadline::Enter,
+            bound: evidence.enter,
+            account_deadline: evidence.enter.deadline_ns()
+        }
     );
     (fx, evidence, proof)
 }
@@ -211,7 +211,7 @@ fn returned_boot_rollback_missing_or_replaced_enter_returns_original_then_accept
             .as_ref()
             .unwrap()
             .disposition_for_test()
-            .3,
+            .bound,
         evidence.enter
     );
     let account = rollback_boot_summary(&mut fx);
@@ -264,7 +264,7 @@ fn returned_boot_rollback_expired_enter_retains_exact_completed_evidence_without
             .as_ref()
             .unwrap()
             .disposition_for_test()
-            .4,
+            .account_deadline,
         evidence.enter.deadline_ns()
     );
     let leave = completed_boot_leave(&mut fx, &evidence, true);
@@ -275,7 +275,7 @@ fn returned_boot_rollback_expired_enter_retains_exact_completed_evidence_without
     let account = run.context.take_stopped_plan_summary().unwrap().unwrap();
     assert_completed_boot_account(&mut fx, &evidence, &account, leave);
     assert_eq!(
-        account.disposition_for_test().4,
+        account.disposition_for_test().account_deadline,
         evidence.enter.deadline_ns()
     );
 }
@@ -308,14 +308,23 @@ fn returned_boot_rollback_after_first_failure_freezes_original_leave_and_halt_mi
         run.context
             .restore_boot_plan_summary_for_rollback(proof)
             .unwrap();
-        let expected = disposition.4.min(leave.deadline_ns()).min(halt);
+        let expected = disposition
+            .account_deadline
+            .min(leave.deadline_ns())
+            .min(halt);
         assert_eq!(
             run.context
                 .plan_summary
                 .as_ref()
                 .unwrap()
                 .disposition_for_test(),
-            (true, false, PumpDeadline::Enter, original, expected)
+            PlanSummaryDisposition {
+                complete: true,
+                cancelled: false,
+                key: PumpDeadline::Enter,
+                bound: original,
+                account_deadline: expected
+            }
         );
         assert_eq!(
             run.context.take_plan_summary(&mut run.clock).unwrap_err(),
@@ -330,7 +339,13 @@ fn returned_boot_rollback_after_first_failure_freezes_original_leave_and_halt_mi
         let account = run.context.take_stopped_plan_summary().unwrap().unwrap();
         assert_eq!(
             account.disposition_for_test(),
-            (true, false, PumpDeadline::Enter, original, expected)
+            PlanSummaryDisposition {
+                complete: true,
+                cancelled: false,
+                key: PumpDeadline::Enter,
+                bound: original,
+                account_deadline: expected
+            }
         );
         assert_eq!(
             std::ptr::from_ref(account.recorded_read().unwrap()) as usize,
@@ -366,7 +381,10 @@ fn returned_boot_rollback_extraction_keeps_a_retired_shorter_leave_in_the_origin
     else {
         panic!("held Leave alone does not invent an observed lifecycle Stop");
     };
-    assert_eq!(proof.disposition_for_test().4, original_leave.deadline_ns());
+    assert_eq!(
+        proof.disposition_for_test().account_deadline,
+        original_leave.deadline_ns()
+    );
     assert_eq!(
         run.context.complete_wait(PumpDeadline::Leave),
         Some(original_leave)
@@ -384,7 +402,7 @@ fn returned_boot_rollback_extraction_keeps_a_retired_shorter_leave_in_the_origin
             .as_ref()
             .unwrap()
             .disposition_for_test()
-            .4,
+            .account_deadline,
         original_leave.deadline_ns()
     );
     run.context
@@ -393,13 +411,13 @@ fn returned_boot_rollback_extraction_keeps_a_retired_shorter_leave_in_the_origin
     let account = run.context.take_stopped_plan_summary().unwrap().unwrap();
     assert_eq!(
         account.disposition_for_test(),
-        (
-            true,
-            false,
-            PumpDeadline::Enter,
-            evidence.enter,
-            original_leave.deadline_ns()
-        )
+        PlanSummaryDisposition {
+            complete: true,
+            cancelled: false,
+            key: PumpDeadline::Enter,
+            bound: evidence.enter,
+            account_deadline: original_leave.deadline_ns()
+        }
     );
     assert_eq!(
         std::ptr::from_ref(account.recorded_read().unwrap()) as usize,
@@ -410,3 +428,6 @@ fn returned_boot_rollback_extraction_keeps_a_retired_shorter_leave_in_the_origin
         Some(replacement)
     );
 }
+
+#[path = "context_plan_summary_cleanup_review_tests.rs"]
+mod cleanup_review_tests;

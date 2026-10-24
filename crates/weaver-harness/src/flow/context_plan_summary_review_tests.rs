@@ -257,7 +257,7 @@ fn plan_summary_unflagged_author_cannot_file_a_plan_effect_or_step_outcome() {
             RunFailure::PlanSummaryOwned
         );
         assert_eq!(
-            format!("{:?}", run.context.refused_author().unwrap()),
+            format!("{:?}", run.context.held_author().unwrap()),
             original
         );
         assert!(run.context.pending_author().is_none());
@@ -319,8 +319,8 @@ fn plan_summary_completed_refresh_keeps_its_exact_outcome_when_stop_revokes_futu
                 RunFailure::PlanSummaryOwned
             );
             let owner = run.context.plan_summary.as_ref().unwrap();
-            assert!(owner.disposition_for_test().0);
-            assert!(!owner.disposition_for_test().1);
+            assert!(owner.disposition_for_test().complete);
+            assert!(!owner.disposition_for_test().cancelled);
         } else {
             let Some(PlanSummaryCompletion::Effect(proof)) =
                 run.context.take_plan_summary(&mut run.clock).unwrap()
@@ -342,8 +342,8 @@ fn plan_summary_completed_refresh_keeps_its_exact_outcome_when_stop_revokes_futu
         if boot {
             let account = rollback_boot_summary(&mut fx);
             assert_eq!(account.recorded_read().unwrap().raw_bytes(), raw);
-            assert!(account.disposition_for_test().0);
-            assert!(!account.disposition_for_test().1);
+            assert!(account.disposition_for_test().complete);
+            assert!(!account.disposition_for_test().cancelled);
         }
     }
 }

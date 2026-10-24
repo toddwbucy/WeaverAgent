@@ -98,6 +98,7 @@ impl RecordingContext {
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.open_turn.is_some()
+            || self.caller_author_held()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || (self.barrier.pending_author().is_some() && !self.flow.has_pending_record())
