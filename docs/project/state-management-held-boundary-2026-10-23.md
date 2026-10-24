@@ -130,6 +130,21 @@ parent remains unchanged pending independent review of these corrections.
 | 6 | Re-evaluate placement ownership after release_live. |
 | 7 and 8 | Remove the duplicate selection precheck; reservation owns the single validation pass and refusal mapping. |
 
+## Current Planner disposition
+
+[Review 5637407681 of #317 at b413e6b2](https://github.com/toddwbucy/WeaverAgent/pull/317#pullrequestreview-5637407681)
+accepts the #315 fixes and marks the child ready, with zero fix rows. Its
+remaining boundary findings are explicit carries:
+
+| #317 row | Current disposition |
+| --- | --- |
+| 1 | Open: prefix admission still uses the narrower existing owner predicate; share the same operational check. |
+| 2 | Open Spec wording election for the operator: held Busy before a notice-producing refusal. The two existing amendment clauses need explicit precedence. No ruling is inferred. |
+| 5 | Open: consolidate placement helper layers after caller ownership is complete. |
+| 6 | The current maps here and in the author record retain all rows. |
+| 7 | Open test gap: Planner mutation W10, preserving pre-liveness place ownership across release_live, survived. The code rechecks ownership, but a case in which liveness settles the last owed work must enforce the resulting PlaceOwned. The author's eleven detected mutations below do not establish this missing case. |
+| 3/4/8/9 | Caller identity, the shared hold ladder and marks cancellation are mapped in the author record; #316 includes both marks findings. |
+
 ## Instruments and validation
 
 The eleven boundary_batch_ cases use real recorder, state and decode evidence
@@ -178,13 +193,13 @@ an independent Planner grade, security disposition or production qualification.
 Draft #314 implements move-owned AuthorFailure and migrates its current internal
 callers. Its evidence record is state-management-author-failure-2026-10-24.md.
 This child corrects its two blocking custody findings as well as #315's notice
-admission finding. These are author corrections awaiting an independent grade;
-the parent stack is not declared ready to merge from these checks alone.
+admission finding. The Planner has now passed #317 at the unchanged head, with
+the batch/file carries above; that grade does not complete the parent stack.
 This boundary correction does not complete worker/dev_loop, lifecycle Busy
 exits, failed-run drain, final world close, production artifacts, measured limits,
 security disposition or coupled cutover. Those remain under #146. The legacy
-serving path stays active; only the operator merges or deploys. All new PRs
-remain drafts and CodeRabbit requests remain operator-controlled.
+serving path stays active; only the operator merges or deploys. New PRs are
+published as drafts and CodeRabbit requests remain operator-controlled.
 
 The Executor's code-review and verification-before-completion skills are absent
 from this environment; no invocation or independent grade is claimed. The

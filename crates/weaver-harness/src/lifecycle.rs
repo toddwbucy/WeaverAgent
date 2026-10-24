@@ -135,7 +135,7 @@ pub(crate) fn render_close(
 /// generation was cut at the turn's token limit carries `finish:
 /// "length"`, and carries it only then, so a client renders a truncated
 /// answer as truncated and pays nothing on the whole ones.
-fn render_close_with_finish(
+pub(crate) fn render_close_with_finish(
     kind: &str,
     member: &str,
     value: &str,
