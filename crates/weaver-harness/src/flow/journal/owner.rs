@@ -2,6 +2,18 @@
 use super::*;
 use crate::flow::place::mirror;
 use crate::flow::place::{ConfirmedGeneration, PreparedPrefix};
+
+/// Minted only after this journal accepts the matching physical append.
+#[derive(Debug)]
+pub(in crate::flow) struct AppendReceipt {
+    identity: Arc<()>,
+    assembly: u64,
+}
+impl AppendReceipt {
+    pub(in crate::flow) fn matches(&self, pending: &PendingAppend) -> bool {
+        Arc::ptr_eq(&self.identity, &pending.identity) && self.assembly == pending.assembly
+    }
+}
 use weaver_trace::serving::payloads as trace;
 use weaver_types::state_flow::{CutMethod, CutReference};
 
@@ -200,7 +212,7 @@ impl Journal {
     pub(in crate::flow) fn complete_generation(
         &mut self,
         proof: &ConfirmedGeneration,
-    ) -> Result<()> {
+    ) -> Result<AppendReceipt> {
         let generation = proof.generation();
         self.complete(
             &proof.grant.pending,
@@ -213,7 +225,11 @@ impl Journal {
                 resident: generation.resident,
                 capacity: generation.capacity,
             },
-        )
+        )?;
+        Ok(AppendReceipt {
+            identity: Arc::clone(&self.identity),
+            assembly: proof.grant.pending.assembly,
+        })
     }
     /// This call is private to a checked cut terminal held by the context owner.
     /// Counts are rechecked here before the immutable projected prefix is installed.

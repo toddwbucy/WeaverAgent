@@ -18,7 +18,8 @@ use weaver_traits::{ContentBlock, ToolCall};
 use weaver_types::state_flow as s;
 use weaver_types::{LifecycleAnswer, LifecycleDirective};
 
-static FAMILY: FoundationRestatement = FoundationRestatement::new("fixture.restatement");
+pub(in crate::flow::context) static FAMILY: FoundationRestatement =
+    FoundationRestatement::new("fixture.restatement");
 static MISSING: FoundationRestatement = FoundationRestatement::new("fixture.missing");
 
 #[test]
@@ -58,7 +59,7 @@ fn author_failure_worker_emission_keeps_exact_refusal_after_cancel() {
     assert!(!work.refusal_started);
     assert!(work.refusal_record.is_none());
     assert!(work.refusal_author.is_none());
-    work.cancel(&mut fx.context, ports.io).unwrap();
+    work.cancel(&mut fx.context, None, None, ports.io).unwrap();
     assert!(work.stage == EmissionStage::RefusalAuthor);
     assert_eq!(
         work.advance(&mut None, &mut None, &mut fx.context, &mut ports),
@@ -147,7 +148,68 @@ fn text(words: &str) -> ContentBlock {
     ContentBlock::Text { text: words.into() }
 }
 pub(in crate::flow::context) fn content(mode: &str) -> Vec<ContentBlock> {
-    if mode.ends_with("empty") {
+    if mode.contains("-final-") && !mode.contains("-external-") {
+        if mode.contains("-round-") {
+            return vec![text("Recall archive."), text("Recall ledger.")];
+        }
+        if mode.contains("empty") {
+            return vec![];
+        }
+        if mode.contains("bindings") {
+            return vec![text("Read zeta. Read alpha.")];
+        }
+        return vec![
+            text(if mode.contains("correction") {
+                "Read bad."
+            } else {
+                "Read file."
+            }),
+            text("Read caf\u{e9}."),
+        ];
+    }
+    if mode.contains("-external-") {
+        let mut blocks = vec![
+            text("Read file."),
+            ContentBlock::ToolCall(ToolCall {
+                name: "sh".into(),
+                arguments: "opaque first command".into(),
+            }),
+        ];
+        if mode.contains("mixed") {
+            blocks.push(text("Recall archive."));
+        }
+        blocks.push(text("Read file."));
+        blocks.push(ContentBlock::ToolCall(ToolCall {
+            name: "sh".into(),
+            arguments: if mode.contains("identical") {
+                "opaque first command".into()
+            } else {
+                "opaque second command".into()
+            },
+        }));
+        return blocks;
+    }
+    if mode.contains("-pairs-") {
+        if mode.ends_with("empty") {
+            return vec![];
+        }
+        let mut blocks = vec![];
+        if mode.contains("mixed") || mode.contains("external") {
+            blocks.push(text("Read file."));
+            blocks.push(ContentBlock::ToolCall(ToolCall {
+                name: "sh".into(),
+                arguments: "opaque original command".into(),
+            }));
+        }
+        blocks.push(text("Recall archive."));
+        blocks.push(text(if mode.contains("identical") {
+            "Recall archive."
+        } else {
+            "Recall ledger."
+        }));
+        return blocks;
+    }
+    if mode.ends_with("empty") && !mode.contains("correction") {
         return vec![];
     }
     if mode.ends_with("bindings") {
@@ -155,7 +217,10 @@ pub(in crate::flow::context) fn content(mode: &str) -> Vec<ContentBlock> {
     }
     vec![
         text(
-            if mode.contains("restatement") || mode.contains("repair-refusal") {
+            if mode.contains("restatement")
+                || mode.contains("repair-refusal")
+                || mode.contains("correction")
+            {
                 "Read bad."
             } else {
                 "Read blue file."
@@ -273,7 +338,7 @@ pub(in crate::flow::context) fn reply(request: &s::Ste100Request, mode: &str) ->
         result,
     }
 }
-fn selection(view: FoundationEmission<'_>) -> Vec<SortAct> {
+pub(in crate::flow::context) fn selection(view: FoundationEmission<'_>) -> Vec<SortAct> {
     let mut acts: Vec<_> = view
         .requests()
         .iter()
@@ -296,7 +361,7 @@ fn selection(view: FoundationEmission<'_>) -> Vec<SortAct> {
     }
     acts
 }
-fn sequence(row: &serde_json::Value) -> u64 {
+pub(in crate::flow::context) fn sequence(row: &serde_json::Value) -> u64 {
     row["sequence"].as_str().unwrap().parse().unwrap()
 }
 
@@ -352,6 +417,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if mode.contains("-final-") {
+        return super::super::final_tests::exercise(
+            serving, member, reader, clock, socket, root, mode,
+        );
+    }
     let mut guard = Guard {
         input: Some(serving.input()),
         management: None,
@@ -376,6 +446,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         .place_task("worker-task".into(), CutMethod::Flush)
         .unwrap();
     until(input, member, clock, mode, FoundationInputProgress::Placed);
+    if mode.contains("pairs-held-statement") {
+        member.hold_kind = Some("message.assistant");
+    }
     input.generate().unwrap();
     until(
         input,
@@ -392,6 +465,19 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     );
     assert_eq!(input.progress(), FoundationInputProgress::Generated);
     let before = std::fs::read(root.join("appended.json")).unwrap();
+    if mode.contains("-external-") {
+        return super::execution::external_tests::exercise(
+            guard, member, reader, clock, socket, root, mode,
+        );
+    }
+    if mode.contains("-pairs-") {
+        return super::execution::tests::exercise(guard, member, reader, clock, socket, root, mode);
+    }
+    if mode.contains("correction") {
+        return super::correction::tests::exercise(
+            guard, member, reader, clock, socket, root, mode,
+        );
+    }
     if mode.contains("actual-worker") {
         return actual_worker(guard, member, reader, mode, raw);
     }
@@ -729,7 +815,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     }
 }
 
-fn stop(
+pub(in crate::flow::context::worker_startup) fn stop(
     guard: &mut Guard<'_>,
     member: &mut Member,
     clock: &mut FakePumpIo,
@@ -761,6 +847,35 @@ fn stop(
         }
     }
     guard.management = Some(guard.input.take().unwrap().management().ok().unwrap());
+    if mode.contains("external-stop-unsent") {
+        for _ in 0..8 {
+            guard
+                .management
+                .as_mut()
+                .unwrap()
+                .advance_with_io(&mut CircuitIo(clock));
+            member.step(clock.now().unwrap(), mode);
+        }
+        assert!(!root.join("external-2.json").exists());
+        assert!(!root.join("closed.json").exists());
+        std::fs::write(root.join("drain-external"), b"drain").unwrap();
+    }
+    if member.hold_control.is_some() {
+        for _ in 0..8 {
+            let management = guard.management.as_mut().unwrap();
+            assert_eq!(
+                management.advance_with_io(&mut CircuitIo(clock)),
+                FoundationManagementProgress::Pending,
+                "{:?}",
+                management.detail()
+            );
+            member.step(clock.now().unwrap(), mode);
+        }
+        assert!(member.held_control.is_some());
+        assert!(read_packet(&peer).is_none());
+        assert!(!root.join("closed.json").exists());
+        member.hold_control = None;
+    }
     if member.hold_kind.is_some() {
         for _ in 0..2000 {
             if member.held_file.is_some() {
@@ -819,17 +934,28 @@ fn stop(
     guard.input = Some(guard.management.take().unwrap().finish().ok().unwrap());
     assert_eq!(
         guard.input.as_ref().unwrap().progress(),
-        FoundationInputProgress::Aborted
+        if mode.contains("refusal-close") {
+            FoundationInputProgress::Refused
+        } else {
+            FoundationInputProgress::Aborted
+        }
     );
     assert!(guard.input.as_ref().unwrap().sorted_acts().is_none());
     assert!(guard.input.as_ref().unwrap().effective_emission().is_none());
     if !mode.ends_with("eof") {
         let answer: OrganEnvelope = serde_json::from_slice(&read_packet(&peer).unwrap()).unwrap();
         assert_eq!(answer.exchange, request.exchange);
-        assert!(matches!(
-            answer.payload,
-            Payload::Answer(LifecycleAnswer::TurnAborted { .. })
-        ));
+        if mode.contains("refusal-close") {
+            assert!(matches!(
+                answer.payload,
+                Payload::Answer(LifecycleAnswer::AtRest)
+            ));
+        } else {
+            assert!(matches!(
+                answer.payload,
+                Payload::Answer(LifecycleAnswer::TurnAborted { .. })
+            ));
+        }
     }
 }
 fn assert_terminals(reader: &mut UnixStream, count: usize) {
@@ -865,7 +991,7 @@ fn actual_worker(
         let responder = scope.spawn(|| {
             let end = Instant::now() + Duration::from_secs(8);
             while !done.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
-                member.step(MonotonicIo.now().unwrap(), mode);
+                member.step_live(mode);
                 std::thread::sleep(Duration::from_millis(1));
             }
         });

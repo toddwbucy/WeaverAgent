@@ -4,7 +4,7 @@ Date: 2026-10-24. Branch: `code/state-cancelled-correction-count`.
 Parent: #318 at `1d82867eb2ee4616a83dbee80f94405c3f28e18b`.
 Stack: main, #312, #314, #315, #317, #318, then this draft.
 Authority: merged #263, Spec 02 CANCELLED-CORRECTION and EMPTY-CORRECTION,
-OUTPUT-UNIT and the harness amendment HARNESS-REPAIR. Refs #146 and #213.
+OUTPUT-UNIT and the harness amendment HARNESS-RECALL-REFUSAL. Refs #146 and #213.
 This record describes a partial implementation of #263, not its completion.
 
 ## Behavior and authority
@@ -49,7 +49,7 @@ them. Normal completed-owner retirement still ends its existing wait.
 | --- | --- |
 | CANCELLED-CORRECTION, nonempty Text-only failure | Conforms for the changed owner boundary: complete Recorded checks, exact issued identity, one retained count before release/take/return, no cancelled continuation. |
 | EMPTY-CORRECTION | Conforms for the late-loan cancellation road and preserves the existing Recorded-refusal boundary. |
-| OUTPUT-UNIT / HARNESS-REPAIR | Complete check grants remain separately guarded. Actual loaded recall meaning excludes attempted calls. Original waits and first fatal evidence remain retained. |
+| OUTPUT-UNIT / HARNESS-RECALL-REFUSAL | Complete check grants remain separately guarded. Actual loaded recall meaning excludes attempted calls. Original waits and first fatal evidence remain retained. |
 | CANCELLED-CORRECTION, attempted-call accounting | Still drifted/incomplete: all required refusals and actual CompletedPair receipts must establish the count before account extraction. This is the next stacked implementation, including the two-call/held-terminal instruments. |
 | Full worker/lifecycle and qualification | Incomplete under #146. These owner instruments do not prove real decoder correction composition, full Stop/Leave cleanup, production artifacts, limits or cutover. |
 
@@ -105,10 +105,12 @@ disposition or production qualification.
 
 ## Remaining work and review carries
 
-The next slice must finish attempted-call accounting at the actual terminal
-filing boundary, validate every original request and admitted non-dispatch cause,
-and test partial two-call prefixes, held terminal receipts and delayed account
-return. No #263 or #146 completion checkbox closes here.
+The child on `code/state-cancelled-call-count` implements attempted-call accounting
+at the actual terminal filing boundary, including every original request, admitted
+non-dispatch cause, two-call prefixes, held terminal receipts and delayed account
+return. Its [record](state-management-cancelled-call-count-2026-10-24.md) gives the
+separate source, validation and limits. This Text-only slice remains partial; no
+full #146 implementation or qualification checkbox closes here.
 
 The inherited #317 and #318 Planner reviews passed with no fix rows and were
 marked ready by the Planner. Their batch/file rows are now mapped in the current

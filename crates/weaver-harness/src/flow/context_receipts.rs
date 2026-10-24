@@ -100,6 +100,16 @@ pub(super) struct FilingTransaction {
 }
 
 impl FilingTransaction {
+    pub(super) fn owns_recorded_pair_terminal(
+        &self,
+        source: &weaver_types::state_flow::SourceBlockId,
+    ) -> bool {
+        self.owner == FilingOwner::Pair
+            && !self.cancelled
+            && self.author_done
+            && self.sequence == Some(Sequence(source.sequence.0))
+    }
+
     pub(super) fn is_boot_cleanup_filing(&self) -> bool {
         self.owner == FilingOwner::BootPairs
     }

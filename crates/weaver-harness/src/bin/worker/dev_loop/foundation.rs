@@ -6,6 +6,12 @@ use weaver_harness::{
 };
 use weaver_types::TurnKey;
 
+#[path = "foundation_turn.rs"]
+pub mod turn;
+
+#[path = "foundation_session.rs"]
+pub mod session;
+
 /// Workflow choices are separate from the harness's protocol transitions. The
 /// caller chooses when to start a task, select its source and use its placement.
 /// Management and refusal return the same owner for the loop's next decision.
@@ -31,6 +37,17 @@ pub fn generate(mut input: Box<FoundationInput<'_>>) -> Box<FoundationInput<'_>>
     }
     input
 }
+pub fn place_results(
+    mut input: Box<FoundationInput<'_>>,
+    calls: Vec<weaver_types::state_flow::CallId>,
+    label: String,
+    method: weaver_types::state_flow::CutMethod,
+) -> Box<FoundationInput<'_>> {
+    if input.place_results(calls, label, method).is_ok() {
+        drive(&mut input);
+    }
+    input
+}
 pub fn repair<'a>(
     mut input: Box<FoundationInput<'a>>,
     family: &'static weaver_harness::FoundationRestatement,
@@ -49,10 +66,54 @@ pub fn outbound<'a>(
     }
     input
 }
+pub fn place_restatement<'a>(
+    mut input: Box<FoundationInput<'a>>,
+    label: String,
+    method: weaver_types::state_flow::CutMethod,
+) -> Box<FoundationInput<'a>> {
+    if input.place_restatement(label, method).is_ok() {
+        drive(&mut input);
+        if input.close_correction_refusal().is_ok() {
+            drive(&mut input);
+        }
+    }
+    input
+}
+pub fn generate_correction(mut input: Box<FoundationInput<'_>>) -> Box<FoundationInput<'_>> {
+    if input.generate_correction().is_ok() {
+        drive(&mut input);
+    }
+    input
+}
+pub fn pairs(mut input: Box<FoundationInput<'_>>) -> Box<FoundationInput<'_>> {
+    if input.begin_pairs().is_ok() {
+        drive(&mut input);
+    }
+    input
+}
+pub fn recall(
+    mut input: Box<FoundationInput<'_>>,
+    call: weaver_types::state_flow::CallId,
+) -> Box<FoundationInput<'_>> {
+    if input.recall(call).is_ok() {
+        drive(&mut input);
+    }
+    input
+}
 fn drive(input: &mut FoundationInput<'_>) {
     while input.progress() == FoundationInputProgress::Pending {
         input.advance();
     }
+}
+
+pub fn execute(
+    mut input: Box<FoundationInput<'_>>,
+    call: weaver_types::state_flow::CallId,
+) -> Box<FoundationInput<'_>> {
+    if input.execute(call).is_ok() {
+        drive(&mut input);
+    }
+    input
 }
 
 /// Service the actual held root connection, then resume the same

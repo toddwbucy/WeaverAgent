@@ -227,6 +227,31 @@ impl ReceiptSet {
         self.slots.iter().position(|slot| &slot.source == source)
     }
 
+    /// Move one actual terminal fact to its existing pair owner. This does not
+    /// release the subscription or create a FilingCompletion, including after
+    /// a later coordinator failure. Opening and statement grants cannot cross.
+    pub(super) fn take_recorded_pair_terminal(
+        &mut self,
+        source: &SourceBlockId,
+    ) -> Option<CommittedSource> {
+        if self.cancelled || self.released || self.slots.len() != 1 {
+            return None;
+        }
+        let slot = &mut self.slots[0];
+        if &slot.source != source
+            || !matches!(&slot.disposition,
+                Some(SourceDisposition::Committed(receipt))
+                if matches!(receipt.file(), LedgerFile::Pair(file)
+                    if matches!(file.pair, weaver_types::state_flow::PairRecord::Ended(_))))
+        {
+            return None;
+        }
+        match slot.disposition.take().unwrap() {
+            SourceDisposition::Committed(receipt) => Some(receipt),
+            SourceDisposition::CorrectlyRejected(_) => unreachable!("checked terminal fact"),
+        }
+    }
+
     pub(super) fn slot_available(&self, index: usize) -> bool {
         !self.cancelled && self.slots[index].disposition.is_none()
     }

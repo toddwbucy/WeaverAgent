@@ -1,6 +1,9 @@
 //! Merged #263's Text-only/empty boundary through real recorder/checker owners.
 //! Scripted language replies are mechanics evidence, not artifact qualification.
 use super::*;
+
+#[path = "context_cancelled_call_count_tests.rs"]
+mod call_count_tests;
 use crate::flow::clock::{WaitInterest, WaitOutcome};
 
 fn count(fx: &RepairFixture) -> u32 {
