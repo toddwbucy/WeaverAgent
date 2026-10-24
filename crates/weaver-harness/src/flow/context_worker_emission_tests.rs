@@ -148,6 +148,25 @@ fn text(words: &str) -> ContentBlock {
     ContentBlock::Text { text: words.into() }
 }
 pub(in crate::flow::context) fn content(mode: &str) -> Vec<ContentBlock> {
+    if mode.contains("-final-") && !mode.contains("-external-") {
+        if mode.contains("-round-") {
+            return vec![text("Recall archive."), text("Recall ledger.")];
+        }
+        if mode.contains("empty") {
+            return vec![];
+        }
+        if mode.contains("bindings") {
+            return vec![text("Read zeta. Read alpha.")];
+        }
+        return vec![
+            text(if mode.contains("correction") {
+                "Read bad."
+            } else {
+                "Read file."
+            }),
+            text("Read caf\u{e9}."),
+        ];
+    }
     if mode.contains("-external-") {
         let mut blocks = vec![
             text("Read file."),
@@ -398,6 +417,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if mode.contains("-final-") {
+        return super::super::final_tests::exercise(
+            serving, member, reader, clock, socket, root, mode,
+        );
+    }
     let mut guard = Guard {
         input: Some(serving.input()),
         management: None,
@@ -841,7 +865,9 @@ pub(in crate::flow::context::worker_startup) fn stop(
             let management = guard.management.as_mut().unwrap();
             assert_eq!(
                 management.advance_with_io(&mut CircuitIo(clock)),
-                FoundationManagementProgress::Pending
+                FoundationManagementProgress::Pending,
+                "{:?}",
+                management.detail()
             );
             member.step(clock.now().unwrap(), mode);
         }
@@ -965,7 +991,7 @@ fn actual_worker(
         let responder = scope.spawn(|| {
             let end = Instant::now() + Duration::from_secs(8);
             while !done.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
-                member.step(MonotonicIo.now().unwrap(), mode);
+                member.step_live(mode);
                 std::thread::sleep(Duration::from_millis(1));
             }
         });
