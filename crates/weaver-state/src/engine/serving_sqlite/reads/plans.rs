@@ -1,6 +1,152 @@
 use super::*;
 
 const STEPS: &str = "SELECT s.*,g.group_id FROM plan_step s LEFT JOIN plan_group_step g ON g.plan_id=s.plan_id AND g.revision=s.revision AND g.step_id=s.step_id WHERE s.plan_id=?1 AND s.revision=?2 ORDER BY s.ordinal";
+const CURRENT: &str =
+    "SELECT * FROM plan_revision WHERE status!='superseded' ORDER BY last_source DESC LIMIT 1";
+const REVISION: &str = "SELECT * FROM plan_revision WHERE plan_id=?1 AND revision=?2";
+const CATEGORIES: &str = "SELECT category_id,category FROM plan_category WHERE plan_id=?1 AND revision=?2 ORDER BY ordinal";
+const GROUPS: &str = "SELECT * FROM plan_group WHERE plan_id=?1 AND revision=?2 ORDER BY ordinal";
+const GROUP_STEPS: &str = "SELECT s.step_id FROM plan_group_step g JOIN plan_step s ON s.plan_id=g.plan_id AND s.revision=g.revision AND s.step_id=g.step_id WHERE g.plan_id=?1 AND g.revision=?2 AND g.group_id=?3 ORDER BY s.ordinal";
+
+// Both the public streaming serializer and the transaction-local typed guard
+// use these row decoders. Only a public result supplies a remaining-byte bound.
+fn plan_text<'a>(row: &'a Row<'_>, name: &str, out: Option<&Output>) -> Result<&'a str> {
+    match out {
+        Some(out) => text_cell(row, name, out),
+        None => row
+            .get_ref(name)?
+            .as_str()
+            .map_err(|_| ReadFailure::ComponentCorruption("stored text is not UTF-8")),
+    }
+}
+macro_rules! plan_json {
+    ($row:expr, $name:expr, $out:expr, $ty:ty) => {
+        decode_strict::<$ty>(plan_text($row, $name, $out)?)
+            .map_err(|_| ReadFailure::ComponentCorruption("invalid typed stored JSON"))?
+    };
+}
+fn task_scope(row: &Row<'_>, seed: &str) -> Result<TaskScopeRef> {
+    Ok(TaskScopeRef {
+        task: marks::span_ref(
+            seed,
+            counter(row, "task_id")?,
+            counter(row, "task_revision")?,
+        ),
+        prompt: marks::span_ref(
+            seed,
+            counter(row, "prompt_id")?,
+            counter(row, "prompt_revision")?,
+        ),
+    })
+}
+fn lock_source(db: &Connection, row: &Row<'_>) -> Result<Option<SourceBlockId>> {
+    row.get::<_, Option<i64>>("lock_source")?
+        .map(|id| source_id(db, id))
+        .transpose()
+}
+fn category(row: &Row<'_>, out: Option<&Output>) -> Result<Category> {
+    let category = plan_json!(row, "category", out, Category);
+    if category.id != plan_text(row, "category_id", out)? {
+        return Err(ReadFailure::ComponentCorruption(
+            "category identity differs from index",
+        ));
+    }
+    Ok(category)
+}
+fn step_id(row: &Row<'_>, seed: &str) -> Result<StepId> {
+    Ok(StepId {
+        seed_id: seed.into(),
+        local_id: counter(row, "step_id")?,
+    })
+}
+fn broken(row: &Row<'_>, out: Option<&Output>) -> Result<Option<PlanBreakRecord>> {
+    if matches!(row.get_ref("broken")?, rusqlite::types::ValueRef::Null) {
+        Ok(None)
+    } else {
+        Ok(Some(plan_json!(row, "broken", out, PlanBreakRecord)))
+    }
+}
+fn push<T>(values: &mut Vec<T>, value: T) -> Result<()> {
+    values
+        .try_reserve(1)
+        .map_err(|_| ReadRefusalCode::ResultUnavailable)?;
+    values.push(value);
+    Ok(())
+}
+
+/// Derive the actual typed metadata inside the caller's transaction. No public
+/// response is encoded and no result-byte limit is invented for an atomic guard.
+/// Keep this materializing traversal separate from `snapshot`'s bounded stream:
+/// building a full PlanSnapshot for a public query would allocate before that
+/// query's byte ceiling can refuse it. Shared row decoders above and the typed /
+/// public parity tests pin the mapping without imposing that allocation policy.
+fn typed_snapshot(db: &Connection, seed: &str, row: &Row<'_>) -> Result<PlanSnapshot> {
+    let plan = plan_ref(seed, row)?;
+    let id = blob(plan.plan_id.local_id);
+    let revision = blob(plan.revision);
+    let mut snapshot = PlanSnapshot {
+        plan,
+        task: task_scope(row, seed)?,
+        status: plan_status(row)?,
+        review: plan_json!(row, "review_setup", None, ReviewSetupRef),
+        operator_source: source_id(db, row.get("operator_source")?)?,
+        lock_source: lock_source(db, row)?,
+        document_sha256: operator_context(db, row.get("operator_source")?)?.document_sha256,
+        last_source: transition_position(db, row.get("last_source")?)?,
+        categories: vec![],
+        group_drafts: plan_json!(row, "group_drafts", None, Vec<GroupDraft>),
+        groups: vec![],
+        steps: vec![],
+        broken: broken(row, None)?,
+    };
+    let mut categories = db.prepare(CATEGORIES)?;
+    let mut categories = categories.query(params![id, revision])?;
+    while let Some(row) = categories.next()? {
+        push(&mut snapshot.categories, category(row, None)?)?;
+    }
+    let mut groups = db.prepare(GROUPS)?;
+    let mut groups = groups.query(params![id, revision])?;
+    while let Some(row) = groups.next()? {
+        let group = plan_text(row, "group_id", None)?;
+        let mut value = PlanGroup {
+            id: group.into(),
+            step_ids: vec![],
+            span: marks::optional_span(row, seed, "span_id", "span_revision")?,
+        };
+        let mut steps = db.prepare(GROUP_STEPS)?;
+        let mut steps = steps.query(params![id, revision, group])?;
+        while let Some(row) = steps.next()? {
+            push(&mut value.step_ids, step_id(row, seed)?)?;
+        }
+        push(&mut snapshot.groups, value)?;
+    }
+    let mut steps = db.prepare(STEPS)?;
+    let mut steps = steps.query(params![id, revision])?;
+    while let Some(row) = steps.next()? {
+        push(&mut snapshot.steps, read_step(db, seed, None, row)?)?;
+    }
+    Ok(snapshot)
+}
+
+pub(super) fn current_snapshot(db: &Connection, seed: &str) -> Result<Option<PlanSnapshot>> {
+    let mut statement = db.prepare(CURRENT)?;
+    let mut rows = statement.query([])?;
+    rows.next()?
+        .map(|row| typed_snapshot(db, seed, row))
+        .transpose()
+}
+pub(super) fn historical_snapshot(
+    db: &Connection,
+    seed: &str,
+    plan: &PlanRef,
+) -> Result<PlanSnapshot> {
+    same_seed(seed, &plan.plan_id.seed_id)?;
+    let mut statement = db.prepare(REVISION)?;
+    let mut rows = statement.query(params![blob(plan.plan_id.local_id), blob(plan.revision)])?;
+    let row = rows.next()?.ok_or(ReadRefusalCode::NotFound)?;
+    typed_snapshot(db, seed, row)
+}
+
 fn plan_ref(seed: &str, row: &Row<'_>) -> Result<PlanRef> {
     Ok(PlanRef {
         plan_id: PlanId {
@@ -34,9 +180,7 @@ pub(super) fn current(db: &Connection, seed: &str, out: &mut Output) -> Result<(
     let next_plan = checked_next(db, "SELECT MAX(plan_id) AS largest FROM plan_revision")?;
     let next_step = checked_next(db, "SELECT MAX(step_id) AS largest FROM plan_step")?;
     out.raw("{\"plan_current\":{\"current\":")?;
-    let mut statement = db.prepare(
-        "SELECT * FROM plan_revision WHERE status!='superseded' ORDER BY last_source DESC LIMIT 1",
-    )?;
+    let mut statement = db.prepare(CURRENT)?;
     let mut rows = statement.query([])?;
     if let Some(row) = rows.next()? {
         snapshot(db, seed, out, row)?;
@@ -56,8 +200,7 @@ pub(super) fn historical(
     plan: &PlanRef,
 ) -> Result<()> {
     same_seed(seed, &plan.plan_id.seed_id)?;
-    let mut statement =
-        db.prepare("SELECT * FROM plan_revision WHERE plan_id=?1 AND revision=?2")?;
+    let mut statement = db.prepare(REVISION)?;
     let mut rows = statement.query(params![blob(plan.plan_id.local_id), blob(plan.revision)])?;
     let row = rows.next()?.ok_or(ReadRefusalCode::NotFound)?;
     out.raw("{\"plan\":{\"snapshot\":")?;
@@ -71,77 +214,55 @@ pub(super) fn snapshot(db: &Connection, seed: &str, out: &mut Output, row: &Row<
     out.raw("{\"plan\":")?;
     value!(out, plan)?;
     out.raw(",\"task\":")?;
-    value!(
-        out,
-        TaskScopeRef {
-            task: marks::span_ref(
-                seed,
-                counter(row, "task_id")?,
-                counter(row, "task_revision")?
-            ),
-            prompt: marks::span_ref(
-                seed,
-                counter(row, "prompt_id")?,
-                counter(row, "prompt_revision")?
-            )
-        }
-    )?;
+    value!(out, task_scope(row, seed)?)?;
     out.raw(",\"status\":")?;
     value!(out, plan_status(row)?)?;
     out.raw(",\"review\":")?;
-    value!(out, json_cell!(out, row, "review_setup", ReviewSetupRef))?;
+    value!(
+        out,
+        plan_json!(row, "review_setup", Some(out), ReviewSetupRef)
+    )?;
     out.raw(",\"operator_source\":")?;
     value!(out, source_id(db, row.get("operator_source")?)?)?;
     out.raw(",\"lock_source\":")?;
+    value!(out, lock_source(db, row)?)?;
+    out.raw(",\"document_sha256\":")?;
     value!(
         out,
-        row.get::<_, Option<i64>>("lock_source")?
-            .map(|id| source_id(db, id))
-            .transpose()?
+        operator_context(db, row.get("operator_source")?)?.document_sha256
     )?;
-    out.raw(",\"document_sha256\":")?;
-    value!(out, operator_digest(db, row.get("operator_source")?)?)?;
     out.raw(",\"last_source\":")?;
     value!(out, transition_position(db, row.get("last_source")?)?)?;
     out.raw(",\"categories\":[")?;
-    let mut categories=db.prepare("SELECT category_id,category FROM plan_category WHERE plan_id=?1 AND revision=?2 ORDER BY ordinal")?;
+    let mut categories = db.prepare(CATEGORIES)?;
     let mut categories = categories.query(params![id, revision])?;
     let mut first = true;
     while let Some(row) = categories.next()? {
-        let category: Category = json_cell!(out, row, "category", Category);
-        if category.id != text_cell(row, "category_id", out)? {
-            return Err(ReadFailure::ComponentCorruption(
-                "category identity differs from index",
-            ));
-        }
+        let category = category(row, Some(out))?;
         out.comma(&mut first)?;
         value!(out, category)?;
     }
     out.raw("],\"group_drafts\":")?;
-    value!(out, json_cell!(out, row, "group_drafts", Vec<GroupDraft>))?;
+    value!(
+        out,
+        plan_json!(row, "group_drafts", Some(out), Vec<GroupDraft>)
+    )?;
     out.raw(",\"groups\":[")?;
-    let mut groups =
-        db.prepare("SELECT * FROM plan_group WHERE plan_id=?1 AND revision=?2 ORDER BY ordinal")?;
+    let mut groups = db.prepare(GROUPS)?;
     let mut groups = groups.query(params![id, revision])?;
     let mut first = true;
     while let Some(row) = groups.next()? {
         out.comma(&mut first)?;
         out.raw("{\"id\":")?;
-        let group = text_cell(row, "group_id", out)?;
+        let group = plan_text(row, "group_id", Some(out))?;
         value!(out, group)?;
         out.raw(",\"step_ids\":[")?;
-        let mut steps=db.prepare("SELECT s.step_id FROM plan_group_step g JOIN plan_step s ON s.plan_id=g.plan_id AND s.revision=g.revision AND s.step_id=g.step_id WHERE g.plan_id=?1 AND g.revision=?2 AND g.group_id=?3 ORDER BY s.ordinal")?;
+        let mut steps = db.prepare(GROUP_STEPS)?;
         let mut steps = steps.query(params![id, revision, group])?;
         let mut first = true;
         while let Some(row) = steps.next()? {
             out.comma(&mut first)?;
-            value!(
-                out,
-                StepId {
-                    seed_id: seed.into(),
-                    local_id: counter(row, "step_id")?
-                }
-            )?;
+            value!(out, step_id(row, seed)?)?;
         }
         out.raw("],\"span\":")?;
         value!(
@@ -156,20 +277,19 @@ pub(super) fn snapshot(db: &Connection, seed: &str, out: &mut Output, row: &Row<
     let mut first = true;
     while let Some(row) = steps.next()? {
         out.comma(&mut first)?;
-        value!(out, read_step(db, seed, out, row)?)?;
+        value!(out, read_step(db, seed, Some(out), row)?)?;
     }
     out.raw("],\"broken\":")?;
-    if matches!(row.get_ref("broken")?, rusqlite::types::ValueRef::Null) {
-        out.raw("null")?;
-    } else {
-        value!(out, json_cell!(out, row, "broken", PlanBreakRecord))?;
-    }
+    value!(out, broken(row, Some(out))?)?;
     out.raw("}")
 }
 
-fn operator_digest(db: &Connection, id: i64) -> Result<Digest> {
+pub(in crate::engine::serving_sqlite) fn operator_context(
+    db: &Connection,
+    id: i64,
+) -> Result<PlanInputContext> {
     let mut statement = db.prepare(
-        "SELECT context_raw FROM content_block WHERE id=?1 AND source_kind='event' AND kind='plan.event' AND channel='input' AND origin='operator' AND turn IS NULL AND block=?2 AND effect IS NULL",
+        "SELECT context_raw FROM content_block WHERE id=?1 AND source_kind='event' AND kind='plan.event' AND channel='input' AND origin='operator' AND turn IS NULL AND block=?2 AND effect IS NULL AND scheme_id=(SELECT scheme_id FROM store_meta WHERE singleton=1)",
     )?;
     let mut rows = statement.query(params![id, blob(0.into())])?;
     let row = rows.next()?.ok_or(ReadFailure::ComponentCorruption(
@@ -181,11 +301,6 @@ fn operator_digest(db: &Connection, id: i64) -> Result<Digest> {
         .get_ref("context_raw")?
         .as_str()
         .map_err(|_| ReadFailure::ComponentCorruption("plan operator context is not text"))?;
-    if !raw.trim_start().starts_with('{') {
-        return Err(ReadFailure::ComponentCorruption(
-            "plan operator context is not an object",
-        ));
-    }
     let context: PlanInputContext = decode_strict(raw)
         .map_err(|_| ReadFailure::ComponentCorruption("invalid plan operator context"))?;
     if context.cause.uid != 0 {
@@ -193,17 +308,21 @@ fn operator_digest(db: &Connection, id: i64) -> Result<Digest> {
             "plan operator context has no root provenance",
         ));
     }
-    Ok(context.document_sha256)
+    Ok(context)
 }
 
 fn transition_position(db: &Connection, id: i64) -> Result<SourcePosition> {
-    let mut statement = db.prepare(
-        "SELECT run,sequence,block,turn FROM content_block WHERE id=?1 AND source_kind='event'",
-    )?;
+    let mut statement =
+        db.prepare("SELECT run,sequence,block,turn,source_kind FROM content_block WHERE id=?1")?;
     let mut rows = statement.query([id])?;
     let row = rows.next()?.ok_or(ReadFailure::ComponentCorruption(
         "missing plan transition source",
     ))?;
+    if row.get::<_, String>("source_kind")? != "event" {
+        return Err(ReadFailure::ComponentCorruption(
+            "plan transition source is not an event",
+        ));
+    }
     Ok(SourcePosition {
         block_id: SourceBlockId {
             run: row.get("run")?,
@@ -214,7 +333,7 @@ fn transition_position(db: &Connection, id: i64) -> Result<SourcePosition> {
     })
 }
 
-fn read_step(db: &Connection, seed: &str, out: &Output, row: &Row<'_>) -> Result<PlanStep> {
+fn read_step(db: &Connection, seed: &str, out: Option<&Output>, row: &Row<'_>) -> Result<PlanStep> {
     let review_run: Option<String> = row.get("review_run")?;
     let review_call = match review_run {
         Some(run) => Some(CallId {
@@ -234,16 +353,13 @@ fn read_step(db: &Connection, seed: &str, out: &Output, row: &Row<'_>) -> Result
     let work = if matches!(row.get_ref("work")?, rusqlite::types::ValueRef::Null) {
         None
     } else {
-        Some(json_cell!(out, row, "work", WorkRef))
+        Some(plan_json!(row, "work", out, WorkRef))
     };
     Ok(PlanStep {
-        step_id: StepId {
-            seed_id: seed.into(),
-            local_id: counter(row, "step_id")?,
-        },
+        step_id: step_id(row, seed)?,
         ordinal: counter(row, "ordinal")?,
         instruction: statement_ref(db, row.get("instruction_id")?)?,
-        category: text_cell(row, "category_id", out)?.into(),
+        category: plan_text(row, "category_id", out)?.into(),
         group: row.get("group_id")?,
         status: step_status(row)?,
         span: marks::optional_span(row, seed, "span_id", "span_revision")?,

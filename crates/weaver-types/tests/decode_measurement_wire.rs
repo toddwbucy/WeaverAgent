@@ -193,6 +193,43 @@ fn opened_equality_checks_every_fact_and_each_raw_box_byte() {
 }
 
 #[test]
+fn opened_has_one_public_named_object_decoder_without_an_array_alias() {
+    use serde::Deserialize as _;
+    let TokenAnswer::Opened(expected) = opened() else {
+        unreachable!()
+    };
+    let object = serde_json::to_string(&expected).unwrap();
+    let positional =
+        r#"["s",13,18446744073709551615,42,1,{"opaque_request":true},{"opaque_measurement":true}]"#;
+    let direct =
+        weaver_types::Opened::deserialize(&mut serde_json::Deserializer::from_str(&object))
+            .unwrap();
+    assert_eq!(direct, expected);
+    assert!(
+        weaver_types::Opened::deserialize(&mut serde_json::Deserializer::from_str(positional))
+            .is_err()
+    );
+    assert!(serde_json::from_reader::<_, weaver_types::Opened>(positional.as_bytes()).is_err());
+    for envelope in [
+        format!("{{\"kind\":\"opened\",\"body\":{positional}}}"),
+        format!("{{\"body\":{positional},\"kind\":\"opened\"}}"),
+    ] {
+        assert!(serde_json::from_str::<TokenAnswer>(&envelope).is_err());
+    }
+    for rejected in [
+        object.replacen("{", "{\"extra\":null,", 1),
+        object.replacen(
+            "\"session\":\"s\"",
+            "\"session\":\"s\",\"session\":\"s\"",
+            1,
+        ),
+        object.replace("\"session\":\"s\",", ""),
+    ] {
+        assert!(serde_json::from_str::<weaver_types::Opened>(&rejected).is_err());
+    }
+}
+
+#[test]
 fn measured_has_exact_required_numeric_body_without_capping_count() {
     let value = measured();
     let bytes = serde_json::to_string(&value).unwrap();

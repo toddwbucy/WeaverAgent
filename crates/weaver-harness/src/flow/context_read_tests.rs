@@ -71,7 +71,12 @@ fn base64(bytes: &[u8]) -> String {
     encoded
 }
 
-fn page(snapshot: u64, offset: usize, total: usize, bytes: &[u8]) -> s::StateControlAnswer {
+pub(super) fn page(
+    snapshot: u64,
+    offset: usize,
+    total: usize,
+    bytes: &[u8],
+) -> s::StateControlAnswer {
     s::StateControlAnswer::ReadPage(s::ReadPage {
         snapshot_id: snapshot.into(),
         offset: (offset as u64).into(),
@@ -563,7 +568,7 @@ fn read_admission_preserves_pending_pair_and_author_owners() {
                     AbsoluteBound::after(member.now(), 1_000_000).unwrap(),
                 ));
             }
-            1 => member.run.context.waiting_content = Some(event),
+            1 => member.run.context.waiting_content = Some(WaitingAuthor::ordinary(event)),
             2 => {
                 let sequence = member.run.author(event).unwrap();
                 // A completed author remains owned across a lifecycle yield.

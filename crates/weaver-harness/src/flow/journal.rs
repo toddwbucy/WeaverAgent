@@ -12,6 +12,7 @@ use weaver_types::state_flow::{
 use super::material::SelectedUnit;
 
 mod layout;
+mod owner;
 use layout::{PlacedSource, RetainedMessage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +53,7 @@ pub(super) struct Journal {
     resident: u64,
     capacity: u64,
     layout: Vec<RetainedMessage>,
+    emissions: Vec<(weaver_types::state_flow::SourcePosition, DecimalU64)>,
     boundaries: Vec<Boundary>,
     pairs: Vec<PairLink>,
     marks: Vec<Mark>,
@@ -137,6 +139,7 @@ impl Journal {
             resident: proof.prefix(),
             capacity: proof.capacity(),
             layout: vec![],
+            emissions: vec![],
             boundaries: vec![],
             pairs: vec![],
             marks: vec![Mark {
@@ -170,7 +173,7 @@ impl Journal {
         self.revision.checked_add(1).ok_or(JournalError::Exhausted)
     }
 
-    fn check_projection(&self, prefix: &PrefixProjection) -> Result<()> {
+    pub(super) fn check_projection(&self, prefix: &PrefixProjection) -> Result<()> {
         if !Arc::ptr_eq(&self.identity, &prefix.identity)
             || prefix.revision != self.revision
             || prefix.resident_before != self.resident
@@ -182,7 +185,7 @@ impl Journal {
 
     /// Cursor input is internal arithmetic, not a public cut address. The future
     /// mark owner must resolve a current CutReference before invoking this core.
-    fn project(&self, end: Option<&ArgumentCursor>) -> Result<PrefixProjection> {
+    pub(super) fn project(&self, end: Option<&ArgumentCursor>) -> Result<PrefixProjection> {
         let end = end.cloned().unwrap_or_else(|| layout::end(&self.layout));
         let position = layout::position(&self.layout, &end)?;
         for pair in &self.pairs {
@@ -228,15 +231,15 @@ impl Journal {
     }
 
     /// Burn prospective IDs once. No message, source or boundary becomes active.
-    fn reserve(
+    pub(super) fn reserve(
         &mut self,
-        prefix: PrefixProjection,
+        prefix: &PrefixProjection,
         units: &[Arc<SelectedUnit>],
     ) -> Result<PendingAppend> {
         if self.pending.is_some() {
             return Err(JournalError::Busy);
         }
-        self.check_projection(&prefix)?;
+        self.check_projection(prefix)?;
         if prefix.n != self.resident
             || layout::compare(&self.layout, &prefix.end, &layout::end(&self.layout))?
                 != std::cmp::Ordering::Equal
@@ -308,7 +311,31 @@ impl Journal {
                 .iter()
                 .flat_map(|m| &m.sources)
                 .collect();
-            new_pairs.extend(unit_pair_links(&sources)?);
+            if let Some(pair) = unit.completed_pair() {
+                let request=prefix.kept.iter().flat_map(|m|&m.sources).find(|s|matches!(&s.material,MaterialRef::Request{call_id} if call_id==&pair.started().call_id)).ok_or(JournalError::InvalidPair)?;
+                let crate::flow::ledger::LedgerFile::Statement(file) = pair.statement().file()
+                else {
+                    return Err(JournalError::InvalidPair);
+                };
+                let statement = &pair.started().statement;
+                let binding = file
+                    .bindings
+                    .get(statement.binding.0 as usize)
+                    .ok_or(JournalError::InvalidPair)?;
+                if !prefix.coverage.iter().any(|m|matches!(m,MaterialRef::Text{source:weaver_types::state_flow::ContentRef::Event{block_id},span} if block_id==&statement.block_id&&span.start<=binding.statement_span.start&&span.end>=binding.statement_span.end)){return Err(JournalError::InvalidPair)}
+                if sources.len() != 1
+                    || !matches!(&sources[0].material,MaterialRef::Returned{call_id} if call_id==&pair.started().call_id)
+                {
+                    return Err(JournalError::InvalidPair);
+                }
+                new_pairs.push(PairLink {
+                    call: pair.started().call_id.clone(),
+                    request: request.clone(),
+                    returned: (*sources[0]).clone(),
+                });
+            } else {
+                new_pairs.extend(unit_pair_links(&sources)?);
+            }
         }
         let assistant_id = next_message.into();
         next_message = next_message.checked_add(1).ok_or(JournalError::Exhausted)?;
@@ -322,11 +349,22 @@ impl Journal {
             assistant_id,
             new_messages,
             new_pairs,
-            prefix,
+            // Retain these exact checked facts only inside the sole pending
+            // reservation. The projection itself exposes no Clone capability.
+            prefix: PrefixProjection {
+                identity: prefix.identity.clone(),
+                revision: prefix.revision,
+                end: prefix.end.clone(),
+                n: prefix.n,
+                resident_before: prefix.resident_before,
+                kept: prefix.kept.clone(),
+                rebuild: prefix.rebuild.clone(),
+                coverage: prefix.coverage.clone(),
+            },
         })
     }
 
-    fn check_pending(&self, pending: &PendingAppend) -> Result<()> {
+    pub(super) fn check_pending(&self, pending: &PendingAppend) -> Result<()> {
         if !Arc::ptr_eq(&self.identity, &pending.identity)
             || self.pending != Some(pending.assembly)
             || pending.revision != self.revision
@@ -336,7 +374,7 @@ impl Journal {
         self.check_projection(&pending.prefix)
     }
 
-    fn cancel(&mut self, pending: &PendingAppend) -> Result<()> {
+    pub(super) fn cancel(&mut self, pending: &PendingAppend) -> Result<()> {
         self.check_pending(pending)?;
         self.pending = None;
         Ok(())
@@ -380,6 +418,8 @@ impl Journal {
         self.marks
             .retain(|mark| layout::position(&self.layout, &mark.end).is_ok_and(|p| p <= old_end));
         self.layout = layout;
+        self.emissions
+            .retain(|(_, id)| self.layout.iter().any(|message| message.id == *id));
         self.pairs.extend(pending.new_pairs.iter().cloned());
         self.boundaries.push(Boundary {
             end,
@@ -409,13 +449,20 @@ impl Journal {
         self.marks
             .retain(|mark| layout::position(&self.layout, &mark.end).is_ok_and(|p| p <= end));
         self.layout = prefix.kept.clone();
+        self.emissions
+            .retain(|(_, id)| self.layout.iter().any(|message| message.id == *id));
         self.resident = prefix.n;
         self.rebuild_pending = !prefix.rebuild.is_empty();
         self.revision = revision;
         Ok(())
     }
 
-    fn project_mark(&self, run: &str, ordinal: u64, span: &SpanRef) -> Result<PrefixProjection> {
+    pub(super) fn project_mark(
+        &self,
+        run: &str,
+        ordinal: u64,
+        span: &SpanRef,
+    ) -> Result<PrefixProjection> {
         if run != self.run {
             return Err(JournalError::InvalidCursor);
         }
@@ -545,3 +592,7 @@ pub(super) enum MaterialGuard {
 pub(super) fn exercise_step_query(unit: SelectedUnit) {
     tests::exercise_step_query(unit);
 }
+
+#[cfg(test)]
+#[path = "journal/drain_review_test_support.rs"]
+mod drain_review_test_support;

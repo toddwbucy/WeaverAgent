@@ -114,8 +114,8 @@ struct Outbound {
 /// inherited status flags untouched. Failure retires both directions, retaining
 /// partial and outgoing evidence until this owner is dropped. A failed channel
 /// never resumes, even though its evidence queries can remain true.
-pub(super) struct Channel {
-    end: OwnedFd,
+pub(super) struct Channel<E = OwnedFd> {
+    end: E,
     limit: usize,
     partial: Option<Partial>,
     outbound: Option<Outbound>,
@@ -129,6 +129,29 @@ pub(super) struct Channel {
 }
 
 impl Channel {
+    /// Retain the exact framing evidence while consuming the sole descriptor.
+    pub(super) fn retire_failed(self) -> Channel<()> {
+        let Self {
+            end,
+            limit,
+            partial,
+            outbound,
+            zero_received,
+            receive_interrupted,
+            failed,
+        } = self;
+        drop(end);
+        Channel {
+            end: (),
+            limit,
+            partial,
+            outbound,
+            zero_received,
+            receive_interrupted,
+            failed,
+        }
+    }
+
     pub(super) fn from_owned(end: OwnedFd, max_wire_bytes: usize) -> Result<Self, Fault> {
         if max_wire_bytes == 0 || u64::try_from(max_wire_bytes).is_err() {
             return Err(Fault::InvalidLimit);

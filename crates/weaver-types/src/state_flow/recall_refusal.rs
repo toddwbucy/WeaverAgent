@@ -3,7 +3,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::codec::deserialize_object as named_object;
-use super::{CallId, DecimalU64, SourceBlockId, StatementRef, ValidationError};
+use super::{CallId, DecimalU64, StatementRef, ValidationError};
 
 /// The original request and its checked statement remain separate identities.
 /// This evidence grants no pair, query, subject selection or model-facing result.
@@ -49,7 +49,7 @@ struct RecallRequestRefusalWire {
     #[serde(deserialize_with = "named_object")]
     call_id: CallId,
     call_block: DecimalU64,
-    #[serde(deserialize_with = "statement_object")]
+    #[serde(deserialize_with = "named_object")]
     statement: StatementRef,
     noun_count: DecimalU64,
     has_condition: bool,
@@ -61,20 +61,6 @@ impl<'de> Deserialize<'de> for RecallRequestRefusal {
         let wire = named_object::<D, RecallRequestRefusalWire>(deserializer)?;
         Self::try_from(wire).map_err(serde::de::Error::custom)
     }
-}
-
-fn statement_object<'de, D: Deserializer<'de>>(deserializer: D) -> Result<StatementRef, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Statement {
-        block_id: SourceBlockId,
-        binding: DecimalU64,
-    }
-    let statement = named_object::<D, Statement>(deserializer)?;
-    Ok(StatementRef {
-        block_id: statement.block_id,
-        binding: statement.binding,
-    })
 }
 
 impl TryFrom<RecallRequestRefusalWire> for RecallRequestRefusal {

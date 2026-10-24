@@ -70,6 +70,10 @@ pub(super) fn event(kind: Kind, payload: Option<Payload>) -> AuthoredEvent {
 
 impl Fixture {
     pub(super) fn new(declaration: FlowConfig) -> Self {
+        Self::with_enter(declaration, 1_000_000_000)
+    }
+
+    pub(super) fn with_enter(declaration: FlowConfig, remaining_enter_ns: u64) -> Self {
         let (sink, reader) = UnixStream::pair().unwrap();
         let (state, peer) = UnixStream::pair().unwrap();
         peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
@@ -83,7 +87,7 @@ impl Fixture {
             "run".into(),
             42,
             declaration,
-            1_000_000_000,
+            remaining_enter_ns,
             &mut clock,
         )
         .unwrap();
@@ -616,7 +620,14 @@ fn initial_author_wait_never_promotes_an_invalid_original() {
             ));
         }
         assert_eq!(
-            format!("{:?}", fx.context.refused_author.as_ref().unwrap()),
+            format!(
+                "{:?}",
+                if kind == Kind::ToolCallStarted {
+                    fx.context.held_author().unwrap()
+                } else {
+                    fx.context.refused_author().unwrap()
+                }
+            ),
             format!("{original:?}")
         );
         assert!(fx.context.waiting_content.is_none());

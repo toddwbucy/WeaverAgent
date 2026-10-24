@@ -404,6 +404,8 @@ impl RecordingContext {
             || self.repair_blocks_external()
             || self.output.is_some()
             || self.boot_open_blocks_external()
+            || self.plan_summary_blocks_external()
+            || self.place_blocks_external()
             || self.measure_blocks_external()
         {
             return Err(RunFailure::PairOwned);
@@ -441,7 +443,7 @@ impl RecordingContext {
             };
             self.pair_rejection_wait = Some((bound, inherited.is_none()));
             let record = self.pairs.pending_rejection().unwrap().record().clone();
-            self.waiting_content = Some(AuthoredEvent {
+            self.waiting_content = Some(WaitingAuthor::ordinary(AuthoredEvent {
                 kind: Kind::ToolReturnRejected,
                 subsystem: Subsystem::Gate,
                 turn: self.open_turn.clone(),
@@ -451,7 +453,7 @@ impl RecordingContext {
                     .as_ref()
                     .map(|call| Sequence(call.sequence.0)),
                 payload: Some(Payload::RejectedReturn(Box::new(record))),
-            });
+            }));
             self.pair_rejected_authoring = true;
             self.continue_waiting_content(ports)?
         };
