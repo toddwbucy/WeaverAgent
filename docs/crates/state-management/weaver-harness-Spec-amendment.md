@@ -4,7 +4,7 @@
 
 **Landing PR:** #263
 
-**Version:** 0.33 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.34 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -443,10 +443,14 @@ private disposition once, after Recorded, under the original Decision bound. [FL
 FLOW-3, CLASS-8, STORE-3]
 
 The repair account keeps Recorded refusals inspectable alongside valid requests without
-releasing a refused CallId as a request candidate. In a correction, complete the one
-correction_call disposition, every RECALL-REFUSAL and every required valid pair's
-actual CompletedPair, including opening commits and the terminal Filed receipt, before
-charging the one failed correction. Preserve the original call identity and any
+releasing a refused CallId as a request candidate. A correction containing a ToolCall
+or UnrecoveredCall requires one Recorded correction_call disposition. An empty
+correction requires its exact Recorded empty_correction refusal under Spec 02
+EMPTY-CORRECTION. A correction with defective Text and no attempted call requires no
+correction_call disposition. For every failed correction, complete all required
+refusal records, including every applicable RECALL-REFUSAL, and every required valid
+pair's actual CompletedPair, including opening commits and the terminal Filed receipt,
+before charging the one failed correction. Preserve the original call identity and any
 corrected statement source independently. Spec 02 CANCELLED-CORRECTION owns the
 complete-attempt boundary across Stop/leave: retain exact correction identity and
 count once when all required facts exist, before fallible continuation or extraction,
