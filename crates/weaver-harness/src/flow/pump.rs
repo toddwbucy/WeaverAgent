@@ -29,7 +29,7 @@ use super::pump_transport::{
 };
 use super::ste100_socket::{AdmissionPoll, SocketPort};
 
-const SOURCE_COUNT: usize = 9;
+const SOURCE_COUNT: usize = 11;
 const CONTROL_BYTES: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +40,8 @@ pub(super) enum PumpDeadline {
     Cut,
     Decision,
     StateControl,
+    /// A silent secondary admin dial, owned by the accepted Leave.
+    AdminRead,
     /// Snapshot/finished missing results require cleanup, not immediate halt.
     CaptureResult,
     /// The unchanged publication window, retained separately from leg waits.
@@ -52,6 +54,8 @@ pub(super) enum PumpDeadline {
 pub(super) enum PumpSource {
     Listener,
     Admin,
+    AdminDial,
+    LeavePeer,
     Residency,
     Gate,
     Decode,
@@ -61,9 +65,11 @@ pub(super) enum PumpSource {
     Trace,
 }
 
-const LIFECYCLE: [PumpSource; 3] = [
+const LIFECYCLE: [PumpSource; 5] = [
     PumpSource::Listener,
     PumpSource::Admin,
+    PumpSource::AdminDial,
+    PumpSource::LeavePeer,
     PumpSource::Residency,
 ];
 const ROTATING: [PumpSource; 6] = [
@@ -107,6 +113,12 @@ pub(super) enum PumpStep {
 pub(super) struct LifecyclePorts<'a> {
     pub listener: Option<&'a mut LifecycleListener>,
     pub peer: Option<&'a mut LifecyclePeer>,
+    /// A dial during an already accepted Leave. Its raw directives are not
+    /// new boot/placement cancellation authority; the Leave owner judges them.
+    pub dial: Option<&'a mut LifecyclePeer>,
+    /// The already accepted Leave's connection. Extra packets stay held and
+    /// EOF is a fact for its owner, never another accepted lifecycle directive.
+    pub leave_peer: Option<&'a mut LifecyclePeer>,
     pub residency: Option<&'a mut OrganPort>,
 }
 
@@ -121,8 +133,8 @@ pub(super) struct PumpPorts<'a, I: PumpIo> {
 /// An Enter's handles stay beside the exact envelope until one explicit take.
 /// The caller, not transport, judges which directive owes each supplied handle.
 #[derive(Debug)]
-pub(super) struct LifecycleMessage {
-    pub envelope: OrganEnvelope,
+pub(super) struct LifecycleMessage<E = OrganEnvelope> {
+    pub envelope: E,
     pub sink: Option<OwnedFd>,
     pub state: Option<OwnedFd>,
 }
@@ -130,6 +142,7 @@ pub(super) struct LifecycleMessage {
 pub(super) struct LifecycleListener {
     listener: CoordinationListener,
     held: Option<LifecyclePeer>,
+    accepted_ns: Option<u64>,
     failure: Option<Failure>,
     interrupted: bool,
 }
@@ -152,6 +165,7 @@ impl LifecycleListener {
         Ok(Self {
             listener,
             held: None,
+            accepted_ns: None,
             failure: None,
             interrupted: false,
         })
@@ -161,13 +175,33 @@ impl LifecycleListener {
         self.held.as_ref()
     }
     pub(super) fn take_connection(&mut self) -> Option<LifecyclePeer> {
+        self.accepted_ns = None;
         self.held.take()
+    }
+    pub(super) fn accepted_ns(&self) -> Option<u64> {
+        self.accepted_ns
+    }
+    pub(super) fn take_observed_connection(&mut self) -> Option<(LifecyclePeer, u64)> {
+        let at = self.accepted_ns?;
+        let peer = self.held.take()?;
+        self.accepted_ns = None;
+        Some((peer, at))
+    }
+    pub(super) fn gate_socket(&self) -> std::path::PathBuf {
+        self.listener.gate_socket()
     }
     pub(super) fn unlink(&self) {
         self.listener.unlink();
     }
     pub(super) fn failure(&self) -> Option<&Failure> {
         self.failure.as_ref()
+    }
+
+    /// Before a recording context exists, accept through this same credential
+    /// check. Transfer the untouched peer to its sole Enter recvmsg owner.
+    pub(super) fn accept_enter(&mut self) -> Result<Option<LifecyclePeer>, Failure> {
+        self.advance()?;
+        Ok(self.take_connection())
     }
 
     fn interest(&self) -> (BorrowedFd<'_>, PollFlags) {
@@ -232,6 +266,7 @@ pub(super) struct LifecyclePeer {
     failure: Option<Failure>,
     interrupted: bool,
     zero_received: bool,
+    enter_ready_guard: bool,
 }
 
 impl LifecyclePeer {
@@ -246,6 +281,7 @@ impl LifecyclePeer {
             failure: None,
             interrupted: false,
             zero_received: false,
+            enter_ready_guard: false,
         })
     }
     pub(super) fn fd(&self) -> BorrowedFd<'_> {
@@ -293,7 +329,75 @@ impl LifecyclePeer {
                 failure,
             });
         }
-        self.sender.stage(envelope)
+        let result = self.sender.stage(envelope)?;
+        if matches!(result, Stage::Queued) {
+            self.enter_ready_guard = false;
+        }
+        Ok(result)
+    }
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_tracked(
+        &mut self,
+        envelope: OrganEnvelope,
+    ) -> Result<super::pump_transport::TrackedStage, StageFailure<OrganEnvelope>> {
+        if let Err(failure) = self.live() {
+            return Err(StageFailure {
+                input: envelope,
+                failure,
+            });
+        }
+        let result = self.sender.stage_tracked(envelope)?;
+        if matches!(result, super::pump_transport::TrackedStage::Queued(_)) {
+            self.enter_ready_guard = false;
+        }
+        Ok(result)
+    }
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_enter_ready(
+        &mut self,
+        envelope: OrganEnvelope,
+    ) -> Result<super::pump_transport::TrackedStage, StageFailure<OrganEnvelope>> {
+        let result = self.stage_tracked(envelope)?;
+        if matches!(result, super::pump_transport::TrackedStage::Queued(_)) {
+            self.enter_ready_guard = true;
+        }
+        Ok(result)
+    }
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_observation(
+        &mut self,
+        envelope: weaver_types::state_flow::enter::ObservationEnvelope,
+    ) -> Result<
+        super::pump_transport::TrackedStage<weaver_types::state_flow::enter::ObservationEnvelope>,
+        StageFailure<weaver_types::state_flow::enter::ObservationEnvelope>,
+    > {
+        if let Err(failure) = self.live() {
+            return Err(StageFailure {
+                input: envelope,
+                failure,
+            });
+        }
+        let result = self.sender.stage_observation(envelope)?;
+        if matches!(result, super::pump_transport::TrackedStage::Queued(_)) {
+            self.enter_ready_guard = false;
+        }
+        Ok(result)
+    }
+    fn enter_ready_pending(&self) -> bool {
+        self.enter_ready_guard && self.sender.send_pending()
+    }
+    pub(super) fn owns_send(&self, send: &super::pump_transport::OrganSend) -> bool {
+        send.belongs_to(&self.sender)
+    }
+    pub(super) fn try_send_observed(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<SendProgress, Failure> {
+        self.live()?;
+        if self.interrupted || self.zero_received {
+            return Ok(SendProgress::Pending);
+        }
+        self.sender.try_send_observed(io)
     }
     pub(super) fn try_send(&mut self) -> Result<SendProgress, Failure> {
         self.live()?;
@@ -353,14 +457,27 @@ impl LifecyclePeer {
     }
 
     pub(super) fn try_receive(&mut self) -> Result<ReceiveProgress, Failure> {
+        match self.receive_message(|bytes| serde_json::from_slice::<OrganEnvelope>(bytes))? {
+            Some(message) => {
+                self.held = Some(message);
+                Ok(ReceiveProgress::Held)
+            }
+            None => Ok(ReceiveProgress::Pending),
+        }
+    }
+
+    fn receive_message<E>(
+        &mut self,
+        decode: impl FnOnce(&[u8]) -> Result<E, serde_json::Error>,
+    ) -> Result<Option<LifecycleMessage<E>>, Failure> {
         self.live()?;
         if self.held.is_some() {
             self.check_terminal()?;
-            return Ok(ReceiveProgress::Pending);
+            return Ok(None);
         }
         if self.zero_received {
             if !self.check_terminal()? {
-                return Ok(ReceiveProgress::Pending);
+                return Ok(None);
             }
             return self.fail(invalid_failure("empty live coordination packet"));
         }
@@ -391,11 +508,11 @@ impl LifecyclePeer {
             let error = Errno::last();
             if error == Errno::EINTR {
                 self.interrupted = true;
-                return Ok(ReceiveProgress::Pending);
+                return Ok(None);
             }
             if error == Errno::EAGAIN {
                 self.interrupted = false;
-                return Ok(ReceiveProgress::Pending);
+                return Ok(None);
             }
             return self.fail(io_failure(error));
         }
@@ -458,12 +575,12 @@ impl LifecyclePeer {
         if count == 0 {
             self.zero_received = true;
             if !self.check_terminal()? {
-                return Ok(ReceiveProgress::Pending);
+                return Ok(None);
             }
             return self.fail(invalid_failure("empty live coordination packet"));
         }
         bytes.truncate(count as usize);
-        let decoded = serde_json::from_slice(&bytes);
+        let decoded = decode(&bytes);
         self.wire = Some(bytes);
         let envelope = decoded.map_err(|error| {
             let failure =
@@ -471,12 +588,11 @@ impl LifecyclePeer {
             self.failure = Some(failure.clone());
             failure
         })?;
-        self.held = Some(LifecycleMessage {
+        Ok(Some(LifecycleMessage {
             envelope,
             sink,
             state,
-        });
-        Ok(ReceiveProgress::Held)
+        }))
     }
 }
 
@@ -551,9 +667,23 @@ impl CommonPump {
     pub(super) fn step<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
+        coordinator: Option<&mut FlowCoordinator<SocketPort>>,
+        cx: &mut FlowRecording<'_>,
+        deadlines: &DeadlineRegistry<PumpDeadline>,
+    ) -> Result<PumpStep, PumpFailure> {
+        self.step_with_wait(ports, coordinator, cx, deadlines, true)
+    }
+
+    /// The same bounded observation and transport work, with an optional wait
+    /// when nothing is ready. A local decision may observe without inventing a
+    /// protocol deadline or substituting a clock/wait provider.
+    pub(super) fn step_with_wait<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
         mut coordinator: Option<&mut FlowCoordinator<SocketPort>>,
         cx: &mut FlowRecording<'_>,
         deadlines: &DeadlineRegistry<PumpDeadline>,
+        wait: bool,
     ) -> Result<PumpStep, PumpFailure> {
         if let Some(expired) = self.deadline(ports.io, deadlines)? {
             return Ok(expired);
@@ -612,6 +742,13 @@ impl CommonPump {
                 .transpose()
                 .map_err(PumpFailure::Flow)?
                 .flatten();
+            if !wait {
+                return Ok(if observation.is_some_and(|tick| self.previous >= tick) {
+                    PumpStep::Observation
+                } else {
+                    PumpStep::Idle
+                });
+            }
             let wake = deadlines.nearest().into_iter().chain(observation).min();
             let mut interests = Vec::new();
             let mut sources = Vec::new();
@@ -685,6 +822,18 @@ impl CommonPump {
             }
         }
         self.cursor = (self.cursor + 1) % ROTATING.len();
+        // The final Enter answer observes every standing component before its
+        // write. This does not reduce a completion or grant readiness itself.
+        if ports
+            .lifecycle
+            .peer
+            .as_deref()
+            .is_some_and(LifecyclePeer::enter_ready_pending)
+            && order.contains(&PumpSource::Admin)
+        {
+            order.retain(|source| *source != PumpSource::Admin);
+            order.push(PumpSource::Admin);
+        }
         for source in order {
             // Withhold only the first Open/placement write for the same held
             // cancellation that the owner observes. Keep receive and terminal
@@ -715,6 +864,37 @@ impl CommonPump {
                     .is_some_and(|peer| peer.cancels_boot_open())
             {
                 ready[source as usize].remove(PollFlags::POLLOUT);
+            }
+            if source == PumpSource::Admin
+                && ports
+                    .lifecycle
+                    .peer
+                    .as_deref()
+                    .is_some_and(LifecyclePeer::enter_ready_pending)
+            {
+                if let Some(expired) = self.deadline(ports.io, deadlines)? {
+                    return Ok(expired);
+                }
+                let peer = ports
+                    .lifecycle
+                    .peer
+                    .as_deref_mut()
+                    .expect("present original Enter");
+                // One bounded receive by the original owner precedes this
+                // irrevocable answer. A held cancellation grants no Ready write.
+                peer.try_receive()
+                    .map_err(|failure| PumpFailure::Transport { source, failure })?;
+                let cancelled = peer.cancels_boot_open();
+                if let Some(expired) = self.deadline(ports.io, deadlines)? {
+                    return Ok(expired);
+                }
+                if cancelled || !ready[source as usize].contains(PollFlags::POLLOUT) {
+                    progressed.push(source);
+                    continue;
+                }
+                // The receive above is this source's read unit. Preserve the
+                // actual writable hint; EAGAIN never means a completed answer.
+                ready[source as usize].remove(PollFlags::POLLIN);
             }
             if let Some(expired) = self.deadline(ports.io, deadlines)? {
                 return Ok(expired);
@@ -769,23 +949,41 @@ impl CommonPump {
         let transport = |failure| PumpFailure::Transport { source, failure };
         match source {
             PumpSource::Listener => {
-                if ports.lifecycle.peer.is_some() {
+                if ports.lifecycle.peer.is_some() || ports.lifecycle.dial.is_some() {
                     return Ok(false);
                 }
                 let Some(listener) = ports.lifecycle.listener.as_mut() else {
                     return Ok(false);
                 };
+                if listener.held.is_none() && is_terminal(flags) {
+                    return listener
+                        .fail(closed_failure("coordination listener closed"))
+                        .map_err(transport);
+                }
                 listener
                     .advance()
-                    .map(|progress| progress != ListenProgress::Pending)
+                    .map(|progress| {
+                        if progress == ListenProgress::Accepted {
+                            // The common clock was checked immediately before
+                            // this nonblocking accept. Delayed reduction cannot
+                            // restart the dial's original receive allowance.
+                            listener.accepted_ns = Some(self.previous);
+                        }
+                        progress != ListenProgress::Pending
+                    })
                     .map_err(transport)
             }
-            PumpSource::Admin => {
-                let Some(peer) = ports.lifecycle.peer.as_mut() else {
+            PumpSource::Admin | PumpSource::AdminDial | PumpSource::LeavePeer => {
+                let slot = match source {
+                    PumpSource::Admin => &mut ports.lifecycle.peer,
+                    PumpSource::AdminDial => &mut ports.lifecycle.dial,
+                    _ => &mut ports.lifecycle.leave_peer,
+                };
+                let Some(peer) = slot.as_mut() else {
                     return Ok(false);
                 };
                 if send {
-                    peer.try_send()
+                    peer.try_send_observed(ports.io)
                         .map(|progress| progress != SendProgress::Pending)
                         .map_err(transport)
                 } else {
@@ -886,9 +1084,13 @@ fn present<I: PumpIo>(
 ) -> bool {
     match source {
         PumpSource::Listener => {
-            ports.lifecycle.peer.is_none() && ports.lifecycle.listener.is_some()
+            ports.lifecycle.peer.is_none()
+                && ports.lifecycle.dial.is_none()
+                && ports.lifecycle.listener.is_some()
         }
         PumpSource::Admin => ports.lifecycle.peer.is_some(),
+        PumpSource::AdminDial => ports.lifecycle.dial.is_some(),
+        PumpSource::LeavePeer => ports.lifecycle.leave_peer.is_some(),
         PumpSource::Residency => ports.lifecycle.residency.is_some(),
         PumpSource::Gate => ports.gate.is_some(),
         PumpSource::Decode => ports.decode.is_some(),
@@ -911,6 +1113,7 @@ fn local_work<I: PumpIo>(
     match source {
         PumpSource::Listener => {
             ports.lifecycle.peer.is_none()
+                && ports.lifecycle.dial.is_none()
                 && ports.lifecycle.listener.as_ref().is_some_and(|port| {
                     port.interrupted || port.held.as_ref().is_some_and(|peer| peer.needs_progress())
                 })
@@ -918,6 +1121,16 @@ fn local_work<I: PumpIo>(
         PumpSource::Admin => ports
             .lifecycle
             .peer
+            .as_ref()
+            .is_some_and(|port| port.needs_progress()),
+        PumpSource::AdminDial => ports
+            .lifecycle
+            .dial
+            .as_ref()
+            .is_some_and(|port| port.needs_progress()),
+        PumpSource::LeavePeer => ports
+            .lifecycle
+            .leave_peer
             .as_ref()
             .is_some_and(|port| port.needs_progress()),
         PumpSource::Residency => ports
@@ -1030,6 +1243,22 @@ fn standing_transport_failure<I: PumpIo>(ports: &PumpPorts<'_, I>) -> Option<Pum
                 .and_then(|port| port.failure()),
         ),
         (
+            PumpSource::AdminDial,
+            ports
+                .lifecycle
+                .dial
+                .as_ref()
+                .and_then(|port| port.failure()),
+        ),
+        (
+            PumpSource::LeavePeer,
+            ports
+                .lifecycle
+                .leave_peer
+                .as_ref()
+                .and_then(|port| port.failure()),
+        ),
+        (
             PumpSource::Residency,
             ports
                 .lifecycle
@@ -1067,11 +1296,19 @@ fn interest<'a>(
     cx: &'a FlowRecording<'_>,
 ) -> Option<(BorrowedFd<'a>, PollFlags)> {
     match source {
-        PumpSource::Listener if lifecycle.peer.is_none() => {
+        PumpSource::Listener if lifecycle.peer.is_none() && lifecycle.dial.is_none() => {
             lifecycle.listener.as_ref().map(|port| port.interest())
         }
         PumpSource::Admin => lifecycle
             .peer
+            .as_ref()
+            .map(|port| (port.fd(), port.interest())),
+        PumpSource::AdminDial => lifecycle
+            .dial
+            .as_ref()
+            .map(|port| (port.fd(), port.interest())),
+        PumpSource::LeavePeer => lifecycle
+            .leave_peer
             .as_ref()
             .map(|port| (port.fd(), port.interest())),
         PumpSource::Residency => lifecycle
@@ -1137,3 +1374,60 @@ fn interest<'a>(
 #[cfg(test)]
 #[path = "pump_tests.rs"]
 mod tests;
+
+/// Descriptorless terminal evidence. Received handle roles remain explicit;
+/// the actual descriptors close without becoming another run's inputs.
+pub(super) struct RetiredLifecycleMessage {
+    pub(super) envelope: OrganEnvelope,
+    pub(super) had_sink: bool,
+    pub(super) had_state: bool,
+}
+impl LifecycleMessage {
+    pub(super) fn retire_failed(self) -> RetiredLifecycleMessage {
+        RetiredLifecycleMessage {
+            envelope: self.envelope,
+            had_sink: self.sink.is_some(),
+            had_state: self.state.is_some(),
+        }
+    }
+}
+pub(super) struct RetiredLifecyclePeer {
+    pub(super) sender: super::pump_transport::PacketPort<OrganEnvelope, ()>,
+    pub(super) held: Option<RetiredLifecycleMessage>,
+    pub(super) wire: Option<Vec<u8>>,
+    pub(super) failure: Option<Failure>,
+    pub(super) interrupted: bool,
+    pub(super) zero_received: bool,
+}
+impl LifecyclePeer {
+    pub(super) fn retire_failed(self) -> RetiredLifecyclePeer {
+        RetiredLifecyclePeer {
+            sender: self.sender.retire_failed(),
+            held: self.held.map(LifecycleMessage::retire_failed),
+            wire: self.wire,
+            failure: self.failure,
+            interrupted: self.interrupted,
+            zero_received: self.zero_received,
+        }
+    }
+}
+pub(super) struct RetiredLifecycleListener {
+    pub(super) held: Option<RetiredLifecyclePeer>,
+    pub(super) accepted_ns: Option<u64>,
+    pub(super) failure: Option<Failure>,
+    pub(super) interrupted: bool,
+}
+impl LifecycleListener {
+    pub(super) fn retire_failed(self) -> RetiredLifecycleListener {
+        self.listener.unlink();
+        RetiredLifecycleListener {
+            held: self.held.map(LifecyclePeer::retire_failed),
+            accepted_ns: self.accepted_ns,
+            failure: self.failure,
+            interrupted: self.interrupted,
+        }
+    }
+}
+
+#[path = "pump_enter.rs"]
+pub(super) mod enter;

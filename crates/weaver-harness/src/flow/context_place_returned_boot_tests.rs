@@ -53,6 +53,8 @@ fn place_returned_boot_install_refusal_transfers_exact_cleanup_owner_through_clo
                     listener: None,
                     peer: Some(&mut admin),
                     residency: None,
+                    dial: None,
+                    leave_peer: None,
                 },
                 gate: None,
                 decode: Some(&mut decode),

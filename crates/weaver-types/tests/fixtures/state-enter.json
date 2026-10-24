@@ -1,0 +1,139 @@
+{
+  "exchange": {
+    "opener": "admin",
+    "ordinal": 7
+  },
+  "position": "open",
+  "payload": {
+    "kind": "directive",
+    "body": {
+      "kind": "enter",
+      "payload": {
+        "session": "carrier-session",
+        "run": "carrier-run",
+        "spu_instruction": {
+          "decoder": {
+            "model-binding": {
+              "artifact": "/synthetic/decoder.gguf",
+              "devices": [
+                0
+              ]
+            },
+            "residual-readout-election": false,
+            "surprisal-election": false,
+            "refeed-permission": false,
+            "column-permission": false,
+            "tunable-values": {}
+          }
+        },
+        "binding": {
+          "kind": "serving",
+          "gate_instruction": {
+            "access-rule": {
+              "allowed-uids": [
+                0
+              ],
+              "allowed-gids": [],
+              "denied-uids": []
+            }
+          },
+          "state_management": {
+            "flow": {
+              "version": 1,
+              "partition": [],
+              "gate_wait": {
+                "elapsed_ns": "1000000",
+                "measurement_ref": "synthetic-carrier"
+              },
+              "cut_wait": {
+                "elapsed_ns": "1000000",
+                "measurement_ref": "synthetic-carrier"
+              },
+              "observation_interval": {
+                "elapsed_ns": "1000",
+                "measurement_ref": "synthetic-carrier"
+              },
+              "backlog": {
+                "max_pending_blocks": "100",
+                "max_pending_bytes": "1000000",
+                "lag_alarm_turns": "2",
+                "measurement_ref": "synthetic"
+              },
+              "scheme": {
+                "scheme_id": "ste100:f015625577fa7fe2fcefe1fbd1f7a6817119cea5b8d789cad602df81a19839aa",
+                "artifact_sha256": "f015625577fa7fe2fcefe1fbd1f7a6817119cea5b8d789cad602df81a19839aa",
+                "verbs": [
+                  "read"
+                ]
+              }
+            },
+            "start": {
+              "dump_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "persistence": {
+              "save_wait": {
+                "elapsed_ns": "1000000",
+                "measurement_ref": "synthetic-carrier"
+              },
+              "snapshot_wait": {
+                "elapsed_ns": "120000000000",
+                "measurement_ref": "synthetic-carrier"
+              }
+            },
+            "reads": {
+              "max_result_bytes": "65536",
+              "measurement_ref": "synthetic"
+            },
+            "ste100": {
+              "model_binding": {
+                "artifact": "/synthetic/checker-manifest.json",
+                "devices": [
+                  1
+                ]
+              },
+              "model_artifact_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "instances": 1,
+              "max_wire_bytes": "65536",
+              "measurement_ref": "synthetic",
+              "repair_cap": {
+                "attempts": 3,
+                "measurement_ref": "synthetic"
+              },
+              "decision_wait": {
+                "elapsed_ns": "1000000",
+                "measurement_ref": "synthetic-carrier"
+              }
+            },
+            "tools": {},
+            "placement": {
+              "c_head": 21,
+              "c_tail": 22,
+              "measurement_ref": "synthetic"
+            }
+          },
+          "start": {
+            "seed_id": "11111111111111111111111111111111",
+            "artifact_id": "00000000000000000001-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "dump_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "parent_artifact_id": null,
+            "position": null
+          },
+          "ste100_scheme": "{\"format\":\"ste100-scheme/1\",\"reference\":{\"edition\":\"synthetic-process-test\",\"document_sha256\":\"52367a6622b19f08825e915fad80c542ad4f4c34dbcebad9f5007994b3e39208\",\"rule_ids\":[\"test-rule\"],\"dictionary_sha256\":\"177ca70f42def1238e36da329473263ed3feadd14094c079a2230be0193436f5\"},\"grammar\":{\"format\":\"test-grammar/1\",\"bytes_base64\":\"Z3JhbW1hcg==\",\"sha256\":\"e05eb8a4a255743e051d77d5e43b75e5e38073b27539b0184fbce352405a3ee1\"},\"verbs\":[{\"key\":\"read\",\"forms\":[\"Read\"],\"sense\":\"test\",\"authority\":{\"rule_id\":\"test-rule\",\"disposition\":\"approved_word\"}}],\"technical_names\":[],\"conditions\":{\"format\":\"test-conditions/1\",\"bytes_base64\":\"Y29uZGl0aW9ucw==\",\"sha256\":\"562a77a7ae22fe1bb05561df5f820282d4e199b7d5469ee234068f35aefedae1\"},\"recall_keys\":[\"read\"],\"qualification\":{\"report_sha256\":\"a7affbfd966fc489cb357f5b9fec8641c8d9fc6d738729d4f190ef54fa63823c\",\"corpus_sha256\":\"a7df0d5876fb35cd08ea55adba13aebf9583713fd3a548e1536164878287efb4\",\"checker_abi\":\"test/1\"}}"
+        },
+        "state_store": {
+          "engine": "sqlite"
+        },
+        "declaration": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "stack": {
+          "weaver-spu-ste100": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "boundary": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "cause": {
+          "uid": 0
+        },
+        "operator": 1234
+      }
+    }
+  }
+}

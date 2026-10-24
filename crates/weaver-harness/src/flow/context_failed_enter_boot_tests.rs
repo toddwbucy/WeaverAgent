@@ -364,3 +364,126 @@ fn failed_enter_cleanup_retires_the_original_summary_rollback_channel_after_a_la
     assert_eq!(unload["payload"]["grant_surface"], "unreadable");
     assert!(owner.unload_sequence().is_some());
 }
+
+#[test]
+fn failed_enter_review_actual_summary_account_precedes_unload_and_keeps_member_closed_fact() {
+    let (mut fx, resources) = completed_pair_resources();
+    fx.begin_boot();
+    released_summary_recall(&mut fx, None);
+    // The real Released measurement is Recorded before pressure is added.
+    // Released provenance is real but its recall author cannot enter the full
+    // writer yet. The resulting summary account remains an actual obligation.
+    fx.boot.member.fill_trace();
+    for _ in 0..128 {
+        fx.advance().unwrap();
+        if fx.run().context.pending_author().is_some() {
+            break;
+        }
+    }
+    let ticket = fx
+        .run()
+        .context
+        .pending_author()
+        .expect("real summary recall is blocked")
+        .ticket;
+    assert_eq!(
+        fx.run().context.pending_author().unwrap().event.kind,
+        Kind::Recall
+    );
+    assert!(fx.run().context.plan_summary.is_some());
+    let recalls_before = fx.records(Kind::Recall).len();
+    // A real classifier EOF preserves the independent healthy member outcome.
+    fx.boot._classifier.close();
+    let run = fx.run();
+    let first = run
+        .context
+        .pump_once(&mut PumpPorts {
+            lifecycle: LifecyclePorts::default(),
+            gate: None,
+            decode: None,
+            label: None,
+            io: &mut run.clock,
+        })
+        .unwrap_err();
+    assert_eq!(run.context.phase, RecordingPhase::Failed);
+    let mut owner = cleanup_fixture::start(fx.run(), resources);
+    for _ in 0..3000 {
+        owner.advance(&mut fx.run().clock);
+        if owner.release_outcome() == ReleaseOutcome::Confirmed {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(owner.release_outcome(), ReleaseOutcome::Confirmed);
+    for _ in 0..8 {
+        owner.advance(&mut fx.run().clock);
+    }
+    assert_eq!(owner.context().pending_author().unwrap().ticket, ticket);
+    assert!(owner.context().plan_summary.is_some());
+    assert!(owner.summary_account().is_none());
+    assert!(
+        owner.unload_sequence().is_none(),
+        "terminal Unload waits for the real summary account"
+    );
+    assert_eq!(
+        owner
+            .context()
+            .barrier
+            .recorder()
+            .structure()
+            .by_kind(Kind::Unload)
+            .count(),
+        0
+    );
+    // Drain actual sink pressure without discarding the context's original
+    // ticket, then allow the same stopped account and terminal record to finish.
+    use std::io::{ErrorKind, Read};
+    fx.run()._reader.set_nonblocking(true).unwrap();
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut bytes = [0u8; 65536];
+    while owner.context().barrier.recorder().boundary().queued != 0 {
+        assert!(std::time::Instant::now() < end);
+        match fx.run()._reader.read(&mut bytes) {
+            Ok(0) => panic!("trace closed before owed recall"),
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::WouldBlock => std::thread::yield_now(),
+            Err(error) => panic!("trace: {error}"),
+        }
+    }
+    cleanup_fixture::drive(&mut owner, &mut fx.run().clock);
+    assert_eq!(owner.failure(), &first);
+    assert!(owner.summary_account().unwrap().recorded_read().is_some());
+    let recall_rows: Vec<_> = owner
+        .context()
+        .barrier
+        .recorder()
+        .structure()
+        .by_kind(Kind::Recall)
+        .collect();
+    assert_eq!(recall_rows.len(), recalls_before + 1);
+    let recall: serde_json::Value =
+        serde_json::from_str(&recall_rows.last().unwrap().line).unwrap();
+    let unload_rows: Vec<_> = owner
+        .context()
+        .barrier
+        .recorder()
+        .structure()
+        .by_kind(Kind::Unload)
+        .collect();
+    assert_eq!(unload_rows.len(), 1);
+    let unload: serde_json::Value = serde_json::from_str(&unload_rows[0].line).unwrap();
+    assert!(
+        recall["sequence"].as_str().unwrap().parse::<u64>().unwrap()
+            < unload["sequence"].as_str().unwrap().parse::<u64>().unwrap()
+    );
+    assert_eq!(unload["payload"]["release"]["spu"], "confirmed");
+    assert_eq!(unload["payload"]["release"]["member"], "closed");
+    let done = match owner.finish() {
+        Ok(done) => done,
+        Err(_) => panic!("closed"),
+    };
+    assert!(!done.abandoned());
+    assert!(done.trace_drained());
+    assert!(done.summary_account().unwrap().recorded_read().is_some());
+    assert!(done.unload_sequence().is_some());
+}
