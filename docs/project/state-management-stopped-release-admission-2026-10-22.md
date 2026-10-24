@@ -1,10 +1,8 @@
 # Stopped release admission implementation record
 
-Date: 2026-10-22.
-Branch: code/state-stopped-release-admission. Parent: exact #264
-285ab7fb1dcda0b23f16f4dcbd4c671f0433720a. Root three-way integration preserves
-#262's final fixture corrections; all seven joined source hashes were checked.
-Authoring seat. Epic #146; Planner #258 row 4.
+Published slice: #265, head a17eba6343e6386f4d3addd22f35260f1bb0915d, parent
+#264 285ab7fb1dcda0b23f16f4dcbd4c671f0433720a. Authoring seat. Epic #146;
+Planner #258 row 4. The executed validation below belongs to that exact slice.
 
 The dormant recording context now admits its existing nonselectable shutdown set
 through a private release author boundary. This closes the concrete mismatch where
@@ -26,7 +24,8 @@ This is an implementation of already merged clauses, not a new lifecycle electio
 | HARNESS-HALT / HARNESS-HALT-BOUND | Conforms within this slice: failure revokes healthy release permission, retains the original/ticket or actual Recorded sequence, and leaves Failed obligations to their existing owner. |
 
 The author grades above have dedicated-target runtime and protective-mutation
-evidence. Independent source review is complete; the Planner grade remains pending.
+evidence. Independent source review is complete. [The Planner grade][planner] found no
+fix-bucket rows and ten batch rows; the [followup record][followup] answers them.
 No production qualification is claimed. The full failed-enter/leave lifecycle composer and author migration remain
 held. Worker/dev_loop still owns orchestration; classification stays in the SPU.
 No existing serving caller is activated or replaced by this slice. Draft #260's
@@ -38,8 +37,8 @@ context_release.rs owns the four-kind predicate and all private proof fields. It
 scope borrows the issuing context's actual phase and first-failure slot and carries
 the barrier identity. The owned author consumes the exact event; an allocation
 identity distinguishes each attempt even when all public run/session/kind values
-match. RecordBarrier retains the original AuthorTicket and a private ticket bound to
-that barrier and attempt. Preparation failure occurs after original retention.
+match. RecordBarrier retains a private release mark on the original AuthorTicket, bound
+to that barrier and attempt. Taking or clearing the author takes its mark with it. Preparation failure occurs after original retention.
 
 Each pressure continuation verifies the actual phase, first-failure absence,
 barrier, attempt, original ticket and kind, prepared kind, run and Observation
@@ -113,14 +112,23 @@ boolean inputs agree, and query evaluation order is preserved. Full harness/lint
 were rerun on the final source. Those initial logs remain in the evidence. Mutation
 anchors were refreshed after formatting; all thirteen final probes executed.
 
-Evidence is /tmp/state-stopped-release-admission-gates/ and
-/tmp/state-stopped-release-admission-mutation-evidence/. Published source, source/input
-hashes, logs, recipes and review notes are deposited at
+The durable deposit contains the published source, source/input hashes, logs,
+recipes and review notes, including the original local gate and mutation logs:
 /bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/stopped-release-admission-285ab7fb/.
 These are author checks, not a Planner grade, complete lifecycle circuit or production
 qualification.
 
-The staging base is exact #261 ef32e86b250c79f66a919ce483a676337bc233ee plus the
-39 resolved PlanSummary join-preview files, with an external source manifest for
-later three-way integration. The only PlanSummary test-file edit in this slice is
-the new integration module include; preserve root's later corrected fixtures.
+The preliminary authoring snapshot combined #261 ef32e86b with the 39 resolved
+PlanSummary join-preview files. It was a preparation input, not the published
+parent or the tested published source. Root integrated the final slice onto exact
+#264 285ab7fb, preserved #262's corrected fixtures, and verified all seven joined
+source hashes before the final gates. The deposit identifies both the preparation
+inputs and the published snapshot; reproducing the published result starts from
+that snapshot, not by replaying the preliminary join.
+
+The Planner independently ran 15 perturbations: nine failed their tests and six
+survived overlapping guards. These are separate from the 13 author probes above.
+The followup record explicitly disposes of the six survivors.
+
+[planner]: https://github.com/toddwbucy/WeaverAgent/pull/265#pullrequestreview-5624154624
+[followup]: state-management-stopped-release-review-followups-2026-10-23.md

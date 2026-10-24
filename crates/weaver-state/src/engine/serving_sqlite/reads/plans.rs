@@ -76,6 +76,10 @@ fn push<T>(values: &mut Vec<T>, value: T) -> Result<()> {
 
 /// Derive the actual typed metadata inside the caller's transaction. No public
 /// response is encoded and no result-byte limit is invented for an atomic guard.
+/// Keep this materializing traversal separate from `snapshot`'s bounded stream:
+/// building a full PlanSnapshot for a public query would allocate before that
+/// query's byte ceiling can refuse it. Shared row decoders above and the typed /
+/// public parity tests pin the mapping without imposing that allocation policy.
 fn typed_snapshot(db: &Connection, seed: &str, row: &Row<'_>) -> Result<PlanSnapshot> {
     let plan = plan_ref(seed, row)?;
     let id = blob(plan.plan_id.local_id);

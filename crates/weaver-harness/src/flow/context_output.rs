@@ -105,6 +105,7 @@ impl RecordingContext {
             || self.flow.has_filing_consumer()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()
+            || (self.held_author.is_some() && !self.generation_output_continuation())
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()
@@ -113,6 +114,7 @@ impl RecordingContext {
             || self.inspection.is_some()
             || self.boot_open_blocks_external()
             || self.plan_summary_blocks_external()
+            || self.place_blocks_external()
             || self.measure_blocks_external()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
@@ -175,7 +177,7 @@ impl RecordingContext {
             author_done: false,
             cancelled: false,
         });
-        self.waiting_content = Some(event);
+        self.waiting_content = Some(WaitingAuthor::ordinary(event));
         self.repair_note_output_started();
         Ok(())
     }
@@ -386,7 +388,7 @@ impl RecordingContext {
         if owner.sequence.is_none() && self.waiting_content.is_some() {
             // No trace ticket or copy exists. The core returns the unchanged
             // original Message. There is nothing to file or to undo.
-            self.waiting_content.take();
+            self.waiting_content.take().map(WaitingAuthor::into_event);
             owner.author_done = true;
         }
     }

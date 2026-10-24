@@ -125,15 +125,28 @@ fn release_shutdown_follows_real_boot_unsent_sent_pressure_fit_and_expired_accou
             let run = &mut fx.boot.member.run;
             let ticket = run.context.pending_author().unwrap().ticket;
             let before = run.context.barrier.recorder().structure().len();
-            assert_eq!(
-                run.context
-                    .author_and_wait(&mut ports(&mut run.clock), shutdown_event(Kind::Fault)),
-                Err(RunFailure::BootOpenOwned)
-            );
-            assert_eq!(run.context.pending_author().unwrap().ticket, ticket);
-            assert_eq!(run.context.barrier.recorder().structure().len(), before);
-            assert!(run.context.failure().is_none());
-            assert_eq!(run.context.refused_author().unwrap().kind, Kind::Fault);
+            let first = shutdown_event(Kind::Fault);
+            let second = shutdown_event(Kind::Refusal);
+            let pointer = |event: &AuthoredEvent| match event.payload.as_ref().unwrap() {
+                Payload::Fault(raw) | Payload::Refusal(raw) => raw.get().as_ptr() as usize,
+                _ => unreachable!(),
+            };
+            let pointers = [pointer(&first), pointer(&second)];
+            assert_ne!(pointers[0], pointers[1]);
+            let author_turn = run.context.author_turn.clone();
+            for (original, expected) in [first, second].into_iter().zip(pointers) {
+                assert_eq!(
+                    run.context
+                        .author_and_wait(&mut ports(&mut run.clock), original),
+                    Err(RunFailure::BootOpenOwned)
+                );
+                assert_eq!(pointer(run.context.held_author().unwrap()), expected);
+                assert!(run.context.refused_author().is_none());
+                assert_eq!(run.context.pending_author().unwrap().ticket, ticket);
+                assert_eq!(run.context.author_turn, author_turn);
+                assert_eq!(run.context.barrier.recorder().structure().len(), before);
+                assert!(run.context.failure().is_none());
+            }
             fx.drain();
         }
         for _ in 0..16 {
@@ -143,6 +156,30 @@ fn release_shutdown_follows_real_boot_unsent_sent_pressure_fit_and_expired_accou
             }
         }
         assert!(fx.boot.member.run.context.boot_open_account_settled());
+        if road == "pressure" {
+            let run = &mut fx.boot.member.run;
+            let returned = run.context.take_held_author().unwrap();
+            let before = run
+                .context
+                .barrier
+                .recorder()
+                .structure()
+                .by_kind(Kind::Refusal)
+                .count();
+            run.context
+                .author_and_wait(&mut ports(&mut run.clock), returned)
+                .unwrap();
+            assert_eq!(
+                run.context
+                    .barrier
+                    .recorder()
+                    .structure()
+                    .by_kind(Kind::Refusal)
+                    .count(),
+                before + 1
+            );
+            assert!(run.context.take_held_author().is_none());
+        }
         assert!(fx.boot.member.run.context.boot_journal.is_none());
         assert!(fx.records(Kind::StateMarkPosition).is_empty());
         assert_eq!(
@@ -274,4 +311,26 @@ fn release_shutdown_after_summary_original_expiry_retains_partial_snapshot_and_l
         account.read_evidence().unwrap().assembled_bytes(),
         &raw[..cut]
     );
+}
+
+#[test]
+fn release_custody_actual_boot_head_cannot_start_new_open_after_release() {
+    let mut fx = OpenFixture::new();
+    let run = &mut fx.boot.member.run;
+    let leave = AbsoluteBound::after(run.clock.now().unwrap(), 1000).unwrap();
+    run.context.begin_releasing(leave, &mut run.clock).unwrap();
+    assert_eq!(run.context.phase(), RecordingPhase::Releasing);
+    let before = run.context.barrier.recorder().structure().len();
+    assert_eq!(
+        run.context
+            .begin_boot_open(&mut fx.decode, &mut run.clock)
+            .unwrap_err()
+            .refusal,
+        BootOpenBeginRefusal::WrongPhase
+    );
+    assert!(!run.context.barrier.boot_open_owed());
+    assert!(run.context.boot_open.is_none());
+    assert!(run.context.failure().is_none());
+    assert_eq!(run.context.barrier.recorder().structure().len(), before);
+    assert!(receive(fx.peer.as_fd()).is_none());
 }

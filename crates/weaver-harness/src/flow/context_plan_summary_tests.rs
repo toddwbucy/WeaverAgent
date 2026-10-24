@@ -1721,6 +1721,8 @@ fn plan_summary_actual_held_stop_revokes_boot_without_stealing_lifecycle_complet
                 listener: None,
                 peer: Some(&mut admin),
                 residency: None,
+                dial: None,
+                leave_peer: None,
             },
             gate: None,
             decode: None,
@@ -1920,10 +1922,7 @@ fn pump_summary_decode(
     decode: &mut DecodePort,
 ) -> Result<PumpStep, RunFailure> {
     let run = fx.run();
-    let mut io = ReadyClock {
-        clock: &mut run.clock,
-        fd: decode.fd().as_raw_fd(),
-    };
+    let mut io = SummaryReadyClock(&mut run.clock);
     run.context.pump_once(&mut PumpPorts {
         lifecycle: LifecyclePorts::default(),
         gate: None,
@@ -1987,11 +1986,7 @@ fn plan_summary_common_pump_holds_actual_generation_until_each_required_refresh_
             Stage::Queued
         ));
         for _ in 0..2 {
-            assert_eq!(
-                pump_summary_decode(&mut fx, &mut decode).unwrap_err(),
-                RunFailure::PlanSummaryOwned,
-                "{phase}"
-            );
+            pump_summary_decode(&mut fx, &mut decode).unwrap();
             assert!(decode.generation_not_started());
             assert!(receive(peer.as_fd()).is_none());
         }
@@ -2070,10 +2065,7 @@ fn plan_summary_revoked_cache_blocks_generation_but_allows_actual_cancel_transpo
                 request
             );
         } else {
-            assert_eq!(
-                pump_summary_decode(&mut fx, &mut decode).unwrap_err(),
-                RunFailure::PlanSummaryOwned
-            );
+            pump_summary_decode(&mut fx, &mut decode).unwrap();
             assert!(receive(peer.as_fd()).is_none());
         }
     }
@@ -2161,3 +2153,14 @@ fn plan_summary_boot_rollback_seal_cannot_retire_a_foreign_recall_ticket() {
 
 #[path = "context_release_integration_tests.rs"]
 mod release_integration_tests;
+
+// Source-only review followups use these same actual owner fixtures.
+#[path = "context_plan_summary_review_tests.rs"]
+mod review_followup_tests;
+use review_followup_tests::SummaryReadyClock;
+
+#[path = "context_place_tests.rs"]
+mod place_tests;
+
+#[path = "context_failed_enter_boot_tests.rs"]
+mod failed_enter_tests;
