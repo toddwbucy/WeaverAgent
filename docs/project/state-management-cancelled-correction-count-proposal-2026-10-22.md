@@ -22,8 +22,8 @@ rejected source and exact correction identity, never to extraction or polling ti
 This preserves [#213's merged empty rule][empty]: its exact Recorded refusal is the
 complete empty-pass boundary, with no checker or pair fabricated. It changes the
 nonempty/call cancelled-completion rule in the reviewed implementation; that change
-must wait for operator ruling, Planner review and merge of this proposal. Existing
-repair custody followups deliberately leave both counting paths unchanged.
+must wait for this approved, reviewed proposal to merge. Existing repair custody
+followups deliberately leave both counting paths unchanged.
 
 ## Exact boundaries
 
@@ -80,15 +80,16 @@ The concrete proposal edits [Spec 02 REPAIR, EMPTY-CORRECTION and the new
 CANCELLED-CORRECTION clause][spec02], [Spec 05 purpose precedence and
 COMPLETED-PAIR][spec05], and [HARNESS-RECALL-REFUSAL][harness]. The Spec headers describe
 the intended merged document state under Working Process section 2; this unmerged
-proposal itself carries no implementation authority. Landing metadata names draft PR #263; the proposal still waits for operator ruling,
-Planner review and merge.
+proposal itself carries no implementation authority. Landing metadata names draft
+PR #263. The operator approved complete-accounting count in comment 6357978329;
+Planner follow-up 5623970858 closed the wording rows. Implementation awaits merge.
 
 A census of failed_corrections and correction-count references found no additional
 wire field, trace kind, state operation or owning contract to change. Historical
 project records, including the 2026-10-21 empty implementation note, remain evidence of
 their author-tested revisions, not independent normative cancellation elections.
 
-Implementation after ruling and merge owes actual-owner tests for every table boundary,
+Implementation after merge owes actual-owner tests for every table boundary,
 including exact empty/call identity, delayed terminal Filed receipts, mixed immutable
 causes, late completion before account extraction, no count for a partial multi-call
 suffix, at-most-once behavior below and at cap, original-bound expiry, and no cancelled
@@ -101,3 +102,20 @@ The full state-management cutover and production qualification holds remain in f
 [spec02]: ../crates/state-management/state-management-spec-02-protocol-classifier-gate.md
 [spec05]: ../crates/state-management/state-management-spec-05-tool-pairs.md
 [harness]: ../crates/state-management/weaver-harness-Spec-amendment.md
+
+## Integration with merged release-absence wording
+
+On 2026-10-23, main at f4482c60936efb6b7b38dd888fb61f25f8a953ed
+was joined into this proposal without rewriting its history. The header
+conflict keeps this proposal as Landing PR and advances the harness
+amendment from merged version 0.30 to proposed version 0.31. Date filed
+retains each owning document's date from main under the operator's
+first-filing convention. Both the proposed clauses and the merged
+HARNESS-RELEASE-ABSENT / TRACE-RELEASE-ABSENT wording are retained.
+
+Exact body comparisons preserve the previously reviewed Spec clause text;
+the harness body additionally contains the unchanged merged absence
+clause. Documentation checks accompany this conflict resolution. These
+five proposals remain separate main-based PRs; later landings must
+incorporate preceding merged clauses and advance shared versions again.
+The proposal remains unmerged and grants no implementation authority.

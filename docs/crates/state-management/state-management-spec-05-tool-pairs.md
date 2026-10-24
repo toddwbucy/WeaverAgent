@@ -4,7 +4,7 @@
 
 **Landing PR:** #263
 
-**Version:** 0.11 **Date filed:** 2026-10-22 **Document ID:** state-management-spec-05
+**Version:** 0.11 **Date filed:** 2026-10-20 **Document ID:** state-management-spec-05
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
