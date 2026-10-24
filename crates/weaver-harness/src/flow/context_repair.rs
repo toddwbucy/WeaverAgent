@@ -240,6 +240,8 @@ fn walk_pair_proofs<'a>(
 
 pub(super) struct RepairTransaction {
     ledger: RepairLedger,
+    scheme: RequestScheme,
+    count_failure: Option<RepairError>,
     certificate: TemplateCertificate,
     template: Option<&'static RestatementTemplate>,
     internal: bool,
@@ -486,6 +488,23 @@ impl RecordingContext {
             .instruction
             .repair_cap
             .attempts;
+        let scheme = match RequestScheme::from_exact_scheme(
+            &self.load_duty.as_ref().unwrap().scheme_text,
+            &self.declaration.scheme,
+        ) {
+            Ok(scheme) => scheme,
+            Err(error) => {
+                return Err(RepairBeginError {
+                    original,
+                    certificate,
+                    refusal: RepairBeginRefusal::WrongGeneration,
+                    failure: Some(
+                        self.repair_fault(io, format!("loaded request scheme: {error:?}")),
+                    ),
+                    instruction_refusal: None,
+                });
+            }
+        };
         let mut ledger = match RepairLedger::begin(original, cap) {
             Ok(ledger) => ledger,
             Err((original, _)) => {
@@ -503,6 +522,8 @@ impl RecordingContext {
         }
         self.repair = Some(RepairTransaction {
             ledger,
+            scheme,
+            count_failure: None,
             certificate,
             template,
             internal: false,
@@ -961,23 +982,7 @@ impl RecordingContext {
                 self.start_correction_call_refusal(correction, ports.io)
             }
             RepairIntent::EmptyCorrectionRefusal { source, correction } => {
-                self.ensure_repair_wait(ports.io)?;
-                let refusal = RefusalRecord::ProtocolRepair {
-                    source_id: source,
-                    case: ProtocolRepairCase::EmptyCorrection,
-                    detail: ProtocolRepairCase::EMPTY_CORRECTION_DETAIL.into(),
-                };
-                let payload = serde_json::value::to_raw_value(&refusal)
-                    .map_err(|error| self.repair_fault(ports.io, error.to_string()))?;
-                self.stage_repair_author(
-                    AuthorPurpose::EmptyCorrectionRefusal,
-                    Kind::Refusal,
-                    AuthoredSource::Runtime,
-                    Some(Sequence(correction.block_id.sequence.0)),
-                    Payload::Refusal(payload),
-                    None,
-                );
-                Ok(RepairProgress::Progress)
+                self.start_empty_refusal(source, correction, ports.io)
             }
             RepairIntent::CorrectionAccounting => {
                 let correction = self
@@ -1053,6 +1058,59 @@ impl RecordingContext {
             .or_else(|| work.account.as_ref().map(|account| account.turn().clone()))
             .or_else(|| self.open_turn.clone())
             .expect("repair retains attributed turn")
+    }
+
+    fn start_empty_refusal(
+        &mut self,
+        source: SourceBlockId,
+        correction: SourcePosition,
+        io: &mut impl PumpIo,
+    ) -> Result<RepairProgress, RunFailure> {
+        self.ensure_repair_wait(io)?;
+        let refusal = RefusalRecord::ProtocolRepair {
+            source_id: source,
+            case: ProtocolRepairCase::EmptyCorrection,
+            detail: ProtocolRepairCase::EMPTY_CORRECTION_DETAIL.into(),
+        };
+        let payload = serde_json::value::to_raw_value(&refusal)
+            .map_err(|error| self.repair_fault(io, error.to_string()))?;
+        self.stage_repair_author(
+            AuthorPurpose::EmptyCorrectionRefusal,
+            Kind::Refusal,
+            AuthoredSource::Runtime,
+            Some(Sequence(correction.block_id.sequence.0)),
+            Payload::Refusal(payload),
+            None,
+        );
+        Ok(RepairProgress::Progress)
+    }
+
+    /// Observe facts before any fallible continuation or output-loan transfer.
+    /// This observer neither advances repair nor changes a lifecycle/Decision bound.
+    pub(super) fn observe_repair_text_count(&mut self) {
+        let Some(work) = self.repair.as_mut() else {
+            return;
+        };
+        if !work.issued || !work.output_started || work.count_failure.is_some() {
+            return;
+        }
+        let (Some(source), Some(expected), Some(checks)) = (
+            work.issued_source.as_ref(),
+            work.expected_correction.as_ref(),
+            self.flow.output_checks(),
+        ) else {
+            return;
+        };
+        if checks.source() == Some(expected)
+            && checks.recorded_failed_text_only(&work.scheme)
+            && let Err(error) = work.ledger.recorded_text_failure(source, expected)
+        {
+            work.count_failure = Some(error);
+        }
+    }
+
+    pub(super) fn repair_count_failure(&self) -> Option<RepairError> {
+        self.repair.as_ref().and_then(|work| work.count_failure)
     }
 
     fn start_recall_refusal(
@@ -1907,15 +1965,11 @@ impl RecordingContext {
                 return Ok(RepairProgress::Pending);
             };
             self.repair.as_mut().unwrap().held_output = Some(checked);
-            let scheme = RequestScheme::from_exact_scheme(
-                &self.load_duty.as_ref().unwrap().scheme_text,
-                &self.declaration.scheme,
-            )
-            .map_err(|error| {
-                self.repair_fault(ports.io, format!("loaded request scheme: {error:?}"))
-            })?;
             let checked = self.repair.as_mut().unwrap().held_output.take().unwrap();
-            let correction = match OriginalRequests::from_checked(checked, &scheme) {
+            let correction = match OriginalRequests::from_checked(
+                checked,
+                &self.repair.as_ref().unwrap().scheme,
+            ) {
                 Ok(correction) => correction,
                 Err(failure) => {
                     self.repair.as_mut().unwrap().held_output = Some(failure.generation);
@@ -1968,6 +2022,15 @@ impl RecordingContext {
             .cancelled_protocol_refusal()
         {
             return self.start_correction_call_refusal(correction, ports.io);
+        }
+        if let Some((source, correction)) = self
+            .repair
+            .as_ref()
+            .unwrap()
+            .ledger
+            .cancelled_empty_refusal()
+        {
+            return self.start_empty_refusal(source, correction, ports.io);
         }
         if self.repair.as_ref().unwrap().account.is_none() {
             let cancelled = self

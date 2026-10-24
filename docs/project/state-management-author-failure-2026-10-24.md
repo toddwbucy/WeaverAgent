@@ -107,6 +107,23 @@ remaining caller/lifecycle work complete.
 | 17, process | Self-check skills remain unavailable. No invocation or independent author-review pass is claimed. |
 | 18, file | #313 now includes the Planner-reported parallel startup race and the existing generation race. Serial passes do not qualify either parallel run. |
 
+## Current Planner disposition
+
+[Review 5637407681 of #317 at b413e6b2](https://github.com/toddwbucy/WeaverAgent/pull/317#pullrequestreview-5637407681)
+reports zero fix, seven batch and two file rows. The Planner accepted the two
+#314 fixes and marked #317 ready. The reviewed code head remains unchanged.
+
+| #317 row | Current disposition |
+| --- | --- |
+| 1 | Open batch: use the shared placement owner predicate on the prefix road. |
+| 2 | Open Spec wording election: state precedence of held Busy over refusals that create a notice owner. The Planner reserves this to the operator; no approval or amended authority is inferred here. |
+| 3 | Open with #314 row 3: retain generic caller identity in the withdrawn slot. |
+| 4 | Open batch: share the admit/resume owner ladder and account for resume's FreshnessOwned/PairOwned differences. |
+| 5 | Open cleanup after the ownership carries: consolidate return/placement helper layers. |
+| 6 | These current row maps name every finding and retain its disposition. |
+| 7 | Open test gap in the held-boundary record: the Planner's release ownership mutation W10 survived. |
+| 8 and 9 | #316 now includes exempt marks' nonfatal replay and the latent fault_started/fault_sequence transition before a future held-input taker. The reported panic is plausible and unreachable on the reviewed head; no reproduction is claimed. |
+
 ## Instruments and validation
 
 Three new tests cover the changed behavior. One drives the real freshness owner
@@ -157,7 +174,8 @@ taking, Stop/Leave cancelled-owner exits, failed-run teardown, final world close
 worker correction and pair composition, production artifacts, measured limits,
 security disposition and qualified coupled cutover remain under #146. The legacy
 serving implementation stays active; only the operator merges or deploys.
-All new PRs remain drafts for independent review at their exact heads.
+New PRs are published as drafts; the Planner subsequently marked #317 ready
+after the independent grade above. The carried work remains open.
 
 The review exposed two paths omitted by the original caller walk: an internal
 continuation could pass the exemption and then reach a competing hold, and a

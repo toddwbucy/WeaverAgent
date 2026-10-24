@@ -3331,6 +3331,22 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 }
             }
             (Some(PendingRecord::Classifier), RecordProof::Classifier(proof)) => {
+                if let Some(request) = self.classifier().outstanding()
+                    && self
+                        .output_checks
+                        .as_ref()
+                        .is_some_and(|output| output.observes(request))
+                {
+                    let classifier = self.classifier.as_ref().expect("standing classifier");
+                    let reply = classifier
+                        .held()
+                        .expect("Recorded classifier reply remains held");
+                    self.output_checks
+                        .as_mut()
+                        .unwrap()
+                        .observe_recorded(classifier.outstanding().unwrap(), reply, &proof)
+                        .map_err(|error| self.fail(cx, "output", error))?;
+                }
                 self.classifier_release = Some(ClassifierRelease {
                     source: proof.source().clone(),
                     recorded_ns: io.now().map_err(|error| self.fail(cx, "clock", error))?,

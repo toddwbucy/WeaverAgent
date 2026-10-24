@@ -152,8 +152,28 @@ impl RecordedEmptyCorrection {
     }
 }
 
+/// One charged pass, attributed to its rejected source and exact correction.
+#[derive(Debug)]
+pub(in crate::flow) struct RecordedFailedCorrection {
+    source: SourceBlockId,
+    correction: SourcePosition,
+    failed_corrections: u32,
+}
+impl RecordedFailedCorrection {
+    pub(in crate::flow) fn source(&self) -> &SourceBlockId {
+        &self.source
+    }
+    pub(in crate::flow) fn correction(&self) -> &SourcePosition {
+        &self.correction
+    }
+    pub(in crate::flow) fn failed_corrections(&self) -> u32 {
+        self.failed_corrections
+    }
+}
+
 /// The original and every correction keep their exact source leases alive.
 /// Requests are derived by this owner only, never accepted from a caller vector.
+/// Failed-pass identities/counts survive cancelled, exhausted and successful exits.
 #[derive(Debug)]
 pub(in crate::flow) struct RepairAccount {
     original: OriginalRequests,
@@ -162,6 +182,7 @@ pub(in crate::flow) struct RepairAccount {
     recall_refusals: Vec<RecordedRecallRefusal>,
     association_refusals: Vec<RecordedAssociationRefusal>,
     empty_corrections: Vec<RecordedEmptyCorrection>,
+    failed_corrections: Vec<RecordedFailedCorrection>,
     nonce: Arc<()>,
 }
 impl RepairAccount {
@@ -195,6 +216,9 @@ impl RepairAccount {
     }
     pub(in crate::flow) fn empty_corrections(&self) -> &[RecordedEmptyCorrection] {
         &self.empty_corrections
+    }
+    pub(in crate::flow) fn failed_corrections(&self) -> &[RecordedFailedCorrection] {
+        &self.failed_corrections
     }
 }
 
@@ -396,6 +420,7 @@ impl RepairLedger {
                 recall_refusals: vec![],
                 association_refusals: vec![],
                 empty_corrections: vec![],
+                failed_corrections: vec![],
                 nonce: Arc::new(()),
             }),
             contexts,
@@ -537,6 +562,60 @@ impl RepairLedger {
             .then(|| pending.generation().source().clone())
     }
 
+    pub(super) fn cancelled_empty_refusal(&self) -> Option<(SourceBlockId, SourcePosition)> {
+        let pending = self.pending.as_ref()?;
+        (self.stage == Stage::Cancelled
+            && !pending.attempted_call()
+            && pending.generation().blocks().is_empty())
+        .then(|| {
+            (
+                self.context().source.clone(),
+                pending.generation().source().clone(),
+            )
+        })
+    }
+
+    /// The context calls this only for the exact issued output after every
+    /// Text check is Recorded and the loaded scheme excludes all attempted calls.
+    /// It changes no stage and grants no retry, including at the cap.
+    pub(super) fn recorded_text_failure(
+        &mut self,
+        source: &SourceBlockId,
+        correction: &SourcePosition,
+    ) -> Result<(), RepairError> {
+        let account = self.account.as_ref().ok_or(RepairError::WrongPhase)?;
+        let context = self
+            .contexts
+            .get(self.current)
+            .ok_or(RepairError::WrongPhase)?;
+        if &context.source != source
+            || correction.block_id.run != account.source().block_id.run
+            || correction.turn != account.source().turn
+            || correction.block_id.block.0 != 0
+            || context.instructions.last().is_none_or(|instruction| {
+                correction.block_id.sequence <= instruction.block_id.sequence
+            })
+        {
+            return Err(RepairError::WrongSource);
+        }
+        if let Some(last) = account.failed_corrections.last() {
+            if &last.source == source && &last.correction == correction {
+                return Ok(());
+            }
+            if last.correction.block_id.sequence >= correction.block_id.sequence {
+                return Err(RepairError::OutOfOrder);
+            }
+        }
+        if !matches!(self.stage, Stage::Awaiting | Stage::Cancelled) {
+            return Err(RepairError::WrongPhase);
+        }
+        if context.failed >= self.cap {
+            return Err(RepairError::WrongPhase);
+        }
+        self.retain_failed_correction(correction.clone());
+        Ok(())
+    }
+
     #[allow(clippy::result_large_err)]
     pub(super) fn observe_cancelled_correction(
         &mut self,
@@ -552,6 +631,15 @@ impl RepairLedger {
             return Err((correction, error));
         }
         self.frontier = generation_frontier(correction.generation());
+        if !correction.attempted_call()
+            && correction
+                .generation()
+                .blocks()
+                .iter()
+                .any(|check| matches!(check.reply().result, Ste100Result::NotSte100 { .. }))
+        {
+            self.retain_failed_correction(correction.generation().source().clone());
+        }
         self.pending = Some(correction);
         self.pending_protocol_recorded = false;
         Ok(())
@@ -635,9 +723,10 @@ impl RepairLedger {
             .any(|check| matches!(check.reply().result, Ste100Result::NotSte100 { .. }));
         let account = self.account.as_mut().unwrap();
         let index = account.corrections.len();
+        let correction_source = correction.generation().source().clone();
         account.corrections.push(correction);
         if failed {
-            return Ok(self.failed_attempt());
+            return Ok(self.failed_attempt(correction_source));
         }
         self.contexts[self.current].success = Some(index);
         self.resolve_external(index);
@@ -689,7 +778,7 @@ impl RepairLedger {
         self.account.as_mut().unwrap().corrections.push(correction);
         // Count at Recorded even when cancellation wins the completion race.
         // A late receipt must never reopen a cancelled retry/exhaustion path.
-        self.failed_attempt();
+        self.failed_attempt(correction_source.clone());
         if cancelled {
             self.stage = Stage::Cancelled;
         }
@@ -748,12 +837,13 @@ impl RepairLedger {
         if let Err(error) = validation {
             return Err((correction, error));
         }
+        let correction_source = correction.generation().source().clone();
         self.account.as_mut().unwrap().corrections.push(correction);
         self.correction_out = None;
         if self.stage == Stage::Cancelled {
             return Ok(CorrectionProgress::Cancelled);
         }
-        Ok(self.failed_attempt())
+        Ok(self.failed_attempt(correction_source))
     }
 
     /// The original checked requests and repaired associations are the only
@@ -960,6 +1050,7 @@ impl RepairLedger {
             || self.account_out.is_some()
             || self.next_recall_refusal().is_some()
             || self.cancelled_protocol_refusal().is_some()
+            || self.cancelled_empty_refusal().is_some()
         {
             return None;
         }
@@ -988,7 +1079,15 @@ impl RepairLedger {
         &self.contexts[self.current]
     }
     fn attempt(&self) -> DecimalU64 {
-        (u64::from(self.context().failed) + 1).into()
+        // A final Recorded check can charge the current pass before its loan
+        // returns. Its already issued ordinal must not change with that count.
+        if self.stage == Stage::Awaiting {
+            u64::try_from(self.context().instructions.len())
+                .expect("instruction count fits u64")
+                .into()
+        } else {
+            (u64::from(self.context().failed) + 1).into()
+        }
     }
     fn require(&self, stage: Stage) -> Result<(), RepairError> {
         if self.stage == Stage::Frozen {
@@ -1024,11 +1123,28 @@ impl RepairLedger {
         }
         self.validate_record(correction.generation().source())
     }
-    fn failed_attempt(&mut self) -> CorrectionProgress {
+    fn retain_failed_correction(&mut self, correction: SourcePosition) {
+        let source = &self.contexts[self.current].source;
+        let account = self.account.as_mut().expect("counting retains its account");
+        if account
+            .failed_corrections
+            .last()
+            .is_some_and(|last| &last.source == source && last.correction == correction)
+        {
+            return;
+        }
         let context = &mut self.contexts[self.current];
-        // The initial defect never enters this counter. Each complete pass calls
-        // this once, after every attempted call has its terminal account.
         context.failed += 1;
+        account.failed_corrections.push(RecordedFailedCorrection {
+            source: context.source.clone(),
+            correction,
+            failed_corrections: context.failed,
+        });
+    }
+
+    fn failed_attempt(&mut self, correction: SourcePosition) -> CorrectionProgress {
+        self.retain_failed_correction(correction);
+        let context = &self.contexts[self.current];
         if context.failed == self.cap {
             self.stage = Stage::ExhaustedRecord;
             CorrectionProgress::Exhausted

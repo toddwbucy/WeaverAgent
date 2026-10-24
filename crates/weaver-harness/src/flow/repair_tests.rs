@@ -28,6 +28,7 @@ const _: fn() = || {
     let _ = <RepairLedger as NotClone<_>>::check;
     let _ = <RepairAccount as NotClone<_>>::check;
     let _ = <RecordedRecallRefusal as NotClone<_>>::check;
+    let _ = <RecordedFailedCorrection as NotClone<_>>::check;
     let _ = <EffectiveEmission as NotClone<_>>::check;
     let _ = <RestatementRequest as NotClone<_>>::check;
     trait NotDefault<M> {
@@ -998,12 +999,35 @@ fn repair_custody_pending_protocol_flag_clears_at_transfer_and_empty_installatio
     ledger.observe_correction(&source(10, 0), empty).unwrap();
     assert!(!ledger.pending_protocol_recorded);
     ledger.cancel();
-    let pending = ledger.take_cancelled().unwrap();
+    assert!(
+        ledger.take_cancelled().is_none(),
+        "the exact empty refusal is still owed"
+    );
     assert_eq!(
-        pending.pending().unwrap().generation().source(),
+        ledger.cancelled_empty_refusal(),
+        Some((source(10, 0), record(300)))
+    );
+    ledger
+        .recorded_empty_correction_refusal(record(340))
+        .unwrap();
+    let pending = ledger.take_cancelled().unwrap();
+    assert!(pending.pending().is_none());
+    assert_eq!(
+        pending
+            .account()
+            .corrections()
+            .last()
+            .unwrap()
+            .generation()
+            .source(),
         &record(300)
     );
-    assert!(pending.account().empty_corrections().is_empty());
+    assert_eq!(pending.account().empty_corrections().len(), 1);
+    assert_eq!(
+        pending.account().empty_corrections()[0].source(),
+        &record(340)
+    );
+    assert_eq!(pending.account().failed_corrections().len(), 2);
 }
 
 // The ledger accepts only its exact frontier index and actual recorded source.
