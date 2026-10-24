@@ -38,7 +38,7 @@ impl PumpIo for CircuitIo<'_> {
     }
 }
 
-fn prompt(seed: &str) -> Vec<u8> {
+pub(in crate::flow::context) fn prompt(seed: &str) -> Vec<u8> {
     let corpus: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("fixtures/recall-sources.json")).unwrap();
     let mut result = corpus
@@ -71,7 +71,7 @@ enum Fault {
 }
 
 fn circuit(fault: Fault) {
-    circuit_with_fixture(fault, TemplateFixture::new(), inventory(), false);
+    circuit_with_fixture(fault, TemplateFixture::new(), inventory(), false, None);
 }
 
 pub(in crate::flow::context) fn after_startup(
@@ -85,7 +85,83 @@ pub(in crate::flow::context) fn after_startup(
     let fx = TemplateFixture {
         input: super::super::input_tests::InputFixture { run, peer },
     };
-    circuit_with_fixture(Fault::None, fx, inventory, true);
+    circuit_with_fixture(Fault::None, fx, inventory, true, None);
+}
+
+pub(in crate::flow::context) fn after_residency(
+    mut run: super::super::tests::Fixture,
+    inventory: crate::flow::templates::CompiledInventory,
+    resources: &mut FailedEnterResources,
+    mut evidence: ResidencyEvidence,
+) {
+    let mode = std::env::var("WEAVER_GATE_STARTUP_DRIVER").unwrap_or_default();
+    if mode == "resident-foreign-context" {
+        let mut foreign = super::super::tests::Fixture::new(super::super::tests::config());
+        evidence = match BootComposition::from_residency(
+            &mut foreign.context,
+            resources,
+            inventory.clone(),
+            evidence,
+        ) {
+            Err((_, _, _, evidence)) => evidence,
+            Ok(_) => panic!("foreign context accepted actual residency"),
+        };
+        assert_eq!(foreign.context.phase, RecordingPhase::Preflight);
+        assert!(foreign.context.failure().is_none());
+    }
+    if mode == "resident-wrong-instruction" {
+        let original = evidence.request.instruction.clone();
+        evidence
+            .request
+            .instruction
+            .decoder
+            .model_binding
+            .artifact
+            .0
+            .push_str("-changed");
+        evidence = match BootComposition::from_residency(
+            &mut run.context,
+            resources,
+            inventory.clone(),
+            evidence,
+        ) {
+            Err((_, _, _, evidence)) => evidence,
+            Ok(_) => panic!("changed Admit instruction accepted"),
+        };
+        evidence.request.instruction = original;
+        assert!(run.context.failure().is_none());
+    }
+    if mode == "resident-foreign-bound" {
+        let bound = evidence.enter;
+        evidence.enter =
+            AbsoluteBound::after(bound.began_ns(), bound.deadline_ns() - bound.began_ns() + 1)
+                .unwrap();
+        evidence = match BootComposition::from_residency(
+            &mut run.context,
+            resources,
+            inventory.clone(),
+            evidence,
+        ) {
+            Err((_, _, _, evidence)) => evidence,
+            Ok(_) => panic!("foreign Enter bound accepted"),
+        };
+        evidence.enter = bound;
+        assert!(run.context.failure().is_none());
+    }
+    let (end, _unused) = crate::channel::ClassifyChannel::pair().unwrap();
+    let peer =
+        crate::flow::ste100_channel::Channel::from_owned(end.into_pump_fd().unwrap(), 262144)
+            .unwrap();
+    let fx = TemplateFixture {
+        input: super::super::input_tests::InputFixture { run, peer },
+    };
+    circuit_with_fixture(
+        Fault::None,
+        fx,
+        inventory,
+        true,
+        Some((resources, evidence)),
+    );
 }
 
 fn circuit_with_fixture(
@@ -93,6 +169,7 @@ fn circuit_with_fixture(
     mut fx: TemplateFixture,
     inventory: crate::flow::templates::CompiledInventory,
     actual_child: bool,
+    actual_resident: Option<(&mut FailedEnterResources, ResidencyEvidence)>,
 ) {
     let enter = fx
         .input
@@ -112,16 +189,148 @@ fn circuit_with_fixture(
         .seed_id
         .clone();
     let (channel, decoder) = DecodeChannel::pair().unwrap();
-    let mut decode = DecodePort::from_channel(channel).unwrap();
+    let mut fallback_decode = DecodePort::from_channel(channel).unwrap();
+    let actual_spu = actual_resident.is_some();
     fx.input.run.state.set_nonblocking(true).unwrap();
-    let mut boot = BootComposition::new(&mut fx.input.run.context, &mut decode, inventory);
+    let mut boot = if let Some((resources, evidence)) = actual_resident {
+        match BootComposition::from_residency(
+            &mut fx.input.run.context,
+            resources,
+            inventory,
+            evidence,
+        ) {
+            Ok(boot) => boot,
+            Err(_) => panic!("actual residency failed its boot join"),
+        }
+    } else {
+        BootComposition::new(&mut fx.input.run.context, &mut fallback_decode, inventory)
+    };
+    let resident_mode = std::env::var("WEAVER_GATE_STARTUP_DRIVER").unwrap_or_default();
+    if resident_mode == "entered-eof-boot" || resident_mode == "entered-substitute-boot" {
+        let (near, _far) = crate::channel::OrganChannel::pair().unwrap();
+        let mut substitute = crate::flow::pump::LifecyclePeer::from_channel(near).unwrap();
+        if resident_mode == "entered-eof-boot" {
+            super::super::startup_composition::tests::entered_tests::close_original_peer();
+        }
+        let result = boot.advance(
+            LifecyclePorts {
+                peer: (resident_mode == "entered-substitute-boot").then_some(&mut substitute),
+                ..Default::default()
+            },
+            &mut fx.input.run.clock,
+        );
+        assert_eq!(result, BootCompositionProgress::Stopped);
+        assert!(matches!(
+            boot.stopped(),
+            Some(BootCompositionStop::Run(RunFailure::Transport {
+                source: PumpSource::Admin,
+                ..
+            }))
+        ));
+        let stopped = boot.into_stopped().ok().unwrap();
+        assert!(
+            stopped
+                .resident
+                .as_ref()
+                .unwrap()
+                .evidence
+                .startup
+                .original_enter
+                .is_some()
+        );
+        return;
+    }
+    if resident_mode == "resident-spu-eof-boot" {
+        boot.resident.as_mut().unwrap().spu.stop_at_cap();
+        for _ in 0..3000 {
+            if boot.advance(
+                LifecyclePorts::default(),
+                &mut CircuitIo(&mut fx.input.run.clock),
+            ) == BootCompositionProgress::Stopped
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(matches!(
+            boot.stopped(),
+            Some(BootCompositionStop::Run(RunFailure::Transport {
+                source: PumpSource::Residency,
+                ..
+            }))
+        ));
+        let stopped = match boot.into_stopped() {
+            Ok(x) => x,
+            Err(_) => panic!("SPU EOF did not stop boot"),
+        };
+        assert!(stopped.resident.is_some());
+        return;
+    }
+    if matches!(
+        resident_mode.as_str(),
+        "resident-boot-substitute" | "resident-boot-window" | "resident-stopped-boot"
+    ) {
+        if resident_mode == "resident-boot-window" {
+            boot.context.deadlines.disarm(PumpDeadline::Enter);
+            boot.context
+                .deadlines
+                .arm(
+                    PumpDeadline::Enter,
+                    AbsoluteBound::after(
+                        enter.began_ns(),
+                        enter.deadline_ns() - enter.began_ns() + 1,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        if resident_mode == "resident-stopped-boot" {
+            boot.context.fail(
+                &mut fx.input.run.clock,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                "stop actual resident boot",
+            );
+        }
+        let (near, _far) = crate::channel::OrganChannel::pair().unwrap();
+        let mut substitute = crate::flow::pump_transport::OrganPort::from_channel(near).unwrap();
+        let result = boot.advance(
+            LifecyclePorts {
+                residency: (resident_mode == "resident-boot-substitute").then_some(&mut substitute),
+                ..Default::default()
+            },
+            &mut fx.input.run.clock,
+        );
+        assert_eq!(result, BootCompositionProgress::Stopped);
+        let stopped = match boot.into_stopped() {
+            Ok(x) => x,
+            Err(_) => panic!("stopped boot lost custody"),
+        };
+        let arms = stopped
+            .resident
+            .as_ref()
+            .expect("stopped boot retains actual resident arms");
+        assert_eq!(arms.evidence.enter, enter);
+        assert!(arms.request.send().sent());
+        assert!(arms.evidence.reply.belongs_to(arms.residency));
+        assert_eq!(
+            arms.spu.state(),
+            super::super::failed_enter_driver::ChildState::Running
+        );
+        assert_eq!(
+            arms.classifier.state(),
+            super::super::failed_enter_driver::ChildState::Running
+        );
+        assert!(stopped.context.failure().is_some());
+        return;
+    }
     let mut input = Vec::new();
     let mut queries = Vec::new();
     let mut releases = 0;
     let mut checks = 0;
     let mut opens = 0;
     let mut filed_pairs = 0;
-    let mut operation_id = 2;
+    let mut operation_id = if actual_child { 3 } else { 2 };
     let mut snapshot = 10u64;
     let mut held_release: Option<(s::StateFrame, usize)> = None;
     let mut held_steps = 0;
@@ -157,7 +366,10 @@ fn circuit_with_fixture(
             );
         }
         let progress = boot.advance(
-            LifecyclePorts::default(),
+            LifecyclePorts {
+                residency: None,
+                ..LifecyclePorts::default()
+            },
             &mut CircuitIo(&mut fx.input.run.clock),
         );
         assert_eq!(boot.context.origin_ns(), origin);
@@ -191,7 +403,13 @@ fn circuit_with_fixture(
                     boot.stopped()
                 ),
             }
-            let stopped = match boot.finish(LifecyclePorts::default(), &mut fx.input.run.clock) {
+            let stopped = match boot.finish(
+                LifecyclePorts {
+                    residency: None,
+                    ..LifecyclePorts::default()
+                },
+                &mut fx.input.run.clock,
+            ) {
                 Err(owner) => match owner.into_stopped() {
                     Ok(stopped) => stopped,
                     Err(_) => panic!("stopped owner not returned"),
@@ -218,7 +436,7 @@ fn circuit_with_fixture(
                 assert_eq!(held_steps, 10);
             }
             assert_eq!(checks, if actual_child { 0 } else { 3 });
-            assert_eq!(opens, 1);
+            assert_eq!(opens, if actual_spu { 0 } else { 1 });
             assert_eq!(releases, 4);
             assert_eq!(queries, ["prompt", "pairs", "pairs", "summary"]);
             assert!(boot.context.place_engine.is_some());
@@ -226,8 +444,13 @@ fn circuit_with_fixture(
             assert!(boot.context.boot_head.is_some());
             if matches!(fault, Fault::ExpireBeforeFinish) {
                 fx.input.run.clock.advance_to(enter.deadline_ns()).unwrap();
-                let stopped = match boot.finish(LifecyclePorts::default(), &mut fx.input.run.clock)
-                {
+                let stopped = match boot.finish(
+                    LifecyclePorts {
+                        residency: None,
+                        ..LifecyclePorts::default()
+                    },
+                    &mut fx.input.run.clock,
+                ) {
                     Err(owner) => owner,
                     Ok(_) => panic!("expired boot transferred completion"),
                 };
@@ -237,15 +460,42 @@ fn circuit_with_fixture(
                 ));
                 assert!(stopped.context.place_engine.is_some());
             } else {
-                let completed =
-                    match boot.finish(LifecyclePorts::default(), &mut fx.input.run.clock) {
-                        Ok(completed) => completed,
-                        Err(owner) => panic!("completed sequence refused: {:?}", owner.stopped()),
-                    };
+                let completed = match boot.finish(
+                    LifecyclePorts {
+                        residency: None,
+                        ..LifecyclePorts::default()
+                    },
+                    &mut fx.input.run.clock,
+                ) {
+                    Ok(completed) => completed,
+                    Err(owner) => panic!("completed sequence refused: {:?}", owner.stopped()),
+                };
+                if actual_spu {
+                    let arms = completed
+                        .resident
+                        .as_ref()
+                        .expect("completed boot retained resident arms");
+                    assert_eq!(arms.evidence.enter, enter);
+                    assert!(arms.evidence.reply.belongs_to(arms.residency));
+                    assert!(arms.request.send().sent());
+                    assert_eq!(arms.evidence.startup.load, Sequence(0));
+                }
                 assert_eq!(completed.certificate.accepted().len(), 3);
                 assert_eq!(completed.context.origin_ns(), origin);
                 assert!(completed.decode.held().is_none());
                 assert!(completed.context.input.snapshot().is_none());
+                if let Ok(mode) = std::env::var("WEAVER_GATE_STARTUP_DRIVER") {
+                    assert!(
+                        actual_child && actual_spu,
+                        "gate instrument uses actual prior forks"
+                    );
+                    super::gate_startup::tests::drive(
+                        completed,
+                        &mut fx.input.run.clock,
+                        None,
+                        &mode,
+                    );
+                }
             }
             return;
         }
@@ -289,7 +539,7 @@ fn circuit_with_fixture(
             if let s::StateFrame::FilePair { filing, .. } = &request {
                 assert!(matches!(fault, Fault::RepairPairs));
                 assert_eq!(queries, ["prompt", "pairs"]);
-                assert_eq!(opens, 1);
+                assert_eq!(opens, if actual_spu { 0 } else { 1 });
                 let now = fx.input.run.clock.now().unwrap();
                 let response = s::StateFrame::Filed {
                     common: request.common().clone(),
@@ -387,6 +637,9 @@ fn circuit_with_fixture(
                 .state
                 .write_all(&s::encode_state_line(&response, s::FrameDirection::Response).unwrap())
                 .unwrap();
+        }
+        if actual_spu {
+            continue;
         }
         match recv(
             decoder.as_fd().as_raw_fd(),

@@ -20,7 +20,7 @@ use weaver_types::{
 #[path = "failed_enter_process.rs"]
 mod process;
 pub(in crate::flow) use process::ChildState;
-use process::OwnedChild;
+pub(in crate::flow::context) use process::OwnedChild;
 
 /// Created by this context, then populated only by actual fork producers.
 /// There is no PID/descriptor adoption constructor for a fabricated child.
@@ -30,6 +30,14 @@ pub(in crate::flow) struct FailedEnterResources {
     classifier: Option<OwnedChild>,
 }
 
+pub(in crate::flow::context) struct ResidentBootResources<'a> {
+    pub residency: &'a mut OrganPort,
+    pub spu: &'a mut OwnedChild,
+    pub classifier: &'a mut OwnedChild,
+    pub request: &'a ResidencyRequest,
+    pub evidence: super::residency_composition::ResidencyEvidence,
+}
+
 struct SpuResource {
     child: OwnedChild,
     decode_identity: PortIdentity,
@@ -37,8 +45,24 @@ struct SpuResource {
     decode: Option<DecodePort>,
     residency: Option<OrganPort>,
     next_ordinal: Option<u64>,
+    residency_request: Option<ResidencyRequest>,
     retired_decode: Option<PacketPort<crate::channel::DecodeReply, ()>>,
     retired_residency: Option<PacketPort<OrganEnvelope, ()>>,
+}
+
+/// Original request value and the exact port-minted whole-send witness. Only
+/// this resource owner stages it; no scalar or cloned token creates this fact.
+pub(in crate::flow) struct ResidencyRequest {
+    envelope: OrganEnvelope,
+    send: OrganSend,
+}
+impl ResidencyRequest {
+    pub(in crate::flow) fn envelope(&self) -> &OrganEnvelope {
+        &self.envelope
+    }
+    pub(in crate::flow) fn send(&self) -> &OrganSend {
+        &self.send
+    }
 }
 
 impl FailedEnterResources {
@@ -106,6 +130,7 @@ impl FailedEnterResources {
             decode: Some(decode),
             residency: Some(residency),
             next_ordinal: Some(1),
+            residency_request: None,
             retired_decode: None,
             retired_residency: None,
         });
@@ -155,20 +180,95 @@ impl FailedEnterResources {
             .map_err(|error| format!("classifier bootstrap: {error:?}"))
     }
 
+    pub(in crate::flow::context) fn origin_for_boot(&self) -> Arc<()> {
+        Arc::clone(&self.origin)
+    }
+
+    pub(in crate::flow::context) fn can_boot(
+        &self,
+        context: &RecordingContext,
+        evidence: &super::residency_composition::ResidencyEvidence,
+    ) -> bool {
+        self.matches(context)
+            && Arc::ptr_eq(&evidence.origin, &self.origin)
+            && context.deadlines.get(PumpDeadline::Enter) == Some(evidence.enter)
+            && context.phase == RecordingPhase::Entered
+            && context.failure().is_none()
+            && self.original_ports()
+            && self.classifier.is_some()
+            && self.spu.as_ref().is_some_and(|spu| {
+                spu.residency.as_ref().is_some_and(|port| {
+                    evidence.reply.belongs_to(port)
+                        && evidence.reply.envelope().position == Position::Close
+                        && matches!(evidence.reply.envelope().payload,
+                            weaver_types::Payload::Answer(LifecycleAnswer::Admitted))
+                        && spu.residency_request.as_ref().is_some_and(|request| {
+                            request.send.belongs_to(port) && request.send.sent()
+                                && request.send.sent_at().is_some_and(|at|
+                                    at >= evidence.enter.began_ns() && !evidence.enter.expired(at))
+                                && request.send.matches_exchange(&evidence.reply.envelope().exchange)
+                                && matches!(&request.envelope.payload,
+                                    weaver_types::Payload::Directive(LifecycleDirective::Admit { instruction })
+                                        if instruction == &evidence.request.instruction)
+                        })
+                })
+            })
+    }
+
+    pub(in crate::flow::context) fn split_for_boot(
+        &mut self,
+        evidence: super::residency_composition::ResidencyEvidence,
+    ) -> (ResidentBootResources<'_>, &mut DecodePort) {
+        let spu = self.spu.as_mut().expect("checked actual SPU");
+        (
+            ResidentBootResources {
+                residency: spu.residency.as_mut().expect("checked residency"),
+                spu: &mut spu.child,
+                classifier: self.classifier.as_mut().expect("checked classifier"),
+                request: spu.residency_request.as_ref().expect("checked Admit"),
+                evidence,
+            },
+            spu.decode.as_mut().expect("checked decode"),
+        )
+    }
+
+    pub(super) fn spu_ports_mut(&mut self) -> Option<(&mut OrganPort, &mut DecodePort)> {
+        let spu = self.spu.as_mut()?;
+        Some((spu.residency.as_mut()?, spu.decode.as_mut()?))
+    }
+
     pub(in crate::flow) fn decode_mut(&mut self) -> Option<&mut DecodePort> {
         self.spu.as_mut()?.decode.as_mut()
     }
 
     /// The resource owner assigns each actual residency exchange exactly once.
     /// Busy/refusal returns the original directive and does not spend its ordinal.
+    /// The single pre-cleanup request stays here through send and reply handling;
+    /// callers inspect its witness by borrow, never take custody out of the bag.
     #[allow(clippy::result_large_err)] // Refusal returns the exact move-owned directive.
     pub(in crate::flow) fn stage_residency(
         &mut self,
         directive: LifecycleDirective,
-    ) -> Result<OrganSend, (LifecycleDirective, String)> {
+    ) -> Result<(), (LifecycleDirective, String)> {
+        // The caller may supply only the once-only Admit. Cleanup alone owns
+        // Release, so an earlier Release can never be replayed as a new one.
+        if !matches!(&directive, LifecycleDirective::Admit { .. }) {
+            return Err((directive, "pre-cleanup residency requires Admit".into()));
+        }
+        self.stage_residency_inner(directive)
+    }
+
+    #[allow(clippy::result_large_err)] // Same exact move-owned refusal as admission.
+    fn stage_residency_inner(
+        &mut self,
+        directive: LifecycleDirective,
+    ) -> Result<(), (LifecycleDirective, String)> {
         let Some(spu) = self.spu.as_mut() else {
             return Err((directive, "no SPU".into()));
         };
+        if spu.residency_request.is_some() {
+            return Err((directive, "residency retains its original request".into()));
+        }
         let Some(ordinal) = spu.next_ordinal else {
             return Err((directive, "residency ordinal exhausted".into()));
         };
@@ -186,19 +286,22 @@ impl FailedEnterResources {
             position: Position::Open,
             payload: weaver_types::Payload::Directive(directive),
         };
-        match port.stage_tracked(envelope) {
+        // Retain the original request value; the transport serializes its equal
+        // envelope copy. The non-Clone send witness still has one owner.
+        match port.stage_tracked(envelope.clone()) {
             Ok(TrackedStage::Queued(send)) => {
                 spu.next_ordinal = ordinal.checked_add(1);
-                Ok(send)
+                spu.residency_request = Some(ResidencyRequest { envelope, send });
+                Ok(())
             }
-            Ok(TrackedStage::Busy(envelope)) => {
+            Ok(TrackedStage::Busy(_)) => {
                 let weaver_types::Payload::Directive(directive) = envelope.payload else {
                     unreachable!()
                 };
                 Err((directive, "residency has an original pending send".into()))
             }
             Err(error) => {
-                let weaver_types::Payload::Directive(directive) = error.input.payload else {
+                let weaver_types::Payload::Directive(directive) = envelope.payload else {
                     unreachable!()
                 };
                 Err((directive, format!("residency stage: {:?}", error.failure)))
@@ -206,8 +309,16 @@ impl FailedEnterResources {
         }
     }
 
+    pub(in crate::flow) fn residency_request(&self) -> Option<&ResidencyRequest> {
+        self.spu.as_ref()?.residency_request.as_ref()
+    }
+
     pub(in crate::flow) fn residency_mut(&mut self) -> Option<&mut OrganPort> {
         self.spu.as_mut()?.residency.as_mut()
+    }
+
+    pub(super) fn residency_port(&self) -> Option<&OrganPort> {
+        self.spu.as_ref()?.residency.as_ref()
     }
 
     fn original_ports(&self) -> bool {
@@ -230,6 +341,22 @@ impl FailedEnterResources {
                 .spu
                 .as_ref()
                 .is_some_and(|spu| !matches!(spu.child.state(), ChildState::Reaped(_)))
+    }
+    /// Observe the actual retained classifier child without waiting or inventing
+    /// a successful reap. The lifecycle owner still owes its terminal disposition.
+    /// Only the classifier exists in the actual refused-startup rollback. At
+    /// the inherited halt cap it receives the existing nonblocking stop action.
+    pub(in crate::flow::context) fn retire_rollback_child(&mut self, expired: bool) {
+        if let Some(child) = &mut self.classifier {
+            if expired {
+                child.stop_at_cap();
+            } else {
+                child.poll();
+            }
+        }
+    }
+    pub(super) fn poll_classifier_child(&mut self) -> Option<ChildState> {
+        self.classifier.as_mut().map(OwnedChild::poll)
     }
     pub(in crate::flow) fn classifier_child(&self) -> Option<ChildState> {
         self.classifier.as_ref().map(OwnedChild::state)
@@ -337,13 +464,17 @@ pub(in crate::flow) struct FailedEnterCleanup {
     release_send: Option<OrganSend>,
     release_exchange: Option<ExchangeId>,
     release_reply: Option<ReceivedOrgan>,
+    prior_residency: Option<ResidencyRequest>,
+    prior_residency_reply: Option<ReceivedOrgan>,
     release_failure: Option<String>,
+    release_blocked: bool,
     refused_release: Option<LifecycleDirective>,
     unload: Option<AuthoredEvent>,
     unload_sequence: Option<Sequence>,
     unload_attempted: bool,
     unload_unavailable: Option<String>,
     abandoned: bool,
+    trace_drained: bool,
     member_stood: bool,
     member_failed: bool,
 }
@@ -365,6 +496,7 @@ impl RecordingContext {
 
     fn preinput_cleanup_domain(&self) -> bool {
         self.flow.preinput_failed_owner()
+            && self.enter_refusal_record.is_none()
             && self.held_author.is_none()
             && self.template_blocked_author.is_none()
             && self.waiting_content.is_none()
@@ -420,7 +552,7 @@ impl RecordingContext {
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn into_failed_enter_cleanup(
         self,
-        resources: FailedEnterResources,
+        mut resources: FailedEnterResources,
     ) -> Result<FailedEnterCleanup, FailedEnterRejected> {
         let refusal = if self.phase != RecordingPhase::Failed
             || self.failure.is_none()
@@ -463,6 +595,10 @@ impl RecordingContext {
         let deadline = self.flow.halt().and_then(|halt| halt.deadline().ok());
         let member_stood = self.flow.failed_cleanup_state_stood();
         let member_failed = self.flow.failed_cleanup_state_failed();
+        let prior_residency = resources
+            .spu
+            .as_mut()
+            .and_then(|spu| spu.residency_request.take());
         Ok(FailedEnterCleanup {
             context: self,
             resources,
@@ -476,13 +612,17 @@ impl RecordingContext {
             release_send: None,
             release_exchange: None,
             release_reply: None,
+            prior_residency,
+            prior_residency_reply: None,
             release_failure: None,
+            release_blocked: false,
             refused_release: None,
             unload: None,
             unload_sequence: None,
             unload_attempted: false,
             unload_unavailable: None,
             abandoned: false,
+            trace_drained: false,
             member_stood,
             member_failed,
         })
@@ -524,7 +664,7 @@ impl<I: PumpIo> PumpIo for AccountClock<'_, I> {
     ) -> std::io::Result<crate::flow::clock::WaitOutcome> {
         let bound = match (deadline, self.deadline) {
             (Some(a), Some(b)) => Some(a.min(b)),
-            (_, inherited) => inherited,
+            (caller, inherited) => caller.or(inherited),
         };
         let result = self.io.wait(interests, bound);
         if result.is_err() {
@@ -534,7 +674,49 @@ impl<I: PumpIo> PumpIo for AccountClock<'_, I> {
     }
 }
 
+pub(super) fn admit_reply_is_terminal(envelope: &OrganEnvelope) -> bool {
+    matches!(
+        &envelope.payload,
+        weaver_types::Payload::Answer(LifecycleAnswer::Admitted)
+            | weaver_types::Payload::Refusal(
+                weaver_types::LifecycleRefusal::ArtifactUnresolvable
+                    | weaver_types::LifecycleRefusal::ArtifactUnreadable
+                    | weaver_types::LifecycleRefusal::DeviceCannotAdmit
+                    | weaver_types::LifecycleRefusal::ConfigInvalid { .. }
+                    | weaver_types::LifecycleRefusal::OutOfOrder
+            )
+    )
+}
+
 impl FailedEnterCleanup {
+    /// The composition owner has already consumed this exact packet. Retain it
+    /// before cleanup runs; it cannot be read a second time from the port.
+    pub(super) fn retain_residency_completion(&mut self, reply: ReceivedOrgan) {
+        assert!(self.prior_residency_reply.is_none());
+        let valid = self.resources.residency_port().is_some_and(|port| {
+            reply.belongs_to(port)
+                && self.prior_residency.as_ref().is_some_and(|prior| {
+                    prior.send.sent()
+                        && prior.send.belongs_to(port)
+                        && prior.send.matches_exchange(&reply.envelope().exchange)
+                        && reply.envelope().position == Position::Close
+                        && admit_reply_is_terminal(reply.envelope())
+                })
+        });
+        self.prior_residency_reply = Some(reply);
+        if !valid {
+            self.release_blocked = true;
+            let detail = "consumed Admit reply did not close its exact sent request".to_owned();
+            self.release_failure = Some(detail.clone());
+            self.secondary(detail);
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn reap_composition_test_children(&mut self) {
+        self.resources.reap_startup_test_children();
+    }
+
     pub(in crate::flow) fn failure(&self) -> &RunFailure {
         self.context.failure.as_ref().unwrap()
     }
@@ -577,6 +759,24 @@ impl FailedEnterCleanup {
     }
 
     fn secondary(&mut self, detail: impl Into<String>) {
+        let detail = detail.into();
+        // Repeated account polling preserves the first observation of each
+        // distinct error instead of growing the account once per wake.
+        if self
+            .context
+            .flow
+            .halt()
+            .unwrap()
+            .secondary()
+            .iter()
+            .any(|prior| {
+                prior.reason == FlowHaltReason::ProtocolFailed
+                    && prior.point == HaltPoint::Teardown
+                    && prior.detail == detail
+            })
+        {
+            return;
+        }
         let _ = self
             .context
             .flow
@@ -586,7 +786,7 @@ impl FailedEnterCleanup {
                 reason: FlowHaltReason::ProtocolFailed,
                 point: HaltPoint::Teardown,
                 observed_ns: Some(self.context.last_ns.into()),
-                detail: detail.into(),
+                detail,
             });
     }
 
@@ -689,12 +889,8 @@ impl FailedEnterCleanup {
                         .as_mut()
                         .and_then(|spu| spu.decode.take())
                     {
-                        // Same exact port/account condition as retire_boot_decode,
-                        // while retaining its original framing evidence on close.
-                        if self.context.check_boot_open_port(&decode).is_err()
-                            || self.context.check_measure_port(&decode).is_err()
-                            || self.context.place_owed()
-                        {
+                        // Share the consuming port's exact retirement predicate.
+                        if !self.context.can_retire_boot_decode(&decode) {
                             self.resources.spu.as_mut().unwrap().decode = Some(decode);
                             self.release_failure = Some("exact decoder retirement refused".into());
                             return FailedEnterProgress::Pending;
@@ -732,15 +928,14 @@ impl FailedEnterCleanup {
                     self.abort();
                     return FailedEnterProgress::Closed;
                 }
-                if self.resources.poll_children() {
-                    for detail in self.resources.child_failures().into_iter().flatten() {
-                        self.secondary(detail);
-                    }
-                    self.stage = Stage::Unload;
-                    FailedEnterProgress::Progress
-                } else {
-                    FailedEnterProgress::Pending
+                // Observe once before the terminal record; a still-running
+                // child cannot spend all remaining time before its attempt.
+                self.resources.poll_children();
+                for detail in self.resources.child_failures().into_iter().flatten() {
+                    self.secondary(detail);
                 }
+                self.stage = Stage::Unload;
+                FailedEnterProgress::Progress
             }
             Stage::Unload => {
                 if !self.advance_accounts(io) {
@@ -758,19 +953,32 @@ impl FailedEnterCleanup {
                     }
                 }
             }
-            Stage::Drain => match self.context.barrier.drain_status(&mut self.context.budget) {
-                Ok(serving::DrainStatus::Emptied) => {
+            Stage::Drain => {
+                // Post-Unload child observations remain local evidence; no
+                // event can be authored after the run's terminal record.
+                let children_done = self.resources.poll_children();
+                for detail in self.resources.child_failures().into_iter().flatten() {
+                    self.secondary(detail);
+                }
+                if !self.trace_drained {
+                    match self.context.barrier.drain_status(&mut self.context.budget) {
+                        Ok(serving::DrainStatus::Emptied) => self.trace_drained = true,
+                        Ok(serving::DrainStatus::Pending { .. }) => {}
+                        Err(error) => {
+                            self.secondary(format!("failed Enter trace drain: {error:?}"));
+                            self.abort();
+                            return FailedEnterProgress::Closed;
+                        }
+                    }
+                }
+                if self.trace_drained && children_done {
                     self.context.phase = RecordingPhase::Closed;
                     self.stage = Stage::Closed;
                     FailedEnterProgress::Closed
+                } else {
+                    FailedEnterProgress::Pending
                 }
-                Ok(serving::DrainStatus::Pending { .. }) => FailedEnterProgress::Pending,
-                Err(error) => {
-                    self.secondary(format!("failed Enter trace drain: {error:?}"));
-                    self.abort();
-                    FailedEnterProgress::Closed
-                }
-            },
+            }
             Stage::Closed => FailedEnterProgress::Closed,
         };
         // Retain consumed records/replies before a broken post-work clock.
@@ -829,7 +1037,7 @@ impl FailedEnterCleanup {
     }
 
     fn advance_release(&mut self, io: &mut impl PumpIo) -> FailedEnterProgress {
-        if self.resources.spu.is_none() {
+        if self.release_blocked || self.resources.spu.is_none() {
             self.stage = Stage::Retire;
             return FailedEnterProgress::Progress;
         }
@@ -839,8 +1047,21 @@ impl FailedEnterCleanup {
                 opener: Opener::Harness,
                 ordinal,
             });
-            match self.resources.stage_residency(LifecycleDirective::Release) {
-                Ok(send) => self.release_send = Some(send),
+            match self
+                .resources
+                .stage_residency_inner(LifecycleDirective::Release)
+            {
+                Ok(()) => {
+                    let request = self
+                        .resources
+                        .spu
+                        .as_mut()
+                        .unwrap()
+                        .residency_request
+                        .take()
+                        .unwrap();
+                    self.release_send = Some(request.send);
+                }
                 Err((original, detail)) => {
                     self.refused_release = Some(original);
                     self.release_failure = Some(detail.clone());
@@ -874,6 +1095,30 @@ impl FailedEnterCleanup {
         match port.take_received() {
             Ok(Some(reply)) => {
                 let envelope = reply.envelope();
+                let prior_reply = self.prior_residency_reply.is_none()
+                    && self.prior_residency.as_ref().is_some_and(|prior| {
+                        prior.send.sent()
+                            && prior.send.belongs_to(port)
+                            && prior.send.matches_exchange(&envelope.exchange)
+                            && envelope.position == Position::Close
+                    });
+                if prior_reply {
+                    // Correlation preserves this actual prior packet even if
+                    // its semantic operation is wrong. Only an Admit answer
+                    // or a refusal from that seam closes the expected request.
+                    // Contract sections 2/5 and SPU dispatch/admit conversion
+                    // name these Admit cases; NoResidency is Release-only.
+                    let valid = admit_reply_is_terminal(envelope);
+                    self.prior_residency_reply = Some(reply);
+                    if !valid {
+                        let detail =
+                            "prior Admit reply was not Admitted or an Admit refusal".to_owned();
+                        self.release_failure = Some(detail.clone());
+                        self.secondary(detail);
+                        self.stage = Stage::Retire;
+                    }
+                    return FailedEnterProgress::Progress;
+                }
                 let matched = self.release_send.as_ref().is_some_and(OrganSend::sent)
                     && self.release_exchange.as_ref() == Some(&envelope.exchange)
                     && envelope.position == Position::Close
@@ -1091,6 +1336,48 @@ pub(in crate::flow) struct FailedEnterFinished {
     cleanup: FailedEnterCleanup,
 }
 impl FailedEnterFinished {
+    pub(in crate::flow) fn abandoned(&self) -> bool {
+        self.cleanup.abandoned
+    }
+    pub(in crate::flow) fn trace_drained(&self) -> bool {
+        self.cleanup.trace_drained
+    }
+    pub(in crate::flow) fn unload_sequence(&self) -> Option<Sequence> {
+        self.cleanup.unload_sequence
+    }
+    pub(in crate::flow) fn unload_attempted(&self) -> bool {
+        self.cleanup.unload_attempted
+    }
+    pub(in crate::flow) fn unload_unavailable(&self) -> Option<&str> {
+        self.cleanup.unload_unavailable.as_deref()
+    }
+    pub(in crate::flow) fn report_unavailable(&self) -> Option<&str> {
+        self.cleanup.report_unavailable.as_deref()
+    }
+    pub(in crate::flow) fn account_failure(&self) -> Option<&HaltAccountFailure> {
+        self.cleanup.account_failure.as_ref()
+    }
+    pub(in crate::flow) fn summary_account(&self) -> Option<&PlanSummaryAccount> {
+        self.cleanup.summary_account.as_ref()
+    }
+    pub(in crate::flow) fn release_outcome(&self) -> ReleaseOutcome {
+        self.cleanup.release
+    }
+    pub(in crate::flow) fn release_send(&self) -> Option<&OrganSend> {
+        self.cleanup.release_send.as_ref()
+    }
+    pub(in crate::flow) fn release_reply(&self) -> Option<&ReceivedOrgan> {
+        self.cleanup.release_reply.as_ref()
+    }
+    pub(in crate::flow) fn release_unavailable(&self) -> Option<&str> {
+        self.cleanup.release_failure.as_deref()
+    }
+    pub(in crate::flow) fn prior_residency(&self) -> Option<&ResidencyRequest> {
+        self.cleanup.prior_residency.as_ref()
+    }
+    pub(in crate::flow) fn prior_residency_reply(&self) -> Option<&ReceivedOrgan> {
+        self.cleanup.prior_residency_reply.as_ref()
+    }
     pub(in crate::flow) fn failure(&self) -> &RunFailure {
         self.cleanup.failure()
     }

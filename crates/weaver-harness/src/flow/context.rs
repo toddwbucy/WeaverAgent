@@ -68,6 +68,7 @@ pub(super) enum RunFailure {
     BootOpenOwned,
     PlanSummaryOwned,
     PlaceOwned,
+    EnterRefusalOwned,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -104,13 +105,15 @@ struct LoadDuty {
 enum AuthorClaim {
     Placement(std::sync::Arc<()>),
     Measurement(std::sync::Arc<()>),
+    EnterRefusal(std::sync::Arc<()>),
 }
 
 impl AuthorClaim {
     fn matches(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Placement(a), Self::Placement(b))
-            | (Self::Measurement(a), Self::Measurement(b)) => std::sync::Arc::ptr_eq(a, b),
+            | (Self::Measurement(a), Self::Measurement(b))
+            | (Self::EnterRefusal(a), Self::EnterRefusal(b)) => std::sync::Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -201,6 +204,7 @@ pub(crate) struct RecordingContext {
     open_start: Option<StartIdentity>,
     open_limits: Option<ReadLimits>,
     load_duty: Option<LoadDuty>,
+    enter_refusal_record: Option<AuthorRecord>,
     template_checks: Option<template_driver::TemplateChecks>,
     template_setup_refusal: Option<super::templates::TemplateError>,
     template_blocked_author: Option<AuthoredEvent>,
@@ -339,6 +343,7 @@ impl RecordingContext {
             open_start: None,
             open_limits: None,
             load_duty: None,
+            enter_refusal_record: None,
             template_checks: None,
             template_setup_refusal: None,
             template_blocked_author: None,
@@ -408,6 +413,11 @@ impl RecordingContext {
         })
     }
 
+    /// Shared private identity for adoption joins; only the actual receiver can
+    /// attach it to its retained original Enter.
+    pub(in crate::flow) fn enter_origin(&self) -> &std::sync::Arc<()> {
+        &self.read_origin
+    }
     pub(super) fn phase(&self) -> RecordingPhase {
         self.phase
     }
@@ -1065,6 +1075,7 @@ impl RecordingContext {
         if claim.is_some() && self.phase != RecordingPhase::Entered {
             return Err(match claim {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
+                Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 _ => RunFailure::MeasureOwned,
             });
         }
@@ -1084,6 +1095,7 @@ impl RecordingContext {
         if claim.is_some() && std::mem::take(&mut self.pause_claim_queue_for_test) {
             return Err(match claim {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
+                Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 _ => RunFailure::MeasureOwned,
             });
         }
@@ -1169,6 +1181,10 @@ impl RecordingContext {
                         AuthorClaim::Placement(identity) => {
                             self.claim_place_author_ticket(&identity, ticket)
                         }
+                        AuthorClaim::EnterRefusal(identity) => self
+                            .enter_refusal_record
+                            .as_mut()
+                            .is_some_and(|record| record.claim(&identity, ticket)),
                         AuthorClaim::Measurement(identity) => {
                             self.claim_measure_author_ticket(&identity, ticket)
                         }
@@ -1290,6 +1306,7 @@ impl RecordingContext {
         if let Some(sequence) = recorded {
             self.bind_place_measure_author(sequence);
             self.bind_place_author(sequence);
+            self.bind_enter_refusal_author(sequence);
         }
         Ok(recorded)
     }
@@ -1310,6 +1327,7 @@ impl RecordingContext {
             {
                 self.bind_place_measure_author(sequence);
                 self.bind_place_author(sequence);
+                self.bind_enter_refusal_author(sequence);
             }
             // Other completion hooks keep their existing successful boundary.
             if let RecordProgress::Recorded {
@@ -1322,6 +1340,7 @@ impl RecordingContext {
                 }
                 self.bind_place_measure_author(*sequence);
                 self.bind_place_author(*sequence);
+                self.bind_enter_refusal_author(*sequence);
                 self.bind_marks_author(*sequence, ports.io)?;
                 self.bind_repair_author(*sequence, ports.io)?;
                 self.bind_pair_author(*sequence, ports.io)?;
@@ -1503,6 +1522,21 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<PumpStep, RunFailure> {
+        self.pump_with_wait(ports, true)
+    }
+
+    fn observe_ready<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<PumpStep, RunFailure> {
+        self.pump_with_wait(ports, false)
+    }
+
+    fn pump_with_wait<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+        wait: bool,
+    ) -> Result<PumpStep, RunFailure> {
         if let Some(decode) = ports.decode.as_deref() {
             self.check_measure_port(decode)?;
             self.check_boot_open_port(decode)?;
@@ -1555,7 +1589,7 @@ impl RecordingContext {
         } else {
             None
         };
-        let step = self.pump.step(
+        let step = self.pump.step_with_wait(
             ports,
             Some(&mut self.flow),
             &mut FlowRecording {
@@ -1565,6 +1599,7 @@ impl RecordingContext {
                 author: &self.author,
             },
             &self.deadlines,
+            wait,
         );
         // Restore before every fallible continuation, including a failed step.
         if let Some(previous) = previous_generation_hold {
@@ -1749,6 +1784,7 @@ impl RecordingContext {
             PumpDeadline::Enter
             | PumpDeadline::Leave
             | PumpDeadline::Label
+            | PumpDeadline::AdminRead
             | PumpDeadline::CaptureResult
             | PumpDeadline::CaptureWindow => {
                 return RunFailure::Wait { key, bound };
@@ -2004,8 +2040,14 @@ pub(super) use capture_driver::{CaptureAnswer, CaptureProgress};
 #[path = "context_capture_tests.rs"]
 mod capture_tests;
 
+#[path = "context_residency_composition.rs"]
+pub(in crate::flow) mod residency_composition;
+
 #[path = "context_startup_composition.rs"]
 pub(in crate::flow) mod startup_composition;
+
+#[path = "context_worker_startup.rs"]
+pub(crate) mod worker_startup;
 
 #[path = "context_boot_composition.rs"]
 pub(in crate::flow) mod boot_composition;
