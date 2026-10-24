@@ -122,7 +122,7 @@ fn parse_request(frame: &weaver_types::TurnFrame) -> Result<Request, String> {
 /// A turn that opened carries its key whatever became of it. The members take
 /// the trace envelope's own names so a consumer holding both joins on what it
 /// already reads.
-fn render_close(
+pub(crate) fn render_close(
     kind: &str,
     member: &str,
     value: &str,

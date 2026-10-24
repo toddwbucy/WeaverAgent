@@ -168,6 +168,13 @@ fn residency_composition_child() {
                     request: serde_json::value::to_raw_value(&serde_json::json!({"rendered":rendered,"template":"fixture"})).unwrap(),
                     measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap() });
                 packet!(decode.as_raw_fd(), &answer);
+                if mode.contains("generation") {
+                    super::super::worker_startup::input::generation::tests::spu_after_open(
+                        &mode,
+                        decode.as_raw_fd(),
+                    );
+                    return;
+                }
             }
             Err(Errno::EAGAIN) => {}
             other => panic!("decode child receive {other:?}"),
@@ -230,12 +237,16 @@ pub(in crate::flow::context) fn drive<'a>(
     } else {
         mode
     });
+    let instruction = startup
+        .original_enter()
+        .map(|original| original.envelope().enter().spu_instruction.clone())
+        .unwrap_or_else(instruction_fixture);
     let mut owner = ResidencyComposition::new(
         startup,
         ResidencyRequest {
             binary: binary.0.clone(),
             arguments: vec![],
-            instruction: instruction_fixture(),
+            instruction,
         },
     );
     if mode == "cleanup-before-fork" {
@@ -281,6 +292,8 @@ pub(in crate::flow::context) fn drive<'a>(
                         listener: None,
                         peer: None,
                         residency: owner.resources.residency_mut(),
+                        dial: None,
+                        leave_peer: None,
                     },
                     gate: None,
                     decode: None,
@@ -307,6 +320,8 @@ pub(in crate::flow::context) fn drive<'a>(
             listener: None,
             peer: (mode == "stop").then_some(&mut admin),
             residency: None,
+            dial: None,
+            leave_peer: None,
         };
         // SAFETY: the caller's fixture guard retains/reaps children on this thread.
         let stage = unsafe { owner.advance(ports, &mut CircuitIo(clock)) };

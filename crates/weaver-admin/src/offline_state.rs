@@ -4,7 +4,7 @@
 //! repository. They start no member, use no classifier and change no active
 //! command surface. FOUNDATION-TRANSITION selects them at coupled cutover.
 
-mod preparation;
+pub(crate) mod preparation;
 
 use weaver_types::state_flow::{PersistencePhase, StartIdentity};
 use weaver_types::{AgentName, Cause, LifecycleRefusal};
