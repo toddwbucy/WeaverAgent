@@ -6,6 +6,9 @@ use crate::flow::material::{
 };
 
 impl RecordingContext {
+    pub(in crate::flow) fn material_origin(&self) -> &std::sync::Arc<()> {
+        &self.read_origin
+    }
     /// Only a completed begin_task can supply this fresh source. A raw seated
     /// input or a cancelled/refused task account has no conversion into it.
     pub(in crate::flow) fn hold_task_material(

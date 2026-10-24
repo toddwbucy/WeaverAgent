@@ -19,17 +19,7 @@ impl Operation<'_, '_> {
             ));
         }
         let id = self.held_source(source)?;
-        let raw: Option<String> = self.tx.query_row(
-            "SELECT context_raw FROM content_block WHERE id=?1 AND kind='plan.event' AND channel='input' AND origin='operator' AND turn IS NULL AND effect IS NULL AND scheme_id=?2",
-            params![id,self.context.scheme_id], |row| row.get(0),
-        ).optional()?.flatten();
-        let context: PlanInputContext = decode_strict(
-            &raw.ok_or_else(|| invalid_effect("operator source has no licensed context"))?,
-        )
-        .map_err(|_| invalid_effect("invalid operator context"))?;
-        if context.cause.uid != 0 {
-            return Err(invalid_effect("operator cause must be root"));
-        }
+        let context = reads::operator_context(self.tx, id).map_err(read_fault)?;
         let (task, steps, categories, groups, review, preserved) = match &context.operation {
             PlanInputOperation::Create {
                 task,

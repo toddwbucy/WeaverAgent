@@ -203,6 +203,21 @@ impl RecordingContext {
         self.marks.as_ref().is_some_and(|work| !work.driving)
     }
 
+    pub(super) fn marks_read_allowed(&self, turn: Option<&TurnRef>) -> bool {
+        self.marks.as_ref().is_some_and(|work| {
+            work.driving && work.stage == Stage::Read && turn == Some(&work.turn)
+        })
+    }
+
+    pub(super) fn marks_filing_allowed(&self, key: PumpDeadline) -> bool {
+        self.marks.as_ref().is_some_and(|work| {
+            work.driving
+                && work.stage == Stage::Mark
+                && key == PumpDeadline::Decision
+                && self.deadlines.get(key) == Some(work.bound)
+        })
+    }
+
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn begin_task(
         &mut self,
@@ -239,12 +254,14 @@ impl RecordingContext {
             || self.inspection.is_some()
             || self.member_capture.is_some()
             || self.boot_open_blocks_external()
+            || self.plan_summary_blocks_external()
+            || self.place_blocks_external()
             || self.measure.is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()
             || self.open_turn.is_some()
             || self.templates_block_content()
-            || self.template_blocked_author.is_some()
+            || self.caller_author_held()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()

@@ -63,6 +63,7 @@ pub(in crate::flow) struct BootPairsBeginError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::flow) enum BootPairsProgress {
+    Progress,
     Pending,
     Complete,
 }
@@ -82,6 +83,9 @@ pub(in crate::flow) struct RepairedBootPairs {
 impl RepairedBootPairs {
     pub(in crate::flow) fn belongs_to(&self, context: &RecordingContext) -> bool {
         std::sync::Arc::ptr_eq(&self.account.prior.origin, &context.read_origin)
+    }
+    pub(in crate::flow) fn checked_open(&self) -> Option<&CheckedBootOpen> {
+        self.account.prior.checked.as_ref()
     }
     pub(in crate::flow) fn initial(&self) -> &RecordedRead {
         match self.account.initial.as_ref().unwrap() {
@@ -176,6 +180,13 @@ impl std::fmt::Debug for BootPairsTransaction {
     }
 }
 
+impl BootPairsTransaction {
+    pub(super) fn actual_boot_owner(&self, context: &RecordingContext) -> bool {
+        std::sync::Arc::ptr_eq(&self.prior.origin, &context.read_origin)
+            && self.prior.checked.is_some()
+    }
+}
+
 impl RecordingContext {
     pub(super) fn boot_pairs_blocks_external(&self) -> bool {
         self.boot_pairs.as_ref().is_some_and(|work| !work.driving)
@@ -240,43 +251,10 @@ impl RecordingContext {
             || self.load_duty.is_none()
         {
             Some(BootPairsBeginRefusal::WrongOpen)
-        } else if self.inspection.is_some()
-            || self.open_turn.is_some()
-            || self.input.snapshot().is_some()
-            || self.input_turn.is_some()
-            || self.input_author.is_some()
-            || self.output.is_some()
-            || self.pair_work.is_some()
-            || self.repair.is_some()
-            || self.filing.is_some()
-            || self.read.is_some()
-            || self.marks.is_some()
-            || self.freshness.is_some()
-            || self.boot_open_blocks_external()
-            || self.measure.is_some()
-            || self.member_capture.is_some()
-            || self.templates_block_content()
-            || self.waiting_content.is_some()
-            || self.completed_author.is_some()
-            || self.template_blocked_author.is_some()
-            || self.barrier.pending().is_some()
-            || self.barrier.pending_author().is_some()
-            || self.flow.has_pending_record()
-            || self.flow.has_filing_consumer()
-            || self.flow.has_output_consumer()
-            || self.flow.pending_control().is_some()
-            || self.flow.pending_check().is_some()
-            || self.flow.operation_completion().is_some()
-            || !self.flow.state().outstanding().is_empty()
-            || self.flow.state().held_measurement().is_some()
-            || [
-                PumpDeadline::Decision,
-                PumpDeadline::Cut,
-                PumpDeadline::Gate,
-                PumpDeadline::StateControl,
-            ]
-            .into_iter()
-            .any(|key| self.deadlines.get(key).is_some())
+        } else if self.boot_open_blocks_external()
+            || self.plan_summary_blocks_external()
+            || self.place_blocks_external()
+            || self.boot_begin_busy()
         {
             Some(BootPairsBeginRefusal::Busy)
         } else {
@@ -324,16 +302,16 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<BootPairsProgress, RunFailure> {
-        match self.boot_pairs.as_ref().unwrap().stage {
+        let progress = match self.boot_pairs.as_ref().unwrap().stage {
             Stage::Initial | Stage::Recheck => self.advance_boot_pairs_read(ports)?,
             Stage::Terminals => self.advance_boot_pairs_terminal(ports)?,
-            Stage::Complete => {}
-        }
+            Stage::Complete => BootPairsProgress::Complete,
+        };
         Ok(
             if self.boot_pairs.as_ref().unwrap().stage == Stage::Complete {
                 BootPairsProgress::Complete
             } else {
-                BootPairsProgress::Pending
+                progress
             },
         )
     }
@@ -341,11 +319,11 @@ impl RecordingContext {
     fn advance_boot_pairs_read<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
-    ) -> Result<(), RunFailure> {
+    ) -> Result<BootPairsProgress, RunFailure> {
         if self.read.is_none() {
             if self.boot_pairs.as_ref().unwrap().cancelled {
                 self.boot_pairs.as_mut().unwrap().stage = Stage::Complete;
-                return Ok(());
+                return Ok(BootPairsProgress::Progress);
             }
             match self.begin_boot_pairs_read(ports.io) {
                 Ok(()) => {}
@@ -354,8 +332,11 @@ impl RecordingContext {
                         return Err(failure);
                     }
                     if error.refusal == ReadBeginRefusal::Busy {
-                        self.reduce_flow(ports.io)?;
-                        return Ok(());
+                        return Ok(if self.reduce_flow(ports.io)? == Advance::Progress {
+                            BootPairsProgress::Progress
+                        } else {
+                            BootPairsProgress::Pending
+                        });
                     }
                     return Err(self.boot_pairs_fault(ports.io, "boot pair read lost admission"));
                 }
@@ -364,9 +345,13 @@ impl RecordingContext {
         if self.boot_pairs.as_ref().unwrap().cancelled {
             self.cancel_read(ports.io)?;
         }
-        self.advance_read(ports)?;
+        let progress = self.advance_read(ports)?;
         let Some(read) = self.take_read(ports.io)? else {
-            return Ok(());
+            return Ok(if progress == ReadProgress::Pending {
+                BootPairsProgress::Pending
+            } else {
+                BootPairsProgress::Progress
+            });
         };
         // No live hook after take: retain the exact consumed proof first.
         let work = self.boot_pairs.as_mut().unwrap();
@@ -378,7 +363,7 @@ impl RecordingContext {
         }
         if work.cancelled {
             work.stage = Stage::Complete;
-            return Ok(());
+            return Ok(BootPairsProgress::Progress);
         }
         let read = if initial {
             &work.initial
@@ -390,7 +375,7 @@ impl RecordingContext {
             ReadCompletion::Refused(_) => {
                 work.refusal = Some(BootPairsRefusal::Read);
                 work.stage = Stage::Complete;
-                return Ok(());
+                return Ok(BootPairsProgress::Progress);
             }
             ReadCompletion::Cancelled(_) => {
                 return Err(self.boot_pairs_fault(ports.io, "boot pair read lost consumption"));
@@ -421,13 +406,13 @@ impl RecordingContext {
             // retained proposal install before another live sample can yield.
             self.prepare_boot_pair_terminal(ports.io)?;
         }
-        Ok(())
+        Ok(BootPairsProgress::Progress)
     }
 
     fn advance_boot_pairs_terminal<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
-    ) -> Result<(), RunFailure> {
+    ) -> Result<BootPairsProgress, RunFailure> {
         if self.boot_pairs.as_ref().unwrap().cancelled
             && let Some(event) = self.withdraw_unstarted_boot_pair()
         {
@@ -436,7 +421,7 @@ impl RecordingContext {
             work.stage = Stage::Complete;
             work.bound = None;
             self.deadlines.disarm(PumpDeadline::Decision);
-            return Ok(());
+            return Ok(BootPairsProgress::Progress);
         }
         if self.filing.is_none() {
             if self.boot_pairs.as_ref().unwrap().cancelled {
@@ -444,7 +429,7 @@ impl RecordingContext {
                 work.stage = Stage::Complete;
                 work.bound = None;
                 self.deadlines.disarm(PumpDeadline::Decision);
-                return Ok(());
+                return Ok(BootPairsProgress::Progress);
             }
             self.prepare_boot_pair_terminal(ports.io)?;
             let ended = self.boot_pairs.as_ref().unwrap().expected.as_ref().unwrap();
@@ -464,14 +449,17 @@ impl RecordingContext {
                 FilingOwner::BootPairs,
                 ports.io,
             ) {
-                Ok(()) => return Ok(()),
+                Ok(()) => return Ok(BootPairsProgress::Progress),
                 Err(error) => {
                     if let Some(failure) = error.failure {
                         return Err(failure);
                     }
                     if error.refusal == FilingBeginRefusal::Busy {
-                        self.reduce_flow(ports.io)?;
-                        return Ok(());
+                        return Ok(if self.reduce_flow(ports.io)? == Advance::Progress {
+                            BootPairsProgress::Progress
+                        } else {
+                            BootPairsProgress::Pending
+                        });
                     }
                     return Err(
                         self.boot_pairs_fault(ports.io, "boot pair terminal lost admission")
@@ -479,9 +467,13 @@ impl RecordingContext {
                 }
             }
         }
-        self.advance_owned_filing(FilingOwner::BootPairs, ports)?;
+        let progress = self.advance_owned_filing(FilingOwner::BootPairs, ports)?;
         let Some(filing) = self.take_owned_filing(FilingOwner::BootPairs, ports.io)? else {
-            return Ok(());
+            return Ok(if progress == FilingProgress::Pending {
+                BootPairsProgress::Pending
+            } else {
+                BootPairsProgress::Progress
+            });
         };
         // Install the exact receipt before validation or the next yielding act.
         self.boot_pairs.as_mut().unwrap().terminals.push(filing);
@@ -507,7 +499,7 @@ impl RecordingContext {
         if self.boot_pairs.as_ref().unwrap().stage == Stage::Terminals {
             self.prepare_boot_pair_terminal(ports.io)?;
         }
-        Ok(())
+        Ok(BootPairsProgress::Progress)
     }
 
     fn prepare_boot_pair_terminal(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {

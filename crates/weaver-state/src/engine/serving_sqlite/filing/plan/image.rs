@@ -44,8 +44,7 @@ pub(in crate::engine::serving_sqlite) fn verify_image_plan(
         if !allocated {
             return Err(invalid_effect("plan history skips an allocated identity"));
         }
-        let snapshot =
-            reads::plan_snapshot(db, seed, &plan, u64::MAX.into()).map_err(read_fault)?;
+        let snapshot = reads::plan_snapshot(db, seed, &plan).map_err(read_fault)?;
         verify_revision(db, seed, &snapshot)?;
         previous = Some(plan);
     }
@@ -94,13 +93,10 @@ fn verify_revision(db: &Connection, seed: &str, p: &PlanSnapshot) -> Result<(), 
         },
     )?;
     let operator = held_id(db, &p.operator_source)?;
-    let raw:Option<String>=db.query_row("SELECT context_raw FROM content_block WHERE id=?1 AND kind='plan.event' AND channel='input' AND origin='operator' AND turn IS NULL AND block=?2 AND effect IS NULL",params![operator,blob(0)],|row|row.get(0)).optional()?.flatten();
-    let input: PlanInputContext =
-        decode_strict(&raw.ok_or_else(|| invalid_effect("invalid plan operator source"))?)
-            .map_err(|_| invalid_effect("invalid plan operator context"))?;
-    if input.cause.uid != 0 || p.document_sha256 != input.document_sha256 {
-        return Err(invalid_effect("stored plan has no root provenance"));
-    }
+    // The shared snapshot read derives the digest and transition position from
+    // these same held rows. Validate source authority here, not a tautological
+    // comparison of a freshly derived carrier with its own inputs.
+    let input = reads::operator_context(db, operator).map_err(read_fault)?;
     verify_input(db, &p.operator_source, &input)?;
     let (categories, groups, review, indices) = match &input.operation {
         PlanInputOperation::Create {
@@ -230,16 +226,6 @@ fn verify_revision(db: &Connection, seed: &str, p: &PlanSnapshot) -> Result<(), 
     }
     verify_operator_steps(db, seed, p, &input)?;
     let last = held_id(db, &p.last_source.block_id)?;
-    let turn: Option<String> = db.query_row(
-        "SELECT turn FROM content_block WHERE id=?1",
-        [last],
-        |row| row.get(0),
-    )?;
-    if p.last_source.turn != turn {
-        return Err(invalid_effect(
-            "plan transition turn differs from its source",
-        ));
-    }
     if last <= operator
         || p.lock_source
             .as_ref()
@@ -495,10 +481,7 @@ fn verify_operator_steps(
             (
                 r.steps.as_slice(),
                 r.preserved_closures.as_slice(),
-                Some(
-                    reads::plan_snapshot(db, seed, expected, u64::MAX.into())
-                        .map_err(read_fault)?,
-                ),
+                Some(reads::plan_snapshot(db, seed, expected).map_err(read_fault)?),
             )
         }
     };

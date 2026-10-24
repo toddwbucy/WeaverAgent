@@ -170,20 +170,27 @@ impl OrganSend {
 }
 
 #[derive(Debug)]
-pub(super) enum TrackedStage {
+pub(super) enum TrackedStage<T = OrganEnvelope> {
     Queued(OrganSend),
-    Busy(OrganEnvelope),
+    Busy(T),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DecodeRequestKind {
     Measurement,
     Open,
+    Generation,
+    Flush,
+    Elide,
 }
 
 #[derive(Debug)]
 struct DecodeReservationState {
     kind: DecodeRequestKind,
+    turn: Option<weaver_types::TurnKey>,
+    cancel_queued: AtomicBool,
+    cancel_sent: AtomicBool,
+    cancel_taken: AtomicBool,
     sent: AtomicBool,
     terminal_taken: AtomicBool,
     invalid_reply: AtomicBool,
@@ -234,6 +241,7 @@ pub(super) struct DecodeFinishError {
 struct DecodeReceipt {
     state: Arc<DecodeReservationState>,
     after_send: bool,
+    after_cancel: bool,
 }
 
 /// A complete reply received by the reserved decoder socket. Its exact bytes
@@ -308,6 +316,10 @@ struct Outbound {
     offset: usize,
     tracked: Option<Arc<TrackedSend>>,
     decode_reservation: Option<Arc<DecodeReservationState>>,
+    generation: bool,
+    resident_mutation: bool,
+    admit: bool,
+    cancel: bool,
 }
 
 #[derive(Debug)]
@@ -320,8 +332,8 @@ struct Series {
 
 /// One owner for an existing typed seam. The public aliases below fix the
 /// codec and wire election, so callers cannot supply a different framing rule.
-pub(super) struct PacketPort<T> {
-    end: OwnedFd,
+pub(super) struct PacketPort<T, E = OwnedFd> {
+    end: E,
     identity: PortIdentity,
     wire: Wire,
     decode: fn(&[u8]) -> Result<T, Failure>,
@@ -336,6 +348,7 @@ pub(super) struct PacketPort<T> {
     failure: Option<Failure>,
     receive_interrupted: bool,
     send_interrupted: bool,
+    generation_send_held: bool,
     zero_received: bool,
 }
 
@@ -376,6 +389,16 @@ impl ReceivedOrgan {
 }
 
 impl OrganPort {
+    pub(super) fn admit_not_started(&self) -> bool {
+        self.outgoing
+            .as_ref()
+            .is_some_and(|out| out.admit && out.offset == 0 && !out.preamble_sent)
+    }
+
+    pub(super) fn port_identity(&self) -> PortIdentity {
+        self.identity.clone()
+    }
+
     pub(super) fn from_channel(channel: OrganChannel) -> Result<Self, Failure> {
         Self::from_owned(channel.into_fd())
     }
@@ -391,7 +414,18 @@ impl OrganPort {
         &mut self,
         input: OrganEnvelope,
     ) -> Result<Stage<OrganEnvelope>, StageFailure<OrganEnvelope>> {
-        self.stage_encoded(input, serde_json::to_vec)
+        let admit = matches!(
+            &input.payload,
+            weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Admit { .. })
+        );
+        let result = self.stage_encoded(input, serde_json::to_vec)?;
+        if matches!(result, Stage::Queued) {
+            self.outgoing
+                .as_mut()
+                .expect("queued organ directive")
+                .admit = admit;
+        }
+        Ok(result)
     }
 
     /// Issue a sealed proof for exactly this stage, without changing the
@@ -403,18 +437,50 @@ impl OrganPort {
     ) -> Result<TrackedStage, StageFailure<OrganEnvelope>> {
         let exchange = input.exchange.clone();
         match self.stage(input)? {
-            Stage::Queued => {
-                let tracked = Arc::new(TrackedSend {
-                    status: AtomicU8::new(SEND_PENDING),
-                    sent_at: AtomicU64::new(0),
+            Stage::Queued => Ok(TrackedStage::Queued(self.track_staged(exchange))),
+            Stage::Busy(input) => Ok(TrackedStage::Busy(input)),
+        }
+    }
+
+    fn track_staged(&mut self, exchange: weaver_types::ExchangeId) -> OrganSend {
+        let tracked = Arc::new(TrackedSend {
+            status: AtomicU8::new(SEND_PENDING),
+            sent_at: AtomicU64::new(0),
+        });
+        self.outgoing.as_mut().expect("queued packet").tracked = Some(Arc::clone(&tracked));
+        OrganSend {
+            identity: self.identity.clone(),
+            exchange,
+            tracked,
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_observation(
+        &mut self,
+        input: weaver_types::state_flow::enter::ObservationEnvelope,
+    ) -> Result<
+        TrackedStage<weaver_types::state_flow::enter::ObservationEnvelope>,
+        StageFailure<weaver_types::state_flow::enter::ObservationEnvelope>,
+    > {
+        let bytes = match input.encode() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let failure = match error {
+                    weaver_types::state_flow::enter::CodecError::TooLarge => {
+                        Failure::truncated(MAX_ENVELOPE_BYTES)
+                    }
+                    _ => Failure::invalid(format!("replacement observation: {error:?}")),
+                };
+                return Err(StageFailure {
+                    input,
+                    failure: self.fail(failure),
                 });
-                self.outgoing.as_mut().expect("queued packet").tracked = Some(Arc::clone(&tracked));
-                Ok(TrackedStage::Queued(OrganSend {
-                    identity: self.identity.clone(),
-                    exchange,
-                    tracked,
-                }))
             }
+        };
+        let exchange = input.exchange.clone();
+        match self.stage_encoded(input, |_| Ok(bytes))? {
+            Stage::Queued => Ok(TrackedStage::Queued(self.track_staged(exchange))),
             Stage::Busy(input) => Ok(TrackedStage::Busy(input)),
         }
     }
@@ -527,7 +593,37 @@ impl DecodePort {
                 failure: Failure::invalid("measurement requires an owned decode reservation"),
             });
         }
-        self.stage_encoded(input, serde_json::to_vec)
+        let generation = matches!(input, TokenDirective::AppendAndGenerate { .. });
+        let mutation = matches!(
+            input,
+            TokenDirective::Open { .. }
+                | TokenDirective::AppendAndGenerate { .. }
+                | TokenDirective::Flush { .. }
+                | TokenDirective::Elide { .. }
+                | TokenDirective::ReFeed { .. }
+        );
+        let result = self.stage_encoded(input, serde_json::to_vec)?;
+        if matches!(result, Stage::Queued) {
+            let outgoing = self.outgoing.as_mut().expect("queued decode directive");
+            outgoing.generation = generation;
+            outgoing.resident_mutation = mutation;
+        }
+        Ok(result)
+    }
+
+    /// Inspect only this staged directive's pre-first-byte state. Cancellation
+    /// and draining an earlier exchange remain transport duties, not new work.
+    pub(super) fn generation_not_started(&self) -> bool {
+        self.outgoing
+            .as_ref()
+            .is_some_and(|out| out.generation && out.offset == 0 && !out.preamble_sent)
+    }
+
+    /// Scoped transport scheduling only. A hold affects no received evidence,
+    /// failure or already-started exchange and grants no cancellation authority.
+    /// Return the prior value so the common-pump caller restores it on all returns.
+    pub(super) fn replace_generation_send_hold(&mut self, held: bool) -> bool {
+        std::mem::replace(&mut self.generation_send_held, held)
     }
 
     /// Reserve and stage atomically. Existing buffered work belongs to its
@@ -552,6 +648,33 @@ impl DecodePort {
                 ),
             });
         }
+        self.stage_decode_owned(input)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_placement(
+        &mut self,
+        input: TokenDirective,
+    ) -> Result<DecodeStage, StageFailure<TokenDirective>> {
+        if !matches!(
+            input,
+            TokenDirective::AppendAndGenerate { .. }
+                | TokenDirective::Flush { .. }
+                | TokenDirective::Elide { .. }
+        ) {
+            return Err(StageFailure {
+                input,
+                failure: Failure::invalid("placement reservation requires append or cut"),
+            });
+        }
+        self.stage_decode_owned(input)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn stage_decode_owned(
+        &mut self,
+        input: TokenDirective,
+    ) -> Result<DecodeStage, StageFailure<TokenDirective>> {
         if let Err(failure) = self.live() {
             return Err(StageFailure { input, failure });
         }
@@ -567,16 +690,25 @@ impl DecodePort {
         {
             return Ok(DecodeStage::Busy(input));
         }
-        let kind = if matches!(input, TokenDirective::Open { .. }) {
-            DecodeRequestKind::Open
-        } else {
-            DecodeRequestKind::Measurement
+        let (kind, turn) = match &input {
+            TokenDirective::Open { .. } => (DecodeRequestKind::Open, None),
+            TokenDirective::MeasureDelta { .. } => (DecodeRequestKind::Measurement, None),
+            TokenDirective::AppendAndGenerate { turn, .. } => {
+                (DecodeRequestKind::Generation, Some(turn.clone()))
+            }
+            TokenDirective::Flush { .. } => (DecodeRequestKind::Flush, None),
+            TokenDirective::Elide { .. } => (DecodeRequestKind::Elide, None),
+            _ => unreachable!("private callers restrict directive kinds"),
         };
         match self.stage_encoded(input, serde_json::to_vec)? {
             Stage::Busy(input) => Ok(DecodeStage::Busy(input)),
             Stage::Queued => {
                 let state = Arc::new(DecodeReservationState {
                     kind,
+                    turn,
+                    cancel_queued: AtomicBool::new(false),
+                    cancel_sent: AtomicBool::new(false),
+                    cancel_taken: AtomicBool::new(false),
                     sent: AtomicBool::new(false),
                     terminal_taken: AtomicBool::new(false),
                     invalid_reply: AtomicBool::new(false),
@@ -588,6 +720,14 @@ impl DecodePort {
                     .as_mut()
                     .expect("reserved request was queued")
                     .decode_reservation = Some(Arc::clone(&state));
+                self.outgoing.as_mut().unwrap().generation = kind == DecodeRequestKind::Generation;
+                self.outgoing.as_mut().unwrap().resident_mutation = matches!(
+                    kind,
+                    DecodeRequestKind::Open
+                        | DecodeRequestKind::Generation
+                        | DecodeRequestKind::Flush
+                        | DecodeRequestKind::Elide
+                );
                 self.decode_reservation = Some(Arc::clone(&state));
                 Ok(DecodeStage::Queued(DecodeReservation {
                     identity: self.identity.clone(),
@@ -595,6 +735,83 @@ impl DecodePort {
                 }))
             }
         }
+    }
+
+    pub(super) fn reservation_invalid(&self, reservation: &DecodeReservation) -> bool {
+        self.check_reservation(reservation).is_err()
+            || reservation.state.invalid_reply.load(Ordering::Acquire)
+    }
+    pub(super) fn reservation_terminal(&self, reservation: &DecodeReservation) -> bool {
+        self.check_reservation(reservation).is_ok()
+            && reservation.state.terminal_taken.load(Ordering::Acquire)
+    }
+    pub(super) fn reservation_settled(&self, reservation: &DecodeReservation) -> bool {
+        self.reservation_terminal(reservation)
+            && !self.reservation_invalid(reservation)
+            && (!reservation.state.cancel_queued.load(Ordering::Acquire)
+                || reservation.state.cancel_taken.load(Ordering::Acquire))
+    }
+    pub(super) fn send_started(&self) -> bool {
+        self.outgoing
+            .as_ref()
+            .is_none_or(|out| out.offset != 0 || out.preamble_sent)
+    }
+    pub(super) fn unowned_mutation_not_started(&self) -> bool {
+        self.decode_reservation.is_none()
+            && self
+                .outgoing
+                .as_ref()
+                .is_some_and(|out| out.resident_mutation && out.offset == 0 && !out.preamble_sent)
+    }
+    pub(super) fn placement_not_started(&self) -> bool {
+        self.decode_reservation.as_ref().is_some_and(|state| {
+            matches!(
+                state.kind,
+                DecodeRequestKind::Generation | DecodeRequestKind::Flush | DecodeRequestKind::Elide
+            )
+        }) && self
+            .outgoing
+            .as_ref()
+            .is_some_and(|out| !out.cancel && out.offset == 0 && !out.preamble_sent)
+    }
+    /// The secondary Cancel shares the original generation reservation and may
+    /// never become a new reader or be followed by a new request before AtRest.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn cancel_reserved(
+        &mut self,
+        reservation: &DecodeReservation,
+        turn: weaver_types::TurnKey,
+    ) -> Result<Stage<TokenDirective>, StageFailure<TokenDirective>> {
+        let input = TokenDirective::Cancel { turn: turn.clone() };
+        if let Err(failure) = self.check_reservation(reservation) {
+            return Err(StageFailure { input, failure });
+        }
+        if reservation.state.kind != DecodeRequestKind::Generation
+            || reservation.state.turn.as_ref() != Some(&turn)
+            || !reservation.sent()
+            || reservation.state.cancel_queued.load(Ordering::Acquire)
+        {
+            return Err(StageFailure {
+                input,
+                failure: Failure::invalid("Cancel does not own a sent generation"),
+            });
+        }
+        if self.outgoing.is_some() {
+            return Ok(Stage::Busy(input));
+        }
+        let held = self.decode_reservation.take();
+        let result = self.stage_encoded(input, serde_json::to_vec);
+        self.decode_reservation = held;
+        if matches!(result, Ok(Stage::Queued)) {
+            let outgoing = self.outgoing.as_mut().unwrap();
+            outgoing.cancel = true;
+            outgoing.decode_reservation = Some(Arc::clone(&reservation.state));
+            reservation
+                .state
+                .cancel_queued
+                .store(true, Ordering::Release);
+        }
+        result
     }
 
     /// A queued boot request is held behind lifecycle reduction before its first byte.
@@ -680,7 +897,30 @@ impl DecodePort {
                 .take()
                 .expect("complete decode reply retains its bytes");
             match &reply {
-                DecodeReply::Answer(TokenAnswer::Fault(_)) => {}
+                DecodeReply::Answer(TokenAnswer::Fault(_))
+                    if matches!(
+                        reservation.state.kind,
+                        DecodeRequestKind::Open | DecodeRequestKind::Measurement
+                    ) => {}
+                DecodeReply::Answer(
+                    TokenAnswer::Token { .. }
+                    | TokenAnswer::Field { .. }
+                    | TokenAnswer::Column { .. },
+                ) if reservation.state.kind == DecodeRequestKind::Generation
+                    && receipt.after_send
+                    && !reservation.state.terminal_taken.load(Ordering::Acquire) => {}
+                DecodeReply::Answer(TokenAnswer::AtRest)
+                    if reservation.state.kind == DecodeRequestKind::Generation
+                        && receipt.after_cancel
+                        && reservation.state.terminal_taken.load(Ordering::Acquire)
+                        && reservation.state.cancel_queued.load(Ordering::Acquire)
+                        && !reservation.state.cancel_taken.load(Ordering::Acquire) =>
+                {
+                    reservation
+                        .state
+                        .cancel_taken
+                        .store(true, Ordering::Release);
+                }
                 reply
                     if receipt.after_send
                         && !reservation.state.terminal_taken.load(Ordering::Acquire)
@@ -694,6 +934,18 @@ impl DecodePort {
                                 | (
                                     DecodeRequestKind::Open,
                                     DecodeReply::Answer(TokenAnswer::Opened(_))
+                                )
+                                | (
+                                    DecodeRequestKind::Generation,
+                                    DecodeReply::Answer(TokenAnswer::Generated(_))
+                                )
+                                | (
+                                    DecodeRequestKind::Flush,
+                                    DecodeReply::Answer(TokenAnswer::Flushed { .. })
+                                )
+                                | (
+                                    DecodeRequestKind::Elide,
+                                    DecodeReply::Answer(TokenAnswer::Elided { .. })
                                 )
                         ) =>
                 {
@@ -731,6 +983,8 @@ impl DecodePort {
             (!reservation.sent()
                 || !reservation.state.terminal_taken.load(Ordering::Acquire)
                 || reservation.state.invalid_reply.load(Ordering::Acquire)
+                || (reservation.state.cancel_queued.load(Ordering::Acquire)
+                    && !reservation.state.cancel_taken.load(Ordering::Acquire))
                 || self.outgoing.is_some()
                 || self.held.is_some()
                 || self.series.is_some()
@@ -803,6 +1057,46 @@ impl LabelPort {
 }
 
 impl<T> PacketPort<T> {
+    /// Consume only the fd. The original sent/partial/held/failure evidence
+    /// remains move-owned in a carrier with no transport methods.
+    pub(super) fn retire_failed(self) -> PacketPort<T, ()> {
+        let Self {
+            end,
+            identity,
+            wire,
+            decode,
+            outgoing,
+            series,
+            received_wire,
+            received_reservation,
+            held,
+            decode_reservation,
+            failure,
+            receive_interrupted,
+            send_interrupted,
+            generation_send_held,
+            zero_received,
+        } = self;
+        drop(end);
+        PacketPort {
+            end: (),
+            identity,
+            wire,
+            decode,
+            outgoing,
+            series,
+            received_wire,
+            received_reservation,
+            held,
+            decode_reservation,
+            failure,
+            receive_interrupted,
+            send_interrupted,
+            generation_send_held,
+            zero_received,
+        }
+    }
+
     fn new(
         end: OwnedFd,
         wire: Wire,
@@ -836,6 +1130,7 @@ impl<T> PacketPort<T> {
             failure: None,
             receive_interrupted: false,
             send_interrupted: false,
+            generation_send_held: false,
             zero_received: false,
         })
     }
@@ -847,7 +1142,7 @@ impl<T> PacketPort<T> {
     pub(super) fn interest(&self) -> Interest {
         Interest {
             readable: self.failure().is_none() && self.held.is_none(),
-            writable: self.failure().is_none() && self.outgoing.is_some(),
+            writable: self.failure().is_none() && self.outgoing.is_some() && !self.send_is_held(),
             live: self.failure().is_none(),
         }
     }
@@ -856,7 +1151,17 @@ impl<T> PacketPort<T> {
     /// makes the fd readable. A partial series alone waits for its next packet.
     pub(super) fn needs_progress(&self) -> bool {
         self.failure().is_none()
-            && (self.receive_interrupted || self.send_interrupted || self.zero_received)
+            && (self.receive_interrupted
+                || (self.send_interrupted && !self.send_is_held())
+                || self.zero_received)
+    }
+
+    fn send_is_held(&self) -> bool {
+        self.generation_send_held
+            && self
+                .outgoing
+                .as_ref()
+                .is_some_and(|out| out.generation && out.offset == 0 && !out.preamble_sent)
     }
 
     pub(super) fn failure(&self) -> Option<&Failure> {
@@ -952,6 +1257,10 @@ impl<T> PacketPort<T> {
                 offset: 0,
                 tracked: None,
                 decode_reservation: None,
+                generation: false,
+                resident_mutation: false,
+                admit: false,
+                cancel: false,
             })
         })();
         match prepared {
@@ -983,6 +1292,9 @@ impl<T> PacketPort<T> {
         observe: Option<&mut dyn PumpIo>,
     ) -> Result<SendProgress, Failure> {
         self.live()?;
+        if self.send_is_held() {
+            return Ok(SendProgress::Pending);
+        }
         if observe.is_none()
             && self
                 .outgoing
@@ -1045,7 +1357,11 @@ impl<T> PacketPort<T> {
         if outbound.offset == outbound.body.len() {
             let tracked = outbound.tracked.clone();
             if let Some(reservation) = &outbound.decode_reservation {
-                reservation.sent.store(true, Ordering::Release);
+                if outbound.cancel {
+                    reservation.cancel_sent.store(true, Ordering::Release);
+                } else {
+                    reservation.sent.store(true, Ordering::Release);
+                }
             }
             if let Some(tracked) = &tracked {
                 tracked.status.store(SEND_SENT, Ordering::Release);
@@ -1120,6 +1436,7 @@ impl<T> PacketPort<T> {
                 self.decode_reservation.as_ref().map(|state| DecodeReceipt {
                     state: Arc::clone(state),
                     after_send: state.sent.load(Ordering::Acquire),
+                    after_cancel: state.cancel_sent.load(Ordering::Acquire),
                 });
         }
         self.accept_packet().map_err(|failure| self.fail(failure))
@@ -1347,3 +1664,7 @@ mod evidence_tests;
 #[cfg(test)]
 #[path = "pump_transport_decode_reservation_tests.rs"]
 mod decode_reservation_tests;
+
+#[cfg(test)]
+#[path = "pump_transport_send_hold_tests.rs"]
+mod send_hold_tests;

@@ -69,7 +69,7 @@ fn selector_invalid() -> LifecycleRefusal {
 
 /// Only absence of the entry is absence of this optional key. In particular,
 /// a dangling link, special file or failed read never selects latest instead.
-fn read_selector(
+pub(crate) fn read_selector(
     directory: BorrowedFd<'_>,
     owner: u32,
 ) -> Result<Option<ArtifactId>, LifecycleRefusal> {
@@ -540,7 +540,7 @@ state-management.persistence.snapshot-wait.elapsed-ns = "120000000000"
 state-management.persistence.snapshot-wait.measurement-ref = "synthetic-snapshot"
 state-management.reads.max-result-bytes = "1024"
 state-management.reads.measurement-ref = "synthetic-read"
-state-management.ste100.model-binding.artifact = "synthetic-checker"
+state-management.ste100.model-binding.artifact = "/synthetic/checker-manifest.json"
 state-management.ste100.model-binding.devices = [1]
 state-management.ste100.model-artifact-sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 state-management.ste100.instances = 1

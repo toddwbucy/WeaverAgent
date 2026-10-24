@@ -452,6 +452,7 @@ fn malformed_recall_adoption_refuses_exact_shape_even_with_consistent_pair_and_h
         (false, true, "item"),
         (true, true, "item"),
         (false, false, "other"),
+        (false, false, "Item"),
         (false, false, "item"),
     ] {
         let request = fixture();

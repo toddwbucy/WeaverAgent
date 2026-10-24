@@ -1,6 +1,6 @@
 //! The store's send/terminal ledger, with no dispatch or timeout policy.
 
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use weaver_types::state_flow::{
     PairEnded, PairFailure, PairFile, PairLane, PairRecord, PairRequest, PairStarted,
     SourceEnvelope, StateRefusalCode, TerminalPairFate, decode_strict,
@@ -29,6 +29,25 @@ pub(super) fn apply(
         }
         _ => Err(invalid("pair payload and source event kind disagree")),
     }
+}
+
+/// Live filing and image adoption check the same held recall shape. Each caller
+/// keeps its own refusal family and transaction/adoption boundary.
+pub(in crate::engine::serving_sqlite) fn recall_matches_statement(
+    db: &Connection,
+    statement_id: i64,
+    subject: &str,
+) -> rusqlite::Result<bool> {
+    if subject.is_empty() {
+        return Ok(false);
+    }
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM statement_binding b JOIN binding_noun n ON n.binding_id=b.id
+         WHERE b.id=?1 AND b.condition IS NULL AND n.value=?2 COLLATE BINARY
+           AND (SELECT COUNT(*) FROM binding_noun WHERE binding_id=b.id)=1)",
+        params![statement_id, subject],
+        |row| row.get(0),
+    )
 }
 
 fn start(
@@ -84,17 +103,12 @@ fn start(
     {
         return Err(invalid("review identity does not name its instruction"));
     }
-    if let PairRequest::Recall { subject } = &started.request {
-        let matched: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM statement_binding b JOIN binding_noun n ON n.binding_id=b.id
-             WHERE b.id=?1 AND b.condition IS NULL AND n.value=?2 COLLATE BINARY
-               AND (SELECT COUNT(*) FROM binding_noun WHERE binding_id=b.id)=1)",
-            params![statement.id, subject], |row| row.get(0))?;
-        if subject.is_empty() || !matched {
-            return Err(invalid(
-                "recall requires its exact single held noun and no condition",
-            ));
-        }
+    if let PairRequest::Recall { subject } = &started.request
+        && !recall_matches_statement(tx, statement.id, subject)?
+    {
+        return Err(invalid(
+            "recall requires its exact single held noun and no condition",
+        ));
     }
     let exists: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM tool_pair WHERE run=?1 AND sequence=?2 AND call=?3)",

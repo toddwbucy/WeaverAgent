@@ -14,6 +14,9 @@ use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
 use std::time::{Duration, Instant};
 use weaver_types::{Opened, SessionId, TokenAnswer, TokenDirective, TokenRefusal};
 
+#[path = "context_plan_summary_tests.rs"]
+mod plan_summary_tests;
+
 const _: fn() = || {
     trait Private<M> {
         fn pin() {}
@@ -584,6 +587,8 @@ fn boot_open_stop_observed_in_same_pump_prevents_first_byte_and_stays_revoked() 
                     listener: None,
                     peer: Some(&mut admin),
                     residency: None,
+                    dial: None,
+                    leave_peer: None,
                 },
                 gate: None,
                 decode: Some(&mut fx.decode),
@@ -681,6 +686,8 @@ fn boot_open_stop_before_owner_creation_is_retained_for_this_enter() {
                 listener: None,
                 peer: Some(&mut admin),
                 residency: None,
+                dial: None,
+                leave_peer: None,
             },
             gate: None,
             decode: None,
@@ -715,6 +722,8 @@ fn boot_open_observe_yields_without_inventing_cancellation() {
                 listener: None,
                 peer: Some(&mut admin),
                 residency: None,
+                dial: None,
+                leave_peer: None,
             },
             gate: None,
             decode: Some(&mut fx.decode),
@@ -1090,6 +1099,60 @@ fn unload() -> AuthoredEvent {
     }
 }
 #[test]
+fn boot_open_held_author_blocks_release_without_cancelling_owned_open() {
+    for failed in [false, true] {
+        let mut fx = OpenFixture::new();
+        fx.begin();
+        let original = unload();
+        let Some(Payload::Unload(payload)) = &original.payload else {
+            unreachable!()
+        };
+        let pointer = std::ptr::from_ref(payload.as_ref()) as usize;
+        let expected = format!("{original:?}");
+        let run = &mut fx.boot.member.run;
+        let enter = run.context.deadlines.get(PumpDeadline::Enter).unwrap();
+        assert_eq!(run.author(original), Err(RunFailure::BootOpenOwned));
+        let failure = failed.then(|| {
+            run.context.fail(
+                &mut run.clock,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                "held Open first cause",
+            )
+        });
+        let leave = AbsoluteBound::after(run.clock.now().unwrap(), 100_000).unwrap();
+        assert_eq!(
+            run.context.begin_boot_open_release(leave, &mut run.clock),
+            Err(failure.clone().unwrap_or(RunFailure::BootOpenOwned))
+        );
+        assert_eq!(run.context.failure(), failure.as_ref());
+        assert_eq!(
+            run.context.phase(),
+            if failed {
+                RecordingPhase::Failed
+            } else {
+                RecordingPhase::Entered
+            }
+        );
+        assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());
+        if !failed {
+            assert!(matches!(fx.sent(), TokenDirective::Open { .. }));
+            fx.answer(fx.opened());
+            let proof = fx.finish();
+            assert_eq!(proof.enter(), enter);
+        }
+        let run = &mut fx.boot.member.run;
+        assert!(run.clock.now().unwrap() < enter.deadline_ns());
+        let returned = run.context.take_held_author().unwrap();
+        let Some(Payload::Unload(payload)) = &returned.payload else {
+            unreachable!()
+        };
+        assert_eq!(std::ptr::from_ref(payload.as_ref()) as usize, pointer);
+        assert_eq!(format!("{returned:?}"), expected);
+    }
+}
+
+#[test]
 fn boot_open_full_stopped_release_accounts_then_retires_unloads_and_drains() {
     for expired in [false, true] {
         let mut fx = OpenFixture::new();
@@ -1252,6 +1315,8 @@ fn boot_open_transferred_grant_does_not_block_later_lifecycle_decode_progress() 
                 listener: None,
                 peer: Some(&mut admin),
                 residency: None,
+                dial: None,
+                leave_peer: None,
             },
             gate: None,
             decode: Some(&mut fx.decode),
@@ -1360,4 +1425,467 @@ fn boot_open_escaped_render_line_breaks_preserve_evidence_and_allow_recording() 
     );
     assert_eq!(fx.records(Kind::StatePlacement).len(), 1);
     assert!(fx.boot.member.run.context.boot_journal.is_some());
+}
+
+#[test]
+fn boot_open_pre_send_receipt_cannot_be_repaired_by_a_later_complete_send() {
+    let mut fx = OpenFixture::new();
+    fx.begin();
+    let raw = fx.answer(fx.opened());
+    // Use the actual transport in adversarial order: receive stamps the receipt
+    // before send, then the whole request leaves. Scalar sent=true is not enough.
+    fx.decode.try_receive().unwrap();
+    assert!(fx.decode.held().is_some());
+    assert!(fx.decode.open_not_started());
+    fx.decode.try_send().unwrap();
+    assert!(receive(fx.peer.as_fd()).is_some());
+    assert!(!fx.decode.send_pending());
+    assert!(fx.advance().is_err());
+    assert_eq!(
+        fx.boot.member.run.context.boot_open_raw(),
+        Some(raw.as_slice())
+    );
+    assert!(fx.records(Kind::StatePlacement).is_empty());
+    assert!(fx.boot.member.run.context.boot_journal.is_none());
+}
+
+#[test]
+fn boot_open_cancelled_unsent_protocol_debris_never_sends_open() {
+    for failed in [false, true] {
+        let mut fx = OpenFixture::new();
+        fx.begin();
+        // Leave the real alternating pump poised to send on its next unit.
+        fx.advance().unwrap();
+        assert!(fx.decode.open_not_started());
+        fx.answer(fx.opened());
+        fx.decode.try_receive().unwrap();
+        assert!(fx.decode.held().is_some());
+        assert!(fx.decode.open_not_started());
+        if failed {
+            fx.fail();
+        } else {
+            fx.release(1000);
+        }
+        assert_eq!(fx.account(), BootOpenProgress::Incomplete);
+        assert!(receive(fx.peer.as_fd()).is_none());
+        assert!(fx.boot.member.run.context.boot_open_account_settled());
+        assert!(fx.records(Kind::StatePlacement).is_empty());
+        assert!(fx.records(Kind::StateMarkPosition).is_empty());
+        assert!(
+            fx.boot
+                .member
+                .run
+                .context
+                .retire_boot_decode(fx.decode)
+                .is_ok()
+        );
+    }
+}
+
+#[test]
+fn boot_open_transferred_grant_refuses_cancellation_and_stays_complete_after_failure() {
+    let mut fx = OpenFixture::new();
+    fx.begin();
+    fx.sent();
+    fx.answer(fx.opened());
+    let proof = fx.finish();
+    let run = &mut fx.boot.member.run;
+    assert_eq!(
+        run.context.cancel_boot_open(),
+        Err(RunFailure::BootOpenOwned)
+    );
+    assert!(!run.context.boot_open_revoked());
+    assert!(run.context.boot_journal.is_some());
+    assert!(
+        run.context
+            .take_boot_open(&mut run.clock)
+            .unwrap()
+            .is_none()
+    );
+    let first = fx.fail();
+    assert_eq!(fx.account(), BootOpenProgress::Complete);
+    assert_eq!(fx.boot.member.run.context.failure(), Some(&first));
+    assert!(!fx.boot.member.run.context.boot_open_revoked());
+    assert_eq!(fx.records(Kind::StatePlacement).len(), 1);
+    assert_eq!(fx.records(Kind::StateMarkPosition).len(), 1);
+    drop(proof);
+}
+
+#[test]
+fn boot_open_live_rejects_enter_bound_drift_even_before_either_bound_expires() {
+    let mut fx = OpenFixture::new();
+    fx.begin();
+    let run = &mut fx.boot.member.run;
+    let original = run.context.deadlines.disarm(PumpDeadline::Enter).unwrap();
+    let replacement = AbsoluteBound::after(run.clock.now().unwrap(), 1000).unwrap();
+    assert_ne!(replacement, original);
+    assert!(!original.expired(run.clock.now().unwrap()));
+    run.context
+        .deadlines
+        .arm(PumpDeadline::Enter, replacement)
+        .unwrap();
+    assert_eq!(
+        run.context.boot_open_live(&mut run.clock),
+        Err(RunFailure::BootOpenOwned)
+    );
+    assert!(run.context.failure().is_none());
+    assert!(receive(fx.peer.as_fd()).is_none());
+    assert!(run.context.boot_journal.is_none());
+}
+
+#[test]
+fn boot_open_live_revocation_survives_retiring_a_recoverable_leave_wait() {
+    let mut fx = OpenFixture::new();
+    fx.begin();
+    let run = &mut fx.boot.member.run;
+    let leave = AbsoluteBound::after(run.clock.now().unwrap(), 1).unwrap();
+    run.context
+        .deadlines
+        .arm(PumpDeadline::Leave, leave)
+        .unwrap();
+    run.clock.advance_to(leave.deadline_ns()).unwrap();
+    assert_eq!(
+        run.context.boot_open_live(&mut run.clock),
+        Err(RunFailure::Wait {
+            key: PumpDeadline::Leave,
+            bound: leave,
+        })
+    );
+    assert!(run.context.failure().is_none());
+    assert!(!run.context.boot_enter_cancelled);
+    assert_eq!(
+        run.context.deadlines.disarm(PumpDeadline::Leave),
+        Some(leave)
+    );
+    assert_eq!(
+        run.context.boot_open_live(&mut run.clock),
+        Err(RunFailure::BootOpenOwned)
+    );
+    assert!(receive(fx.peer.as_fd()).is_none());
+    assert!(run.context.boot_journal.is_none());
+}
+
+#[test]
+fn boot_open_unrelated_held_lifecycle_directive_does_not_suppress_first_byte() {
+    let mut fx = OpenFixture::new();
+    fx.begin();
+    fx.advance().unwrap();
+    assert!(fx.decode.open_not_started());
+    let (admin, peer) = OrganChannel::pair().unwrap();
+    let mut admin = LifecyclePeer::from_channel(admin).unwrap();
+    let observe = directive(weaver_types::LifecycleDirective::Observe);
+    send_bytes(peer.as_fd(), &serde_json::to_vec(&observe).unwrap());
+    let run = &mut fx.boot.member.run;
+    let mut io = ReadyClock {
+        clock: &mut run.clock,
+        fd: fx.decode.fd().as_raw_fd(),
+    };
+    run.context
+        .pump_once(&mut PumpPorts {
+            lifecycle: LifecyclePorts {
+                listener: None,
+                peer: Some(&mut admin),
+                residency: None,
+                dial: None,
+                leave_peer: None,
+            },
+            gate: None,
+            decode: Some(&mut fx.decode),
+            label: None,
+            io: &mut io,
+        })
+        .unwrap();
+    assert!(admin.held().is_some());
+    let sent = receive(fx.peer.as_fd()).expect("held Observe cannot suppress the ready Open send");
+    assert!(matches!(
+        serde_json::from_slice::<TokenDirective>(&sent).unwrap(),
+        TokenDirective::Open { .. }
+    ));
+    assert!(!run.context.boot_open_revoked());
+    assert_eq!(admin.take_completion().unwrap().unwrap().envelope, observe);
+}
+
+#[test]
+fn boot_open_cannot_consume_a_replacement_author_ticket_under_pressure() {
+    let mut fx = OpenFixture::new();
+    fx.begin();
+    fx.sent();
+    fx.answer(fx.opened());
+    fx.advance().unwrap();
+    fx.boot.member.fill_trace();
+    assert_eq!(fx.advance().unwrap(), BootOpenProgress::Pending);
+    let run = &mut fx.boot.member.run;
+    let held = run.context.barrier.pending_author().unwrap();
+    let original_ticket = held.ticket;
+    let other = held.event.clone();
+    // An adversarial internal caller replaces the slot with a genuinely minted
+    // new ticket. No scalar equality or same-kind event can substitute for it.
+    assert!(run.context.barrier.abandon_boot_author(original_ticket));
+    let progress = run.context.barrier.submit_authored_with_clock(
+        other,
+        RecordPurpose::Observation,
+        &run.context.author,
+        1,
+        &mut run.context.inbox,
+        &mut run.context.budget,
+        &mut || run.clock.now(),
+    );
+    assert!(
+        matches!(progress, RecordProgress::Pending),
+        "replacement must be a valid pending author: {progress:?}; failure={:?}",
+        run.context.barrier.failure()
+    );
+    let replacement = run.context.barrier.pending_author().unwrap().ticket;
+    assert_ne!(replacement, original_ticket);
+    assert!(fx.advance().is_err());
+    assert_eq!(
+        fx.boot.member.run.context.pending_author().unwrap().ticket,
+        replacement
+    );
+    assert!(fx.records(Kind::StatePlacement).is_empty());
+    assert!(fx.boot.member.run.context.boot_journal.is_none());
+    fx.drain();
+}
+
+#[test]
+fn boot_open_unload_guards_return_both_originals_without_latching_failure() {
+    for authored in [false, true] {
+        let mut fx = OpenFixture::new();
+        fx.begin();
+        let run = &mut fx.boot.member.run;
+        let original = unload();
+        let progress = if authored {
+            run.context.barrier.submit_authored_with_clock(
+                original,
+                RecordPurpose::Observation,
+                &run.context.author,
+                1,
+                &mut run.context.inbox,
+                &mut run.context.budget,
+                &mut || run.clock.now(),
+            )
+        } else {
+            let prepared = run
+                .context
+                .author
+                .prepare(&original, run.clock.now().unwrap(), 1)
+                .unwrap();
+            run.context.barrier.submit_with_clock(
+                prepared,
+                RecordPurpose::Observation,
+                &mut run.context.inbox,
+                &mut run.context.budget,
+                &mut || run.clock.now(),
+            )
+        };
+        match progress {
+            RecordProgress::BusyAuthored {
+                event,
+                purpose,
+                owed: Some(crate::flow::recording::OwedAuthor::BootOpen),
+            } if authored => {
+                assert_eq!(event.kind, Kind::Unload);
+                assert!(matches!(purpose, RecordPurpose::Observation));
+            }
+            RecordProgress::Busy { event, purpose } if !authored => {
+                assert_eq!(event.envelope.kind, Kind::Unload);
+                assert!(matches!(purpose, RecordPurpose::Observation));
+            }
+            other => panic!("owed boot must retain Unload outside the barrier: {other:?}"),
+        }
+        assert!(run.context.barrier.failure().is_none());
+        assert!(!run.context.budget.is_frozen());
+        assert!(run.context.barrier.pending().is_none());
+        assert!(run.context.barrier.pending_author().is_none());
+        assert!(!run.context.barrier.is_closed());
+        assert!(run.context.failure().is_none());
+        fx.release(1000);
+        assert_eq!(fx.account(), BootOpenProgress::Cancelled);
+    }
+}
+
+#[test]
+fn boot_open_clock_failure_before_preparation_retains_exact_ticket_until_bounded_disposal() {
+    struct FailsOnce<'a> {
+        clock: &'a mut FakePumpIo,
+        at: usize,
+        calls: usize,
+    }
+    impl PumpIo for FailsOnce<'_> {
+        fn now(&mut self) -> io::Result<u64> {
+            self.calls += 1;
+            if self.calls == self.at {
+                Err(io::Error::other("boot preparation clock fixture"))
+            } else {
+                self.clock.now()
+            }
+        }
+        fn wait(&mut self, _: &[WaitInterest<'_>], _: Option<u64>) -> io::Result<WaitOutcome> {
+            panic!("placement author step does not wait")
+        }
+    }
+    // Select by the actual custody state, not a baseline number of clock samples.
+    let mut witnessed = false;
+    for at in 1..=8 {
+        let mut fx = OpenFixture::new();
+        fx.begin();
+        fx.sent();
+        fx.answer(fx.opened());
+        fx.advance().unwrap();
+        let run = &mut fx.boot.member.run;
+        let result = run.context.advance_boot_open(&mut PumpPorts {
+            lifecycle: LifecyclePorts::default(),
+            gate: None,
+            decode: Some(&mut fx.decode),
+            label: None,
+            io: &mut FailsOnce {
+                clock: &mut run.clock,
+                at,
+                calls: 0,
+            },
+        });
+        if result.is_ok()
+            || run.context.barrier.pending_author().is_none()
+            || run.context.barrier.pending().is_some()
+        {
+            continue;
+        }
+        witnessed = true;
+        let ticket = run.context.barrier.pending_author().unwrap().ticket;
+        assert!(run.context.boot_owns_pending_author());
+        assert!(fx.records(Kind::StatePlacement).is_empty());
+        let first = fx.fail();
+        fx.account();
+        let run = &mut fx.boot.member.run;
+        assert_eq!(run.context.pending_author().unwrap().ticket, ticket);
+        assert_eq!(
+            run.context.advance_halt_trace(&mut run.clock).unwrap(),
+            HaltTraceProgress::Pending
+        );
+        let enter = run.context.deadlines.get(PumpDeadline::Enter).unwrap();
+        run.clock.advance_to(enter.deadline_ns()).unwrap();
+        assert_eq!(fx.account(), BootOpenProgress::Incomplete);
+        assert!(fx.boot.member.run.context.pending_author().is_none());
+        assert_eq!(fx.boot.member.run.context.failure(), Some(&first));
+        assert!(
+            fx.boot
+                .member
+                .run
+                .context
+                .retire_boot_decode(fx.decode)
+                .is_ok()
+        );
+        break;
+    }
+    assert!(
+        witnessed,
+        "must exercise the actual unprepared author-ticket failure window"
+    );
+}
+
+#[test]
+fn boot_open_cancellation_demotes_both_unsubmitted_and_queued_mark_before_accounting() {
+    for queued in [false, true] {
+        let mut fx = OpenFixture::new();
+        fx.begin();
+        fx.sent();
+        fx.answer(fx.opened());
+        fx.advance().unwrap();
+        assert_eq!(fx.advance().unwrap(), BootOpenProgress::PlacementRecorded);
+        fx.advance().unwrap(); // Placement continuation creates the mark author.
+        assert_eq!(
+            fx.boot
+                .member
+                .run
+                .context
+                .boot_open
+                .as_ref()
+                .unwrap()
+                .unsubmitted_event_for_test()
+                .unwrap()
+                .kind,
+            Kind::StateMarkPosition
+        );
+        if queued {
+            fx.boot.member.fill_trace();
+            assert_eq!(fx.advance().unwrap(), BootOpenProgress::Pending);
+            assert_eq!(
+                fx.boot
+                    .member
+                    .run
+                    .context
+                    .pending_author()
+                    .unwrap()
+                    .event
+                    .kind,
+                Kind::StateMarkPosition
+            );
+        }
+        fx.release(1000);
+        assert_eq!(fx.account(), BootOpenProgress::Cancelled);
+        assert!(fx.boot.member.run.context.boot_open_account_settled());
+        assert!(fx.boot.member.run.context.pending_author().is_none());
+        assert!(fx.boot.member.run.context.boot_journal.is_none());
+        assert_eq!(fx.records(Kind::StatePlacement).len(), 1);
+        assert!(fx.records(Kind::StateMarkPosition).is_empty());
+        if queued {
+            fx.drain();
+        }
+    }
+}
+
+#[test]
+fn boot_open_placement_transfers_the_same_payload_allocation_into_its_barrier_ticket() {
+    fn placement(event: &AuthoredEvent) -> *const serving::payloads::PlacementRecord {
+        let Some(Payload::Placement(value)) = &event.payload else {
+            panic!("placement payload")
+        };
+        &**value
+    }
+    for stopped in [false, true] {
+        let mut fx = OpenFixture::new();
+        fx.begin();
+        fx.sent();
+        fx.answer(fx.opened());
+        fx.advance().unwrap();
+        let allocation = placement(
+            fx.boot
+                .member
+                .run
+                .context
+                .boot_open
+                .as_ref()
+                .unwrap()
+                .unsubmitted_event_for_test()
+                .unwrap(),
+        );
+        fx.boot.member.fill_trace();
+        if stopped {
+            fx.release(1000);
+            fx.account();
+        } else {
+            assert_eq!(fx.advance().unwrap(), BootOpenProgress::Pending);
+        }
+        let context = &fx.boot.member.run.context;
+        assert!(
+            context
+                .boot_open
+                .as_ref()
+                .unwrap()
+                .unsubmitted_event_for_test()
+                .is_none()
+        );
+        assert_eq!(
+            placement(&context.pending_author().unwrap().event),
+            allocation
+        );
+        assert!(context.boot_owns_pending_author());
+        fx.drain();
+        if stopped {
+            assert_eq!(fx.account(), BootOpenProgress::Cancelled);
+        } else {
+            let _proof = fx.finish();
+        }
+        assert_eq!(fx.records(Kind::StatePlacement).len(), 1);
+    }
 }

@@ -1,6 +1,102 @@
 use super::*;
 
 #[test]
+fn kind_first_decode_answers_do_not_buffer_or_reparse_the_outer_values() {
+    let bodies = [
+        ("token", r#"{"token":17,"piece":"\u00e9\n"}"#),
+        ("field", r#"{"position":2,"ranked":[],"realized":17}"#),
+        ("column", r#"{"position":2,"layers":[[1.0,2.0]]}"#),
+        (
+            "delta_measured",
+            r#"{"resident":2,"prefix_tokens":1,"keep":1,"input_tokens":1,"capacity":99}"#,
+        ),
+        ("flushed", r#"{"resident_before":7,"resident_after":3}"#),
+        ("elided", r#"{"resident_before":7,"resident_after":3}"#),
+        (
+            "opened",
+            r#"{"session":"s","prefix_tokens":2,"capacity":99,"generation_limit":7,"terminal_tokens":1,"request":{ "x":"\u00e9" },"measurement":{ "n":1e0 }}"#,
+        ),
+        (
+            "generated",
+            r#"{"emission":"x","finish":"completed","content":[],"request":{ "x":"\u00e9" },"measurement":{ "n":1e0 },"resident":1,"capacity":99}"#,
+        ),
+        (
+            "re_fed",
+            r#"{"emission":"x","finish":"completed","content":[],"request":{ "x":"\u00e9" },"measurement":{ "n":1e0 },"resident":1,"capacity":99}"#,
+        ),
+        (
+            "fault",
+            r#"{"case":"device_fault_during_generation","account":{ "x":"\u00e9" }}"#,
+        ),
+    ];
+    for (kind, body) in bodies {
+        let canonical = format!("{{\"kind\":\"{kind}\",\"body\":{body}}}");
+        DECODE_ANSWER_BUFFERED.with(|counts| counts.set((0, 0)));
+        let expected: TokenAnswer = serde_json::from_str(&canonical).unwrap();
+        assert_eq!(
+            DECODE_ANSWER_BUFFERED.with(|counts| counts.get()),
+            (0, 0),
+            "{kind}"
+        );
+        let read: TokenAnswer = serde_json::from_reader(canonical.as_bytes()).unwrap();
+        assert_eq!(read, expected);
+        assert_eq!(
+            DECODE_ANSWER_BUFFERED.with(|counts| counts.get()),
+            (0, 0),
+            "reader {kind}"
+        );
+
+        let body_first = format!("{{\"body\":{body},\"kind\":\"{kind}\"}}");
+        let actual: TokenAnswer = serde_json::from_str(&body_first).unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(
+            DECODE_ANSWER_BUFFERED.with(|counts| counts.get()),
+            (2, body.len() + kind.len() + 2),
+            "actual fallback buffers for {kind}"
+        );
+        let read: TokenAnswer = serde_json::from_reader(body_first.as_bytes()).unwrap();
+        assert_eq!(
+            read, expected,
+            "reader retains exact raw evidence for {kind}"
+        );
+        assert_eq!(
+            DECODE_ANSWER_BUFFERED.with(|counts| counts.get()),
+            (4, 2 * (body.len() + kind.len() + 2)),
+            "reader fallback buffers for {kind}"
+        );
+    }
+    DECODE_ANSWER_BUFFERED.with(|counts| counts.set((0, 0)));
+    assert_eq!(
+        serde_json::from_str::<TokenAnswer>(r#"{"kind":"at_rest"}"#).unwrap(),
+        TokenAnswer::AtRest
+    );
+    assert_eq!(DECODE_ANSWER_BUFFERED.with(|counts| counts.get()), (0, 0));
+}
+
+#[test]
+fn kind_first_decode_fast_path_retains_closed_envelope_and_typed_body_checks() {
+    for invalid in [
+        r#"{"kind":"token","kind":"token","body":{"token":1,"piece":"a"}}"#,
+        r#"{"kind":"token","body":{"token":1,"piece":"a"},"body":{"token":1,"piece":"a"}}"#,
+        r#"{"kind":"token","extra":null,"body":{"token":1,"piece":"a"}}"#,
+        r#"{"kind":"token","body":{"token":1,"piece":"a"},"extra":null}"#,
+        r#"{"kind":"token"}"#,
+        r#"{"kind":"token","body":{"token":4294967296,"piece":"a"}}"#,
+        r#"{"kind":"token","body":{"token":1,"piece":"a","extra":null}}"#,
+        r#"{"kind":"unknown","body":{}}"#,
+        r#"{"kind":null,"body":{}}"#,
+        r#"{"body":{"token":1,"piece":"a"}}"#,
+        r#"{}"#,
+        r#"["token",{"token":1,"piece":"a"}]"#,
+    ] {
+        assert!(
+            serde_json::from_str::<TokenAnswer>(invalid).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
 fn state_fault_cases_keep_component_and_conformance_results_distinct() {
     for (case, spelling) in [
         (FaultCase::StateFlowFailed, "state_flow_failed"),
