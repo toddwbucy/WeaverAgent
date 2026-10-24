@@ -20,7 +20,7 @@ use weaver_types::{
 #[path = "failed_enter_process.rs"]
 mod process;
 pub(in crate::flow) use process::ChildState;
-use process::OwnedChild;
+pub(in crate::flow::context) use process::OwnedChild;
 
 /// Created by this context, then populated only by actual fork producers.
 /// There is no PID/descriptor adoption constructor for a fabricated child.
@@ -28,6 +28,14 @@ pub(in crate::flow) struct FailedEnterResources {
     origin: Arc<()>,
     spu: Option<SpuResource>,
     classifier: Option<OwnedChild>,
+}
+
+pub(in crate::flow::context) struct ResidentBootResources<'a> {
+    pub residency: &'a mut OrganPort,
+    pub spu: &'a mut OwnedChild,
+    pub classifier: &'a mut OwnedChild,
+    pub request: &'a ResidencyRequest,
+    pub evidence: super::residency_composition::ResidencyEvidence,
 }
 
 struct SpuResource {
@@ -172,6 +180,58 @@ impl FailedEnterResources {
             .map_err(|error| format!("classifier bootstrap: {error:?}"))
     }
 
+    pub(in crate::flow::context) fn origin_for_boot(&self) -> Arc<()> {
+        Arc::clone(&self.origin)
+    }
+
+    pub(in crate::flow::context) fn can_boot(
+        &self,
+        context: &RecordingContext,
+        evidence: &super::residency_composition::ResidencyEvidence,
+    ) -> bool {
+        self.matches(context)
+            && Arc::ptr_eq(&evidence.origin, &self.origin)
+            && context.deadlines.get(PumpDeadline::Enter) == Some(evidence.enter)
+            && context.phase == RecordingPhase::Entered
+            && context.failure().is_none()
+            && self.original_ports()
+            && self.classifier.is_some()
+            && self.spu.as_ref().is_some_and(|spu| {
+                spu.residency.as_ref().is_some_and(|port| {
+                    evidence.reply.belongs_to(port)
+                        && evidence.reply.envelope().position == Position::Close
+                        && matches!(evidence.reply.envelope().payload,
+                            weaver_types::Payload::Answer(LifecycleAnswer::Admitted))
+                        && spu.residency_request.as_ref().is_some_and(|request| {
+                            request.send.belongs_to(port) && request.send.sent()
+                                && request.send.sent_at().is_some_and(|at|
+                                    at >= evidence.enter.began_ns() && !evidence.enter.expired(at))
+                                && request.send.matches_exchange(&evidence.reply.envelope().exchange)
+                                && matches!(&request.envelope.payload,
+                                    weaver_types::Payload::Directive(LifecycleDirective::Admit { instruction })
+                                        if instruction == &evidence.request.instruction)
+                        })
+                })
+            })
+    }
+
+    pub(in crate::flow::context) fn split_for_boot(
+        &mut self,
+        evidence: super::residency_composition::ResidencyEvidence,
+    ) -> (ResidentBootResources<'_>, &mut DecodePort) {
+        let spu = self.spu.as_mut().expect("checked actual SPU");
+        (
+            ResidentBootResources {
+                residency: spu.residency.as_mut().expect("checked residency"),
+                spu: &mut spu.child,
+                classifier: self.classifier.as_mut().expect("checked classifier"),
+                request: spu.residency_request.as_ref().expect("checked Admit"),
+                evidence,
+            },
+            spu.decode.as_mut().expect("checked decode"),
+        )
+    }
+
     pub(super) fn spu_ports_mut(&mut self) -> Option<(&mut OrganPort, &mut DecodePort)> {
         let spu = self.spu.as_mut()?;
         Some((spu.residency.as_mut()?, spu.decode.as_mut()?))
@@ -284,6 +344,17 @@ impl FailedEnterResources {
     }
     /// Observe the actual retained classifier child without waiting or inventing
     /// a successful reap. The lifecycle owner still owes its terminal disposition.
+    /// Only the classifier exists in the actual refused-startup rollback. At
+    /// the inherited halt cap it receives the existing nonblocking stop action.
+    pub(in crate::flow::context) fn retire_rollback_child(&mut self, expired: bool) {
+        if let Some(child) = &mut self.classifier {
+            if expired {
+                child.stop_at_cap();
+            } else {
+                child.poll();
+            }
+        }
+    }
     pub(super) fn poll_classifier_child(&mut self) -> Option<ChildState> {
         self.classifier.as_mut().map(OwnedChild::poll)
     }

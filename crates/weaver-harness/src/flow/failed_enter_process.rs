@@ -15,7 +15,7 @@ pub(in crate::flow) enum ChildState {
     NotWaitable,
 }
 
-pub(super) struct OwnedChild {
+pub(in crate::flow::context) struct OwnedChild {
     pid: Pid,
     state: ChildState,
     kill_attempt: Option<Result<(), Errno>>,
@@ -29,7 +29,7 @@ impl OwnedChild {
     /// The caller is the serving thread and remains alive until this child's
     /// custody is returned/reaped or the whole worker exits failed. This is the
     /// same fork-thread obligation as spawn::fork_organ, not another runtime.
-    pub(super) unsafe fn spawn(
+    pub(in crate::flow::context) unsafe fn spawn(
         binary: &Path,
         ends: &[BorrowedFd<'_>],
         arguments: &[String],
@@ -53,7 +53,7 @@ impl OwnedChild {
         Ok(child)
     }
 
-    pub(super) fn state(&self) -> ChildState {
+    pub(in crate::flow::context) fn state(&self) -> ChildState {
         self.state
     }
     pub(super) fn kill_attempt(&self) -> Option<Result<(), Errno>> {
@@ -64,7 +64,7 @@ impl OwnedChild {
     }
 
     /// One nonblocking syscall; Interrupted/StillAlive never mean reaped.
-    pub(super) fn poll(&mut self) -> ChildState {
+    pub(in crate::flow::context) fn poll(&mut self) -> ChildState {
         if self.state != ChildState::Running {
             return self.state;
         }
@@ -88,7 +88,7 @@ impl OwnedChild {
     /// At the shared cap, attempt kill once then one nonblocking reap. A live
     /// result retains this exact owner; neither kill success nor ECHILD is a
     /// successful child exit. Caller must exit failed if custody remains.
-    pub(super) fn stop_at_cap(&mut self) -> ChildState {
+    pub(in crate::flow::context) fn stop_at_cap(&mut self) -> ChildState {
         self.poll();
         if self.state == ChildState::Running && self.kill_attempt.is_none() {
             self.kill_attempt = Some(kill(self.pid, Signal::SIGKILL));

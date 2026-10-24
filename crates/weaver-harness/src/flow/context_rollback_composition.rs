@@ -525,3 +525,6 @@ impl PreparedRollback<'_> {
 #[cfg(test)]
 #[path = "context_rollback_composition_tests.rs"]
 pub(super) mod tests;
+
+#[path = "context_rollback_halt.rs"]
+pub(in crate::flow) mod halt;

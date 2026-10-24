@@ -222,7 +222,7 @@ fn prepare_against(
     })
 }
 
-fn read_text(
+pub(crate) fn read_text(
     directory: BorrowedFd<'_>,
     name: &str,
     owner: u32,
@@ -273,7 +273,10 @@ fn open_judged(
     }
 }
 
-fn judge_checker(path: &Path, owner: u32) -> Result<(PathBuf, Digest), PreparationFailure> {
+pub(crate) fn judge_checker(
+    path: &Path,
+    owner: u32,
+) -> Result<(PathBuf, Digest), PreparationFailure> {
     let metadata =
         std::fs::symlink_metadata(path).map_err(|error| custody("ste100-binary", error))?;
     if metadata.file_type().is_symlink() {
@@ -315,11 +318,11 @@ fn judge_checker(path: &Path, owner: u32) -> Result<(PathBuf, Digest), Preparati
     Ok((canonical, digest))
 }
 
-fn hash(bytes: &[u8]) -> Digest {
+pub(crate) fn hash(bytes: &[u8]) -> Digest {
     Digest::new(format!("{:x}", Sha256::digest(bytes))).expect("SHA-256 is a digest")
 }
 
-fn invalid(field: &str, detail: impl Into<String>) -> PreparationFailure {
+pub(crate) fn invalid(field: &str, detail: impl Into<String>) -> PreparationFailure {
     PreparationFailure::Inventory {
         refusal: LifecycleRefusal::ConfigInvalid {
             field: Some(FieldName(field.into())),
@@ -328,7 +331,7 @@ fn invalid(field: &str, detail: impl Into<String>) -> PreparationFailure {
     }
 }
 
-fn custody(field: &str, detail: impl std::fmt::Display) -> PreparationFailure {
+pub(crate) fn custody(field: &str, detail: impl std::fmt::Display) -> PreparationFailure {
     PreparationFailure::Inventory {
         refusal: LifecycleRefusal::BoundaryUnverified,
         detail: format!("{field}: {detail}"),
@@ -336,4 +339,4 @@ fn custody(field: &str, detail: impl std::fmt::Display) -> PreparationFailure {
 }
 
 #[cfg(test)]
-pub(in crate::seed) mod tests;
+pub(crate) mod tests;

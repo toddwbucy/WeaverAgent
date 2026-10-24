@@ -230,3 +230,29 @@ impl RollbackDials {
         }
     }
 }
+
+pub(super) struct RetiredRollbackDials {
+    pub(super) listener: crate::flow::pump::RetiredLifecycleListener,
+    pub(super) active: Option<RetiredRollbackDial>,
+}
+pub(super) struct RetiredRollbackDial {
+    pub(super) peer: crate::flow::pump::RetiredLifecyclePeer,
+    pub(super) read: Option<AbsoluteBound>,
+    pub(super) message: Option<crate::flow::pump::RetiredLifecycleMessage>,
+    pub(super) answer: Option<OrganEnvelope>,
+    pub(super) send: Option<OrganSend>,
+}
+impl RollbackDials {
+    pub(super) fn retire_failed(self) -> RetiredRollbackDials {
+        RetiredRollbackDials {
+            listener: self.listener.retire_failed(),
+            active: self.active.map(|dial| RetiredRollbackDial {
+                peer: dial.peer.retire_failed(),
+                read: dial.read,
+                message: dial.message.map(LifecycleMessage::retire_failed),
+                answer: dial.answer,
+                send: dial.send,
+            }),
+        }
+    }
+}
