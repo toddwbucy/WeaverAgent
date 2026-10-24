@@ -41,6 +41,9 @@ impl AdapterAdmission for NoCompiledAdapter {
     fn kind(&self) -> AdapterKind {
         AdapterKind::Production
     }
+    fn is_available(&self) -> bool {
+        false
+    }
     fn admit(
         &self,
         _: &VerifiedArtifacts,
@@ -83,7 +86,14 @@ pub fn run() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut runtime = Runtime::new(channel, NoCompiledAdapter);
+    drive(Runtime::new(channel, NoCompiledAdapter))
+}
+
+fn drive<A>(mut runtime: Runtime<A>) -> ExitCode
+where
+    A: AdapterAdmission + Send + 'static,
+    A::Backend: CheckBackend,
+{
     loop {
         match runtime.advance() {
             Ok(RuntimeProgress::Progress) => {}
@@ -104,3 +114,7 @@ pub fn run() -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "entry_review_tests.rs"]
+mod review_tests;

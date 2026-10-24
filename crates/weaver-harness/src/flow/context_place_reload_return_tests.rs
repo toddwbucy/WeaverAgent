@@ -91,20 +91,25 @@ fn place_reload_return_confirmed_cut_after_at_rest_stop_is_usable_in_next_turn()
                 resident_after: n,
             },
         });
-        let ReloadCompletion::Cancelled(mut account) = fx.finish_reload() else {
-            panic!("Stop must retain the cancelled disposition");
+        let ReloadCompletion::CancelledStaged {
+            staged,
+            mut account,
+        } = fx.finish_reload()
+        else {
+            panic!("Stop must return its actual Staged separately from the cancelled evidence");
         };
-        let identity = account.staged_evidence().unwrap().identity.clone();
-        let recorded = account.staged_evidence().unwrap().recorded.unwrap();
+        let identity = staged.identity.clone();
+        let recorded = staged.recorded.unwrap();
+        assert!(
+            account.staged_evidence().is_none(),
+            "the evidence account hides no capability"
+        );
         assert!(!account.recorded_sequences().is_empty());
         assert!(account.raw_bytes().is_some());
         assert!(
             account.take_reload_inputs().is_none(),
             "a confirmed cut cannot return a stale prefix"
         );
-        let staged = account
-            .take_staged()
-            .expect("confirmed cancelled cut must transfer its carry");
         assert!(Arc::ptr_eq(&identity, &staged.identity));
         assert_eq!(staged.recorded, Some(recorded));
         assert!(account.take_staged().is_none());
@@ -113,6 +118,7 @@ fn place_reload_return_confirmed_cut_after_at_rest_stop_is_usable_in_next_turn()
             "taking carry must not reopen pre-cut inputs"
         );
         assert!(receive(fx.peer.as_fd()).is_none(), "Stop grants no append");
+        drop(account); // evidence disposal cannot hide or destroy the separately returned carry
         fx.turn("cut-next");
         finish_staged_append(&mut fx, staged, expected);
         assert!(fx.run().context.failure().is_none());
@@ -144,9 +150,9 @@ fn place_reload_return_queued_turn_stop_preserves_inputs_until_actual_turn_close
         .take_reload_inputs()
         .expect("pre-mutation Stop returns original inputs");
     assert!(account.take_reload_inputs().is_none());
-    assert_eq!(inputs.prefix.assembly_id(), assembly);
-    assert!(inputs.resolved.is_empty());
-    let ReloadItem::Held(unit) = &inputs.original_tail.items[0] else {
+    assert_eq!(inputs.prefix().assembly_id(), assembly);
+    assert!(inputs.resolved().is_empty());
+    let ReloadItem::Held(unit) = &inputs.original_tail().items[0] else {
         unreachable!()
     };
     assert_eq!(Arc::as_ptr(unit), exact);
@@ -173,6 +179,7 @@ fn place_reload_return_filed_pending_tail_retries_without_refiling_or_reclassifi
     let original = fx.whole_span(8, "record", 80);
     let held_first = fx.text(9, "first");
     let held_last = fx.text(10, "last");
+    let second_units = fx.text(11, "second");
     let first_messages = held_first[0].messages().to_vec();
     let last_messages = held_last[0].messages().to_vec();
     fx.turn("pending-return");
@@ -186,8 +193,20 @@ fn place_reload_return_filed_pending_tail_retries_without_refiling_or_reclassifi
         .context
         .hold_reload_text(lease, source.clone())
         .unwrap();
+    let mut second_generation =
+        fx.generation(second_units, 3, 1, "Read second.", Finish::Completed);
+    let mut second_output = second_generation.take_output().unwrap();
+    let second_source = second_output.source().block_id.clone();
+    assert_ne!(second_source, source);
+    let second_lease = second_output.take_receipt_lease().unwrap();
+    let second_pending = fx
+        .run()
+        .context
+        .hold_reload_text(second_lease, second_source.clone())
+        .unwrap();
     let mut tail = ReloadTail::held(held_first);
     tail.push_pending(pending);
+    tail.push_pending(second_pending);
     tail.items.extend(ReloadTail::held(held_last).items);
     fx.close_turn();
     let mark = fx.mark(80);
@@ -218,14 +237,14 @@ fn place_reload_return_filed_pending_tail_retries_without_refiling_or_reclassifi
     );
     assert_eq!(
         delta.len(),
-        prefix_len + first_len + 1 + last_messages.len()
+        prefix_len + first_len + 2 + last_messages.len()
     );
     assert_eq!(
         &delta[delta.len() - last_messages.len()..],
         last_messages.as_slice()
     );
     assert_eq!(
-        delta[delta.len() - 2].content,
+        delta[delta.len() - 3].content,
         vec![ContentBlock::Text {
             text: "Read pending.".into()
         }]
@@ -239,10 +258,10 @@ fn place_reload_return_filed_pending_tail_retries_without_refiling_or_reclassifi
     let inputs = account
         .take_reload_inputs()
         .expect("no-mutation refusal returns real tail");
-    assert!(inputs.rejected.is_none());
-    assert_eq!(inputs.resolved.len(), 3);
-    let exact_units: Vec<_> = inputs.resolved.iter().map(Arc::as_ptr).collect();
-    let ReloadItem::Pending(original_pending) = &inputs.original_tail.items[1] else {
+    assert!(inputs.rejected().is_none());
+    assert_eq!(inputs.resolved().len(), 4);
+    let exact_units: Vec<_> = inputs.resolved().iter().map(Arc::as_ptr).collect();
+    let ReloadItem::Pending(original_pending) = &inputs.original_tail().items[1] else {
         panic!("original retained")
     };
     assert_eq!(original_pending.source, source);
@@ -255,9 +274,17 @@ fn place_reload_return_filed_pending_tail_retries_without_refiling_or_reclassifi
         crate::flow::ledger::LeaseSlotStatus::Taken
     );
     let (prefix, tail) = inputs.into_retry().unwrap();
-    assert_eq!(tail.filed_sources.len(), 1);
+    assert_eq!(tail.filed_sources.len(), 2);
     assert_eq!(tail.filed_sources[0].0, 1);
     assert_eq!(tail.filed_sources[0].1.source, source);
+    assert_eq!(tail.filed_sources[1].0, 2);
+    assert_eq!(tail.filed_sources[1].1.source, second_source);
+    for (index, source) in [(1, &source), (2, &second_source)] {
+        let ReloadItem::Held(unit) = &tail.items[index] else {
+            panic!("actual filed Held unit");
+        };
+        assert_eq!(unit.filed_source().unwrap().source(), source);
+    }
     for (item, exact) in tail.items.iter().zip(exact_units) {
         let ReloadItem::Held(unit) = item else {
             panic!("resolved input stays held")
@@ -267,7 +294,49 @@ fn place_reload_return_filed_pending_tail_retries_without_refiling_or_reclassifi
     let run = fx.run();
     assert!(run.context.place_close().is_some());
     run.context.place_response_sent(&mut run.clock).unwrap();
-    let staged = fx.staged(prefix, tail, 6);
+    let registrations = fx.run().context.flow.ledger().source_lease_count();
+    assert!(registrations > 0);
+    // Defensive corruption swaps two genuine filed Held units while leaving
+    // both original Taken leases and their strictly ordered indexes intact.
+    // Only the exact committed-source identity check can reject this mismatch.
+    let mut tail = tail;
+    tail.items.swap(1, 2);
+    let run = fx.run();
+    let error = run
+        .context
+        .begin_cut_and_reload(prefix, tail, &mut run.clock)
+        .unwrap_err();
+    assert_eq!(error.refusal, PlaceError::InvalidTail);
+    assert!(error.failure.is_none());
+    let (prefix, mut tail) = error.input;
+    assert_eq!(tail.filed_sources.len(), 2);
+    assert_eq!(
+        fx.run().context.flow.ledger().source_lease_count(),
+        registrations
+    );
+    tail.items.swap(1, 2);
+    let resident = prefix.resident_before();
+    let n = prefix.n();
+    fx.begin_reload(prefix, tail);
+    assert_eq!(
+        fx.run().context.flow.ledger().source_lease_count() + 2,
+        registrations,
+        "retry admission relinquishes its consumed subscription before any later cut or extraction"
+    );
+    let TokenDirective::MeasureDelta { keep, delta, .. } = fx.reload_packet() else {
+        panic!("retry measures retained receipts")
+    };
+    assert_eq!(keep, n);
+    assert_eq!(delta, wanted);
+    fx.answer(&fx.measured(n, 6));
+    assert_eq!(fx.reload_packet(), TokenDirective::Flush { keep: n });
+    fx.answer(&TokenAnswer::Flushed {
+        resident_before: resident,
+        resident_after: n,
+    });
+    let ReloadCompletion::Staged(staged) = fx.finish_reload() else {
+        panic!("retry stages actual carry")
+    };
     assert_eq!(fx.records(Kind::Ste100Result).len(), checks);
     assert_eq!(fx.summary.files.len(), files);
     fx.turn("pending-retry-next");
@@ -295,10 +364,15 @@ fn place_reload_return_cancelled_staged_leave_keeps_exact_grant_but_refuses_next
         }
         let run = fx.run();
         run.context.cancel_reload(&mut run.clock).unwrap();
-        let ReloadCompletion::Cancelled(mut account) = fx.finish_reload() else {
-            panic!("cancelled")
+        let ReloadCompletion::CancelledStaged {
+            staged,
+            mut account,
+        } = fx.finish_reload()
+        else {
+            panic!("cancelled Staged must be explicit")
         };
-        let staged = account.take_staged().unwrap();
+        assert!(account.take_staged().is_none());
+        assert!(account.take_reload_inputs().is_none());
         fx.turn("staged-before-leave");
         fx.decision();
         fx.observe_place_command(if join {
@@ -363,9 +437,9 @@ fn place_reload_return_cancel_before_filing_keeps_original_pending_source_lease(
         panic!("cancelled")
     };
     let inputs = account.take_reload_inputs().unwrap();
-    assert!(inputs.resolved.is_empty());
-    assert!(inputs.original_tail.filed_sources.is_empty());
-    let ReloadItem::Pending(pending) = &inputs.original_tail.items[0] else {
+    assert!(inputs.resolved().is_empty());
+    assert!(inputs.original_tail().filed_sources.is_empty());
+    let ReloadItem::Pending(pending) = &inputs.original_tail().items[0] else {
         panic!("original pending")
     };
     assert_eq!(pending.source, source);

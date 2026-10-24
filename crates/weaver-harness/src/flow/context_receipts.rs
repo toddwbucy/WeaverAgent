@@ -200,6 +200,14 @@ impl RecordingContext {
         // effect can create a refresh duty. Return the unchanged event before
         // reserving a receipt subscription or admitting any author input.
         let plan_effect = is_plan_effect_event(&event);
+        let owned_continuation = match owner {
+            FilingOwner::Pair => self.pair_work.as_ref().is_some_and(|work| {
+                work.leg.is_none() && work.bound == bound && key == PumpDeadline::Decision
+            }),
+            FilingOwner::Marks => self.marks_filing_allowed(key),
+            FilingOwner::BootPairs => self.boot_pairs_filing_allowed(),
+            FilingOwner::Ordinary | FilingOwner::Outbound => false,
+        };
         if (plan_effect && (!self.plan_cache.boot_started || self.plan_cache.committed.is_none()))
             || (self.boot_pairs.is_some() && owner != FilingOwner::BootPairs)
             || (owner == FilingOwner::BootPairs && !self.boot_pairs_filing_allowed())
@@ -209,6 +217,7 @@ impl RecordingContext {
             || self.flow.has_filing_consumer()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()
+            || (self.held_author.is_some() && !owned_continuation)
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()

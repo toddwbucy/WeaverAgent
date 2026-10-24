@@ -508,12 +508,11 @@ fn place_reload_cancel_after_real_cut_preserves_physical_truth_and_staged_carry(
                 resident_before: before.1,
                 resident_after: n,
             });
-            let ReloadCompletion::Cancelled(account) = fx.finish_reload() else {
-                panic!("cancelled cut must retain an account");
+            let ReloadCompletion::CancelledStaged { staged, account } = fx.finish_reload() else {
+                panic!("cancelled cut must return Staged beside its account");
             };
-            let staged = account
-                .staged_evidence()
-                .expect("actual physical cut keeps its nonresident carry as evidence");
+            assert!(account.staged_evidence().is_none());
+            assert!(account.raw_bytes().is_some());
             assert_eq!(staged.resident_after(), n);
             assert_eq!(fx.journal().1, n);
             assert_eq!(fx.records(Kind::Flush).len(), 1);
@@ -739,21 +738,21 @@ fn place_pending_output_lease_preserves_preclassification_acceptance_and_correct
                 .take_reload_inputs()
                 .expect("rejection returns original input custody");
             assert!(matches!(
-                inputs.rejected.as_ref(),
+                inputs.rejected(),
                 Some(crate::flow::ledger::SourceDisposition::CorrectlyRejected(_))
             ));
             assert!(
-                inputs.resolved.is_empty(),
+                inputs.resolved().is_empty(),
                 "rejected Text never becomes a held selected unit"
             );
             assert!(matches!(
-                &inputs.original_tail.items[0],
+                &inputs.original_tail().items[0],
                 ReloadItem::Pending(_)
             ));
             let rejected = inputs
                 .into_retry()
                 .expect_err("retry cannot silently accept or drop rejected Text");
-            assert!(rejected.rejected.is_some());
+            assert!(rejected.rejected().is_some());
             assert!(account.take_reload_inputs().is_none());
         } else {
             if !queue_after_terminal {

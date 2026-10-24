@@ -13,11 +13,19 @@ fn take_cancelled_native(fx: &mut PlaceFixture) -> PlaceAccount {
                 .unwrap()
                 .is_none()
         );
+        assert!(
+            run.context.barrier.place_owed_for_test(),
+            "the actual native owner still owes extraction"
+        );
         if let Some(account) = run
             .context
             .take_cancelled_place_marks(&mut run.clock)
             .unwrap()
         {
+            assert!(
+                !run.context.barrier.place_owed_for_test(),
+                "cancelled extraction releases the actual barrier duty"
+            );
             return account;
         }
     }
@@ -265,3 +273,6 @@ fn place_native_return_under_recorder_pressure_waits_for_every_original_recorded
     assert_eq!(account.native_recorded_sequences().len(), 2);
     assert!(account.native_proposal().is_some());
 }
+
+#[path = "context_place_phase_review_tests.rs"]
+mod phase_review;

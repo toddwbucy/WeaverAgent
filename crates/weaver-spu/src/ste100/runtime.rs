@@ -98,6 +98,9 @@ impl Worker {
         let thread = thread::Builder::new()
             .name("weaver-ste100-check".into())
             .spawn(move || {
+                // Declare the admitted owner first: on check unwind Notify must
+                // disconnect and wake before a backend destructor can block.
+                let mut owner;
                 let mut notify = Notify {
                     wake: wake_worker,
                     completed: Some(completed),
@@ -111,7 +114,7 @@ impl Worker {
                         super::admission::admit_from_path_fixture(bootstrap, &adapter)
                     }
                 };
-                let mut owner = match admission {
+                owner = match admission {
                     Ok(owner) => owner,
                     Err(refusal) => {
                         notify.send(Completion::Refused(refusal));
@@ -295,32 +298,30 @@ where
         }
     }
 
-    fn retire_worker(&mut self) {
-        if let Some(worker) = self.worker.take() {
-            worker.retire();
-        }
-    }
-
     /// Wait on only transport and completion readiness. No new operation clock
     /// is introduced; the parent process owner retains the admitted bounds.
     pub(super) fn wait(&mut self) -> Result<(), Fault> {
-        let mut pollfds = vec![libc::pollfd {
-            fd: self.dispatcher.readiness().as_raw_fd(),
-            events: libc::POLLIN
-                | if self.dispatcher.wants_write() {
-                    libc::POLLOUT
-                } else {
-                    0
-                },
-            revents: 0,
-        }];
-        if let Some(worker) = &self.worker {
-            pollfds.push(libc::pollfd {
-                fd: worker.wake.as_raw_fd(),
+        let mut pollfds = [
+            libc::pollfd {
+                fd: self.dispatcher.readiness().as_raw_fd(),
+                events: libc::POLLIN
+                    | if self.dispatcher.wants_write() {
+                        libc::POLLOUT
+                    } else {
+                        0
+                    },
+                revents: 0,
+            },
+            libc::pollfd {
+                // poll ignores a negative descriptor when no worker stands.
+                fd: self
+                    .worker
+                    .as_ref()
+                    .map_or(-1, |worker| worker.wake.as_raw_fd()),
                 events: libc::POLLIN,
                 revents: 0,
-            });
-        }
+            },
+        ];
         loop {
             // SAFETY: this contiguous pollfd allocation stays live and unchanged
             // throughout poll; every fd remains owned by self until it returns.
@@ -339,11 +340,17 @@ where
     }
 }
 
-impl<A: AdapterAdmission> Drop for Runtime<A> {
-    fn drop(&mut self) {
+impl<A: AdapterAdmission> Runtime<A> {
+    fn retire_worker(&mut self) {
         if let Some(worker) = self.worker.take() {
             worker.retire();
         }
+    }
+}
+
+impl<A: AdapterAdmission> Drop for Runtime<A> {
+    fn drop(&mut self) {
+        self.retire_worker();
     }
 }
 

@@ -39,6 +39,7 @@ impl RecordingContext {
         self.place_engine.as_mut().unwrap().outstanding = None;
         self.barrier.set_place_owed(self.place_owed());
         Ok(PlaceAccount {
+            phase: self.phase,
             work: AccountWork::Generation(Box::new(GenerationTransaction {
                 grant: Some(grant),
                 native_admission: None,
@@ -650,6 +651,7 @@ impl RecordingContext {
         }
         let cancelled = work.cancelled;
         let account = PlaceAccount {
+            phase: self.phase,
             work: AccountWork::Generation(Box::new(work)),
             measure: None,
         };

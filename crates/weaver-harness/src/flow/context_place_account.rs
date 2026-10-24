@@ -128,7 +128,7 @@ impl RecordingContext {
                     .boot_journal
                     .as_ref()
                     .unwrap()
-                    .check_projection(&w.prefix.as_ref().unwrap().projection)
+                    .check_projection(&w.live_prefix().projection)
                     .is_err()
             {
                 return Err(RunFailure::PlaceOwned);
@@ -208,6 +208,7 @@ impl RecordingContext {
             && self.native_marks.is_none()
             && self.place_notice.is_none())
             || !self.place_owed()
+            || self.caller_author_held()
             || self.phase != RecordingPhase::Entered
         {
             return Err(RunFailure::PlaceOwned);
@@ -608,15 +609,7 @@ impl RecordingContext {
                         && received.after_send()
                         && r.sent()
                         && !decode.reservation_invalid(r);
-                    let method = self
-                        .reload
-                        .as_ref()
-                        .unwrap()
-                        .prefix
-                        .as_ref()
-                        .unwrap()
-                        .method
-                        .unwrap();
+                    let method = self.reload.as_ref().unwrap().live_prefix().method.unwrap();
                     let counts = match (method, received.reply()) {
                         (
                             CutMethod::Flush,
@@ -711,7 +704,7 @@ impl RecordingContext {
             AccountWork::Generation(Box::new(w))
         } else if let Some(w) = self.reload.take() {
             AccountWork::Reload(Box::new(w))
-        } else if let Some(w) = self.native_marks.take() {
+        } else if let Some(w) = self.take_native_account_work() {
             AccountWork::Native(Box::new(w))
         } else {
             AccountWork::Notice(Box::new(self.place_notice.take()?))
@@ -721,6 +714,7 @@ impl RecordingContext {
             e.staged = None;
         }
         Some(PlaceAccount {
+            phase: self.phase,
             work,
             measure: self.place_stopped_measure.take(),
         })

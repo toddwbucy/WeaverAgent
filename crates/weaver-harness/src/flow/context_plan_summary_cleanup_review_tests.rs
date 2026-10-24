@@ -1,6 +1,9 @@
 //! Cleanup-only return order and static successful-Boot evidence after review #271.
 use super::*;
 
+#[path = "context_plan_summary_admission_review_tests.rs"]
+mod admission_review_tests;
+
 fn cleanup_leave(fx: &mut SummaryFixture) -> AbsoluteBound {
     AbsoluteBound::after(fx.run().clock.now().unwrap(), 100_000).unwrap()
 }

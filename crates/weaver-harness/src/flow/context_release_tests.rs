@@ -909,3 +909,6 @@ fn release_returned_original_survives_a_failing_intake_before_the_hold_result() 
 
 #[path = "context_release_custody_tests.rs"]
 mod custody_tests;
+
+#[path = "context_author_admission_review_tests.rs"]
+mod author_admission_review_tests;

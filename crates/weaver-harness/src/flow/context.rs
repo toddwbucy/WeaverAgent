@@ -344,6 +344,12 @@ impl RecordingContext {
         self.held_author.take()
     }
 
+    /// Caller input has not returned to its owner yet. It is not a pending
+    /// ticket, and cannot be dropped by starting another owner or closing.
+    fn caller_author_held(&self) -> bool {
+        self.held_author.is_some() || self.template_blocked_author.is_some()
+    }
+
     pub(super) fn halt(&self) -> Option<&super::report::HaltLatch> {
         self.flow.halt()
     }
@@ -621,7 +627,8 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
-        if self.place_owed()
+        if self.caller_author_held()
+            || self.place_owed()
             || self.boot_open_blocks_external()
             || self.plan_summary.is_some()
             || self.output.is_some()
@@ -678,7 +685,10 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Advance, RunFailure> {
         self.live(io)?;
-        if self.phase != RecordingPhase::Entered || !self.barrier.is_refused() {
+        if self.caller_author_held()
+            || self.phase != RecordingPhase::Entered
+            || !self.barrier.is_refused()
+        {
             return Err(self.fail(
                 io,
                 FlowHaltReason::ProtocolFailed,
@@ -753,7 +763,10 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
         self.live(ports.io)?;
-        if self.phase != RecordingPhase::Releasing || !self.barrier.is_closed() {
+        if self.caller_author_held()
+            || self.phase != RecordingPhase::Releasing
+            || !self.barrier.is_closed()
+        {
             return Err(self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
