@@ -69,7 +69,7 @@ fn selector_invalid() -> LifecycleRefusal {
 
 /// Only absence of the entry is absence of this optional key. In particular,
 /// a dangling link, special file or failed read never selects latest instead.
-fn read_selector(
+pub(crate) fn read_selector(
     directory: BorrowedFd<'_>,
     owner: u32,
 ) -> Result<Option<ArtifactId>, LifecycleRefusal> {
