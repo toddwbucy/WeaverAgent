@@ -53,18 +53,15 @@ fn template_return_review_complete_checks_do_not_drop_the_held_caller_at_release
             result.unwrap();
             assert_eq!(run.context.phase(), RecordingPhase::Releasing);
         } else {
-            assert!(matches!(
-                result,
-                Err(RunFailure::Flow {
-                    reason: FlowHaltReason::ProtocolFailed,
-                    ..
-                })
-            ));
+            assert_eq!(result, Err(RunFailure::Busy(HeldInput::Template)));
             assert_eq!(
                 format!("{:?}", run.context.take_template_blocked_author().unwrap()),
                 expected
             );
-            assert_eq!(run.context.phase(), RecordingPhase::Failed);
+            assert_eq!(run.context.phase(), RecordingPhase::Entered);
+            assert!(run.context.failure().is_none());
+            run.context.begin_releasing(leave, &mut run.clock).unwrap();
+            assert_eq!(run.context.phase(), RecordingPhase::Releasing);
         }
     }
 }

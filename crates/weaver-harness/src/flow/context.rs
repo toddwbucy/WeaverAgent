@@ -46,6 +46,8 @@ pub(super) enum RunFailure {
         failure: super::pump_transport::Failure,
     },
     Closed,
+    /// Untaken caller input blocks a new boundary without failing the run.
+    Busy(HeldInput),
     /// Certification owns the content boundary. This operation did not start
     /// and does not latch a component failure.
     TemplateBlocked,
@@ -69,6 +71,13 @@ pub(super) enum RunFailure {
     PlanSummaryOwned,
     PlaceOwned,
     EnterRefusalOwned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HeldInput {
+    Caller,
+    Template,
+    Both,
 }
 
 /// Creation errors happen before a usable recording context exists. They go to
@@ -450,7 +459,41 @@ impl RecordingContext {
     /// Caller input has not returned to its owner yet. It is not a pending
     /// ticket, and cannot be dropped by starting another owner or closing.
     fn caller_author_held(&self) -> bool {
-        self.held_author.is_some() || self.template_blocked_author.is_some()
+        self.held_input().is_some()
+    }
+
+    fn held_input(&self) -> Option<HeldInput> {
+        match (
+            self.held_author.is_some(),
+            self.template_blocked_author.is_some(),
+        ) {
+            (false, false) => None,
+            (true, false) => Some(HeldInput::Caller),
+            (false, true) => Some(HeldInput::Template),
+            (true, true) => Some(HeldInput::Both),
+        }
+    }
+
+    /// An earlier admitted owner may continue only through its existing private
+    /// proof. Template-held input still excludes a new content continuation.
+    fn caller_author_blocks_continuation(&self, owns: impl FnOnce() -> bool) -> bool {
+        match self.held_input() {
+            None => false,
+            Some(HeldInput::Caller) => !owns(),
+            Some(HeldInput::Template | HeldInput::Both) => true,
+        }
+    }
+
+    /// Call after the boundary's normal liveness check, before any mutation.
+    /// The read-only template completion check also preserves a latched cause.
+    fn check_held_input(&self) -> Result<(), RunFailure> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone());
+        }
+        match self.held_input() {
+            Some(held) => Err(RunFailure::Busy(held)),
+            None => Ok(()),
+        }
     }
 
     pub(super) fn halt(&self) -> Option<&super::report::HaltLatch> {
@@ -730,8 +773,8 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
-        if self.caller_author_held()
-            || self.place_owed()
+        self.check_held_input()?;
+        if self.place_owed()
             || self.boot_open_blocks_external()
             || self.plan_summary.is_some()
             || self.output.is_some()
@@ -788,10 +831,8 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Advance, RunFailure> {
         self.live(io)?;
-        if self.caller_author_held()
-            || self.phase != RecordingPhase::Entered
-            || !self.barrier.is_refused()
-        {
+        self.check_held_input()?;
+        if self.phase != RecordingPhase::Entered || !self.barrier.is_refused() {
             return Err(self.fail(
                 io,
                 FlowHaltReason::ProtocolFailed,
@@ -866,10 +907,8 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
         self.live(ports.io)?;
-        if self.caller_author_held()
-            || self.phase != RecordingPhase::Releasing
-            || !self.barrier.is_closed()
-        {
+        self.check_held_input()?;
+        if self.phase != RecordingPhase::Releasing || !self.barrier.is_closed() {
             return Err(self.fail(
                 ports.io,
                 FlowHaltReason::ProtocolFailed,
@@ -2013,6 +2052,10 @@ fn wall_ms() -> Result<u64, String> {
 #[cfg(test)]
 #[path = "context_tests.rs"]
 pub(in crate::flow) mod tests;
+
+#[cfg(test)]
+#[path = "context_held_input_tests.rs"]
+mod held_input_tests;
 
 #[cfg(test)]
 #[path = "context_edge_tests.rs"]

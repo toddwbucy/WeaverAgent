@@ -202,13 +202,16 @@ impl RecordingContext {
         leave: AbsoluteBound,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
+        if self.caller_author_held() {
+            self.live(io)?;
+            self.check_held_input()?;
+        }
         if (self.place.is_none()
             && self.generation.is_none()
             && self.reload.is_none()
             && self.native_marks.is_none()
             && self.place_notice.is_none())
             || !self.place_owed()
-            || self.caller_author_held()
             || self.phase != RecordingPhase::Entered
         {
             return Err(RunFailure::PlaceOwned);

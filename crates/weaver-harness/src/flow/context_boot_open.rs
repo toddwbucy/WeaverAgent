@@ -294,6 +294,8 @@ impl RecordingContext {
             Some(BootOpenBeginRefusal::WrongPhase)
         } else if self.boot_open.is_some() || self.boot_journal.is_some() {
             Some(BootOpenBeginRefusal::AlreadyStarted)
+        } else if self.caller_author_held() {
+            Some(BootOpenBeginRefusal::Busy)
         } else if self.boot_head.as_ref().is_none_or(|head| {
             !head.belongs_to(self)
                 || self.deadlines.get(PumpDeadline::Enter) != Some(head.enter_bound())
@@ -874,11 +876,12 @@ impl RecordingContext {
         leave: AbsoluteBound,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
+        if self.caller_author_held() {
+            self.live(io)?;
+            self.check_held_input()?;
+        }
         if self.boot_open.is_none() {
             return Err(RunFailure::BootOpenOwned);
-        }
-        if self.caller_author_held() {
-            return Err(self.failure.clone().unwrap_or(RunFailure::BootOpenOwned));
         }
         self.cancel_boot_open()?;
         if let Some(failure) = &self.failure {

@@ -904,7 +904,8 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         if self.caller_author_held() {
-            return Err(RunFailure::PlanSummaryOwned);
+            self.live(io)?;
+            self.check_held_input()?;
         }
         let Some(work) = self.plan_summary.as_mut() else {
             return Err(RunFailure::PlanSummaryOwned);

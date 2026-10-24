@@ -2,6 +2,99 @@
 use super::*;
 
 #[test]
+fn held_boundary_place_release_preserves_the_pending_decode_and_first_failure() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        for failure_case in 0..3 {
+            let mut fx = PlaceFixture::new();
+            let units = fx.text(8, "record");
+            fx.turn("held-release");
+            let grant = fx.grant(units, 3);
+            fx.start_generation(grant);
+            fx.sent_generation();
+            let run = fx.run();
+            let leave = AbsoluteBound::after(run.clock.now().unwrap(), PLACE_WAIT).unwrap();
+            let waits = format!("{:?}", run.context.deadlines);
+            let generation = std::ptr::from_ref(run.context.generation.as_ref().unwrap());
+            let originals = hold(&mut run.context, held);
+            let first = (failure_case == 1).then(|| {
+                run.context.fail(
+                    &mut run.clock,
+                    FlowHaltReason::ProtocolFailed,
+                    HaltPoint::Barrier,
+                    "first placement cause",
+                )
+            });
+            if failure_case == 2 {
+                run.clock = FakePumpIo::new(0);
+            }
+            let result = run.context.begin_place_release(leave, &mut run.clock);
+            originals.assert_held(&run.context);
+            assert_eq!(
+                std::ptr::from_ref(run.context.generation.as_ref().unwrap()),
+                generation
+            );
+            assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());
+            if failure_case == 0 {
+                assert_eq!(result, Err(RunFailure::Busy(held)));
+                assert!(run.context.failure().is_none());
+                assert_eq!(run.context.phase(), RecordingPhase::Entered);
+                assert_eq!(format!("{:?}", run.context.deadlines), waits);
+                originals.take(&mut run.context);
+                run.context
+                    .begin_place_release(leave, &mut run.clock)
+                    .unwrap();
+                assert_eq!(run.context.phase(), RecordingPhase::Releasing);
+                assert_eq!(run.context.deadlines.get(PumpDeadline::Leave), Some(leave));
+            } else {
+                let failure = result.unwrap_err();
+                assert!(matches!(failure, RunFailure::Flow { .. }));
+                if let Some(first) = first {
+                    assert_eq!(failure, first);
+                }
+                assert_eq!(run.context.failure(), Some(&failure));
+                assert_eq!(run.context.phase(), RecordingPhase::Failed);
+                originals.take(&mut run.context);
+                // Taking held input does not clear the failed run or its cause.
+                assert_eq!(run.context.live(&mut run.clock), Err(failure));
+            }
+        }
+    }
+}
+
+#[test]
+fn held_boundary_install_returns_the_exact_boot_proof_with_busy_then_admits_after_take() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        let mut fx = SummaryFixture::new(vec![]);
+        let proof = fx.boot(None);
+        let raw = proof.read().raw_bytes().as_ptr();
+        let recall = proof.read().recall_sequence();
+        let run = fx.run();
+        let waits = format!("{:?}", run.context.deadlines);
+        let originals = hold(&mut run.context, held);
+        let error = run
+            .context
+            .install_place(proof, &mut run.clock)
+            .unwrap_err();
+        assert_eq!(error.refusal, PlaceError::Busy);
+        assert!(error.failure.is_none());
+        assert_eq!(error.prerequisite.read().raw_bytes().as_ptr(), raw);
+        assert_eq!(error.prerequisite.read().recall_sequence(), recall);
+        assert!(run.context.place_engine.is_none());
+        assert!(run.context.failure().is_none());
+        assert_eq!(format!("{:?}", run.context.deadlines), waits);
+        originals.assert_held(&run.context);
+        originals.take(&mut run.context);
+        run.context
+            .install_place(error.prerequisite, &mut run.clock)
+            .unwrap();
+        assert!(run.context.place_engine.is_some());
+        assert_eq!(format!("{:?}", run.context.deadlines), waits);
+    }
+}
+
+#[test]
 fn place_held_author_allows_confirmed_output_but_blocks_release() {
     let mut fx = PlaceFixture::new();
     let units = fx.text(8, "record");
@@ -17,7 +110,7 @@ fn place_held_author_allows_confirmed_output_but_blocks_release() {
     let leave = AbsoluteBound::after(run.clock.now().unwrap(), PLACE_WAIT).unwrap();
     assert_eq!(
         run.context.begin_place_release(leave, &mut run.clock),
-        Err(RunFailure::PlaceOwned)
+        Err(RunFailure::Busy(HeldInput::Caller))
     );
     assert_eq!(run.context.phase(), RecordingPhase::Entered);
     assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());

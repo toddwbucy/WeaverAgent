@@ -310,17 +310,17 @@ impl RecordingContext {
             .template_checks
             .as_ref()
             .expect("checked template owner");
-        if !owner.complete
-            || owner.rejected
-            || self.template_setup_refusal.is_some()
-            || self.caller_author_held()
-        {
+        if !owner.complete || owner.rejected || self.template_setup_refusal.is_some() {
             return Err(RunFailure::TemplateBlocked);
         }
+        self.check_held_input()?;
         Ok(owner.enter)
     }
 
     fn template_enter_live(&self) -> Result<(), RunFailure> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone());
+        }
         let Some(owner) = self.template_checks.as_ref() else {
             return Err(RunFailure::TemplateBlocked);
         };

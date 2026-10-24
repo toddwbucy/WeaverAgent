@@ -14,6 +14,67 @@ use std::sync::OnceLock;
 use weaver_types::TurnFrame;
 use weaver_types::state_flow as s;
 
+#[test]
+fn held_boundary_completed_templates_report_custody_not_a_failed_certificate() {
+    use super::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        let mut fx = TemplateFixture::new();
+        fx.begin();
+        for index in 0..templates().len() {
+            fx.accept(index);
+        }
+        assert_eq!(fx.advance().unwrap(), TemplateProgress::Complete);
+        let enter = fx.input.run.context.completed_template_enter().unwrap();
+        let originals = hold(&mut fx.input.run.context, held);
+        assert_eq!(
+            fx.input.run.context.completed_template_enter(),
+            Err(RunFailure::Busy(held))
+        );
+        assert!(fx.input.run.context.failure().is_none());
+        assert!(fx.certificate().unwrap().is_none());
+        originals.assert_held(&fx.input.run.context);
+        originals.take(&mut fx.input.run.context);
+        assert_eq!(fx.input.run.context.completed_template_enter(), Ok(enter));
+        assert!(fx.certificate().unwrap().is_some());
+    }
+}
+
+#[test]
+fn held_boundary_completed_templates_preserve_enter_expiry_and_first_failure() {
+    use super::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        for failed in [false, true] {
+            let mut fx = TemplateFixture::new();
+            fx.begin();
+            for index in 0..templates().len() {
+                fx.accept(index);
+            }
+            assert_eq!(fx.advance().unwrap(), TemplateProgress::Complete);
+            let run = &mut fx.input.run;
+            let enter = run.context.completed_template_enter().unwrap();
+            let originals = hold(&mut run.context, held);
+            let expected = if failed {
+                run.context.fail(
+                    &mut run.clock,
+                    FlowHaltReason::ProtocolFailed,
+                    HaltPoint::Barrier,
+                    "first template cause",
+                )
+            } else {
+                run.clock.advance_to(enter.deadline_ns()).unwrap();
+                run.context.live(&mut run.clock).unwrap_err()
+            };
+            assert_eq!(
+                run.context.completed_template_enter(),
+                Err(expected.clone())
+            );
+            originals.assert_held(&run.context);
+            originals.take(&mut run.context);
+            assert_eq!(run.context.completed_template_enter(), Err(expected));
+        }
+    }
+}
+
 pub(super) fn templates() -> &'static [s::TemplateSpec] {
     static TEMPLATES: OnceLock<Vec<s::TemplateSpec>> = OnceLock::new();
     TEMPLATES.get_or_init(|| {

@@ -17,6 +17,37 @@ use weaver_types::{Opened, SessionId, TokenAnswer, TokenDirective, TokenRefusal}
 #[path = "context_plan_summary_tests.rs"]
 mod plan_summary_tests;
 
+#[test]
+fn held_boundary_boot_open_reports_busy_with_the_actual_boot_head_intact() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        let mut fx = OpenFixture::new();
+        let run = &mut fx.boot.member.run;
+        let head = std::ptr::from_ref(run.context.boot_head.as_ref().unwrap());
+        let enter = run.context.completed_template_enter().unwrap();
+        let originals = hold(&mut run.context, held);
+        let error = run
+            .context
+            .begin_boot_open(&mut fx.decode, &mut run.clock)
+            .unwrap_err();
+        assert_eq!(error.refusal, BootOpenBeginRefusal::Busy);
+        assert!(error.failure.is_none());
+        assert!(run.context.boot_open.is_none());
+        assert!(!fx.decode.send_pending());
+        assert_eq!(
+            std::ptr::from_ref(run.context.boot_head.as_ref().unwrap()),
+            head
+        );
+        originals.assert_held(&run.context);
+        originals.take(&mut run.context);
+        run.context
+            .begin_boot_open(&mut fx.decode, &mut run.clock)
+            .unwrap();
+        assert!(run.context.boot_open.is_some());
+        assert_eq!(run.context.deadlines.get(PumpDeadline::Enter), Some(enter));
+    }
+}
+
 const _: fn() = || {
     trait Private<M> {
         fn pin() {}
@@ -1123,7 +1154,9 @@ fn boot_open_held_author_blocks_release_without_cancelling_owned_open() {
         let leave = AbsoluteBound::after(run.clock.now().unwrap(), 100_000).unwrap();
         assert_eq!(
             run.context.begin_boot_open_release(leave, &mut run.clock),
-            Err(failure.clone().unwrap_or(RunFailure::BootOpenOwned))
+            Err(failure
+                .clone()
+                .unwrap_or(RunFailure::Busy(HeldInput::Caller)))
         );
         assert_eq!(run.context.failure(), failure.as_ref());
         assert_eq!(

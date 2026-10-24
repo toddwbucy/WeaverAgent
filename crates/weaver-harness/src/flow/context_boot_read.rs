@@ -183,6 +183,12 @@ impl RecordingContext {
                 failure: None,
             });
         }
+        if self.caller_author_held() {
+            return Err(BootReadBeginError {
+                refusal: BootReadBeginRefusal::Busy,
+                failure: None,
+            });
+        }
         let enter = self
             .completed_template_enter()
             .map_err(|failure| BootReadBeginError {

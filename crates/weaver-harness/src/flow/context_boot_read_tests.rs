@@ -6,6 +6,29 @@ use weaver_traits::{ContentBlock, Message, Role};
 
 const PROMPT: &str = "Read caf\u{e9}.";
 
+#[test]
+fn held_boundary_boot_read_keeps_certification_and_request_identity_until_take() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        let mut fx = BootFixture::new(true);
+        let run = &mut fx.member.run;
+        let enter = run.context.completed_template_enter().unwrap();
+        let originals = hold(&mut run.context, held);
+        let error = run.context.begin_boot_read(&mut run.clock).unwrap_err();
+        assert_eq!(error.refusal, BootReadBeginRefusal::Busy);
+        assert!(error.failure.is_none());
+        assert!(!run.context.boot_read_started);
+        assert!(run.context.read.is_none());
+        assert!(run.context.flow.state().outstanding().is_empty());
+        assert_eq!(run.context.deadlines.get(PumpDeadline::Enter), Some(enter));
+        originals.assert_held(&run.context);
+        originals.take(&mut run.context);
+        run.context.begin_boot_read(&mut run.clock).unwrap();
+        assert!(run.context.read.is_some());
+        assert_eq!(run.context.deadlines.get(PumpDeadline::Enter), Some(enter));
+    }
+}
+
 const _: fn() = || {
     trait MustNotClone<Marker> {
         fn check() {}
