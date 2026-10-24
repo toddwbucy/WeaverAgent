@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #241
+**Landing PR:** #263
 
-**Version:** 0.16 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
+**Version:** 0.17 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -597,7 +597,7 @@ event is repair_exhausted. [CLASS-9, COST-5, FALS-2]
 | AwaitingCorrection | Correct defect, correction attempts a call, or empty correction under EMPTY-CORRECTION | Complete required defect, refusal and pair accounting, then increment failed_corrections once |
 | AwaitingCorrection | Failed corrections below cap | NeedRestatement for the unresolved source |
 | AwaitingCorrection | Cap reached | Record repair_exhausted, account conforming requests without dispatch, return RepairExhausted, no successful answer grant |
-| Any repair state | Stop or operator leave | Cancel ledger, retain dispositions, no successful answer grant |
+| Any repair state | Stop or operator leave | Cancel ledger, retain dispositions and complete-attempt counts under CANCELLED-CORRECTION, no successful answer grant |
 | Any repair state | Component failure or an armed decision wait expires | Foundation halt, no dump and no action dispatch |
 
 The initial defect is not a failed correction. Every new correction pass counts at most
@@ -623,18 +623,22 @@ an empty correction supplies no replacement for the unresolved statement. Counti
 under the existing cap gives that repair a finite outcome without erasing the source.
 [CLASS-9, CLASS-10, FLOW-3]
 
-After that refusal is recorded, increment failed_corrections once and follow the same
-below-cap or cap-reached row. This is an operation refusal, never non_ste100 fabricated
-without a checker result and never component failure. It creates no statement, binding
-or pair. A correction containing a ToolCall or UnrecoveredCall follows correction_call
-instead, even if it contains no Text. A Text block whose text is empty still takes
-OUTPUT-UNIT's normal classifier path and its recorded non_ste100 outcome. This rule
-applies only to a requested correction. An original generation with no Text retains
-the existing OUTPUT-UNIT and DECISION-BARRIER behavior.
-[CLASS-8, CLASS-9, CLASS-10, FLOW-3]
+After that refusal is recorded, increment failed_corrections once. While repair remains
+live, follow the same below-cap or cap-reached row; after Stop or leave, retain that
+count under CANCELLED-CORRECTION without reopening either continuation. This preserves
+the operator's Recorded refusal boundary. This is an operation refusal, never non_ste100
+fabricated without a checker result and never component failure. It creates no
+statement, binding or pair. A correction containing a ToolCall or UnrecoveredCall
+follows correction_call instead, even if it contains no Text. A Text block whose text is
+empty still takes OUTPUT-UNIT's normal classifier path and its recorded non_ste100
+outcome. This rule applies only to a requested correction. An original generation with
+no Text retains the existing OUTPUT-UNIT and DECISION-BARRIER behavior. [CLASS-8,
+CLASS-9, CLASS-10, FLOW-3]
 
 Every conforming request in a forbidden correction pass still takes Spec 05's start and
-terminal path, ending not_dispatched/pass_purpose. This includes a valid recall binding.
+terminal path, ending not_dispatched/pass_purpose while live. Stop or leave may own the
+unclaimed suffix under Spec 05 PAIR-LEAVE; already admitted terminal causes remain
+unchanged. This includes a valid recall binding.
 An accepted recall binding with invalid operation shape is also an attempted call.
 Record correction_call once for that correction pass and each RECALL-REFUSAL separately
 for its identified invalid request. Complete all required refusal and pair accounting
@@ -645,6 +649,50 @@ Correctly rejected or unassociated call blocks have no accepted send and do not 
 a pair by inference. On repair exhaustion, conforming requests held from the original
 pass end not_dispatched/repair_exhausted. Discarding their proposed execution does not
 discard their ledger account. [CLASS-9, CLASS-10, PAIR-1, PAIR-4]
+
+**CANCELLED-CORRECTION.** Stop or operator leave revokes repair continuation, not a
+completed failed attempt. Count one failed attempt for the requested correction only
+when all of these facts are retained under the original rejected source and the exact
+correction message.assistant identity:
+
+- The complete correction message is Recorded, every Text has its complete checked
+  result Recorded, and the pass has a correct defect, an attempted call, or the
+  EMPTY-CORRECTION shape. An all-accepted, nonempty, call-free correction is not a
+  failed attempt merely because it was cancelled.
+- Every required correction refusal is Recorded, including correction_call and each
+  attributed RECALL-REFUSAL where applicable. The empty pass requires its exact
+  EMPTY-CORRECTION refusal and no invented classifier or pair evidence.
+- Every conforming request has its actual Spec 05 CompletedPair. Both opening commits
+  and the terminal filing receipt, with their recorded observations, must match the
+  original request and terminal; Recorded PairEnded alone is insufficient. Each
+  forbidden correction terminal is failed/not_dispatched with its actual pass_purpose,
+  stop or unload cause. Correctly rejected or unassociated calls need no invented pair.
+
+The last required fact establishes completion. Returning a loan, taking an account or
+running a later ledger hook does not choose that boundary. Count once per correction
+identity: a pass completed before cancellation keeps its count; a failed pass whose
+owed accounting completes after cancellation updates only the retained cancelled
+account. An unfinished decoded message, missing checker or refusal record, outstanding
+opening/terminal filing receipt, or only a completed prefix of several calls contributes
+no attempt. Ordinary accepted Text filings do not add a wait beyond DECISION-BARRIER;
+request filings required by Spec 05 remain mandatory. [CLASS-8, CLASS-9, CLASS-10,
+PAIR-1, PAIR-4]
+
+After cancellation, reaching the count boundary or the cap never returns
+RestatementRequest, EffectiveEmission or RepairExhausted, starts another correction,
+or authors a new repair_exhausted continuation. Preserve any already Recorded cap
+event without replay. Keep the original Decision bound and any earlier lifecycle bound;
+no receipt, cancellation, extraction or delayed completion renews either. Owed work may
+finish only through existing lifecycle and recording permissions. This rule adds no
+permission to check, author or file after those permissions end. Foundation halt and
+its ban on new store writes remain unchanged; incomplete evidence cannot become a
+completed attempt by teardown. [CLASS-8, CLASS-9, FLOW-4, FLOW-5, PERSIST-4]
+
+A refused restatement instruction or runtime-template rejection is an operation
+refusal, not a new failed correction: without a complete requested correction and the
+facts above, there is no attempt to charge. Its own recorded refusal/check evidence
+remains retained. Several defect/refusal records or pair terminals for one correction
+still contribute at most one attempt. [CLASS-9, CLASS-10]
 
 **EFFECTIVE-EMISSION.** After repair, expose a private EffectiveEmission to the caller.
 Its fields are source:SourcePosition, finish:weaver_types::Finish,
@@ -817,6 +865,7 @@ a serving declaration. [CLASS-4, CLASS-7, PROMPT-2, FLOW-7]
 | OUTPUT-UNIT | Mixed Text/ToolCall messages with sparse selected indices | Renumber indices or skip checking unselected Text |
 | DECISION-BARRIER, REPAIR | Multiple-block generation, delayed rejection, repair cap, stop/leave and fake-clock cases | Deliver success early, dispatch before acceptance, omit cap evidence or halt on correct rejection |
 | EMPTY-CORRECTION | Requested empty correction below and at cap, held refusal recording, empty original, empty Text and call-only correction fixtures | Resolve the rejected source with no text, count an attempt twice, continue before the refusal is recorded, fabricate a checker result or change the original-generation rule |
+| CANCELLED-CORRECTION | Stop/leave before decode completion, during checks/refusals, between two call terminals, with terminal filing held, after complete facts before ledger resumption, and below/at cap | Count an incomplete suffix, treat Recorded as Filed, change an admitted cause, erase or double-count a complete failed pass, depend on extraction timing, renew a bound or reopen cancelled continuation |
 | TOOL-STATEMENT, RECALL | Pair and read-port doubles, shell schema regression, real pure helper tests | Bind unrelated text, execute a correction call, register recall at gate or omit the internal return |
 | RECALL-REFUSAL | Mixed valid and invalid recall bindings, correction calls, cap, recorder pressure, stop/leave and zero-noun Accepted fixtures | Select a subject, open a pair, renumber a call, lose a corrected source, return before Recorded, count one correction twice or treat invalid classifier evidence as an operation refusal |
 | QUALIFICATION | Review of frozen protocol plus held-out qualification run | Accept a tuple whose thresholds were changed after its held-out results |
