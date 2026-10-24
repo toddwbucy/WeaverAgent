@@ -503,6 +503,13 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         assert!(input.generate().is_err());
         assert!(!root.join("measured.json").exists());
         assert!(input.serving.owner.context.failure().is_none());
+        input.close_operation_refusal().unwrap();
+        until(input, member, clock, mode, FoundationInputProgress::Refused);
+        assert_eq!(
+            input.task_read_refusal(),
+            Some((s::ReadRefusalCode::InvalidSelector, "worker prompt refusal"))
+        );
+        super::emission::correction::tests::assert_public_refusal(input, root);
         return;
     }
     assert!(

@@ -70,7 +70,6 @@ pub(super) struct EmissionWork {
     restatement: Option<RestatementRequest>,
     corrections: Vec<CorrectionWork>,
     closing_correction: bool,
-    correction_close: Option<weaver_types::TurnFrame>,
     effective: Option<EffectiveEmission>,
     refused: Option<RepairRefused>,
     exhausted: Option<RepairExhausted>,
@@ -110,7 +109,6 @@ impl EmissionWork {
             restatement: None,
             corrections: vec![],
             closing_correction: false,
-            correction_close: None,
             effective: None,
             refused: None,
             exhausted: None,
@@ -160,8 +158,8 @@ impl EmissionWork {
     pub(super) fn closing_correction(&self) -> bool {
         self.closing_correction
     }
-    pub(super) fn correction_close(&self) -> Option<&weaver_types::TurnFrame> {
-        self.correction_close.as_ref()
+    pub(super) fn ready_to_close_refusal(&self) -> bool {
+        self.stage == EmissionStage::RefusalClose
     }
 
     pub(super) fn cancel(
@@ -218,50 +216,6 @@ impl EmissionWork {
                 self.account = Some(correction.finish_refusal(context, ports.io)?);
                 *certificate = context.take_repair_certificate(ports.io)?;
                 self.stage = EmissionStage::CancelAccount;
-            }
-            EmissionStage::RefusalClose => {
-                self.returned_refusal.check()?;
-                if self.refusal_author.is_none() && !self.refusal_started {
-                    self.refusal_author = Some(AuthoredEvent {
-                        kind: serving::Kind::TurnClosed,
-                        subsystem: Subsystem::Harness,
-                        turn: context.open_turn.clone(),
-                        source: AuthoredSource::Runtime,
-                        causal_parent: None,
-                        payload: Some(serving::Payload::TurnClosed(
-                            weaver_trace::TurnClose::Stopped {
-                                reason: weaver_trace::StopReason::Refused,
-                                cause: None,
-                            },
-                        )),
-                    });
-                }
-                let turn = self.account.as_ref().unwrap().turn().clone();
-                let sequence = if self.refusal_started {
-                    context
-                        .resume_author_and_wait(ports)
-                        .map_err(|failure| self.returned_refusal.retain(failure))?
-                } else {
-                    self.refusal_started = true;
-                    context
-                        .author_and_wait(ports, self.refusal_author.take().unwrap())
-                        .map_err(|failure| {
-                            self.returned_refusal
-                                .retain_started(failure, &mut self.refusal_started)
-                        })?
-                };
-                self.refusal_record = Some(sequence);
-                let frame = crate::lifecycle::render_close(
-                    "stopped",
-                    "reason",
-                    self.detail.as_deref().expect("placement refusal retained"),
-                    Some((
-                        &weaver_types::TurnKey(turn.0),
-                        &weaver_types::RunId(context.barrier.run().to_owned()),
-                    )),
-                );
-                self.correction_close = Some(weaver_types::TurnFrame::carry(frame.as_bytes()));
-                self.stage = EmissionStage::Refused;
             }
             EmissionStage::Correction => {
                 let correction = self.corrections.last_mut().unwrap();
@@ -542,10 +496,12 @@ impl EmissionWork {
                     .map_err(|failure| self.returned_pair_filing.retain(failure))?;
                 if let Some(account) = context.take_repair_accounting(ports.io)? {
                     self.account = Some(account);
-                    context.complete_wait(PumpDeadline::Decision);
                     self.stage = if self.closing_correction && !self.cancelled {
+                        // The same operation still owes its trace close and
+                        // world delivery. WorldClose inherits this bound.
                         EmissionStage::RefusalClose
                     } else {
+                        context.complete_wait(PumpDeadline::Decision);
                         EmissionStage::Cancelled
                     };
                 } else if progress == crate::flow::context::PairProgress::Pending {

@@ -248,6 +248,9 @@ pub(in crate::flow::context) fn exercise(
             assert!(input.serving.owner.context.place_close().is_none());
             assert!(!root.join("correction-appended-1.json").exists());
             input.close_correction_refusal().unwrap();
+            if mode.contains("refusal-boundary-") {
+                return refusal_boundary(guard, member, reader, clock, socket, root, mode);
+            }
             if mode.contains("refusal-close") {
                 member.hold_kind = Some("tool.call.completed");
                 stop(&mut guard, member, clock, mode, socket, root);
@@ -278,6 +281,7 @@ pub(in crate::flow::context) fn exercise(
                     .filter(|r| r["kind"] == "tool.call.completed")
                     .all(|r| sequence(r) < close)
             );
+            assert_public_refusal(guard.input.as_ref().unwrap(), root);
             return;
         }
         if attempt == 1 && mode.contains("held-filing") {
@@ -517,6 +521,249 @@ pub(in crate::flow::context) fn exercise(
     assert!(rows.iter().any(|r| r["kind"] == "sort.decision"));
 }
 
+pub(in crate::flow::context::worker_startup) fn assert_public_refusal(
+    input: &FoundationInput<'_>,
+    root: &Path,
+) {
+    let end = Instant::now() + Duration::from_secs(2);
+    while !root.join("closed.json").exists() && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let close: OrganEnvelope =
+        serde_json::from_slice(&std::fs::read(root.join("closed.json")).unwrap()).unwrap();
+    assert_eq!(
+        close.exchange,
+        input.received.as_ref().unwrap().envelope().exchange
+    );
+    assert_eq!(close.position, Position::Close);
+    let Payload::Frame(frame) = close.payload else {
+        panic!("actual world close")
+    };
+    let close: serde_json::Value = serde_json::from_slice(&frame.octets().unwrap()).unwrap();
+    assert_eq!(
+        close,
+        serde_json::json!({
+            "kind": "stopped", "reason": "the operation was refused",
+            "turn": "generation-turn", "run": input.serving.owner.context.flow.run(),
+        })
+    );
+    assert!(
+        input.operation_detail().is_some(),
+        "retain the private refusal"
+    );
+}
+
+fn refusal_boundary(
+    mut guard: Guard<'_>,
+    member: &mut Member,
+    reader: &mut UnixStream,
+    clock: &mut FakePumpIo,
+    socket: &Path,
+    root: &Path,
+    mode: &str,
+) {
+    use crate::flow::clock::{WaitInterest, WaitOutcome};
+    use crate::flow::context::startup_composition::tests::CircuitIo;
+    use crate::flow::context::worker_startup::input::management::stop::tests::{fill, fill_trace};
+    use crate::flow::context::worker_startup::tests::trace_through;
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+
+    let input = guard.input.as_mut().unwrap();
+    let mut bound = None;
+    for _ in 0..2000 {
+        let work = input.engine.as_ref().unwrap().emission.as_ref().unwrap();
+        if work.stage == EmissionStage::Pairs {
+            bound = input
+                .serving
+                .owner
+                .context
+                .deadlines
+                .get(PumpDeadline::Decision);
+        }
+        if work.stage == EmissionStage::RefusalClose {
+            break;
+        }
+        assert_eq!(
+            step(input, member, clock, mode),
+            FoundationInputProgress::Pending
+        );
+    }
+    assert_eq!(
+        input
+            .engine
+            .as_ref()
+            .unwrap()
+            .emission
+            .as_ref()
+            .unwrap()
+            .stage,
+        EmissionStage::RefusalClose
+    );
+    let bound = bound.expect("pair filing owns a Decision bound");
+    assert_eq!(
+        input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision),
+        Some(bound),
+        "the close inherits the original accounting bound"
+    );
+    assert!(input.serving.owner.context.open_turn.is_some());
+    reader.set_nonblocking(true).unwrap();
+    let mut rows = trace_through(
+        reader,
+        vec![],
+        input.serving.owner.context.last_author_sequence.unwrap(),
+        Instant::now() + Duration::from_secs(3),
+    )
+    .unwrap();
+    assert!(!rows.iter().any(|r| r["kind"] == "turn.closed"));
+    assert_eq!(
+        rows.iter()
+            .filter(|r| r["kind"] == "tool.call.completed")
+            .count(),
+        1
+    );
+    if mode.ends_with("ready-stop") {
+        stop(&mut guard, member, clock, mode, socket, root);
+    } else {
+        // Move time before the close is elected: a fresh Decision would extend
+        // the operation, even when both waits are individually bounded.
+        let delayed = clock.now().unwrap() + 100;
+        clock.advance_to(delayed).unwrap();
+        let trace_pressure = mode.contains("boundary-trace-");
+        let expired = mode.ends_with("deadline");
+        let count = if trace_pressure {
+            fill_trace(input.serving.owner.context, clock)
+        } else {
+            fill(input.serving.owner.gate.fd().as_raw_fd());
+            0
+        };
+        struct Wait<'a> {
+            clock: &'a mut FakePumpIo,
+            reader: &'a mut UnixStream,
+            root: &'a Path,
+            deadline: u64,
+            count: usize,
+            expired: bool,
+            seen: bool,
+            bytes: Vec<u8>,
+        }
+        impl PumpIo for Wait<'_> {
+            fn now(&mut self) -> std::io::Result<u64> {
+                self.clock.now()
+            }
+            fn wait(
+                &mut self,
+                interests: &[WaitInterest<'_>],
+                deadline: Option<u64>,
+            ) -> std::io::Result<WaitOutcome> {
+                if !self.seen {
+                    assert_eq!(
+                        deadline,
+                        Some(self.deadline),
+                        "blocking close keeps the original bound"
+                    );
+                    assert!(
+                        !self.root.join("closed.json").exists(),
+                        "no delivery through pressure"
+                    );
+                    self.seen = true;
+                    if self.expired {
+                        self.clock.advance_to(self.deadline).unwrap();
+                        return Ok(WaitOutcome::Timeout);
+                    }
+                    if self.count == 0 {
+                        std::fs::write(self.root.join("drain"), b"yes").unwrap();
+                    }
+                }
+                if self.count > 0 {
+                    // Free the socket, then let the pump observe readiness and
+                    // wake the writer. Queued rows need that pump turn too.
+                    let _ = self.reader.read_to_end(&mut self.bytes);
+                }
+                CircuitIo(self.clock).wait(interests, deadline)
+            }
+        }
+        reader.set_nonblocking(true).unwrap();
+        let mut io = Wait {
+            clock,
+            reader,
+            root,
+            deadline: bound.deadline_ns(),
+            count,
+            expired,
+            seen: false,
+            bytes: vec![],
+        };
+        for _ in 0..2000 {
+            let progress = input.advance_with_io(&mut io);
+            if io.seen || progress == FoundationInputProgress::Stopped {
+                break;
+            }
+        }
+        assert!(io.seen, "the actual blocked transport must reach wait");
+        let bytes = std::mem::take(&mut io.bytes);
+        if expired {
+            assert_eq!(input.progress(), FoundationInputProgress::Stopped);
+            assert!(matches!(
+                input.serving.owner.context.failure(),
+                Some(RunFailure::Flow {
+                    reason: FlowHaltReason::DecisionBound,
+                    ..
+                })
+            ));
+            assert!(!root.join("closed.json").exists());
+            assert_eq!(
+                input.serving.owner.context.open_turn.is_some(),
+                trace_pressure,
+                "only the gate wait has already Recorded the close"
+            );
+            if !trace_pressure {
+                std::fs::write(root.join("drain"), b"yes").unwrap();
+            }
+            return;
+        }
+        until(input, member, clock, mode, FoundationInputProgress::Refused);
+        rows.extend(
+            trace_through(
+                reader,
+                bytes,
+                input.serving.owner.context.last_author_sequence.unwrap(),
+                Instant::now() + Duration::from_secs(3),
+            )
+            .unwrap(),
+        );
+    }
+    let input = guard.input.as_ref().unwrap();
+    if mode.ends_with("ready-stop") {
+        rows.extend(trace(reader));
+    }
+    assert_eq!(input.progress(), FoundationInputProgress::Refused);
+    assert!(input.serving.owner.context.failure().is_none());
+    assert!(
+        input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision)
+            .is_none()
+    );
+    let closes: Vec<_> = rows.iter().filter(|r| r["kind"] == "turn.closed").collect();
+    assert_eq!(closes.len(), 1);
+    assert_eq!(closes[0]["payload"]["reason"], "refused");
+    assert!(
+        rows.iter()
+            .filter(|r| r["kind"] == "tool.call.completed")
+            .all(|r| sequence(r) < sequence(closes[0]))
+    );
+    assert_public_refusal(input, root);
+}
+
 fn actual_worker(
     mut guard: Guard<'_>,
     member: &mut Member,
@@ -549,7 +796,7 @@ fn actual_worker(
                     work.stage,
                     work.corrections.last().unwrap().stage,
                     work.account.is_some(),
-                    work.correction_close.is_some(),
+                    input.engine.as_ref().unwrap().answer.is_some(),
                     input.serving.owner.context.pair_work.is_some(),
                     input.serving.owner.context.pending_author().is_some(),
                     input.serving.owner.context.flow.has_pending_record()

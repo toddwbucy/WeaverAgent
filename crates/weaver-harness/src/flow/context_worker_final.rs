@@ -72,7 +72,7 @@ impl FoundationInput<'_> {
                 _ => None,
             })
             .unwrap_or_else(|| "operation refused".into());
-        let close = WorldClose::refused(self, detail.clone()).ok_or(self.progress())?;
+        let close = WorldClose::refused(self).ok_or(self.progress())?;
         let work = self.engine.as_mut().unwrap();
         work.detail = Some(detail);
         work.answer = Some(close);

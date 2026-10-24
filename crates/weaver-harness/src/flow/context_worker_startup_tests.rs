@@ -1647,6 +1647,27 @@ scenario!(
 );
 
 scenario!(
+    worker_correction_composition_refusal_trace_pressure,
+    "input-generation-emission-correction-fit-refusal-boundary-trace-pressure"
+);
+scenario!(
+    worker_correction_composition_refusal_trace_deadline,
+    "input-generation-emission-correction-fit-refusal-boundary-trace-deadline"
+);
+scenario!(
+    worker_correction_composition_refusal_gate_pressure,
+    "input-generation-emission-correction-fit-refusal-boundary-gate-pressure"
+);
+scenario!(
+    worker_correction_composition_refusal_gate_deadline,
+    "input-generation-emission-correction-fit-refusal-boundary-gate-deadline"
+);
+scenario!(
+    worker_correction_composition_refusal_ready_stop,
+    "input-generation-emission-correction-fit-refusal-boundary-refusal-close-ready-stop"
+);
+
+scenario!(
     worker_inward_composition_ready,
     "input-generation-emission-pairs-ready"
 );

@@ -259,6 +259,24 @@ impl<'a> FoundationInput<'a> {
         peer: Option<&mut LifecyclePeer>,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
+        if self.engine.as_ref().is_some_and(|work| {
+            work.stage == EngineStage::Emission
+                && work
+                    .emission
+                    .as_ref()
+                    .is_some_and(|emission| emission.ready_to_close_refusal())
+        }) {
+            let close = super::close::WorldClose::refused(self).ok_or_else(|| {
+                fault(
+                    self.serving.owner.context,
+                    io,
+                    "correction refusal lost its turn or original gate request".into(),
+                )
+            })?;
+            let work = self.engine.as_mut().unwrap();
+            work.answer = Some(close);
+            work.stage = EngineStage::Answer;
+        }
         let owner = &mut self.serving.owner;
         let work = self.engine.as_mut().unwrap();
         let context = &mut owner.context;
@@ -471,20 +489,10 @@ impl<'a> FoundationInput<'a> {
                     context,
                     &mut ports,
                 )?;
-                if work.emission.as_ref().unwrap().correction_close().is_some() {
-                    work.stage = EngineStage::Closing;
-                }
             }
             EngineStage::Closing => {
                 if self.close.is_none() && self.send.is_none() {
-                    let frame = context
-                        .place_close()
-                        .or_else(|| {
-                            work.emission
-                                .as_ref()
-                                .and_then(|work| work.correction_close())
-                        })
-                        .ok_or(RunFailure::PlaceOwned)?;
+                    let frame = context.place_close().ok_or(RunFailure::PlaceOwned)?;
                     self.close = Some(OrganEnvelope {
                         exchange: self.received.as_ref().unwrap().envelope().exchange.clone(),
                         position: Position::Close,

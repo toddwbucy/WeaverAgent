@@ -118,6 +118,7 @@ fn worker_input_gate_child() {
         || mode.contains("final-manual-stop-after")
         || mode.contains("final-manual-deadline")
         || mode.contains("final-manual-send-clock")
+        || mode.contains("refusal-boundary-gate-")
     {
         let end = Instant::now() + Duration::from_secs(5);
         while !root.join("drain").exists() && Instant::now() < end {

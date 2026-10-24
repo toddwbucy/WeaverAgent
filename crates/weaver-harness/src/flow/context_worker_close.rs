@@ -70,14 +70,14 @@ impl WorldClose {
             Stage::Completed,
         )
     }
-    pub(super) fn refused(input: &FoundationInput<'_>, detail: String) -> Option<Self> {
+    pub(super) fn refused(input: &FoundationInput<'_>) -> Option<Self> {
         Self::begin(
             input,
             TurnClose::Stopped {
                 reason: StopReason::Refused,
                 cause: None,
             },
-            detail,
+            "the operation was refused".into(),
             false,
             Stage::Refused,
         )
