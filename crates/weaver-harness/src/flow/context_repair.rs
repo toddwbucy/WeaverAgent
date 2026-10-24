@@ -1691,15 +1691,16 @@ impl RecordingContext {
         }
         let result = self.advance_pairs(ports);
         self.repair.as_mut().unwrap().internal = false;
-        if result.map_err(|failure| {
+        match result.map_err(|failure| {
             self.repair
                 .as_mut()
                 .unwrap()
                 .returned_pair_filing
                 .retain(failure)
-        })? != PairProgress::Complete
-        {
-            return Ok(RepairProgress::Pending);
+        })? {
+            PairProgress::Complete => {}
+            PairProgress::Progress => return Ok(RepairProgress::Progress),
+            PairProgress::Pending => return Ok(RepairProgress::Pending),
         }
         self.repair.as_mut().unwrap().internal = true;
         let correction = if matches!(

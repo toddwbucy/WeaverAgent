@@ -270,7 +270,7 @@ impl<'a> FoundationInput<'a> {
                 fault(
                     self.serving.owner.context,
                     io,
-                    "correction refusal lost its turn or original gate request".into(),
+                    "emission refusal lost its turn or original gate request".into(),
                 )
             })?;
             let work = self.engine.as_mut().unwrap();

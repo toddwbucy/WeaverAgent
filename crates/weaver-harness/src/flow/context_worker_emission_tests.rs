@@ -148,7 +148,10 @@ fn text(words: &str) -> ContentBlock {
     ContentBlock::Text { text: words.into() }
 }
 pub(in crate::flow::context) fn content(mode: &str) -> Vec<ContentBlock> {
-    if mode.contains("-final-") && !mode.contains("-external-") {
+    if mode.contains("-final-")
+        && !mode.contains("-external-")
+        && !mode.contains("operation-refusal")
+    {
         if mode.contains("-round-") {
             return vec![text("Recall archive."), text("Recall ledger.")];
         }
@@ -786,6 +789,37 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         }
         if let Some(bound) = completed_bound {
             observe_completed_after_bound(&mut guard, clock, socket, bound);
+        }
+        if mode.ends_with("operation-close-stop") {
+            let input = guard.input.as_mut().unwrap();
+            input.close_operation_refusal().unwrap();
+            for _ in 0..2000 {
+                if input
+                    .engine
+                    .as_ref()
+                    .unwrap()
+                    .emission
+                    .as_ref()
+                    .unwrap()
+                    .ready_to_close_refusal()
+                {
+                    break;
+                }
+                assert_eq!(
+                    step(input, member, clock, mode),
+                    FoundationInputProgress::Pending
+                );
+            }
+            assert!(
+                input
+                    .engine
+                    .as_ref()
+                    .unwrap()
+                    .emission
+                    .as_ref()
+                    .unwrap()
+                    .ready_to_close_refusal()
+            );
         }
         stop(&mut guard, member, clock, mode, socket, root);
         assert_terminals(reader, 2);

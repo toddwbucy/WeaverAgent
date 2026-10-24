@@ -38,10 +38,13 @@ impl CorrectionWork {
         context: &mut RecordingContext,
         io: &mut impl PumpIo,
     ) -> Result<RepairAccount, RunFailure> {
-        let Some(PlacementCompletion::Refused(refusal)) = &self.placement else {
-            return Err(RunFailure::PlaceOwned);
-        };
-        context.finish_refused_restatement(&self.restatement, refusal, io)
+        if let Some(PlacementCompletion::Refused(refusal)) = &self.placement {
+            context.finish_refused_restatement(&self.restatement, refusal, io)
+        } else if let Some(GenerationCompletion::Refused(account)) = &self.generation {
+            context.finish_refused_restatement_generation(&self.restatement, account, io)
+        } else {
+            Err(RunFailure::PlaceOwned)
+        }
     }
     pub(super) fn progress(&self) -> FoundationInputProgress {
         if self.stage == CorrectionStage::Placed {
@@ -273,7 +276,7 @@ impl CorrectionWork {
 }
 
 impl FoundationInput<'_> {
-    /// Elect the mandatory placement-refusal close. This pass's purpose now
+    /// Elect the placement or decoder refusal close. This pass's purpose now
     /// bars dispatch; all original conforming requests receive real terminal
     /// filings before the refused turn and original world exchange close.
     pub fn close_correction_refusal(&mut self) -> Result<(), FoundationInputProgress> {
@@ -289,12 +292,25 @@ impl FoundationInput<'_> {
             .ok_or(FoundationInputProgress::OperationRefused)?;
         if !work.corrections.last().is_some_and(|correction| {
             matches!(correction.placement, Some(PlacementCompletion::Refused(_)))
-        }) || work.closing_correction
+                || matches!(
+                    correction.generation,
+                    Some(GenerationCompletion::Refused(_))
+                )
+        }) || work.closing_refusal.is_some()
         {
             return Err(FoundationInputProgress::OperationRefused);
         }
-        work.closing_correction = true;
-        work.stage = EmissionStage::PlacementRefusal;
+        work.closing_refusal = Some(
+            if matches!(
+                work.corrections.last().unwrap().placement,
+                Some(PlacementCompletion::Refused(_))
+            ) {
+                RefusalElection::Placement
+            } else {
+                RefusalElection::Operation
+            },
+        );
+        work.stage = EmissionStage::CorrectionRefusal;
         Ok(())
     }
     /// Place only this attempt's certified, actually filed instruction. The

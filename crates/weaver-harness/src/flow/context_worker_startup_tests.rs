@@ -1958,6 +1958,40 @@ scenario!(
 );
 
 scenario!(
+    worker_emission_composition_operation_refusal_stop,
+    "input-generation-emission-sort-refusal-operation-close-stop"
+);
+
+scenario!(
+    worker_final_composition_operation_repair_refusal,
+    "input-worker-generation-emission-final-operation-refusal-repair-refusal"
+);
+scenario!(
+    worker_final_composition_operation_outbound_refusal,
+    "input-worker-generation-emission-final-operation-refusal-sort-refusal"
+);
+scenario!(
+    worker_final_composition_operation_outbound_template_refusal,
+    "input-worker-generation-emission-final-operation-refusal-no-sort"
+);
+scenario!(
+    worker_final_composition_operation_outbound_refusal_held,
+    "input-worker-generation-emission-final-operation-refusal-sort-refusal-held-terminal"
+);
+scenario!(
+    worker_final_composition_operation_repair_exhausted,
+    "input-worker-generation-emission-final-correction-operation-refusal-cap"
+);
+scenario!(
+    worker_final_composition_operation_decode_refusal,
+    "input-worker-generation-emission-final-correction-operation-refusal-decode-refusal"
+);
+scenario!(
+    worker_correction_composition_decode_refusal_proof,
+    "input-generation-emission-correction-decode-refusal-proof"
+);
+
+scenario!(
     worker_final_composition_empty,
     "input-worker-generation-emission-final-empty"
 );

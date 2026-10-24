@@ -136,6 +136,32 @@ enum AccountWork {
     Notice(Box<PlaceNotice>),
 }
 impl PlaceAccount {
+    pub(in crate::flow::context) fn refused_restatement_generation(
+        &self,
+        context: &RecordingContext,
+        source: &SourceBlockId,
+    ) -> bool {
+        self.phase == RecordingPhase::Entered
+            && matches!(&self.work, AccountWork::Generation(work)
+            if work.done && !work.cancelled && work.incomplete.is_none()
+                && work.confirmed.is_none() && work.reservation.is_none()
+                && !work.recorded_authors.is_empty()
+                && matches!(work.terminal.as_ref().map(ReceivedDecode::reply),
+                    Some(DecodeReply::Refusal(_)))
+                && work.grant.as_ref().is_some_and(|grant| {
+                    Arc::ptr_eq(&grant.origin, &context.read_origin)
+                        && context.open_turn.as_ref() == Some(&grant.turn)
+                        && grant.units.len() == 1
+                        && grant.units.iter().all(|unit| {
+                            unit.filed_source().is_some_and(|source_file| {
+                                matches!(source_file.file(), crate::flow::ledger::LedgerFile::Statement(file)
+                                    if &file.block_id == source
+                                        && file.source.kind == "loop.instruction"
+                                        && file.source.origin == "loop")
+                            })
+                        })
+                }))
+    }
     pub(in crate::flow::context) fn refused_restatement(
         &self,
         context: &RecordingContext,

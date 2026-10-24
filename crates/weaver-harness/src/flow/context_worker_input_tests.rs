@@ -126,6 +126,7 @@ fn worker_input_gate_child() {
         }
         assert!(root.join("drain").exists());
     }
+    let mut next_after_refusal = false;
     loop {
         let n = recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()).unwrap_or(0);
         if n == 0 {
@@ -145,7 +146,10 @@ fn worker_input_gate_child() {
                 serde_json::from_slice(&frame.octets().unwrap()).unwrap();
             assert_eq!(
                 value["kind"],
-                if mode.contains("-final-") && !mode.contains("stop-before") {
+                if mode.contains("-final-")
+                    && !mode.contains("stop-before")
+                    && !mode.contains("operation-refusal")
+                {
                     "answered"
                 } else {
                     "stopped"
@@ -171,6 +175,10 @@ fn worker_input_gate_child() {
             );
         }
         std::fs::write(root.join("closed.json"), &bytes[..n]).unwrap();
+        if mode.contains("operation-refusal") && !next_after_refusal {
+            next_after_refusal = true;
+            packet(3, &frame(&mode, 102));
+        }
         if mode == "input-duplicate" {
             packet(3, &frame(&mode, 101));
         }
