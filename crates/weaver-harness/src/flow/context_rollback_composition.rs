@@ -1,8 +1,13 @@
 //! Actual Recorded Enter refusal -> tracked response -> accepted rollback ->
-//! measured current Grants and release phase. Terminal cleanup remains owned.
+//! measured initial/current Grants comparison and an owned release handoff.
+//! Terminal cleanup remains separate; this owner grants no Unload or Left.
 use super::*;
-use crate::flow::pump::{LifecycleMessage, LifecyclePeer};
+use crate::flow::pump::{LifecycleListener, LifecycleMessage, LifecyclePeer};
+#[path = "context_rollback_listener.rs"]
+mod listener;
 use crate::flow::pump_transport::{OrganSend, TrackedStage};
+use listener::RollbackDials;
+use weaver_trace::GrantSurface;
 use weaver_types::{LifecycleDirective, Position};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,10 +153,12 @@ pub(in crate::flow) enum RollbackJoinReason {
     NoDirective,
     WrongDirective,
     WrongWindow,
+    UnclockedListener,
 }
 pub(in crate::flow) struct RollbackJoinError<'a> {
     pub response: EnterRefusalResponse<'a>,
     pub peer: LifecyclePeer,
+    pub listener: LifecycleListener,
     pub bound: AbsoluteBound,
     pub reason: RollbackJoinReason,
 }
@@ -182,6 +189,7 @@ pub(in crate::flow) enum RollbackStop {
 pub(in crate::flow) struct RollbackComposition<'a> {
     response: EnterRefusalResponse<'a>,
     peer: LifecyclePeer,
+    dials: RollbackDials,
     directive: LifecycleMessage,
     leave: AbsoluteBound,
     stage: RollbackStage,
@@ -197,6 +205,7 @@ impl<'a> EnterRefusalResponse<'a> {
     pub(in crate::flow) fn accept_rollback(
         self,
         mut peer: LifecyclePeer,
+        listener: LifecycleListener,
         bound: AbsoluteBound,
     ) -> Result<RollbackComposition<'a>, RollbackJoinError<'a>> {
         let reason = match peer.held() {
@@ -222,6 +231,7 @@ impl<'a> EnterRefusalResponse<'a> {
             return Err(RollbackJoinError {
                 response: self,
                 peer,
+                listener,
                 bound,
                 reason,
             });
@@ -236,8 +246,18 @@ impl<'a> EnterRefusalResponse<'a> {
             return Err(RollbackJoinError {
                 response: self,
                 peer,
+                listener,
                 bound,
                 reason: RollbackJoinReason::WrongWindow,
+            });
+        }
+        if listener.held().is_some() && listener.accepted_ns().is_none() {
+            return Err(RollbackJoinError {
+                response: self,
+                peer,
+                listener,
+                bound,
+                reason: RollbackJoinReason::UnclockedListener,
             });
         }
         let directive = peer
@@ -247,6 +267,7 @@ impl<'a> EnterRefusalResponse<'a> {
         Ok(RollbackComposition {
             response: self,
             peer,
+            dials: RollbackDials::new(listener),
             directive,
             leave: bound,
             stage: RollbackStage::Transition,
@@ -257,7 +278,7 @@ impl<'a> EnterRefusalResponse<'a> {
     }
 }
 
-impl RollbackComposition<'_> {
+impl<'a> RollbackComposition<'a> {
     pub(in crate::flow) fn stage(&self) -> RollbackStage {
         self.stage
     }
@@ -287,6 +308,43 @@ impl RollbackComposition<'_> {
             .as_ref()
             .expect("classifier refusal follows the retained initial Grants")
     }
+    /// Move the whole actual chain into release preparation. No caller can
+    /// provide a substitute initial reading, result, cause, deadline or peer.
+    /// Rejection returns the unchanged owner for its ongoing work/accounting.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn into_prepared(self) -> Result<PreparedRollback<'a>, Self> {
+        if self.stage != RollbackStage::Prepared {
+            return Err(self);
+        }
+        let Some(current) = self.current.as_ref() else {
+            return Err(self);
+        };
+        let grant_surface = match (self.initial(), current) {
+            (
+                InspectionCompletion::Grants {
+                    surface: initial, ..
+                },
+                InspectionCompletion::Grants {
+                    surface: current, ..
+                },
+            ) if initial == current => GrantSurface::Unchanged,
+            (InspectionCompletion::Grants { .. }, InspectionCompletion::Grants { .. }) => {
+                GrantSurface::Varied
+            }
+            (
+                InspectionCompletion::Grants { .. } | InspectionCompletion::Refused { .. },
+                InspectionCompletion::Refused { .. },
+            )
+            | (InspectionCompletion::Refused { .. }, InspectionCompletion::Grants { .. }) => {
+                GrantSurface::Unreadable
+            }
+            _ => return Err(self),
+        };
+        Ok(PreparedRollback {
+            owner: self,
+            grant_surface,
+        })
+    }
     fn stopped(&mut self, cause: RollbackStop) -> RollbackStage {
         self.stop = Some(cause);
         self.stage = RollbackStage::Stopped;
@@ -297,7 +355,24 @@ impl RollbackComposition<'_> {
             return self.stage;
         }
         if let Err(error) = self.step(io) {
-            self.stopped(RollbackStop::Run(error));
+            let context = &mut self.response.refusal.owner.startup.context;
+            let result = if matches!(
+                error,
+                RunFailure::Transport {
+                    source: crate::flow::pump::PumpSource::LeavePeer,
+                    ..
+                }
+            ) {
+                eprintln!(
+                    "weaver-harness: accepted Leave answer path failed ({error:?}); rollback continues"
+                );
+                context.live(io)
+            } else {
+                self.dials.recover(context, error, io)
+            };
+            if let Err(error) = result {
+                self.stopped(RollbackStop::Run(error));
+            }
         }
         self.stage
     }
@@ -352,7 +427,7 @@ impl RollbackComposition<'_> {
             self.stopped(RollbackStop::WrongWindow);
             return Ok(());
         }
-        context.live(io)?;
+        self.dials.prepare(context, self.leave, io)?;
         match self.stage {
             RollbackStage::RetireClassifier => {
                 context.retire_refused_classifier(io)?;
@@ -373,10 +448,9 @@ impl RollbackComposition<'_> {
                     self.inspecting = true;
                 }
                 let mut ports = PumpPorts {
-                    lifecycle: LifecyclePorts {
-                        peer: Some(&mut self.peer),
-                        ..Default::default()
-                    },
+                    // The original Leave peer remains only an answer path;
+                    // secondary dials cannot become new cancellation authority.
+                    lifecycle: self.dials.ports(&mut self.peer),
                     gate: None,
                     decode: None,
                     label: None,
@@ -385,8 +459,11 @@ impl RollbackComposition<'_> {
                 let progress = context.advance_inspection(&mut ports)?;
                 if let Some(completion) = context.take_inspection(ports.io)? {
                     match completion {
-                        granted @ InspectionCompletion::Grants { .. } => {
-                            self.current = Some(granted);
+                        reading @ (InspectionCompletion::Grants { .. }
+                        | InspectionCompletion::Refused { .. }) => {
+                            // A typed read refusal is a recorded observation of
+                            // unreadability, not authority to stop healthy Leave.
+                            self.current = Some(reading);
                             self.stage = RollbackStage::Release;
                         }
                         stopped => {
@@ -414,6 +491,40 @@ impl RollbackComposition<'_> {
     }
 }
 
+/// Preparation is a retained fact, not terminal permission. The final lifecycle
+/// owner must still service the listener, release resources, record Unload and
+/// drain before answering Left. There is no mutable context/peer escape here.
+pub(in crate::flow) struct PreparedRollback<'a> {
+    owner: RollbackComposition<'a>,
+    grant_surface: GrantSurface,
+}
+
+impl PreparedRollback<'_> {
+    pub(in crate::flow) fn grant_surface(&self) -> GrantSurface {
+        self.grant_surface
+    }
+    pub(in crate::flow) fn initial(&self) -> &InspectionCompletion {
+        self.owner.initial()
+    }
+    pub(in crate::flow) fn current(&self) -> &InspectionCompletion {
+        self.owner
+            .current()
+            .expect("prepared rollback retains its current reading")
+    }
+    pub(in crate::flow) fn directive(&self) -> &LifecycleMessage {
+        self.owner.directive()
+    }
+    pub(in crate::flow) fn forced(&self) -> bool {
+        self.owner.forced()
+    }
+    pub(in crate::flow) fn leave(&self) -> AbsoluteBound {
+        self.owner.leave()
+    }
+}
+
 #[cfg(test)]
 #[path = "context_rollback_composition_tests.rs"]
 pub(super) mod tests;
+
+#[path = "context_rollback_halt.rs"]
+pub(in crate::flow) mod halt;
