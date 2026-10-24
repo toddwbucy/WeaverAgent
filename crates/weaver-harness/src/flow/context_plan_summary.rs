@@ -933,6 +933,7 @@ impl RecordingContext {
             });
         let account_ready = work.rollback.account_settled || self.last_ns >= account_deadline;
         let read_started = work.rollback.started;
+        let account_cancelled = work.rollback.cancelled;
         if self.filing.is_some()
             || self.output.is_some()
             || self.pair_work.is_some()
@@ -964,7 +965,7 @@ impl RecordingContext {
         // the already admitted read may continue through its private owner.
         if !account_ready
             && self.caller_author_held()
-            && (read_started || self.held_input() == Some(HeldInput::Caller))
+            && (read_started || account_cancelled || self.held_input() == Some(HeldInput::Caller))
         {
             return Err(RunFailure::PlanSummaryOwned);
         }

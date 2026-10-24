@@ -1490,7 +1490,9 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         _io: &mut impl PumpIo,
     ) -> Result<Advance, FlowFailure> {
         self.require_enter_rollback(cx)?;
-        let owner = self.state.as_mut().expect("required rollback state owner");
+        let Some(owner) = &mut self.state else {
+            return Err(self.fail(cx, "barrier", "enter rollback lost its state owner"));
+        };
         let unused = owner
             .abandon_unactivated_open()
             .map_err(|error| self.fail(cx, "state_reply", error))?;

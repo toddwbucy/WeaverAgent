@@ -197,25 +197,28 @@ impl RecordingContext {
             _ => false,
         }
     }
-    pub(in crate::flow) fn begin_place_release(
-        &mut self,
-        leave: AbsoluteBound,
-        io: &mut impl PumpIo,
-    ) -> Result<(), RunFailure> {
-        let owns_release = (self.place.is_some()
+    fn place_release_owned(&self) -> bool {
+        (self.place.is_some()
             || self.generation.is_some()
             || self.reload.is_some()
             || self.native_marks.is_some()
             || self.place_notice.is_some())
             && self.place_owed()
-            && self.phase == RecordingPhase::Entered;
+            && self.phase == RecordingPhase::Entered
+    }
+    pub(in crate::flow) fn begin_place_release(
+        &mut self,
+        leave: AbsoluteBound,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        let owns_release = self.place_release_owned();
         // Preserve revocation on refused unheld attempts. A custody hold must
         // leave the admitted operation live until its owner takes the original.
         if owns_release && !self.caller_author_held() {
             self.revoke_place();
         }
         self.release_live(io)?;
-        if !owns_release {
+        if !self.place_release_owned() {
             return Err(RunFailure::PlaceOwned);
         }
         // Foreign content/classification is never silently waived by this seal.

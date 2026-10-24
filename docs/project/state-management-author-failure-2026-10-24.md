@@ -1,168 +1,167 @@
 # Returned author originals and caller custody
 
-Date: 2026-10-24. Branch: `code/state-author-failure`.
-Parent: draft #312 at `b24a260e81409c1f0d30d7128c00ab912ab7f5fc`.
+Date: 2026-10-24. Branch: `code/state-author-review-fixes`.
+Parent: draft #315 at `f372720a12877ec6a53a231a4b309c33dbce5a76`, above
+#314 at `a95e0a6d` and reviewed root #312 at `b24a260e`.
 Authority: merged #276, `weaver-harness-Spec-amendment`
-HARNESS-RECORD-LIFETIME. This is implementation evidence for #146 and the
-AuthorFailure finding in #255 review 5636484478 row 1. It is not a new
-protocol or production qualification.
+HARNESS-RECORD-LIFETIME and HARNESS-HELD-BOUNDARY. This is implementation
+evidence for #146, #255 review 5636484478 row 1 and #314 Planner review
+5637217403. The same child answers #315 review 5637284596 in the paired
+held-boundary record. It is not production qualification or a new protocol.
 
 ## Behavior and scope
 
 The shared author and both resume roads return a move-owned AuthorFailure,
 containing the existing RunFailure and an optional exact AuthoredEvent.
-RunFailure remains an account of failure, wait or admission refusal; it
-carries no event. AuthorFailure is not Clone, and there is no conversion
-from it to RunFailure which could silently discard a returned original.
+AuthorFailure is not Clone and has no lossy conversion to RunFailure. An absent
+returned original means that the context retains it in an existing slot or
+it has already reached Recorded; absence alone is not acknowledgement.
 
-A second submit remains a caller error. With no prior fatal cause it latches
-ProtocolFailed. With a prior fatal cause it returns that immutable cause.
-If the existing held caller or first-fatal slot prevents retention, the new
-original moves back to the caller. Neither earlier original is replaced.
-The pending author's ticket, turn metadata, release identity and original
-wait remain with that first attempt. The error neither creates a sequence
-nor grants retry or continuation.
+A second submission remains a caller error. A first fatal cause stays immutable.
+An admitted marks or internal repair continuation retains its existing exemption
+for an ordinary held caller. If that continuation meets another nonfatal owner
+hold, it must return its new original instead of overwriting the older one.
+All twelve early hold branches and the owed-withdrawal branch now use the same
+slot helper: fill an empty slot once; otherwise return the exact new event.
+This applies to the template slot as well as the ordinary caller slot. No hold
+creates a sequence, renews a wait or permits another submission.
 
-An absent returned original means the exact input remains in an existing
-context slot or has already reached Recorded. Early owner refusals still
-use the existing single held slot. A caller flag meaning that submission
-has started is not proof of recorder admission. A returned original clears
-that flag; the caller keeps the error and exact input in its stopped owner.
+The #314 precedence change remains explicit: template-held input is checked
+before the owner holds, so a second author is fatal even for marks/repair
+continuations. An ordinary caller hold still admits only those private
+continuations. The helper protects the earlier original when an exempt
+continuation encounters a later hold. It does not expand the exemption.
 
-When a real CapacityPending author is withdrawn for an existing mandatory
-account, only that attempt's unadmitted preparation and bookkeeping retire.
-An empty held slot may retain it. An occupied held slot requires its return
-through AuthorFailure. No wait is renewed, no account is skipped, and no
-sequence is assigned. Both generic and private resume paths retain a fatal
-cause ahead of an otherwise completed sequence, so a late observer failure
-cannot be converted into successful continuation.
+A withdrawn CapacityPending author has no trace sequence. Freshness may drive
+that previous caller's author, but retains a returned original in the existing
+waiting slot with its withdrawal reason. Both resume roads and the shared
+waiting-content continuation inspect this marker before they can queue it.
+The continuation returns that exact event even when a fatal cause is already
+latched; without a fatal cause it still cannot treat withdrawal as permission
+to submit again. The existing account remains owed.
 
-Each logical caller owns at most one stopped return, in an Option held by
-that operation. This is not an overflow queue. Freshness is a driver of an
-earlier caller, rather than its owner: it retains a withdrawn original in
-the existing waiting slot, marked withdrawn, until the matching caller
-takes it through resume. It never submits that original again.
+StoppedAuthor is one Option per logical caller, not an overflow queue. Its
+returned event remains with that operation. A returned original clears the
+caller's started flag; AuthorRecord also clears the unrecorded ticket. Those
+flags are bookkeeping, not evidence of Recorded. The marks regression exercises
+that actual caller retaining its returned fault through another advance.
 
-## Finite caller census
+## Finite hold and continuation census
 
-Every production use of the changed shared author methods was inspected.
-The census includes their private helpers, callers which already hold a
-claimed AuthorRecord, and the two other consumers of the former void
-retain_refused helper.
-
-| Caller | Exact return and failure disposition |
+| Road | Exact-return disposition |
 | --- | --- |
-| Shared author admission and its generic/private resume helpers | Retain the first held and first-fatal originals; return only the new unowned input. Pending and Recorded facts remain distinct. |
-| InputOffered and input Refusal | InputAuthor retains the original stage and returned event before propagating the failure. |
-| Input TurnStarted and MessageUser | Restore the complete InputTurn after failure; retain its accepted source, exact returned event and submitted-state flag. |
-| Mark-template fault | The marks operation retains the fault return and clears its submitted-state flag; its entry still checks liveness. |
-| Repair instruction, association and refusal authors | RepairAuthor retains the return, resets its internal author-driving flag before propagation, and blocks replacement or retry. Cancellation cannot discard a retained return. |
-| Startup Load | Restore the returned event into the existing Load slot. Startup enters Stopped on the failure rather than constructing a replacement Load. |
-| Worker organ-fault report | FoundationInput retains its original organ report and returned event. The report is cleared only after Recorded. |
-| Worker Stop TurnClosed | StopWork retains the return and cannot supply a close sequence, gate close or successful Stop answer. Management checks context liveness before driving it. |
-| Worker emission refusal | EmissionWork retains its exact refusal and stage through cancellation; it cannot report a recorded refusal or restart the attempt. Its engine checks liveness before advancing. |
-| Measurement, placement and Enter-refusal claimed authors | AuthorRecord retains the returned original. Only that unrecorded attempt's ticket is cleared; its private identity remains. Existing entry checks precede continuation. |
-| Filing and OUTPUT transactions | The transaction retains the returned original and failure before propagating; a stopped return cannot be turned into another author or a completion. |
-| Outbound runtime fault | OutboundWork retains the fault and its submission disposition; no sort or dispatch result follows from the error. |
-| Pair rejection | The context's existing rejection owner retains the return and submission state; acknowledgement still requires its real Recorded sequence. |
-| Freshness | The previous caller's exact withdrawn input waits in the existing slot. The matching resume returns it with current failure precedence and no ticket or resubmission. |
-| Read recall BusyAuthored | The existing ReadTransaction retains the exact rejected original separately from its immutable recall facts, then enters the existing record-failure path. |
-| Failed pair-filing admission | The existing PairTransaction retains the exact attempted event alongside its pair; the failure cannot replace first-fatal context evidence. |
+| Place/placement-stopped, plan summary/effect, boot Open, boot pairs, marks, freshness, inspection, read, repair, measurement | Shared occupied-slot helper returns the new original with the existing owner reason; it cannot replace the first held allocation. |
+| Generic ToolCallStarted/ToolCallCompleted hold | The same helper returns PairOwned and preserves prior custody. |
+| Template-blocked content/TurnStarted hold | The same helper retains an empty template slot or returns the new input. The earlier second-submit gate still owns competing template custody. |
+| BusyAuthored with owed boot/place account | The same helper preserves earlier held input while the existing withdrawal clears only this attempt's ticket/turn/release preparation. |
+| Generic and claimed resume | Existing withdrawn-marker return and first-cause rules. Private claims match their exact identity. Claim-less caller identity is still a review carry. |
+| Shared continue_waiting_content/continue_claimed_content | Now takes a matching withdrawn original before phase/latch/queue continuation. It cannot allocate another ticket or sequence for that input. |
+| Filing, OUTPUT, outbound-sort fault, pair-rejection author | All consume that shared waiting-content continuation and retain its returned AuthorFailure in their existing owner. |
+| Marks fault author | Existing StoppedAuthor retains the returned original, clears started, and refuses another attempt. The new actual caller test pins this behavior. |
 
-StoppedAuthor owns only returned input; a failure with no returned input
-leaves the original in its existing context owner. Callers must not infer
-Recorded from that absence. A private AuthorRecord never clears a Recorded
-sequence to accept a return. Existing normal wait/resume and successful
-recording paths continue to use their original identities and bounds.
+The twelve early holds are eleven ordinary caller slots plus the template slot;
+the thirteenth site is the already-guarded owed-withdrawal return. Grepping the
+production flow source leaves their writes in the shared helper. First-fatal
+retention remains separate because it owns a different disposition.
+
+## Other current author callers
+
+#314 migrated the existing internal call sites. Their complete census is retained
+here, with evidence limits made explicit rather than claiming full legacy
+serving migration.
+
+| Caller | Current implementation and evidence boundary |
+| --- | --- |
+| InputOffered, Refusal, TurnStarted, MessageUser | Input owners retain their exact return and stage. Existing input custody tests remain in the full suite. |
+| Repair instruction, association and refusal | RepairAuthor retains the return and clears its driving/submitted state. Cancellation of the separate instruction check remains review row 7. |
+| Startup Load | Restores the exact input to the existing Load slot and stops. A failing-author caller test that detects removing this restoration is still owed. |
+| Worker organ-fault report | FoundationInput retains the report and return before propagation. |
+| Worker Stop TurnClosed | StopWork retains its return without inventing a close sequence; a protective caller test remains owed. |
+| Worker emission refusal | EmissionWork retains exact input/stage through cancellation; existing actual emission custody test remains in the suite. |
+| Claimed measurement, placement and Enter-refusal authors | AuthorRecord retains the original and clears the unrecorded ticket. A protective actual caller test for that clearing remains owed. |
+| Freshness | Reuses waiting_content for its caller's withdrawn original; no second queue. Generic owner identity and nonfatal reason replacement remain rows 3/4. |
+| Read recall BusyAuthored and failed pair filing | Their existing transaction retains the attempted original before failure; no fabricated receipt or acknowledgement. |
+
+## Planner disposition
+
+Planner review 5637217403 of #314 at a95e0a6d reported two fix, thirteen batch
+and three file rows. This act addresses the two fix rows; it does not claim the
+remaining caller/lifecycle work complete.
+
+| Review row | Disposition |
+| --- | --- |
+| 1, fix | The shared continuation takes the withdrawn marker before it can queue. A real freshness withdrawal returns its exact original through this road; an isolated healthy withdrawn slot cannot acquire a sequence. |
+| 2, fix | Every nonfatal hold uses the occupied-slot helper. A real marks fault continuation encountering an independent read hold returns its new fault and preserves the prior caller allocation. |
+| 3, batch | Open: claim-less withdrawn returns lack a per-caller identity. Private AuthorClaim matching is retained. Full caller composition must settle the generic owner. |
+| 4, batch | Open: a later nonfatal live Wait can replace the withdrawal reason. This act preserves the existing reason policy. |
+| 5, batch carry | Open: no production taker yet drains ordinary/template held slots. The existing started flag is not a successful admission. |
+| 6 and 16, file | Filed together as #316: a nonfatal returned author can keep a cancelled filing/OUTPUT owner replaying the same reason without completing its take. Full bounded lifecycle exit is owed. |
+| 7, batch | Open: repair cancellation must retire the instruction check independently of returned author custody. |
+| 8, batch | The template-held precedence change is recorded explicitly above. |
+| 9, test gaps | This act adds real freshness/marks continuation coverage and a no-resubmission control. The reported take_withdrawn live-precedence, early-latch, AuthorRecord ticket, Startup Load and StopWork caller controls remain open; they are not credited as enforced by unrelated tests. |
+| 10, batch | Open: owed withdrawal can classify an original as first-fatal evidence when failure was already latched. The first failure itself remains immutable. |
+| 11, cleanup | Hold storage is now shared and the twelve touched redundant owner-error wrappers are removed. Separate caller retention helpers keep their different invariants; narrow lint allows remain rather than suppressing the module. |
+| 12, record | One current record and gate result replace the earlier counts and appended history. Git and evidence deposits retain prior versions. |
+| 13, record | #315 maps all twelve #312 regrade rows, including its carries and reasoned dispositions. |
+| 14 and 15, carries | Open: worker prefix Busy and healthy rollback Busy exit. They belong with the actual caller/lifecycle composition. |
+| 17, process | Self-check skills remain unavailable. No invocation or independent author-review pass is claimed. |
+| 18, file | #313 now includes the Planner-reported parallel startup race and the existing generation race. Serial passes do not qualify either parallel run. |
 
 ## Instruments and validation
 
-The focused tests use actual recorder capacity, Unix sockets and the shared
-author/resume code. They cover second and third submissions, immutable
-first-fatal evidence, pending ticket/turn/release preservation, both resumed
-withdrawal paths with an occupied slot, caller retention through the real
-halt cap, and refusal to grant Recorded after failure. Pointer plus value
-checks distinguish an exact moved original from a clone.
+Three new tests cover the changed behavior. One drives the real freshness owner
+and invokes the same waiting-content continuation used by filing/output/sort.
+A second isolates a nonfatal withdrawn-slot state with an exact unadmitted event
+and no ticket or fabricated success; the continuation must return it, not record
+it. The third drives a real rejected mark to its actual fault author, then moves
+an actual read owner from another task solely to isolate the defensive competing
+owner case. That read is neither driven nor used as evidence in the other run,
+and is returned to its original fixture afterward. Ordinary public admission
+excludes that overlap; the test does not claim it is a production sequence.
 
-Actual input owners are exercised at InputOffered, Refusal, TurnStarted and
-MessageUser. A worker EmissionWork test exercises returned refusal custody
-through cancellation. A freshness test drives an earlier caller's deferred
-author and verifies that only the caller can take its exact returned input.
-Negative compile pins enforce the absence of Clone on AuthorFailure and of
-a lossy From<AuthorFailure> implementation on RunFailure.
+The first two focused tests passed. An attempted nonfatal freshness fixture
+raised place debt under an ordinary pending observation; that debt applies only
+to release/Unload admission, so the ordinary observation remained pending and
+its Cut expired. Its failing source and log are retained. The replacement makes
+the nonfatal slot precondition explicit and leaves the real freshness test beside
+it. All three focused cases pass on the corrected source.
 
-The occupied-slot withdrawal fixture deliberately raises mandatory-account
-debt after obtaining a real CapacityPending ticket; public owner admission
-currently prevents this transition. It tests the specified defensive return
-without claiming an integrated production path can cause it. The halt-cap
-case retains a real caller return while advancing the actual halt reporter
-to AbortRequired; it does not establish complete failed-run teardown.
+The same child adds three boundary regression tests and corrects the eleven
+existing boundary_batch_ cases as described in the held-boundary record.
 
-Validation used `CARGO_TARGET_DIR=/var/tmp/weaver-state-146-author-failure-target`,
-`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4` and the pinned toolchain. Cargo,
-mutations and Git mutations ran sequentially.
+Final restored-source checks passed with the pinned toolchain,
+CARGO_INCREMENTAL=0, CARGO_BUILD_JOBS=4, --locked and private target
+`/var/tmp/weaver-state-146-author-review-fixes-target`.
 
 | Gate or instrument | Result |
 | --- | --- |
-| `process/gates/lock.sh`, before and after Cargo | Passed, exit 0 |
-| `cargo fmt --all -- --check` | Passed |
-| `cargo clippy -p weaver-harness --all-targets --locked -- -D warnings` | Passed |
-| `cargo test -p weaver-harness --locked -- --test-threads=4` | 1,979 passed, including 22 doctests; 183 ignored in this ordinary run |
-| Focused `author_failure_` tests | 12 passed, including the existing coordinator ignored-result test and restored nonfatal pending-owner regression |
-| Delegated gate startup | 46 passed |
-| Delegated worker startup, input, Observe and Stop | 17, 19, 14 and 16 passed |
-| Delegated worker generation and emission | 20 and 33 passed |
-| Protective runtime mutations | All 16 compiled and failed their targeted tests |
-| Negative type mutations | Both adding Clone and adding a lossy failure conversion failed their intended compile pins |
-| Diff and source checks | Passed; all 659 tracked/new crate and configuration files match the final gate manifest |
+| lock.sh before/after Cargo, formatting, strict harness clippy and diff check | Passed |
+| Full harness suite with four test threads | 1,996 passed, including 22 doctests; 183 ignored in the ordinary run |
+| Focused author_review_ and boundary_batch_ cases | All six new and eleven corrected existing cases passed |
+| Delegated gate/startup/input/Observe/Stop/generation/emission | 46/17/19/14/16/20/33 passed; 165 total, serially in isolated scopes |
+| Protective mutations on the final combined source | All eleven compiled and failed the intended tests; every source restored exactly |
+| Final source manifest | All 660 tracked crate/configuration files verified |
 
-The 165 delegated cases ran serially through an isolated delegated scope.
-Observe and Stop used a freshly built actual admin test executable from the
-same private target. Eighteen inherited harness ignores and the separate
-eight privileged admin-startup instruments remain outside this run. No
-deployed agent was changed. The gate manifest SHA-256 is
-`fe380d6664306cc0525a8e5de869d7e1a911bae2acf3085addaf412a5bdb169f`.
+The source manifest SHA-256 is `b2b203c2e4d35c9668edc3a98b934d7831e3f02e9d7ef085ccedf960af7773a8`.
+Observe and Stop used the actual admin test executable rebuilt in this private
+target. Eighteen inherited harness ignores and eight privileged admin-startup
+instruments remain outside this gate. Serial passes do not close #313's parallel
+startup/generation clock races. No Cargo or Git mutations overlapped, deployed
+agent changed, or CodeRabbit review was requested. These author checks are not
+an independent Planner grade, security disposition or production qualification.
 
-The first full run, before joining the corrected parent, had 1,889 passed,
-nine failed and 183 ignored. It exposed owner-refusal ordering and private
-continuation regressions, a failing-intake custody case, and older custody
-expectations. The logs and source patch are retained. All those tests pass
-in the final suite. Initial compile/lint failures are also retained.
+## Remaining work and after-action
 
-The first 17 controls preceded restoration of the valid nonfatal pending-owner
-regression; the extra ordering control and final gates include it. Evidence
-retains that earlier test file, mutation source copies and both source
-manifests. Every mutation was restored byte-for-byte before final gates.
+Full author-site migration in worker/dev_loop, generic held-caller identity and
+taking, Stop/Leave cancelled-owner exits, failed-run teardown, final world close,
+worker correction and pair composition, production artifacts, measured limits,
+security disposition and qualified coupled cutover remain under #146. The legacy
+serving implementation stays active; only the operator merges or deploys.
+All new PRs remain drafts for independent review at their exact heads.
 
-## Remaining work and after-action review
-
-This act changes the new internal recording context and all its current
-production consumers. The legacy serving path remains active until the
-qualified coupled cutover. Full author-site migration in worker/dev_loop,
-failed-run teardown, rollback Busy/OperationRefused exits, final world close,
-and the remaining #146 composition and qualification checklist are still
-required. The serial delegated fixture lane does not resolve #313's
-pre-existing parallel clock race.
-
-Planner regrade 5637136323 clears parent #312 at b24a260e on the agreed
-severity line (zero fix rows). Its batch items remain tracked. In particular,
-row 3's worker prefix step still turns held Busy into a fatal fault, and row
-7's rollback still lacks a healthy Busy exit. This signature and exact-return
-migration does not claim to close either composition carry. The operator
-directed on 2026-10-24 that this reviewed parent remain the stack root for
-the subsequent draft corrections and composition work.
-
-The Executor's code-review and verification-before-completion skills are
-unavailable in this environment, as disclosed on #312. No invocation or
-Planner grade is claimed by this record. The branch remains draft for
-independent review; only the operator merges or deploys.
-
-The initial implementation put pending-author detection ahead of existing
-private owner refusals. Regression tests showed this changed established
-ReadOwned/RepairOwned precedence. The check now follows genuine owner and
-phase checks while a second held original is still refused before any slot
-can be replaced. Review also found that freshness drives another caller's
-author: keeping a withdrawn marker in that same waiting slot preserves the
-owner instead of creating a second return queue. The reusable practice is
-to enumerate every move-owned error consumer before changing the signature,
-then test custody and acknowledgement separately at actual caller stages.
+The review exposed two paths omitted by the original caller walk: an internal
+continuation could pass the exemption and then reach a competing hold, and a
+caller could use the waiting-content continuation instead of either resume API.
+Protecting a slot at only one admission site did not enforce its lifetime.
+The correction puts preservation at the shared storage boundary and withdrawal
+at every shared return road, then tests exact custody separately from Recorded.

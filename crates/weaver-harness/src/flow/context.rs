@@ -1111,46 +1111,76 @@ impl RecordingContext {
         if self.place_blocks_external()
             || (self.place_admission_stopped() && event.kind == Kind::TurnStarted)
         {
-            self.held_author = Some(event);
-            return Err((RunFailure::PlaceOwned).into());
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::PlaceOwned,
+                event,
+            ));
         }
         if (self.plan_summary_blocks_external() && !self.plan_summary_allows_turn_close(&event))
             || (receipt_driver::is_plan_effect_event(&event) && !self.plan_effect_inflight())
         {
-            self.held_author = Some(event);
-            return Err((RunFailure::PlanSummaryOwned).into());
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::PlanSummaryOwned,
+                event,
+            ));
         }
         if self.boot_open_blocks_external() {
-            self.held_author = Some(event);
-            return Err((RunFailure::BootOpenOwned).into());
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::BootOpenOwned,
+                event,
+            ));
         }
         if self.boot_pairs_blocks_external() {
-            self.held_author = Some(event);
-            return Err((RunFailure::BootPairsOwned).into());
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::BootPairsOwned,
+                event,
+            ));
         }
         if self.marks_blocks_external() {
-            self.held_author = Some(event);
-            return Err((RunFailure::MarksOwned).into());
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::MarksOwned,
+                event,
+            ));
         }
         if self.freshness.is_some() && !retained_retry {
-            self.held_author = Some(event);
-            return Err((RunFailure::FreshnessOwned).into());
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::FreshnessOwned,
+                event,
+            ));
         }
         if self.inspection.is_some() {
-            self.held_author = Some(event);
-            return Err((RunFailure::InspectionOwned).into());
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::InspectionOwned,
+                event,
+            ));
         }
         if self.read.is_some() {
-            self.held_author = Some(event);
-            return Err((RunFailure::ReadOwned).into());
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::ReadOwned,
+                event,
+            ));
         }
         if self.repair_blocks_external() {
-            self.held_author = Some(event);
-            return Err((RunFailure::RepairOwned).into());
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::RepairOwned,
+                event,
+            ));
         }
         if self.measure_blocks_external() {
-            self.held_author = Some(event);
-            return Err((RunFailure::MeasureOwned).into());
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::MeasureOwned,
+                event,
+            ));
         }
         if self.filing.is_some()
             || self.output.is_some()
@@ -1172,12 +1202,18 @@ impl RecordingContext {
             // This is refused caller input, never a pending author ticket.
             // The caller takes it unchanged before attempting another author.
             // resume_author_and_wait cannot turn it into admitted content.
-            self.template_blocked_author = Some(event);
-            return Err((RunFailure::TemplateBlocked).into());
+            return Err(Self::hold_author_failure(
+                &mut self.template_blocked_author,
+                RunFailure::TemplateBlocked,
+                event,
+            ));
         }
         if matches!(event.kind, Kind::ToolCallStarted | Kind::ToolCallCompleted) {
-            self.held_author = Some(event);
-            return Err((RunFailure::PairOwned).into());
+            return Err(Self::hold_author_failure(
+                &mut self.held_author,
+                RunFailure::PairOwned,
+                event,
+            ));
         }
         if !self.author_allowed(&event) {
             let reason = self.fail(
@@ -1237,6 +1273,11 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
         claim: Option<AuthorClaim>,
     ) -> Result<Sequence, AuthorFailure> {
+        // Freshness drives another caller's author. Its withdrawal is a return,
+        // never permission to queue that original past the owning account.
+        if let Some(failure) = self.take_withdrawn_author(claim.as_ref(), ports.io) {
+            return Err(failure);
+        }
         if let Some(failure) = self.failure.clone() {
             return Err(failure.into());
         }
@@ -1583,18 +1624,20 @@ impl RecordingContext {
                         self.author_turn = None;
                         self.author_admission_pending = false;
                         self.finish_release_author();
-                        let original = if self.held_author.is_none() {
-                            self.held_author = Some(event);
-                            None
-                        } else {
-                            Some(event)
-                        };
-                        let reason = match self.drain_intake(ports.io) {
-                            Err(reason) => reason,
-                            Ok(()) => self.failure.clone().unwrap_or(match owed {
+                        let AuthorFailure {
+                            reason: owed_reason,
+                            original,
+                        } = Self::hold_author_failure(
+                            &mut self.held_author,
+                            match owed {
                                 OwedAuthor::BootOpen => RunFailure::BootOpenOwned,
                                 OwedAuthor::Placement => RunFailure::PlaceOwned,
-                            }),
+                            },
+                            event,
+                        );
+                        let reason = match self.drain_intake(ports.io) {
+                            Err(reason) => reason,
+                            Ok(()) => self.failure.clone().unwrap_or(owed_reason),
                         };
                         if self.failure.is_some()
                             && original.is_none()
@@ -2128,6 +2171,20 @@ impl RecordingContext {
             }
         }
         result
+    }
+
+    fn hold_author_failure(
+        slot: &mut Option<AuthoredEvent>,
+        reason: RunFailure,
+        event: AuthoredEvent,
+    ) -> AuthorFailure {
+        let original = if slot.is_some() {
+            Some(event)
+        } else {
+            *slot = Some(event);
+            None
+        };
+        AuthorFailure { reason, original }
     }
 
     #[must_use]
