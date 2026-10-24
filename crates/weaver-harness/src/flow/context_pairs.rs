@@ -189,6 +189,7 @@ impl RecordingContext {
             || self.filing.is_some()
             || self.templates_block_content()
             || self.template_blocked_author.is_some()
+            || (self.held_author.is_some() && !self.repair_pair_intake_allowed())
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()

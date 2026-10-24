@@ -592,3 +592,7 @@ pub(super) enum MaterialGuard {
 pub(super) fn exercise_step_query(unit: SelectedUnit) {
     tests::exercise_step_query(unit);
 }
+
+#[cfg(test)]
+#[path = "journal/drain_review_test_support.rs"]
+mod drain_review_test_support;

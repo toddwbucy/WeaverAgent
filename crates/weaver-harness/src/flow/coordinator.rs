@@ -1220,6 +1220,21 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.state.as_ref()
     }
 
+    /// Defensive admission fixtures temporarily retain the actual channel
+    /// outside this owner. This does not fabricate a transport or phase.
+    #[cfg(test)]
+    pub(super) fn take_state_for_admission_test(&mut self) -> StateChannel {
+        self.state
+            .take()
+            .expect("fixture owns an actual state channel")
+    }
+
+    #[cfg(test)]
+    pub(super) fn restore_state_after_admission_test(&mut self, state: StateChannel) {
+        assert!(self.state.is_none());
+        self.state = Some(state);
+    }
+
     /// Isolate the passive channel-latch boundary using the real stream parser.
     /// Production transport_one maps the error immediately instead of retaining
     /// this deliberately unmapped intermediate state.

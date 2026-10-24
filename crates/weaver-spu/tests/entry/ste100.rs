@@ -319,3 +319,30 @@ fn ste100_entry_adopts_fd_once_with_cloexec_and_real_close_in_isolated_child() {
         "exact child must execute all actual descriptor checks: {stdout}\n{stderr}"
     );
 }
+
+#[test]
+fn ste100_entry_review_missing_adapter_refuses_before_opening_declared_artifacts() {
+    let mut fixture = fixture::Fixture::new(false);
+    fixture.bootstrap.instruction.model_binding.artifact.0 = fixture
+        .root
+        .join("missing-manifest")
+        .to_str()
+        .unwrap()
+        .into();
+    let (peer, child) = seqpacket_pair();
+    let mut process = Process::spawn(&["--max-wire-bytes", "65536"], &[child.as_raw_fd()]);
+    drop(child);
+    let mut peer = Channel::from_owned(peer, fixture::LIMIT).unwrap();
+    send(&mut peer, serde_json::to_vec(&fixture.bootstrap).unwrap());
+    let message = receive(&mut peer);
+    assert_eq!(message.tag, Tag::AdmissionRefused);
+    let refusal: Ste100AdmissionRefused =
+        decode_strict(std::str::from_utf8(&message.payload).unwrap()).unwrap();
+    assert_eq!(refusal.code, Ste100AdmissionCode::UnsupportedArtifact);
+    assert_eq!(
+        refusal.detail,
+        "no compatible STE100 adapter is compiled into this executable"
+    );
+    assert!(!process.wait().success());
+    assert!(peer.try_receive().is_err());
+}

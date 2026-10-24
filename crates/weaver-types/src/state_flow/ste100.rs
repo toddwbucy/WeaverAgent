@@ -565,12 +565,32 @@ impl Ste100Scheme {
     /// Cryptographic implementation is supplied by the artifact owner, not another floor dependency.
     pub fn verify_blobs(&self, hash: impl Fn(&[u8]) -> Digest) -> Result<(), ValidationError> {
         for blob in [&self.grammar, &self.conditions] {
-            if hash(&blob.decode()?) != blob.sha256 {
-                return Err(ValidationError("grammar blob digest mismatch"));
-            }
+            verify_decoded_blob(blob, &blob.decode()?, &hash)?;
         }
         Ok(())
     }
+
+    /// Check the same digest rule on bytes already decoded and retained by the owner.
+    pub fn verify_decoded_blobs(
+        &self,
+        grammar: &[u8],
+        conditions: &[u8],
+        hash: impl Fn(&[u8]) -> Digest,
+    ) -> Result<(), ValidationError> {
+        verify_decoded_blob(&self.grammar, grammar, &hash)?;
+        verify_decoded_blob(&self.conditions, conditions, &hash)
+    }
+}
+
+fn verify_decoded_blob(
+    blob: &GrammarBlob,
+    bytes: &[u8],
+    hash: &impl Fn(&[u8]) -> Digest,
+) -> Result<(), ValidationError> {
+    if hash(bytes) != blob.sha256 {
+        return Err(ValidationError("grammar blob digest mismatch"));
+    }
+    Ok(())
 }
 
 impl GrammarBlob {
@@ -1106,6 +1126,34 @@ mod tests {
                 .verify_blobs(|_| Digest::new("1".repeat(64)).unwrap())
                 .is_err()
         );
+        let decoded = scheme.validate_and_decode(&artifact, &declared).unwrap();
+        assert!(
+            scheme
+                .verify_decoded_blobs(&decoded.0, &decoded.1, |bytes| {
+                    assert_eq!(bytes, b"a");
+                    artifact.clone()
+                })
+                .is_ok()
+        );
+        for corrupt in [0, 1] {
+            let mut bytes = decoded.clone();
+            if corrupt == 0 {
+                bytes.0 = b"different".to_vec();
+            } else {
+                bytes.1 = b"different".to_vec();
+            }
+            let refusal = scheme
+                .verify_decoded_blobs(&bytes.0, &bytes.1, |part| {
+                    if part == b"a" {
+                        artifact.clone()
+                    } else {
+                        Digest::new("1".repeat(64)).unwrap()
+                    }
+                })
+                .unwrap_err();
+            assert_eq!(refusal.0, "grammar blob digest mismatch");
+        }
+
         scheme.verbs[0].forms.push("read".into());
         assert!(scheme.validate(&artifact, &declared).is_err());
         scheme.verbs[0].forms.pop();

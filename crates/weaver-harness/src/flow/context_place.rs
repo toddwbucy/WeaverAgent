@@ -69,11 +69,61 @@ pub(in crate::flow) enum GenerationCompletion {
 #[derive(Debug)]
 pub(in crate::flow) enum ReloadCompletion {
     Staged(Staged),
+    CancelledStaged {
+        staged: Staged,
+        account: PlaceAccount,
+    },
     Refused(PlaceAccount),
     Cancelled(PlaceAccount),
 }
+/// Last checked no-mutation prefix and the already-filed portion of the tail.
+/// Queue/drain may have refreshed this prefix while preserving its exact boundary.
+/// A rejection stays explicit; conversion never retries a rejected source.
+#[derive(Debug)]
+pub(in crate::flow) struct ReturnedReloadInputs {
+    prefix: PreparedPrefix,
+    original_tail: ReloadTail,
+    resolved: Vec<Arc<crate::flow::material::SelectedUnit>>,
+    rejected: Option<crate::flow::ledger::SourceDisposition>,
+}
+impl ReturnedReloadInputs {
+    pub(in crate::flow) fn prefix(&self) -> &PreparedPrefix {
+        &self.prefix
+    }
+    pub(in crate::flow) fn original_tail(&self) -> &ReloadTail {
+        &self.original_tail
+    }
+    pub(in crate::flow) fn resolved(&self) -> &[Arc<crate::flow::material::SelectedUnit>] {
+        &self.resolved
+    }
+    pub(in crate::flow) fn rejected(&self) -> Option<&crate::flow::ledger::SourceDisposition> {
+        self.rejected.as_ref()
+    }
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn into_retry(self) -> Result<(PreparedPrefix, ReloadTail), Self> {
+        if self.rejected.is_some() {
+            return Err(self);
+        }
+        let Self {
+            prefix,
+            mut original_tail,
+            resolved,
+            rejected: _,
+        } = self;
+        for (index, unit) in resolved.into_iter().enumerate() {
+            let original =
+                std::mem::replace(&mut original_tail.items[index], ReloadItem::Held(unit));
+            if let ReloadItem::Pending(pending) = original {
+                original_tail.filed_sources.push((index, pending));
+            }
+        }
+        Ok((prefix, original_tail))
+    }
+}
 #[derive(Debug)]
 pub(in crate::flow) struct PlaceAccount {
+    // Captured by the actual context when custody leaves its owner.
+    phase: RecordingPhase,
     work: AccountWork,
     measure: Option<measure_driver::StoppedPlaceMeasure>,
 }
@@ -130,11 +180,59 @@ impl PlaceAccount {
     pub(in crate::flow) fn take_staged(&mut self) -> Option<Staged> {
         match &mut self.work {
             AccountWork::Place(w) => w.staged.take(),
+            AccountWork::Reload(w)
+                if matches!(
+                    self.phase,
+                    RecordingPhase::Entered | RecordingPhase::Releasing
+                ) && w.done
+                    && w.incomplete.is_none()
+                    && w.staged
+                        .as_ref()
+                        .is_some_and(|staged| staged.recorded.is_some()) =>
+            {
+                w.staged.take()
+            }
             AccountWork::Generation(w) if w.confirmed.is_none() && w.reservation.is_none() => {
                 w.grant.as_mut().and_then(|g| g.staged.take())
             }
             _ => None,
         }
+    }
+    pub(in crate::flow) fn reload_prefix(&self) -> Option<&PreparedPrefix> {
+        match &self.work {
+            AccountWork::Reload(work) => work.prefix.as_ref(),
+            _ => None,
+        }
+    }
+    pub(in crate::flow) fn reload_tail(&self) -> Option<&ReloadTail> {
+        match &self.work {
+            AccountWork::Reload(work) => work.tail.as_ref(),
+            _ => None,
+        }
+    }
+    pub(in crate::flow) fn take_reload_inputs(&mut self) -> Option<ReturnedReloadInputs> {
+        let AccountWork::Reload(work) = &mut self.work else {
+            return None;
+        };
+        // A confirmed cut owns Staged, even after that capability is taken.
+        // Failed/incomplete exchange custody remains trace-only.
+        if !matches!(
+            self.phase,
+            RecordingPhase::Entered | RecordingPhase::Releasing
+        ) || !work.done
+            || work.cut_confirmed
+            || work.incomplete.is_some()
+            || work.prefix.is_none()
+            || work.tail.is_none()
+        {
+            return None;
+        }
+        Some(ReturnedReloadInputs {
+            prefix: work.prefix.take().unwrap(),
+            original_tail: work.tail.take().unwrap(),
+            resolved: std::mem::take(&mut work.units),
+            rejected: work.rejected.take(),
+        })
     }
     pub(in crate::flow) fn take_unplaced_selection(
         &mut self,
@@ -194,6 +292,7 @@ impl PlaceAccount {
 }
 #[derive(Debug)]
 struct PlaceAuthor {
+    identity: Arc<()>,
     event: Option<AuthoredEvent>,
     ticket: Option<u64>,
     sequence: Option<Sequence>,
@@ -203,6 +302,7 @@ struct PlaceAuthor {
 impl PlaceAuthor {
     fn new(event: AuthoredEvent) -> Self {
         Self {
+            identity: Arc::new(()),
             kind: event.kind,
             turn: event.turn.clone(),
             event: Some(event),
@@ -258,8 +358,9 @@ pub(super) struct GenerationTransaction {
 }
 #[derive(Debug)]
 pub(super) struct ReloadTransaction {
-    prefix: PreparedPrefix,
-    tail: ReloadTail,
+    // Taken only from a settled no-mutation account; live work retains both.
+    prefix: Option<PreparedPrefix>,
+    tail: Option<ReloadTail>,
     units: Vec<Arc<crate::flow::material::SelectedUnit>>,
     frozen_sources: Vec<SourceBlockId>,
     bound: Option<AbsoluteBound>,
@@ -271,6 +372,7 @@ pub(super) struct ReloadTransaction {
     author: Option<PlaceAuthor>,
     recorded_authors: Vec<Sequence>,
     staged: Option<Staged>,
+    cut_confirmed: bool,
     driving: bool,
     cancelled: bool,
     done: bool,
@@ -283,6 +385,51 @@ pub(super) struct ReloadTransaction {
     account_deadline: Option<u64>,
 }
 
+impl ReloadTransaction {
+    fn live_prefix(&self) -> &PreparedPrefix {
+        self.prefix
+            .as_ref()
+            .expect("live reload retains its checked prefix until account extraction")
+    }
+    fn live_tail(&self) -> &ReloadTail {
+        self.tail
+            .as_ref()
+            .expect("live reload retains its original tail until account extraction")
+    }
+}
+
+#[cfg(test)]
+pub(super) struct ReloadDrainEvidence<'a> {
+    pub bound: Option<AbsoluteBound>,
+    pub measured: bool,
+    pub reserved: bool,
+    pub refused: bool,
+    pub code: Option<ReloadCode>,
+    pub detail: Option<&'a str>,
+}
+
+#[cfg(test)]
+impl ReloadTransaction {
+    pub(super) fn drain_evidence_for_test(&self) -> ReloadDrainEvidence<'_> {
+        ReloadDrainEvidence {
+            bound: self.bound,
+            measured: self.measurement.is_some(),
+            reserved: self.reservation.is_some(),
+            refused: self.refused,
+            code: self.reload_code,
+            detail: self.reload_detail.as_deref(),
+        }
+    }
+
+    pub(super) fn saved_prefix_for_drain_review(&self) -> &PreparedPrefix {
+        self.prefix.as_ref().expect("live reload owns its prefix")
+    }
+
+    pub(super) fn saved_prefix_mut_for_drain_review(&mut self) -> &mut PreparedPrefix {
+        self.prefix.as_mut().expect("live reload owns its prefix")
+    }
+}
+
 impl RecordingContext {
     pub(in crate::flow) fn install_place(
         &mut self,
@@ -290,10 +437,9 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), PlaceInstallError> {
         let failure = self.live(io).err();
-        let valid = boot.repaired().belongs_to(self)
-            && boot.repaired().checked_open().is_some()
-            && self.boot_journal.is_some()
+        let valid = self.boot_proof_current(boot.repaired())
             && self.committed_plan_summary().is_ok()
+            && !self.caller_author_held()
             && self.place_engine.is_none()
             && self.load_duty.is_some()
             && !self.place_admission_stopped()
@@ -355,7 +501,10 @@ impl RecordingContext {
         if self.place_engine.is_none() {
             return Err(PlaceError::WrongProof);
         }
-        if self.place_blocks_external() || self.place_engine.as_ref().unwrap().staged.is_some() {
+        if self.caller_author_held()
+            || self.place_blocks_external()
+            || self.place_engine.as_ref().unwrap().staged.is_some()
+        {
             return Err(PlaceError::Busy);
         }
         let journal = self.boot_journal.as_ref().ok_or(PlaceError::WrongProof)?;
@@ -371,6 +520,27 @@ impl RecordingContext {
                 Err(PlaceError::InvalidPrefix)
             }
         }
+    }
+    pub(super) fn place_measurement_continuation(&self, key: PumpDeadline) -> bool {
+        match key {
+            PumpDeadline::Decision => self.place.as_ref().is_some_and(|work| {
+                work.driving
+                    && work.measurement.is_none()
+                    && self.deadlines.get(key) == Some(work.bound)
+            }),
+            PumpDeadline::Cut => self.reload.as_ref().is_some_and(|work| {
+                work.driving
+                    && work.measurement.is_none()
+                    && work.bound.is_some()
+                    && self.deadlines.get(key) == work.bound
+            }),
+            _ => false,
+        }
+    }
+    pub(super) fn generation_output_continuation(&self) -> bool {
+        self.generation
+            .as_ref()
+            .is_some_and(|work| work.driving && work.confirmed.is_some() && !work.output_started)
     }
     pub(super) fn place_blocks_external(&self) -> bool {
         self.place_notice.is_some()
@@ -448,6 +618,7 @@ impl RecordingContext {
             || self.input.snapshot().is_some()
             || self.input_turn.is_some()
             || self.input_author.is_some()
+            || self.caller_author_held()
             || self.waiting_content.is_some()
             || self.completed_author.is_some()
             || self.barrier.pending().is_some()
@@ -759,7 +930,12 @@ impl RecordingContext {
             }
             if let Some(MeasureCompletion::Refused(refused)) = &work.measurement {
                 work.refusal = Some(PlaceRefused {
-                    assembly_id: work.request.prefix.assembly,
+                    assembly_id: work
+                        .pending
+                        .as_ref()
+                        .expect("measured reservation")
+                        .assembly()
+                        .into(),
                     code: refused.code(),
                     detail: "decode measurement refused".into(),
                     account: None,
@@ -780,7 +956,12 @@ impl RecordingContext {
             let limits = self.place_engine.as_ref().unwrap().limits();
             let event = if let Err(code) = crate::flow::place::fit(&facts, limits) {
                 let refusal = PlaceRefused {
-                    assembly_id: work.request.prefix.assembly,
+                    assembly_id: work
+                        .pending
+                        .as_ref()
+                        .expect("measured reservation")
+                        .assembly()
+                        .into(),
                     code,
                     detail: "measured argument exceeds declared placement budget".into(),
                     account: None,
@@ -882,12 +1063,14 @@ impl RecordingContext {
             self.barrier.set_place_owed(self.place_owed());
             return Ok(Some(if let Some(mut refusal) = work.refusal.take() {
                 refusal.account = Some(PlaceAccount {
+                    phase: self.phase,
                     work: AccountWork::Place(Box::new(work)),
                     measure: None,
                 });
                 PlacementCompletion::Refused(refusal)
             } else {
                 PlacementCompletion::Cancelled(PlaceAccount {
+                    phase: self.phase,
                     work: AccountWork::Place(Box::new(work)),
                     measure: None,
                 })
@@ -909,25 +1092,6 @@ impl RecordingContext {
         };
         self.deadlines.disarm(PumpDeadline::Decision);
         Ok(Some(PlacementCompletion::Granted(grant)))
-    }
-    pub(in crate::flow) fn cancel_place(
-        &mut self,
-        _decode: &mut DecodePort,
-        io: &mut impl PumpIo,
-    ) -> Result<(), RunFailure> {
-        if let Some(work) = self.place.as_mut() {
-            work.cancelled = true;
-            work.driving = true;
-        } else {
-            return Err(RunFailure::PlaceOwned);
-        };
-        let result = if self.measure.is_some() {
-            self.cancel_measurement(io)
-        } else {
-            Ok(())
-        };
-        self.place.as_mut().unwrap().driving = false;
-        result
     }
     fn place_response_ready(&self) -> bool {
         self.phase == RecordingPhase::Entered
@@ -1002,11 +1166,47 @@ impl RecordingContext {
         }
         self.place_notice.as_mut().and_then(|w| w.author.as_mut())
     }
+    #[cfg(test)]
+    pub(super) fn place_author_record_state(
+        &self,
+    ) -> Option<(Option<u64>, Option<Sequence>, Kind)> {
+        self.active_place_author()
+            .map(|a| (a.ticket, a.sequence, a.kind))
+    }
     pub(super) fn place_owns_pending_author(&self) -> bool {
         self.active_place_author()
             .is_some_and(|a| a.sequence.is_none() && (a.ticket.is_some() || a.event.is_none()))
     }
+    pub(super) fn claim_place_author_ticket(&mut self, identity: &Arc<()>, ticket: u64) -> bool {
+        let Some(author) = self.active_place_author_mut() else {
+            return false;
+        };
+        if !Arc::ptr_eq(&author.identity, identity)
+            || author.event.is_some()
+            || author.sequence.is_some()
+            || author.ticket.is_some_and(|held| held != ticket)
+        {
+            return false;
+        }
+        author.ticket = Some(ticket);
+        true
+    }
+
     pub(super) fn bind_place_author(&mut self, sequence: Sequence) -> Result<(), RunFailure> {
+        let Some(author) = self.active_place_author() else {
+            return Ok(());
+        };
+        if author.sequence == Some(sequence) {
+            return Ok(());
+        }
+        let recorded_ticket = self.barrier.recorded_author_ticket(sequence);
+        if author.event.is_some()
+            || author.sequence.is_some()
+            || author.ticket.is_none()
+            || author.ticket != recorded_ticket
+        {
+            return Ok(());
+        }
         let closing = self
             .active_place_author()
             .filter(|a| a.event.is_none() && a.kind == Kind::TurnClosed)
@@ -1098,15 +1298,19 @@ impl RecordingContext {
         {
             return Err(self.place_fault(ports.io, "placement author ticket was replaced"));
         }
+        let identity = Arc::clone(&author.identity);
         if let Some(event) = self.active_place_author_mut().unwrap().event.take() {
             self.waiting_content = Some(event);
         }
-        let result = self.resume_owned_author_and_wait(ports);
-        if let Some(ticket) = self.barrier.pending_author().map(|a| a.ticket) {
-            self.active_place_author_mut().unwrap().ticket = Some(ticket);
-        }
+        let result =
+            self.resume_claimed_author_and_wait(ports, Some(AuthorClaim::Placement(identity)));
         if let Ok(sequence) = result {
             self.bind_place_author(sequence)?;
+            if self.active_place_author().and_then(|a| a.sequence) != Some(sequence) {
+                return Err(
+                    self.place_fault(ports.io, "placement completion has another author's ticket")
+                );
+            }
         }
         result.map(|_| ())
     }
