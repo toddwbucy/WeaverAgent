@@ -225,7 +225,7 @@ pub(super) struct PairLedger {
     run: String,
     scheme: SchemeDeclaration,
     active: Option<Batch>,
-    closed: Vec<CompletedPair>,
+    closed: Vec<Arc<CompletedPair>>,
     frozen: bool,
     gate_failed: bool,
     rejected: Option<RejectedGateReturn>,
@@ -761,7 +761,7 @@ impl PairLedger {
             .into_iter()
             .flat_map(|batch| &batch.entries)
             .filter_map(|entry| entry.completed.as_ref())
-            .chain(self.closed.iter())
+            .chain(self.closed.iter().map(Arc::as_ref))
             .find(|pair| &pair.started.call_id == predecessor)
             .ok_or(PairError::InvalidLineage)?;
         if entry.opening_authoring
@@ -1290,7 +1290,7 @@ impl PairLedger {
         self.closed
             .iter()
             .find(|pair| &pair.started.call_id == call)
-            .map(Some)
+            .map(|pair| Some(pair.as_ref()))
             .ok_or(PairError::UnknownCall)
     }
 
@@ -1346,7 +1346,7 @@ impl PairLedger {
             batch
                 .entries
                 .into_iter()
-                .map(|entry| entry.completed.unwrap()),
+                .map(|entry| Arc::new(entry.completed.unwrap())),
         );
         Ok(batch.proof)
     }
@@ -1543,3 +1543,24 @@ mod tests;
 #[cfg(test)]
 #[path = "pairs_execution_tests.rs"]
 mod execution_tests;
+
+impl PairLedger {
+    pub(super) fn opening_for_material(
+        &self,
+        call: &CallId,
+    ) -> Option<(&PairStarted, &CommittedSource, &OriginalRequests)> {
+        let batch = self.active.as_ref()?;
+        let entry = batch.entries.iter().find(|e| &e.started.call_id == call)?;
+        Some((
+            &entry.started,
+            entry.opening.as_ref()?,
+            batch.proof.original(),
+        ))
+    }
+    pub(super) fn closed_for_material(&self, call: &CallId) -> Option<Arc<CompletedPair>> {
+        self.closed
+            .iter()
+            .find(|p| &p.started.call_id == call)
+            .cloned()
+    }
+}

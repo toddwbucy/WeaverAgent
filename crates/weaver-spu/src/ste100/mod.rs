@@ -1,8 +1,8 @@
 //! The STE100 duty's protocol and binding mechanics.
 //!
 //! This is an internal SPU library surface, not a link for another organ. The
-//! production grammar compiler, model adapter and executable admission path are
-//! separate dependencies of Spec 02 O02-1 and O02-2. None of these mechanics
+//! production grammar compiler and model adapter remain dependencies of Spec 02
+//! O02-1 and O02-2. The separate entry refuses unsupported artifacts. None of these mechanics
 //! qualifies an artifact or substitutes the sequence-label scorer for a binder.
 
 pub mod admission;
@@ -14,3 +14,9 @@ pub mod dispatcher;
 // The merged TEMPLATES compiler consumes this private algorithm at cutover.
 #[allow(dead_code)]
 mod inclusion;
+
+mod entry;
+mod runtime;
+
+// Executable entry only; this does not activate the worker serving composition.
+pub use entry::run;

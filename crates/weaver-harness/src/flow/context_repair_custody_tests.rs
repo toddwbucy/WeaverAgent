@@ -335,7 +335,8 @@ fn repair_custody_refused_extraction_advances_owed_recall_and_protocol_records()
             .stage_repair_test_refusal(&mut fx.input.run.clock);
         let bound = fx.input.run.context.deadlines.get(PumpDeadline::Decision);
         for _ in 0..32 {
-            if fx.step(true) == RepairProgress::Refused {
+            fx.step(true);
+            if fx.input.run.context.repair_refused() {
                 break;
             }
         }
@@ -354,7 +355,18 @@ fn repair_custody_refused_extraction_advances_owed_recall_and_protocol_records()
         );
         let mut retained = None;
         for _ in 0..64 {
-            fx.step(true);
+            let progress = fx.step(true);
+            if progress == RepairProgress::Refused {
+                assert!(
+                    fx.input
+                        .run
+                        .context
+                        .deadlines
+                        .get(PumpDeadline::Decision)
+                        .is_none(),
+                    "refusal readiness retires its original wait before extraction"
+                );
+            }
             retained = fx
                 .input
                 .run
@@ -552,3 +564,6 @@ fn repair_custody_association_success_retains_each_exact_record_in_order() {
     let next = fx.generation(vec![text("Read next.")], true);
     assert!(next.generation().source().block_id.sequence.0 > sequence(&records[1]));
 }
+
+#[path = "context_repair_review_tests.rs"]
+mod review_tests;

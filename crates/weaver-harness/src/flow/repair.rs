@@ -29,6 +29,8 @@ pub(in crate::flow) enum RepairError {
     InvalidExpansion,
     WrongAccounting,
     InvalidStatement,
+    OutstandingCorrectionLoan,
+    OutstandingAccountLoan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -461,9 +463,11 @@ impl RepairLedger {
     pub(super) fn original(&self) -> Option<&OriginalRequests> {
         self.account.as_ref().map(|account| &account.original)
     }
+    #[cfg(test)]
     pub(super) fn associations(&self) -> &[RepairAssociationRefusal] {
         &self.associations
     }
+    #[cfg(test)]
     pub(super) fn original_refusals(&self) -> &[AssociationRefusal] {
         self.account
             .as_ref()
@@ -752,15 +756,59 @@ impl RepairLedger {
         Ok(self.failed_attempt())
     }
 
+    /// The original checked requests and repaired associations are the only
+    /// authority for this frontier; no caller supplies a refusal or final flag.
+    pub(super) fn next_association_refusal(&self) -> Option<(usize, RefusalRecord)> {
+        let account = self.account.as_ref()?;
+        let index = account.association_refusals.len();
+        // Traverse borrowed descriptions first. Only the selected frontier
+        // allocates an owned refusal, including on repeated pending polls.
+        let (source, case, detail) = account
+            .original
+            .refusals()
+            .iter()
+            .filter_map(|refusal| {
+                let AssociationRefusal::External {
+                    source,
+                    case,
+                    detail,
+                    ..
+                } = refusal
+                else {
+                    return None;
+                };
+                Some((source, *case, *detail))
+            })
+            .chain(self.associations.iter().map(|refusal| {
+                (
+                    refusal.source(),
+                    refusal.case(),
+                    "repaired external send requires exactly one non-recall statement",
+                )
+            }))
+            .nth(index)?;
+        let refusal = RefusalRecord::ProtocolRepair {
+            source_id: source.clone(),
+            case,
+            detail: detail.into(),
+        };
+        Some((index, refusal))
+    }
+
     pub(super) fn recorded_association_refusal(
         &mut self,
-        refusal: RefusalRecord,
+        expected_index: usize,
         source: SourcePosition,
-        last: bool,
     ) -> Result<(), RepairError> {
         let cancelled = self.stage == Stage::Cancelled;
         if !cancelled {
             self.require(Stage::Association)?;
+        }
+        let (index, refusal) = self
+            .next_association_refusal()
+            .ok_or(RepairError::WrongPhase)?;
+        if index != expected_index {
+            return Err(RepairError::WrongAccounting);
         }
         self.record(source.clone())?;
         self.account
@@ -768,7 +816,7 @@ impl RepairLedger {
             .unwrap()
             .association_refusals
             .push(RecordedAssociationRefusal { refusal, source });
-        if last {
+        if self.next_association_refusal().is_none() {
             self.association_recorded = true;
             self.original_refusals_recorded = true;
             if !cancelled {
@@ -896,6 +944,16 @@ impl RepairLedger {
             self.stage = Stage::Cancelled;
         }
     }
+    pub(super) fn outstanding_loan(&self) -> Option<RepairError> {
+        if self.correction_out.is_some() {
+            Some(RepairError::OutstandingCorrectionLoan)
+        } else if self.account_out.is_some() {
+            Some(RepairError::OutstandingAccountLoan)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn take_cancelled(&mut self) -> Option<RepairCancellation> {
         if self.stage != Stage::Cancelled
             || self.correction_out.is_some()
@@ -1069,7 +1127,7 @@ fn append_statements(
     Ok(())
 }
 
-fn validate_accounted<'a>(
+pub(super) fn validate_accounted<'a>(
     requests: impl Iterator<Item = &'a PairStarted>,
     completed: &[&CompletedPair],
     cause: NonDispatchCause,
@@ -1089,6 +1147,43 @@ fn validate_accounted<'a>(
         {
             return Err(RepairError::WrongAccounting);
         }
+    }
+    Ok(())
+}
+
+/// A terminal already admitted by one purpose remains immutable when Stop and
+/// then Unload claim the remaining suffix. Public pair ownership cannot reorder
+/// that prefix; this check also refuses corrupted or wrongly composed proofs.
+pub(super) fn validate_refused_accounted<'a>(
+    requests: impl ExactSizeIterator<Item = &'a PairStarted>,
+    completed: &[&CompletedPair],
+    cancel: Option<NonDispatchCause>,
+) -> Result<(), RepairError> {
+    let ceiling = match cancel {
+        None => 0,
+        Some(NonDispatchCause::Stop) => 1,
+        Some(NonDispatchCause::Unload) => 2,
+        Some(_) => return Err(RepairError::WrongAccounting),
+    };
+    if requests.len() != completed.len() {
+        return Err(RepairError::WrongAccounting);
+    }
+    let mut previous = 0;
+    for (request, proof) in requests.zip(completed) {
+        let Some(PairFailure::NotDispatched { cause }) = &proof.ended().reason else {
+            return Err(RepairError::WrongAccounting);
+        };
+        let rank = match cause {
+            NonDispatchCause::PassPurpose => 0,
+            NonDispatchCause::Stop => 1,
+            NonDispatchCause::Unload => 2,
+            _ => return Err(RepairError::WrongAccounting),
+        };
+        if rank < previous || rank > ceiling {
+            return Err(RepairError::WrongAccounting);
+        }
+        validate_accounted(std::iter::once(request), &[*proof], *cause)?;
+        previous = rank;
     }
     Ok(())
 }
