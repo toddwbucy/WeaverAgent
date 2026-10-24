@@ -104,13 +104,9 @@ fn effect(sequence: u64, effect: PlanEffect) -> StatementFile {
     file
 }
 fn snapshot(store: &ServingSqlite) -> PlanSnapshot {
-    reads::current_plan_snapshot(
-        &store.connection,
-        &store.context.seed_id,
-        store.read_limits.max_result_bytes,
-    )
-    .unwrap()
-    .unwrap()
+    reads::current_plan_snapshot(&store.connection, &store.context.seed_id)
+        .unwrap()
+        .unwrap()
 }
 fn unchanged(store: &mut ServingSqlite, filing: &StatementFile) {
     let before = store
@@ -668,13 +664,7 @@ fn new_operator_plan_retires_broken_execution_without_closing_it() {
             },
         ))
         .unwrap();
-    let old = reads::plan_snapshot(
-        &store.connection,
-        &store.context.seed_id,
-        &plan(1),
-        store.read_limits.max_result_bytes,
-    )
-    .unwrap();
+    let old = reads::plan_snapshot(&store.connection, &store.context.seed_id, &plan(1)).unwrap();
     assert_eq!(old.status, PlanStatus::Superseded);
     assert_eq!(old.steps[0].status, StepStatus::Retired);
     assert_eq!(snapshot(&store).plan, next);

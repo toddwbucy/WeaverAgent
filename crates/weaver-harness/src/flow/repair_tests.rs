@@ -547,17 +547,7 @@ fn ambiguous_repaired_external_statement_is_an_operation_refusal_not_another_fai
         ProtocolRepairCase::AmbiguousToolStatement
     );
     assert!(ledger.take_effective().unwrap().is_none());
-    ledger
-        .recorded_association_refusal(
-            RefusalRecord::ProtocolRepair {
-                source_id: source(10, 0),
-                case: ProtocolRepairCase::AmbiguousToolStatement,
-                detail: "repaired external send requires exactly one non-recall statement".into(),
-            },
-            record(140),
-            true,
-        )
-        .unwrap();
+    ledger.recorded_association_refusal(0, record(140)).unwrap();
     let effective = ledger.take_effective().unwrap().unwrap();
     assert!(effective.requests().is_empty());
     assert!(effective.attempted_call());
@@ -818,6 +808,10 @@ fn cancellation_recovers_a_lent_forbidden_correction_without_minting_completion(
         .unwrap();
     ledger.recorded_protocol_refusal(record(140)).unwrap();
     let correction = ledger.take_correction_accounting().unwrap();
+    assert_eq!(
+        ledger.outstanding_loan(),
+        Some(RepairError::OutstandingCorrectionLoan)
+    );
     ledger.cancel();
     assert!(ledger.take_cancelled().is_none());
     // The stopped owner may return before every pair is terminal. Custody still
@@ -857,9 +851,14 @@ fn cancellation_recovers_a_lent_exhaustion_account_without_erasing_its_pending_s
         .unwrap();
     ledger.recorded_exhausted(record(140)).unwrap();
     let account = ledger.take_exhausted_account().unwrap();
+    assert_eq!(
+        ledger.outstanding_loan(),
+        Some(RepairError::OutstandingAccountLoan)
+    );
     ledger.cancel();
     assert!(ledger.take_cancelled().is_none());
     ledger.finish_exhausted_account(account, &[]).unwrap();
+    assert_eq!(ledger.outstanding_loan(), None);
     assert!(ledger.take_exhausted().is_none());
     let cancelled = ledger.take_cancelled().unwrap();
     assert_eq!(cancelled.account().requests().len(), 1);
@@ -906,11 +905,7 @@ fn invalid_recall_requires_its_actual_refusal_record_before_transfer() {
     assert_eq!(ledger.original_refusals().len(), 1);
     assert!(ledger.associations().is_empty());
     assert_eq!(
-        ledger.recorded_association_refusal(
-            RefusalRecord::RecallRequest(refusal.clone()),
-            record(40),
-            true
-        ),
+        ledger.recorded_association_refusal(0, record(40)),
         Err(RepairError::WrongPhase)
     );
     assert!(ledger.take_effective().unwrap().is_none());
@@ -1009,4 +1004,98 @@ fn repair_custody_pending_protocol_flag_clears_at_transfer_and_empty_installatio
         &record(300)
     );
     assert!(pending.account().empty_corrections().is_empty());
+}
+
+// The ledger accepts only its exact frontier index and actual recorded source.
+// A caller cannot supply either the refusal payload or a claimed final flag.
+const _: fn(&mut RepairLedger, usize, SourcePosition) -> Result<(), RepairError> =
+    RepairLedger::recorded_association_refusal;
+
+#[test]
+fn repair_review_ledger_derives_ordered_association_payload_and_completion() {
+    let original = original_at(
+        10,
+        vec![call("orphan"), text("bad"), call("linked")],
+        vec![rejected()],
+    );
+    let mut ledger = RepairLedger::begin(original, 2).unwrap();
+    request(&mut ledger, 40);
+    let correction = original_at(
+        100,
+        vec![text("Read first. Read second.")],
+        vec![accepted("Read first. Read second.")],
+    );
+    ledger
+        .observe_correction(&source(10, 1), correction)
+        .unwrap();
+    assert_eq!(ledger.intent(), RepairIntent::AssociationRefusals);
+    let expected = [
+        RefusalRecord::ProtocolRepair {
+            source_id: source(10, 0),
+            case: ProtocolRepairCase::MissingToolStatement,
+            detail: "tool call has no immediately preceding Text block".into(),
+        },
+        RefusalRecord::ProtocolRepair {
+            source_id: source(10, 1),
+            case: ProtocolRepairCase::AmbiguousToolStatement,
+            detail: "repaired external send requires exactly one non-recall statement".into(),
+        },
+    ];
+    assert_eq!(
+        ledger.next_association_refusal(),
+        Some((0, expected[0].clone()))
+    );
+    assert_eq!(
+        ledger.recorded_association_refusal(1, record(140)),
+        Err(RepairError::WrongAccounting)
+    );
+    assert!(
+        ledger
+            .account
+            .as_ref()
+            .unwrap()
+            .association_refusals()
+            .is_empty()
+    );
+    ledger.recorded_association_refusal(0, record(140)).unwrap();
+    assert_eq!(ledger.intent(), RepairIntent::AssociationRefusals);
+    assert!(
+        ledger.take_effective().unwrap().is_none(),
+        "one real record cannot claim the remaining frontier is final"
+    );
+    assert_eq!(
+        ledger.next_association_refusal(),
+        Some((1, expected[1].clone()))
+    );
+    assert_eq!(
+        ledger.recorded_association_refusal(0, record(141)),
+        Err(RepairError::WrongAccounting)
+    );
+    assert_eq!(
+        ledger
+            .account
+            .as_ref()
+            .unwrap()
+            .association_refusals()
+            .len(),
+        1
+    );
+    ledger.recorded_association_refusal(1, record(141)).unwrap();
+    assert!(ledger.next_association_refusal().is_none());
+    assert_eq!(
+        ledger.recorded_association_refusal(2, record(142)),
+        Err(RepairError::WrongPhase)
+    );
+    let effective = ledger.take_effective().unwrap().unwrap();
+    assert!(effective.requests().is_empty());
+    assert_eq!(effective.account().association_refusals().len(), 2);
+    for (index, receipt) in effective
+        .account()
+        .association_refusals()
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(receipt.refusal(), &expected[index]);
+        assert_eq!(receipt.source(), &record(140 + index as u64));
+    }
 }

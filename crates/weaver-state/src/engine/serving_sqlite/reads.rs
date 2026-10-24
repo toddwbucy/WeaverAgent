@@ -1,7 +1,9 @@
 //! Read-only state-content/1 queries and bounded complete-result serialization.
 //!
-//! The encoded port streams SQLite rows into one bounded snapshot. The typed port
-//! decodes only that already bounded result. Neither port exposes a partial result.
+//! The encoded port streams SQLite rows into one bounded snapshot. The public typed
+//! port decodes only that bounded result. Private transaction-local plan guards
+//! derive typed metadata without imposing a public response limit. Neither public
+//! port exposes a partial result.
 
 use super::ServingSqlite;
 use crate::serving_bytes::BufferBytes;
@@ -502,39 +504,13 @@ impl Write for Output<'_> {
 }
 
 /// Transaction-local views used by atomic plan guards. They neither begin a second
-/// transaction nor mint a closure or activation grant.
-pub(super) fn plan_snapshot(
-    db: &Connection,
-    seed: &str,
-    plan: &PlanRef,
-    max_bytes: DecimalU64,
-) -> Result<PlanSnapshot> {
-    let mut out = Output::new(max_bytes)?;
-    plans::historical(db, seed, &mut out, plan)?;
-    match serde_json::from_slice::<QueryResult>(&out.bytes)
-        .map_err(|_| ReadFailure::ComponentCorruption("invalid plan encoding"))?
-    {
-        QueryResult::Plan { snapshot } => Ok(snapshot),
-        _ => Err(ReadFailure::ComponentCorruption("wrong plan result")),
-    }
+/// transaction nor mint a closure or activation grant. These typed metadata views
+/// do not serialize a public response and take no external result-byte limit.
+pub(super) fn plan_snapshot(db: &Connection, seed: &str, plan: &PlanRef) -> Result<PlanSnapshot> {
+    plans::historical_snapshot(db, seed, plan)
 }
-pub(super) fn current_plan_snapshot(
-    db: &Connection,
-    seed: &str,
-    max_bytes: DecimalU64,
-) -> Result<Option<PlanSnapshot>> {
-    let mut out = Output::new(max_bytes)?;
-    let mut statement = db.prepare(
-        "SELECT * FROM plan_revision WHERE status!='superseded' ORDER BY last_source DESC LIMIT 1",
-    )?;
-    let mut rows = statement.query([])?;
-    let Some(row) = rows.next()? else {
-        return Ok(None);
-    };
-    plans::snapshot(db, seed, &mut out, row)?;
-    serde_json::from_slice(&out.bytes)
-        .map(Some)
-        .map_err(|_| ReadFailure::ComponentCorruption("invalid current plan encoding"))
+pub(super) fn current_plan_snapshot(db: &Connection, seed: &str) -> Result<Option<PlanSnapshot>> {
+    plans::current_snapshot(db, seed)
 }
 pub(super) fn span_preview_encoded(
     db: &Connection,

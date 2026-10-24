@@ -44,8 +44,7 @@ pub(in crate::engine::serving_sqlite) fn verify_image_plan(
         if !allocated {
             return Err(invalid_effect("plan history skips an allocated identity"));
         }
-        let snapshot =
-            reads::plan_snapshot(db, seed, &plan, u64::MAX.into()).map_err(read_fault)?;
+        let snapshot = reads::plan_snapshot(db, seed, &plan).map_err(read_fault)?;
         verify_revision(db, seed, &snapshot)?;
         previous = Some(plan);
     }
@@ -482,10 +481,7 @@ fn verify_operator_steps(
             (
                 r.steps.as_slice(),
                 r.preserved_closures.as_slice(),
-                Some(
-                    reads::plan_snapshot(db, seed, expected, u64::MAX.into())
-                        .map_err(read_fault)?,
-                ),
+                Some(reads::plan_snapshot(db, seed, expected).map_err(read_fault)?),
             )
         }
     };

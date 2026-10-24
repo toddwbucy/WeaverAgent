@@ -280,6 +280,10 @@ fn ste100_manifest_locator_has_exact_field_attribution_and_preserves_legacy_bind
         " /models/checker.json",
         "C:\\models\\checker.json",
         "/models/checker\0.json",
+        "/",
+        "/models/",
+        "/models/.",
+        "/models/x/..",
     ] {
         // JSON string escaping is also valid for these TOML basic strings.
         let value = serde_json::to_string(locator).unwrap();

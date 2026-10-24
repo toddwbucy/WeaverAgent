@@ -309,6 +309,7 @@ mod tests {
         use std::os::fd::{AsRawFd, IntoRawFd};
 
         const CHILD: &str = "WEAVER_STATE_IMAGE_FD_TEST_CHILD";
+        const COMPLETED: &str = "WEAVER_STATE_IMAGE_FD_READ_ONLY_REGULAR_CLOSED";
         const TEST: &str =
             "member::room::tests::image_descriptor_is_read_only_regular_and_owned_once";
         if std::env::var_os(CHILD).is_none() {
@@ -325,9 +326,10 @@ mod tests {
                 output.status.success(),
                 "isolated descriptor test failed: {stdout}\n{stderr}"
             );
-            assert!(
-                stdout.contains("test result: ok. 1 passed;"),
-                "the exact child test must run once: {stdout}\n{stderr}"
+            assert_eq!(
+                stdout.lines().filter(|line| *line == COMPLETED).count(),
+                1,
+                "the exact child test must finish once: {stdout}\n{stderr}"
             );
             return;
         }
@@ -357,5 +359,8 @@ mod tests {
             io::Error::last_os_error().raw_os_error(),
             Some(nix::libc::EBADF)
         );
+        // Emit our own proof only after every real descriptor assertion. A zero-
+        // test child exits successfully but cannot print this completion marker.
+        println!("\n{COMPLETED}");
     }
 }

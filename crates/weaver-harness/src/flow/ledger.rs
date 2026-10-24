@@ -732,6 +732,24 @@ impl Ledger {
         self.source_leases.release(lease)
     }
 
+    #[cfg(test)]
+    pub(super) fn review_set_taken_source_status(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+        status: LeaseSlotStatus,
+    ) {
+        self.source_leases
+            .review_set_taken_status(lease, source, status);
+    }
+
+    pub(super) fn release_source_leases(
+        &mut self,
+        leases: &[&SourceLease],
+    ) -> Result<(), LedgerError> {
+        self.source_leases.release_batch(leases)
+    }
+
     /// Retained consumer facts are separate from owed filing gauges and barriers.
     pub(super) fn has_source_leases(&self) -> bool {
         !self.source_leases.is_empty()
@@ -773,6 +791,26 @@ impl Ledger {
             set.cancel();
             set
         })
+    }
+
+    pub(super) fn split_source_lease(
+        &mut self,
+        lease: &SourceLease,
+        source: &SourceBlockId,
+    ) -> Result<SourceLease, LedgerError> {
+        self.source_leases.split(lease, source)
+    }
+
+    pub(super) fn owned_pending_text(&self, lease: &SourceLease, source: &SourceBlockId) -> bool {
+        (self
+            .source_leases
+            .status(lease, source)
+            .is_ok_and(|status| status == LeaseSlotStatus::Pending)
+            && self.entries.iter().any(|entry| {
+                entry.file.source() == source
+                    && matches!(&entry.file,LedgerFile::Statement(file) if !file.text.is_empty())
+            }))
+            || self.source_leases.retained_whole_text(lease, source)
     }
 
     pub(super) fn barrier(&self, sources: &[SourceBlockId]) -> Result<bool, LedgerError> {

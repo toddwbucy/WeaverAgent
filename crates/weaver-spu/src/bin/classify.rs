@@ -26,7 +26,9 @@ fn main() -> ExitCode {
         eprintln!("weaver-spu-classify <artifact-dir> <device-ordinal>");
         return ExitCode::FAILURE;
     };
-    let seam = match adopt_classify() {
+    // SAFETY: argv parsing opened no descriptors or workers. fd3 is the
+    // harness's uniquely inherited raw end, with no Rust/foreign owner yet.
+    let seam = match unsafe { adopt_classify() } {
         Ok(seam) => seam,
         Err(fault) => {
             eprintln!("weaver-spu-classify: the seam did not adopt: {fault:?}");
