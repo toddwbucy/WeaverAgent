@@ -3,7 +3,7 @@
 Date filed: 2026-10-24
 
 Issue: #146. Parent: draft #323 at
-`64d6460bc6f061ee5f566e6f30fdb262fdc5e0c2`.
+`89e301d59841b9a374ae374ef8961c1930fc88f0`.
 Branch: `code/state-worker-external`, based on
 `code/state-worker-return-delivery`.
 
@@ -150,7 +150,38 @@ The next act must include unrelated gate traffic and the schema's loaded policy
 in its initial sequence audit; a primitive's refusal/OtherTraffic result needs
 a concrete worker owner as much as its successful result does.
 
-## Review and corrected parent join
+## Account correction join
+
+This merge joins #323 at 89e301d5, which answers Planner regrade 5638217934's
+cleanup-bound and frozen-receipt findings. Generation retires its admission
+Decision before installing the decode owner; Busy retains its original window.
+Another wait owner blocks admission. Leave/halt accounting after slow decode
+uses its lifecycle bound, and an already-authored result receipt is retained
+after ledger freeze without granting new material or delivery.
+
+The external execution policy and all ten carries below remain unchanged.
+Codex finding 4367095722 at bbe299fe independently identifies the same queued
+world-input stall as Planner row 1. The Planner left that thread open until
+routing is joined; it is not resolved by this parent merge.
+
+The combined source passed **2030 harness tests**, including 22 doctests, and
+**243 delegated process cases serially**. Its 261 ordinary ignores comprise
+those 243 delegated cases and 18 inherited ones. Lock before/after Cargo,
+formatting, strict harness lint and diff checks passed on the pinned --locked
+toolchain in `/var/tmp/weaver-state-146-worker-external-target`. All 670
+source/configuration hashes match manifest
+`37d8b7399ba7cbce62993e9f21747a3e4d0b6074d7665cbcebb5d0141d9ba4af`.
+
+No new mutation round is claimed for this ancestry join. The corrected #323
+has four compiled account controls and restored-source checks; the earlier
+mutation evidence below remains historical, including its superseded frozen
+receipt check. Eight privileged admin-startup cases remain unrun; #313 and
+full #316 teardown remain open. Current evidence is in
+`/tmp/state-146-worker-external-account-join/`, with the exact-head bulk leaf
+and manifest recorded on #324/#146. This is author verification, not a Planner
+regrade, security pass or production qualification.
+
+## First corrected parent join (historical bbe299fe)
 
 Planner review 5638144682 cleared b5f48f6a with zero fix and ten batch rows.
 The Planner marked that head ready. This merge joins corrected #323 cc27588c;

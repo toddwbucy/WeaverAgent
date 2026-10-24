@@ -108,7 +108,7 @@ impl RecordingContext {
                 staged: None,
             });
         }
-        if self.place_busy() {
+        if self.place_busy() || self.wait_still_owned(PumpDeadline::Decision) {
             return Err(PlaceBeginError {
                 input: grant,
                 refusal: PlaceError::Busy(self.held_input()),
@@ -152,6 +152,11 @@ impl RecordingContext {
                 });
             }
         };
+        // Busy admission keeps its original Decision window. Once staging
+        // succeeds, retire that window before installing the decode owner:
+        // complete_wait freezes existing accounts, and admission is not a
+        // bound on later Leave/halt accounting of this generation.
+        self.complete_wait(PumpDeadline::Decision);
         self.barrier.set_place_owed(true);
         self.generation = Some(GenerationTransaction {
             grant: Some(grant),

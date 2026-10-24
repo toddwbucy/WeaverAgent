@@ -78,7 +78,55 @@ The current pair road keeps Decision armed at PairReady, so time taken by the
 loop to elect the next operation counts against decision_wait; a slow election
 can halt at that existing bound.
 
-## Review corrections
+## Account review correction
+
+Planner regrade 5638217934 at cc27588c detected that complete_wait froze the
+retired admission deadline into a just-installed generation account. Decode
+could complete, but Leave or failure after a slow decode abandoned cleanup
+against that old bound. It also corrected the earlier request to freeze
+record_result: retaining an already-authored receipt remains owed after failure.
+This revision answers those findings on the same PR.
+
+| Row | Disposition |
+| --- | --- |
+| 1 | Fixed: begin_generation retires Decision after successful staging and before installing GenerationTransaction. Decode-port Busy retains the original deadline and caller-owned grant. Real socket instruments hold generation beyond that window, then separately Leave or fail, and require Cancel/Generated/AtRest to settle under Leave or halt. The original slow task/result process instruments remain. |
+| 2 | Fixed: record_result retains an authored receipt after the ledger freezes. Fresh material, result_record as a delivery precondition, and delivery still require a live ledger. A result author pending under actual trace pressure survives failure with the exact recorded sequence and first failure retained. |
+| 3 | Fixed defensively: generation admission checks the same wait-owner predicate as complete_wait before staging. Another owner cannot keep Decision armed behind a successfully admitted generation. The existing predicate and complete_wait's other account freezes remain unchanged. |
+| 4 | Open batch: distinguish Frozen from invalid-result refusal detail, retain the notice queue result, and expose the refused-selection notice's ownership consistently. |
+| 5 | Open batch: avoid cloning CallId.run for indexed lookups and share the borrowed key with duplicate selection checks. |
+| 6 | Open batch: remove or test-gate the unused take_result production method and use the index for the remaining completed/duplicate/exchange scans. |
+| 7 | Open batch: make an unexpected replaced index entry explicit instead of relying only on admission's DuplicateCall check. |
+| 8 | Open composition batch: unify journal selection validation and refusal recording between the worker precheck and begin_place while preserving caller ownership. |
+| 9 | Open batch: construct the placement record once after the result authors rather than patching its wait sample. |
+
+The earlier 32-round workflow composition and unavailable self-check skills
+remain open. These cleanup tests exercise the exact placement account; they do
+not establish the complete worker/admin Leave or failed-run teardown, which
+remain under #146/#316. No outcome, bound or record shape is newly elected.
+
+Account correction checks passed: **2030 harness tests**, including 22 doctests,
+and **222 delegated process cases serially**, with 240 ordinary ignores (222
+delegated plus 18 inherited). Lock before/after Cargo, formatting, strict harness
+lint and diff checks passed. The same private target and pinned --locked
+toolchain were used. Four new ordinary cases cover Leave after slow decode,
+failure after slow decode, Busy admission and failure during a result author.
+
+All **four compiled protective mutations were detected**: retiring admission
+after installing the generation, retiring it before a Busy stage, leaving
+Decision armed through decode, and refusing an owed result receipt after freeze.
+The source was restored, rebuilt and passed the slow-account, Busy, RETURN-CARRY
+and all generation/result process checks. All 668 source/configuration hashes
+match manifest `2c8ac4342a3f08f0bfeccae753eef1ed89ef911091f23f65d0d9cfe745159b6e`.
+
+Evidence: `/tmp/state-146-worker-return-account-review/`, with exact-head bulk
+deposit recorded on #323/#146. The first compile found two test-only type errors;
+the next run found a Busy fixture using MeasureDelta on the placement-reservation
+port. The final fixture uses an unsent AppendAndGenerate reservation. Those logs
+are retained separately and none is counted as a mutation detection. The eight
+privileged admin-startup cases remain unrun; #313's races and full #316 teardown
+remain open. This is author verification, not a fresh Planner or security grade.
+
+## First review correction (historical cc27588c)
 
 Planner review 5638101361 at 64d6460b found one blocking Decision-clock
 regression and eleven batch rows. This correction changes the same PR; it does
@@ -91,7 +139,7 @@ not claim a regrade. The complete disposition is:
 | 3 | Fixed: placement wait is sampled after all result authors. Actual trace-pressure instrumentation includes that delay. |
 | 4 | Fixed: delivered/foreign/duplicate selection admission queues the placement refusal owner under the existing author ordering. Invalid input remains caller-owned. |
 | 5 | Fixed for fresh live-result grants across selected and staged units, before measurement. Two instruments retain both refused inputs and require no decode send. Historical complete-span replay remains governed by its separate repeated-occurrence rule. |
-| 6 | Fixed: result_record, record_result and acknowledge_delivery run the frozen check. Each check has an isolated compiled mutation. |
+| 6 | At cc27588c all three operations ran the frozen check. The account regrade above corrects the overbroad record_result check; retaining an owed receipt remains legal after freeze. The other two checks remain. |
 | 7 | Comparison retained deliberately: AppendReceipt holds the journal-issued identity and assembly independently of the pending request. Swapping two genuine completed append receipts fails, while restoring the correct one succeeds. The comparison does more than test presence. |
 | 8 | All five named guards are isolated: delivered material, absent result record, Returned coverage, changed result sequence and context origin. Corruption fixtures start with real pair/append receipts; test-only helpers create no production capability. Each guard's removal must fail its instrument. |
 | 9 | Fixed: hold_place_return uses one checked completed lookup and preserves Frozen, UnknownCall, NotReady and AlreadyDelivered. Its only production caller, place_results, returns the unchanged CallId selection on refusal. |

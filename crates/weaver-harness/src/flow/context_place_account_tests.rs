@@ -1,5 +1,6 @@
 //! Failed and releasing accounts retain exact wire and recorder custody.
 use super::*;
+use crate::flow::pump_transport::DecodeStage;
 
 impl PlaceFixture {
     pub(super) fn account_step(&mut self) -> Result<PlaceProgress, RunFailure> {
@@ -35,6 +36,127 @@ impl PlaceFixture {
         }
         panic!("bounded place account did not settle");
     }
+}
+
+fn slow_generation_account(failed: bool) {
+    let mut fx = PlaceFixture::new();
+    let units = fx.text(8, "record");
+    fx.turn("slow-account");
+    let before = fx.journal();
+    let grant = fx.grant(units, 3);
+    let run = fx.run();
+    let admission = AbsoluteBound::after(run.clock.now().unwrap(), PLACE_WAIT).unwrap();
+    run.context
+        .arm(PumpDeadline::Decision, admission, &mut run.clock)
+        .unwrap();
+    fx.start_generation(grant);
+    fx.sent_generation();
+    let run = fx.run();
+    run.clock
+        .advance_to(admission.deadline_ns() + PLACE_WAIT)
+        .unwrap();
+    let first = if failed {
+        Some(run.context.fail(
+            &mut run.clock,
+            FlowHaltReason::ProtocolFailed,
+            HaltPoint::Barrier,
+            "fixture failure after slow decode",
+        ))
+    } else {
+        let leave = AbsoluteBound::after(run.clock.now().unwrap(), PLACE_WAIT / 2).unwrap();
+        run.context
+            .begin_place_release(leave, &mut run.clock)
+            .unwrap();
+        None
+    };
+    if failed {
+        fx.first_fault_attempt();
+    }
+    let mut cancel = None;
+    for _ in 0..32 {
+        fx.account_step().unwrap();
+        if let Some(raw) = receive(fx.peer.as_fd()) {
+            cancel = Some(serde_json::from_slice::<TokenDirective>(&raw).unwrap());
+            break;
+        }
+        assert!(fx.run().context.take_place_account().is_none());
+    }
+    assert_eq!(
+        cancel,
+        Some(TokenDirective::Cancel {
+            turn: TurnKey("slow-account".into())
+        })
+    );
+    let terminal = generated(before.1, 3, 1, "Read result.", Finish::Stopped, before.2);
+    let raw = fx.answer(&TokenAnswer::Generated(terminal));
+    for _ in 0..8 {
+        fx.account_step().unwrap();
+        assert!(
+            fx.run().context.take_place_account().is_none(),
+            "the original Cancel still owes AtRest"
+        );
+    }
+    fx.answer(&TokenAnswer::AtRest);
+    let account = fx.settled_account();
+    assert!(account.incomplete().is_none());
+    assert_eq!(account.raw_bytes(), Some(raw.as_slice()));
+    assert!(account.confirmed_generation().is_some());
+    assert_eq!(fx.run().context.failure(), first.as_ref());
+    assert!(receive(fx.peer.as_fd()).is_none());
+}
+
+#[test]
+fn place_slow_generation_leave_accounts_under_leave_not_retired_admission() {
+    slow_generation_account(false);
+}
+
+#[test]
+fn place_slow_generation_failure_accounts_under_halt_not_retired_admission() {
+    slow_generation_account(true);
+}
+
+#[test]
+fn place_generation_busy_keeps_original_admission_window_until_staged() {
+    let mut fx = PlaceFixture::new();
+    let units = fx.text(8, "record");
+    fx.turn("busy-admission");
+    let grant = fx.grant(units, 3);
+    let run = fx.run();
+    let admission = AbsoluteBound::after(run.clock.now().unwrap(), PLACE_WAIT).unwrap();
+    run.context
+        .arm(PumpDeadline::Decision, admission, &mut run.clock)
+        .unwrap();
+    let DecodeStage::Queued(held) = fx
+        .decode
+        .stage_placement(TokenDirective::AppendAndGenerate {
+            turn: TurnKey("held-append".into()),
+            delta: vec![],
+            tool_schemas: vec![],
+        })
+        .unwrap()
+    else {
+        panic!("idle fixture decode port");
+    };
+    let run = &mut fx.summary.boot.member.run;
+    let error = run
+        .context
+        .begin_generation(grant, &mut fx.decode, &mut run.clock)
+        .unwrap_err();
+    assert!(matches!(error.refusal, PlaceError::Busy(_)));
+    assert!(error.failure.is_none());
+    assert_eq!(
+        run.context.deadlines.get(PumpDeadline::Decision),
+        Some(admission)
+    );
+    fx.decode.withdraw_unsent(held).unwrap();
+    fx.start_generation(error.input);
+    assert!(
+        fx.run()
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision)
+            .is_none()
+    );
 }
 
 #[test]
