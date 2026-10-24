@@ -1188,18 +1188,22 @@ impl RecordingContext {
     /// final disposition. Returning the port on refusal preserves caller custody.
     #[allow(clippy::result_large_err)] // Refusal returns the original owned transport.
     pub(in crate::flow) fn retire_boot_decode(&self, decode: DecodePort) -> Result<(), DecodePort> {
-        if !matches!(
-            self.phase,
-            RecordingPhase::Releasing | RecordingPhase::Failed
-        ) || !self.boot_open_account_settled()
-            || self.place_owed()
-            || self.check_place_port(&decode).is_err()
-            || self.check_boot_open_port(&decode).is_err()
-        {
+        if !self.can_retire_boot_decode(&decode) {
             return Err(decode);
         }
         drop(decode);
         Ok(())
+    }
+    /// The same admission predicate applies when failure teardown retains the
+    /// closed transport's framing evidence instead of dropping it outright.
+    pub(super) fn can_retire_boot_decode(&self, decode: &DecodePort) -> bool {
+        matches!(
+            self.phase,
+            RecordingPhase::Releasing | RecordingPhase::Failed
+        ) && self.boot_open_account_settled()
+            && !self.place_owed()
+            && self.check_place_port(decode).is_ok()
+            && self.check_boot_open_port(decode).is_ok()
     }
     fn boot_trace_fault(&mut self, io: &mut impl PumpIo, detail: impl Into<String>) -> RunFailure {
         let detail = detail.into();

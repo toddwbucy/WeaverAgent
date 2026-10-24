@@ -238,10 +238,9 @@ fn child_release(wrong: u8) {
         weaver_types::Payload::Directive(LifecycleDirective::Release)
     ));
     assert_eq!(request.position, Position::Open);
-    let mut probe = [0u8; 1];
-    let closed =
-        unsafe { nix::libc::recv(4, probe.as_mut_ptr().cast(), 1, nix::libc::MSG_DONTWAIT) };
-    assert_eq!(closed, 0, "decoder must close before first Release byte");
+    // Another fixture's fork may briefly inherit a copy until its exec. Only
+    // actual EOF establishes closure; EAGAIN is a bounded wait, never success.
+    review_tests::await_decoder_eof(4, Duration::from_secs(3));
     let mut exchange = request.exchange;
     if wrong == 1 {
         exchange.ordinal += 1;
@@ -253,11 +252,15 @@ fn child_release(wrong: u8) {
         } else {
             Position::Close
         },
-        payload: weaver_types::Payload::Answer(if wrong == 3 {
-            LifecycleAnswer::Ready
+        payload: if wrong == 4 {
+            weaver_types::Payload::Refusal(weaver_types::LifecycleRefusal::OutOfOrder)
         } else {
-            LifecycleAnswer::Released
-        }),
+            weaver_types::Payload::Answer(if wrong == 3 {
+                LifecycleAnswer::Ready
+            } else {
+                LifecycleAnswer::Released
+            })
+        },
     })
     .unwrap();
     let sent = unsafe {
@@ -345,6 +348,18 @@ fn failed_enter_cleanup_real_fork_release_requires_exact_reply_and_reaps_origina
         assert!(spu.decode.is_none() && spu.residency.is_none());
         assert!(spu.retired_decode.is_some() && spu.retired_residency.is_some());
         assert!(owner.unload_sequence().is_some());
+        let rows = records(&mut fx);
+        let unloads: Vec<_> = rows.iter().filter(|row| row["kind"] == "unload").collect();
+        assert_eq!(unloads.len(), 1);
+        assert_eq!(
+            unloads[0]["payload"]["release"]["spu"],
+            if expected == ReleaseOutcome::Confirmed {
+                "confirmed"
+            } else {
+                "unconfirmed"
+            }
+        );
+        assert_eq!(unloads[0]["payload"]["release"]["member"], "unconfirmed");
     }
 }
 
@@ -513,6 +528,17 @@ fn failed_enter_cleanup_preopen_failure_closes_without_fabricated_load_sample_fa
     assert!(owner.unload_unavailable.is_some());
     assert!(owner.context.flow.standing_state().is_none());
     assert!(records(&mut fx).is_empty());
+    let done = match owner.finish() {
+        Ok(done) => done,
+        Err(_) => panic!("closed"),
+    };
+    assert!(!done.abandoned());
+    assert!(done.trace_drained());
+    assert!(done.unload_attempted());
+    assert!(done.unload_sequence().is_none());
+    assert!(done.unload_unavailable().is_some());
+    assert!(done.report_unavailable().is_some());
+    assert!(done.account_failure().is_some());
 }
 
 fn fill_trace(fx: &mut Fixture) {
@@ -853,7 +879,7 @@ fn failed_enter_cleanup_foreign_replaced_producer_ports_return_exact_resources_b
             let next = resources.spu.as_ref().unwrap().next_ordinal;
             assert!(
                 resources
-                    .stage_residency(LifecycleDirective::Release)
+                    .stage_residency(review_tests::prior_admission())
                     .is_err()
             );
             assert_eq!(resources.spu.as_ref().unwrap().next_ordinal, next);
@@ -1065,3 +1091,6 @@ fn failed_enter_cleanup_wait_uses_original_cap_with_actual_silent_child_and_trac
     }
     assert!(!finished.resources().has_unreaped_child());
 }
+
+#[path = "context_failed_enter_review_tests.rs"]
+mod review_tests;

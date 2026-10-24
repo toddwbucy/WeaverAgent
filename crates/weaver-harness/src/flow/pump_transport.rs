@@ -170,9 +170,9 @@ impl OrganSend {
 }
 
 #[derive(Debug)]
-pub(super) enum TrackedStage {
+pub(super) enum TrackedStage<T = OrganEnvelope> {
     Queued(OrganSend),
-    Busy(OrganEnvelope),
+    Busy(T),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -318,6 +318,7 @@ struct Outbound {
     decode_reservation: Option<Arc<DecodeReservationState>>,
     generation: bool,
     resident_mutation: bool,
+    admit: bool,
     cancel: bool,
 }
 
@@ -388,6 +389,12 @@ impl ReceivedOrgan {
 }
 
 impl OrganPort {
+    pub(super) fn admit_not_started(&self) -> bool {
+        self.outgoing
+            .as_ref()
+            .is_some_and(|out| out.admit && out.offset == 0 && !out.preamble_sent)
+    }
+
     pub(super) fn port_identity(&self) -> PortIdentity {
         self.identity.clone()
     }
@@ -407,7 +414,18 @@ impl OrganPort {
         &mut self,
         input: OrganEnvelope,
     ) -> Result<Stage<OrganEnvelope>, StageFailure<OrganEnvelope>> {
-        self.stage_encoded(input, serde_json::to_vec)
+        let admit = matches!(
+            &input.payload,
+            weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Admit { .. })
+        );
+        let result = self.stage_encoded(input, serde_json::to_vec)?;
+        if matches!(result, Stage::Queued) {
+            self.outgoing
+                .as_mut()
+                .expect("queued organ directive")
+                .admit = admit;
+        }
+        Ok(result)
     }
 
     /// Issue a sealed proof for exactly this stage, without changing the
@@ -419,18 +437,50 @@ impl OrganPort {
     ) -> Result<TrackedStage, StageFailure<OrganEnvelope>> {
         let exchange = input.exchange.clone();
         match self.stage(input)? {
-            Stage::Queued => {
-                let tracked = Arc::new(TrackedSend {
-                    status: AtomicU8::new(SEND_PENDING),
-                    sent_at: AtomicU64::new(0),
+            Stage::Queued => Ok(TrackedStage::Queued(self.track_staged(exchange))),
+            Stage::Busy(input) => Ok(TrackedStage::Busy(input)),
+        }
+    }
+
+    fn track_staged(&mut self, exchange: weaver_types::ExchangeId) -> OrganSend {
+        let tracked = Arc::new(TrackedSend {
+            status: AtomicU8::new(SEND_PENDING),
+            sent_at: AtomicU64::new(0),
+        });
+        self.outgoing.as_mut().expect("queued packet").tracked = Some(Arc::clone(&tracked));
+        OrganSend {
+            identity: self.identity.clone(),
+            exchange,
+            tracked,
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_observation(
+        &mut self,
+        input: weaver_types::state_flow::enter::ObservationEnvelope,
+    ) -> Result<
+        TrackedStage<weaver_types::state_flow::enter::ObservationEnvelope>,
+        StageFailure<weaver_types::state_flow::enter::ObservationEnvelope>,
+    > {
+        let bytes = match input.encode() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let failure = match error {
+                    weaver_types::state_flow::enter::CodecError::TooLarge => {
+                        Failure::truncated(MAX_ENVELOPE_BYTES)
+                    }
+                    _ => Failure::invalid(format!("replacement observation: {error:?}")),
+                };
+                return Err(StageFailure {
+                    input,
+                    failure: self.fail(failure),
                 });
-                self.outgoing.as_mut().expect("queued packet").tracked = Some(Arc::clone(&tracked));
-                Ok(TrackedStage::Queued(OrganSend {
-                    identity: self.identity.clone(),
-                    exchange,
-                    tracked,
-                }))
             }
+        };
+        let exchange = input.exchange.clone();
+        match self.stage_encoded(input, |_| Ok(bytes))? {
+            Stage::Queued => Ok(TrackedStage::Queued(self.track_staged(exchange))),
             Stage::Busy(input) => Ok(TrackedStage::Busy(input)),
         }
     }
@@ -1209,6 +1259,7 @@ impl<T> PacketPort<T> {
                 decode_reservation: None,
                 generation: false,
                 resident_mutation: false,
+                admit: false,
                 cancel: false,
             })
         })();

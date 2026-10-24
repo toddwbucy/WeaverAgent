@@ -1,7 +1,10 @@
 //! The replacement boot sequence, driven by one caller under one Enter window.
 //! No user gate, Ready answer, process creation or serving activation lives here.
+use super::failed_enter_driver::ResidentBootResources;
+use super::residency_composition::ResidencyEvidence;
 use super::*;
 use crate::flow::pump::LifecyclePorts;
+use crate::flow::pump::enter::{probe_enter_peer, with_enter};
 use crate::flow::pump_transport::DecodePort;
 use crate::flow::templates::{CompiledInventory, TemplateCertificate};
 
@@ -48,6 +51,7 @@ pub(in crate::flow) enum BootCompositionStop {
 /// activation and classifier admission. The constructor grants no missing proof.
 /// Every primitive rechecks its own admission and retains its original evidence.
 pub(in crate::flow) struct BootComposition<'a> {
+    resident: Option<ResidentBootResources<'a>>,
     context: &'a mut RecordingContext,
     decode: &'a mut DecodePort,
     stage: BootStage,
@@ -63,6 +67,7 @@ pub(in crate::flow) struct BootComposition<'a> {
 /// Completion of this sequence is not lifecycle Ready. The outer lifecycle must
 /// still stand the gate and complete its other elected Enter obligations.
 pub(in crate::flow) struct ComposedBoot<'a> {
+    resident: Option<ResidentBootResources<'a>>,
     context: &'a mut RecordingContext,
     decode: &'a mut DecodePort,
     certificate: TemplateCertificate,
@@ -71,6 +76,7 @@ pub(in crate::flow) struct ComposedBoot<'a> {
 /// A stopped sequence returns every outstanding prerequisite beside the same
 /// context and decode borrow. The lifecycle caller still owes bounded cleanup.
 pub(in crate::flow) struct StoppedBoot<'a> {
+    resident: Option<ResidentBootResources<'a>>,
     pub context: &'a mut RecordingContext,
     pub decode: &'a mut DecodePort,
     pub cause: BootCompositionStop,
@@ -82,18 +88,49 @@ pub(in crate::flow) struct StoppedBoot<'a> {
 }
 
 impl<'a> ComposedBoot<'a> {
-    pub(in crate::flow) fn into_parts(
+    pub(in crate::flow::context) fn into_parts(
         self,
     ) -> (
         &'a mut RecordingContext,
         &'a mut DecodePort,
         TemplateCertificate,
+        Option<ResidentBootResources<'a>>,
     ) {
-        (self.context, self.decode, self.certificate)
+        (self.context, self.decode, self.certificate, self.resident)
     }
 }
 
 impl<'a> BootComposition<'a> {
+    #[allow(clippy::type_complexity, clippy::result_large_err)]
+    pub(in crate::flow) fn from_residency(
+        context: &'a mut RecordingContext,
+        resources: &'a mut FailedEnterResources,
+        inventory: CompiledInventory,
+        evidence: ResidencyEvidence,
+    ) -> Result<
+        Self,
+        (
+            &'a mut RecordingContext,
+            &'a mut FailedEnterResources,
+            CompiledInventory,
+            ResidencyEvidence,
+        ),
+    > {
+        if !resources.can_boot(context, &evidence)
+            || evidence
+                .startup
+                .original_enter
+                .as_ref()
+                .is_some_and(|original| !original.adopted_by(context))
+        {
+            return Err((context, resources, inventory, evidence));
+        }
+        let (resident, decode) = resources.split_for_boot(evidence);
+        let mut boot = Self::new(context, decode, inventory);
+        boot.resident = Some(resident);
+        Ok(boot)
+    }
+
     pub(in crate::flow) fn new(
         context: &'a mut RecordingContext,
         decode: &'a mut DecodePort,
@@ -102,6 +139,7 @@ impl<'a> BootComposition<'a> {
         Self {
             context,
             decode,
+            resident: None,
             stage: BootStage::Templates,
             inventory: Some(inventory),
             certificate: None,
@@ -144,15 +182,76 @@ impl<'a> BootComposition<'a> {
         if let Some(failure) = self.context.failure().cloned() {
             return self.stop(BootCompositionStop::Run(failure));
         }
+        let mut resident = self.resident.take();
+        let mut lifecycle = lifecycle;
+        let progress = if resident.is_some() && lifecycle.residency.is_some() {
+            let failure = self.context.fail(
+                io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                "resident boot received a substitute residency port",
+            );
+            self.stop(BootCompositionStop::Run(failure))
+        } else {
+            let inherited_enter = resident.as_ref().map(|arms| arms.evidence.enter);
+            let original = resident.as_mut().and_then(|arms| {
+                lifecycle.residency = Some(&mut *arms.residency);
+                arms.evidence.startup.original_enter.as_mut()
+            });
+            match with_enter(original, lifecycle, |ports, payload| {
+                self.advance_retained(ports, inherited_enter, payload.is_some(), io)
+            }) {
+                Ok(progress) => progress,
+                Err(failure) => self.stop(BootCompositionStop::Run(RunFailure::Transport {
+                    source: PumpSource::Admin,
+                    failure,
+                })),
+            }
+        };
+        self.resident = resident;
+        progress
+    }
+
+    fn advance_retained<I: PumpIo>(
+        &mut self,
+        mut lifecycle: LifecyclePorts<'_>,
+        inherited_enter: Option<AbsoluteBound>,
+        has_original: bool,
+        io: &mut I,
+    ) -> BootCompositionProgress {
+        if self.stage == BootStage::Stopped {
+            return BootCompositionProgress::Stopped;
+        }
+        if let Some(failure) = self.context.failure().cloned() {
+            return self.stop(BootCompositionStop::Run(failure));
+        }
         self.context.observe_boot_lifecycle(&lifecycle);
         self.context.observe_place_lifecycle(&lifecycle);
         if self.context.boot_enter_cancelled || self.context.place_admission_stopped() {
             return self.stop(BootCompositionStop::Interrupted);
         }
+        if inherited_enter
+            .is_some_and(|enter| self.context.deadlines.get(PumpDeadline::Enter) != Some(enter))
+        {
+            let failure = self.context.fail(
+                io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                "resident boot lost its original Enter bound",
+            );
+            return self.stop(BootCompositionStop::Run(failure));
+        }
         if let Err(failure) = self.context.live(io) {
             return self.stop(BootCompositionStop::Run(failure));
         }
-        match self.step(lifecycle, io) {
+        if has_original && let Err(failure) = probe_enter_peer(&mut lifecycle) {
+            return self.stop(BootCompositionStop::Run(RunFailure::Transport {
+                source: PumpSource::Admin,
+                failure,
+            }));
+        }
+        let result = self.step(lifecycle, io);
+        match result {
             Ok(progress) => progress,
             Err(failure) => self.stop(BootCompositionStop::Run(failure)),
         }
@@ -333,6 +432,7 @@ impl<'a> BootComposition<'a> {
             return Err(self);
         }
         Ok(StoppedBoot {
+            resident: self.resident,
             context: self.context,
             decode: self.decode,
             cause: self.stop.expect("stopped sequence retains its cause"),
@@ -358,6 +458,7 @@ impl<'a> BootComposition<'a> {
             return Err(self);
         }
         Ok(ComposedBoot {
+            resident: self.resident,
             context: self.context,
             decode: self.decode,
             certificate: self.certificate.expect("complete certification retained"),
@@ -367,4 +468,7 @@ impl<'a> BootComposition<'a> {
 
 #[cfg(test)]
 #[path = "context_boot_composition_tests.rs"]
-mod tests;
+pub(super) mod tests;
+
+#[path = "context_gate_startup.rs"]
+pub(in crate::flow) mod gate_startup;
