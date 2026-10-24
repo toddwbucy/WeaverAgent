@@ -67,7 +67,11 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                     } => {
                         assert!(measured.is_none());
                         assert_eq!(*keep, 3 + 5 * pass);
-                        assert!(tool_schemas.is_empty());
+                        if mode.contains("-external-") && !mode.contains("no-grant") {
+                            assert_eq!(tool_schemas, &[crate::tools::shell_schema().to_owned()]);
+                        } else {
+                            assert!(tool_schemas.is_empty());
+                        }
                         if pass == 0 {
                             assert_eq!(
                                 delta,

@@ -482,11 +482,12 @@ impl<'a> FoundationInput<'a> {
             work.stage = EngineStage::Emission;
         }
         if work.stage == EngineStage::Emission {
-            return work
-                .emission
-                .as_mut()
-                .unwrap()
-                .cancel(owner.context, Some(owner.decode), io);
+            return work.emission.as_mut().unwrap().cancel(
+                owner.context,
+                Some(owner.decode),
+                Some(&mut owner.gate),
+                io,
+            );
         }
         owner.context.cancel_task();
         owner.context.revoke_place();

@@ -483,12 +483,27 @@ fn circuit(mode: &str) {
         load.state_flow.ste100.decision_wait.elapsed_ns = 5_000_000_000.into();
         bootstrap.instruction.decision_wait.elapsed_ns = 5_000_000_000.into();
     }
+    if mode.contains("-external-") && !mode.contains("no-grant") {
+        load.state_flow.tools.sh = Some(weaver_trace::serving::payloads::ToolPolicy {
+            clock_ms: 1234,
+            measurement_ref: "synthetic-worker-external".into(),
+        });
+    }
     let envelope = super::super::startup_composition::tests::entered_tests::envelope(
         &config,
         &load,
         &bootstrap,
         program.organs.classify.as_ref().unwrap(),
     );
+    let envelope = if mode.contains("-external-") && !mode.contains("no-grant") {
+        let mut value = serde_json::to_value(envelope).unwrap();
+        value["payload"]["body"]["payload"]["binding"]["shell"] = serde_json::json!({
+            "binary": "/synthetic/sh", "commands": "/synthetic/commands"
+        });
+        serde_json::from_value(value).unwrap()
+    } else {
+        envelope
+    };
     let bytes = envelope.encode().unwrap();
     let wire = if mode == "malformed" {
         b"{bad".to_vec()
@@ -1634,4 +1649,109 @@ scenario!(
 scenario!(
     worker_return_composition_actual_worker,
     "input-worker-generation-emission-pairs-return-actual-worker"
+);
+
+scenario!(
+    worker_external_composition_ready,
+    "input-generation-emission-pairs-external-ready"
+);
+
+scenario!(
+    worker_external_composition_identical,
+    "input-generation-emission-pairs-external-identical"
+);
+
+scenario!(
+    worker_external_composition_mixed,
+    "input-generation-emission-pairs-external-mixed"
+);
+
+scenario!(
+    worker_external_composition_reverse,
+    "input-generation-emission-pairs-external-reverse"
+);
+
+scenario!(
+    worker_external_composition_no_grant,
+    "input-generation-emission-pairs-external-no-grant"
+);
+
+scenario!(
+    worker_external_composition_refused,
+    "input-generation-emission-pairs-external-refused"
+);
+
+scenario!(
+    worker_external_composition_errored,
+    "input-generation-emission-pairs-external-errored"
+);
+
+scenario!(
+    worker_external_composition_killed,
+    "input-generation-emission-pairs-external-killed"
+);
+
+scenario!(
+    worker_external_composition_held_terminal,
+    "input-generation-emission-pairs-external-held-terminal"
+);
+
+scenario!(
+    worker_external_composition_stop_elected,
+    "input-generation-emission-pairs-external-stop-elected"
+);
+
+scenario!(
+    worker_external_composition_stop_unsent,
+    "input-generation-emission-pairs-external-stop-unsent"
+);
+
+scenario!(
+    worker_external_composition_stop_running,
+    "input-generation-emission-pairs-external-stop-running"
+);
+
+scenario!(
+    worker_external_composition_stop_crossed,
+    "input-generation-emission-pairs-external-stop-crossed"
+);
+
+scenario!(
+    worker_external_composition_stop_terminal,
+    "input-generation-emission-pairs-external-stop-terminal"
+);
+
+scenario!(
+    worker_external_composition_wrong_return,
+    "input-generation-emission-pairs-external-wrong-return"
+);
+
+scenario!(
+    worker_external_composition_duplicate,
+    "input-generation-emission-pairs-external-duplicate"
+);
+
+scenario!(
+    worker_external_composition_actual_worker,
+    "input-worker-generation-emission-pairs-external-actual-worker"
+);
+
+scenario!(
+    worker_external_composition_mixed_revoked,
+    "input-generation-emission-pairs-external-mixed-revoked"
+);
+
+scenario!(
+    worker_external_composition_gate_death,
+    "input-generation-emission-pairs-external-gate-death"
+);
+
+scenario!(
+    worker_external_composition_multiline,
+    "input-generation-emission-pairs-external-multiline"
+);
+
+scenario!(
+    worker_external_composition_queued_input,
+    "input-generation-emission-pairs-external-queued-input"
 );

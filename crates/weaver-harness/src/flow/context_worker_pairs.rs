@@ -1,20 +1,29 @@
 //! Worker custody from recorded outbound selection through actual pair/read
-//! completion. The loop elects recall. Readiness itself never runs a request.
+//! completion. The loop elects each lane. Readiness itself never runs a request.
 use super::*;
 use crate::flow::context::{InwardProgress, PairProgress};
+use crate::flow::pump_transport::OrganPort;
 use weaver_types::state_flow::{CallId, PairEnded, PairLane, PairStarted};
+
+#[path = "context_worker_external.rs"]
+mod external;
+use external::ExternalWork;
+
+#[cfg(test)]
+#[path = "context_worker_external_tests.rs"]
+pub(in crate::flow::context) mod external_tests;
 
 #[cfg(test)]
 #[path = "context_worker_pairs_tests.rs"]
 pub(in crate::flow::context) mod tests;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
     Begin,
     Opening,
     Ready,
-    Recall,
+    Recall(CallId),
     Reading,
+    External,
     Complete,
 }
 
@@ -22,7 +31,7 @@ pub(super) struct WorkerPairs {
     stage: Stage,
     effective: Option<EffectiveEmission>,
     calls: Vec<CallId>,
-    elected: Option<CallId>,
+    external: Vec<ExternalWork>,
     cancelled: bool,
 }
 impl WorkerPairs {
@@ -35,7 +44,7 @@ impl WorkerPairs {
                 .map(|p| p.call_id.clone())
                 .collect(),
             effective: Some(effective),
-            elected: None,
+            external: Vec::new(),
             cancelled: false,
         }
     }
@@ -49,13 +58,22 @@ impl WorkerPairs {
     pub(super) fn cancel(
         &mut self,
         context: &mut RecordingContext,
+        gate: Option<&mut OrganPort>,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.cancelled = true;
         if context.pair_work.is_some() {
-            context.bar_pending_pairs(NonDispatchCause::Stop, io)?;
+            if context.pairs.executing().is_some() {
+                context.bar_executing_pairs(
+                    NonDispatchCause::Stop,
+                    gate.ok_or(RunFailure::PairOwned)?,
+                    io,
+                )?;
+            } else {
+                context.bar_pending_pairs(NonDispatchCause::Stop, io)?;
+            }
         }
-        if matches!(self.stage, Stage::Ready | Stage::Recall) {
+        if matches!(self.stage, Stage::Ready | Stage::Recall(_)) {
             self.stage = Stage::Opening;
         }
         Ok(())
@@ -66,7 +84,7 @@ impl WorkerPairs {
         context: &mut RecordingContext,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
-        match self.stage {
+        match &self.stage {
             Stage::Begin => {
                 decision(context, ports.io)?;
                 match context.begin_pair_execution(self.effective.take().unwrap(), ports.io) {
@@ -124,8 +142,11 @@ impl WorkerPairs {
                     context.pump_once(ports)?;
                 }
             }
-            Stage::Recall => {
-                let call = self.elected.as_ref().expect("explicit recall election");
+            Stage::Recall(call) => {
+                if context.next_pair_execution().map(|p| &p.call_id) != Some(call) {
+                    self.stage = Stage::Opening;
+                    return Ok(());
+                }
                 match context.begin_inward_recall(call, ports.io)? {
                     Ok(()) => self.stage = Stage::Reading,
                     Err(refusal) => {
@@ -139,10 +160,19 @@ impl WorkerPairs {
             }
             Stage::Reading => {
                 if context.advance_inward_recall(ports)? == InwardProgress::Terminal {
-                    self.elected = None;
                     self.stage = Stage::Opening;
                 } else {
                     context.pump_once(ports)?;
+                }
+            }
+            Stage::External => {
+                if self
+                    .external
+                    .last_mut()
+                    .unwrap()
+                    .advance(self.cancelled, context, ports)?
+                {
+                    self.stage = Stage::Opening;
                 }
             }
             Stage::Ready | Stage::Complete => {}
@@ -197,8 +227,41 @@ impl FoundationInput<'_> {
             .execution
             .as_mut()
             .unwrap();
-        work.elected = Some(call);
-        work.stage = Stage::Recall;
+        work.stage = Stage::Recall(call);
+        Ok(())
+    }
+
+    /// Elect the next selected external request, retaining an unused harness
+    /// exchange across backpressure. No request is executed by becoming ready.
+    pub fn execute(&mut self, call: CallId) -> Result<(), CallId> {
+        if !self
+            .ready_pair()
+            .is_some_and(|ready| ready.call_id == call && ready.lane == PairLane::External)
+        {
+            return Err(call);
+        }
+        let Some(ordinal) = self.serving.gate_outgoing.checked_add(1) else {
+            return Err(call);
+        };
+        self.serving.gate_outgoing = ordinal;
+        let work = self
+            .engine
+            .as_mut()
+            .unwrap()
+            .emission
+            .as_mut()
+            .unwrap()
+            .execution
+            .as_mut()
+            .unwrap();
+        work.external.push(ExternalWork::new(
+            call,
+            weaver_types::ExchangeId {
+                opener: weaver_types::Opener::Harness,
+                ordinal,
+            },
+        ));
+        work.stage = Stage::External;
         Ok(())
     }
 

@@ -100,6 +100,16 @@ fn drive(input: &mut FoundationInput<'_>) {
     }
 }
 
+pub fn execute(
+    mut input: Box<FoundationInput<'_>>,
+    call: weaver_types::state_flow::CallId,
+) -> Box<FoundationInput<'_>> {
+    if input.execute(call).is_ok() {
+        drive(&mut input);
+    }
+    input
+}
+
 /// Service the actual held root connection, then resume the same
 /// input. Without a pending connection it returns the input unchanged. Other
 /// lifecycle directives retain their complete management owner.

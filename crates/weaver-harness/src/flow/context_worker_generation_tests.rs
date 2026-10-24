@@ -43,7 +43,7 @@ fn generated(mode: &str, finish: Finish) -> TokenAnswer {
     })
 }
 pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
-    if mode.contains("-return-") {
+    if mode.contains("-return-") || mode.contains("-external-") {
         return super::return_tests::spu(mode, fd);
     }
     if mode.contains("correction") {
