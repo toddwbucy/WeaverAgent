@@ -3,6 +3,7 @@
 **Status:** MERGED.
 
 **Version:** 0.27 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
+**Landing PR:** #325
 
 ## 0. What this document is
 
@@ -64,8 +65,10 @@ both the trace and declaration parser. [TAP-1, TAP-3]
 | All other kinds | Existing payloads | No selectable surface in this amendment | Existing rule |
 
 **TRACE-REJECTED-RETURN.** Spec 05's RejectedReturn.raw_envelope is a JSON string
-whose decoded UTF-8 bytes equal the original complete organ packet. The trace mirrors
-this as a serialize-only String field, never RawValue or a parsed object. Serialize the
+whose decoded UTF-8 bytes equal the original organ frame's complete payload, as held
+by ReceivedOrgan.raw_bytes, excluding transport delimiters and length prefixes. The
+trace mirrors this as a serialize-only String field, never RawValue or a parsed
+object. Serialize the
 outer string normally so quotes, backslashes and literal CR/LF in that packet cannot
 introduce a second trace line. The event retains one final newline and all existing
 kind, channel, origin, attribution and partition rules. The harness retains the actual
@@ -76,12 +79,21 @@ This representation applies to new foundation runs at the paired cutover. Histor
 records whose raw_envelope is an object remain historical objects. Readers distinguish
 the field types and preserve old source records without rewriting them into the new
 shape or claiming a normalized object reproduces its original packet. Update every
-producer and trace reader before cutover. The organ wire, state-copy/1 registry and
-forbidden projection are unchanged. The old shape is not accepted by the new publisher
+producer and trace reader before cutover, including WeaverAnalysis's canonical trace
+reader and its diagnostic/preload conversion path. This repository's authoritative
+weaver-analysis-state contract draws this reader rule from the canonical trace;
+WeaverAnalysis must mirror it and verify both historical shapes. The organ wire,
+state-copy/1 registry and forbidden projection are unchanged. The old shape is not
+accepted by the new publisher
 as an alternate encoding for a new run. [FLOW-3, TAP-1, TAP-3]
 
-Qualification includes the final escaped record size, retained packet and author copies
-and recording time under the existing organ packet bound and rejection wait. Escaping
+The organ packet bound governs the received payload, not the escaped trace line.
+The recorder has no per-record byte ceiling. The resulting line may exceed the organ
+bound and is not PayloadMalformed merely for that size. Qualification must account
+for the full outer event and escaping expansion, retained packet and author copies,
+and recording time under the existing rejection wait. Test maximum admitted payloads
+and control-character expansion; admission on the organ wire alone does not qualify
+recording cost. Existing recorder failure and pressure rules still apply. Escaping
 adds no recorder byte ceiling, new timing field, overflow queue or renewed deadline.
 The record certifies exact evidence carriage, not the rejected outcome's truth or an
 execution grant. [FLOW-3, FLOW-4, TAP-3, COST-4]

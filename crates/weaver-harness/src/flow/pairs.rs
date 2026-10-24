@@ -2,6 +2,7 @@
 //! Dispatch requires a sealed effective emission and both real commits. A gate
 //! answer remains owned until its exact terminal commits, never itself a grant.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use weaver_traits::ContentBlock;
@@ -222,6 +223,10 @@ struct Batch {
     cause: Option<NonDispatchCause>,
 }
 
+fn call_key(call: &CallId) -> (String, u64, u64) {
+    (call.run.clone(), call.sequence.0, call.call.0)
+}
+
 struct RetainedPair {
     pair: Arc<CompletedPair>,
     result_record: Option<weaver_trace::Sequence>,
@@ -240,6 +245,7 @@ pub(super) struct PairLedger {
     scheme: SchemeDeclaration,
     active: Option<Batch>,
     closed: Vec<RetainedPair>,
+    closed_by_call: HashMap<(String, u64, u64), usize>,
     frozen: bool,
     gate_failed: bool,
     rejected: Option<RejectedGateReturn>,
@@ -307,6 +313,19 @@ impl PairLedger {
             panic!("fixture requires a ready recall");
         };
         subject.clear();
+    }
+
+    /// Isolate a defensive delivery gate after real pair and append receipts.
+    /// This corruption instrument is absent from production builds.
+    #[cfg(test)]
+    pub(super) fn remove_result_record_for_test(
+        &mut self,
+        call: &CallId,
+    ) -> weaver_trace::Sequence {
+        self.closed[*self.closed_by_call.get(&call_key(call)).unwrap()]
+            .result_record
+            .take()
+            .unwrap()
     }
 
     pub(super) fn start_inward(&mut self, call: &CallId) -> Result<(), PairError> {
@@ -856,6 +875,7 @@ impl PairLedger {
             scheme,
             active: None,
             closed: Vec::new(),
+            closed_by_call: HashMap::new(),
             frozen: false,
             gate_failed: false,
             rejected: None,
@@ -930,6 +950,9 @@ impl PairLedger {
                 .try_reserve_exact(count)
                 .map_err(|_| PairError::Allocation)?;
             self.closed
+                .try_reserve(count)
+                .map_err(|_| PairError::Allocation)?;
+            self.closed_by_call
                 .try_reserve(count)
                 .map_err(|_| PairError::Allocation)?;
             for started in proof.requests() {
@@ -1379,12 +1402,15 @@ impl PairLedger {
             return Err(PairError::WrongPhase);
         }
         let batch = self.active.take().unwrap();
-        self.closed
-            .extend(batch.entries.into_iter().map(|entry| RetainedPair {
+        for entry in batch.entries {
+            self.closed_by_call
+                .insert(call_key(&entry.started.call_id), self.closed.len());
+            self.closed.push(RetainedPair {
                 pair: Arc::new(entry.completed.unwrap()),
                 result_record: None,
                 delivered: None,
-            }));
+            });
+        }
         Ok(batch.proof)
     }
 
@@ -1594,11 +1620,20 @@ impl PairLedger {
             batch.proof.original(),
         ))
     }
-    pub(super) fn closed_for_material(&self, call: &CallId) -> Option<Arc<CompletedPair>> {
-        self.closed
-            .iter()
-            .find(|p| &p.started.call_id == call && p.delivered.is_none())
-            .map(|p| Arc::clone(&p.pair))
+    pub(super) fn closed_for_material(
+        &self,
+        call: &CallId,
+    ) -> Result<Arc<CompletedPair>, PairError> {
+        self.live()?;
+        if let Some(index) = self.closed_by_call.get(&call_key(call)) {
+            let retained = &self.closed[*index];
+            if retained.delivered.is_some() {
+                return Err(PairError::AlreadyDelivered);
+            }
+            return Ok(Arc::clone(&retained.pair));
+        }
+        self.completed(call)?;
+        Err(PairError::NotReady)
     }
 
     /// The complete grant is borrowed. Delivery changes no terminal evidence.
@@ -1617,10 +1652,12 @@ impl PairLedger {
         &self,
         pair: &CompletedPair,
     ) -> Result<Option<weaver_trace::Sequence>, PairError> {
+        self.live()?;
         let retained = self
-            .closed
-            .iter()
-            .find(|p| std::ptr::eq(p.pair.as_ref(), pair))
+            .closed_by_call
+            .get(&call_key(&pair.started.call_id))
+            .map(|index| &self.closed[*index])
+            .filter(|p| std::ptr::eq(p.pair.as_ref(), pair))
             .ok_or(PairError::WrongReceipt)?;
         if retained.delivered.is_some() {
             return Err(PairError::AlreadyDelivered);
@@ -1633,11 +1670,12 @@ impl PairLedger {
         call: &CallId,
         sequence: weaver_trace::Sequence,
     ) -> Result<(), PairError> {
-        let pair = self
-            .closed
-            .iter_mut()
-            .find(|p| &p.started.call_id == call)
+        self.live()?;
+        let index = *self
+            .closed_by_call
+            .get(&call_key(call))
             .ok_or(PairError::UnknownCall)?;
+        let pair = &mut self.closed[index];
         if pair.delivered.is_some() || pair.result_record.is_some_and(|old| old != sequence) {
             return Err(PairError::WrongReceipt);
         }
@@ -1650,11 +1688,12 @@ impl PairLedger {
         call: &CallId,
         proof: &crate::flow::place::ConfirmedGeneration,
     ) -> Result<(), PairError> {
-        let pair = self
-            .closed
-            .iter_mut()
-            .find(|p| &p.started.call_id == call)
+        self.live()?;
+        let index = *self
+            .closed_by_call
+            .get(&call_key(call))
             .ok_or(PairError::UnknownCall)?;
+        let pair = &mut self.closed[index];
         if pair.delivered.is_some() {
             return Err(PairError::AlreadyDelivered);
         }

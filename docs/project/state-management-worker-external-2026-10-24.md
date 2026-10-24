@@ -149,3 +149,47 @@ Sustain actual port joins and exact source retention before fixture repairs.
 The next act must include unrelated gate traffic and the schema's loaded policy
 in its initial sequence audit; a primitive's refusal/OtherTraffic result needs
 a concrete worker owner as much as its successful result does.
+
+## Review and corrected parent join
+
+Planner review 5638144682 cleared b5f48f6a with zero fix and ten batch rows.
+The Planner marked that head ready. This merge joins corrected #323 cc27588c;
+its separate review record answers the inherited Decision/decode regression and
+delivery guards. The original two parents remain in history. The join changes
+no external execution policy and still needs review at its resulting head.
+
+| Planner row | Disposition |
+| --- | --- |
+| 1 | Open, already characterized: an unrelated world frame can occupy the gate completion slot and hide both a tool answer and Stop cancellation answer. Production selection of execute remains barred until an owning routing path is joined. |
+| 2 | Open: TOOL-CLOCK's offered schema still advertises the legacy constant; the loaded wire clock is correct. The schema assertion must change with the certified renderer, not be treated as conformance evidence. |
+| 3 | Open: the held-answer-before-cancel ordering needs a separate held-answer instrument and a true wire-crossing case in the external control join. |
+| 4 | Open: distinguish an actual non-dispatch terminal from an unexplained NotReady election; pin the inward/external disposition together. No new refusal election is made by this merge. |
+| 5 | Open dormant error path: None gate after cancellation election can set the cancelled flag without barring an executing pair. Actual serving supplies its gate; the control join must eliminate or safely return the absent-gate road. |
+| 6 | E2/E3/E4 remain unpinned: exact cancel ticket exchange/port and Stop before staging require independent corruption/interleaving instruments. Existing ordinary cancel cases prove neither isolated check. |
+| 7 | Retaining completed external owners is intentional evidence custody, including actual cancel sends. A stage-payload cleanup must preserve that completed account rather than silently discard it. The separate empty-Vec unwrap remains a cleanup carry. |
+| 8 | Open efficiency carry: repeated Stop polling re-bars the batch. A successful-bar state belongs in the external control composition with its refusal/retry tests. |
+| 9 | Open test-boundary cleanup: use a test-only re-export when narrowing execution visibility. The current visibility is within worker_startup only. |
+| 10 | Required self-check skills remain unavailable; no invocation is claimed. |
+
+The review also reported two unrelated rollback timing failures under parallel
+userns load. They are not credited as protective mutations. #313's parallel
+fixture qualification remains open; the serial gates below do not resolve it.
+No CodeRabbit review is requested.
+
+Combined-source gates used the pinned --locked toolchain and private target
+`/var/tmp/weaver-state-146-worker-external-target`. Lock before/after, formatting,
+strict harness clippy and diff checks passed. The union passed **2026 harness
+tests**, including 22 doctests, and **243 delegated cases serially**: gate 46,
+startup 17, input 19, Observe 14, Stop 16, generation 21, emission 33,
+correction 19, inward 24, return 13 and external 21. Its 261 ordinary ignores
+are those 243 delegated cases and 18 inherited ones. Eight privileged admin
+startup instruments remain unrun.
+
+All 670 crate/configuration files match source manifest
+`d3c7d631cde233e1dd580be667e0e4488b2ed8154b4d40b5bd9e409fbbe23ef4`. No new mutation round is claimed for this ancestry join; #323's
+correction has its own 13 compiled controls, and the original #324 evidence
+retains its separate nine. The full union rerun checks the shared task/result
+road alongside all external cases. Evidence is in
+`/tmp/state-146-worker-external-review/`; the exact-head bulk leaf and hash are
+on #324 and #146. This is an author check, not the resulting head's regrade or
+production qualification.

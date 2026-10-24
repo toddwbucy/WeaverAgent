@@ -4,6 +4,7 @@
 
 **Version:** 0.12 **Date filed:** 2026-10-20 **Document ID:** state-management-spec-05
 **Parent:** state-management-primitives-PRD
+**Landing PR:** #325
 
 ## 0. What this document is
 
@@ -186,11 +187,13 @@ fault, not a fabricated tool return. Preserve the merged fault and teardown beha
 after recording the available raw evidence. [PAIR-2, PAIR-3, FLOW-3]
 
 RejectedReturn is {call_id:CallId-or-null,execution:ExchangeId,reason,
-raw_envelope:String}. The string is the exact UTF-8 text of the complete received organ
-packet, including leading and trailing whitespace, literal CR/LF, JSON escapes and
-member order. JSON string escaping belongs only to the outer trace encoding. Decoding
-that field recovers bytes equal to the received packet. Do not parse/reserialize the
-packet, trim it or use lossy UTF-8 conversion to construct the string. A malformed
+raw_envelope:String}. The string is the exact UTF-8 text of the received organ frame's
+payload, as held by ReceivedOrgan.raw_bytes. It excludes transport delimiters and
+length prefixes. Payload whitespace, literal CR/LF, JSON escapes and member order
+remain evidence, including whitespace at either end of that payload. JSON string
+escaping belongs only to the outer trace encoding. Decoding that field recovers the
+original payload bytes. Do not parse/reserialize the packet, trim it or use lossy
+UTF-8 conversion to construct the string. A malformed
 packet still follows the existing protocol-fault evidence path, not a fabricated
 RejectedReturn. [PAIR-2, PAIR-3, FLOW-3]
 

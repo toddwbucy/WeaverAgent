@@ -1,8 +1,8 @@
 # Rejected-return raw packet representation proposal
 
 Date filed: 2026-10-24
-Issue: #146. Parent: draft #324 at
-`b5f48f6ac7d76b6615471e35e664920c2ca4cd34`.
+Issue: #146. Parent: #324 at
+`bbe299fe6fd8c3515a16f550976c7652ba5e78f7`.
 Branch: `docs/state-rejected-return-wire`.
 
 This is a design proposal for operator election, Planner review and merge before
@@ -28,22 +28,30 @@ Change only RejectedReturn.raw_envelope from RawValue to String in Spec 05 and
 its trace mirror. The producer copies the exact valid UTF-8 packet into that
 string. The trace's outer JSON encoding escapes the packet's quotes, backslashes
 and literal control characters. One outer JSON decode recovers exactly the
-original packet bytes, including surrounding whitespace, member order and
-original escape spellings. It is not a parsed envelope or a normalized JSON dump.
+original frame payload bytes, as held by ReceivedOrgan.raw_bytes, including
+surrounding payload whitespace, member order and original escape spellings.
+It is not a parsed envelope or a normalized JSON dump.
+Transport delimiters and length prefixes are outside that payload.
 Malformed or non-UTF-8 traffic keeps the existing protocol-fault evidence path.
 
 Keep the original packet until the rejection is Recorded. Use the existing
 pending author, applicable original bound and failed-run evidence owner through pressure
-or cancellation. Qualify escaped record size and retained copies under existing
-limits. There is no new recorder byte ceiling, clock, queue, trace event or
-execution permission.
+or cancellation. The organ bound limits the received payload. The escaped trace
+line may be larger; the recorder has no per-record byte ceiling and does not
+refuse a line merely for exceeding the organ bound. Qualify the full event's
+escaped size, copies and recording time, including maximum admitted payloads
+and control-character expansion. There is no new recorder byte ceiling, clock,
+queue, trace event or execution permission.
 
 New publishers use the string shape. Historical object-valued records stay
 unchanged. Readers distinguish both shapes without rewriting history or treating
 a reconstructed object as byte-exact evidence. Harness, trace and every external
-reader must change together before the held foundation cutover. This repository
-changes its Spec 05 and trace amendment copies only. No external consumer or
-mirrored contract is claimed updated by this proposal.
+reader must change together before the held foundation cutover. This includes
+WeaverAnalysis's canonical reader and diagnostic/preload converter. This act
+changes this repository's Spec 05, trace amendment and authoritative
+weaver-analysis-state contract copies. The contract draws the two-shape reader
+rule from trace; no new preload encoding is defined. WeaverAnalysis's mirror
+and implementation remain owed. No external consumer is claimed updated.
 
 Alternatives considered:
 
@@ -63,15 +71,24 @@ Alternatives considered:
 | trace serving payloads/records.rs | Serialize-only String mirror, outer escaping and one final newline. No internal-crate dependency. |
 | trace payload/recorder instruments | Whole-record round trip with CR/LF, tabs, surrounding whitespace, quotes, backslashes, Unicode and original JSON escapes. |
 | harness primitive/process instruments | Exact bytes before/after Recorded, no early discard, no changed terminal or forged result, and multiline regression now records successfully. |
-| readers and diagnostic converter | Historical object and new string cases, unchanged diagnostic refusal and forbidden state projection; audit external consumers before cutover. |
+| WeaverAnalysis canonical reader and diagnostic/preload converter | Historical object and new string cases, unchanged diagnostic refusal and forbidden state projection; update its contract mirror and audit other external consumers before cutover. |
 | qualification | Escaped line size, retained memory and authoring latency against the actual declared limits and transport maximum. |
 
-The trace registry references Spec 05 for this payload, so no contract or floor
-wire needs a second definition. Version advances from 0.11 to 0.12 in Spec 05 and
-0.26 to 0.27 in the trace amendment. First filing dates stay 2026-10-20 and
-2026-10-21. Stale Landing PR pointers were removed; Git identifies the revisions.
+The trace registry references Spec 05 for this payload. The analysis-state
+contract draws its reader rule from trace rather than defining another wire.
+Version advances from 0.11 to 0.12 in Spec 05 and 0.26 to 0.27 in the trace
+amendment. First filing dates stay 2026-10-20 and
+2026-10-21. Landing PR names #325 in each changed normative document; their first
+filing dates remain unchanged.
 
 ## Evidence and completion boundary
+
+Planner review 5638105018 at b600ee88 graded zero fix and four batch, and marked
+the proposal ready without electing it. This revision answers all four rows:
+Landing PR names #325; raw_bytes defines the payload boundary; WeaverAnalysis
+and its authoritative contract are named; the organ bound and recorder's lack
+of a per-record byte ceiling are explicit. The corrected #324 parent is joined
+without changing its tested runtime. The proposal now changes four documents.
 
 The exact #324 reproduction and source are deposited in
 `worker-external-b5f48f6a-20261024` under the approved #146 evidence root. Its

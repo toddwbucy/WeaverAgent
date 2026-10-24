@@ -129,6 +129,12 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                             &bytes[..n],
                         )
                         .unwrap();
+                        if pass > 0 && mode.contains("slow-decode") {
+                            while !root.join("release-generation").exists() {
+                                assert!(Instant::now() < end);
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                        }
                         if pass == 0 || !mode.contains("stop-generating") {
                             answer(fd, generation(mode, pass, false));
                             pass += 1;
@@ -253,6 +259,16 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             } else if !mode.contains("fit-refusal") {
                 let input = guard.input.as_mut().unwrap();
                 input.generate().unwrap();
+                if mode.contains("slow-decode") {
+                    super::tests::slow_generation(
+                        input,
+                        member,
+                        clock,
+                        root,
+                        mode,
+                        "return-appended.json",
+                    );
+                }
                 if mode.contains("stop-generating") {
                     for _ in 0..1000 {
                         assert_eq!(
