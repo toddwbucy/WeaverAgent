@@ -382,6 +382,25 @@ fn sort_records_preserve_refs_drop_reasons_and_unavailable_counts() {
 }
 
 #[test]
+fn open_evidence_preserves_raw_bytes_and_compares_their_exact_spelling() {
+    let evidence = OpenEvidenceRecord {
+        request: raw(r#"{ "template" : "family", "rendered":"a\u0062" }"#),
+        measurement: raw(r#"{"future": { "answer":1 }, "future":2}"#),
+    };
+    assert_eq!(
+        json(&evidence),
+        r#"{"request":{ "template" : "family", "rendered":"a\u0062" },"measurement":{"future": { "answer":1 }, "future":2}}"#
+    );
+    assert_eq!(evidence, evidence.clone());
+    let mut different = evidence.clone();
+    different.request = raw(r#"{"template":"family","rendered":"ab"}"#);
+    assert_ne!(evidence, different);
+    let mut different = evidence.clone();
+    different.measurement = raw(r#"{"future":{"answer":1},"future":2}"#);
+    assert_ne!(evidence, different);
+}
+
+#[test]
 fn placement_keeps_token_numbers_separate_from_decimal_message_and_mark_ids() {
     let placement = PlacementRecord {
         assembly_id: 0.into(),
@@ -401,10 +420,14 @@ fn placement_keeps_token_numbers_separate_from_decimal_message_and_mark_ids() {
         assistant_message_id: None,
         recomputed_messages: 0.into(),
         wait_ns: u64::MAX.into(),
+        open_evidence: Some(OpenEvidenceRecord {
+            request: raw(r#"{"rendered":"head","template":"family"}"#),
+            measurement: raw(r#"{"opaque":true}"#),
+        }),
     };
     assert_eq!(
         json(&placement),
-        r#"{"assembly_id":"0","phase":"boot","context":null,"cut":null,"method":null,"N":1024,"prefix_tokens":1024,"resident_before":1024,"input_tokens":0,"capacity":8192,"generation_limit":512,"terminal_tokens":1,"unit_map":[],"message_ids":[],"assistant_message_id":null,"recomputed_messages":"0","wait_ns":"18446744073709551615"}"#
+        r#"{"assembly_id":"0","phase":"boot","context":null,"cut":null,"method":null,"N":1024,"prefix_tokens":1024,"resident_before":1024,"input_tokens":0,"capacity":8192,"generation_limit":512,"terminal_tokens":1,"unit_map":[],"message_ids":[],"assistant_message_id":null,"recomputed_messages":"0","wait_ns":"18446744073709551615","open_evidence":{"request":{"rendered":"head","template":"family"},"measurement":{"opaque":true}}}"#
     );
     let mark = MarkPosition {
         id: MarkOccurrenceId {
@@ -996,6 +1019,10 @@ pub(crate) fn payload_fixtures() -> Vec<(
                 assistant_message_id: None,
                 recomputed_messages: 0.into(),
                 wait_ns: 20.into(),
+                open_evidence: Some(OpenEvidenceRecord {
+                    request: raw(r#"{"rendered":"head","template":"family"}"#),
+                    measurement: raw(r#"{"opaque":true}"#),
+                }),
             })),
         ),
         (

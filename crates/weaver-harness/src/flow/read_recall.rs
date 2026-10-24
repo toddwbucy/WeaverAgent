@@ -156,7 +156,7 @@ impl Walk {
         if let Some(source) = &plan.lock_source {
             self.event(source);
         }
-        self.event(&plan.last_source);
+        self.event(&plan.last_source.block_id);
         for step in &plan.steps {
             self.statement(&step.instruction);
             if let Some(work) = &step.work {

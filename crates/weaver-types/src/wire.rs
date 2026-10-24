@@ -517,6 +517,24 @@ pub struct Composer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LifecycleRefusal {
+    #[serde(deserialize_with = "deserialize_state_management_refusal")]
+    StateManagementInvalid {
+        stage: crate::state_flow::StateManagementStage,
+        code: crate::state_flow::StateManagementCode,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rule_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        detail: String,
+    },
+    #[serde(deserialize_with = "deserialize_persistence_refusal")]
+    StatePersistenceInvalid {
+        stage: crate::state_flow::PersistenceStage,
+        case: crate::state_flow::PersistenceCase,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artifact_id: Option<String>,
+        detail: String,
+    },
     Unauthorized,
     Malformed,
     NoSuchAgent,
@@ -569,6 +587,115 @@ pub enum LifecycleRefusal {
     /// gate with its connection standing (`weaver-admin-Spec` section 3, S4 x
     /// dialer request).
     Unloading,
+}
+
+type StateManagementRefusalFields = (
+    crate::state_flow::StateManagementStage,
+    crate::state_flow::StateManagementCode,
+    Option<String>,
+    Option<String>,
+    String,
+);
+
+// The same validated variant decoder runs inside recursive OrganRefused and
+// every Payload/OrganEnvelope, rather than relying on callers to revalidate.
+fn deserialize_state_management_refusal<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<StateManagementRefusalFields, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Fields {
+        #[serde(deserialize_with = "string_code")]
+        stage: crate::state_flow::StateManagementStage,
+        #[serde(deserialize_with = "string_code")]
+        code: crate::state_flow::StateManagementCode,
+        rule_id: Option<String>,
+        path: Option<String>,
+        detail: String,
+    }
+    fn string_code<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        let code = String::deserialize(deserializer)?;
+        T::deserialize(serde::de::value::StringDeserializer::<D::Error>::new(code))
+    }
+    struct Object;
+    impl<'de> serde::de::Visitor<'de> for Object {
+        type Value = Fields;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a state-management refusal object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Fields, A::Error> {
+            Fields::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    let fields = deserializer.deserialize_map(Object)?;
+    if !fields.code.permits_stage(fields.stage) {
+        return Err(serde::de::Error::custom(
+            "state-management code is invalid at this stage",
+        ));
+    }
+    Ok((
+        fields.stage,
+        fields.code,
+        fields.rule_id,
+        fields.path,
+        fields.detail,
+    ))
+}
+
+// The custom decoder belongs to this variant. It also runs when OrganRefused
+// carries it, without exposing a second public decoder that skips validation.
+fn deserialize_persistence_refusal<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<
+    (
+        crate::state_flow::PersistenceStage,
+        crate::state_flow::PersistenceCase,
+        Option<String>,
+        String,
+    ),
+    D::Error,
+> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Fields {
+        #[serde(deserialize_with = "string_code")]
+        stage: crate::state_flow::PersistenceStage,
+        #[serde(deserialize_with = "string_code")]
+        case: crate::state_flow::PersistenceCase,
+        artifact_id: Option<String>,
+        detail: String,
+    }
+    // A derived fieldless enum also accepts an externally tagged object. These
+    // closed lifecycle codes are strings, including inside OrganRefused.
+    fn string_code<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        let code = String::deserialize(deserializer)?;
+        T::deserialize(serde::de::value::StringDeserializer::<D::Error>::new(code))
+    }
+    struct Object;
+    impl<'de> serde::de::Visitor<'de> for Object {
+        type Value = Fields;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a persistence refusal object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Fields, A::Error> {
+            Fields::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    let fields = deserializer.deserialize_map(Object)?;
+    if !fields.case.permits_stage(fields.stage) {
+        return Err(serde::de::Error::custom(
+            "persistence case is invalid at this stage",
+        ));
+    }
+    Ok((fields.stage, fields.case, fields.artifact_id, fields.detail))
 }
 
 /// What admin supplies in the enter directive, per
@@ -950,7 +1077,7 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
 /// arriving with a turn had no engine to reach. The value discipline that
 /// guarded the map moved with it to [`crate::config::DecoderInstruction`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TokenDirective {
     Open {
         session: SessionId,
@@ -1033,17 +1160,18 @@ pub enum TokenDirective {
 /// pre-serialized JSON. A wire type one party can write and the other cannot
 /// read is not a wire type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "body", rename_all = "snake_case")]
+#[serde(
+    remote = "Self",
+    tag = "kind",
+    content = "body",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum TokenAnswer {
     /// Actual facts from the one open residency, under TYPES-DECODE. The
     /// generation limit is resolved by the SPU, including tunable values.
     /// This required body replaces the former unit answer at cutover.
-    Opened {
-        prefix_tokens: u64,
-        capacity: u64,
-        generation_limit: u64,
-        terminal_tokens: u64,
-    },
+    Opened(Opened),
     /// Count-only result for the exact measured proposal. Numeric facts do
     /// not carry a rendered prefix, a placement grant or a saved proposal.
     DeltaMeasured {
@@ -1129,6 +1257,195 @@ pub enum TokenAnswer {
     Fault(FaultReport),
 }
 
+impl Serialize for TokenAnswer {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TokenAnswer {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Serde's adjacent-tag decoder buffers a body encountered before its
+        // kind as generic Content, which loses RawValue's original bytes. The
+        // normal kind-first stream can use its typed decoder directly. Only a
+        // body-first answer needs raw outer buffers to replay kind first.
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field {
+            Kind,
+            Body,
+        }
+        struct KindFirst<A> {
+            map: A,
+            first: bool,
+        }
+        impl<'de, A: serde::de::MapAccess<'de>> serde::de::MapAccess<'de> for KindFirst<A> {
+            type Error = A::Error;
+            fn next_key_seed<K: serde::de::DeserializeSeed<'de>>(
+                &mut self,
+                seed: K,
+            ) -> Result<Option<K::Value>, A::Error> {
+                if std::mem::take(&mut self.first) {
+                    seed.deserialize(serde::de::value::BorrowedStrDeserializer::<A::Error>::new(
+                        "kind",
+                    ))
+                    .map(Some)
+                } else {
+                    self.map.next_key_seed(seed)
+                }
+            }
+            fn next_value_seed<V: serde::de::DeserializeSeed<'de>>(
+                &mut self,
+                seed: V,
+            ) -> Result<V::Value, A::Error> {
+                self.map.next_value_seed(seed)
+            }
+        }
+        struct Envelope;
+        impl<'de> serde::de::Visitor<'de> for Envelope {
+            type Value = TokenAnswer;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a decode answer object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<TokenAnswer, A::Error> {
+                use serde::de::Error;
+                let first = map
+                    .next_key::<Field>()?
+                    .ok_or_else(|| A::Error::missing_field("kind"))?;
+                if matches!(first, Field::Kind) {
+                    return TokenAnswer::deserialize(serde::de::value::MapAccessDeserializer::new(
+                        KindFirst { map, first: true },
+                    ));
+                }
+                let mut kind = None;
+                let mut body = Some(buffer_decode_answer_value(&mut map)?);
+                while let Some(key) = map.next_key::<Field>()? {
+                    let (slot, name) = match key {
+                        Field::Kind => (&mut kind, "kind"),
+                        Field::Body => (&mut body, "body"),
+                    };
+                    if slot.is_some() {
+                        return Err(A::Error::custom(format!("duplicate field {name}")));
+                    }
+                    *slot = Some(buffer_decode_answer_value(&mut map)?);
+                }
+                let kind = kind.ok_or_else(|| A::Error::missing_field("kind"))?;
+                let fields = std::iter::once(("kind", kind.as_ref()))
+                    .chain(body.as_deref().map(|body| ("body", body)));
+                TokenAnswer::deserialize(serde::de::value::MapDeserializer::new(fields))
+                    .map_err(A::Error::custom)
+            }
+        }
+        deserializer.deserialize_map(Envelope)
+    }
+}
+
+fn buffer_decode_answer_value<'de, A: serde::de::MapAccess<'de>>(
+    map: &mut A,
+) -> Result<Box<serde_json::value::RawValue>, A::Error> {
+    let raw = map.next_value::<Box<serde_json::value::RawValue>>()?;
+    #[cfg(test)]
+    DECODE_ANSWER_BUFFERED.with(|counts| {
+        let (values, bytes) = counts.get();
+        counts.set((values + 1, bytes + raw.get().len()));
+    });
+    Ok(raw)
+}
+
+#[cfg(test)]
+thread_local! {
+    // Counts actual owned raw envelope buffers, not payload Strings or raw boxes.
+    static DECODE_ANSWER_BUFFERED: std::cell::Cell<(usize, usize)> = const {
+        std::cell::Cell::new((0, 0))
+    };
+}
+
+// One field list supplies both the public carrier and its private decoder. A
+// public remote derive would expose an inherent decoder bypassing the map gate.
+macro_rules! define_opened {
+    ($(#[$doc:meta])* $($field:ident : $kind:ty),* $(,)?) => {
+        $(#[$doc])*
+        #[derive(Debug, Clone, Serialize)]
+        pub struct Opened {
+            $(pub $field: $kind,)*
+        }
+        impl<'de> Deserialize<'de> for Opened {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Fields { $($field: $kind,)* }
+                struct Object;
+                impl<'de> serde::de::Visitor<'de> for Object {
+                    type Value = Opened;
+                    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str("an Opened object")
+                    }
+                    fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Opened, A::Error> {
+                        let Fields { $($field,)* } = Fields::deserialize(
+                            serde::de::value::MapAccessDeserializer::new(map),
+                        )?;
+                        Ok(Opened { $($field,)* })
+                    }
+                }
+                deserializer.deserialize_map(Object)
+            }
+        }
+    };
+}
+
+define_opened! {
+    /// Evidence of the successful identity prefill under TYPES-DECODE. The SPU owns
+    /// each raw box's contents; the harness validates them before use. The floor
+    /// preserves the bytes and deliberately grants no rendering or placement proof.
+    /// There is no public inherent decoder bypassing the Deserialize trait gate.
+    ///
+    /// ```compile_fail
+    /// let _ = weaver_types::Opened::deserialize(
+    ///     &mut serde_json::Deserializer::from_str("{}"),
+    /// );
+    /// ```
+    session: SessionId,
+    prefix_tokens: u64,
+    capacity: u64,
+    generation_limit: u64,
+    terminal_tokens: u64,
+    request: Box<serde_json::value::RawValue>,
+    measurement: Box<serde_json::value::RawValue>,
+}
+
+impl PartialEq for Opened {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            session,
+            prefix_tokens,
+            capacity,
+            generation_limit,
+            terminal_tokens,
+            request,
+            measurement,
+        } = self;
+        let Self {
+            session: other_session,
+            prefix_tokens: other_prefix_tokens,
+            capacity: other_capacity,
+            generation_limit: other_generation_limit,
+            terminal_tokens: other_terminal_tokens,
+            request: other_request,
+            measurement: other_measurement,
+        } = other;
+        session == other_session
+            && prefix_tokens == other_prefix_tokens
+            && capacity == other_capacity
+            && generation_limit == other_generation_limit
+            && terminal_tokens == other_terminal_tokens
+            && request.get() == other_request.get()
+            && measurement.get() == other_measurement.get()
+    }
+}
+
 /// One refused input, attributed to the run-local offer under TYPES-INPUT.
 /// This record grants neither filing nor a component halt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1172,6 +1489,8 @@ pub enum RefusalRecord {
     Classify { refusal: LabelRefusal },
     /// The pre-turn input check's attributed operation refusal.
     Input(InputRefusal),
+    /// A checked recall binding with no single unconditional noun operation.
+    RecallRequest(crate::state_flow::RecallRequestRefusal),
     /// A model pass cannot supply a usable tool statement, attempts a call
     /// during restatement, or returns an empty correction. This is no component halt.
     ProtocolRepair {

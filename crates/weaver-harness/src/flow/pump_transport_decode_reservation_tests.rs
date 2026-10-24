@@ -89,7 +89,7 @@ fn drain_send(port: &mut DecodePort, peer: &OwnedFd) -> Vec<Vec<u8>> {
 }
 
 fn measured() -> Vec<u8> {
-    b" \n{\"kind\":\"delta_measured\", \"body\":{\"resident\":90,\"prefix_tokens\":20,\"keep\":90,\"input_tokens\":7,\"capacity\":4096,\"opaque\":\"a\\u0062\"}}\t".to_vec()
+    b" \n{\"kind\":\"delta_measured\", \"body\":{\"resident\":90,\"prefix_tokens\":20,\"keep\":90,\"input_token\\u0073\":7,\"capacity\":4096}}\t".to_vec()
 }
 
 fn reply(port: &mut DecodePort, peer: &OwnedFd, bytes: &[u8]) {
@@ -368,12 +368,15 @@ fn preexisting_unreserved_work_is_never_adopted_by_a_reservation() {
         DecodeStage::Busy(_)
     ));
     drain_send(&mut port, &peer);
-    let opened = serde_json::to_vec(&TokenAnswer::Opened {
+    let opened = serde_json::to_vec(&TokenAnswer::Opened(weaver_types::Opened {
+        session: weaver_types::SessionId("session".into()),
         prefix_tokens: 20,
         capacity: 4096,
         generation_limit: 10,
         terminal_tokens: 1,
-    })
+        request: serde_json::value::to_raw_value(&serde_json::json!({})).unwrap(),
+        measurement: serde_json::value::to_raw_value(&serde_json::json!({})).unwrap(),
+    }))
     .unwrap();
     reply(&mut port, &peer, &opened);
     assert!(matches!(
@@ -382,7 +385,7 @@ fn preexisting_unreserved_work_is_never_adopted_by_a_reservation() {
     ));
     assert!(matches!(
         port.take_completion().unwrap(),
-        Some(DecodeReply::Answer(TokenAnswer::Opened { .. }))
+        Some(DecodeReply::Answer(TokenAnswer::Opened(_)))
     ));
     let large = serde_json::to_vec(&TokenAnswer::Fault(FaultReport {
         case: FaultCase::ResidencyDegraded,
@@ -447,7 +450,7 @@ fn dropping_unsettled_ticket_exposes_failure_and_never_unlocks_or_erases_bytes()
 }
 
 #[test]
-fn reservation_authorizes_only_measurement_without_faulting_other_owners() {
+fn reservation_allows_open_or_measurement_and_preserves_other_owners() {
     let (mut port, peer) = pair();
     let input = TokenDirective::Flush { keep: 9 };
     let failure = port.stage_reserved(input.clone()).unwrap_err();
@@ -472,4 +475,76 @@ fn typed_refusal_after_whole_send_is_a_terminal_but_not_a_successful_measurement
     ));
     assert_eq!(received.raw_bytes(), bytes);
     port.finish_reserved(ticket).unwrap();
+}
+
+fn boot_request(size: usize) -> TokenDirective {
+    TokenDirective::Open {
+        session: weaver_types::SessionId("session".into()),
+        messages: vec![Message {
+            role: Role::System,
+            content: vec![ContentBlock::Text {
+                text: "x".repeat(size),
+            }],
+        }],
+        column_ask: false,
+    }
+}
+fn opened_wire() -> Vec<u8> {
+    serde_json::to_vec(&TokenAnswer::Opened(weaver_types::Opened {
+        session: weaver_types::SessionId("session".into()),
+        prefix_tokens: 0,
+        capacity: 100,
+        generation_limit: 1,
+        terminal_tokens: 1,
+        request: serde_json::value::to_raw_value(&serde_json::json!({})).unwrap(),
+        measurement: serde_json::value::to_raw_value(&serde_json::json!({})).unwrap(),
+    }))
+    .unwrap()
+}
+#[test]
+fn boot_reservation_can_withdraw_only_before_any_preamble_or_payload_byte() {
+    let (mut port, peer) = pair();
+    let ticket = reserve(&mut port, boot_request(MAX_ENVELOPE_BYTES));
+    assert!(port.open_not_started());
+    port.withdraw_unsent(ticket).unwrap();
+    assert!(recv_bytes(&peer).is_none());
+    assert!(!port.send_pending());
+    assert!(port.failure().is_none());
+    let ticket = reserve(&mut port, boot_request(MAX_ENVELOPE_BYTES));
+    port.try_send().unwrap();
+    let preamble = recv_bytes(&peer).unwrap();
+    assert!(serde_json::from_slice::<SegmentPreamble>(&preamble).is_ok());
+    assert!(!ticket.sent());
+    assert!(!port.open_not_started());
+    let error = port.withdraw_unsent(ticket).unwrap_err();
+    assert!(error.reservation.belongs_to(&port));
+    let packets = drain_send(&mut port, &peer);
+    assert_eq!(packets.len(), 2);
+    assert!(error.reservation.sent());
+    reply(&mut port, &peer, &opened_wire());
+    assert!(matches!(
+        port.take_reserved(&error.reservation)
+            .unwrap()
+            .unwrap()
+            .reply(),
+        DecodeReply::Answer(TokenAnswer::Opened(_))
+    ));
+    port.finish_reserved(error.reservation).unwrap();
+}
+#[test]
+fn open_and_measurement_reservations_reject_each_others_terminal() {
+    for open in [false, true] {
+        let (mut port, peer) = pair();
+        let ticket = reserve(&mut port, if open { boot_request(1) } else { request(1) });
+        drain_send(&mut port, &peer);
+        reply(
+            &mut port,
+            &peer,
+            &if open { measured() } else { opened_wire() },
+        );
+        assert!(port.take_reserved(&ticket).unwrap().is_some());
+        let error = port.finish_reserved(ticket).unwrap_err();
+        assert!(error.reservation.belongs_to(&port));
+        assert!(port.decode_reservation.is_some());
+    }
 }

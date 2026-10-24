@@ -269,18 +269,39 @@ fn payload_licensed(envelope: &Envelope, payload: &Payload) -> bool {
         (K::StateMarkPosition, P::MarkPosition(_)) | (K::InputOffered, P::InputOffered(_)) => true,
         (K::StatePlacement, P::Placement(record)) => match record.phase {
             PlacementPhase::Boot => {
-                record.context.is_none()
+                !turn
+                    && envelope.causal_parent.is_some()
+                    && record.context.is_none()
                     && record.cut.is_none()
                     && record.method.is_none()
                     && record.assistant_message_id.is_none()
                     && record.assembly_id.0 == 0
+                    && record.n == record.prefix_tokens
+                    && record.resident_before == record.prefix_tokens
+                    && record.input_tokens == 0
+                    && record.prefix_tokens <= record.capacity
+                    && record.terminal_tokens == 1
+                    && record.unit_map.is_empty()
+                    && record.message_ids.is_empty()
+                    && record.recomputed_messages.0 == 0
+                    && record
+                        .open_evidence
+                        .as_ref()
+                        .is_some_and(OpenEvidenceRecord::has_object_boxes)
             }
             PlacementPhase::Cut => {
                 record.context.is_none()
                     && record.method.is_some()
                     && record.assistant_message_id.is_none()
+                    && record.assembly_id.0 != 0
+                    && record.open_evidence.is_none()
             }
-            PlacementPhase::Append => record.context.is_some() && record.method.is_some(),
+            PlacementPhase::Append => {
+                record.context.is_some()
+                    && record.method.is_some()
+                    && record.assembly_id.0 != 0
+                    && record.open_evidence.is_none()
+            }
         },
         (K::StateFlow, P::FlowObservation(record)) => {
             let repair = matches!(

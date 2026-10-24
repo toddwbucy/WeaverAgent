@@ -6,9 +6,9 @@ use weaver_spu::decoder::backend::{DecodeFault, TokenId};
 use weaver_spu::decoder::session::Session;
 use weaver_spu::family::{self, Family};
 use weaver_spu::residency::{Resident, StopSet};
-use weaver_spu::sampling::EffectiveSessionParameters;
+use weaver_spu::sampling::{EffectiveKnobs, EffectiveSessionParameters};
 use weaver_traits::Message;
-use weaver_types::{TokenRefusal, TurnKey};
+use weaver_types::{Opened, SessionId, TokenRefusal, TurnKey};
 
 /// The same owner the decode loop establishes after a successful Open. The
 /// resident borrowed by its session also supplies its renderer and tokenizer.
@@ -40,6 +40,12 @@ pub(super) struct PreparedDelta {
     pub(super) tokens: Vec<TokenId>,
 }
 
+/// The one identity render and the exact vector passed to prefix prefill.
+pub(super) struct PreparedIdentity {
+    pub(super) rendered: String,
+    pub(super) tokens: Vec<TokenId>,
+}
+
 // The dispatcher renders these private facts into the shared wire shapes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct OpenFacts {
@@ -59,6 +65,44 @@ pub(super) struct DeltaMeasured {
 }
 
 impl<'r> OpenedSession<'r> {
+    /// Return evidence only after the exact prepared prefix has been seated.
+    /// No temporary render, token vector or evidence is retained in the owner.
+    pub(super) fn open(
+        resident: &'r Resident,
+        knobs: &EffectiveKnobs,
+        parameters: EffectiveSessionParameters,
+        messages: &[Message],
+        column_ask: bool,
+        session_id: SessionId,
+    ) -> Result<(Self, Opened), PlacementFailure> {
+        let renderer = (resident.declaration.renderer)();
+        let prepared = prepare_identity(renderer, messages, |text| resident.tokenize(text))?;
+        let mut session = resident
+            .open_session(knobs, parameters.context_capacity)
+            .map_err(PlacementFailure::Decode)?;
+        session
+            .open(&prepared.tokens)
+            .map_err(PlacementFailure::Decode)?;
+        let stop = resident
+            .stop_set(renderer)
+            .map_err(PlacementFailure::Decode)?;
+        if column_ask {
+            session.ask_columns();
+        }
+        let standing = Self::from_open(session, resident, parameters, stop);
+        let facts = standing.open_facts().map_err(PlacementFailure::Decode)?;
+        let evidence = open_evidence(
+            session_id,
+            facts,
+            resident.declaration.template,
+            &resident.artifact.display().to_string(),
+            &resident.weights_hash.0,
+            &prepared,
+        )
+        .map_err(PlacementFailure::Decode)?;
+        Ok((standing, evidence))
+    }
+
     pub(super) fn from_open(
         session: Session<'r>,
         resident: &'r Resident,
@@ -123,6 +167,77 @@ impl<'r> OpenedSession<'r> {
             terminal_tokens: 1,
         })
     }
+}
+
+pub(super) fn prepare_identity(
+    renderer: &dyn Family,
+    messages: &[Message],
+    tokenize: impl FnOnce(&str) -> Result<Vec<TokenId>, DecodeFault>,
+) -> Result<PreparedIdentity, PlacementFailure> {
+    let rendered = renderer
+        .render_identity(messages)
+        .map_err(|refusal| PlacementFailure::Render(refusal.into()))?;
+    let tokens = tokenize(&rendered).map_err(PlacementFailure::Decode)?;
+    Ok(PreparedIdentity { rendered, tokens })
+}
+
+pub(super) fn open_evidence(
+    session: SessionId,
+    facts: OpenFacts,
+    template: &str,
+    model: &str,
+    weights_hash: &str,
+    prepared: &PreparedIdentity,
+) -> Result<Opened, DecodeFault> {
+    if facts.prefix_tokens != count(prepared.tokens.len())? {
+        return Err(DecodeFault::Engine {
+            detail: "Open prefix count disagrees with prefill input".into(),
+        });
+    }
+    let encoding = |error: serde_json::Error| DecodeFault::Engine {
+        detail: format!("Open evidence encoding failed: {error}"),
+    };
+    // Write the organ-owned shape in its declared field order. serde_json
+    // escapes each string and writes numeric u32/u64 values without a second
+    // token vector or a floor mirror of the SPU's evidence vocabulary.
+    let mut request = b"{\"rendered\":".to_vec();
+    serde_json::to_writer(&mut request, &prepared.rendered).map_err(encoding)?;
+    request.extend_from_slice(b",\"template\":");
+    serde_json::to_writer(&mut request, template).map_err(encoding)?;
+    request.push(b'}');
+
+    let mut measurement = b"{\"model\":".to_vec();
+    serde_json::to_writer(&mut measurement, model).map_err(encoding)?;
+    measurement.extend_from_slice(b",\"weights_hash\":");
+    serde_json::to_writer(&mut measurement, weights_hash).map_err(encoding)?;
+    measurement.extend_from_slice(b",\"prefix_token_ids\":[");
+    for (index, token) in prepared.tokens.iter().enumerate() {
+        if index != 0 {
+            measurement.push(b',');
+        }
+        serde_json::to_writer(&mut measurement, &token.0).map_err(encoding)?;
+    }
+    measurement
+        .extend_from_slice(b"],\"blocks\":[{\"label\":\"identity-prefix\",\"start\":0,\"end\":");
+    serde_json::to_writer(&mut measurement, &count(prepared.rendered.len())?).map_err(encoding)?;
+    measurement.extend_from_slice(b"}]}");
+    let raw = |bytes| {
+        let text = String::from_utf8(bytes).map_err(|error| DecodeFault::Engine {
+            detail: format!("Open evidence encoding is not UTF-8: {error}"),
+        })?;
+        serde_json::value::RawValue::from_string(text).map_err(encoding)
+    };
+    let request = raw(request)?;
+    let measurement = raw(measurement)?;
+    Ok(Opened {
+        session,
+        prefix_tokens: facts.prefix_tokens,
+        capacity: facts.capacity,
+        generation_limit: facts.generation_limit,
+        terminal_tokens: facts.terminal_tokens,
+        request,
+        measurement,
+    })
 }
 
 fn count(value: usize) -> Result<u64, DecodeFault> {

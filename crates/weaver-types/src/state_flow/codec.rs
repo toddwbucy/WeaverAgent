@@ -70,6 +70,79 @@ pub fn decode_strict<T: DeserializeOwned>(json: &str) -> Result<T, serde_json::E
     serde_json::from_str(json)
 }
 
+/// Delegate a typed field map without accepting serde's struct-as-array form.
+pub(crate) fn deserialize_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct Object<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for Object<T> {
+        type Value = T;
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+            T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    deserializer.deserialize_map(Object(std::marker::PhantomData))
+}
+
+// One field list defines the public carrier and its private closed map decoder.
+// The private helper cannot expose a second public deserialization entry point.
+macro_rules! closed_object {
+    (@attributes [$($public:tt)*] [$($decoder:tt)*]
+        #[serde(rename_all = $rename:literal)] $($rest:tt)*) => {
+        $crate::state_flow::codec::closed_object! {
+            @attributes [$($public)* #[serde(rename_all = $rename)]]
+            [$($decoder)* #[serde(rename_all = $rename)]] $($rest)*
+        }
+    };
+    (@attributes [$($public:tt)*] [$($decoder:tt)*]
+        #[serde($($unsupported:tt)*)] $($rest:tt)*) => {
+        compile_error!("closed_object supports only rename_all as a container serde attribute");
+    };
+    (@attributes [$($public:tt)*] [$($decoder:tt)*]
+        #[$attribute:meta] $($rest:tt)*) => {
+        $crate::state_flow::codec::closed_object! {
+            @attributes [$($public)* #[$attribute]] [$($decoder)*] $($rest)*
+        }
+    };
+    (@attributes [$($public:tt)*] [$($decoder:tt)*]
+        @struct $visibility:vis struct $name:ident {
+            $($(#[$field_attribute:meta])* $field_visibility:vis $field:ident: $kind:ty),* $(,)?
+        }) => {
+        $($public)*
+        $visibility struct $name {
+            $($(#[$field_attribute])* $field_visibility $field: $kind,)*
+        }
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                $($decoder)*
+                struct Fields {
+                    $($(#[$field_attribute])* $field: $kind,)*
+                }
+                let Fields { $($field,)* } =
+                    $crate::state_flow::codec::deserialize_object(deserializer)?;
+                Ok(Self { $($field,)* })
+            }
+        }
+    };
+    ($(#[$($attribute:tt)*])* $visibility:vis struct $name:ident {
+        $($(#[$field_attribute:meta])* $field_visibility:vis $field:ident: $kind:ty),* $(,)?
+    }) => {
+        $crate::state_flow::codec::closed_object! {
+            @attributes [] [] $(#[$($attribute)*])* @struct $visibility struct $name {
+                $($(#[$field_attribute])* $field_visibility $field: $kind,)*
+            }
+        }
+    };
+}
+pub(crate) use closed_object;
+
 struct UniqueJson;
 
 impl<'de> Deserialize<'de> for UniqueJson {

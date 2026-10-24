@@ -18,7 +18,7 @@ pub(crate) fn event(
             channel,
             origin,
             subsystem: Subsystem::Harness,
-            causal_parent: None,
+            causal_parent: (kind == Kind::StatePlacement).then_some(Sequence(9)),
             wall_ms: 42,
             monotonic_ns: MonotonicNs(9007199254740993),
         },
@@ -337,10 +337,212 @@ fn boot_placement_refuses_a_cut_reference_but_cut_preparation_may_omit_it() {
     payload.phase = PlacementPhase::Cut;
     payload.assembly_id = 1.into();
     payload.method = Some(CutMethod::Flush);
+    payload.open_evidence = None;
     assert!(accepts(&placement));
     let Some(Payload::Placement(payload)) = &mut placement.payload else {
         panic!()
     };
     payload.cut = None;
     assert!(accepts(&placement));
+}
+
+#[test]
+fn boot_placement_requires_its_turnless_outer_facts_without_electing_fit() {
+    let good = fixture(Kind::StatePlacement);
+    assert!(accepts(&good));
+    let mut bad = good.clone();
+    bad.envelope.turn = Some(TurnRef("turn".into()));
+    assert!(!accepts(&bad));
+    let mut bad = good.clone();
+    bad.envelope.causal_parent = None;
+    assert!(!accepts(&bad));
+
+    type Change = (&'static str, fn(&mut PlacementRecord));
+    let changes: &[Change] = &[
+        ("assembly", |p| p.assembly_id = 1.into()),
+        ("context", |p| {
+            p.context = Some(PlacementContext {
+                label: "invented".into(),
+                instruction: None,
+            });
+        }),
+        ("method", |p| p.method = Some(CutMethod::Flush)),
+        ("N", |p| p.n += 1),
+        ("resident_before", |p| p.resident_before += 1),
+        ("input_tokens", |p| p.input_tokens = 1),
+        ("capacity", |p| p.capacity = p.prefix_tokens - 1),
+        ("terminal_tokens", |p| p.terminal_tokens = 0),
+        ("unit_map", |p| {
+            p.unit_map.push(UnitMapEntry {
+                unit_id: UnitId::Pair {
+                    call_id: CallId {
+                        run: "run".into(),
+                        sequence: 1.into(),
+                        call: 0.into(),
+                    },
+                },
+                occurrence_id: UnitOccurrenceId {
+                    run: "run".into(),
+                    assembly_id: 0.into(),
+                    unit_index: 0.into(),
+                },
+                message_start: 0.into(),
+                message_end: 1.into(),
+                spans: vec![],
+                source_map: vec![],
+                step_queries: vec![],
+            });
+        }),
+        ("message_ids", |p| p.message_ids.push(1.into())),
+        ("assistant_message_id", |p| {
+            p.assistant_message_id = Some(1.into());
+        }),
+        ("recomputed_messages", |p| p.recomputed_messages = 1.into()),
+        ("open_evidence", |p| p.open_evidence = None),
+    ];
+    for (name, change) in changes {
+        let mut bad = good.clone();
+        let Some(Payload::Placement(record)) = &mut bad.payload else {
+            unreachable!()
+        };
+        change(record);
+        assert!(!accepts(&bad), "{name}");
+    }
+
+    let mut seated = good;
+    let Some(Payload::Placement(record)) = &mut seated.payload else {
+        unreachable!()
+    };
+    // Empty valid prefixes and unsuccessful configured fit still have a
+    // truthful boot account. Trace never supplies journal/readiness authority.
+    record.n = 0;
+    record.resident_before = 0;
+    record.prefix_tokens = 0;
+    record.capacity = 0;
+    record.generation_limit = u64::MAX;
+    assert!(accepts(&seated));
+}
+
+#[test]
+fn open_evidence_checks_object_boxes_without_decoding_spu_members() {
+    for value in ["null", "[]", "0", "true", r#""object""#] {
+        for request in [false, true] {
+            let mut placement = fixture(Kind::StatePlacement);
+            let Some(Payload::Placement(record)) = &mut placement.payload else {
+                unreachable!()
+            };
+            let evidence = record.open_evidence.as_mut().unwrap();
+            if request {
+                evidence.request = raw(value);
+            } else {
+                evidence.measurement = raw(value);
+            }
+            assert!(!accepts(&placement), "request={request}: {value}");
+        }
+    }
+    for value in [
+        "{}",
+        r#"{ "future": {"v":1}, "future": {"v":2} }"#,
+        r#"{"prefix_token_ids":[-1],"blocks":[{"start":"invalid"}]}"#,
+    ] {
+        let mut placement = fixture(Kind::StatePlacement);
+        let Some(Payload::Placement(record)) = &mut placement.payload else {
+            unreachable!()
+        };
+        record.open_evidence = Some(OpenEvidenceRecord {
+            request: raw(value),
+            measurement: raw(value),
+        });
+        assert!(accepts(&placement), "trace must leave SPU contents opaque");
+    }
+}
+
+#[test]
+fn shared_open_corpus_keeps_harness_semantics_out_of_trace_admission() {
+    use super::super::record::Object;
+
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../weaver-types/tests/fixtures/decode-open-evidence.json"
+    ))
+    .unwrap();
+    let mut opaque_cases = 0;
+    for case in cases.as_array().unwrap() {
+        if !case["outer_valid"].as_bool().unwrap() {
+            continue;
+        }
+        let wire = Object::parse(case["wire"].as_str().unwrap()).unwrap();
+        let body = Object::parse(wire.get("body").unwrap().get()).unwrap();
+        let number = |field| serde_json::from_str::<u64>(body.get(field).unwrap().get()).unwrap();
+        let request = body.get("request").unwrap().get();
+        let measurement = body.get("measurement").unwrap().get();
+        let mut placement = fixture(Kind::StatePlacement);
+        let Some(Payload::Placement(record)) = &mut placement.payload else {
+            unreachable!()
+        };
+        record.prefix_tokens = number("prefix_tokens");
+        record.n = record.prefix_tokens;
+        record.resident_before = record.prefix_tokens;
+        record.capacity = number("capacity");
+        record.generation_limit = number("generation_limit");
+        record.terminal_tokens = number("terminal_tokens");
+        record.open_evidence = Some(OpenEvidenceRecord {
+            request: raw(request),
+            measurement: raw(measurement),
+        });
+        // Trace sees only its local count predicates and object-box shape.
+        // The harness owns the wire session and every nested evidence member.
+        let expected = record.prefix_tokens <= record.capacity
+            && record.terminal_tokens == 1
+            && serde_json::from_str::<serde_json::Value>(request)
+                .unwrap()
+                .is_object()
+            && serde_json::from_str::<serde_json::Value>(measurement)
+                .unwrap()
+                .is_object();
+        let encoded = serde_json::to_string(record).unwrap();
+        assert!(encoded.contains(&format!(
+            "\"open_evidence\":{{\"request\":{request},\"measurement\":{measurement}}}"
+        )));
+        assert_eq!(accepts(&placement), expected, "{}", case["name"]);
+        if expected && !case["evidence_valid"].as_bool().unwrap() {
+            opaque_cases += 1;
+        }
+    }
+    assert!(
+        opaque_cases > 0,
+        "corpus must exercise opaque invalid contents"
+    );
+}
+
+#[test]
+fn nonboot_placement_requires_null_open_evidence_and_nonzero_assembly() {
+    for phase in [PlacementPhase::Cut, PlacementPhase::Append] {
+        let mut placement = fixture(Kind::StatePlacement);
+        let Some(Payload::Placement(record)) = &mut placement.payload else {
+            unreachable!()
+        };
+        record.phase = phase;
+        record.assembly_id = 1.into();
+        record.method = Some(CutMethod::Flush);
+        record.context = (phase == PlacementPhase::Append).then(|| PlacementContext {
+            label: "identity".into(),
+            instruction: None,
+        });
+        assert!(!accepts(&placement));
+        let Some(Payload::Placement(record)) = &mut placement.payload else {
+            unreachable!()
+        };
+        record.open_evidence = None;
+        assert!(
+            serde_json::to_string(record)
+                .unwrap()
+                .ends_with(",\"open_evidence\":null}")
+        );
+        assert!(accepts(&placement));
+        let Some(Payload::Placement(record)) = &mut placement.payload else {
+            unreachable!()
+        };
+        record.assembly_id = 0.into();
+        assert!(!accepts(&placement));
+    }
 }

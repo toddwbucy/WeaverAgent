@@ -227,6 +227,92 @@ fn recall_admission_preserves_sequence_and_records_without_a_state_copy() {
 }
 
 #[test]
+fn boot_open_evidence_stays_in_the_canonical_line_without_a_copy_or_terminal_permit() {
+    use super::super::recall_tests::{boot, event as recall_event};
+
+    for stopped in [false, true] {
+        let (mut recorder, reader) = recorder();
+        let head = recorded(recorder.submit(recall_event(boot())));
+        let mut placement = fixture(Kind::StatePlacement);
+        // Author sequence values are placeholders, not trusted causal order.
+        placement.envelope.sequence = Sequence(0);
+        placement.envelope.causal_parent = Some(head.sequence);
+        let Some(Payload::Placement(record)) = &mut placement.payload else {
+            unreachable!()
+        };
+        let request = r#"{ "rendered":"head\n\u00e9", "template":"family" }"#;
+        let measurement = r#"{"opaque":[1,2], "opaque":{"future":true}}"#;
+        record.open_evidence = Some(payloads::OpenEvidenceRecord {
+            request: raw(request),
+            measurement: raw(measurement),
+        });
+        if stopped {
+            recorder.stop_tap();
+        }
+        // The trace-only teardown account uses this same ordinary road.
+        let submission = recorded(recorder.submit(placement.clone()));
+        assert_eq!(submission.sequence, Sequence(2));
+        assert_eq!(
+            submission.tap,
+            if stopped {
+                TapOutcome::Stopped
+            } else {
+                TapOutcome::Unselected
+            }
+        );
+        let line = recorder.structure().iter().last().unwrap().line.clone();
+        assert!(line.contains(&format!(
+            "\"open_evidence\":{{\"request\":{request},\"measurement\":{measurement}}}"
+        )));
+        assert!(line.contains(r#""causal_parent":"1""#));
+        assert_eq!(line.bytes().filter(|&byte| byte == b'\n').count(), 1);
+        assert!(line.ends_with('\n'));
+        assert_eq!(recorder.structure().by_kind(Kind::ModelRequest).count(), 0);
+        assert_eq!(
+            recorder.structure().by_kind(Kind::ModelMeasurement).count(),
+            0
+        );
+
+        recorder.stop_tap();
+        assert!(recorder.submit_terminal(placement).is_err());
+        assert_eq!(recorder.structure().len(), 3);
+        let expected: String = recorder
+            .structure()
+            .iter()
+            .map(|record| record.line.as_ref())
+            .collect();
+        drained(&mut recorder);
+        drop(recorder);
+        assert_eq!(bytes(reader), expected);
+    }
+}
+
+#[test]
+fn boot_open_evidence_requires_a_parent_before_the_assigned_sequence() {
+    use super::super::recall_tests::{boot, event as recall_event};
+
+    let (mut recorder, reader) = recorder();
+    let head = recorded(recorder.submit(recall_event(boot())));
+    for parent in [None, Some(Sequence(2)), Some(Sequence(u64::MAX))] {
+        let mut placement = fixture(Kind::StatePlacement);
+        placement.envelope.causal_parent = parent;
+        assert!(matches!(
+            recorder.submit(placement),
+            Err(Failure::RefusedOnSubmit {
+                reason: crate::SubmitRefusal::PayloadMalformed
+            })
+        ));
+        assert_eq!(recorder.structure().len(), 2);
+    }
+    let mut placement = fixture(Kind::StatePlacement);
+    placement.envelope.causal_parent = Some(head.sequence);
+    assert_eq!(recorded(recorder.submit(placement)).sequence, Sequence(2));
+    drained(&mut recorder);
+    drop(recorder);
+    assert_eq!(bytes(reader).lines().count(), 3);
+}
+
+#[test]
 fn tap_failure_records_the_complete_source_then_stops_without_losing_fault() {
     let (mut recorder, reader) = recorder();
     let mut bad = message("Read file.");

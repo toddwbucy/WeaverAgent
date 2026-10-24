@@ -1,6 +1,9 @@
 //! Load-template certification through real packet and recorder owners.
 //! The compiled fixture inventory and scripted checker are not language qualification.
 
+#[path = "context_template_return_review_tests.rs"]
+mod return_review_tests;
+
 use super::super::coordinator::TransportSource;
 use super::super::ste100_channel::{Fault, Receive, Tag};
 use super::super::templates::{CompiledInventory, TemplateCertificate};
@@ -11,7 +14,7 @@ use std::sync::OnceLock;
 use weaver_types::TurnFrame;
 use weaver_types::state_flow as s;
 
-fn templates() -> &'static [s::TemplateSpec] {
+pub(super) fn templates() -> &'static [s::TemplateSpec] {
     static TEMPLATES: OnceLock<Vec<s::TemplateSpec>> = OnceLock::new();
     TEMPLATES.get_or_init(|| {
         vec![
@@ -48,7 +51,7 @@ fn templates() -> &'static [s::TemplateSpec] {
     })
 }
 
-fn inventory() -> CompiledInventory {
+pub(super) fn inventory() -> CompiledInventory {
     CompiledInventory::new(templates()).unwrap()
 }
 
@@ -60,6 +63,15 @@ impl TemplateFixture {
     pub(super) fn new() -> Self {
         Self {
             input: InputFixture::with_template_inventory(&inventory()),
+        }
+    }
+
+    pub(super) fn with_enter(remaining_enter_ns: u64) -> Self {
+        Self {
+            input: InputFixture::with_template_inventory_and_enter(
+                &inventory(),
+                remaining_enter_ns,
+            ),
         }
     }
 

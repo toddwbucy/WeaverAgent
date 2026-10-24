@@ -65,7 +65,14 @@ fn a_message_of_exactly_the_bound_reads_clean() {
 /// exactly that removal.
 #[test]
 fn a_write_past_the_bound_refuses_before_it_reaches_the_socket() {
-    let (writer, _reader) = seqpacket_pair();
+    let (writer, reader) = seqpacket_pair();
+    // A removed bound must fail this instrument, not fill the socket and hang.
+    nix::sys::socket::setsockopt(
+        &writer,
+        nix::sys::socket::sockopt::SendTimeout,
+        &nix::sys::time::TimeVal::new(5, 0),
+    )
+    .unwrap();
     let socket = decode_from_owned(writer);
     let oversized = vec![b'z'; DECODE_MESSAGE_BOUND + 1];
     assert_eq!(
@@ -73,5 +80,10 @@ fn a_write_past_the_bound_refuses_before_it_reaches_the_socket() {
         Err(ChannelFault::Truncated {
             bound: DECODE_MESSAGE_BOUND
         })
+    );
+    assert_eq!(
+        recv(reader.as_raw_fd(), &mut [0_u8; 128], MsgFlags::MSG_DONTWAIT),
+        Err(nix::errno::Errno::EAGAIN),
+        "refusal must precede any segment preamble"
     );
 }

@@ -84,6 +84,36 @@ pub enum PlacementPhase {
     Cut,
     Append,
 }
+
+/// The checked Open answer's opaque boxes, retained exactly as the SPU sent
+/// them. The harness validates their contents before authoring this wrapper.
+///
+/// ```compile_fail,E0277
+/// fn reads<T: for<'a> serde::Deserialize<'a>>() {}
+/// reads::<weaver_trace::serving::payloads::OpenEvidenceRecord>();
+/// ```
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenEvidenceRecord {
+    pub request: Box<RawValue>,
+    pub measurement: Box<RawValue>,
+}
+
+impl PartialEq for OpenEvidenceRecord {
+    fn eq(&self, other: &Self) -> bool {
+        self.request.get() == other.request.get()
+            && self.measurement.get() == other.measurement.get()
+    }
+}
+
+impl OpenEvidenceRecord {
+    pub(in crate::serving) fn has_object_boxes(&self) -> bool {
+        // RawValue already guarantees valid JSON. Inspect only the outer
+        // value kind, without decoding members or normalizing their spelling.
+        self.request.get().trim_start().starts_with('{')
+            && self.measurement.get().trim_start().starts_with('{')
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PlacementRecord {
     pub assembly_id: DecimalU64,
@@ -104,6 +134,7 @@ pub struct PlacementRecord {
     pub assistant_message_id: Option<DecimalU64>,
     pub recomputed_messages: DecimalU64,
     pub wait_ns: DecimalU64,
+    pub open_evidence: Option<OpenEvidenceRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

@@ -1,6 +1,9 @@
 use super::*;
 use crate::engine::serving_sqlite::{OpenFault, image};
 
+mod internal_view;
+mod summary;
+
 struct Fixture {
     store: ServingSqlite,
     start: StartIdentity,
@@ -132,8 +135,12 @@ impl Fixture {
     }
 
     fn replace(&mut self, changed_task: bool) -> SpanRef {
+        self.replace_with_digest(changed_task, Digest::new("1".repeat(64)).unwrap())
+    }
+
+    fn replace_with_digest(&mut self, changed_task: bool, document_sha256: Digest) -> SpanRef {
         let (sequence, task_id, index) = if changed_task { (3, 3, 1) } else { (5, 5, 0) };
-        let ctx = context(
+        let mut ctx = context(
             PlanInputOperation::Replace(PlanInputReplacement {
                 task: changed_task.then(|| 0.into()),
                 steps: vec![PlanInputStep {
@@ -147,6 +154,7 @@ impl Fixture {
             }),
             Some(plan(1)),
         );
+        ctx.document_sha256 = document_sha256;
         self.file(input(sequence, 0, &ctx));
         if changed_task {
             self.file(input(sequence, 1, &ctx));

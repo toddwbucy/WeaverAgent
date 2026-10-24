@@ -59,6 +59,10 @@ impl ServingAuthor {
         })
     }
 
+    pub(super) fn session(&self) -> &str {
+        &self.session
+    }
+
     pub(super) fn prepare(
         &self,
         authored: &AuthoredEvent,

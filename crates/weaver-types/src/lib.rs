@@ -70,6 +70,8 @@
 //! }
 //! fn refusal_name(r: &LifecycleRefusal) -> &'static str {
 //!     match r {
+//!         LifecycleRefusal::StateManagementInvalid { .. } => "state_management_invalid",
+//!         LifecycleRefusal::StatePersistenceInvalid { .. } => "state_persistence_invalid",
 //!         LifecycleRefusal::Unauthorized => "unauthorized",
 //!         LifecycleRefusal::Malformed => "malformed",
 //!         LifecycleRefusal::NoSuchAgent => "no_such_agent",
@@ -121,8 +123,8 @@ pub use wire::{
     EnterBinding, EnterPayload, ExchangeId, FaultCase, FaultReport, Finish, Generation,
     InputRefusal, KillCause, LEAVE_BOUND_MS, LOWER_BOUND_MS, LOWER_SETTLE_MARGIN_MS, LabelAnswer,
     LabelDirective, LabelRefusal, LifecycleAnswer, LifecycleAsk, LifecycleDirective,
-    LifecycleRefusal, Lineage, LoadFacts, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload,
-    Position, RefusalRecord, RefusingOrgan, Reset, ResetReason, RunId, SavePointLeg,
+    LifecycleRefusal, Lineage, LoadFacts, MAX_ENVELOPE_BYTES, Opened, Opener, OrganEnvelope,
+    Payload, Position, RefusalRecord, RefusingOrgan, Reset, ResetReason, RunId, SavePointLeg,
     SavePointReport, ScoredLabel, SegmentPreamble, SessionId, TokenAnswer, TokenAsk,
     TokenDirective, TokenRefusal, ToolExecution, ToolOutcome, TurnFrame, TurnKey, TurnRequest,
     UnrecoveredCall, UnrecoveredReason,

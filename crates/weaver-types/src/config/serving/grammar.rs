@@ -296,9 +296,10 @@ fn parse_ste100(root: &Object<'_>) -> Result<Ste100Instruction, ConfigError> {
     )?;
     let binding = ste100.child("model-binding", &["artifact", "devices"])?;
     let artifact: ArtifactRef = binding.get("artifact")?;
-    if artifact.0.is_empty() {
-        return Err(bad(&binding.path("artifact")));
-    }
+    checked(
+        &binding.path("artifact"),
+        Ste100Instruction::validate_artifact_locator(&artifact.0),
+    )?;
     let devices: Vec<DeviceOrdinal> = binding.get("devices")?;
     let mut seen = BTreeSet::new();
     if devices.is_empty() || devices.iter().any(|device| !seen.insert(device.0)) {

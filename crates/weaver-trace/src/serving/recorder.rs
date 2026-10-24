@@ -448,10 +448,24 @@ impl Core {
         if let Some(failure) = self.writer.standing_failure() {
             return Err(failure);
         }
+        let sequence = Sequence(self.next.ok_or_else(malformed)?);
+        if matches!(
+            event.payload.as_ref(),
+            Some(Payload::Placement(record))
+                if record.phase == super::payloads::PlacementPhase::Boot
+        ) && event
+            .envelope
+            .causal_parent
+            .is_none_or(|parent| parent >= sequence)
+        {
+            // The caller's sequence is only a placeholder. Check ordering
+            // against the sequence this recorder will actually assign; the
+            // harness proves that the source is its held boot recall.
+            return Err(malformed());
+        }
         let Some(reservation) = self.writer.reserve(terminal)? else {
             return Ok(SubmitAttempt::CapacityPending(event));
         };
-        let sequence = Sequence(self.next.ok_or_else(malformed)?);
         event.envelope.sequence = sequence;
         let line = render(&event)?;
         if let Err(failure) = self.structure.append(Record {

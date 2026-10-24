@@ -546,11 +546,11 @@ fn invalid_recall_shape_retains_exact_evidence_and_reserves_its_ordinal() {
     assert_eq!(requests.requests().len(), 1);
     assert_eq!(requests.requests()[0].opening().call_id.call.0, 2);
     assert!(
-        matches!(&requests.refusals()[0], AssociationRefusal::InvalidRecall { call_id, statement, noun_count: 2, has_condition: false }
+        matches!(&requests.refusals()[0], AssociationRefusal::InvalidRecall { call_id, call_block: 0, statement, noun_count: 2, has_condition: false }
         if call_id.call.0 == 0 && statement.block_id == source(0))
     );
     assert!(
-        matches!(&requests.refusals()[1], AssociationRefusal::InvalidRecall { call_id, statement, noun_count: 1, has_condition: true }
+        matches!(&requests.refusals()[1], AssociationRefusal::InvalidRecall { call_id, call_block: 1, statement, noun_count: 1, has_condition: true }
         if call_id.call.0 == 1 && statement.block_id == source(1))
     );
 }

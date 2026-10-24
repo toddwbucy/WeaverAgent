@@ -122,7 +122,7 @@ fn parse_request(frame: &weaver_types::TurnFrame) -> Result<Request, String> {
 /// A turn that opened carries its key whatever became of it. The members take
 /// the trace envelope's own names so a consumer holding both joins on what it
 /// already reads.
-fn render_close(
+pub(crate) fn render_close(
     kind: &str,
     member: &str,
     value: &str,
@@ -3333,18 +3333,37 @@ fn open_session(
     identity: Vec<weaver_traits::Message>,
     column_ask: bool,
 ) -> Result<(), LifecycleRefusal> {
+    open_session_with_diagnostic(
+        decode,
+        session,
+        identity,
+        column_ask,
+        &mut std::io::stderr(),
+    )
+}
+
+fn open_session_with_diagnostic(
+    decode: &DecodeChannel,
+    session: SessionId,
+    identity: Vec<weaver_traits::Message>,
+    column_ask: bool,
+    diagnostic: &mut impl std::io::Write,
+) -> Result<(), LifecycleRefusal> {
     decode
         .send_directive(&TokenDirective::Open {
-            session,
+            session: session.clone(),
             messages: identity,
             column_ask,
         })
         .map_err(|_| LifecycleRefusal::NoResidency)?;
     match decode.recv_reply() {
-        // The complete replacement body must decode even on the retiring
-        // boot path. The foundation boot/place owner caches and checks these
-        // facts against its declared budgets at the coordinated cutover.
-        Ok(crate::channel::DecodeReply::Answer(TokenAnswer::Opened { .. })) => Ok(()),
+        // Diagnostic and retiring serving callers consume the paired wire too.
+        // They validate its exact echo and evidence without authoring a new
+        // diagnostic event or manufacturing foundation boot/place readiness.
+        Ok(crate::channel::DecodeReply::Answer(TokenAnswer::Opened(opened))) => {
+            crate::open_evidence::validate(&opened, &session)
+                .map_err(|cause| open_evidence_refusal(cause, diagnostic))
+        }
         // The emission, matched by name: a fault at open is the residency
         // unfit to serve, not the load's shape refused, and the wildcard
         // below would misname it. No recorder stands this early, so the
@@ -3361,6 +3380,18 @@ fn open_session(
         // undecodable, is the residency lost the moment it was confirmed.
         Err(_) => Err(LifecycleRefusal::NoResidency),
     }
+}
+
+fn open_evidence_refusal(
+    cause: crate::open_evidence::OpenEvidenceError,
+    diagnostic: &mut impl std::io::Write,
+) -> LifecycleRefusal {
+    // Operator detail stays outside the trace and the closed refusal vocabulary.
+    // Do not copy raw model evidence into stderr or let a failed log write change
+    // the refusal, matching the existing lifecycle diagnostic writer policy.
+    let line = serde_json::json!({ "open_evidence_invalid": { "cause": format!("{cause:?}") } });
+    let _ = writeln!(diagnostic, "{line}");
+    LifecycleRefusal::NoResidency
 }
 
 fn classify_organ_death(pid: nix::unistd::Pid) -> Option<LifecycleRefusal> {

@@ -987,3 +987,6 @@ fn boot_recall_state_eof_keeps_the_pending_author_and_withholds_boot_head() {
 
 #[path = "context_boot_pairs_tests.rs"]
 mod pair_repair_tests;
+
+#[path = "context_boot_open_tests.rs"]
+mod open_owner_tests;
