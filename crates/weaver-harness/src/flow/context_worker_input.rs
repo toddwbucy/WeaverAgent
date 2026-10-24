@@ -12,12 +12,27 @@ use crate::flow::report::{FlowHaltReason, HaltPoint};
 use weaver_trace::{Subsystem, TurnRef, serving};
 use weaver_types::{Opener, OrganEnvelope, Payload, Position, TurnKey};
 
+#[path = "context_worker_generation.rs"]
+pub(crate) mod generation;
+#[path = "context_worker_management.rs"]
+pub(crate) mod management;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoundationInputProgress {
     Pending,
     Accepted,
     Turn,
+    Task,
+    Placed,
+    Generated,
+    Restatement,
+    Effective,
+    Sorted,
+    /// An operation refused. Its full account remains with this owner.
+    OperationRefused,
     Refused,
+    /// The stopped turn's world close has been completely carried.
+    Aborted,
     /// The actual root connection is retained for management judgment. Mere
     /// acceptance is not a Leave and does not revoke input or grant cleanup.
     ManagementPending,
@@ -32,12 +47,14 @@ enum Stage {
     Source,
     Closing,
     Refused,
+    Aborted,
     Turn,
+    Engine,
     Stopped,
 }
 
 /// Owns the serving resources and original input through checking, trace waits,
-/// an actual unnamed close, or source authoring. A stopped owner remains owed
+/// an actual world close, or source authoring. A stopped owner remains owed
 /// to lifecycle teardown; dropping it is not completed cleanup.
 ///
 /// ```compile_fail,E0507
@@ -57,6 +74,7 @@ pub struct FoundationInput<'a> {
     report: Option<(ReceivedOrgan, Subsystem)>,
     report_started: bool,
     failure: Option<RunFailure>,
+    engine: Option<Box<generation::EngineWork>>,
 }
 
 impl<'a> FoundationServing<'a> {
@@ -75,6 +93,7 @@ impl<'a> FoundationServing<'a> {
             report: None,
             report_started: false,
             failure: None,
+            engine: None,
         })
     }
 }
@@ -90,7 +109,9 @@ impl<'a> FoundationInput<'a> {
         match self.stage {
             Stage::Accepted => FoundationInputProgress::Accepted,
             Stage::Turn => FoundationInputProgress::Turn,
+            Stage::Engine => self.engine.as_ref().unwrap().progress(),
             Stage::Refused => FoundationInputProgress::Refused,
+            Stage::Aborted => FoundationInputProgress::Aborted,
             _ => FoundationInputProgress::Pending,
         }
     }
@@ -104,11 +125,14 @@ impl<'a> FoundationInput<'a> {
     }
 
     fn advance_with_io(&mut self, io: &mut impl PumpIo) -> FoundationInputProgress {
-        if self.progress() != FoundationInputProgress::Pending {
+        if matches!(
+            self.progress(),
+            FoundationInputProgress::Stopped | FoundationInputProgress::ManagementPending
+        ) {
             return self.progress();
         }
         let result = self.observe(io).and_then(|()| {
-            if self.serving.owner.listener.held().is_some() {
+            if self.progress() != FoundationInputProgress::Pending {
                 Ok(())
             } else {
                 self.step(io)
@@ -162,6 +186,9 @@ impl<'a> FoundationInput<'a> {
     }
 
     fn step(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        if self.stage == Stage::Engine {
+            return self.advance_engine(None, io);
+        }
         let owner = &mut self.serving.owner;
         owner.context.live(io)?;
         let mut ports = PumpPorts {
@@ -377,11 +404,14 @@ impl<'a> FoundationInput<'a> {
         Ok(())
     }
 
-    /// Only whole refusal delivery or Recorded checked source authoring grants
-    /// a result. Every other attempt returns the full original owner.
+    /// Only whole world-close delivery, Recorded checked source authoring or a
+    /// confirmed/check-recorded generation grants a result. The generated arm
+    /// retains custody for repair/sort; it grants no final answer or dispatch.
+    /// Every other attempt returns the full original owner.
     pub fn finish(mut self: Box<Self>) -> Result<FoundationInputResult<'a>, Box<Self>> {
         match self.progress() {
             FoundationInputProgress::Refused => Ok(FoundationInputResult::Refused(self.serving)),
+            FoundationInputProgress::Aborted => Ok(FoundationInputResult::Aborted(self.serving)),
             FoundationInputProgress::Turn => {
                 Ok(FoundationInputResult::Turn(Box::new(FoundationTurn {
                     serving: self.serving,
@@ -389,6 +419,12 @@ impl<'a> FoundationInput<'a> {
                     input: self.seated.take().expect("recorded source"),
                 })))
             }
+            FoundationInputProgress::Generated => Ok(FoundationInputResult::Generated(
+                generation::FoundationGeneration { input: self },
+            )),
+            FoundationInputProgress::Sorted => Ok(FoundationInputResult::Sorted(
+                generation::emission::FoundationOutbound { input: self },
+            )),
             _ => Err(self),
         }
     }
@@ -396,7 +432,10 @@ impl<'a> FoundationInput<'a> {
 
 pub enum FoundationInputResult<'a> {
     Refused(FoundationServing<'a>),
+    Aborted(FoundationServing<'a>),
     Turn(Box<FoundationTurn<'a>>),
+    Generated(generation::FoundationGeneration<'a>),
+    Sorted(generation::emission::FoundationOutbound<'a>),
 }
 
 /// Actual checked source and the still-open gate exchange, beside the original
@@ -415,7 +454,27 @@ pub struct FoundationTurn<'a> {
     received: ReceivedOrgan,
     input: SeatedInput,
 }
-impl FoundationTurn<'_> {
+impl<'a> FoundationTurn<'a> {
+    /// Return this still-owned checked source to the common service pump. Its
+    /// original gate request and source remain intact; no input token, event or
+    /// turn identity is minted again. The loop can hear management before it
+    /// transfers this turn to a subsequent operation owner.
+    pub fn into_service(self: Box<Self>) -> Box<FoundationInput<'a>> {
+        Box::new(FoundationInput {
+            turn: Some(TurnKey(self.input.turn.0.clone())),
+            serving: self.serving,
+            stage: Stage::Turn,
+            received: Some(self.received),
+            token: None,
+            seated: Some(self.input),
+            close: None,
+            send: None,
+            report: None,
+            report_started: false,
+            failure: None,
+            engine: None,
+        })
+    }
     pub fn message(&self) -> &weaver_traits::Message {
         &self.input.message
     }
