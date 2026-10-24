@@ -108,7 +108,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         recorder.join().unwrap()
     });
     let progress = flow.progress();
-    let detail = flow.detail().map(str::to_owned);
+    let detail = flow.detail();
     let rounds = flow.rounds();
     if mode.ends_with("management-leave") {
         assert_eq!(progress, worker::turn::Progress::DirectivePending);
@@ -196,6 +196,10 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         input.detail(),
         input.operation_detail()
     );
+    assert!(
+        detail.is_none(),
+        "completed answer has no failure detail: {detail:?}"
+    );
     assert!(input.serving.owner.context.open_turn.is_none());
     assert!(input.serving.owner.context.failure().is_none());
     assert!(
@@ -245,6 +249,13 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     assert_eq!(rounds, if limited { 32 } else { usize::from(round) });
     let closes: Vec<_> = rows.iter().filter(|r| r["kind"] == "turn.closed").collect();
     assert_eq!(closes.len(), 1);
+    if mode.ends_with("model-stop") {
+        assert_eq!(closes[0]["payload"]["close"], "clean");
+        assert!(
+            rows.iter()
+                .any(|row| row["kind"] == "model.output" && row["payload"]["finish"] == "stopped")
+        );
+    }
     let terminals: Vec<_> = rows
         .iter()
         .filter(|r| r["kind"] == "tool.call.completed")

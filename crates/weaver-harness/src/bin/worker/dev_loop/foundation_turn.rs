@@ -17,6 +17,9 @@ pub enum Progress {
     DirectivePending,
     Completed,
     Refused,
+    /// A loop election could not advance its retained owner. Management remains
+    /// serviceable; this is not a completed refused world reply.
+    ElectionRefused,
     Aborted,
     Stopped,
 }
@@ -37,15 +40,15 @@ pub struct Workflow<'a> {
 }
 
 impl<'a> Workflow<'a> {
-    /// Begin at checked input acceptance. Starting a second task in an existing
-    /// task span can refuse; multi-turn plan/task continuation is a separate join.
+    /// Begin at checked input acceptance. The task primitive reads the actual
+    /// catalog and reuses its open task without creating another boundary.
     pub fn begin(
         input: Box<FoundationInput<'a>>,
         turn: TurnKey,
         family: &'static FoundationRestatement,
         method: CutMethod,
     ) -> Result<Self, Box<FoundationInput<'a>>> {
-        if input.progress() != FoundationInputProgress::Accepted || turn.0.is_empty() {
+        if !input.accepts_turn(&turn) {
             return Err(input);
         }
         Ok(Self {
@@ -62,9 +65,6 @@ impl<'a> Workflow<'a> {
     }
 
     pub fn progress(&self) -> Progress {
-        if self.detail.is_some() {
-            return Progress::Refused;
-        }
         if let Some(management) = &self.management {
             return match management.progress() {
                 FoundationManagementProgress::DirectivePending => Progress::DirectivePending,
@@ -77,22 +77,47 @@ impl<'a> Workflow<'a> {
             FoundationInputProgress::Refused => Progress::Refused,
             FoundationInputProgress::Aborted => Progress::Aborted,
             FoundationInputProgress::Stopped => Progress::Stopped,
+            _ if self.detail.is_some() => Progress::ElectionRefused,
             _ => Progress::Pending,
         }
     }
-    pub fn detail(&self) -> Option<&str> {
-        self.detail.as_deref()
+    pub fn detail(&self) -> Option<String> {
+        self.detail.clone().or_else(|| {
+            self.input
+                .as_ref()
+                .and_then(|input| {
+                    input.detail().or_else(|| {
+                        matches!(
+                            input.progress(),
+                            FoundationInputProgress::OperationRefused
+                                | FoundationInputProgress::Refused
+                                | FoundationInputProgress::Stopped
+                        )
+                        .then(|| input.operation_detail().map(str::to_owned))
+                        .flatten()
+                    })
+                })
+                .or_else(|| {
+                    self.management
+                        .as_ref()
+                        .and_then(|owner| owner.detail().map(str::to_owned))
+                })
+        })
     }
     pub fn rounds(&self) -> usize {
         self.rounds
     }
 
     pub fn advance(&mut self) -> Progress {
-        if self.progress() != Progress::Pending {
+        if !matches!(
+            self.progress(),
+            Progress::Pending | Progress::ElectionRefused
+        ) {
             return self.progress();
         }
-        if let Some(mut management) = self.management.take() {
+        if let Some(management) = self.management.as_mut() {
             management.advance();
+            let management = self.management.take().unwrap();
             match management.finish() {
                 Ok(input) => self.input = Some(input),
                 Err(management) => self.management = Some(management),
@@ -100,6 +125,12 @@ impl<'a> Workflow<'a> {
             return self.progress();
         }
         let input = self.input.as_mut().unwrap();
+        if self.detail.is_some() && input.progress() != FoundationInputProgress::ManagementPending {
+            // Observe the actual management listener even while the loop cannot
+            // make another election. A refused election grants no new operation.
+            input.advance();
+            return self.progress();
+        }
         let result: Result<(), String> = match input.progress() {
             FoundationInputProgress::Pending => {
                 input.advance();
@@ -193,7 +224,7 @@ impl<'a> Workflow<'a> {
                     .map_err(|_| "result placement refused".into()),
             },
             FoundationInputProgress::OperationRefused => {
-                input.close_correction_refusal().map_err(|_| {
+                input.close_operation_refusal().map_err(|_| {
                     input
                         .operation_detail()
                         .unwrap_or("operation refused")

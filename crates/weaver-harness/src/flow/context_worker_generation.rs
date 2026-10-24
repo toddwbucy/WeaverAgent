@@ -29,6 +29,10 @@ mod answer;
 #[path = "context_worker_final_tests.rs"]
 pub(in crate::flow::context) mod final_tests;
 
+#[cfg(test)]
+#[path = "context_worker_session_tests.rs"]
+pub(in crate::flow::context) mod session_tests;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EngineStage {
     StartTask,
@@ -60,7 +64,7 @@ pub(super) struct EngineWork {
     return_calls: Vec<weaver_types::state_flow::CallId>,
     return_units: Option<Vec<crate::flow::material::SelectedUnit>>,
     rounds: Vec<RetainedRound>,
-    answer: Option<answer::AnswerWork>,
+    answer: Option<super::close::WorldClose>,
 }
 // A later model pass does not discard the decoder, repair, sort and pair
 // evidence of its predecessor. The service owner retains the whole chain.
@@ -87,7 +91,7 @@ impl<'a> FoundationInput<'a> {
     /// Elect begin_task using the one accepted input. It waits for the actual
     /// input and mark filings before supplying task material to the next call.
     pub fn start_task(&mut self, turn: TurnKey) -> Result<(), TurnKey> {
-        if self.progress() != FoundationInputProgress::Accepted || turn.0.is_empty() {
+        if !self.accepts_turn(&turn) {
             return Err(turn);
         }
         self.turn = Some(turn);
@@ -108,6 +112,14 @@ impl<'a> FoundationInput<'a> {
             answer: None,
         }));
         Ok(())
+    }
+
+    /// Preflight a loop-supplied identity without consuming the accepted input.
+    /// The context's existing turn set is authoritative across session wrappers.
+    pub fn accepts_turn(&self, turn: &TurnKey) -> bool {
+        self.progress() == FoundationInputProgress::Accepted
+            && !turn.0.is_empty()
+            && !self.serving.owner.context.input_turns.contains(&turn.0)
     }
 
     /// Select this filed task's exact source as the complete fresh selection.
@@ -266,7 +278,7 @@ impl<'a> FoundationInput<'a> {
         match work.stage {
             EngineStage::Answer => {
                 if work.answer.as_mut().unwrap().advance(context, &mut ports)? {
-                    self.stage = Stage::Completed;
+                    self.stage = work.answer.as_ref().unwrap().completed();
                 }
             }
             EngineStage::StartTask => {
@@ -569,7 +581,10 @@ impl<'a> FoundationInput<'a> {
     }
 }
 
-fn decision(context: &mut RecordingContext, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+pub(super) fn decision(
+    context: &mut RecordingContext,
+    io: &mut impl PumpIo,
+) -> Result<(), RunFailure> {
     if context.deadlines.get(PumpDeadline::Decision).is_none() {
         let elapsed = context
             .load_duty
