@@ -4,13 +4,17 @@ Date filed: 2026-10-24
 
 Issue: #146. Branch: `code/state-worker-session`, based on
 `code/state-worker-final` at
-`bb02de61333dda43d040562b008f5209ac60a748` (#327).
+`b0c639987dab901a987267c830c109c99deee5e4` (#327), joined with both
+parents retained above the original session head `97564492`.
 
 The worker now retains one entered serving seat across explicitly elected turns.
 Each turn uses its own accepted input and caller-supplied identity. Successful
 world delivery, a completed input refusal or a completed Stop permits the caller
 to request the next input. An unfinished operation refusal, unsupported directive
-or failed run retains its complete owner. Existing serving remains selected.
+or failed run can return its current owner through into_owner. The Planner found
+unfinished-refusal, Stop and post-Stop account gaps that block activation; the
+current implementation is not a complete session lifecycle. Existing serving
+remains selected.
 
 ## Authority and author assessment
 
@@ -23,7 +27,7 @@ is not authority, and its raw-return string carrier remains unimplemented.
 | Spec 06 BOUNDARIES, MARK-FILE and MARK-READ | Conforms in the exercised composition: the actual begin_task port files each input, reads and releases the marks catalog, and reuses its open task. Two and three turns produce one begin_task mark and no invented task end. |
 | Spec 06 COVERAGE-JOURNAL and ordinary PLACE-PORT | Conforms for successive no-cut appends: each model request carries only the new input; measurement retains the exact prior resident argument. Scripted model/member facts exercise the join, not production tokenization or SQLite. |
 | basic-inference-loop sections 4 and 6; harness-gate section 2 | Conforms for explicit next-input handoff. The actual Completed/Refused/Aborted input owner must return its serving seat. A refused workflow election cannot bypass the underlying unfinished owner. |
-| Harness Stop/Observe and HARNESS-PUMP | Conforms at tested idle, accepted-input and active-generation boundaries. The exact suspended input and same recording context survive management. Unsupported Leave and decoder failure transfer custody without claiming teardown. |
+| Harness Stop/Observe and HARNESS-PUMP | Conforms for the exercised idle and active management joins. Stop after acceptance needs the outstanding operator ruling; unfinished-refusal management and post-Stop account handoff remain activation blockers. Unsupported Leave and decoder failure return their current owner without claiming teardown. |
 | Spec 09 qualification and coupled cutover | Incomplete. Artifact, language/model/store, resource, security and complete lifecycle qualification remain open. |
 
 ## Ownership
@@ -38,13 +42,16 @@ plan election, task-close policy, state read or scheduler.
 the underlying owner actually finishes. A workflow-level Refused status alone is
 insufficient: a duplicate turn election retains the second accepted input, original
 gate frame and operation account. The caller can transfer that complete owner to
-the still-owed refusal/teardown composition. No input is silently dropped to recover
-an idle seat.
+the still-owed refusal/teardown composition. This is the exercised unfinished
+election boundary, not proof that every completed Stop has discharged its account.
+Planner row 5 identifies that finish can drop a retained cancelled-generation
+account during handoff; that route needs an owed-account check or transfer.
 
 Observe or Stop between turns, and before an accepted input opens its turn, uses
 the existing management owner and returns the same input. During a running turn,
 the existing workflow retains all repair, pair and round decisions. After a
-completed Stop, a new turn may reuse the still-open task and confirmed argument.
+completed Stop, the instrument starts another turn with the still-open task and
+confirmed argument. It does not establish safe handoff of every owed Stop account.
 The session does not reset the journal or open another state/decode session.
 
 The one-turn workflow now reports its retained input/management failure detail
@@ -77,17 +84,29 @@ Private target:
 `/tmp/weaver-state-146-worker-session-target`; pinned toolchain;
 `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4`, and `--locked` on resolution.
 
-Six compiled protective mutations were detected: replacing the original turn
+At the original session head 97564492, six compiled protective mutations were
+detected: replacing the original turn
 identity, starting a task from acceptance alone, advancing intake automatically,
 opening another task over the existing scope, losing the accepted input through
 management, and hiding the retained decoder failure. Each failed at the intended
 owner or trace assertion. All 675 crate/configuration files were restored by hash,
 then all 12 session cases and the lock/fmt/diff checks passed again. Source manifest
-SHA256: `3b263c033eae72cdc1050724641a68762417c4c96f2081df28ba250163590fa6`.
+SHA256 at that head:
+`3b263c033eae72cdc1050724641a68762417c4c96f2081df28ba250163590fa6`.
+These are historical controls, not a new mutation round for the parent join.
 
 Logs, commands, source snapshots, mutation patches and restoration results are
 under `/tmp/state-146-worker-session/`. The immutable bulk evidence leaf and exact
 published revision are recorded in the draft PR after deposit verification.
+The current parent join passed lock, formatting, strict harness lint, 2,030
+harness tests and all 275 serial delegated cases (including 20 final and 12
+session cases). Its 675-file source manifest was verified after the gates; SHA256:
+`946a8229abade0708f7a90440dd77ec2678a070a70fa9ea56259497a21769bd9`.
+The parent-join gates and current 675-file manifest are under
+`/tmp/state-146-worker-session-parent-join/`. The final and session responders now
+both use the parent's explicit step_live path; the mode-specific clock override
+is removed. Other shared-fixture callers still use their earlier clock entry,
+including simulated-clock callers, so this join does not close #313.
 
 Initial evidence retains one compile failure from an unavailable direct serde
 trait import (replaced by a local serialization macro), the first scripted
@@ -98,6 +117,30 @@ the harness correctly refused it. The production count validator was unchanged.
 The required code-review and verification-before-completion skills remain
 unavailable in this environment, as disclosed in the parent acts. These checks
 are author evidence, not those skill invocations or an independent Planner grade.
+
+## Planner review dispositions
+
+Planner review 5638632959 at 97564492 found 0 own fixes and 10 batch rows,
+leaving the PR draft on #327's inherited clock-race gate. This join carries
+#327's b0c63998 correction with its original ancestry and reruns the joined gates.
+The parent's five idle and five loaded final-family passes and its surviving F3
+control are parent evidence, not a new repetition round on this joined head.
+
+| Row | Disposition |
+| --- | --- |
+| 1 | Activation blocker: an unfinished operation refusal leaves an open world exchange and progress never services later management. into_owner can recover current custody but is not refusal/lifecycle completion. |
+| 2 | Open: reject a previously used TurnKey before consuming accepted input. The current duplicate-key instrument demonstrates the unfinished refusal, not recovery to Accepted. |
+| 3 | Open: advance Input and Turn in place where possible; taking state around a panicking call can leave None and make subsequent owner extraction panic. No unwind-safety claim is made. |
+| 4 | Activation blocker and operator election: Stop after acceptance currently answers AtRest and returns that same Accepted input. The test records current behavior; it does not settle the pending #255 intake/AtRest ruling. |
+| 5 | Activation blocker: FoundationInput::finish can drop a retained engine/account on post-Stop handoff. Transfer any owed account to lifecycle or refuse that handoff. #316's complete failed/Stop exit remains owed. |
+| 6 | Open: operation_detail can appear even on Completed. Restrict the fallback to refused/failed owners and assert exact failure text. |
+| 7 | Open: share progress/management owner helpers and remove unreachable arms. |
+| 8 | Partly addressed by the inherited explicit step_live path for final/session responders. Migrating every shared live responder remains #313 work; simulated-clock tests need their explicit supplied readings. |
+| 9 | Open: S1/S2's redundant guards remain, enforced again by Workflow::begin/start_task and finish. S3 is unverified because its startup hit #313. No independent enforcement claim is made for those guard lines. Comments or removal remain owed. |
+| 10 | Required self-check skills remain unavailable and are not claimed as invoked. |
+
+The joined head awaits Planner regrade. The no-production-caller condition is
+material to the dormant batch classification and remains unchanged.
 
 ## Remaining work
 
