@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #244
+**Landing PR:** #282.
 
-**Version:** 0.29 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.30 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -185,9 +185,10 @@ serving flow bounds, and cannot start the serving coordinator. Admin enforces th
 binding-kind distinction at inventory. [PERSIST-5, SCOPE-1, October 18 R8]
 
 **TYPES-ENTER.** Remove the top-level EnterPayload.state_election. Add
-`state_management: StateManagementConfig`, `start: StartIdentity` and `ste100_scheme:
-String` to `EnterBinding::Serving`, and `state_election: StateElection` to
-`EnterBinding::Diagnostic`. Keep the remaining binding fields. Remove
+`state_management: StateManagementConfig`, `start: StartIdentity`, `ste100_scheme:
+String` and `enter_window: EnterWindow` to `EnterBinding::Serving`, and
+`state_election: StateElection` to `EnterBinding::Diagnostic`. Keep the remaining
+binding fields. Remove
 LoadFacts.state_election and add LoadFacts.state: LoadedStateFacts. LoadedStateFacts is
 externally tagged Serving {state_management, start, ste100_scheme, ste100_binary_sha256}
 or Diagnostic {state_election}, with the same types as EnterBinding. Keep state_store
@@ -199,6 +200,26 @@ from state_management.ste100, not a duplicate instruction field. ste100_binary_s
 the root-judged executable digest in the existing binary facts, copied into
 LoadedStateFacts for show. It is not the model-manifest digest or scheme digest. Spec
 02's CUSTODY governs all three identities. [CLASS-2, FLOW-3]
+
+**TYPES-ENTER-WINDOW.** Add state_flow::EnterWindow with exactly
+{began_ns:DecimalU64,deadline_ns:DecimalU64}. Both fields are raw readings of the same
+Linux CLOCK_MONOTONIC domain under Spec 09 CLOCK, and began_ns < deadline_ns. The
+interval is positive; an absolute began_ns of zero is not invalid by itself. Require
+canonical DecimalU64 strings, both fields, no unknown or duplicate fields, and checked
+arithmetic. An equal or reversed interval is malformed. A well-formed window whose
+deadline has passed is expired, not malformed, and a codec never renews or clamps it.
+[CLASS-8, FLOW-3, PERSIST-6, SEAM-2]
+
+enter_window is required only in the replacement EnterBinding::Serving shape. It has
+no default, optional spelling, caller-chosen duration, or legacy Serving fallback.
+Diagnostic carries no enter_window and continues its separately elected lifecycle;
+the closed Diagnostic shape rejects that member. This is an invocation fact, not a
+bound-declaration setting or a new LoadedStateFacts/show or trace load field. The
+existing envelope bound still includes its encoded bytes. No Rust Instant, wall-clock
+translation, time-namespace translation or cross-host deadline is a valid carrier.
+ADMIN-ENTER-WINDOW owns its sole producer and HARNESS-ENTER-WINDOW owns receipt and
+expiry. Both retain the original two values; an existing retry does not earn another
+budget. This carrier adds no permission to retry. [CLASS-8, FLOW-3, SEAM-2]
 
 The harness converts StateManagementConfig.flow, .persistence, .reads, .ste100, .tools
 and .placement into trace::FlowDeclarationRecord. Its verified start becomes
