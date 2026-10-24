@@ -443,11 +443,21 @@ private disposition once, after Recorded, under the original Decision bound. [FL
 FLOW-3, CLASS-8, STORE-3]
 
 The repair account keeps Recorded refusals inspectable alongside valid requests without
-releasing a refused CallId as a request candidate. In a correction, complete the one
-correction_call disposition, every RECALL-REFUSAL and every required valid
-pair terminal before charging the one failed correction. Preserve the original call
-identity and any corrected statement source independently. Cancellation and phase
-permissions follow RECALL-REFUSAL and HARNESS-RECORD-LIFETIME. No new terminal reserve,
+releasing a refused CallId as a request candidate. A correction containing a ToolCall
+or UnrecoveredCall requires one Recorded correction_call disposition. An empty
+correction requires its exact Recorded empty_correction refusal under Spec 02
+EMPTY-CORRECTION. A correction with defective Text and no attempted call requires no
+correction_call disposition. For every failed correction, complete all required
+refusal records, including every applicable RECALL-REFUSAL, and every required valid
+pair's actual CompletedPair, including opening commits and the terminal Filed receipt,
+before charging the one failed correction. Preserve the original call identity and any
+corrected statement source independently. Spec 02 CANCELLED-CORRECTION owns the
+complete-attempt boundary across Stop/leave: retain exact correction identity and
+count once when all required facts exist, before fallible continuation or extraction,
+without reopening any cancelled grant or cap continuation. Recorded PairEnded alone
+is not a completion receipt. Cancellation and phase permissions follow
+RECALL-REFUSAL and HARNESS-RECORD-LIFETIME; no new filing after foundation halt or
+renewal of the original wait is authorized. No new terminal reserve,
 placement grant, final-answer policy or classifier meaning is introduced. [CLASS-9,
 CLASS-10, FLOW-4, FLOW-5, OUT-1]
 
