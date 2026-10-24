@@ -134,7 +134,9 @@ pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
                                 fd,
                                 &generated(
                                     mode,
-                                    if mode.ends_with("final-length") {
+                                    if mode.ends_with("final-model-stop") {
+                                        Finish::Stopped
+                                    } else if mode.ends_with("final-length") {
                                         Finish::Length
                                     } else {
                                         Finish::Completed

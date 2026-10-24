@@ -10,6 +10,7 @@ pub enum Progress {
     Accepted,
     Completed,
     Refused,
+    ElectionRefused,
     Aborted,
     DirectivePending,
     Stopped,
@@ -62,6 +63,7 @@ impl<'a> Session<'a> {
                 turn::Progress::Pending => Progress::Pending,
                 turn::Progress::Completed => Progress::Completed,
                 turn::Progress::Refused => Progress::Refused,
+                turn::Progress::ElectionRefused => Progress::ElectionRefused,
                 turn::Progress::Aborted => Progress::Aborted,
                 turn::Progress::DirectivePending => Progress::DirectivePending,
                 turn::Progress::Stopped => Progress::Stopped,
@@ -71,42 +73,62 @@ impl<'a> Session<'a> {
 
     pub fn detail(&self) -> Option<String> {
         match self.state.as_ref().unwrap() {
-            State::Input(input) => input
-                .detail()
-                .or_else(|| input.operation_detail().map(str::to_owned)),
+            State::Input(input) => input.detail().or_else(|| {
+                matches!(
+                    input.progress(),
+                    FoundationInputProgress::OperationRefused
+                        | FoundationInputProgress::Refused
+                        | FoundationInputProgress::Stopped
+                )
+                .then(|| input.operation_detail().map(str::to_owned))
+                .flatten()
+            }),
             State::Management(owner) => owner.detail().map(str::to_owned),
             State::Turn(flow) => flow.detail(),
         }
     }
 
     pub fn advance(&mut self) -> Progress {
-        if !matches!(self.progress(), Progress::Pending | Progress::Accepted) {
+        if !matches!(
+            self.progress(),
+            Progress::Pending | Progress::Accepted | Progress::ElectionRefused
+        ) {
             return self.progress();
         }
-        self.state = Some(match self.state.take().unwrap() {
-            State::Input(mut input) => {
+        // Calls that may unwind borrow the retained state. Take it only for the
+        // explicit, checked ownership moves below, never around advance().
+        match self.state.as_mut().unwrap() {
+            State::Input(input) => {
                 input.advance();
-                if input.progress() == FoundationInputProgress::ManagementPending {
-                    match input.management() {
-                        Ok(owner) => State::Management(owner),
-                        Err(input) => State::Input(input),
-                    }
-                } else {
-                    State::Input(input)
-                }
             }
-            State::Management(mut owner) => {
+            State::Management(owner) => {
                 owner.advance();
-                match owner.finish() {
-                    Ok(input) => State::Input(input),
-                    Err(owner) => State::Management(owner),
-                }
             }
-            State::Turn(mut flow) => {
+            State::Turn(flow) => {
                 flow.advance();
-                State::Turn(flow)
             }
-        });
+        }
+        if matches!(self.state.as_ref(), Some(State::Input(input))
+            if input.progress() == FoundationInputProgress::ManagementPending)
+        {
+            let Some(State::Input(input)) = self.state.take() else {
+                unreachable!()
+            };
+            self.state = Some(match input.management() {
+                Ok(owner) => State::Management(owner),
+                Err(input) => State::Input(input),
+            });
+        } else if matches!(self.state.as_ref(), Some(State::Management(owner))
+            if matches!(owner.progress(), FoundationManagementProgress::Answered | FoundationManagementProgress::Dropped))
+        {
+            let Some(State::Management(owner)) = self.state.take() else {
+                unreachable!()
+            };
+            self.state = Some(match owner.finish() {
+                Ok(input) => State::Input(input),
+                Err(owner) => State::Management(owner),
+            });
+        }
         self.progress()
     }
 
@@ -114,7 +136,7 @@ impl<'a> Session<'a> {
     /// the actual marks catalog and reuses an open task; a turn close does not
     /// end that task or erase the resident argument.
     pub fn start_turn(&mut self, turn: TurnKey) -> Result<(), TurnKey> {
-        if self.progress() != Progress::Accepted || turn.0.is_empty() {
+        if !matches!(self.state.as_ref(), Some(State::Input(input)) if input.accepts_turn(&turn)) {
             return Err(turn);
         }
         let State::Input(input) = self.state.take().unwrap() else {
@@ -133,8 +155,8 @@ impl<'a> Session<'a> {
     }
 
     /// Advance to intake only after the old owner can return its serving seat.
-    /// In particular an elected operation refusal with unfinished accounting
-    /// remains owned, even though its progress is also Refused.
+    /// An unfinished election remains ElectionRefused and keeps its owner;
+    /// only a completed refused reply permits this handoff.
     pub fn next_input(&mut self) -> Result<Progress, Progress> {
         let completed = self.progress();
         if !matches!(

@@ -865,7 +865,9 @@ pub(in crate::flow::context::worker_startup) fn stop(
             let management = guard.management.as_mut().unwrap();
             assert_eq!(
                 management.advance_with_io(&mut CircuitIo(clock)),
-                FoundationManagementProgress::Pending
+                FoundationManagementProgress::Pending,
+                "{:?}",
+                management.detail()
             );
             member.step(clock.now().unwrap(), mode);
         }
