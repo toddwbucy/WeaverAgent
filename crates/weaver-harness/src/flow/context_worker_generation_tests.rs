@@ -32,10 +32,10 @@ fn packet(fd: i32, value: &TokenAnswer) {
     let bytes = serde_json::to_vec(value).unwrap();
     assert_eq!(send(fd, &bytes, MsgFlags::MSG_NOSIGNAL), Ok(bytes.len()));
 }
-fn generated(finish: Finish) -> TokenAnswer {
+fn generated(mode: &str, finish: Finish) -> TokenAnswer {
     TokenAnswer::Generated(Generation {
         emission: "Read result.".into(), finish,
-        content: vec![weaver_traits::ContentBlock::Text { text: "Read result.".into() }],
+        content: if mode.contains("emission") { super::emission::tests::content(mode) } else { vec![weaver_traits::ContentBlock::Text { text: "Read result.".into() }] },
         unrecovered: vec![],
         request: serde_json::value::RawValue::from_string("{ \"rendered\": \"fixture family render\", \"template\": \"fixture\" }".into()).unwrap(),
         measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","input_tokens":[17,18,19],"output_tokens":[31]})).unwrap(),
@@ -69,7 +69,7 @@ pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
                             &[weaver_traits::Message {
                                 role: weaver_traits::Role::User,
                                 content: vec![weaver_traits::ContentBlock::Text {
-                                    text: "Read café.".into()
+                                    text: "Read caf\u{e9}.".into()
                                 }]
                             }]
                         );
@@ -115,14 +115,14 @@ pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
                         std::fs::write(root.join("appended.json"), &bytes[..n]).unwrap();
                         appended = true;
                         if !mode.ends_with("stop-generation") {
-                            packet(fd, &generated(Finish::Completed));
+                            packet(fd, &generated(mode, Finish::Completed));
                         }
                     }
                     TokenDirective::Cancel { turn } => {
                         assert!(appended && mode.ends_with("stop-generation"));
                         assert_eq!(turn.0, "generation-turn");
                         std::fs::write(root.join("cancelled.json"), &bytes[..n]).unwrap();
-                        packet(fd, &generated(Finish::Stopped));
+                        packet(fd, &generated(mode, Finish::Stopped));
                         packet(fd, &TokenAnswer::AtRest);
                     }
                     _ => panic!("unexpected serving decoder request {request:?}"),
@@ -135,19 +135,19 @@ pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
     }
     panic!("generation child watchdog");
 }
-fn step(
+pub(super) fn step(
     input: &mut FoundationInput<'_>,
     member: &mut Member,
     clock: &mut FakePumpIo,
     mode: &str,
 ) -> FoundationInputProgress {
-    let p = if mode == "input-worker-generation" {
+    let p = if mode.starts_with("input-worker-generation") {
         input.advance()
     } else {
         input.advance_with_io(&mut CircuitIo(clock))
     };
     member.step(
-        if mode == "input-worker-generation" {
+        if mode.starts_with("input-worker-generation") {
             MonotonicIo.now().unwrap()
         } else {
             clock.now().unwrap()
@@ -157,7 +157,7 @@ fn step(
     std::thread::sleep(Duration::from_millis(1));
     p
 }
-fn until(
+pub(super) fn until(
     input: &mut FoundationInput<'_>,
     member: &mut Member,
     clock: &mut FakePumpIo,
@@ -182,7 +182,7 @@ fn until(
         input.operation_detail()
     );
 }
-fn stop(
+pub(super) fn stop(
     guard: &mut Guard<'_>,
     member: &mut Member,
     clock: &mut FakePumpIo,
@@ -320,7 +320,12 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
-    if mode == "input-worker-generation" {
+    if mode.contains("emission") {
+        return super::emission::tests::exercise(
+            serving, member, reader, clock, socket, root, mode,
+        );
+    }
+    if mode.starts_with("input-worker-generation") {
         return exercise_worker(serving, member, reader, clock, mode);
     }
     let mut guard = Guard {
@@ -530,7 +535,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         map["material"]["text"]["source"]["event"]["block_id"]["sequence"],
         source["sequence"]
     );
-    assert_eq!(map["end"], "11"); // Complete UTF-8 bytes of Read café.
+    assert_eq!(map["end"], "11"); // Complete UTF-8 bytes of Read caf\u{e9}.
     assert_eq!(map["message_id"], placement["payload"]["message_ids"][0]);
     assert_eq!(
         rows.iter().filter(|r| r["kind"] == "message.user").count(),
@@ -712,10 +717,11 @@ fn exercise_worker(
     assert!(!rows.iter().any(|r| r["kind"] == "turn.closed"));
 }
 
-fn observe(guard: &mut Guard<'_>, clock: &mut FakePumpIo, socket: &Path) {
+pub(super) fn observe(guard: &mut Guard<'_>, clock: &mut FakePumpIo, socket: &Path) {
     use weaver_types::state_flow::enter::{
         ObservationAnswer, ObservationContent, ObservationEnvelope,
     };
+    let progress_before = guard.input.as_ref().unwrap().progress();
     let bound = guard
         .input
         .as_ref()
@@ -724,8 +730,7 @@ fn observe(guard: &mut Guard<'_>, clock: &mut FakePumpIo, socket: &Path) {
         .owner
         .context
         .deadlines
-        .get(PumpDeadline::Decision)
-        .unwrap();
+        .get(PumpDeadline::Decision);
     let peer = dial(socket);
     let request = OrganEnvelope {
         exchange: weaver_types::ExchangeId {
@@ -765,9 +770,9 @@ fn observe(guard: &mut Guard<'_>, clock: &mut FakePumpIo, socket: &Path) {
             .context
             .deadlines
             .get(PumpDeadline::Decision),
-        Some(bound)
+        bound
     );
-    assert_eq!(input.progress(), FoundationInputProgress::Pending);
+    assert_eq!(input.progress(), progress_before);
     let answer = ObservationEnvelope::decode(&read_packet(&peer).unwrap()).unwrap();
     assert_eq!(answer.exchange, request.exchange);
     assert!(matches!(

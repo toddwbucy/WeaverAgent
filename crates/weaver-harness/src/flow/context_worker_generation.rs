@@ -15,6 +15,9 @@ use weaver_types::state_flow::{CutMethod, PlacementContext};
 #[path = "context_worker_generation_tests.rs"]
 pub(in crate::flow::context) mod tests;
 
+#[path = "context_worker_emission.rs"]
+pub(crate) mod emission;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EngineStage {
     StartTask,
@@ -26,6 +29,7 @@ enum EngineStage {
     StartGeneration,
     Generation,
     Generated,
+    Emission,
     Refused,
     Cancelled,
     Closing,
@@ -40,6 +44,7 @@ pub(super) struct EngineWork {
     placement: Option<PlacementCompletion>,
     generation: Option<GenerationCompletion>,
     detail: Option<String>,
+    emission: Option<Box<emission::EmissionWork>>,
 }
 impl EngineWork {
     pub(super) fn progress(&self) -> FoundationInputProgress {
@@ -47,6 +52,7 @@ impl EngineWork {
             EngineStage::TaskReady => FoundationInputProgress::Task,
             EngineStage::Placed => FoundationInputProgress::Placed,
             EngineStage::Generated => FoundationInputProgress::Generated,
+            EngineStage::Emission => self.emission.as_ref().unwrap().progress(),
             EngineStage::Refused | EngineStage::Cancelled => {
                 FoundationInputProgress::OperationRefused
             }
@@ -73,6 +79,7 @@ impl<'a> FoundationInput<'a> {
             placement: None,
             generation: None,
             detail: None,
+            emission: None,
         }));
         Ok(())
     }
@@ -101,7 +108,12 @@ impl<'a> FoundationInput<'a> {
     }
 
     pub fn operation_detail(&self) -> Option<&str> {
-        self.engine.as_ref().and_then(|w| w.detail.as_deref())
+        self.engine.as_ref().and_then(|w| {
+            w.emission
+                .as_ref()
+                .and_then(|e| e.detail())
+                .or(w.detail.as_deref())
+        })
     }
 
     /// Preserve the member's exact typed read refusal for workflow judgment.
@@ -163,7 +175,10 @@ impl<'a> FoundationInput<'a> {
                 if let Err(error) = context.begin_task(
                     token,
                     TurnRef(self.turn.as_ref().unwrap().0.clone()),
-                    &owner.certificate,
+                    owner
+                        .certificate
+                        .as_ref()
+                        .expect("task owns its certificate"),
                     ports.io,
                 ) {
                     self.token = Some(error.input);
@@ -303,6 +318,14 @@ impl<'a> FoundationInput<'a> {
                     context.pump_once(&mut ports)?;
                 }
             }
+            EngineStage::Emission => {
+                work.emission.as_mut().unwrap().advance(
+                    &mut work.generation,
+                    &mut owner.certificate,
+                    context,
+                    &mut ports,
+                )?;
+            }
             EngineStage::Closing => {
                 if self.close.is_none() && self.send.is_none() {
                     let frame = context.place_close().ok_or(RunFailure::PlaceOwned)?;
@@ -350,6 +373,13 @@ impl<'a> FoundationInput<'a> {
             return Ok(());
         };
         let owner = &mut self.serving.owner;
+        if work.stage == EngineStage::Generated {
+            work.emission = Some(Box::new(emission::EmissionWork::stopped()));
+            work.stage = EngineStage::Emission;
+        }
+        if work.stage == EngineStage::Emission {
+            return work.emission.as_mut().unwrap().cancel(owner.context, io);
+        }
         owner.context.cancel_task();
         owner.context.revoke_place();
         if owner.context.measure.is_some() {
@@ -381,9 +411,10 @@ impl<'a> FoundationInput<'a> {
     }
 
     pub(super) fn engine_settled(&self) -> bool {
-        self.engine
-            .as_ref()
-            .is_none_or(|w| w.stage == EngineStage::Cancelled)
+        self.engine.as_ref().is_none_or(|w| {
+            w.stage == EngineStage::Cancelled
+                || (w.stage == EngineStage::Emission && w.emission.as_ref().unwrap().settled())
+        })
     }
 }
 
