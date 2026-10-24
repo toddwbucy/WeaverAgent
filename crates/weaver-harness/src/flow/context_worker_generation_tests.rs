@@ -168,14 +168,11 @@ pub(super) fn step(
     } else {
         input.advance_with_io(&mut CircuitIo(clock))
     };
-    member.step(
-        if mode.starts_with("input-worker-generation") {
-            MonotonicIo.now().unwrap()
-        } else {
-            clock.now().unwrap()
-        },
-        mode,
-    );
+    if mode.starts_with("input-worker-generation") {
+        member.step_live(mode);
+    } else {
+        member.step(clock.now().unwrap(), mode);
+    }
     std::thread::sleep(Duration::from_millis(1));
     p
 }
@@ -751,7 +748,7 @@ fn exercise_worker(
         let responder = scope.spawn(|| {
             let end = Instant::now() + Duration::from_secs(8);
             while !done.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
-                member.step(MonotonicIo.now().unwrap(), mode);
+                member.step_live(mode);
                 std::thread::sleep(Duration::from_millis(1));
             }
         });

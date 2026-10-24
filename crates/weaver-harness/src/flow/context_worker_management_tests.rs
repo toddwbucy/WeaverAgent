@@ -17,6 +17,21 @@ pub(in crate::flow::context::worker_startup) struct Guard<'a> {
     pub(in crate::flow::context::worker_startup) input: Option<Box<FoundationInput<'a>>>,
     pub(in crate::flow::context::worker_startup) management: Option<Box<FoundationManagement<'a>>>,
 }
+impl Guard<'_> {
+    pub(in crate::flow::context::worker_startup) fn recorded_sequence(
+        &self,
+    ) -> weaver_trace::Sequence {
+        self.input
+            .as_deref()
+            .or_else(|| self.management.as_deref().map(|m| &*m.input))
+            .expect("fixture retains its input owner")
+            .serving
+            .owner
+            .context
+            .last_author_sequence
+            .expect("fixture has Recorded events")
+    }
+}
 impl Drop for Guard<'_> {
     fn drop(&mut self) {
         let input = self
@@ -114,14 +129,11 @@ pub(in super::super::super) fn exercise(
             "{:?}",
             input.detail()
         );
-        member.step(
-            if real {
-                MonotonicIo.now().unwrap()
-            } else {
-                clock.now().unwrap()
-            },
-            "ready",
-        );
+        if real {
+            member.step_live("ready");
+        } else {
+            member.step(clock.now().unwrap(), "ready");
+        }
         std::thread::sleep(Duration::from_millis(1));
     }
     if checking {
@@ -280,14 +292,11 @@ pub(in super::super::super) fn exercise(
             break;
         }
         assert_ne!(p, FoundationInputProgress::Stopped);
-        member.step(
-            if real {
-                MonotonicIo.now().unwrap()
-            } else {
-                clock.now().unwrap()
-            },
-            "ready",
-        );
+        if real {
+            member.step_live("ready");
+        } else {
+            member.step(clock.now().unwrap(), "ready");
+        }
         std::thread::sleep(Duration::from_millis(1));
     }
     assert_eq!(
@@ -300,7 +309,7 @@ pub(in super::super::super) fn exercise(
             let responder = scope.spawn(|| {
                 let end = Instant::now() + Duration::from_secs(8);
                 while !done.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
-                    member.step(MonotonicIo.now().unwrap(), "ready");
+                    member.step_live("ready");
                     std::thread::sleep(Duration::from_millis(1));
                 }
             });
@@ -530,14 +539,11 @@ pub(in super::super::super) fn exercise(
                 "{:?}",
                 input.detail()
             );
-            member.step(
-                if real {
-                    MonotonicIo.now().unwrap()
-                } else {
-                    clock.now().unwrap()
-                },
-                "ready",
-            );
+            if real {
+                member.step_live("ready");
+            } else {
+                member.step(clock.now().unwrap(), "ready");
+            }
             std::thread::sleep(Duration::from_millis(1));
         }
         assert_eq!(

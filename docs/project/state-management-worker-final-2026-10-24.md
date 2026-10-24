@@ -91,39 +91,44 @@ actual management owner. The long case requires 64 reads and result filings, 66
 terminal pairs, exactly 33 ordinary generations, and no 34th generation. A turn
 close must not add a task-end mark.
 
-The final source passed lock, formatting, strict harness lint and **2,030 harness
-unit/integration/doctests (22 doctests included)**. The ordinary suite reports 281
-ignored cases: **263 delegated process cases passed serially**, and 18 inherited
-ignored cases remain. The delegated groups are gate 46, startup 17, input 19,
-Observe 14, Stop 16, generation 21, emission 33, correction 19, inward 24, return
-13, external 21 and final workflow 20. The admin fixture binary was rebuilt for
-those joins; the eight privileged admin startup instruments were not run.
+The current source passed lock, formatting, strict harness lint and **2,033
+harness unit/integration/doctests (22 doctests included)**. Three new deterministic
+fixture tests establish that no sample is taken on an empty or partial request,
+that trace collection waits for a delayed complete Recorded row, and that a
+missing row fails under the fixture deadline. The ordinary suite reports 281
+ignored cases: **263 delegated process cases passed serially**, with 18 inherited
+ignores. Groups: gate 46, startup 17, input 19, Observe 14, Stop 16, generation
+21, emission 33, correction 19, inward 24, return 13, external 21 and final 20.
+The admin fixture was rebuilt; the eight privileged admin startup cases were not run.
 
-The corrected final family passed **five idle runs and five loaded runs**, 20
-cases per run, **200/200 cases**. Load was four low-priority SHA256 workers;
-each consumed 42.78-42.79 CPU seconds during the five loaded families. This is
-measured fixture repetition, not production capacity qualification.
+All five consecutive idle final families passed, **100/100 cases**. The same
+12 delegated families then passed with four test threads each, **263/263 cases**.
+No ordering refusal or EAGAIN failure occurred in these runs; that does not
+establish production capacity or erase earlier recorded resource-load failures.
 
-The review controls produced two distinct results. Reintroducing a clock sampled
-before request receipt, with a 2 ms delay to expose that ordering, reproduced the
-exact store-measurement clock refusal in the round-limit case. Planner F3,
-removing only AnswerWork's sent_at guard, **survived all 20 final cases**. That
-individual guard is not independently pinned. Source reading explains the extra
-defense: a failed send-clock observation exits pump_once with an error; the input
-or management owner latches TraceFailed and Stopped before AnswerWork can advance
-again. No malformed owner state was injected to manufacture a mutation failure.
-The original ten author mutations remain evidence at bb02de61, not rerun claims
-for this correction; the review discovered that old fixture's unreliable clock.
+All **three compiled fixture mutations** were detected: sampling before receipt,
+returning before the required Recorded sequence, and accepting a partial result
+when the required row never arrives. All 673 source/configuration hashes were
+restored, then the three focused tests, 20 final cases and lock/fmt/diff checks
+passed. Current manifest SHA256:
+9c7567df9e779694ae317839f7b462e5941fe838b517f251dea66b43d8d7cc76.
 
-All **673 source/configuration hashes were restored and verified**, followed by
-another **20/20 restored final cases** and lock/fmt/diff checks. Current manifest
-SHA256: `249aa8a61d60ae5f5953698f731f497611e098c51f8367cfb9fc93a572b01313`.
-Current local evidence is `/tmp/state-146-worker-final-clock-review/`, including
-gates, repetitions, load accounting, controls and restoration. The initial sandbox
-attempt could not start sudo and is retained separately, not counted as a test.
-Original author evidence remains `/tmp/state-146-worker-final/`. The private
-target is `/var/tmp/weaver-state-146-worker-final-target`; the PR body records the
-new immutable deposit and exact committed source.
+Planner F3 remains an independently unpinned guard: removing only AnswerWork's
+sent_at check survived cleanly at b0c63998 in both author and Planner runs. A
+failed send-clock observation exits pump_once; the enclosing input/management
+owner latches TraceFailed and Stopped before AnswerWork advances again. The
+runtime guard remains unchanged. The original ten author mutations at bb02de61
+and the earlier repetitions at b0c63998 are historical evidence; neither head's
+fixtures were reliably green under independent repetition.
+
+Current evidence is /tmp/state-146-shared-fixture-review/, including the caller
+census, read-only real-member timestamp audit, gates, repetitions, controls and
+restoration. The private target remains
+/var/tmp/weaver-state-146-worker-final-target. The PR body records the immutable
+current deposit and published source. Earlier evidence remains in
+/tmp/state-146-worker-final/ and /tmp/state-146-worker-final-clock-review/.
+The first compile of this correction failed on private management input access;
+the existing test Guard now supplies the sequence without exposing a runtime port.
 
 The first author runs retained two fixture failures: the new recall modes were
 not admitted by the scripted member, and final Decision expiry was incorrectly
@@ -133,17 +138,34 @@ a lazy bool closure lint. They are not passed instruments or perturbations.
 
 ## Planner review dispositions
 
-Review 5638580573 at bb02de61 found one fix and nine batch rows. The new head
-requires a Planner regrade; author evidence is not that grade. The current
-correction routes the concurrent final-workflow responder through step_live,
-which samples its clock after each complete request is decoded. Simulated-clock
-responders retain their caller-supplied reading. Production observation validation
-is unchanged. The test-only send probe now uses one atomic load with the same
-Sent/Observed alternatives as sent().
+Regrade 5638693346 at b0c63998 found one remaining clock fix and a trace-reader
+fixture race. This correction routes all live Member callers through step_live:
+ten formerly concurrent and five inline real-clock call sites migrated, alongside
+the already-corrected final responder (16 live sites total). All 17 supplied-clock
+sites are explicitly simulated and stepped between worker advances. The child
+session responder uses the same live entry. No production clock validator changed.
+
+Final live, management and manual paths now preserve raw partial trace bytes and
+wait through the owner's actual last Recorded sequence before inspecting rows.
+The child session will use the same helper. The test-only Guard supplies that
+sequence from its retained input or management owner. A missing sequence fails
+within three seconds; done alone grants no partial result. Other touched files'
+trace snapshots use their older bounded snapshot helper, not this done/read race.
+
+The real member source audit is separate: Channel::receive returns a complete
+line before member::run calls sampled_request for Open and subsequent operations.
+sampled_request stamps before peek_operation/validation, and OperationSample
+retains that reading. Existing timing instruments cover the pre-parser boundary;
+no fresh state-member runtime qualification is claimed by this source audit.
+
+Original review 5638580573's row dispositions remain below. The new head needs
+Planner regrade; author evidence is not that grade. The prior send-probe correction
+(one atomic load, matching Sent/Observed) is retained. F3's unpinned status and its
+failure-path explanation above answer regrade row 3; the dormant batches remain.
 
 | Row | Disposition |
 | --- | --- |
-| 1 | Corrected responder; idle/loaded repetition counts and exact-source rerun evidence are recorded above. Earlier one-off green author gates remain historical evidence, not proof that the old responder was reliable. |
+| 1 | Corrected across all live callers, with deterministic receipt regression, five idle final families and parallel delegated evidence above. The trace-reader race from the regrade is corrected through the actual Recorded sequence. |
 | 2 | Open before activation: model-side Finish::Stopped currently refuses the answer election instead of following the existing clean-close road. No elected replacement behavior is claimed. |
 | 3 | Current policy is explicit: a round-limit pass answers from all its selected checked Text, including request statements whose calls are barred. Thus the fixture answers Read/Recall request text while recording not_dispatched/round_limit; it claims no dispatch. Clarifying basic-inference-loop section 6 remains owed. |
 | 4 | Refused still combines answered refusal and unfinished election. The exact finish result keeps custody; splitting the progress states remains owed. The child session layer rejects next_input while the underlying owner cannot finish. |
@@ -162,8 +184,10 @@ Sent/Observed alternatives as sent().
   cleanup and unavailable self-check skills remain open. The reported OUTPUT
   cleanup-bound issue is #326; its source counterevidence is pending review,
   and no fix to that mechanism is claimed here.
-- #313 now includes the fourth parallel timestamp fixture. Loaded-run residency
-  EAGAIN failures remain separate failures; passing serial runs do not close them.
+- #313's shared live-clock sites are corrected and the affected families passed
+  serially and with four threads. Review and merge remain owed. The separately
+  reported loaded-run residency EAGAIN failures remain resource-load evidence,
+  not timestamp failures or production qualification.
 - #324 at 5fc27ead was regraded in 5638375910: 0 own fix, 10 batch,
   ready. Its queued-world-input obstruction, loaded schema clock/certification,
   cancellation ordering and other batch findings remain. This workflow is not

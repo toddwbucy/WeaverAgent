@@ -21,6 +21,156 @@ use weaver_types::state_flow as s;
 #[path = "../bin/worker/dev_loop/foundation.rs"]
 pub(super) mod worker;
 
+/// Recorded does not imply the sink reader has received the writer's bytes.
+/// Keep partial lines and wait through the actual Recorded sequence under a
+/// fixture deadline. A missing row is a failed instrument, never a partial pass.
+pub(super) fn trace_through(
+    reader: &mut impl Read,
+    mut bytes: Vec<u8>,
+    through: weaver_trace::Sequence,
+    deadline: Instant,
+) -> std::io::Result<Vec<serde_json::Value>> {
+    let mut rows = Vec::<serde_json::Value>::new();
+    loop {
+        match reader.read_to_end(&mut bytes) {
+            Ok(_) => (),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) => {}
+            Err(error) => return Err(error),
+        }
+        while let Some(end) = bytes.iter().position(|b| *b == b'\n') {
+            let line: Vec<_> = bytes.drain(..=end).collect();
+            rows.push(serde_json::from_slice(&line).map_err(std::io::Error::other)?);
+        }
+        let last = rows
+            .last()
+            .and_then(|row| row["sequence"].as_str())
+            .and_then(|s| s.parse::<u64>().ok());
+        if last.is_some_and(|sequence| sequence >= through.0) {
+            return Ok(rows);
+        }
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "trace fixture ended at {last:?}, before Recorded {}",
+                    through.0
+                ),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn worker_fixture_trace_waits_for_delayed_complete_recorded_row() {
+    struct Delayed(std::collections::VecDeque<Vec<u8>>);
+    impl Read for Delayed {
+        fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+            let Some(bytes) = self.0.front_mut() else {
+                return Ok(0);
+            };
+            if bytes.is_empty() {
+                self.0.pop_front();
+                return Err(std::io::ErrorKind::WouldBlock.into());
+            }
+            let count = bytes.len().min(output.len());
+            output[..count].copy_from_slice(&bytes[..count]);
+            bytes.drain(..count);
+            if bytes.is_empty() {
+                self.0.pop_front();
+            }
+            Ok(count)
+        }
+    }
+    let mut reader = Delayed(std::collections::VecDeque::from([
+        b"{\"sequence\":\"1\"}\n{\"sequence\":".to_vec(),
+        vec![],
+        b"\"2\",\"kind\":\"turn.closed\"}\n".to_vec(),
+    ]));
+    let rows = trace_through(
+        &mut reader,
+        vec![],
+        weaver_trace::Sequence(2),
+        Instant::now() + Duration::from_secs(1),
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1]["kind"], "turn.closed");
+}
+
+#[test]
+fn worker_fixture_trace_missing_recorded_row_fails_at_deadline() {
+    let mut reader = std::io::Cursor::new(b"{\"sequence\":\"1\"}\n");
+    let error = trace_through(
+        &mut reader,
+        vec![],
+        weaver_trace::Sequence(2),
+        Instant::now(),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(error.to_string().contains("before Recorded 2"));
+}
+
+#[test]
+fn worker_fixture_clock_waits_for_complete_request_receipt() {
+    use std::io::BufRead;
+    let (mut peer, member) = UnixStream::pair().unwrap();
+    member.set_nonblocking(true).unwrap();
+    let mut member = Member {
+        peer: member,
+        bytes: vec![],
+        seed: "seed".into(),
+        ordinal: 0,
+        requests: vec![],
+        hold_mark: false,
+        hold_kind: None,
+        filings: vec![],
+        held_file: None,
+        hold_control: None,
+        held_control: None,
+    };
+    let samples = std::cell::Cell::new(0);
+    let sample = || {
+        samples.set(samples.get() + 1);
+        30
+    };
+    // Arrival after an empty poll and then a partial line must not reuse an
+    // earlier reading. No scheduling assumption or production validator changes.
+    member.step_observed("ready", sample);
+    assert_eq!(samples.get(), 0);
+    let request = s::StateFrame::Control {
+        common: s::Common {
+            session_id: "session".into(),
+            run_id: "run".into(),
+            request_id: 2.into(),
+        },
+        frame: s::StateControl::Read {
+            selector: s::ReadSelector::OpenPairs {},
+        },
+    };
+    let bytes = s::encode_state_line(&request, s::FrameDirection::Request).unwrap();
+    peer.write_all(&bytes[..bytes.len() - 1]).unwrap();
+    member.step_observed("ready", sample);
+    assert_eq!(samples.get(), 0);
+    peer.write_all(&bytes[bytes.len() - 1..]).unwrap();
+    member.step_observed("ready", sample);
+    assert_eq!(samples.get(), 1);
+    let mut bytes = vec![];
+    std::io::BufReader::new(peer)
+        .read_until(b'\n', &mut bytes)
+        .unwrap();
+    let answer = s::decode_state_line(&bytes, s::FrameDirection::Response).unwrap();
+    let s::StateFrame::ControlAnswer { observation, .. } = answer else {
+        panic!("actual read response")
+    };
+    assert_eq!(observation.began_ns.0, 30);
+}
+
 struct Files(PathBuf);
 impl Files {
     fn new() -> Self {
@@ -615,7 +765,7 @@ fn circuit(mode: &str) {
         let responder = std::thread::spawn(move || {
             let limit = Instant::now() + Duration::from_secs(8);
             while !flag.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < limit {
-                member.step(MonotonicIo.now().unwrap(), "ready");
+                member.step_live("ready");
                 std::thread::sleep(Duration::from_millis(1));
             }
             member

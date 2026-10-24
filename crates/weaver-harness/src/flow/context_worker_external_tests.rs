@@ -278,7 +278,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             guard.input = Some(std::thread::scope(|scope| {
                 let responder = scope.spawn(|| {
                     while !done.load(std::sync::atomic::Ordering::SeqCst) {
-                        member.step(MonotonicIo.now().unwrap(), mode);
+                        member.step_live(mode);
                         std::thread::sleep(Duration::from_millis(1));
                     }
                 });

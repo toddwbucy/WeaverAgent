@@ -153,14 +153,11 @@ fn prepare(
             "{:?}",
             input.detail()
         );
-        member.step(
-            if real {
-                MonotonicIo.now().unwrap()
-            } else {
-                clock.now().unwrap()
-            },
-            "ready",
-        );
+        if real {
+            member.step_live("ready");
+        } else {
+            member.step(clock.now().unwrap(), "ready");
+        }
         std::thread::sleep(Duration::from_millis(1));
     }
     panic!("input never reached target");
@@ -299,7 +296,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             let responder = scope.spawn(|| {
                 let end = Instant::now() + Duration::from_secs(8);
                 while !done.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
-                    member.step(MonotonicIo.now().unwrap(), "ready");
+                    member.step_live("ready");
                     std::thread::sleep(Duration::from_millis(1));
                 }
             });
