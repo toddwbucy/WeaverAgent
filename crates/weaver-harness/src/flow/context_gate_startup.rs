@@ -123,6 +123,10 @@ impl<'a> ComposedBoot<'a> {
     }
 }
 impl<'a> GateStartup<'a> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn test_gate_child(&mut self) -> Option<&mut OwnedChild> {
+        self.child.as_mut()
+    }
     /// The outer lifecycle judges this real accepted connection, then supplies
     /// it as the primary peer while it reduces the pending directive.
     pub(in crate::flow) fn take_accepted_connection(
@@ -402,7 +406,7 @@ impl<'a> GateStartup<'a> {
             return Err(self.protocol(io, "gate response did not close its exact whole-sent Raise"));
         }
         match &reply.envelope().payload {
-            weaver_types::Payload::Answer(LifecycleAnswer::Ready) => {
+            weaver_types::Payload::Answer(LifecycleAnswer::GateReady) => {
                 self.stage = GateStartupStage::Complete
             }
             weaver_types::Payload::Refusal(_) => {
@@ -462,6 +466,10 @@ impl<'a> GateStartup<'a> {
     }
 }
 impl RaisedBoot<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn test_gate_child(&mut self) -> Option<&mut OwnedChild> {
+        self.owner.test_gate_child()
+    }
     pub(in crate::flow) fn reply(&self) -> &ReceivedOrgan {
         self.owner.reply.as_ref().expect("actual Ready retained")
     }

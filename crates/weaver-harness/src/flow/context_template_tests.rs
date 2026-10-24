@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 use weaver_types::TurnFrame;
 use weaver_types::state_flow as s;
 
-fn templates() -> &'static [s::TemplateSpec] {
+pub(super) fn templates() -> &'static [s::TemplateSpec] {
     static TEMPLATES: OnceLock<Vec<s::TemplateSpec>> = OnceLock::new();
     TEMPLATES.get_or_init(|| {
         vec![

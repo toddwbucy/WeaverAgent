@@ -1120,6 +1120,14 @@ impl RecordingContext {
             None
         }
     }
+    /// A measured refusal already owns its refusal/turn-close transaction.
+    /// Enclosing lifecycle composition settles that transaction before judging
+    /// whether Stop still has an open turn to abort.
+    pub(in crate::flow) fn placement_refusing(&self) -> bool {
+        self.place
+            .as_ref()
+            .is_some_and(|work| work.refusal.is_some())
+    }
     pub(in crate::flow) fn place_response_sent(
         &mut self,
         io: &mut impl PumpIo,
