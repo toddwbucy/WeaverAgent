@@ -129,7 +129,7 @@ impl RecordingContext {
             Ok(DecodeStage::Busy(_)) => {
                 return Err(PlaceBeginError {
                     input: grant,
-                    refusal: PlaceError::Busy,
+                    refusal: PlaceError::Busy(None),
                     failure: None,
                     staged: None,
                 });

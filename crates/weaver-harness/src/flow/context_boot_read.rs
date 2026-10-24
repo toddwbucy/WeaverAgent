@@ -9,7 +9,7 @@ use weaver_types::state_flow::{ReadSource, SpanRef};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::flow) enum BootReadBeginRefusal {
     WrongPhase,
-    Busy,
+    Busy(Option<HeldInput>),
     Templates,
     AlreadyStarted,
     PriorContent,
@@ -183,14 +183,8 @@ impl RecordingContext {
                 failure: None,
             });
         }
-        if self.caller_author_held() {
-            return Err(BootReadBeginError {
-                refusal: BootReadBeginRefusal::Busy,
-                failure: None,
-            });
-        }
         let enter = self
-            .completed_template_enter()
+            .certified_template_enter()
             .map_err(|failure| BootReadBeginError {
                 refusal: BootReadBeginRefusal::Templates,
                 failure: Some(failure),
@@ -205,6 +199,12 @@ impl RecordingContext {
                 failure: None,
             });
         };
+        if let Some(held) = self.held_input() {
+            return Err(BootReadBeginError {
+                refusal: BootReadBeginRefusal::Busy(Some(held)),
+                failure: None,
+            });
+        }
         self.begin_read_with_purpose(
             ReadSelector::SystemPrompt {},
             None,
@@ -218,7 +218,7 @@ impl RecordingContext {
         .map_err(|error| BootReadBeginError {
             refusal: match error.refusal {
                 ReadBeginRefusal::WrongPhase => BootReadBeginRefusal::WrongPhase,
-                ReadBeginRefusal::Busy => BootReadBeginRefusal::Busy,
+                ReadBeginRefusal::Busy => BootReadBeginRefusal::Busy(None),
             },
             failure: error.failure,
         })

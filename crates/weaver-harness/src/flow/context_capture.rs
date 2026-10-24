@@ -70,8 +70,7 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
-        self.check_held_input()?;
-        if self.templates_block_content() {
+        if self.template_certification_blocks_content() {
             return Err(RunFailure::TemplateBlocked);
         }
         if self.place_blocks_external() {
@@ -156,6 +155,19 @@ impl RecordingContext {
             .last_author_sequence
             .ok_or_else(|| self.capture_fault(io, "capture has no recorded frontier"))?
             .0;
+        self.flow
+            .check_capture_barrier(
+                &mut FlowRecording {
+                    barrier: &mut self.barrier,
+                    inbox: &mut self.inbox,
+                    budget: &mut self.budget,
+                    author: &self.author,
+                },
+                id,
+                frontier,
+            )
+            .map_err(|failure| self.flow_failed(io, failure))?;
+        self.check_held_input()?;
         let result = self.flow.register_capture_barrier(
             &mut FlowRecording {
                 barrier: &mut self.barrier,

@@ -202,10 +202,7 @@ impl RecordingContext {
         leave: AbsoluteBound,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
-        if self.caller_author_held() {
-            self.live(io)?;
-            self.check_held_input()?;
-        }
+        self.release_live(io)?;
         if (self.place.is_none()
             && self.generation.is_none()
             && self.reload.is_none()
@@ -215,15 +212,6 @@ impl RecordingContext {
             || self.phase != RecordingPhase::Entered
         {
             return Err(RunFailure::PlaceOwned);
-        }
-        self.revoke_place();
-        match self.live(io) {
-            Ok(()) => {}
-            Err(RunFailure::Wait {
-                key: PumpDeadline::Enter | PumpDeadline::Leave,
-                ..
-            }) => {}
-            Err(failure) => return Err(failure),
         }
         // Foreign content/classification is never silently waived by this seal.
         if self.output.is_some()
@@ -235,16 +223,14 @@ impl RecordingContext {
         {
             return Err(RunFailure::PlaceOwned);
         }
-        let now = io.now().map_err(|e| self.place_fault(io, e.to_string()))?;
-        if now < self.last_ns {
-            return Err(self.place_fault(io, "place release clock reversed"));
+        if let Some(held) = self.deadlines.get(PumpDeadline::Leave)
+            && held != leave
+        {
+            return Err(RunFailure::PlaceOwned);
         }
-        self.last_ns = now;
-        if let Some(held) = self.deadlines.get(PumpDeadline::Leave) {
-            if held != leave {
-                return Err(RunFailure::PlaceOwned);
-            }
-        } else {
+        self.check_held_input()?;
+        self.revoke_place();
+        if self.deadlines.get(PumpDeadline::Leave).is_none() {
             self.deadlines
                 .arm(PumpDeadline::Leave, leave)
                 .map_err(|_| RunFailure::PlaceOwned)?;

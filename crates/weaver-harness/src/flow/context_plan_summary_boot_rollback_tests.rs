@@ -413,3 +413,94 @@ fn completed_boot_rollback_unfinished_control_keeps_its_actual_cancelled_disposi
 
 #[path = "context_plan_summary_returned_boot_tests.rs"]
 mod returned_boot_tests;
+
+#[test]
+fn held_boundary_summary_release_checks_failure_and_allows_original_enter_leave_expiry() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        for cause in [
+            "healthy",
+            "enter",
+            "leave",
+            "latched",
+            "independent",
+            "clock",
+            "owner",
+        ] {
+            let (mut fx, evidence) = completed_boot(true);
+            let leave = completed_boot_leave(&mut fx, &evidence, cause == "enter");
+            let run = fx.run();
+            run.context
+                .arm(PumpDeadline::Leave, leave, &mut run.clock)
+                .unwrap();
+            let removed = if cause == "owner" {
+                run.context.plan_summary.take()
+            } else {
+                None
+            };
+            let before = run
+                .context
+                .plan_summary
+                .as_ref()
+                .map(|work| format!("{work:?}"));
+            let originals = hold(&mut run.context, held);
+            let latched = (cause == "latched").then(|| {
+                run.context.fail(
+                    &mut run.clock,
+                    FlowHaltReason::ProtocolFailed,
+                    HaltPoint::Barrier,
+                    "first summary failure",
+                )
+            });
+            match cause {
+                "enter" => {
+                    run.clock.advance_to(evidence.enter.deadline_ns()).unwrap();
+                }
+                "leave" => {
+                    run.clock.advance_to(leave.deadline_ns()).unwrap();
+                }
+                "independent" => run.context.plan_cache.invalid = Some("observed plan failure"),
+                "clock" => run.clock = FakePumpIo::new(0),
+                _ => {}
+            }
+            let result = run
+                .context
+                .begin_boot_plan_summary_release(leave, &mut run.clock);
+            originals.assert_held(&run.context);
+            assert_eq!(run.context.deadlines.get(PumpDeadline::Leave), Some(leave));
+            if matches!(cause, "healthy" | "enter" | "leave") {
+                assert_eq!(result, Err(RunFailure::Busy(held)));
+                assert_eq!(run.context.phase(), RecordingPhase::Entered);
+                assert_eq!(
+                    run.context
+                        .plan_summary
+                        .as_ref()
+                        .map(|work| format!("{work:?}")),
+                    before
+                );
+                originals.take(&mut run.context);
+                run.context
+                    .begin_boot_plan_summary_release(leave, &mut run.clock)
+                    .unwrap();
+                assert_eq!(run.context.phase(), RecordingPhase::Releasing);
+            } else if cause == "owner" {
+                assert_eq!(result, Err(RunFailure::PlanSummaryOwned));
+                assert!(run.context.failure().is_none());
+                assert!(removed.is_some());
+            } else {
+                let failure = result.unwrap_err();
+                assert!(matches!(failure, RunFailure::Flow { .. }));
+                if let Some(first) = latched {
+                    assert_eq!(failure, first);
+                }
+                assert_eq!(run.context.failure(), Some(&failure));
+                originals.take(&mut run.context);
+                assert_eq!(
+                    run.context
+                        .begin_boot_plan_summary_release(leave, &mut run.clock),
+                    Err(failure)
+                );
+            }
+        }
+    }
+}

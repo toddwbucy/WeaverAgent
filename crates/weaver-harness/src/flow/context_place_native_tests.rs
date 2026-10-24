@@ -1096,7 +1096,7 @@ fn place_cut_drains_actual_native_effect_records_without_changing_its_requested_
         run.context
             .prepare_prefix(None, s::CutMethod::Flush, &mut run.clock)
             .unwrap_err(),
-        PlaceError::Busy
+        PlaceError::Busy(None)
     );
     run.context
         .begin_place_effect_marks(proof, &mut run.clock)
@@ -1441,7 +1441,7 @@ fn place_refused_queued_cut_keeps_native_handoff_and_response_behind_its_real_re
         .context
         .begin_place_effect_marks(proof, &mut run.clock)
         .unwrap_err();
-    assert_eq!(error.refusal, PlaceError::Busy);
+    assert_eq!(error.refusal, PlaceError::Busy(None));
     assert!(error.failure.is_none());
     assert_eq!(error.prerequisite.filing().sequence(), proof_sequence);
     fx.summary.boot.member.fill_trace();
@@ -1464,7 +1464,7 @@ fn place_refused_queued_cut_keeps_native_handoff_and_response_behind_its_real_re
         .context
         .begin_place_effect_marks(error.prerequisite, &mut run.clock)
         .unwrap_err();
-    assert_eq!(error.refusal, PlaceError::Busy);
+    assert_eq!(error.refusal, PlaceError::Busy(None));
     assert!(error.failure.is_none());
     assert_eq!(run.context.pending_author().unwrap().ticket, pending);
     assert_eq!(run.context.deadlines.get(PumpDeadline::Cut), Some(bound));

@@ -993,7 +993,7 @@ fn place_valid_measurement_tail_refusal_records_close_without_component_latch_or
         run.context
             .prepare_prefix(None, s::CutMethod::Flush, &mut run.clock)
             .unwrap_err(),
-        PlaceError::Busy
+        PlaceError::Busy(None)
     );
     run.context.place_response_sent(&mut run.clock).unwrap();
     assert!(

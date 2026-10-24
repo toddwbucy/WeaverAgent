@@ -2232,3 +2232,72 @@ fn cleanup_unblocks_a_real_selected_filing_then_a_new_capture() {
     member.result(CaptureProgress::ImageReady, &image);
     assert!(member.run.context.halt().is_none());
 }
+
+#[test]
+fn held_boundary_capture_does_not_hide_other_invalid_prerequisites() {
+    use super::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        for defect in ["turn", "window", "identity", "phase"] {
+            let mut run = active();
+            let mut window = Member::new(&mut run).requested(42, SAVE_NS);
+            if defect == "turn" {
+                run.context.open_turn = Some(TurnRef("open".into()));
+            }
+            if defect == "window" {
+                window.deadline_ns.0 -= 1;
+            }
+            if defect == "phase" {
+                run.context.phase = RecordingPhase::Releasing;
+            }
+            let originals = hold(&mut run.context, held);
+            let id = if defect == "identity" { 0 } else { 42 };
+            let failure = run
+                .context
+                .prepare_member_capture(id.into(), window, &mut run.clock)
+                .unwrap_err();
+            assert!(
+                matches!(
+                    failure,
+                    RunFailure::Flow {
+                        reason: FlowHaltReason::ProtocolFailed,
+                        ..
+                    }
+                ),
+                "{defect}: {failure:?}"
+            );
+            assert_eq!(run.context.failure(), Some(&failure));
+            assert!(run.context.member_capture.is_none());
+            assert!(run.context.capture_snapshot().is_none());
+            assert!(
+                run.context
+                    .deadlines
+                    .get(PumpDeadline::CaptureWindow)
+                    .is_none()
+            );
+            originals.assert_held(&run.context);
+        }
+    }
+}
+
+#[test]
+fn held_boundary_capture_keeps_genuine_incomplete_certification() {
+    use super::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        let mut fx = super::template_tests::TemplateFixture::new();
+        fx.begin();
+        let run = &mut fx.input.run;
+        let originals = hold(&mut run.context, held);
+        let window = s::SaveWindow {
+            began_ns: 100.into(),
+            deadline_ns: 200.into(),
+        };
+        assert_eq!(
+            run.context
+                .prepare_member_capture(42.into(), window, &mut run.clock),
+            Err(RunFailure::TemplateBlocked)
+        );
+        assert!(run.context.failure().is_none());
+        assert!(run.context.member_capture.is_none());
+        originals.assert_held(&run.context);
+    }
+}

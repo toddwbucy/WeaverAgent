@@ -254,7 +254,7 @@ impl<'a> FoundationInput<'a> {
                         if let Some(failure) = error.failure {
                             return Err(failure);
                         }
-                        if error.refusal != PlaceError::Busy {
+                        if !matches!(error.refusal, PlaceError::Busy(_)) {
                             return Err(fault(
                                 context,
                                 ports.io,
@@ -294,7 +294,7 @@ impl<'a> FoundationInput<'a> {
                         if let Some(failure) = error.failure {
                             return Err(failure);
                         }
-                        if error.refusal != PlaceError::Busy {
+                        if !matches!(error.refusal, PlaceError::Busy(_)) {
                             return Err(fault(
                                 context,
                                 ports.io,

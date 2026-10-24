@@ -458,13 +458,6 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), PlaceInstallError> {
         let failure = self.live(io).err();
-        if failure.is_none() && self.caller_author_held() {
-            return Err(PlaceInstallError {
-                prerequisite: boot,
-                refusal: PlaceError::Busy,
-                failure: None,
-            });
-        }
         let valid = self.boot_proof_current(boot.repaired())
             && self.committed_plan_summary().is_ok()
             && self.place_engine.is_none()
@@ -477,6 +470,13 @@ impl RecordingContext {
                 prerequisite: boot,
                 refusal: PlaceError::WrongProof,
                 failure,
+            });
+        }
+        if let Some(held) = self.held_input() {
+            return Err(PlaceInstallError {
+                prerequisite: boot,
+                refusal: PlaceError::Busy(Some(held)),
+                failure: None,
             });
         }
         let schemas = if self.load_duty.as_ref().unwrap().tools.sh.is_some() {
@@ -532,7 +532,7 @@ impl RecordingContext {
             || self.place_blocks_external()
             || self.place_engine.as_ref().unwrap().staged.is_some()
         {
-            return Err(PlaceError::Busy);
+            return Err(PlaceError::Busy(self.held_input()));
         }
         let journal = self.boot_journal.as_ref().ok_or(PlaceError::WrongProof)?;
         let assembly = journal.next_assembly().into();
@@ -687,7 +687,7 @@ impl RecordingContext {
                 .as_ref()
                 .is_some_and(|e| e.outstanding.is_some() || e.staged.is_some())
         {
-            return Err(PlaceError::Busy);
+            return Err(PlaceError::Busy(self.held_input()));
         }
         let engine = self.place_engine.as_ref().ok_or(PlaceError::WrongProof)?;
         let journal = self.boot_journal.as_ref().ok_or(PlaceError::WrongProof)?;
@@ -722,7 +722,7 @@ impl RecordingContext {
                 if e.failure.is_some() {
                     PlaceError::WrongPhase
                 } else {
-                    PlaceError::Busy
+                    PlaceError::Busy(self.held_input())
                 }
             })
     }
@@ -771,7 +771,7 @@ impl RecordingContext {
                 e.outstanding.is_some() || (e.staged.is_some() && staged.is_none())
             })
         {
-            Some(PlaceError::Busy)
+            Some(PlaceError::Busy(self.held_input()))
         } else if self.place_engine.is_none() || !self.native_place_cache_ready() {
             Some(PlaceError::WrongProof)
         } else if self.open_turn.is_none() || self.deadlines.get(PumpDeadline::Decision).is_none() {
@@ -908,7 +908,7 @@ impl RecordingContext {
             self.barrier.set_place_owed(self.place_owed());
             return Err(PlaceBeginError {
                 input,
-                refusal: PlaceError::Busy,
+                refusal: PlaceError::Busy(self.held_input()),
                 failure: error.failure,
                 staged: work.staged,
             });

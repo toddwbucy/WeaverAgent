@@ -158,7 +158,7 @@ fn place_invalid_cut_records_exact_refusal_then_holds_matching_response_before_n
             run.context
                 .prepare_prefix(None, s::CutMethod::Flush, &mut run.clock)
                 .unwrap_err(),
-            PlaceError::Busy
+            PlaceError::Busy(None)
         );
         assert!(receive(fx.peer.as_fd()).is_none());
         assert_eq!(fx.journal(), before);

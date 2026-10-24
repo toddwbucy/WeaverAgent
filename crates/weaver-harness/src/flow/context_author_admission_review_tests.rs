@@ -368,3 +368,122 @@ fn author_admission_review_defensive_pending_ordinary_unload_returns_exact_owed_
         }
     }
 }
+
+#[test]
+fn held_boundary_release_does_not_hide_a_fatal_precondition() {
+    for held in HOLDS {
+        for defect in ["turn", "phase", "bound"] {
+            let mut fx = Fixture::new(config());
+            fx.activate();
+            fx.context.complete_wait(PumpDeadline::Enter).unwrap();
+            let leave = AbsoluteBound::after(fx.clock.now().unwrap(), 1_000_000).unwrap();
+            fx.context
+                .arm(PumpDeadline::Leave, leave, &mut fx.clock)
+                .unwrap();
+            let offered = if defect == "bound" {
+                AbsoluteBound::after(leave.began_ns(), 2_000_000).unwrap()
+            } else {
+                leave
+            };
+            match defect {
+                "turn" => fx.context.open_turn = Some(weaver_trace::TurnRef("open".into())),
+                "phase" => {
+                    fx.context.begin_releasing(leave, &mut fx.clock).unwrap();
+                }
+                _ => {}
+            }
+            let originals = hold(&mut fx.context, held);
+            let failure = fx
+                .context
+                .begin_releasing(offered, &mut fx.clock)
+                .unwrap_err();
+            assert!(
+                matches!(
+                    failure,
+                    RunFailure::Flow {
+                        reason: FlowHaltReason::ProtocolFailed,
+                        ..
+                    }
+                ),
+                "{defect}: {failure:?}"
+            );
+            assert_eq!(fx.context.failure(), Some(&failure));
+            assert_eq!(fx.context.phase(), RecordingPhase::Failed);
+            assert_eq!(fx.context.deadlines.get(PumpDeadline::Leave), Some(leave));
+            originals.assert_held(&fx.context);
+        }
+    }
+}
+
+#[test]
+fn held_boundary_rollback_does_not_hide_a_missing_refusal_or_wrong_bound() {
+    for held in HOLDS {
+        for defect in ["refusal", "phase", "bound"] {
+            let mut fx = if defect == "refusal" {
+                let mut fx = Fixture::new(config());
+                fx.activate();
+                fx
+            } else {
+                refused_enter()
+            };
+            let leave = AbsoluteBound::after(fx.clock.now().unwrap(), 1_000_000).unwrap();
+            fx.context
+                .arm(PumpDeadline::Leave, leave, &mut fx.clock)
+                .unwrap();
+            if defect == "phase" {
+                fx.context.phase = RecordingPhase::Preflight;
+            }
+            let offered = if defect == "bound" {
+                AbsoluteBound::after(leave.began_ns(), 2_000_000).unwrap()
+            } else {
+                leave
+            };
+            let originals = hold(&mut fx.context, held);
+            let failure = fx
+                .context
+                .begin_enter_rollback(offered, &mut fx.clock)
+                .unwrap_err();
+            assert!(matches!(
+                failure,
+                RunFailure::Flow {
+                    reason: FlowHaltReason::ProtocolFailed,
+                    ..
+                }
+            ));
+            assert_eq!(fx.context.failure(), Some(&failure));
+            assert_eq!(fx.context.deadlines.get(PumpDeadline::Leave), Some(leave));
+            assert!(fx.context.flow.unused_open().is_none());
+            originals.assert_held(&fx.context);
+        }
+    }
+}
+
+#[test]
+fn held_boundary_close_does_not_hide_a_missing_unload_or_wrong_phase() {
+    for held in HOLDS {
+        for releasing_phase in [false, true] {
+            let mut fx = if releasing_phase {
+                releasing(false, false)
+            } else {
+                let mut fx = Fixture::new(config());
+                fx.activate();
+                fx
+            };
+            let originals = hold(&mut fx.context, held);
+            let failure = fx
+                .context
+                .close_after_drain(&mut ports(&mut fx.clock))
+                .unwrap_err();
+            assert!(matches!(
+                failure,
+                RunFailure::Flow {
+                    reason: FlowHaltReason::ProtocolFailed,
+                    ..
+                }
+            ));
+            assert_eq!(fx.context.failure(), Some(&failure));
+            assert_eq!(fx.context.phase(), RecordingPhase::Failed);
+            originals.assert_held(&fx.context);
+        }
+    }
+}

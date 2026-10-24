@@ -484,12 +484,9 @@ impl RecordingContext {
         }
     }
 
-    /// Call after the boundary's normal liveness check, before any mutation.
-    /// The read-only template completion check also preserves a latched cause.
+    /// Pure custody check, after the boundary's liveness and prerequisite checks
+    /// and before its first transition. A held-only refusal grants no new time.
     fn check_held_input(&self) -> Result<(), RunFailure> {
-        if let Some(failure) = &self.failure {
-            return Err(failure.clone());
-        }
         match self.held_input() {
             Some(held) => Err(RunFailure::Busy(held)),
             None => Ok(()),
@@ -773,7 +770,6 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.live(io)?;
-        self.check_held_input()?;
         if self.place_owed()
             || self.boot_open_blocks_external()
             || self.plan_summary.is_some()
@@ -799,16 +795,26 @@ impl RecordingContext {
                 "release requires settled input, a closed turn and completed capture",
             ));
         }
-        if let Some(armed) = self.deadlines.get(PumpDeadline::Leave) {
-            if armed != leave {
-                return Err(self.fail(
-                    io,
-                    FlowHaltReason::ProtocolFailed,
-                    HaltPoint::Barrier,
-                    "release cannot replace the existing leave window",
-                ));
-            }
-        } else {
+        if let Some(armed) = self.deadlines.get(PumpDeadline::Leave)
+            && armed != leave
+        {
+            return Err(self.fail(
+                io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                "release cannot replace the existing leave window",
+            ));
+        }
+        self.flow
+            .check_releasing(&mut FlowRecording {
+                barrier: &mut self.barrier,
+                inbox: &mut self.inbox,
+                budget: &mut self.budget,
+                author: &self.author,
+            })
+            .map_err(|failure| self.flow_failed(io, failure))?;
+        self.check_held_input()?;
+        if self.deadlines.get(PumpDeadline::Leave).is_none() {
             self.arm(PumpDeadline::Leave, leave, io)?;
         }
         let result = self.flow.begin_releasing(&mut FlowRecording {
@@ -831,7 +837,6 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Advance, RunFailure> {
         self.live(io)?;
-        self.check_held_input()?;
         if self.phase != RecordingPhase::Entered || !self.barrier.is_refused() {
             return Err(self.fail(
                 io,
@@ -840,16 +845,26 @@ impl RecordingContext {
                 "enter rollback requires this context's recorded refusal",
             ));
         }
-        if let Some(armed) = self.deadlines.get(PumpDeadline::Leave) {
-            if armed != leave {
-                return Err(self.fail(
-                    io,
-                    FlowHaltReason::ProtocolFailed,
-                    HaltPoint::Barrier,
-                    "rollback cannot replace the existing leave window",
-                ));
-            }
-        } else {
+        if let Some(armed) = self.deadlines.get(PumpDeadline::Leave)
+            && armed != leave
+        {
+            return Err(self.fail(
+                io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                "rollback cannot replace the existing leave window",
+            ));
+        }
+        self.flow
+            .check_enter_rollback(&mut FlowRecording {
+                barrier: &mut self.barrier,
+                inbox: &mut self.inbox,
+                budget: &mut self.budget,
+                author: &self.author,
+            })
+            .map_err(|failure| self.flow_failed(io, failure))?;
+        self.check_held_input()?;
+        if self.deadlines.get(PumpDeadline::Leave).is_none() {
             self.arm(PumpDeadline::Leave, leave, io)?;
         }
         let result = self.flow.begin_enter_rollback(
@@ -907,7 +922,6 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
         self.live(ports.io)?;
-        self.check_held_input()?;
         if self.phase != RecordingPhase::Releasing || !self.barrier.is_closed() {
             return Err(self.fail(
                 ports.io,
@@ -916,6 +930,17 @@ impl RecordingContext {
                 "close requires the recorded unload of a releasing context",
             ));
         }
+        if self.flow.phase() != CoordinatorPhase::Closed {
+            self.flow
+                .check_close(&mut FlowRecording {
+                    barrier: &mut self.barrier,
+                    inbox: &mut self.inbox,
+                    budget: &mut self.budget,
+                    author: &self.author,
+                })
+                .map_err(|failure| self.flow_failed(ports.io, failure))?;
+        }
+        self.check_held_input()?;
         if self.flow.phase() != CoordinatorPhase::Closed {
             let result = self.flow.close(&mut FlowRecording {
                 barrier: &mut self.barrier,
@@ -1739,6 +1764,19 @@ impl RecordingContext {
             io,
         );
         result.map_err(|failure| self.flow_failed(io, failure))
+    }
+
+    /// Stopped disposal keeps the original Enter/Leave cap even after expiry.
+    /// Other waits and every independently observed failure keep their meaning.
+    fn release_live(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        match self.live(io) {
+            Ok(())
+            | Err(RunFailure::Wait {
+                key: PumpDeadline::Enter | PumpDeadline::Leave,
+                ..
+            }) => Ok(()),
+            Err(failure) => Err(failure),
+        }
     }
 
     fn live(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {

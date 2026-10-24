@@ -231,7 +231,7 @@ impl RecordingContext {
                 .is_some_and(|work| work.bound.is_some())
                 && !self.reload_draining())
         {
-            Some(PlaceError::Busy)
+            Some(PlaceError::Busy(self.held_input()))
         } else if self.place_engine.is_none()
             || !prerequisite.filing().belongs_to(self)
             || !prerequisite.read().belongs_to(self)

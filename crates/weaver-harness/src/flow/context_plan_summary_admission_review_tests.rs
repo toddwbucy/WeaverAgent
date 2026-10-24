@@ -41,7 +41,7 @@ fn summary_admission_review_held_original_does_not_stall_admitted_refresh() {
             assert_eq!(
                 run.context
                     .begin_boot_plan_summary_release(leave, &mut run.clock),
-                Err(RunFailure::Busy(HeldInput::Caller))
+                Err(RunFailure::PlanSummaryOwned)
             );
             assert_eq!(run.context.phase(), RecordingPhase::Entered);
             assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());

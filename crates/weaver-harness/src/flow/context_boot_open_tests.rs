@@ -30,7 +30,7 @@ fn held_boundary_boot_open_reports_busy_with_the_actual_boot_head_intact() {
             .context
             .begin_boot_open(&mut fx.decode, &mut run.clock)
             .unwrap_err();
-        assert_eq!(error.refusal, BootOpenBeginRefusal::Busy);
+        assert_eq!(error.refusal, BootOpenBeginRefusal::Busy(Some(held)));
         assert!(error.failure.is_none());
         assert!(run.context.boot_open.is_none());
         assert!(!fx.decode.send_pending());
@@ -1920,5 +1920,120 @@ fn boot_open_placement_transfers_the_same_payload_allocation_into_its_barrier_ti
             let _proof = fx.finish();
         }
         assert_eq!(fx.records(Kind::StatePlacement).len(), 1);
+    }
+}
+
+#[test]
+fn held_boundary_boot_open_preserves_a_genuinely_missing_head() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        let mut fx = OpenFixture::new();
+        let run = &mut fx.boot.member.run;
+        let original_head = run.context.boot_head.take().unwrap();
+        let originals = hold(&mut run.context, held);
+        let error = run
+            .context
+            .begin_boot_open(&mut fx.decode, &mut run.clock)
+            .unwrap_err();
+        assert_eq!(error.refusal, BootOpenBeginRefusal::MissingHead);
+        assert!(error.failure.is_none());
+        assert!(run.context.boot_open.is_none());
+        assert!(!fx.decode.send_pending());
+        assert!(original_head.belongs_to(&run.context));
+        originals.assert_held(&run.context);
+    }
+}
+
+#[test]
+fn held_boundary_boot_release_checks_failure_and_allows_original_enter_leave_expiry() {
+    use crate::flow::context::held_input_tests::{HOLDS, hold};
+    for held in HOLDS {
+        for cause in [
+            "healthy",
+            "enter",
+            "leave",
+            "latched",
+            "independent",
+            "clock",
+            "owner",
+        ] {
+            let mut fx = OpenFixture::new();
+            if cause != "owner" {
+                fx.begin();
+            }
+            let run = &mut fx.boot.member.run;
+            let enter = run.context.deadlines.get(PumpDeadline::Enter).unwrap();
+            let now = run.clock.now().unwrap();
+            let duration = if cause == "enter" {
+                enter.deadline_ns() - now + 1000
+            } else {
+                1000
+            };
+            let leave = AbsoluteBound::after(now, duration).unwrap();
+            run.context
+                .arm(PumpDeadline::Leave, leave, &mut run.clock)
+                .unwrap();
+            let originals = hold(&mut run.context, held);
+            let before = run.context.boot_open.as_ref().map(|work| {
+                (
+                    std::ptr::from_ref(work),
+                    work.release_disposition_for_test(),
+                )
+            });
+            let latched = (cause == "latched").then(|| {
+                run.context.fail(
+                    &mut run.clock,
+                    FlowHaltReason::ProtocolFailed,
+                    HaltPoint::Barrier,
+                    "first release failure",
+                )
+            });
+            match cause {
+                "enter" => {
+                    run.clock.advance_to(enter.deadline_ns()).unwrap();
+                }
+                "leave" => {
+                    run.clock.advance_to(leave.deadline_ns()).unwrap();
+                }
+                "independent" => run.context.plan_cache.invalid = Some("observed plan failure"),
+                "clock" => run.clock = FakePumpIo::new(0),
+                _ => {}
+            }
+            let result = run.context.begin_boot_open_release(leave, &mut run.clock);
+            originals.assert_held(&run.context);
+            assert_eq!(run.context.deadlines.get(PumpDeadline::Leave), Some(leave));
+            if matches!(cause, "healthy" | "enter" | "leave") {
+                assert_eq!(result, Err(RunFailure::Busy(held)));
+                assert_eq!(run.context.phase(), RecordingPhase::Entered);
+                assert!(!run.context.boot_enter_cancelled);
+                assert_eq!(
+                    run.context.boot_open.as_ref().map(|work| (
+                        std::ptr::from_ref(work),
+                        work.release_disposition_for_test()
+                    )),
+                    before
+                );
+                originals.take(&mut run.context);
+                run.context
+                    .begin_boot_open_release(leave, &mut run.clock)
+                    .unwrap();
+                assert_eq!(run.context.phase(), RecordingPhase::Releasing);
+            } else if cause == "owner" {
+                assert_eq!(result, Err(RunFailure::BootOpenOwned));
+                assert!(run.context.failure().is_none());
+            } else {
+                let failure = result.unwrap_err();
+                assert!(matches!(failure, RunFailure::Flow { .. }));
+                if let Some(first) = latched {
+                    assert_eq!(failure, first);
+                }
+                assert_eq!(run.context.failure(), Some(&failure));
+                originals.take(&mut run.context);
+                assert_eq!(
+                    run.context.begin_boot_open_release(leave, &mut run.clock),
+                    Err(failure)
+                );
+            }
+        }
     }
 }

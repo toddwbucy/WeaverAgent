@@ -903,46 +903,19 @@ impl RecordingContext {
         leave: AbsoluteBound,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
-        if self.caller_author_held() {
-            self.live(io)?;
-            self.check_held_input()?;
-        }
-        let Some(work) = self.plan_summary.as_mut() else {
+        self.release_live(io)?;
+        let Some(work) = self.plan_summary.as_ref() else {
             return Err(RunFailure::PlanSummaryOwned);
         };
         if work.effect() || self.phase != RecordingPhase::Entered {
             return Err(RunFailure::PlanSummaryOwned);
         }
-        if !work.rollback.complete {
-            work.rollback.cancelled = true;
-            self.cancel_plan_summary_read();
-        }
-        self.plan_cache.revoke();
-        if let Some(failure) = &self.failure {
-            return Err(failure.clone());
-        }
-        let now = io.now().map_err(|error| {
-            self.plan_summary_fault(io, format!("summary rollback clock: {error}"))
-        })?;
-        if now < self.last_ns {
-            return Err(self.plan_summary_fault(io, "summary rollback clock reversed"));
-        }
-        self.last_ns = now;
-        if let Some((key, bound)) = self
-            .deadlines
-            .expired(now)
-            .min_by_key(|(_, bound)| bound.deadline_ns())
-            && !matches!(key, PumpDeadline::Enter | PumpDeadline::Leave)
-        {
-            // A strictly earlier read/control timeout is still its existing
-            // foundation failure. Rollback cannot reclassify it as expired Enter.
-            return Err(self.expired(io, key, bound));
-        }
-        self.freeze_plan_summary_account_bound();
-        let work = self.plan_summary.as_ref().unwrap();
-        if !work.rollback.account_settled && now < work.rollback.account_deadline {
-            return Err(RunFailure::PlanSummaryOwned);
-        }
+        let account_deadline = self
+            .plan_summary_account_minimum()
+            .map_or(work.rollback.account_deadline, |bound| {
+                work.rollback.account_deadline.min(bound)
+            });
+        let account_ready = work.rollback.account_settled || self.last_ns >= account_deadline;
         if self.filing.is_some()
             || self.output.is_some()
             || self.pair_work.is_some()
@@ -964,11 +937,29 @@ impl RecordingContext {
             return Err(RunFailure::PlanSummaryOwned);
         }
         let permit = self.plan_read_rollback_permit()?;
-        if let Some(held) = self.deadlines.get(PumpDeadline::Leave) {
-            if held != leave {
-                return Err(RunFailure::PlanSummaryOwned);
-            }
-        } else {
+        if let Some(held) = self.deadlines.get(PumpDeadline::Leave)
+            && held != leave
+        {
+            return Err(RunFailure::PlanSummaryOwned);
+        }
+        // An unfinished account is an independent ownership refusal. Held
+        // input still excludes starting its cancellation as a release side effect;
+        // the already admitted read may continue through its private owner.
+        if !account_ready && self.caller_author_held() {
+            return Err(RunFailure::PlanSummaryOwned);
+        }
+        self.check_held_input()?;
+        let work = self.plan_summary.as_mut().unwrap();
+        if !work.rollback.complete {
+            work.rollback.cancelled = true;
+            self.cancel_plan_summary_read();
+        }
+        self.plan_cache.revoke();
+        self.freeze_plan_summary_account_bound();
+        if !account_ready {
+            return Err(RunFailure::PlanSummaryOwned);
+        }
+        if self.deadlines.get(PumpDeadline::Leave).is_none() {
             self.deadlines
                 .arm(PumpDeadline::Leave, leave)
                 .map_err(|error| {
