@@ -15,7 +15,8 @@ delivery. A cancelled or refused placement does not consume the result. An
 acknowledged result cannot be selected again as a fresh result unit.
 
 Implements: Spec 05 RETURN-CARRY and PAIR-END's model-facing record; Spec 06
-PLACE-CALLS and COVERAGE-JOURNAL; Spec 08 UNIT's fresh-result path.
+PLACE-CALLS and COVERAGE-JOURNAL; Spec 08 UNIT's fresh-result path;
+Spec 02 C02-3 and HARNESS-CLASSIFY decision/decode clock separation.
 
 | Authority | Author assessment for this join |
 | --- | --- |
@@ -23,6 +24,7 @@ PLACE-CALLS and COVERAGE-JOURNAL; Spec 08 UNIT's fresh-result path.
 | PAIR-END model-facing record | Conforms: whole private ToolResult, tool attribution, exact terminal parent, Recorded before the placement grant, and no duplicate author on retry. The record creates no content filing. |
 | PLACE-CALLS / COVERAGE-JOURNAL | Conforms in the tested no-cut worker path: original request and statement must remain kept; preparation sends no generation; the journal creates its receipt only after matching append confirmation. |
 | UNIT fresh result | Conforms: only the actual private completion constructs the unit. Held-pair replay still uses its separate immutable read adapter. A cut removing the request rejects the fresh result before mutation. |
+| Spec 02 C02-3 | Conforms in task and result process instruments: Busy admission is bounded, successful admission disarms Decision during decode, and OUTPUT starts a fresh full bound. |
 | Full serving, selection and lifecycle | Incomplete under #146. Full worker selection/cuts, external execution, healthy final answer and coupled cutover remain separate joins. |
 
 ## Ownership and transitions
@@ -59,22 +61,79 @@ coverage fact, not a final-answer decision. Terminal facts remain available for
 pair and late-return accounting after delivery.
 
 `FoundationInput::place_results` accepts an explicit ordered, nonempty selection
-only at PairsComplete. It rejects unknown, duplicate and already delivered IDs
-without consuming the current emission. The developer-loop adapter makes the
+only at PairsComplete. It rejects unknown, duplicate and already delivered IDs,
+and checks request/statement coverage in the current no-cut journal before
+consuming the current emission. The developer-loop adapter makes the
 same election. The worker retains each previous generation and emission owner
 when advancing to the next pass, including original decoder bytes, repair,
 sort and pair evidence. It can then repair and sort the new actual emission
 through the existing ports. No result is automatically selected or dispatched.
 
 The shared task/result preparation path now treats held-input Busy as a wait,
-and generation admission arms Decision before a possible Busy pump. This bounds
-the new result road as well as its shared task admission. It is not a claim to
+and generation admission arms Decision before a possible Busy pump. A successful
+admission disarms that bound while decoding; OUTPUT starts a fresh complete
+decision_wait. This bounds admission without timing the model with Decision. It is not a claim to
 fix the separate correction owner's Busy/refusal/cancellation carries in #321.
 The current pair road keeps Decision armed at PairReady, so time taken by the
 loop to elect the next operation counts against decision_wait; a slow election
 can halt at that existing bound.
 
-## Instruments and evidence
+## Review corrections
+
+Planner review 5638101361 at 64d6460b found one blocking Decision-clock
+regression and eleven batch rows. This correction changes the same PR; it does
+not claim a regrade. The complete disposition is:
+
+| Row | Disposition |
+| --- | --- |
+| 1 | Fixed: successful generation admission disarms Decision. Two process instruments hold actual task/result decoder replies while the common clock advances beyond two decision_wait intervals, then require a fresh full OUTPUT bound. |
+| 2 | Fixed at the worker precheck: the current journal validates the complete fresh selection before any generation/emission owner moves. Existing cut/coverage instruments exercise the journal refusal; the full worker cut-selection join remains owed. |
+| 3 | Fixed: placement wait is sampled after all result authors. Actual trace-pressure instrumentation includes that delay. |
+| 4 | Fixed: delivered/foreign/duplicate selection admission queues the placement refusal owner under the existing author ordering. Invalid input remains caller-owned. |
+| 5 | Fixed for fresh live-result grants across selected and staged units, before measurement. Two instruments retain both refused inputs and require no decode send. Historical complete-span replay remains governed by its separate repeated-occurrence rule. |
+| 6 | Fixed: result_record, record_result and acknowledge_delivery run the frozen check. Each check has an isolated compiled mutation. |
+| 7 | Comparison retained deliberately: AppendReceipt holds the journal-issued identity and assembly independently of the pending request. Swapping two genuine completed append receipts fails, while restoring the correct one succeeds. The comparison does more than test presence. |
+| 8 | All five named guards are isolated: delivered material, absent result record, Returned coverage, changed result sequence and context origin. Corruption fixtures start with real pair/append receipts; test-only helpers create no production capability. Each guard's removal must fail its instrument. |
+| 9 | Fixed: hold_place_return uses one checked completed lookup and preserves Frozen, UnknownCall, NotReady and AlreadyDelivered. Its only production caller, place_results, returns the unchanged CallId selection on refusal. |
+| 10 | Shared unit validation, a retained result cursor and a private CallId index avoid rescanning preceding result units and the entire completed pool for each author. Original order and exact CompletedPair pointer checks remain. |
+| 11 | Open composition carry: EngineWork retains prior rounds without enforcing the existing 32-round workflow bound. This act neither drops evidence nor invents a different limit. The loop must account for every barred request before its round-limit close; #146 tracks that join. |
+| 12 | Required self-check skills remain unavailable; gates and manual review are not represented as those invocations. |
+
+The CallId index is reserved with batch admission and populated only while actual
+completed pairs retire. It retains ordered pairs as before. Lookup keys include
+run, generation sequence and original call ordinal. New mutation surfaces are
+the result cursor, index, frozen checks, duplicate precheck and late timing
+sample. The result admission paths, cancelled physical append, stopped-account
+retention and prior round owners are exercised by the full harness/process gates.
+
+Correction checks used the same private target and pinned --locked toolchain.
+All lock, formatting, strict harness lint and diff checks passed. The full suite
+passed **2026 harness tests**, including 22 doctests, with 240 ordinary ignored
+(222 delegated and 18 inherited). All **222 delegated cases passed serially**:
+gate 46, startup 17, input 19, Observe 14, Stop 16, generation 21, emission 33,
+correction 19, inward 24 and result delivery 13. The admin fixture helper was
+built; its eight privileged startup cases were not run. #313 remains open.
+
+All **13 compiled protective mutations failed as intended**: rearm Decision
+through decode, return delivered material, omit the result-record/coverage/
+sequence/context/append-identity guards, omit each of three frozen checks,
+accept duplicate fresh results, omit result-author waiting time and skip the
+next selected result. Each mutation's patch and output are retained. The restored
+source rebuilt and passed all 13 RETURN-CARRY tests, 21 generation process
+cases and 13 result process cases. All 668 crate/configuration files match
+source manifest `b1a56445df384508ddfa6daa8b0f5fc9e0934902661e7ad23a6b2e00340ef3d4`.
+
+Evidence is in `/tmp/state-146-worker-return-review/`, with exact-head bulk
+publication recorded on #323 and #146. Initial compile/test fixture failures
+are retained separately: a missing import and non-Hash CallId key, an invented
+Staged test accessor, a shared-Arc corruption probe, a reload attempted before
+its turn closed, and a clock assertion that omitted six scheduling ticks.
+The corrected tests keep actual shared evidence and wait for the true operation
+boundary; no runtime validation was relaxed. These checks are author evidence,
+not a Planner regrade, security clearance or production qualification.
+
+
+## Original checkpoint evidence
 
 Six new ordinary port instruments use real completed pair receipts, the trace
 recorder, measured grants and matching decoder answers. They exercise actual and

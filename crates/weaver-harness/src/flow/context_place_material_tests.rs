@@ -1,5 +1,6 @@
 //! Canonical held material, original pair identity, UTF-8 ranges and placed marks.
 use super::*;
+use std::sync::Arc;
 
 fn attached_pair(entry: &s::ReadEntry, call: u64) -> s::ReadPair {
     let s::ReadSource::Event(statement) = &entry.source else {
@@ -349,6 +350,10 @@ fn actual_completed_pair(fx: &mut PlaceFixture) -> s::CallId {
         run.context.pairs.take_result(&call),
         Err(pairs::PairError::NotReady)
     ));
+    assert!(matches!(
+        run.context.hold_place_return(&call),
+        Err(pairs::PairError::NotReady)
+    ));
     let mut bytes = vec![];
     let mut requests = vec![];
     let mut done = false;
@@ -463,6 +468,10 @@ fn return_carry_acknowledges_only_the_actual_completed_return_and_refuses_stale_
         fx.run().context.pairs.take_result(&unknown),
         Err(pairs::PairError::UnknownCall)
     ));
+    assert!(matches!(
+        fx.run().context.hold_place_return(&unknown),
+        Err(pairs::PairError::UnknownCall)
+    ));
     let returned = fx.run().context.hold_place_return(&call).unwrap();
     let stale = fx.run().context.hold_place_return(&call).unwrap();
     let unrelated = fx.text(9, "unrelated");
@@ -528,6 +537,10 @@ fn return_carry_acknowledges_only_the_actual_completed_return_and_refuses_stale_
         Err(pairs::PairError::AlreadyDelivered)
     );
     assert!(fx.run().context.hold_place_return(&call).is_err());
+    assert!(matches!(
+        fx.run().context.pairs.closed_for_material(&call),
+        Err(pairs::PairError::AlreadyDelivered)
+    ));
     let request = fx.request(vec![stale]);
     let run = &mut fx.summary.boot.member.run;
     let error = run
@@ -537,6 +550,220 @@ fn return_carry_acknowledges_only_the_actual_completed_return_and_refuses_stale_
     assert_eq!(error.refusal, PlaceError::InvalidUnits);
     assert_eq!(error.input.selection.len(), 1);
     assert!(receive(fx.peer.as_fd()).is_none());
+    assert_eq!(fx.finish_notice().code, s::PlacementCode::InvalidPair);
+}
+
+#[test]
+fn return_carry_independent_result_record_and_sequence_guards() {
+    let mut fx = PlaceFixture::new();
+    let call = actual_completed_pair(&mut fx);
+    let returned = fx.run().context.hold_place_return(&call).unwrap();
+    let proof = fx.generation(vec![returned], 2, 0, "", Finish::Completed);
+    let sequence = fx.run().context.pairs.remove_result_record_for_test(&call);
+    assert_eq!(
+        fx.run().context.acknowledge_delivery(&call, &proof),
+        Err(pairs::PairError::WrongReceipt)
+    );
+    let pair = fx.run().context.pairs.closed_for_material(&call).unwrap();
+    assert_eq!(fx.run().context.pairs.result_record(&pair), Ok(None));
+    fx.run()
+        .context
+        .pairs
+        .record_result(&call, sequence)
+        .unwrap();
+    assert_eq!(
+        fx.run()
+            .context
+            .pairs
+            .record_result(&call, Sequence(sequence.0 + 1)),
+        Err(pairs::PairError::WrongReceipt)
+    );
+    assert_eq!(
+        fx.run().context.pairs.result_record(&pair),
+        Ok(Some(sequence))
+    );
+    fx.run()
+        .context
+        .pairs
+        .record_result(&call, sequence)
+        .unwrap();
+    fx.run()
+        .context
+        .acknowledge_delivery(&call, &proof)
+        .unwrap();
+}
+
+#[test]
+fn return_carry_independent_coverage_and_origin_guards() {
+    let mut fx = PlaceFixture::new();
+    let call = actual_completed_pair(&mut fx);
+    let returned = fx.run().context.hold_place_return(&call).unwrap();
+    let mut proof = fx.generation(vec![returned], 2, 0, "", Finish::Completed);
+    let incomplete = proof.grant.units[0].without_return_coverage_for_test();
+    let complete = std::mem::replace(&mut proof.grant.units[0], Arc::new(incomplete));
+    assert_eq!(
+        fx.run().context.acknowledge_delivery(&call, &proof),
+        Err(pairs::PairError::WrongReceipt)
+    );
+    proof.grant.units[0] = complete;
+    let origin = std::mem::replace(&mut proof.grant.origin, Arc::new(()));
+    assert_eq!(
+        fx.run().context.acknowledge_delivery(&call, &proof),
+        Err(pairs::PairError::WrongReceipt)
+    );
+    assert!(fx.run().context.pairs.take_result(&call).is_ok());
+    proof.grant.origin = origin;
+    fx.run()
+        .context
+        .acknowledge_delivery(&call, &proof)
+        .unwrap();
+}
+
+#[test]
+fn return_carry_foreign_append_receipt_does_not_match_the_actual_placement() {
+    let mut fx = PlaceFixture::new();
+    let call = actual_completed_pair(&mut fx);
+    let returned = fx.run().context.hold_place_return(&call).unwrap();
+    let mut proof = fx.generation(vec![returned], 2, 0, "", Finish::Completed);
+    let unrelated = fx.text(9, "unrelated");
+    let mut other = fx.generation(unrelated, 2, 0, "", Finish::Completed);
+    std::mem::swap(&mut proof.append_receipt, &mut other.append_receipt);
+    assert_eq!(
+        fx.run().context.acknowledge_delivery(&call, &proof),
+        Err(pairs::PairError::WrongReceipt)
+    );
+    std::mem::swap(&mut proof.append_receipt, &mut other.append_receipt);
+    fx.run()
+        .context
+        .acknowledge_delivery(&call, &proof)
+        .unwrap();
+}
+
+#[test]
+fn return_carry_frozen_ledger_grants_no_new_record_or_delivery() {
+    let mut fx = PlaceFixture::new();
+    let call = actual_completed_pair(&mut fx);
+    let returned = fx.run().context.hold_place_return(&call).unwrap();
+    let proof = fx.generation(vec![returned], 2, 0, "", Finish::Completed);
+    let pair = fx.run().context.pairs.closed_for_material(&call).unwrap();
+    let sequence = fx
+        .run()
+        .context
+        .pairs
+        .result_record(&pair)
+        .unwrap()
+        .unwrap();
+    fx.run().context.pairs.freeze();
+    assert!(matches!(
+        fx.run().context.hold_place_return(&call),
+        Err(pairs::PairError::Frozen)
+    ));
+    assert_eq!(
+        fx.run().context.pairs.result_record(&pair),
+        Err(pairs::PairError::Frozen)
+    );
+    assert_eq!(
+        fx.run().context.pairs.record_result(&call, sequence),
+        Err(pairs::PairError::Frozen)
+    );
+    assert_eq!(
+        fx.run().context.acknowledge_delivery(&call, &proof),
+        Err(pairs::PairError::Frozen)
+    );
+}
+
+#[test]
+fn return_carry_duplicate_live_result_refuses_before_measurement() {
+    let mut fx = PlaceFixture::new();
+    let call = actual_completed_pair(&mut fx);
+    let one = fx.run().context.hold_place_return(&call).unwrap();
+    let two = fx.run().context.hold_place_return(&call).unwrap();
+    let request = fx.request(vec![one, two]);
+    let run = &mut fx.summary.boot.member.run;
+    let error = run
+        .context
+        .begin_place(request, &mut fx.decode, &mut run.clock)
+        .unwrap_err();
+    assert_eq!(error.refusal, PlaceError::InvalidUnits);
+    assert_eq!(error.input.selection.len(), 2);
+    assert!(receive(fx.peer.as_fd()).is_none());
+    assert_eq!(fx.finish_notice().code, s::PlacementCode::InvalidPair);
+    assert!(fx.records(Kind::MessageToolResult).is_empty());
+    assert!(fx.run().context.pairs.take_result(&call).is_ok());
+}
+
+#[test]
+fn return_carry_duplicate_across_staged_and_fresh_selection_refuses() {
+    let mut fx = PlaceFixture::new();
+    let call = actual_completed_pair(&mut fx);
+    let one = fx.run().context.hold_place_return(&call).unwrap();
+    let two = fx.run().context.hold_place_return(&call).unwrap();
+    fx.close_turn();
+    let prefix = fx.prefix(None, s::CutMethod::Elide);
+    let staged = fx.staged(prefix, ReloadTail::held(vec![one]), 2);
+    fx.turn("duplicate-return-after-cut");
+    fx.decision();
+    let run = &mut fx.summary.boot.member.run;
+    let error = run
+        .context
+        .begin_staged_place(
+            staged,
+            vec![two],
+            s::PlacementContext {
+                label: "duplicate carried result".into(),
+                instruction: None,
+            },
+            &mut fx.decode,
+            &mut run.clock,
+        )
+        .unwrap_err();
+    assert_eq!(error.refusal, PlaceError::InvalidUnits);
+    assert_eq!(error.selection.len(), 1);
+    assert_eq!(error.staged.units.len(), 1);
+    assert!(receive(fx.peer.as_fd()).is_none());
+    assert_eq!(fx.finish_notice().code, s::PlacementCode::InvalidPair);
+}
+
+#[test]
+fn return_carry_placement_wait_includes_result_record_pressure() {
+    let mut fx = PlaceFixture::new();
+    let call = actual_completed_pair(&mut fx);
+    let returned = fx.run().context.hold_place_return(&call).unwrap();
+    let request = fx.request(vec![returned]);
+    fx.begin(request);
+    let TokenDirective::MeasureDelta { keep, .. } = fx.next_measure() else {
+        unreachable!()
+    };
+    fx.answer(&fx.measured(keep, 2));
+    fx.summary.boot.member.fill_trace();
+    for _ in 0..128 {
+        fx.advance_placement_pressure().unwrap();
+        if fx
+            .run()
+            .context
+            .pending_author()
+            .is_some_and(|a| a.event.kind == Kind::MessageToolResult)
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        fx.run().context.pending_author().unwrap().event.kind,
+        Kind::MessageToolResult
+    );
+    let after = fx.run().clock.now().unwrap() + 100;
+    fx.run().clock.advance_to(after).unwrap();
+    fx.summary.drain();
+    assert!(matches!(fx.take(), PlacementCompletion::Granted(_)));
+    let wait: u64 = fx.records(Kind::StatePlacement).last().unwrap()["payload"]["wait_ns"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        wait >= 100,
+        "result-author pressure belongs to placement wait"
+    );
 }
 
 #[test]

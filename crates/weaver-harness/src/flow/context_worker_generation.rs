@@ -148,6 +148,17 @@ impl<'a> FoundationInput<'a> {
             };
             units.push(unit);
         }
+        // A retained terminal is not permission to append an orphan result.
+        // Validate the unchanged journal before consuming this round's owners.
+        let Some(journal) = self.serving.owner.context.boot_journal.as_ref() else {
+            return Err(calls);
+        };
+        if !journal
+            .project(None)
+            .is_ok_and(|prefix| journal.validate_selection(&prefix, &units).is_ok())
+        {
+            return Err(calls);
+        }
         let work = self.engine.as_mut().unwrap();
         work.rounds.push(RetainedRound {
             _generation: work.generation.take(),
@@ -365,7 +376,12 @@ impl<'a> FoundationInput<'a> {
                     ports.decode.as_deref_mut().unwrap(),
                     ports.io,
                 ) {
-                    Ok(()) => work.stage = EngineStage::Generation,
+                    Ok(()) => {
+                        // Admission may wait under Decision, but decoding does
+                        // not spend the next OUTPUT barrier's budget.
+                        context.complete_wait(PumpDeadline::Decision);
+                        work.stage = EngineStage::Generation;
+                    }
                     Err(error) => {
                         work.placement = Some(PlacementCompletion::Granted(error.input));
                         if let Some(failure) = error.failure {

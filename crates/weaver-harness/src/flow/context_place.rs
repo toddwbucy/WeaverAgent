@@ -366,6 +366,7 @@ pub(super) struct PlaceTransaction {
     account_deadline: Option<u64>,
     selected_count: usize,
     return_author: Option<weaver_types::state_flow::CallId>,
+    next_return: usize,
     placement_after_returns: Option<AuthoredEvent>,
 }
 #[derive(Debug)]
@@ -510,20 +511,14 @@ impl RecordingContext {
         });
         Ok(())
     }
-    pub(in crate::flow) fn hold_place_return(
+    pub(super) fn hold_place_return(
         &self,
         call: &weaver_types::state_flow::CallId,
-    ) -> Result<crate::flow::material::SelectedUnit, PlaceError> {
+    ) -> Result<crate::flow::material::SelectedUnit, pairs::PairError> {
         if self.place_engine.is_none() {
-            return Err(PlaceError::WrongProof);
+            return Err(pairs::PairError::WrongPhase);
         }
-        self.pairs
-            .take_result(call)
-            .map_err(|_| PlaceError::WrongProof)?;
-        let pair = self
-            .pairs
-            .closed_for_material(call)
-            .ok_or(PlaceError::WrongProof)?;
+        let pair = self.pairs.closed_for_material(call)?;
         Ok(crate::flow::material::from_completed_pair(
             self.read_origin.clone(),
             pair,
@@ -726,13 +721,7 @@ impl RecordingContext {
         if journal.check_projection(&prefix.projection).is_err() {
             return Err(PlaceError::Stale);
         }
-        if schemas != engine.schemas
-            || units.iter().any(|u| {
-                !u.belongs_to(self)
-                    || u.completed_pair()
-                        .is_some_and(|p| self.pairs.result_record(p).is_err())
-            })
-        {
+        if schemas != engine.schemas || !self.place_units_valid(units.iter()) {
             return Err(PlaceError::InvalidUnits);
         }
         journal
@@ -856,17 +845,17 @@ impl RecordingContext {
         }
         // A previously minted selection is still a live grant, not permission
         // to redeliver a result acknowledged by a later completed append.
-        if request
-            .selection
-            .iter()
-            .chain(staged.iter().flat_map(|s| s.units.iter().map(Arc::as_ref)))
-            .any(|unit| {
-                !unit.belongs_to(self)
-                    || unit
-                        .completed_pair()
-                        .is_some_and(|pair| self.pairs.result_record(pair).is_err())
-            })
-        {
+        if !self.place_units_valid(
+            request
+                .selection
+                .iter()
+                .chain(staged.iter().flat_map(|s| s.units.iter().map(Arc::as_ref))),
+        ) {
+            let _ = self.queue_place_refusal(
+                request.prefix.assembly,
+                PlacementCode::InvalidPair,
+                "selected material has foreign, duplicate or already delivered result evidence",
+            );
             return Err(PlaceBeginError {
                 input: request,
                 refusal: PlaceError::InvalidUnits,
@@ -957,6 +946,7 @@ impl RecordingContext {
             account_deadline: None,
             selected_count,
             return_author: None,
+            next_return: 0,
             placement_after_returns: None,
         });
         let result = self.begin_measurement(measure, PumpDeadline::Decision, decode, io);
@@ -1445,8 +1435,12 @@ impl RecordingContext {
     }
 
     fn prepare_place_return_author(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
-        let work = self.place.as_ref().ok_or(RunFailure::PlaceOwned)?;
-        for unit in &work.units {
+        while let Some(unit) = {
+            let work = self.place.as_mut().ok_or(RunFailure::PlaceOwned)?;
+            let unit = work.units.get(work.next_return).cloned();
+            work.next_return += usize::from(unit.is_some());
+            unit
+        } {
             let Some(pair) = unit.completed_pair() else {
                 continue;
             };
@@ -1479,11 +1473,34 @@ impl RecordingContext {
             return Ok(());
         }
         let work = self.place.as_mut().unwrap();
-        work.author = work.placement_after_returns.take().map(PlaceAuthor::new);
+        work.author = work.placement_after_returns.take().map(|mut event| {
+            if let Some(Payload::Placement(record)) = &mut event.payload {
+                record.wait_ns = self.last_ns.saturating_sub(work.started_ns).into();
+            }
+            PlaceAuthor::new(event)
+        });
         if work.author.is_none() {
             return Err(self.place_fault(io, "result author lost its placement record"));
         }
         Ok(())
+    }
+
+    fn place_units_valid<'a>(
+        &self,
+        units: impl IntoIterator<Item = &'a crate::flow::material::SelectedUnit>,
+    ) -> bool {
+        let mut returned = std::collections::HashSet::new();
+        units.into_iter().all(|unit| {
+            unit.belongs_to(self)
+                && unit.completed_pair().is_none_or(|pair| {
+                    self.pairs.result_record(pair).is_ok()
+                        && returned.insert((
+                            &pair.started().call_id.run,
+                            pair.started().call_id.sequence.0,
+                            pair.started().call_id.call.0,
+                        ))
+                })
+        })
     }
 
     pub(super) fn retain_place_return_record(
