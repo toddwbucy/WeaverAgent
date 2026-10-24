@@ -4,7 +4,7 @@
 
 **Landing PR:** #268
 
-**Version:** 0.30 **Date filed:** 2026-10-23 **Parent:** weaver-types-PRD
+**Version:** 0.30 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
