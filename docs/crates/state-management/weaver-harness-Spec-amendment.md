@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #276.
+**Landing PR:** #268
 
-**Version:** 0.32 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.33 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -1668,6 +1668,7 @@ undone. [PLAN-6, MARK-5, FLOW-4]
 | --- | --- | --- |
 | Idle | Root update accepted | Begin decision deadline, read plan/marks, Reading |
 | Reading | Matching snapshots | Check expected revision and typed structure, author operator plan.event, Input |
+| Reading, or Input during preflight | Valid PLAN-PREFLIGHT-READ refusal | Finish acquired cleanup and admitted dispositions, record read_refused with exact code/detail, release allocator grant, keep prior cache, answer refusal, Idle |
 | Input | Every selected statement filed | Preflight source-backed effect, Effect |
 | Input | Correct rejection | Finish dispositions, record/refuse non_ste100, Idle |
 | Effect | Valid private grant | Expand certified template, author/classify/file effect, AwaitReceipt |
@@ -1678,6 +1679,27 @@ undone. [PLAN-6, MARK-5, FLOW-4]
 | Any phase | Component failure, refused filing or deadline | Foundation latch, no success answer |
 | Any phase | Admin disconnect | Continue already accepted operation under its original bound, retain trace outcome |
 | Any phase | Stop/leave | No new effect after cancellation, finish admitted dispositions under existing shutdown rules |
+
+The root coordinator applies Spec 07 PLAN-PREFLIGHT-READ only before admitting an
+effect. It retains the exact read leg and its recorded operation measurement, and
+records RefusalRecord::Lifecycle with ask plan_update, case read_refused, the original
+read_code/detail and no rejected_blocks. Its causal_parent is the refusing leg's
+Recorded measurement sequence. Keep the same author ticket through pressure and bind
+its Recorded completion before any fallible continuation. Do not author recall for a
+refused query, guess a snapshot or parent, or substitute a later release measurement.
+[PLAN-6, FLOW-3, SEAM-3]
+
+An initial refusal sends no release. An acquired cursor is released once within the
+original bounds before the operation refusal completes. Existing source dispositions
+still settle. Release the allocator grant with operation settlement, after acquired
+cursor cleanup, admitted dispositions and the Recorded refusal, before answering.
+No new effect is admitted, the previous committed cache remains evidence
+and becomes usable after those duties, and this valid operation refusal alone latches
+no component failure. A failed release, invalid leg/code/identity, malformed response
+or observation, dead seam or applicable expiry keeps its existing failure account.
+After a committed effect, the required summary refresh retains its explicit foundation
+latch on refusal. Do not route that refresh through the pre-effect rule. [PLAN-6,
+CLASS-8, FLOW-4, SEAM-3]
 
 Every model-blocking phase consumes Spec 02's single decision deadline, without reset on
 intermediate reads or receipts. Tool execution disarms that decision wait and uses the
