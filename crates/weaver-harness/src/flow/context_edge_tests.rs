@@ -163,7 +163,10 @@ fn final_drain_leave_wait_preserves_queued_records_for_successful_retry() {
                     cause: None,
                     forced: false,
                     forced_by: None,
-                    release: None,
+                    release: serving::payloads::Release {
+                        spu: None,
+                        member: None,
+                    },
                     end_reason: None,
                     state_flow_failure: None,
                 }))),

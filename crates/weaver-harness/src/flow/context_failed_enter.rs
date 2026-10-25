@@ -12,7 +12,7 @@ use crate::flow::pump_transport::{
 use nix::poll::PollFlags;
 use std::path::Path;
 use std::sync::Arc;
-use weaver_trace::{GrantSurface, MemberRelease, Release, ReleaseOutcome, Subsystem};
+use weaver_trace::{GrantSurface, MemberRelease, ReleaseOutcome, Subsystem};
 use weaver_types::{
     ExchangeId, LifecycleAnswer, LifecycleDirective, Opener, OrganEnvelope, Position,
 };
@@ -1269,14 +1269,14 @@ impl FailedRunCleanup {
             cause: None,
             forced: false,
             forced_by: None,
-            release: Some(Release {
-                spu: self.release,
+            release: serving::payloads::Release {
+                spu: self.resources.spu.is_some().then_some(self.release),
                 member: self.member_stood.then_some(if self.member_failed {
                     MemberRelease::Unconfirmed
                 } else {
                     MemberRelease::Closed
                 }),
-            }),
+            },
             end_reason: Some(serving::payloads::EndReason::ComponentFailure),
             state_flow_failure: Some(serving::payloads::StateFlowFailure {
                 fault_sequence,

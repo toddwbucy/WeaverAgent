@@ -1,6 +1,6 @@
 //! Payload records that compose the closed shared mirrors at the trace boundary.
 use super::*;
-use crate::event::{Cause, GrantSurface, Lineage, LoopIdentity, Release, Reset, StoreIdentity};
+use crate::event::{Cause, GrantSurface, Lineage, LoopIdentity, Reset, StoreIdentity};
 
 pub type StateStartRecord = StartIdentity;
 pub type Ste100ResultRecord = Ste100Reply;
@@ -283,6 +283,15 @@ pub struct StateFlowFailure {
     /// HARNESS-HALT-ACCOUNT is deliberately opaque to the recorder.
     pub account: Box<RawValue>,
 }
+/// Replacement serving release evidence. Absence of SPU means no child was
+/// created; a reaped or failed-exec child still has a present outcome.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Release {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spu: Option<crate::ReleaseOutcome>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member: Option<crate::MemberRelease>,
+}
 #[derive(Debug, Clone, Serialize)]
 pub struct UnloadClose {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -292,8 +301,7 @@ pub struct UnloadClose {
     pub forced: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forced_by: Option<Cause>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub release: Option<Release>,
+    pub release: Release,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_reason: Option<EndReason>,
     #[serde(skip_serializing_if = "Option::is_none")]

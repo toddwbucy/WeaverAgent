@@ -219,3 +219,19 @@ pub unsafe fn enter(
     // Enter or a completed failed-run cleanup.
     Ok(owner.finish())
 }
+
+/// Complete the explicit rollback of a recorded classifier refusal. Every
+/// stopped chain is returned whole for the failed-startup owner; it grants no
+/// successful Enter, retry, or Left. Awaiting root uses the same owned listener.
+pub fn rollback(
+    mut owner: Box<weaver_harness::FoundationRollback<'_>>,
+) -> Box<weaver_harness::FoundationRollback<'_>> {
+    use weaver_harness::FoundationRollbackProgress as Progress;
+    while matches!(
+        owner.progress(),
+        Progress::Pending | Progress::AwaitRollback
+    ) {
+        owner.advance();
+    }
+    owner
+}

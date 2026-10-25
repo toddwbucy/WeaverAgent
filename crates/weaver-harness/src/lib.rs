@@ -143,6 +143,7 @@ pub use flow::context::worker_startup::input::management::{
 pub use flow::context::worker_startup::input::{
     FoundationInput, FoundationInputProgress, FoundationInputResult, FoundationTurn,
 };
+pub use flow::context::worker_startup::rollback::{FoundationRollback, FoundationRollbackProgress};
 pub use flow::context::worker_startup::{
     FoundationAdmission, FoundationAdmissionProgress, FoundationEnter, FoundationEnterProgress,
     FoundationProgram, FoundationRun, FoundationServing,

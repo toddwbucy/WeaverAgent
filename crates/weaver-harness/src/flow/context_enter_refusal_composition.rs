@@ -35,6 +35,20 @@ pub(in crate::flow) struct RecordedStartupRefusal<'a> {
 
 impl<'a> StartupComposition<'a> {
     #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn into_original_refusal(
+        self,
+    ) -> Result<EnterRefusalComposition<'a>, (Self, RefusalJoinError)> {
+        let Some(original) = self
+            .original_enter
+            .as_ref()
+            .filter(|o| o.adopted_by(self.context))
+        else {
+            return Err((self, RefusalJoinError::WrongExchange));
+        };
+        let exchange = original.envelope().exchange.clone();
+        self.into_refusal(exchange)
+    }
+    #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn into_refusal(
         self,
         exchange: ExchangeId,
@@ -99,7 +113,66 @@ impl<'a> StartupComposition<'a> {
     }
 }
 
-impl EnterRefusalComposition<'_> {
+impl<'a> EnterRefusalComposition<'a> {
+    pub(in crate::flow) fn advance_original_record(
+        &mut self,
+        listener: &mut crate::flow::pump::LifecycleListener,
+        io: &mut impl PumpIo,
+    ) -> Result<Sequence, RunFailure> {
+        let mut original = self.startup.original_enter.take();
+        let result = crate::flow::pump::enter::with_enter(
+            original.as_mut(),
+            LifecyclePorts {
+                listener: Some(listener),
+                ..Default::default()
+            },
+            |lifecycle, _| {
+                self.advance_record(&mut PumpPorts {
+                    lifecycle,
+                    gate: None,
+                    decode: None,
+                    label: None,
+                    io,
+                })
+            },
+        );
+        self.startup.original_enter = original;
+        result.map_err(|failure| RunFailure::Transport {
+            source: crate::flow::pump::PumpSource::Admin,
+            failure,
+        })?
+    }
+
+    pub(in crate::flow) fn original_bound(&self) -> AbsoluteBound {
+        self.bound
+    }
+
+    /// Recorded custody survives a later expired Enter. It still authorizes no
+    /// response after expiry; the response owner keeps it for actual rollback.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn finish_original(self) -> Result<RecordedStartupRefusal<'a>, Self> {
+        if self.recorded_sequence().is_none()
+            || self.startup.context.failure().is_some()
+            || !self
+                .startup
+                .original_enter
+                .as_ref()
+                .is_some_and(|original| original.adopted_by(self.startup.context))
+            || self.startup.context.phase != RecordingPhase::Entered
+            || self.startup.context.deadlines.get(PumpDeadline::Enter) != Some(self.bound)
+            || self
+                .startup
+                .context
+                .deadlines
+                .get(PumpDeadline::Leave)
+                .is_some()
+            || self.startup.context.boot_enter_cancelled
+            || self.startup.context.place_admission_stopped()
+        {
+            return Err(self);
+        }
+        Ok(RecordedStartupRefusal { owner: self })
+    }
     pub(in crate::flow) fn source(&self) -> &weaver_types::state_flow::Ste100AdmissionRefused {
         let Some(StartupStop::ClassifierRefused(source)) = self.startup.stop.as_ref() else {
             unreachable!("owner retains actual startup refusal")

@@ -44,7 +44,10 @@ fn shutdown(kind: Kind) -> AuthoredEvent {
             cause: None,
             forced: false,
             forced_by: None,
-            release: None,
+            release: serving::payloads::Release {
+                spu: None,
+                member: None,
+            },
             end_reason: None,
             state_flow_failure: None,
         }))),
@@ -925,3 +928,27 @@ mod author_admission_review_tests;
 
 #[path = "context_author_failure_tests.rs"]
 mod author_failure;
+
+#[test]
+fn unload_recorded_observer_failure_retains_exact_sequence_without_success() {
+    let mut fx = releasing(false, false);
+    fx.context.barrier.fail_next_recorded_observer_for_test();
+    let failure = fx
+        .context
+        .author_and_wait(&mut ports(&mut fx.clock), shutdown(Kind::Unload))
+        .unwrap_err();
+    assert!(failure.original.is_none());
+    let recorded = fx
+        .context
+        .barrier
+        .admitted_before_failure()
+        .expect("actual admission");
+    assert_eq!(fx.context.release_recorded_sequence(), Some(recorded));
+    assert_eq!(fx.context.phase(), RecordingPhase::Failed);
+    assert!(
+        fx.context
+            .resume_author_and_wait(&mut ports(&mut fx.clock))
+            .is_err()
+    );
+    assert_eq!(fx.context.release_recorded_sequence(), Some(recorded));
+}

@@ -204,7 +204,20 @@ impl LifecycleListener {
         Ok(self.take_connection())
     }
 
-    fn interest(&self) -> (BorrowedFd<'_>, PollFlags) {
+    /// Observe before the actual nonblocking accept. A queued connection keeps
+    /// that first anchor even when its owner reduces it later.
+    pub(super) fn accept_observed(&mut self, before: u64) -> Result<bool, Failure> {
+        if self.held.is_some() {
+            return Ok(true);
+        }
+        let progress = self.advance()?;
+        if self.held.is_some() {
+            self.accepted_ns = Some(before);
+        }
+        Ok(progress != ListenProgress::Pending || self.interrupted)
+    }
+
+    pub(super) fn interest(&self) -> (BorrowedFd<'_>, PollFlags) {
         if let Some(peer) = &self.held {
             (peer.fd(), terminal_flags())
         } else {
@@ -406,7 +419,7 @@ impl LifecyclePeer {
         }
         self.sender.try_send()
     }
-    fn interest(&self) -> PollFlags {
+    pub(super) fn interest(&self) -> PollFlags {
         if self.failure().is_some() {
             return PollFlags::empty();
         }

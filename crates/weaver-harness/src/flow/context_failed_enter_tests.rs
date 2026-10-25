@@ -127,6 +127,11 @@ fn failed_enter_cleanup_state_eof_keeps_first_fault_and_closes_after_one_unload(
     let unloads: Vec<_> = rows.iter().filter(|row| row["kind"] == "unload").collect();
     assert_eq!(faults.len(), 1);
     assert_eq!(unloads.len(), 1);
+    assert_eq!(
+        unloads[0]["payload"]["release"],
+        serde_json::json!({"member":"unconfirmed"})
+    );
+    assert!(owner.resources.spu.is_none());
     assert_eq!(unloads[0]["payload"]["end_reason"], "component_failure");
     assert_eq!(unloads[0]["payload"]["grant_surface"], "unreadable");
     assert_eq!(

@@ -1612,6 +1612,9 @@ impl RecordingContext {
             if matches!(&progress, RecordProgress::Failed)
                 && let Some(sequence) = self.barrier.admitted_before_failure()
             {
+                if self.release_author.is_some() {
+                    self.retain_recorded_author(sequence);
+                }
                 self.bind_place_measure_author(sequence);
                 self.bind_place_author(sequence);
                 self.bind_enter_refusal_author(sequence);

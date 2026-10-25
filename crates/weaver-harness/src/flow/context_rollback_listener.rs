@@ -6,6 +6,7 @@ use weaver_types::{LifecycleAnswer, LifecycleRefusal, Payload};
 pub(super) struct RollbackDials {
     pub(super) listener: LifecycleListener,
     pub(super) active: Option<PendingDial>,
+    sealing: bool,
 }
 
 pub(super) struct PendingDial {
@@ -21,6 +22,7 @@ impl RollbackDials {
         Self {
             listener,
             active: None,
+            sealing: false,
         }
     }
 
@@ -138,7 +140,7 @@ impl RollbackDials {
                 return Ok(());
             }
             let payload = match &message.envelope.payload {
-                Payload::Directive(LifecycleDirective::Observe) => {
+                Payload::Directive(LifecycleDirective::Observe) if !self.sealing => {
                     Payload::Answer(LifecycleAnswer::InTransition {
                         constituents: Vec::new(),
                     })
@@ -179,6 +181,59 @@ impl RollbackDials {
             }
         }
         Ok(())
+    }
+
+    /// Seal before organ release. Unlink once, exhaust the actual backlog and
+    /// answer every secondary directive OutOfOrder within the existing Leave.
+    pub(super) fn seal_step(
+        &mut self,
+        context: &mut RecordingContext,
+        leave: AbsoluteBound,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        if !self.sealing {
+            self.listener.unlink();
+            self.sealing = true;
+        }
+        let result = (|| {
+            context.live(io)?;
+            let attempted = self.active.is_none();
+            let accepted = if attempted {
+                self.listener
+                    .accept_observed(context.last_ns)
+                    .map_err(|failure| RunFailure::Transport {
+                        source: PumpSource::Listener,
+                        failure,
+                    })?
+            } else {
+                false
+            };
+            self.prepare(context, leave, io)?;
+            if attempted && self.active.is_none() && self.listener.held().is_none() && !accepted {
+                return Ok(true);
+            }
+            if self.active.is_none() {
+                return Ok(false);
+            }
+            context.pump_once(&mut PumpPorts {
+                lifecycle: LifecyclePorts {
+                    dial: self.active.as_mut().map(|dial| &mut dial.peer),
+                    ..Default::default()
+                },
+                gate: None,
+                decode: None,
+                label: None,
+                io,
+            })?;
+            Ok(false)
+        })();
+        match result {
+            Ok(done) => Ok(done),
+            Err(error) => {
+                self.recover(context, error, io)?;
+                Ok(false)
+            }
+        }
     }
 
     pub(super) fn ports<'a>(&'a mut self, peer: &'a mut LifecyclePeer) -> LifecyclePorts<'a> {

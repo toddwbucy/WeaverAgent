@@ -24,6 +24,7 @@ pub(in crate::flow) struct RetiredFailedRollback<'a> {
     enter_send: Option<OrganSend>,
     enter_returned: Option<OrganEnvelope>,
     enter_stop: Option<ResponseStop>,
+    _original_enter: Option<crate::flow::pump::enter::DetachedEnter>,
     peer: RetiredLifecyclePeer,
     dials: listener::RetiredRollbackDials,
     directive: LifecycleMessage,
@@ -190,6 +191,7 @@ impl<'a> RollbackComposition<'a> {
             send,
             returned,
             stop: enter_stop,
+            original,
             ..
         } = response;
         Ok(RetiredFailedRollback {
@@ -198,6 +200,7 @@ impl<'a> RollbackComposition<'a> {
             enter_send: send,
             enter_returned: returned,
             enter_stop,
+            _original_enter: original,
             peer: peer.retire_failed(),
             dials: dials.retire_failed(),
             directive,

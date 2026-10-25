@@ -31,6 +31,7 @@ pub(in crate::flow) struct EnterRefusalResponse<'a> {
     send: Option<OrganSend>,
     returned: Option<OrganEnvelope>,
     stop: Option<ResponseStop>,
+    original: Option<crate::flow::pump::enter::DetachedEnter>,
 }
 
 impl<'a> RecordedStartupRefusal<'a> {
@@ -44,11 +45,118 @@ impl<'a> RecordedStartupRefusal<'a> {
             send: None,
             returned: None,
             stop: None,
+            original: None,
         }
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn into_original_response(
+        mut self,
+    ) -> Result<EnterRefusalResponse<'a>, Self> {
+        let Some(original) = self.owner.startup.original_enter.take() else {
+            return Err(self);
+        };
+        let (peer, original) = original.into_response_peer();
+        let mut response = self.into_response(peer);
+        response.original = Some(original);
+        Ok(response)
     }
 }
 
 impl EnterRefusalResponse<'_> {
+    /// Await only root's explicit rollback. An expired original Enter is not a
+    /// new failure or time allowance; every other live/clock failure survives.
+    pub(in crate::flow) fn observe_await(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<u64, RunFailure> {
+        let context = &mut self.refusal.owner.startup.context;
+        match context.live(io) {
+            Ok(()) => {}
+            Err(RunFailure::Wait {
+                key: PumpDeadline::Enter,
+                bound,
+            }) if bound == self.refusal.owner.bound => {}
+            Err(error) => return Err(error),
+        }
+        Ok(context.last_ns)
+    }
+    /// Transport observation while awaiting root is not boot work. Keep the
+    /// original Enter registered and retained, but do not use its expiry to
+    /// suppress state/trace failure observation or the actual rollback accept.
+    pub(in crate::flow) fn pump_await(
+        &mut self,
+        ports: &mut PumpPorts<'_, impl PumpIo>,
+        read: Option<AbsoluteBound>,
+    ) -> Result<(), RunFailure> {
+        self.observe_await(ports.io)?;
+        let context = &mut self.refusal.owner.startup.context;
+        if context.phase != RecordingPhase::Entered
+            || context.deadlines.get(PumpDeadline::Enter) != Some(self.refusal.owner.bound)
+            || context.deadlines.get(PumpDeadline::Leave).is_some()
+        {
+            return Err(RunFailure::EnterRefusalOwned);
+        }
+        let mut waits = crate::flow::clock::DeadlineRegistry::new();
+        for (key, bound) in context.deadlines.entries() {
+            if key != PumpDeadline::Enter {
+                waits
+                    .arm(key, bound)
+                    .map_err(|_| RunFailure::EnterRefusalOwned)?;
+            }
+        }
+        if let Some(read) = read {
+            waits
+                .arm(PumpDeadline::AdminRead, read)
+                .map_err(|_| RunFailure::EnterRefusalOwned)?;
+        }
+        let result = context.pump.step(
+            ports,
+            Some(&mut context.flow),
+            &mut FlowRecording {
+                barrier: &mut context.barrier,
+                inbox: &mut context.inbox,
+                budget: &mut context.budget,
+                author: &context.author,
+            },
+            &waits,
+        );
+        match result {
+            Ok(crate::flow::pump::PumpStep::Deadline { key, bound }) => {
+                return Err(RunFailure::Wait { key, bound });
+            }
+            Ok(_) => {}
+            Err(crate::flow::pump::PumpFailure::Transport { source, failure }) => {
+                return Err(RunFailure::Transport { source, failure });
+            }
+            Err(error) => {
+                if let Some(failure) = context.flow.failure().cloned() {
+                    return Err(context.flow_failed(ports.io, failure));
+                }
+                if context.barrier.failure().is_some()
+                    || context.barrier.standing_failure().is_some()
+                {
+                    return Err(context.record_failed(ports.io));
+                }
+                return Err(context.fail(
+                    ports.io,
+                    FlowHaltReason::TraceFailed,
+                    HaltPoint::Author,
+                    format!("rollback wait: {error:?}"),
+                ));
+            }
+        }
+        self.observe_await(ports.io).map(|_| ())
+    }
+    pub(in crate::flow) fn recorded_sequence(&self) -> Sequence {
+        self.refusal.sequence()
+    }
+    pub(in crate::flow) fn original_bound(&self) -> AbsoluteBound {
+        self.refusal.owner.bound
+    }
+    pub(in crate::flow) fn context(&self) -> &RecordingContext {
+        self.refusal.owner.startup.context
+    }
     pub(in crate::flow) fn stage(&self) -> ResponseStage {
         self.stage
     }
@@ -528,3 +636,6 @@ pub(super) mod tests;
 
 #[path = "context_rollback_halt.rs"]
 pub(in crate::flow) mod halt;
+
+#[path = "context_rollback_terminal.rs"]
+pub(in crate::flow) mod terminal;

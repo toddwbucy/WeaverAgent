@@ -396,7 +396,10 @@ fn unload_close() -> serving::payloads::UnloadClose {
         cause: None,
         forced: false,
         forced_by: None,
-        release: None,
+        release: serving::payloads::Release {
+            spu: None,
+            member: None,
+        },
         end_reason: None,
         state_flow_failure: None,
     }

@@ -205,7 +205,7 @@ impl Files {
                     "WEAVER_STARTUP_COMPOSITION_CHILD",
                     if mode.starts_with("input-") {
                         mode
-                    } else if mode == "classifier-refusal" {
+                    } else if mode == "classifier-refusal" || mode.starts_with("rollback-") {
                         "refuse"
                     } else {
                         "ready"
@@ -260,7 +260,7 @@ impl Drop for Files {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
-fn dial(path: &std::path::Path) -> OwnedFd {
+pub(super) fn dial(path: &std::path::Path) -> OwnedFd {
     let fd = socket(
         AddressFamily::Unix,
         SockType::SeqPacket,
@@ -271,7 +271,7 @@ fn dial(path: &std::path::Path) -> OwnedFd {
     connect(fd.as_raw_fd(), &UnixAddr::new(path).unwrap()).unwrap();
     fd
 }
-fn packet(peer: &OwnedFd) -> Option<weaver_types::OrganEnvelope> {
+pub(super) fn packet(peer: &OwnedFd) -> Option<weaver_types::OrganEnvelope> {
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
     match recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
         Ok(n) if n > 0 => Some(serde_json::from_slice(&bytes[..n]).unwrap()),
@@ -475,10 +475,21 @@ impl Member {
                 s::StateFrame::Control { frame, .. } => {
                     let frame = match frame {
                         s::StateControl::Grants {} => {
-                            assert_eq!(self.requests, ["open"]);
+                            if mode.starts_with("rollback-") && self.requests.len() == 2 {
+                                assert_eq!(self.requests, ["open", "grants"]);
+                            } else {
+                                assert_eq!(self.requests, ["open"]);
+                            }
                             self.requests.push("grants".into());
                             s::StateControlAnswer::Grants {
-                                surface: vec!["owner:actual".into()],
+                                surface: vec![
+                                    if mode == "rollback-varied" && self.requests.len() == 3 {
+                                        "owner:changed"
+                                    } else {
+                                        "owner:actual"
+                                    }
+                                    .into(),
+                                ],
                             }
                         }
                         s::StateControl::Read { selector } => {
@@ -993,6 +1004,23 @@ fn circuit(mode: &str) {
         }
         member.step(clock.now().unwrap(), mode);
         std::thread::sleep(Duration::from_millis(1));
+    }
+    if mode.starts_with("rollback-") {
+        assert_eq!(
+            guard.0.as_ref().unwrap().progress(),
+            FoundationEnterProgress::Stopped
+        );
+        super::rollback::tests::exercise(
+            guard.0.take().unwrap(),
+            &peer,
+            &mut member,
+            &mut reader,
+            &mut clock,
+            &path,
+            &envelope,
+            mode,
+        );
+        return;
     }
     let owner = guard.0.as_mut().unwrap();
     let successful = matches!(
@@ -2585,4 +2613,74 @@ scenario!(
 scenario!(
     worker_startup_composition_original_window_expiry_unadmitted,
     "window-expired"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_left,
+    "rollback-left"
+);
+scenario!(
+    worker_startup_composition_refusal_rollback_late,
+    "rollback-late"
+);
+scenario!(
+    worker_startup_composition_refusal_rollback_expired,
+    "rollback-expired"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_varied,
+    "rollback-varied"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_secondary,
+    "rollback-secondary"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_enter_lost,
+    "rollback-enter-lost"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_leave_lost,
+    "rollback-leave-lost"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_observer,
+    "rollback-observer"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_send_pressure,
+    "rollback-send-pressure"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_await_eof,
+    "rollback-await-eof"
+);
+scenario!(
+    worker_startup_composition_refusal_rollback_worker,
+    "rollback-worker"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_seal_silent,
+    "rollback-seal-silent"
+);
+scenario!(
+    worker_startup_composition_refusal_rollback_seal_backlog,
+    "rollback-seal-backlog"
+);
+scenario!(
+    worker_startup_composition_refusal_rollback_left_expired,
+    "rollback-left-expired"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_drain_expired,
+    "rollback-drain-expired"
 );
