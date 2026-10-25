@@ -468,6 +468,7 @@ pub(in crate::flow) struct FailedRunCleanup {
     account_failure: Option<HaltAccountFailure>,
     retired: Option<FailedFlowResources>,
     summary_account: Option<PlanSummaryAccount>,
+    placement_accounts: Vec<PlaceAccount>,
     release: ReleaseOutcome,
     release_send: Option<OrganSend>,
     release_exchange: Option<ExchangeId>,
@@ -488,6 +489,14 @@ pub(in crate::flow) struct FailedRunCleanup {
     member_failed: bool,
     rollback_cause: Option<weaver_types::Cause>,
     rollback_read: Option<super::startup_composition::refusal::response::halt::FailedRollbackRead>,
+    rollback_scope: Option<RollbackServingScope>,
+}
+
+#[derive(Default)]
+struct RollbackServingScope {
+    attempted: bool,
+    events: Vec<AuthoredEvent>,
+    sequences: Vec<Sequence>,
 }
 
 impl RecordingContext {
@@ -674,6 +683,34 @@ impl FailedRunCleanup {
         owner
     }
 
+    /// A real component failure during serving rollback retains the whole
+    /// active coordinator and the earlier Leave cap. Reporting has not yet run;
+    /// unlike after_serving, this entry must begin with that actual report.
+    pub(in crate::flow::context) fn after_serving_rollback(
+        context: RecordingContext,
+        resources: FailedEnterResources,
+        leave: AbsoluteBound,
+        cause: weaver_types::Cause,
+        release: Option<expired_residency::RollbackResidencyRelease>,
+        admit_reply: Option<ReceivedOrgan>,
+    ) -> Self {
+        let mut owner = Self::after_expired_rollback(
+            context,
+            resources,
+            Some(leave),
+            Some(cause),
+            release,
+            admit_reply,
+        );
+        owner.serving = true;
+        owner.rollback_scope = Some(RollbackServingScope::default());
+        owner
+    }
+
+    pub(in crate::flow::context) fn serving_rollback(&self) -> bool {
+        self.rollback_scope.is_some()
+    }
+
     fn new(context: RecordingContext, mut resources: FailedEnterResources, serving: bool) -> Self {
         let deadline = context.flow.halt().and_then(|halt| halt.deadline().ok());
         let member_stood = context.flow.failed_cleanup_state_stood();
@@ -696,6 +733,7 @@ impl FailedRunCleanup {
             account_failure: None,
             retired: None,
             summary_account: None,
+            placement_accounts: Vec::new(),
             release: ReleaseOutcome::Unconfirmed,
             release_send: None,
             release_exchange: None,
@@ -716,6 +754,7 @@ impl FailedRunCleanup {
             member_failed,
             rollback_cause: None,
             rollback_read: None,
+            rollback_scope: None,
         }
     }
 
@@ -1000,6 +1039,13 @@ impl FailedRunCleanup {
                 {
                     FailedEnterProgress::Pending
                 } else {
+                    if !self.advance_rollback_scope(io) {
+                        return if self.stage == Stage::Closed {
+                            FailedEnterProgress::Closed
+                        } else {
+                            FailedEnterProgress::Pending
+                        };
+                    }
                     if let Some(decode) = self
                         .resources
                         .spu
@@ -1173,6 +1219,14 @@ impl FailedRunCleanup {
         if observed.unavailable {
             return false;
         }
+        if self.serving {
+            // Completion revokes the journal's outstanding grant only through
+            // this move-owned account transfer. Keep every original here; a
+            // done flag alone does not retire the decoder's placement debt.
+            while let Some(account) = self.context.take_place_account() {
+                self.placement_accounts.push(account);
+            }
+        }
         if self.context.plan_summary.is_some() {
             if let Err(error) = self.context.advance_plan_summary_account(&mut observed) {
                 self.secondary(format!("failed Enter summary account: {error:?}"));
@@ -1184,6 +1238,137 @@ impl FailedRunCleanup {
             }
         }
         !observed.unavailable
+    }
+
+    /// Called after the outer rollback has disposed its actual gate and after
+    /// owned decode accounting. Terminal attempts retain their exact events;
+    /// unavailable trace capacity grants no new ordinary work or retry window.
+    fn advance_rollback_scope(&mut self, io: &mut impl PumpIo) -> bool {
+        let Some(scope) = &self.rollback_scope else {
+            return true;
+        };
+        if scope.attempted {
+            return true;
+        }
+        let session_owned = self
+            .context
+            .barrier
+            .pending_author()
+            .is_some_and(|author| author.event.kind == Kind::SessionClosed);
+        let existing_terminal = self.context.barrier.pending_author().is_some_and(|author| {
+            matches!(
+                author.event.kind,
+                Kind::ToolCallCompleted
+                    | Kind::MessageToolResult
+                    | Kind::TurnClosed
+                    | Kind::SessionClosed
+            )
+        });
+        if existing_terminal {
+            match self.context.resume_halt_terminal_and_bind() {
+                Ok(Some(sequence)) => self
+                    .rollback_scope
+                    .as_mut()
+                    .unwrap()
+                    .sequences
+                    .push(sequence),
+                Ok(None) => (),
+                Err(error) => {
+                    self.secondary(format!("failed rollback pending terminal: {error:?}"))
+                }
+            }
+        } else {
+            let _ = self.context.advance_halt_trace(io);
+        }
+        if !self.clock(io) {
+            self.abort();
+            return false;
+        }
+        if self
+            .context
+            .barrier
+            .pending_author()
+            .is_some_and(|author| author.event.kind == Kind::TurnStarted)
+            && self
+                .context
+                .halt_report
+                .as_ref()
+                .is_some_and(|report| !report.trace_unavailable())
+        {
+            return false;
+        }
+        let scope = self.rollback_scope.as_mut().unwrap();
+        scope.attempted = true;
+        if let Some(event) = self.context.failed_gate_terminal_event() {
+            scope.events.push(event);
+        }
+        let pending_close = self
+            .context
+            .barrier
+            .pending_author()
+            .is_some_and(|author| author.event.kind == Kind::TurnClosed);
+        if !pending_close && let Some(turn) = self.context.open_turn.clone() {
+            scope.events.push(AuthoredEvent {
+                kind: Kind::TurnClosed,
+                subsystem: Subsystem::Harness,
+                turn: Some(turn),
+                source: AuthoredSource::Runtime,
+                causal_parent: None,
+                payload: Some(serving::Payload::TurnClosed(
+                    weaver_trace::TurnClose::Stopped {
+                        reason: weaver_trace::StopReason::Fault,
+                        cause: None,
+                    },
+                )),
+            });
+        }
+        if !session_owned {
+            scope.events.push(AuthoredEvent {
+                kind: Kind::SessionClosed,
+                subsystem: Subsystem::Harness,
+                turn: None,
+                source: AuthoredSource::Runtime,
+                causal_parent: None,
+                payload: None,
+            });
+        }
+        for index in 0..scope.events.len() {
+            if !self.clock(io) {
+                self.abort();
+                return false;
+            }
+            let wall = match wall_ms() {
+                Ok(wall) => wall,
+                Err(error) => {
+                    self.secondary(error);
+                    continue;
+                }
+            };
+            let event = &self.rollback_scope.as_ref().unwrap().events[index];
+            let result = self.context.barrier.submit_terminal_authored_ref(
+                event,
+                &self.context.author,
+                self.context.last_ns,
+                wall,
+            );
+            match result {
+                Ok(sequence) => {
+                    if event.kind == Kind::TurnClosed {
+                        self.context.open_turn = None;
+                    }
+                    self.rollback_scope
+                        .as_mut()
+                        .unwrap()
+                        .sequences
+                        .push(sequence);
+                }
+                Err(error) => self.secondary(format!(
+                    "failed rollback terminal {:?}: {error}",
+                    event.kind
+                )),
+            }
+        }
+        true
     }
 
     fn advance_release(&mut self, io: &mut impl PumpIo) -> FailedEnterProgress {

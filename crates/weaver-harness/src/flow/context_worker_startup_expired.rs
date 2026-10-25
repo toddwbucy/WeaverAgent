@@ -13,7 +13,7 @@ mod active;
 #[path = "context_worker_startup_expired_failure.rs"]
 pub(super) mod failure;
 #[path = "context_worker_startup_expired_gate.rs"]
-pub(in crate::flow::context::worker_startup) mod gate;
+pub(in crate::flow) mod gate;
 #[path = "context_worker_startup_expired_preflight.rs"]
 pub(in crate::flow) mod preflight;
 

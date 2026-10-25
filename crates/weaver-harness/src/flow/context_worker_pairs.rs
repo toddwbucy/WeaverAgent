@@ -32,13 +32,13 @@ pub(super) struct WorkerPairs {
     effective: Option<EffectiveEmission>,
     calls: Vec<CallId>,
     external: Vec<ExternalWork>,
-    cancelled: bool,
+    cancelled: Option<NonDispatchCause>,
     barred: Option<NonDispatchCause>,
     returned_filing: crate::flow::context::StoppedAuthor,
 }
 impl WorkerPairs {
     pub(super) fn completed_effective(&self) -> Option<&EffectiveEmission> {
-        (matches!(self.stage, Stage::Complete) && !self.cancelled)
+        (matches!(self.stage, Stage::Complete) && self.cancelled.is_none())
             .then_some(self.effective.as_ref())
             .flatten()
     }
@@ -52,7 +52,7 @@ impl WorkerPairs {
                 .collect(),
             effective: Some(effective),
             external: Vec::new(),
-            cancelled: false,
+            cancelled: None,
             barred,
             returned_filing: crate::flow::context::StoppedAuthor::default(),
         }
@@ -66,20 +66,26 @@ impl WorkerPairs {
     }
     pub(super) fn cancel(
         &mut self,
+        cause: NonDispatchCause,
         context: &mut RecordingContext,
         gate: Option<&mut OrganPort>,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
-        self.cancelled = true;
+        let previous = self.cancelled;
+        retain_cancellation(&mut self.cancelled, cause);
+        let cause = self.cancelled.unwrap();
         if context.pair_work.is_some() {
             if context.pairs.executing().is_some() {
-                context.bar_executing_pairs(
-                    NonDispatchCause::Stop,
-                    gate.ok_or(RunFailure::PairOwned)?,
-                    io,
-                )?;
+                if let Some(gate) = gate {
+                    context.bar_executing_pairs(cause, gate, io)?;
+                } else if previous != Some(cause) && !context.pairs.barred_for(cause) {
+                    // The first election must reconcile the actual send on
+                    // its port. Once barred, retained gate replies can settle
+                    // after that port retires without renewing the election.
+                    return Err(RunFailure::PairOwned);
+                }
             } else {
-                context.bar_pending_pairs(NonDispatchCause::Stop, io)?;
+                context.bar_pending_pairs(cause, io)?;
             }
         }
         if matches!(self.stage, Stage::Ready | Stage::Recall(_)) {
@@ -87,6 +93,43 @@ impl WorkerPairs {
         }
         Ok(())
     }
+    pub(super) fn cancel_control(
+        &self,
+    ) -> Option<(&OrganEnvelope, &crate::flow::pump_transport::OrganSend)> {
+        self.external.last()?.cancel_control()
+    }
+
+    pub(super) fn advance_cancel_control(
+        &mut self,
+        context: &mut RecordingContext,
+        gate: &mut OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        if !matches!(self.stage, Stage::External) {
+            return Ok(true);
+        }
+        let cause = self.cancelled.ok_or(RunFailure::PairOwned)?;
+        self.external
+            .last_mut()
+            .unwrap()
+            .advance_cancel_control(cause, context, gate, io)
+    }
+
+    pub(super) fn route_cancel_reply(
+        &mut self,
+        context: &mut RecordingContext,
+        gate: &mut OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        if !matches!(self.stage, Stage::External) {
+            return Ok(false);
+        }
+        self.external
+            .last_mut()
+            .unwrap()
+            .route_cancel_reply(context, gate, io)
+    }
+
     pub(super) fn advance<I: PumpIo>(
         &mut self,
         acts: &[SortAct],
@@ -98,15 +141,8 @@ impl WorkerPairs {
                 decision(context, ports.io)?;
                 match context.begin_pair_execution(self.effective.take().unwrap(), ports.io) {
                     Ok(()) => {
-                        if self.cancelled || self.barred.is_some() {
-                            context.bar_pending_pairs(
-                                if self.cancelled {
-                                    NonDispatchCause::Stop
-                                } else {
-                                    self.barred.unwrap()
-                                },
-                                ports.io,
-                            )?;
+                        if let Some(cause) = self.cancelled.or(self.barred) {
+                            context.bar_pending_pairs(cause, ports.io)?;
                         }
                         self.stage = Stage::Opening;
                     }
@@ -143,17 +179,13 @@ impl WorkerPairs {
                         }
                         SortAct::Answer { .. } => false,
                     });
-                    if selected && !self.cancelled {
+                    if selected && self.cancelled.is_none() {
                         self.stage = Stage::Ready;
                     } else {
                         let call = ready.call_id.clone();
                         context.refuse_pair_dispatch(
                             &call,
-                            if self.cancelled {
-                                NonDispatchCause::Stop
-                            } else {
-                                NonDispatchCause::PlanBreak
-                            },
+                            self.cancelled.unwrap_or(NonDispatchCause::PlanBreak),
                             ports.io,
                         )?;
                     }

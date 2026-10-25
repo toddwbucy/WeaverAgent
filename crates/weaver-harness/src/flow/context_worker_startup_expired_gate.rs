@@ -7,8 +7,10 @@ use crate::flow::context::startup_composition::refusal::response::listener::Roll
 use crate::flow::context::worker_startup::failed::HeldGate;
 use crate::flow::context::*;
 use crate::flow::pump::{PumpPorts, PumpSource};
+use crate::flow::pump_transport::PortIdentity;
 use crate::flow::pump_transport::ReceivedOrgan;
 use crate::tools_cgroup::{Containment, Context as ContainmentContext};
+use std::sync::Arc;
 use weaver_trace::{Sequence, Subsystem};
 use weaver_types::{ExchangeId, LifecycleAsk, Payload as WirePayload, RefusalRecord};
 
@@ -25,6 +27,7 @@ struct GateRecord {
     event: Option<AuthoredEvent>,
     started: bool,
     stopped: StoppedAuthor,
+    claim: Option<Arc<RollbackGateAuthor>>,
 }
 
 impl GateRecord {
@@ -47,6 +50,91 @@ impl GateRecord {
             }),
             started: false,
             stopped: StoppedAuthor::default(),
+            claim: None,
+        }
+    }
+}
+
+/// Minted only by this gate's actual cleanup record. The exact noncontent
+/// event, root identity and accepted Leave cannot be widened by a caller.
+#[derive(Debug)]
+pub(in crate::flow::context) struct RollbackGateAuthor {
+    origin: Arc<()>,
+    leave: AbsoluteBound,
+    kind: Kind,
+    subsystem: Subsystem,
+    payload: String,
+    ticket: std::sync::OnceLock<u64>,
+    sequence: std::sync::OnceLock<Sequence>,
+}
+
+impl RollbackGateAuthor {
+    fn new(context: &RecordingContext, leave: AbsoluteBound, event: &AuthoredEvent) -> Self {
+        let payload = match event.payload.as_ref() {
+            Some(serving::Payload::Refusal(raw) | serving::Payload::Fault(raw)) => raw.get().into(),
+            _ => unreachable!("gate cleanup only owns refusal or fault input"),
+        };
+        Self {
+            origin: Arc::clone(&context.read_origin),
+            leave,
+            kind: event.kind,
+            subsystem: event.subsystem,
+            payload,
+            ticket: std::sync::OnceLock::new(),
+            sequence: std::sync::OnceLock::new(),
+        }
+    }
+
+    pub(in crate::flow::context) fn allows(&self, context: &RecordingContext) -> bool {
+        Arc::ptr_eq(&self.origin, &context.read_origin)
+            && context.phase == RecordingPhase::Entered
+            && context.deadlines.get(PumpDeadline::Leave) == Some(self.leave)
+            && !self.leave.expired(context.last_ns)
+            && context.failure.is_none()
+            && context.flow.halt().is_none()
+    }
+
+    pub(in crate::flow::context) fn allows_event(&self, event: &AuthoredEvent) -> bool {
+        if event.kind != self.kind
+            || event.subsystem != self.subsystem
+            || event.turn.is_some()
+            || event.causal_parent.is_some()
+            || !matches!(event.source, AuthoredSource::Runtime)
+        {
+            return false;
+        }
+        match (&event.kind, &event.payload) {
+            (Kind::Refusal, Some(serving::Payload::Refusal(raw))) => {
+                event.subsystem == Subsystem::Harness
+                    && raw.get() == self.payload
+                    && matches!(
+                        serde_json::from_str::<RefusalRecord>(raw.get()),
+                        Ok(RefusalRecord::Lifecycle {
+                            asked: LifecycleAsk::Leave,
+                            refusal: LifecycleRefusal::Unloading
+                        })
+                    )
+            }
+            (Kind::Fault, Some(serving::Payload::Fault(raw))) => {
+                matches!(event.subsystem, Subsystem::Gate | Subsystem::Harness)
+                    && raw.get() == self.payload
+            }
+            _ => false,
+        }
+    }
+
+    pub(in crate::flow::context) fn claim(&self, ticket: u64) -> bool {
+        self.ticket.set(ticket).is_ok()
+    }
+    pub(in crate::flow::context) fn ticket(&self) -> Option<u64> {
+        self.ticket.get().copied()
+    }
+    pub(in crate::flow::context) fn sequence(&self) -> Option<Sequence> {
+        self.sequence.get().copied()
+    }
+    pub(in crate::flow::context) fn bind(&self, ticket: Option<u64>, sequence: Sequence) {
+        if self.ticket().is_some() && self.ticket() == ticket {
+            let _ = self.sequence.set(sequence);
         }
     }
 }
@@ -68,6 +156,9 @@ pub(in crate::flow::context::worker_startup) struct GateRollbackEvidence<'a> {
     pub(in crate::flow::context::worker_startup) reply: Option<&'a ReceivedOrgan>,
     pub(in crate::flow::context::worker_startup) gate_enter: Option<AbsoluteBound>,
     pub(in crate::flow::context::worker_startup) enter: AbsoluteBound,
+    pub(in crate::flow::context::worker_startup) current_outgoing: u64,
+    pub(in crate::flow::context::worker_startup) control:
+        Option<(&'a OrganEnvelope, &'a OrganSend)>,
 }
 
 impl<'a> GateRollbackEvidence<'a> {
@@ -81,6 +172,8 @@ impl<'a> GateRollbackEvidence<'a> {
             reply: gate.reply.as_ref(),
             gate_enter: gate.enter,
             enter,
+            current_outgoing: gate.raise.exchange.ordinal,
+            control: None,
         }
     }
 }
@@ -96,6 +189,7 @@ pub(in crate::flow::context::worker_startup) struct GateRollbackHost<'a> {
 }
 
 pub(in crate::flow::context::worker_startup) struct RollbackGate {
+    closed: Option<RollbackGateClosed>,
     bound: AbsoluteBound,
     lower: Option<OrganEnvelope>,
     send: Option<OrganSend>,
@@ -114,11 +208,244 @@ pub(in crate::flow::context::worker_startup) struct RollbackGate {
     refusal: Option<LifecycleRefusal>,
     last_recorded: Option<Sequence>,
     complete: bool,
+    failed_pair_unavailable: bool,
+    failed_retired_answer: Option<ReceivedOrgan>,
+}
+
+/// The actual gate transport has been retired and its Leave sweep performed.
+/// This is a world-connection disposition, never a successful response receipt.
+pub(in crate::flow) struct RollbackGateClosed {
+    origin: Arc<()>,
+    port: PortIdentity,
+    leave: AbsoluteBound,
+    disposed: bool,
+    execution_reaped: bool,
+}
+
+impl RollbackGateClosed {
+    pub(in crate::flow::context) fn allows(&self, context: &RecordingContext) -> bool {
+        self.disposed
+            && Arc::ptr_eq(&self.origin, &context.read_origin)
+            && context.deadlines.get(PumpDeadline::Leave) == Some(self.leave)
+            && !self.leave.expired(context.last_ns)
+            && context.failure().is_none()
+    }
+
+    pub(in crate::flow::context) fn owns(&self, received: &ReceivedOrgan) -> bool {
+        self.disposed && self.port.matches_received(received)
+    }
+
+    pub(in crate::flow::context) fn owns_port(&self, port: &PortIdentity) -> bool {
+        self.disposed && self.port.same(port)
+    }
+
+    pub(in crate::flow::context) fn execution_reaped(&self) -> bool {
+        self.disposed && self.execution_reaped
+    }
 }
 
 pub(super) type ExpiredGateRollback = RollbackGate;
 
 impl RollbackGate {
+    pub(in crate::flow::context::worker_startup) fn owns_author(&self) -> bool {
+        self.pending.as_ref().is_some_and(|record| record.started)
+    }
+    pub(in crate::flow::context::worker_startup) fn world_closed(
+        &self,
+    ) -> Option<&RollbackGateClosed> {
+        self.closed.as_ref().filter(|proof| proof.disposed)
+    }
+
+    pub(in crate::flow::context::worker_startup) fn route_retired_answer(
+        &mut self,
+        context: &mut RecordingContext,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        if !self.received.as_ref().is_some_and(|received| {
+            matches!(received.envelope().payload, WirePayload::ToolAnswer(_))
+        }) {
+            return Ok(true);
+        }
+        let Some(proof) = self.closed.as_ref().filter(|proof| proof.disposed) else {
+            return Ok(false);
+        };
+        let received = self.received.take().unwrap();
+        match context.observe_rollback_pair_reply(proof, received, io) {
+            Ok(_) => Ok(true),
+            Err((original, error)) => {
+                self.received = original;
+                if matches!(error, RunFailure::PairOwned) {
+                    Ok(false)
+                } else {
+                    Err(error)
+                }
+            }
+        }
+    }
+
+    pub(in crate::flow::context::worker_startup) fn settle_retired_execution(
+        &mut self,
+        context: &mut RecordingContext,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        if let (Some(proof), Some(retired)) = (
+            self.closed.as_ref().filter(|proof| proof.disposed),
+            self.retired.as_mut(),
+        ) {
+            context.prepare_rollback_gate_execution(proof, retired, io)?;
+        }
+        if !self.route_retired_answer(context, io)? {
+            return Ok(false);
+        }
+        if let (Some(proof), Some(retired)) = (
+            self.closed.as_ref().filter(|proof| proof.disposed),
+            self.retired.as_mut(),
+        ) {
+            return context.close_rollback_gate_execution(proof, retired, io);
+        }
+        Ok(true)
+    }
+
+    /// The serving seat already owns this FIFO. Take one exact original only
+    /// when this gate's existing record slot is free; no overflow queue is made.
+    #[allow(clippy::result_large_err)] // Refusal returns the move-owned original.
+    pub(in crate::flow::context::worker_startup) fn retain_queued_input(
+        &mut self,
+        input: ReceivedOrgan,
+    ) -> Result<(), ReceivedOrgan> {
+        if self.pending.is_some() || self.received.is_some() {
+            return Err(input);
+        }
+        self.pending = Some(GateRecord::unloading(input));
+        self.complete = false;
+        Ok(())
+    }
+
+    /// Progress Lower without competing for an ordinary author or waiting for
+    /// the active turn's cancellation. Tool answers stay in the original port
+    /// for its pair owner. The same Lower cap applies while another exact send
+    /// is being reconciled by that owner.
+    pub(in crate::flow::context::worker_startup) fn transport_step(
+        &mut self,
+        host: &mut GateRollbackHost<'_>,
+        dials: &mut RollbackDials,
+        allow_lower: bool,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        match host.context.live(io) {
+            Ok(()) => (),
+            Err(RunFailure::Wait {
+                key: PumpDeadline::Lower,
+                bound,
+            }) if bound == self.bound => (),
+            Err(
+                error @ RunFailure::Wait {
+                    key: PumpDeadline::AdminRead,
+                    ..
+                },
+            ) => {
+                dials.recover(host.context, error, io)?;
+            }
+            Err(error) => return Err(error),
+        }
+        if !self.lower_retired && self.bound.expired(host.context.last_ns) {
+            self.end_transport(host.arms, true, false);
+            self.retire_lower(host.context);
+        }
+        if self.transport_done {
+            match host.arms.child.as_mut().map(|child| child.poll()) {
+                Some(ChildState::Reaped(_)) => {
+                    if let Some(proof) = &mut self.closed {
+                        proof.execution_reaped = true;
+                    }
+                    self.retire_lower(host.context);
+                }
+                Some(ChildState::NotWaitable) => {
+                    return Err(host.context.fail(
+                        io,
+                        FlowHaltReason::ProtocolFailed,
+                        HaltPoint::Teardown,
+                        "rollback gate lost its actual child reap",
+                    ));
+                }
+                _ => (),
+            }
+            return Ok(self.complete);
+        }
+        if self.lower.is_none() {
+            self.end_transport(host.arms, true, false);
+            return Ok(false);
+        }
+        let result = (|| {
+            if self.received.is_none() {
+                let port = host
+                    .arms
+                    .port
+                    .as_mut()
+                    .expect("original live rollback gate");
+                if port.held().is_none() {
+                    port.try_receive()
+                        .map_err(|failure| RunFailure::Transport {
+                            source: PumpSource::Gate,
+                            failure,
+                        })?;
+                }
+                if port.held().is_some_and(|frame| {
+                    !matches!(frame.payload, WirePayload::ToolAnswer(_))
+                        && (self.pending.is_none()
+                            || !matches!(
+                                frame.payload,
+                                WirePayload::Frame(_) | WirePayload::Fault(_)
+                            ))
+                }) {
+                    self.received =
+                        port.take_received()
+                            .map_err(|failure| RunFailure::Transport {
+                                source: PumpSource::Gate,
+                                failure,
+                            })?;
+                    host.context.live(io)?;
+                    if let Some(received) = self.received.take() {
+                        self.receive(host, received, true);
+                    }
+                }
+            }
+            if allow_lower && !self.transport_done {
+                self.send_lower(host, io)?;
+            }
+            Ok(false)
+        })();
+        match result {
+            Err(RunFailure::Wait {
+                key: PumpDeadline::Lower,
+                bound,
+            }) if bound == self.bound => {
+                self.end_transport(host.arms, true, false);
+                self.retire_lower(host.context);
+                Ok(false)
+            }
+            Err(RunFailure::Transport {
+                source: PumpSource::Gate,
+                ..
+            }) => {
+                if self
+                    .send
+                    .as_ref()
+                    .is_some_and(|send| send.sent() && send.sent_at().is_none())
+                {
+                    return Err(host.context.fail(
+                        io,
+                        FlowHaltReason::TraceFailed,
+                        HaltPoint::Author,
+                        "rollback Lower send clock failed",
+                    ));
+                }
+                self.observe_death(host, dials, io)?;
+                Ok(false)
+            }
+            other => other,
+        }
+    }
     pub(in crate::flow::context::worker_startup) fn bound(&self) -> AbsoluteBound {
         self.bound
     }
@@ -173,9 +500,7 @@ impl RollbackGate {
             })
         });
         let lower = if raised {
-            gate.raise
-                .exchange
-                .ordinal
+            gate.current_outgoing
                 .checked_add(1)
                 .map(|ordinal| OrganEnvelope {
                     exchange: ExchangeId {
@@ -189,6 +514,13 @@ impl RollbackGate {
             None
         };
         Ok(Self {
+            closed: arms.port.as_ref().map(|port| RollbackGateClosed {
+                origin: Arc::clone(&context.read_origin),
+                port: port.port_identity(),
+                leave,
+                disposed: false,
+                execution_reaped: false,
+            }),
             bound,
             lower,
             send: None,
@@ -203,10 +535,12 @@ impl RollbackGate {
             containment: None,
             sweep_fault: None,
             death: None,
-            refusal: (raised && gate.raise.exchange.ordinal == u64::MAX)
+            refusal: (raised && gate.current_outgoing == u64::MAX)
                 .then_some(LifecycleRefusal::Malformed),
             last_recorded: None,
             complete: false,
+            failed_pair_unavailable: false,
+            failed_retired_answer: None,
         })
     }
 
@@ -380,6 +714,9 @@ impl RollbackGate {
         if kill && let Some(child) = &mut arms.child {
             child.stop_at_cap();
         }
+        if let Some(proof) = &mut self.closed {
+            proof.disposed = true;
+        }
     }
 
     fn retire_lower(&mut self, context: &mut RecordingContext) {
@@ -414,6 +751,7 @@ impl RollbackGate {
                 event: Some(event),
                 started: false,
                 stopped: StoppedAuthor::default(),
+                claim: None,
             });
             return;
         }
@@ -477,18 +815,34 @@ impl RollbackGate {
     ) -> Result<(), RunFailure> {
         let record = self.pending.as_mut().expect("owed gate record");
         record.stopped.check()?;
+        if !record.started && !host.context.rollback_gate_author_available() {
+            return Ok(());
+        }
+        if record.claim.is_none() {
+            record.claim = Some(Arc::new(RollbackGateAuthor::new(
+                host.context,
+                host.leave,
+                record.event.as_ref().expect("unstarted gate record"),
+            )));
+        }
+        let claim = record.claim.as_ref().unwrap();
         let mut ports = PumpPorts {
             lifecycle: dials.ports(host.peer),
-            gate: host.arms.port.as_mut(),
+            gate: host.arms.port.as_mut().filter(|port| {
+                // A nested serving wait already yielded this packet to its
+                // owner. Keep the second Frame held while this exact record
+                // resumes; the original Lower/Leave still bounds the wait.
+                port.held().is_none() || host.context.rollback_gate_port.is_none()
+            }),
             decode: None,
             label: None,
             io,
         };
         let result = if let Some(event) = record.event.take() {
             record.started = true;
-            host.context.author_and_wait(&mut ports, event)
+            host.context.author_rollback_gate(&mut ports, claim, event)
         } else {
-            host.context.resume_author_and_wait(&mut ports)
+            host.context.resume_rollback_gate_author(&mut ports, claim)
         };
         match result {
             Ok(sequence) => {
@@ -502,13 +856,18 @@ impl RollbackGate {
                 // permits continuation under the unchanged Leave.
                 if matches!(
                     error.reason,
-                    RunFailure::Wait {
-                        key: PumpDeadline::Lower | PumpDeadline::AdminRead,
-                        ..
-                    } | RunFailure::Transport {
-                        source: PumpSource::Gate | PumpSource::LeavePeer | PumpSource::AdminDial,
-                        ..
-                    }
+                    RunFailure::Busy(_)
+                        | RunFailure::RollbackGateHeld
+                        | RunFailure::Wait {
+                            key: PumpDeadline::Lower | PumpDeadline::AdminRead,
+                            ..
+                        }
+                        | RunFailure::Transport {
+                            source: PumpSource::Gate
+                                | PumpSource::LeavePeer
+                                | PumpSource::AdminDial,
+                            ..
+                        }
                 ) {
                     record.started = error.original.is_none();
                     record.event = error.original;
@@ -524,6 +883,7 @@ impl RollbackGate {
         &mut self,
         host: &mut GateRollbackHost<'_>,
         dials: &mut RollbackDials,
+        allow_lower: bool,
         io: &mut impl PumpIo,
     ) -> Result<bool, RunFailure> {
         if self.complete {
@@ -554,7 +914,7 @@ impl RollbackGate {
         if !self.transport_done && self.lower.is_none() {
             self.end_transport(host.arms, true, false);
         }
-        let result = match self.step_live(host, dials, io) {
+        let result = match self.step_live(host, dials, allow_lower, io) {
             Err(RunFailure::Transport {
                 source: PumpSource::LeavePeer,
                 ..
@@ -611,17 +971,63 @@ impl RollbackGate {
         &mut self,
         host: &mut GateRollbackHost<'_>,
         dials: &mut RollbackDials,
+        allow_lower: bool,
         io: &mut impl PumpIo,
     ) -> Result<bool, RunFailure> {
         let leave = host.leave;
         dials.prepare(host.context, leave, io)?;
+        if !allow_lower && !self.transport_done {
+            // Keep the already accepted Leave peer and secondary management
+            // dials serviced without touching a held gate packet or author.
+            host.context.observe_ready(&mut PumpPorts {
+                lifecycle: dials.ports(host.peer),
+                gate: None,
+                decode: None,
+                label: None,
+                io: &mut *io,
+            })?;
+            // The exact interrupt still owns the outgoing slot. Wait only for
+            // that socket's writability; neither a queued Frame's trace author
+            // nor an execution result may stand between its send and Lower.
+            // A short wake also returns to the existing lifecycle/receive
+            // owners when a packet is already held. Every earlier bound wins.
+            let wake = host.context.last_ns.saturating_add(10_000_000);
+            let wake = host
+                .context
+                .deadlines
+                .nearest()
+                .map_or(wake, |end| wake.min(end));
+            let port = host
+                .arms
+                .port
+                .as_ref()
+                .expect("live blocked rollback control");
+            io.wait(
+                &[crate::flow::clock::WaitInterest {
+                    fd: port.fd(),
+                    events: nix::poll::PollFlags::POLLOUT,
+                }],
+                Some(wake),
+            )
+            .map_err(|error| {
+                host.context.fail(
+                    io,
+                    FlowHaltReason::TraceFailed,
+                    HaltPoint::Author,
+                    format!("rollback control wait: {error}"),
+                )
+            })?;
+            return Ok(false);
+        }
         if self.death.as_ref().is_some_and(|death| !death.settled)
             && !self.settle_death(host, io)?
         {
             return Ok(false);
         }
         if self.pending.is_some() {
-            self.send_lower(host, io)?;
+            if allow_lower {
+                self.send_lower(host, io)?;
+            }
             self.record(host, dials, io)?;
             return Ok(false);
         }
@@ -635,6 +1041,7 @@ impl RollbackGate {
                 event: Some(event),
                 started: false,
                 stopped: StoppedAuthor::default(),
+                claim: None,
             });
             return Ok(false);
         }
@@ -647,6 +1054,12 @@ impl RollbackGate {
             } else {
                 None
             };
+            if port
+                .held()
+                .is_some_and(|held| matches!(held.payload, WirePayload::ToolAnswer(_)))
+            {
+                return Ok(false);
+            }
             if let Some(received) =
                 port.take_received()
                     .map_err(|failure| RunFailure::Transport {
@@ -658,7 +1071,9 @@ impl RollbackGate {
                 host.context.live(io)?;
                 let received = self.received.take().unwrap();
                 self.receive(host, received, true);
-                self.send_lower(host, io)?;
+                if allow_lower {
+                    self.send_lower(host, io)?;
+                }
                 return Ok(false);
             }
             if let Some(failure) = receive_error {
@@ -667,7 +1082,9 @@ impl RollbackGate {
                     failure,
                 });
             }
-            self.send_lower(host, io)?;
+            if allow_lower {
+                self.send_lower(host, io)?;
+            }
             if self.transport_done {
                 return Ok(false);
             }
@@ -683,7 +1100,12 @@ impl RollbackGate {
         }
         let arms = &mut *host.arms;
         match arms.child.as_mut().map(|child| child.poll()) {
-            None | Some(ChildState::Reaped(_)) => {
+            state @ (None | Some(ChildState::Reaped(_))) => {
+                if matches!(state, Some(ChildState::Reaped(_)))
+                    && let Some(proof) = &mut self.closed
+                {
+                    proof.execution_reaped = true;
+                }
                 self.retire_lower(host.context);
                 self.complete = true;
                 Ok(true)
@@ -739,7 +1161,10 @@ impl RollbackGate {
             // Keep a second content frame in the pump's one receive slot while
             // the preceding record waits. A pre-send close has no Lower witness.
             if port.held().is_some_and(|frame| {
-                !matches!(frame.payload, WirePayload::Frame(_) | WirePayload::Fault(_))
+                !matches!(
+                    frame.payload,
+                    WirePayload::Frame(_) | WirePayload::Fault(_) | WirePayload::ToolAnswer(_)
+                )
             }) {
                 port.take_received()
                     .map_err(|failure| RunFailure::Transport {

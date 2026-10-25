@@ -108,6 +108,12 @@ pub(super) enum Stage<T> {
 pub(super) struct PortIdentity(Arc<()>);
 
 impl PortIdentity {
+    pub(super) fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+    pub(super) fn matches_received(&self, received: &ReceivedOrgan) -> bool {
+        Arc::ptr_eq(&self.0, &received.port_identity().0)
+    }
     pub(super) fn matches_decode(&self, port: &DecodePort) -> bool {
         Arc::ptr_eq(&self.0, &port.identity.0)
     }
@@ -138,6 +144,17 @@ pub(super) struct OrganSend {
 }
 
 impl OrganSend {
+    #[cfg(test)]
+    pub(super) fn state_probe_for_test(&self) -> Box<dyn Fn() -> (bool, bool) + Send> {
+        let tracked = Arc::clone(&self.tracked);
+        Box::new(move || {
+            let status = tracked.status.load(Ordering::Acquire);
+            (
+                matches!(status, SEND_SENT | SEND_OBSERVED),
+                status == SEND_WITHDRAWN,
+            )
+        })
+    }
     #[cfg(test)]
     pub(super) fn sent_probe_for_test(&self) -> Box<dyn Fn() -> bool> {
         let tracked = Arc::clone(&self.tracked);
@@ -365,6 +382,59 @@ pub(super) struct PacketPort<T, E = OwnedFd> {
 pub(super) type OrganPort = PacketPort<OrganEnvelope>;
 pub(super) type DecodePort = PacketPort<DecodeReply>;
 pub(super) type LabelPort = PacketPort<ClassifyReply>;
+
+impl PacketPort<OrganEnvelope, ()> {
+    /// Retiring the descriptor does not erase an already received tool answer.
+    /// No socket read or fabricated decoded envelope occurs on this path.
+    pub(super) fn take_retired_tool_answer(&mut self) -> Option<ReceivedOrgan> {
+        if !self.held.as_ref().is_some_and(|envelope| {
+            matches!(envelope.payload, weaver_types::Payload::ToolAnswer(_))
+        }) {
+            return None;
+        }
+        Some(ReceivedOrgan {
+            envelope: self.held.take().unwrap(),
+            raw: self
+                .received_wire
+                .take()
+                .expect("original decoded datagram"),
+            identity: self.identity.clone(),
+        })
+    }
+    /// A consumed port can dispose its exact wholly unsent datagram without
+    /// regaining any transport operation. Its original ticket records withdrawal.
+    pub(super) fn withdraw_retired_unsent(
+        &mut self,
+        exchange: &weaver_types::ExchangeId,
+    ) -> Result<Option<OrganEnvelope>, Failure> {
+        let Some(outbound) = self.outgoing.as_ref() else {
+            return Ok(None);
+        };
+        if outbound.preamble.is_some() || outbound.preamble_sent || outbound.offset != 0 {
+            return Err(Failure::invalid(
+                "retired withdrawal requires a wholly unsent datagram",
+            ));
+        }
+        let pending = (self.decode)(&outbound.body)?;
+        if pending.exchange != *exchange {
+            return Ok(None);
+        }
+        let Some(tracked) = &outbound.tracked else {
+            return Err(Failure::invalid(
+                "retired withdrawal requires its original send ticket",
+            ));
+        };
+        if tracked.status.load(Ordering::Acquire) != SEND_PENDING {
+            return Err(Failure::invalid(
+                "retired withdrawal cannot replace a sent ticket",
+            ));
+        }
+        let tracked = self.outgoing.take().unwrap().tracked.unwrap();
+        tracked.status.store(SEND_WITHDRAWN, Ordering::Release);
+        self.send_interrupted = false;
+        Ok(Some(pending))
+    }
+}
 
 /// One actual organ datagram, with its decoded view and original octets held
 /// together. Only the owning socket port constructs this fact. It is not a
