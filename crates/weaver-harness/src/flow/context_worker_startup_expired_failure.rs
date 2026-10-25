@@ -177,6 +177,13 @@ impl FoundationExpiredRollbackExit {
         }
     }
     #[cfg(test)]
+    pub(super) fn test_filing_context(&self) -> Option<&RecordingContext> {
+        match &self.driver {
+            Driver::Halt(tail) => Some(tail.context()),
+            Driver::Recorded(_) => None,
+        }
+    }
+    #[cfg(test)]
     pub(super) fn test_admission(
         &self,
     ) -> Option<&crate::flow::context::expired_admission_driver::StoppedAdmissionAccount> {

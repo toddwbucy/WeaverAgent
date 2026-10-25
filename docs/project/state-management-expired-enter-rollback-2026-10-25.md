@@ -544,9 +544,105 @@ The evidence destination is the approved root's
 `state-expired-boot-pairs-local-20261025` directory, with an exact source archive
 and per-file hashes. Earlier deposits remain immutable.
 
-This remains an unpublished local checkpoint. In-flight repair filing still
-needs consuming cleanup of its author, PairCopy, ledger reservation and exact
-receipt exchange. The completed-receipt case does not establish that road.
+These repair cases exclude an active filing. The continuation below exercises
+that author's custody, selected copy and original receipt exchange.
+
+## In-flight boot filing continuation
+
+An expired repair filing now transfers into stopped custody under the same
+actual rollback permit. Its BootPairs owner, original Decision bound, CallId,
+StartIdentity, recorded source, receipt reservation and record barrier must
+match the retained repair. The original FilingTransaction, waiting author,
+completed sequence and admission state move together. A pending trace record
+keeps its prepared event and actual ticket; no successful filing or repaired
+boot grant follows this transfer.
+
+An unsubmitted author with no selected content or owed record can use ordinary
+rollback Grants comparison after its original owner moves. A timely completed
+receipt set can also move, but remains unreleased evidence in the stopped
+account. The normal receipt-consumer method would mark it released; this path
+uses a separate private move that preserves its original state.
+
+An unfinished selected filing keeps its original ledger, receipt subscription,
+PairCopy and retention charges. Before freezing the ledger, the coordinator
+retains the last actual transport facts. This neither sends bytes nor releases
+a reply. The original StateChannel leaves the pump while retaining every
+request byte, send offset, partial reply, measurement and release proof. No
+FilePair retry or Grants query follows on that occupied member seam. Cleanup
+reports the Grants surface as Unreadable.
+
+The original retention budget stays intact. Its failure freeze is not used as
+cleanup permission. A private releasing-obligations predicate permits only the
+validated parked inventory at classifier retirement and terminal close; other
+admission and release prerequisites remain strict. While parked, the ordinary
+drain validates that inventory and performs no content transfer or disposition.
+Actual failure still freezes the budget and latches the first cause.
+
+Cleanup seals the lifecycle listener and closes/reaps the actual classifier
+before SPU release and member retirement. The live member channel becomes a
+retained descriptor-free carrier; close failure remains visible to failed-run
+accounting. Actual Unload and trace drain use the accepted Leave cap. An
+unfinished filing forbids Left even after those resource steps finish. Leave
+expiry and a failed Release retain the same stopped author, account, framing and
+first failure, with no duplicate filing, Release or terminal.
+
+Twelve added delegated cases cover the unsubmitted author, selected copy,
+unsent FilePair, sent filing awaiting its real reply, a partially received reply,
+actual completed receipts before caller collection, author/flow/measurement
+records under trace pressure, held classifier exit, Leave expiry and wrong SPU
+Release. The author-pressure fixture pauses the real recorder queue at its
+pending boundary with the actual original event and allocated ticket. The
+partial-reply fixture writes half of the encoded actual Filed response. Neither
+constructs a Recorded proof. Identity probes reject a foreign filing owner,
+CallId, bound, source reservation and record barrier.
+
+The tests compare the retained author, source material, subscription and actual
+receipt, original channel framing and buffer addresses, pending event and ticket,
+and original retention charges. Final ledger transport facts are checked against
+the actual parked exchange separately. Trace assertions distinguish a Recorded
+terminal from a FilePair that has not yet sent; no duplicate terminal or request
+is inferred from one count alone.
+
+Initial failures and fixture corrections remain in `boot-filing-checks/`. They
+include test-only visibility/import corrections, a stale expectation of Grants
+on an occupied seam, the normal consumer's receipt-release flag, and a fixture
+that had not consumed an already-sent FilePair before taking its request census.
+The two initial cases and all twelve expanded cases passed before the protective
+controls. No earlier failed build or run is counted as a passing gate.
+
+All thirteen compiled controls were detected after nine exact positive baselines.
+They check the original barrier, filing owner, bound and CallId; custody of the
+waiting author, actual pending ticket, completed receipt and partial reply;
+retained last transport facts; member close after classifier reap; no Left while
+accounting is unfinished; and retention through the cap and failed-exit handoff.
+The waiting-author and pending-ticket move controls are caught by the subsequent
+admission/author guard; the early member-close control is caught by actual EOF.
+All five controlled files were restored byte-for-byte.
+
+The first final gate attempt stopped at strict lint: the new account enlarged
+the expired-read enum, and a trace assertion allocated inside a comparison. The
+private filing account is now boxed and the decimal-string assertion prepares
+its expected value once. The controls precede those two lint corrections; all
+five controlled files still match their restored hashes. The initial gate logs
+remain preserved.
+
+All eight final gates passed in `boot-filing-final-checks/results.json`: first
+and last lock checks, formatting, strict harness clippy, the complete harness
+suite, library build, all delegated startup cases and diff check. The ordinary
+suite passes 1986 library tests, 43 binary/integration tests and 26 doctests
+(2055 total), with 526 library cases ignored. The delegated run passes all 169
+startup cases, including 91 expired-startup cases. The final manifest covers
+709 crate/configuration files. Other ignored families, privileged admin-startup
+cases and production artifacts remain outside these runs.
+
+Evidence is prepared for deposit under the approved root as
+`state-expired-boot-filing-local-20261025`, with the exact source archive and
+per-file hashes. Earlier deposits remain immutable. Manual review follows the
+new predicates through both detach callers, classifier/member retirement,
+Unload, cap disposal and failed-exit custody. The required review skills remain
+unavailable; these author checks are not a Planner grade or production
+qualification. No wire shape, event, dependency, production limit or serving
+selection changes.
 
 ## Completion boundary
 
@@ -556,7 +652,7 @@ positions do not establish cleanup of all pending accounts or gate ownership.
 Those unsupported positions have no ordinary rollback-completion claim. This
 owner must not be wired into a dispatcher as completed cleanup.
 
-The same slice still owes in-flight boot-pair filing and other summary transitions,
+The same slice still owes other summary transitions,
 gate Lower and tool containment,
 before-Load and gate-owned stopped cleanup, and the worker/dev_loop adapter. Successful
 Ready and pre-adoption expiry need their own lifecycle continuations. The full
@@ -564,6 +660,6 @@ Ready and pre-adoption expiry need their own lifecycle continuations. The full
 exit and dispatcher selection, production artifacts and prompt qualification,
 measured limits, security disposition and the operator's coupled cutover.
 
-In-flight boot-repair filings still need consuming cleanup under their original
-bounds. The repair cases above do not establish those filings, gate teardown or
-the remaining worker adapter.
+The filing cases above establish only the named boot-repair rollback boundaries.
+They do not establish gate teardown, the remaining worker adapter or production
+qualification.

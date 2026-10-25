@@ -82,7 +82,12 @@ impl ExpiredActiveRollback {
                     .detach_expired_boot_pairs(&permit, io)
                     .map_err(|error| format!("expired boot repair: {error:?}"))?,
             );
-            self.stage = Stage::Enter;
+            if self.boot_pairs.as_ref().unwrap().parked_filing() {
+                self.surface = Some(GrantSurface::Unreadable);
+                self.stage = Stage::Seal;
+            } else {
+                self.stage = Stage::Enter;
+            }
             return Ok(());
         }
         if self.stage == Stage::Admission {
@@ -236,7 +241,12 @@ impl ExpiredActiveRollback {
                 }
                 Stage::Seal => {
                     if dials.seal_step(context, leave, io)? {
-                        self.stage = if self.read.is_some() {
+                        self.stage = if self.read.is_some()
+                            || self
+                                .boot_pairs
+                                .as_ref()
+                                .is_some_and(|account| account.parked_filing())
+                        {
                             Stage::Classifier
                         } else {
                             Stage::Release
@@ -325,7 +335,20 @@ impl ExpiredActiveRollback {
                     }
                 }
                 Stage::State => {
-                    if self.read.is_some() {
+                    if self
+                        .boot_pairs
+                        .as_ref()
+                        .is_some_and(|account| account.parked_filing())
+                    {
+                        if !matches!(
+                            owner.run.resources.classifier_child(),
+                            Some(ChildState::Reaped(_))
+                        ) {
+                            return Err(RunFailure::BootPairsOwned);
+                        }
+                        self.member = context.retire_expired_boot_filing(io)?;
+                        self.stage = Stage::Terminal;
+                    } else if self.read.is_some() {
                         if !matches!(
                             owner.run.resources.classifier_child(),
                             Some(ChildState::Reaped(_))
@@ -375,6 +398,10 @@ impl ExpiredActiveRollback {
                     .as_ref()
                     .and_then(ExpiredResidencyRelease::outcome),
                 self.open.as_ref().is_none_or(|open| !open.incomplete())
+                    && self
+                        .boot_pairs
+                        .as_ref()
+                        .is_none_or(|account| account.account_complete())
                     && self
                         .admission
                         .as_ref()
@@ -433,10 +460,14 @@ impl FoundationExpiredRollback {
             || ((context.barrier.pending().is_some() || context.barrier.pending_author().is_some())
                 && !detach_open
                 && !park_read
-                && !detach_templates)
-            || (context.flow.pending_control().is_some() && !park_read)
-            || (context.flow.operation_completion().is_some() && !park_read && !detach_templates)
-            || (!context.flow.state().outstanding().is_empty() && !park_read)
+                && !detach_templates
+                && !detach_boot_pairs)
+            || (context.flow.pending_control().is_some() && !park_read && !detach_boot_pairs)
+            || (context.flow.operation_completion().is_some()
+                && !park_read
+                && !detach_templates
+                && !detach_boot_pairs)
+            || (!context.flow.state().outstanding().is_empty() && !park_read && !detach_boot_pairs)
         {
             return None;
         }

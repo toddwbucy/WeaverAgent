@@ -146,10 +146,12 @@ pub(in crate::flow::context::worker_startup) fn enter(
     let admission_received = mode
         .starts_with("expired-startup-classifying")
         .then(|| root.join("classifier-bootstrap"));
+    let repair_filing = mode.starts_with("expired-startup-repair-filing-");
     if matches!(
         mode,
         "expired-startup-repair-filed-complete" | "expired-startup-repair-proposed-complete"
-    ) {
+    ) || repair_filing
+    {
         let corpus: Vec<serde_json::Value> =
             serde_json::from_str(include_str!("fixtures/recall-sources.json")).unwrap();
         let mut pair = corpus
@@ -169,6 +171,11 @@ pub(in crate::flow::context::worker_startup) fn enter(
         member
             .boot_pairs
             .push(serde_json::from_value(pair).unwrap());
+    }
+    if repair_filing
+        && (mode.contains("-pending-") || mode.contains("-measurement-") || mode.contains("-flow-"))
+    {
+        member.hold_kind = Some("tool.call.completed");
     }
     let read_target = matches!(suffix, "prompt" | "summary-read")
         || mode.starts_with("expired-startup-repair-read-")
@@ -238,9 +245,10 @@ pub(in crate::flow::context::worker_startup) fn enter(
         "expired-startup-repair-proposed-complete",
     ]
     .contains(&mode)
+        || repair_filing
     {
         let proposed = mode == "expired-startup-repair-proposed-complete";
-        if proposed {
+        if proposed || repair_filing {
             let context = context(guard.0.as_mut().unwrap());
             let enter = context.deadlines.get(PumpDeadline::Enter).unwrap();
             let remaining = (context
@@ -262,25 +270,67 @@ pub(in crate::flow::context::worker_startup) fn enter(
             panic!("original boot owner");
         };
         owner.failure_test_stage_repair(&mut CircuitIo(clock));
-        if !mode.contains("-unstarted-") {
+        if mode != "expired-startup-repair-unstarted-complete" {
             let context = context(guard.0.as_mut().unwrap());
+            let mut filing_pressure = false;
             loop {
                 assert!(Instant::now() < limit, "boot repair did not settle");
-                let progress = context
-                    .advance_boot_pairs(&mut PumpPorts {
-                        lifecycle: LifecyclePorts {
-                            listener: None,
-                            peer: None,
-                            residency: None,
-                            dial: None,
-                            leave_peer: None,
-                        },
-                        gate: None,
-                        decode: None,
-                        label: None,
-                        io: &mut CircuitIo(clock),
-                    })
-                    .unwrap();
+                if repair_filing
+                    && mode.contains("-flow-")
+                    && !filing_pressure
+                    && context
+                        .flow
+                        .state()
+                        .outstanding()
+                        .first()
+                        .is_some_and(|work| {
+                            work.operation == s::StateOperation::FilePair && work.bytes_sent > 0
+                        })
+                {
+                    super::super::failed::tests::fill_trace(context, clock);
+                    filing_pressure = true;
+                }
+                let mut ports = PumpPorts {
+                    lifecycle: LifecyclePorts {
+                        listener: None,
+                        peer: None,
+                        residency: None,
+                        dial: None,
+                        leave_peer: None,
+                    },
+                    gate: None,
+                    decode: None,
+                    label: None,
+                    io: &mut CircuitIo(clock),
+                };
+                let progress =
+                    if repair_filing && mode.contains("-settled-") && context.filing.is_some() {
+                        let progress = context
+                            .advance_owned_filing(
+                                crate::flow::context::receipt_driver::FilingOwner::BootPairs,
+                                &mut ports,
+                            )
+                            .unwrap();
+                        if progress == crate::flow::context::FilingProgress::Complete {
+                            assert!(context.flow.filing_receipts().unwrap().is_complete());
+                            assert!(
+                                context.flow.filing_recorded_ns().unwrap()
+                                    < context
+                                        .deadlines
+                                        .get(PumpDeadline::Enter)
+                                        .unwrap()
+                                        .deadline_ns()
+                            );
+                            break;
+                        }
+                        if progress == crate::flow::context::FilingProgress::Pending {
+                            BootPairsProgress::Pending
+                        } else {
+                            BootPairsProgress::Progress
+                        }
+                    } else {
+                        context.advance_boot_pairs(&mut ports).unwrap()
+                    };
                 if proposed && let Some(bound) = context.deadlines.get(PumpDeadline::Decision) {
                     assert_eq!(
                         bound.deadline_ns(),
@@ -299,8 +349,158 @@ pub(in crate::flow::context::worker_startup) fn enter(
                     );
                     break;
                 }
+                if repair_filing
+                    && (mode.contains("-unstarted-") || mode.contains("-author-"))
+                    && context.filing.is_some()
+                {
+                    assert!(context.waiting_content.is_some());
+                    assert!(context.barrier.pending_author().is_none());
+                    assert!(
+                        member
+                            .filings
+                            .iter()
+                            .all(|file| !matches!(file, s::StateFrame::FilePair { .. }))
+                    );
+                    if mode.contains("-author-") {
+                        use crate::flow::recording::{RecordProgress, RecordPurpose};
+                        super::super::failed::tests::fill_trace(context, clock);
+                        // Pause the normal author path at the recorder's real pending
+                        // boundary, without fabricating a ticket or Recorded proof.
+                        let event = context.waiting_content.take().unwrap().into_event();
+                        context.author_turn = Some((event.kind, event.turn.clone()));
+                        let queued = context.barrier.queue_authored_with_clock(
+                            event,
+                            RecordPurpose::Content,
+                            &context.author,
+                            1,
+                            &mut context.inbox,
+                            &mut context.budget,
+                            &mut || clock.now(),
+                        );
+                        assert!(matches!(queued.progress, RecordProgress::Pending));
+                        assert_eq!(
+                            queued.ticket,
+                            context.barrier.pending_author().map(|author| author.ticket)
+                        );
+                    }
+                    break;
+                }
+                if repair_filing && mode.contains("-measurement-") && member.held_file.is_some() {
+                    // Finish the earlier send observation while the actual receipt
+                    // remains at the peer, then put its measurement under pressure.
+                    for _ in 0..8 {
+                        context.reduce_flow(&mut CircuitIo(clock)).unwrap();
+                    }
+                    assert!(context.barrier.pending().is_none());
+                    super::super::failed::tests::fill_trace(context, clock);
+                    member.hold_kind = None;
+                    member.step(clock.now().unwrap(), "ready");
+                    while context.barrier.pending().is_none() {
+                        assert!(
+                            Instant::now() < limit,
+                            "actual filing measurement did not become pending"
+                        );
+                        context
+                            .pump_once(&mut PumpPorts {
+                                lifecycle: LifecyclePorts {
+                                    listener: None,
+                                    peer: None,
+                                    residency: None,
+                                    dial: None,
+                                    leave_peer: None,
+                                },
+                                gate: None,
+                                decode: None,
+                                label: None,
+                                io: &mut CircuitIo(clock),
+                            })
+                            .unwrap();
+                        context.reduce_flow(&mut CircuitIo(clock)).unwrap();
+                    }
+                    assert_eq!(
+                        context.barrier.pending().unwrap().envelope.kind,
+                        weaver_trace::serving::Kind::StateStoreMeasurement
+                    );
+                    break;
+                }
+                if filing_pressure && context.barrier.pending().is_some() {
+                    assert_eq!(
+                        context.barrier.pending().unwrap().envelope.kind,
+                        weaver_trace::serving::Kind::StateFlow
+                    );
+                    member.step(clock.now().unwrap(), "ready");
+                    assert!(
+                        member.held_file.is_some(),
+                        "the original complete send predates expiry"
+                    );
+                    break;
+                }
+                if repair_filing && mode.contains("-pending-") && member.held_file.is_some() {
+                    assert!(context.filing.is_some());
+                    assert_eq!(context.flow.state().outstanding().len(), 1);
+                    if mode.contains("-partial-") {
+                        let partial = member.send_held_filing_prefix();
+                        context
+                            .pump_once(&mut PumpPorts {
+                                lifecycle: LifecyclePorts {
+                                    listener: None,
+                                    peer: None,
+                                    residency: None,
+                                    dial: None,
+                                    leave_peer: None,
+                                },
+                                gate: None,
+                                decode: None,
+                                label: None,
+                                io: &mut CircuitIo(clock),
+                            })
+                            .unwrap();
+                        assert_eq!(
+                            context.flow.state().retained_received_bytes(),
+                            partial.as_slice()
+                        );
+                        assert!(context.flow.state().held_measurement().is_none());
+                    }
+                    break;
+                }
+                if repair_filing
+                    && mode.contains("-queued-")
+                    && context.filing.is_some()
+                    && context.flow.ledger().facts().next().is_some()
+                    && context.flow.state().outstanding().is_empty()
+                {
+                    assert_eq!(context.flow.ledger().facts().count(), 1);
+                    assert!(
+                        member
+                            .filings
+                            .iter()
+                            .all(|file| !matches!(file, s::StateFrame::FilePair { .. }))
+                    );
+                    break;
+                }
+                if repair_filing
+                    && mode.contains("-unsent-")
+                    && context
+                        .flow
+                        .state()
+                        .outstanding()
+                        .first()
+                        .is_some_and(|work| {
+                            work.operation == s::StateOperation::FilePair && work.bytes_sent == 0
+                        })
+                {
+                    assert!(context.filing.is_some());
+                    assert!(
+                        member
+                            .filings
+                            .iter()
+                            .all(|file| !matches!(file, s::StateFrame::FilePair { .. }))
+                    );
+                    break;
+                }
                 if progress == BootPairsProgress::Complete {
                     assert!(!proposed, "fixture must retain the unstarted terminal");
+                    assert!(!repair_filing, "fixture must retain the actual filing");
                     break;
                 }
                 member.step(clock.now().unwrap(), "ready");
@@ -671,6 +871,29 @@ pub(in crate::flow::context::worker_startup) fn finish(
         .boot_pairs
         .as_ref()
         .map(|work| work.expired_test_evidence());
+    let filing_author = owner.run.context.test_boot_filing_author();
+    let filing_trace = owner.run.context.test_boot_filing_trace();
+    let filing_record = filing_author.as_ref().and_then(|_| {
+        owner.run.context.barrier.pending().map(|event| {
+            (
+                serde_json::to_vec(event).unwrap(),
+                owner.run.context.barrier.pending_author().unwrap().ticket,
+            )
+        })
+    });
+    let filing_pending =
+        filing_author.is_some() && !mode.contains("-unstarted-") && !mode.contains("-settled-");
+    let filing_flow = filing_author
+        .as_ref()
+        .map(|_| owner.run.context.flow.test_boot_filing_evidence());
+    let filing_channel =
+        filing_pending.then(|| owner.run.context.flow.test_boot_filing_channel().unwrap());
+    let filing_intake = filing_author.as_ref().map(|_| {
+        format!(
+            "{:?}",
+            (&owner.run.context.inbox, &owner.run.context.budget)
+        )
+    });
     let boot_pair_filings = boot_pair_evidence.as_ref().map(|_| {
         member
             .filings
@@ -1163,6 +1386,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
     }
     if boot_pair_evidence.is_some() {
         let context = &mut owner.run.context;
+        if context.filing.is_some() {
+            context.test_boot_filing_identity_guards();
+        }
         for (origin, enter, leave) in [
             (Arc::new(()), original_enter, leave),
             (
@@ -1320,7 +1546,8 @@ pub(in crate::flow::context::worker_startup) fn finish(
         // close_after_drain is itself a blocking operation under its bound.
         let trace_reader = (pending_open.is_some()
             || pending_read_record.is_some()
-            || template_record.is_some())
+            || template_record.is_some()
+            || filing_record.is_some())
         .then(|| {
             use std::io::BufRead;
             let input = reader.try_clone().unwrap();
@@ -1639,6 +1866,25 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         expected
                     );
                 }
+                if let Some(author) = filing_author.as_ref() {
+                    assert_eq!(
+                        exit.0.test_boot_pairs().unwrap().test_filing().as_ref(),
+                        Some(author)
+                    );
+                    let context = exit.0.test_filing_context().unwrap();
+                    assert_eq!(
+                        Some(context.flow.test_boot_filing_evidence()).as_ref(),
+                        filing_flow.as_ref()
+                    );
+                    assert_eq!(
+                        context.flow.test_boot_filing_channel().as_ref(),
+                        filing_channel.as_ref()
+                    );
+                    assert!(context.flow.test_boot_filing_retired());
+                    assert!(context.flow.test_boot_filing_progress_current());
+                    assert!(context.filing.is_none());
+                    member.assert_closed_without_request();
+                }
                 if template_target {
                     let account = exit
                         .0
@@ -1825,7 +2071,16 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         "healthy Unload requires classifier reap first"
                     );
                     member.assert_no_request();
-                    if !pending_read {
+                    if filing_pending {
+                        assert_eq!(
+                            owner.run.context.flow.test_boot_filing_channel().as_ref(),
+                            filing_channel.as_ref()
+                        );
+                        assert!(
+                            !owner.run.context.flow.test_boot_filing_retired(),
+                            "member stays live until the actual classifier reap"
+                        );
+                    } else if !pending_read {
                         assert!(
                             owner.run.context.flow.standing_state().is_some(),
                             "healthy member release follows classifier reap"
@@ -1879,7 +2134,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         assert!(owner.run.context.flow.standing_state().is_none());
         assert_eq!(
             owner.active.as_ref().unwrap().current.is_none(),
-            pending_read
+            pending_read || filing_pending
         );
         if mode == "expired-startup-admit-sent-complete" {
             let release = owner.active.as_ref().unwrap().release.as_ref().unwrap();
@@ -1894,7 +2149,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
             assert_eq!(release.received_reply().unwrap().exchange.ordinal, 2);
         }
         let mut expected_requests = requests.clone();
-        if !pending_read {
+        if !pending_read && !filing_pending {
             expected_requests.push("grants".into());
         }
         assert_eq!(member.requests, expected_requests);
@@ -1903,6 +2158,34 @@ pub(in crate::flow::context::worker_startup) fn finish(
             let account = boot_pair_account(owner).expect("retained original boot repair");
             assert_eq!(&account.test_evidence(), expected);
             assert!(owner.run.context.boot_pairs.is_none());
+            if let Some(author) = filing_author.as_ref() {
+                assert_eq!(account.test_filing().as_ref(), Some(author));
+                assert!(owner.run.context.filing.is_none());
+                assert_eq!(
+                    owner.run.context.flow.test_boot_filing_record(),
+                    filing_record
+                );
+                assert_eq!(
+                    Some(owner.run.context.flow.test_boot_filing_evidence()).as_ref(),
+                    filing_flow.as_ref()
+                );
+                assert_eq!(
+                    Some(format!(
+                        "{:?}",
+                        (&owner.run.context.inbox, &owner.run.context.budget)
+                    ))
+                    .as_ref(),
+                    filing_intake.as_ref()
+                );
+                if let Some(channel) = filing_channel.as_ref() {
+                    assert_eq!(
+                        owner.run.context.flow.test_boot_filing_channel().as_ref(),
+                        Some(channel)
+                    );
+                    assert!(owner.run.context.flow.test_boot_filing_retired());
+                    assert!(owner.run.context.flow.test_boot_filing_progress_current());
+                }
+            }
             let actual: Vec<_> = member
                 .filings
                 .iter()
@@ -2036,6 +2319,13 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 !leave.expired(clock.now().unwrap()),
                 "no new refusal accounting window"
             );
+        } else if filing_pending {
+            assert!(!boot_pair_account(owner).unwrap().account_complete());
+            assert!(
+                packet(&peer).is_none(),
+                "unfinished filing cannot grant Left"
+            );
+            assert!(owner.retired_dial.as_ref().unwrap()._send.is_none());
         } else if incomplete_open {
             let account = owner.active.as_ref().unwrap().open.as_ref().unwrap();
             assert!(
@@ -2107,7 +2397,21 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 .iter()
                 .filter(|row| row["kind"] == "tool.call.completed")
                 .collect();
-            assert_eq!(terminals.len(), files.len());
+            assert_eq!(
+                terminals.len(),
+                files.len().max(usize::from(filing_trace.is_some()))
+            );
+            if let Some((sequence, ended)) = filing_trace.as_ref() {
+                let sequence_text = sequence.0.to_string();
+                let terminal = terminals
+                    .iter()
+                    .find(|row| row["sequence"].as_str() == Some(sequence_text.as_str()))
+                    .unwrap();
+                assert_eq!(
+                    terminal["payload"],
+                    serde_json::to_value(crate::flow::mirror::pair_ended(ended)).unwrap()
+                );
+            }
             for (row, filing) in terminals.iter().zip(files) {
                 let s::PairRecord::Ended(ended) = &filing.pair else {
                     unreachable!()
@@ -2155,7 +2459,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         );
         assert_eq!(
             terminal["payload"]["grant_surface"],
-            if pending_read || mode.ends_with("-unreadable") {
+            if pending_read || filing_pending || mode.ends_with("-unreadable") {
                 "unreadable"
             } else if mode.ends_with("-varied") {
                 "varied"
@@ -2389,6 +2693,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         owner.retired.as_ref().unwrap().state.is_some()
             || owner.retired.as_ref().unwrap().has_stopped_plan_read()
             || owner.run.context.flow.unused_open().is_some()
+            || owner.run.context.flow.test_boot_filing_retired()
     );
     if let Some(expected) = boot_pair_evidence.as_ref() {
         assert_eq!(
@@ -2397,6 +2702,35 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 .test_evidence(),
             expected
         );
+    }
+    if let Some(author) = filing_author.as_ref() {
+        assert_eq!(
+            boot_pair_account(owner).unwrap().test_filing().as_ref(),
+            Some(author)
+        );
+        assert_eq!(
+            Some(owner.run.context.flow.test_boot_filing_evidence()).as_ref(),
+            filing_flow.as_ref()
+        );
+        assert_eq!(
+            owner.run.context.flow.test_boot_filing_channel().as_ref(),
+            filing_channel.as_ref()
+        );
+        assert!(owner.run.context.flow.test_boot_filing_retired());
+        assert!(owner.run.context.flow.test_boot_filing_progress_current());
+        assert_eq!(
+            Some(format!(
+                "{:?}",
+                (&owner.run.context.inbox, &owner.run.context.budget)
+            ))
+            .as_ref(),
+            filing_intake.as_ref()
+        );
+        assert!(
+            owner.unload_sequence().is_none(),
+            "cap grants no new Unload"
+        );
+        member.assert_closed_without_request();
     }
     assert!(owner.run.resources.decode_present_for_serving().is_none());
     assert!(owner.run.resources.residency_port().is_none());

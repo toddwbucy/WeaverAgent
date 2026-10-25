@@ -1070,6 +1070,51 @@ impl RecordBarrier {
         })
     }
 
+    pub(super) fn boot_filing_record_matches(
+        &self,
+        permit: &super::context::BootFilingRollbackPermit,
+        measurement: Option<&weaver_types::state_flow::StateStoreMeasurement>,
+        observation: Option<&FlowObservation>,
+    ) -> bool {
+        if !permit.matches_record(self) {
+            return false;
+        }
+        match (&self.pending, &self.pending_author) {
+            (None, None) => true,
+            (Some((event, purpose)), Some(author))
+                if event.envelope.turn.is_none() && author.event.turn.is_none() =>
+            {
+                matches_purpose(event, purpose)
+                    && match purpose {
+                        RecordPurpose::Content => {
+                            permit.source.is_none()
+                                && permit.matches_event(&author.event)
+                                && matches!(&event.payload, Some(Payload::PairEnded(ended))
+                            if ended.as_ref() == &super::mirror::pair_ended(&permit.expected))
+                        }
+                        RecordPurpose::State(actual) => measurement == Some(actual),
+                        RecordPurpose::Flow(actual) => observation == Some(actual),
+                        RecordPurpose::Terminal(source) => permit.source.as_ref() == Some(source),
+                        _ => false,
+                    }
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn retain_boot_filing_record(
+        &mut self,
+        permit: &super::context::BootFilingRollbackPermit,
+    ) -> Result<StoppedStartupRecord, &'static str> {
+        if !permit.matches_record(self) {
+            return Err("boot filing record belongs to another barrier");
+        }
+        Ok(StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        })
+    }
+
     pub(super) fn pending_classifier_result_matches(
         &self,
         reply: &weaver_types::state_flow::Ste100Reply,

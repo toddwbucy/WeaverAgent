@@ -230,6 +230,7 @@ impl Files {
                     } else if mode == "expired-startup-classifier-held"
                         || mode == "expired-startup-summary-read-held"
                         || mode == "expired-startup-repair-read-held"
+                        || mode == "expired-startup-repair-filing-pending-classifier-held"
                     {
                         "rollback-held-exit"
                     } else if mode.starts_with("input-") {
@@ -452,6 +453,17 @@ impl Member {
             "failed run must close the actual member without another request"
         );
     }
+    pub(super) fn send_held_filing_prefix(&mut self) -> Vec<u8> {
+        let raw = s::encode_state_line(
+            self.held_file.as_ref().unwrap(),
+            s::FrameDirection::Response,
+        )
+        .unwrap();
+        let prefix = raw[..raw.len() / 2].to_vec();
+        self.peer.write_all(&prefix).unwrap();
+        prefix
+    }
+
     pub(super) fn stop_responses(&self) {
         self.peer.shutdown(std::net::Shutdown::Write).unwrap();
     }
@@ -3416,6 +3428,14 @@ scenario!(
     "expired-startup-repair-proposed-complete"
 );
 scenario!(
+    worker_startup_composition_expired_repair_filing_unstarted_complete,
+    "expired-startup-repair-filing-unstarted-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_complete,
+    "expired-startup-repair-filing-pending-complete"
+);
+scenario!(
     worker_startup_composition_expired_repair_read_measurement_complete,
     "expired-startup-repair-read-measurement-complete"
 );
@@ -3434,4 +3454,54 @@ scenario!(
 scenario!(
     worker_startup_composition_expired_repair_read_release_wrong,
     "expired-startup-repair-read-release-wrong"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_queued_complete,
+    "expired-startup-repair-filing-queued-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_unsent_complete,
+    "expired-startup-repair-filing-unsent-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_settled_complete,
+    "expired-startup-repair-filing-settled-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_cap,
+    "expired-startup-repair-filing-pending-cap"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_classifier_held,
+    "expired-startup-repair-filing-pending-classifier-held"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_release_wrong,
+    "expired-startup-repair-filing-pending-release-wrong"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_author_complete,
+    "expired-startup-repair-filing-author-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_flow_complete,
+    "expired-startup-repair-filing-flow-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_measurement_complete,
+    "expired-startup-repair-filing-measurement-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_partial_complete,
+    "expired-startup-repair-filing-pending-partial-complete"
 );

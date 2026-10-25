@@ -36,6 +36,9 @@ pub(super) use expired_templates::StoppedTemplateCheck;
 #[path = "coordinator_expired_admission.rs"]
 mod expired_admission;
 pub(super) use expired_admission::StoppedClassifierAdmission;
+#[path = "coordinator_expired_boot_filing.rs"]
+mod expired_boot_filing;
+use expired_boot_filing::StoppedBootFiling;
 
 #[path = "output.rs"]
 mod output;
@@ -358,7 +361,7 @@ struct InputReuse {
     source_sequence: Option<u64>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum PendingRecord {
     Classifier,
     ClassifierRelease,
@@ -390,6 +393,7 @@ pub(super) enum CoordinatorPhase {
 
 /// One consumer reserves before authoring. Its source is bound only by the
 /// recorder's actual completion, before any classification can be reduced.
+#[derive(Debug)]
 struct ReceiptReservation {
     sequence: Option<u64>,
     expected: Vec<SourceBlockId>,
@@ -424,6 +428,7 @@ pub(super) struct FlowCoordinator<P> {
     state_retired: bool,
     unused_open: Option<UnusedOpen>,
     stopped_plan_read: Option<Box<StoppedPlanRead>>,
+    stopped_boot_filing: Option<Box<StoppedBootFiling>>,
     observations: Option<Observation>,
     observation_config: Option<(MeasuredInterval, u64)>,
     scheme: SchemeDeclaration,
@@ -493,6 +498,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             state_retired: false,
             unused_open: None,
             stopped_plan_read: None,
+            stopped_boot_filing: None,
             observations: Some(observations),
             observation_config: None,
             phase: CoordinatorPhase::Active,
@@ -1400,6 +1406,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             state_retired: false,
             unused_open: None,
             stopped_plan_read: None,
+            stopped_boot_filing: None,
             observations: None,
             observation_config: Some((observation_interval, lag_alarm_turns)),
             scheme,
@@ -1902,7 +1909,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         if self.phase != CoordinatorPhase::Releasing
             || self.classifier_retired
             || self.starting_classifier.is_some()
-            || !self.clean_obligations(cx)
+            || !self.releasing_obligations(cx)
             || self
                 .classifier
                 .as_ref()
@@ -1933,7 +1940,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         if self.phase != CoordinatorPhase::Releasing
             || !self.state_retired
             || !self.classifier_retired
-            || !self.clean_obligations(cx)
+            || !self.releasing_obligations(cx)
         {
             return Err(self.fail(
                 cx,
@@ -2925,6 +2932,16 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         io: &mut impl PumpIo,
     ) -> Result<(), FlowFailure> {
         self.observe_failures(cx)?;
+        if self
+            .stopped_boot_filing
+            .as_ref()
+            .is_some_and(|held| held.parked)
+        {
+            if !self.retained_boot_filing(cx) {
+                return Err(self.fail(cx, "copy_intake", "stopped boot filing inventory changed"));
+            }
+            return Ok(());
+        }
         if self.phase != CoordinatorPhase::Active {
             if cx.inbox.queued().next().is_some() || cx.budget.waiting_copy().is_some() {
                 return Err(self.fail(cx, "copy_intake", "content reached a non-active flow"));
@@ -3990,7 +4007,10 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
     }
 
     pub(super) fn failed_cleanup_state_stood(&self) -> bool {
-        self.state.is_some() || self.state_retired || self.stopped_plan_read.is_some()
+        self.state.is_some()
+            || self.state_retired
+            || self.stopped_plan_read.is_some()
+            || self.stopped_boot_filing.is_some()
     }
     pub(super) fn failed_cleanup_state_failed(&self) -> bool {
         self.state
@@ -3999,6 +4019,10 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
             || self.stopped_plan_read.as_ref().is_some_and(|owner| {
                 owner._state.failure().is_some() || owner.close_error.is_some()
             })
+            || self
+                .stopped_boot_filing
+                .as_ref()
+                .is_some_and(|owner| owner.failed())
     }
 
     /// Prove that every retained control/measurement slot belongs to this
@@ -4156,6 +4180,7 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
     }
 
     fn retire_failed_ports_owned(&mut self) -> FailedFlowResources {
+        self.retire_stopped_boot_filing_transport();
         let retired = FailedFlowResources {
             state: self.state.take().map(StateChannel::retire_failed),
             _stopped_plan_read: self

@@ -2458,6 +2458,7 @@ mod template_tests;
 
 #[path = "context_receipts.rs"]
 mod receipt_driver;
+pub(super) use receipt_driver::BootFilingRollbackPermit;
 
 #[path = "context_sort.rs"]
 mod sort_driver;

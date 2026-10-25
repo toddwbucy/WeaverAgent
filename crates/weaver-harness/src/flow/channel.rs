@@ -238,6 +238,49 @@ pub(super) struct StateChannel<S = UnixStream> {
 }
 
 impl<S> StateChannel<S> {
+    pub(super) fn failure(&self) -> Option<&ChannelFailure> {
+        self.failure.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_retained_evidence(&self) -> String {
+        format!(
+            "{:?}",
+            (
+                (
+                    &self.session,
+                    &self.run,
+                    self.next_request,
+                    self.next_operation,
+                    self.opened,
+                    &self.opened_scheme
+                ),
+                self.exchanges
+                    .iter()
+                    .map(|exchange| (
+                        &exchange.request,
+                        &exchange.bytes,
+                        exchange.bytes.as_ptr(),
+                        exchange.offset,
+                        exchange.queued_ns,
+                        exchange.sent_ns,
+                        exchange.commit,
+                    ))
+                    .collect::<Vec<_>>(),
+                (&self.received, self.received.as_ptr(), self.received_ns),
+                self.held
+                    .as_ref()
+                    .map(|held| (&held.answer, &held.measurement, &held.recorded)),
+                (
+                    self.capture,
+                    &self.failure,
+                    self.receive_interrupted,
+                    self.send_interrupted,
+                    self.terminal_interrupted
+                ),
+            )
+        )
+    }
     pub(super) fn outstanding(&self) -> Vec<ExchangeProgress> {
         self.exchanges.iter().map(Exchange::progress).collect()
     }
@@ -366,10 +409,6 @@ impl StateChannel {
     /// Capture cleanup can deliver both ordered answers in one kernel read.
     pub(super) fn ready_buffered(&self) -> bool {
         self.failure.is_none() && self.held.is_none() && self.received.contains(&b'\n')
-    }
-
-    pub(super) fn failure(&self) -> Option<&ChannelFailure> {
-        self.failure.as_ref()
     }
 
     /// A failed paged read has no valid cleanup exchange. Closing the seam
