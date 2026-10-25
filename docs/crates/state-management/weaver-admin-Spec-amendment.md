@@ -4,7 +4,7 @@
 
 **Landing PR:** #268
 
-**Version:** 0.17 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
+**Version:** 0.18 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -260,6 +260,18 @@ worker's typed refusal says so. No answer is Unanswered, never an inferred phase
 successful outcome. R20-6 governs missing-result retry, and R20-7 forbids completing
 publication after worker failure. [FLOW-5, PERSIST-4]
 
+For pre-Commit leave refusal, follow foundation PERSIST-LEAVE-REFUSAL. A local
+preparation refusal sends SavePointAborted and retains the exchange until the worker's
+matching SavePointCaptureRefused. That frame acknowledges a refused capture only after
+member cleanup and trace accounting. Cancel unconfirmed publication, remove unlisted
+root parts and, on a timely acknowledgement, disarm only the capture wait. Then await
+Left with forced true, no_state false and no save report, or SavePointNotTaken with the
+same missed leg for a leave that stayed graceful. Neither continuation is a final
+command result. Preserve the outer and shared leave windows and all normal conclusion
+duties. Capture expiry still gives the existing unanswered-command outcome, never a
+new wait for a late success. A worker Aborted after a latched failure instead follows
+failed-run recovery and proves no cleanup. [PERSIST-4, FLOW-5, admin Spec 3.0]
+
 These clauses amend admin Spec 3.0 and section 3's leave/save wait routines. The
 protocol fixture checks both graceful bound omissions, finite and forced windows, stale
 Beginning, reordered Image and early or duplicate CaptureComplete. It must fail when a
@@ -276,8 +288,9 @@ remove the guard or resume publication in recovery. No halt requests a new image
 
 Replace S3 save-point ActivityNotAtRest with accepted/pending to the next turn boundary.
 Explicit refusal and missing image/finished timeout retain the merged retry path under
-R20-6, including S6/S9. For a timeout, SavePointNotTaken is sent only after the
-harness's correlated abort receives aborted under PERSIST-CLEANUP. Admin never treats a
+R20-6, including S6/S9. For a timeout, the final refusal disposition is permitted
+only after the harness's correlated abort receives aborted under PERSIST-CLEANUP.
+Leave follows PERSIST-LEAVE-REFUSAL. Admin never treats a
 late image/finished result as success or initiates another ask on the member channel. A
 cleanup failure is FlowFailed and ends the run, not a retryable save refusal. Silence at
 admin's unchanged outer deadline remains Unanswered, never inferred cleanup success.

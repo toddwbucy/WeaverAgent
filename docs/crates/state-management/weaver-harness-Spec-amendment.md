@@ -4,7 +4,7 @@
 
 **Landing PR:** #260
 
-**Version:** 0.35 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.36 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -758,6 +758,15 @@ retains its bytes and does not disarm the window. A force join keeps the same ca
 and can shorten but never restart a deadline. The measured wait values remain
 qualification obligations. [PERSIST-4, FLOW-5, COST-4]
 
+For a refused pre-Commit leave capture, follow foundation PERSIST-LEAVE-REFUSAL.
+Only proven member cleanup and Recorded refusal permit the worker's matching
+SavePointCaptureRefused acknowledgement. It ends no Leave. Preserve the shared tail
+through release and the real final response, Left without a save report for a forced
+leave or
+SavePointNotTaken at S9 for a leave that stayed graceful. A refused capture never sends
+CaptureComplete. Admin loss does not renew a wait or create delivery evidence.
+[PERSIST-4, FLOW-5, admin Spec 3.0, harness Spec 6]
+
 The fixture drives a graceful S4/S5 longer than save_wait with either lifecycle bound
 absent and proves no save timer or Beginning exists yet. It then lowers the gate and
 checks the original tail plus the fresh capture window. Other cases fragment
@@ -775,9 +784,11 @@ are validated and their observations recorded, but discarded as save results. Th
 neither reach admin nor restart the cleanup bound. Partial writes retain their offsets.
 [PERSIST-4, CLASS-8, FLOW-4, COST-2, R20-6]
 
-Only aborted proves Ready and permits SavePointNotTaken, barrier release and the
-operator retry. Failed carry, dead peer, missing or invalid aborted, cleanup refusal or
-failed room-file deletion is component failure. R20-6 still forbids halting merely for
+Only aborted proves Ready and permits barrier release and the final refusal
+disposition. On demand that is SavePointNotTaken and operator retry. On leave it is
+PERSIST-LEAVE-REFUSAL, with the accepted lifecycle outcome still owed. Failed carry,
+dead peer, missing or invalid aborted, cleanup refusal or failed room-file deletion
+is component failure. R20-6 still forbids halting merely for
 the original image/finished timeout. The snapshot allowance is the loaded
 persistence.snapshot_wait from TYPES-CONFIG, initially declared as 120 seconds with no
 silent compiled fallback. The finished allowance stays two seconds. Cleanup neither
@@ -797,7 +808,7 @@ the category decides whether serving stops, while the reason records what broke.
 | --- | --- | --- |
 | AwaitImage or AwaitFinished | Original result bound expires | Keep barrier, enqueue correlated abort, Aborting |
 | Aborting | Expected late snapshot, finished or capture refusal for the timed-out leg | Validate and record observation, discard result, remain Aborting |
-| Aborting | Matching aborted | Record refusal, release barrier, return SavePointNotTaken, lifecycle owns retry |
+| Aborting | Matching aborted | Record refusal, release barrier, follow PERSIST-LEAVE-REFUSAL on leave or return SavePointNotTaken on demand |
 | Aborting | Partial carry or WouldBlock | Retain bytes and deadline, remain Aborting |
 | Aborting | Cleanup bound expires without aborted | Latch control_bound at barrier, no further ask or successful leave |
 | Aborting | Refused, malformed or wrongly correlated cleanup | Latch protocol_failed at state_reply, no further ask or successful leave |
