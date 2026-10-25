@@ -41,9 +41,15 @@ fn replacement_enter_retains_actual_bytes_descriptor_order_and_original_peer() {
     let (state, mut state_peer) = UnixStream::pair().unwrap();
     send(&peer, FIXTURE, &[sink.as_raw_fd(), state.as_raw_fd()]);
     drop((sink, state));
-    assert_eq!(owner.advance().unwrap(), ReceiveProgress::Held);
+    assert_eq!(
+        owner.advance(&mut FakePumpIo::new(1)).unwrap(),
+        ReceiveProgress::Held
+    );
     send(&peer, FIXTURE, &[]);
-    assert_eq!(owner.advance().unwrap(), ReceiveProgress::Pending);
+    assert_eq!(
+        owner.advance(&mut FakePumpIo::new(1)).unwrap(),
+        ReceiveProgress::Pending
+    );
     let first = received(owner);
     assert_eq!(first.wire(), FIXTURE);
     assert_eq!(first.envelope().exchange.ordinal, 7);
@@ -66,7 +72,10 @@ fn replacement_enter_retains_actual_bytes_descriptor_order_and_original_peer() {
     state_peer.read_exact(&mut bytes).unwrap();
     assert_eq!(&bytes, b"state");
     let mut second = EnterReceiver::from_peer(peer_owner).ok().unwrap();
-    assert_eq!(second.advance().unwrap(), ReceiveProgress::Held);
+    assert_eq!(
+        second.advance(&mut FakePumpIo::new(1)).unwrap(),
+        ReceiveProgress::Held
+    );
 }
 #[test]
 fn replacement_enter_adopts_one_recording_context_from_the_received_handles() {
@@ -75,13 +84,10 @@ fn replacement_enter_adopts_one_recording_context_from_the_received_handles() {
     let (state, mut state_peer) = UnixStream::pair().unwrap();
     send(&peer, FIXTURE, &[sink.as_raw_fd(), state.as_raw_fd()]);
     drop((sink, state));
-    owner.advance().unwrap();
+    owner.advance(&mut FakePumpIo::new(1)).unwrap();
     let source = received(owner);
     let mut clock = FakePumpIo::new(123);
-    let adopted = source
-        .adopt(5000, &mut clock)
-        .map_err(|f| f.detail)
-        .unwrap();
+    let adopted = source.adopt(&mut clock).map_err(|f| f.detail).unwrap();
     let (mut context, source) = adopted.into_parts();
     assert_eq!(context.origin_ns(), 123);
     assert_eq!(source.wire(), FIXTURE);
@@ -162,12 +168,12 @@ fn replacement_enter_adoption_refusals_retain_original_bytes_and_unconsumed_hand
             vec![sink.as_raw_fd(), state.as_raw_fd()]
         };
         send(&peer, &bytes, &handles);
-        owner.advance().unwrap();
+        owner.advance(&mut FakePumpIo::new(1)).unwrap();
         if case == "dead-peer" {
             drop(peer);
         }
         let refusal = received(owner)
-            .adopt(1000, &mut FakePumpIo::new(1))
+            .adopt(&mut FakePumpIo::new(1))
             .err()
             .unwrap();
         assert!(!refusal.detail.is_empty());
@@ -182,7 +188,7 @@ fn replacement_enter_malformed_and_truncated_packets_close_received_handles() {
         let (sink, mut sink_peer) = UnixStream::pair().unwrap();
         send(&peer, &bytes, &[sink.as_raw_fd()]);
         drop(sink);
-        assert!(owner.advance().is_err());
+        assert!(owner.advance(&mut FakePumpIo::new(1)).is_err());
         sink_peer.set_nonblocking(true).unwrap();
         assert_eq!(sink_peer.read(&mut [0]).unwrap(), 0);
         assert!(owner.into_received().is_err());
@@ -197,3 +203,201 @@ const _: fn() = || {
     let _ = <ReceivedEnter as NoClone<_>>::check;
     let _ = <AdoptedEnter as NoClone<_>>::check;
 };
+
+fn timed_packet(began: u64, deadline: u64) -> Vec<u8> {
+    let mut value: serde_json::Value = serde_json::from_slice(FIXTURE).unwrap();
+    value["payload"]["body"]["payload"]["binding"]["enter_window"] = serde_json::json!({
+        "began_ns": began.to_string(), "deadline_ns": deadline.to_string()
+    });
+    serde_json::to_vec(&value).unwrap()
+}
+
+#[test]
+fn enter_parse_and_constructor_delay_spend_the_original_window() {
+    struct Clock<'a>(&'a std::cell::Cell<u64>);
+    impl PumpIo for Clock<'_> {
+        fn now(&mut self) -> std::io::Result<u64> {
+            Ok(self.0.get())
+        }
+        fn wait(
+            &mut self,
+            _: &[super::super::super::clock::WaitInterest<'_>],
+            _: Option<u64>,
+        ) -> std::io::Result<super::super::super::clock::WaitOutcome> {
+            panic!("no work or wait before adoption")
+        }
+    }
+    for future in [false, true] {
+        let (mut owner, peer) = receiver();
+        let (sink, mut reader) = UnixStream::pair().unwrap();
+        let (state, mut member) = UnixStream::pair().unwrap();
+        let bytes = if future {
+            timed_packet(150, 300)
+        } else {
+            timed_packet(50, 200)
+        };
+        send(&peer, &bytes, &[sink.as_raw_fd(), state.as_raw_fd()]);
+        drop((sink, state));
+        let raw = std::cell::Cell::new(100);
+        owner
+            .advance_with_decoder(&mut Clock(&raw), |bytes| {
+                let decoded = EnterEnvelope::decode(bytes);
+                raw.set(200); // parse/dispatch consumed the original interval
+                decoded
+            })
+            .unwrap();
+        let source = received(owner);
+        assert_eq!(source.received_ns, 100, "receipt must precede JSON decode");
+        assert_eq!(
+            source.check_window(&mut Clock(&raw)),
+            Err(if future {
+                EnterTimeError::Future
+            } else {
+                EnterTimeError::Expired
+            })
+        );
+        let failure = source
+            .adopt(&mut Clock(&raw))
+            .err()
+            .expect("no new context");
+        assert_eq!(failure.source.wire(), bytes);
+        if future {
+            drop(failure);
+        }
+        reader.set_nonblocking(true).unwrap();
+        member.set_nonblocking(true).unwrap();
+        assert_eq!(
+            reader.read(&mut [0]).unwrap(),
+            0,
+            "no manufactured load/refusal trace"
+        );
+        assert_eq!(member.read(&mut [0]).unwrap(), 0, "no state Open");
+    }
+}
+
+#[test]
+fn entered_context_retains_original_anchor_without_readding_remaining_time() {
+    let (mut owner, peer) = receiver();
+    let (sink, _reader) = UnixStream::pair().unwrap();
+    let (state, mut member) = UnixStream::pair().unwrap();
+    send(
+        &peer,
+        &timed_packet(10, 200),
+        &[sink.as_raw_fd(), state.as_raw_fd()],
+    );
+    drop((sink, state));
+    owner.advance(&mut FakePumpIo::new(100)).unwrap();
+    let (mut context, source) = received(owner)
+        .adopt(&mut FakePumpIo::new(150))
+        .map_err(|e| e.detail)
+        .unwrap()
+        .into_parts();
+    let bound = context.complete_wait(PumpDeadline::Enter).unwrap();
+    context
+        .arm(PumpDeadline::Enter, bound, &mut FakePumpIo::new(150))
+        .unwrap();
+    assert_eq!(
+        (bound.began_ns(), bound.deadline_ns(), context.origin_ns()),
+        (10, 200, 150)
+    );
+    let weaver_types::state_flow::enter::EnterBinding::Serving {
+        start,
+        state_management,
+        ..
+    } = &source.envelope().enter().binding
+    else {
+        panic!()
+    };
+    assert!(
+        matches!(context.begin_open(start.clone(), state_management.reads.clone(), &mut FakePumpIo::new(200)), Err(crate::flow::context::RunFailure::Wait { key: PumpDeadline::Enter, bound: b }) if b == bound)
+    );
+    assert!(
+        context.failure().is_none(),
+        "ordinary expiry is not component failure"
+    );
+    member.set_nonblocking(true).unwrap();
+    assert_eq!(
+        member.read(&mut [0]).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
+fn enter_expiring_inside_context_constructor_closes_only_unadmitted_handles() {
+    struct Clock(u64);
+    impl PumpIo for Clock {
+        fn now(&mut self) -> std::io::Result<u64> {
+            self.0 += 50;
+            Ok(self.0)
+        }
+        fn wait(
+            &mut self,
+            _: &[super::super::super::clock::WaitInterest<'_>],
+            _: Option<u64>,
+        ) -> std::io::Result<super::super::super::clock::WaitOutcome> {
+            panic!("unadmitted")
+        }
+    }
+    let (mut owner, peer) = receiver();
+    let (sink, mut reader) = UnixStream::pair().unwrap();
+    let (state, mut member) = UnixStream::pair().unwrap();
+    let bytes = timed_packet(1, 200);
+    send(&peer, &bytes, &[sink.as_raw_fd(), state.as_raw_fd()]);
+    drop((sink, state));
+    owner.advance(&mut FakePumpIo::new(100)).unwrap();
+    // Admission sees 150; constructor captures 200, independently of trace origin.
+    let error = received(owner)
+        .adopt(&mut Clock(100))
+        .err()
+        .expect("no expired context");
+    assert!(error.detail.contains("expired before context construction"));
+    assert_eq!(error.source.wire(), bytes);
+    reader.set_nonblocking(true).unwrap();
+    member.set_nonblocking(true).unwrap();
+    assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+    assert_eq!(member.read(&mut [0]).unwrap(), 0);
+}
+
+#[test]
+fn enter_clock_reversal_cannot_hide_between_admission_and_trace_origin() {
+    struct Clock(u8);
+    impl PumpIo for Clock {
+        fn now(&mut self) -> std::io::Result<u64> {
+            self.0 += 1;
+            Ok(if self.0 == 1 { 150 } else { 125 })
+        }
+        fn wait(
+            &mut self,
+            _: &[super::super::super::clock::WaitInterest<'_>],
+            _: Option<u64>,
+        ) -> std::io::Result<super::super::super::clock::WaitOutcome> {
+            panic!("unadmitted")
+        }
+    }
+    for during_constructor in [true, false] {
+        let (mut owner, peer) = receiver();
+        let (sink, _reader) = UnixStream::pair().unwrap();
+        let (state, _member) = UnixStream::pair().unwrap();
+        send(
+            &peer,
+            &timed_packet(10, 200),
+            &[sink.as_raw_fd(), state.as_raw_fd()],
+        );
+        drop((sink, state));
+        owner.advance(&mut FakePumpIo::new(100)).unwrap();
+        let original = received(owner);
+        let error = if during_constructor {
+            original
+                .adopt(&mut Clock(0))
+                .err()
+                .expect("reversed constructor")
+        } else {
+            original.check_window(&mut FakePumpIo::new(150)).unwrap();
+            original
+                .adopt(&mut FakePumpIo::new(125))
+                .err()
+                .expect("reversed adoption")
+        };
+        assert!(error.detail.contains("reversed"), "{}", error.detail);
+    }
+}

@@ -694,6 +694,36 @@ fn circuit(mode: &str) {
     } else {
         envelope
     };
+    let mut envelope = envelope;
+    let now = if mode == "worker" || mode.starts_with("input-worker") {
+        crate::flow::clock::monotonic_ns().unwrap()
+    } else {
+        100
+    };
+    let weaver_types::state_flow::enter::EnterContent::Directive(
+        weaver_types::state_flow::enter::EnterDirective::Enter { payload },
+    ) = &mut envelope.payload;
+    let weaver_types::state_flow::enter::EnterBinding::Serving { enter_window, .. } =
+        &mut payload.binding
+    else {
+        panic!()
+    };
+    *enter_window = weaver_types::state_flow::EnterWindow {
+        began_ns: now.into(),
+        deadline_ns: (now
+            + if mode == "worker" || mode.starts_with("input-worker") {
+                5_000_000_000
+            } else {
+                1_000_000_000
+            })
+        .into(),
+    };
+    if mode == "window-future" {
+        enter_window.began_ns = 101.into();
+    } else if mode == "window-expired" {
+        enter_window.began_ns = 1.into();
+        enter_window.deadline_ns = 100.into();
+    }
     let bytes = envelope.encode().unwrap();
     let wire = if mode == "malformed" {
         b"{bad".to_vec()
@@ -717,24 +747,54 @@ fn circuit(mode: &str) {
         wire.len()
     );
     drop((sink, state));
-    let received = admission.advance();
+    let mut clock = FakePumpIo::new(100);
+    let received = if mode == "worker" || mode.starts_with("input-worker") {
+        admission.advance()
+    } else {
+        admission.advance_with_io(&mut clock)
+    };
+    if mode == "window-future" || mode == "window-expired" {
+        assert_eq!(received, FoundationAdmissionProgress::Stopped);
+        assert_eq!(admission.received.as_ref().unwrap().wire(), bytes);
+        let response = packet(&peer);
+        if mode == "window-future" {
+            let response = response.expect("before-load Malformed on actual valid exchange");
+            assert_eq!(response.exchange, envelope.exchange);
+            assert_eq!(response.position, weaver_types::Position::Close);
+            assert!(matches!(
+                response.payload,
+                weaver_types::Payload::Refusal(weaver_types::LifecycleRefusal::Malformed)
+            ));
+        } else {
+            assert!(response.is_none(), "expiry produces no substitute answer");
+        }
+        reader.set_nonblocking(true).unwrap();
+        member.set_nonblocking(true).unwrap();
+        assert_eq!(reader.read(&mut [0]).unwrap(), 0, "no load/refusal trace");
+        assert_eq!(
+            (&member).read(&mut [0]).unwrap(),
+            0,
+            "actual unadmitted descriptors closed, no state Open"
+        );
+        assert!(admission.adopt_with_io(&mut clock).is_err());
+        return;
+    }
     if mode == "malformed" {
         assert_eq!(received, FoundationAdmissionProgress::Stopped);
         let detail = admission.detail().unwrap().to_owned();
         assert_eq!(admission.advance(), FoundationAdmissionProgress::Stopped);
         assert_eq!(admission.detail(), Some(detail.as_str()));
-        assert!(admission.adopt(1_000_000_000).is_err());
+        assert!(admission.adopt().is_err());
         assert!(packet(&peer).is_none());
         return;
     }
     assert_eq!(received, FoundationAdmissionProgress::Received);
     assert_eq!(admission.received.as_ref().unwrap().wire(), bytes);
     assert_eq!(admission.advance(), FoundationAdmissionProgress::Received);
-    let mut clock = FakePumpIo::new(100);
     let adopted = if mode == "worker" || mode.starts_with("input-worker") {
-        admission.adopt(5_000_000_000)
+        admission.adopt()
     } else {
-        admission.adopt_with_io(1_000_000_000, &mut clock)
+        admission.adopt_with_io(&mut clock)
     };
     if mode == "missing-state" {
         let admission = adopted.err().expect("missing handle refused");
@@ -2516,4 +2576,13 @@ scenario!(
 scenario!(
     worker_external_composition_failed_exit_start_pending_expiry,
     "input-generation-external-halt-gate-exit-start-pending-start-expiry"
+);
+
+scenario!(
+    worker_startup_composition_original_window_future_refused,
+    "window-future"
+);
+scenario!(
+    worker_startup_composition_original_window_expiry_unadmitted,
+    "window-expired"
 );

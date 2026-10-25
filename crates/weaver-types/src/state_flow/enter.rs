@@ -78,6 +78,7 @@ pub struct EnterPayload {
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum EnterBinding {
     Serving {
+        enter_window: super::EnterWindow,
         gate_instruction: crate::GateInstruction,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shell: Option<crate::ShellGrant>,
@@ -135,6 +136,7 @@ pub enum CodecError {
     TooLarge,
     Malformed(serde_json::Error),
     WrongExchange,
+    InvalidEnterWindow,
     InvalidLoadedState,
 }
 impl EnterEnvelope {
@@ -155,6 +157,11 @@ impl EnterEnvelope {
         payload
     }
     fn check_exchange(&self) -> Result<(), CodecError> {
+        if let EnterBinding::Serving { enter_window, .. } = &self.enter().binding {
+            enter_window
+                .validate()
+                .map_err(|_| CodecError::InvalidEnterWindow)?;
+        }
         if self.exchange.opener != Opener::Admin || self.position != Position::Open {
             return Err(CodecError::WrongExchange);
         }

@@ -6,12 +6,16 @@ use weaver_types::state_flow::enter::EnterEnvelope;
 pub(in crate::flow) struct EnterReceiver {
     peer: LifecyclePeer,
     held: Option<LifecycleMessage<EnterEnvelope>>,
+    received_ns: Option<u64>,
 }
 pub(in crate::flow) struct ReceivedEnter {
     peer: LifecyclePeer,
     message: LifecycleMessage<EnterEnvelope>,
     wire: Vec<u8>,
     adopted_origin: Option<std::sync::Arc<()>>,
+    received_ns: u64,
+    observed_ns: std::cell::Cell<u64>,
+    closed_unadmitted: Option<(bool, bool)>,
 }
 
 /// Complete original Enter evidence after its actual handles have closed.
@@ -22,6 +26,9 @@ pub(in crate::flow) struct RetiredEnter {
     _had_sink: bool,
     _had_state: bool,
     _adopted_origin: Option<std::sync::Arc<()>>,
+    _received_ns: u64,
+    _observed_ns: u64,
+    _closed_unadmitted: Option<(bool, bool)>,
 }
 impl EnterReceiver {
     #[allow(clippy::result_large_err)]
@@ -34,16 +41,33 @@ impl EnterReceiver {
         {
             return Err(peer);
         }
-        Ok(Self { peer, held: None })
+        Ok(Self {
+            peer,
+            held: None,
+            received_ns: None,
+        })
     }
-    pub(in crate::flow) fn advance(&mut self) -> Result<ReceiveProgress, Failure> {
+    pub(in crate::flow) fn advance(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<ReceiveProgress, Failure> {
+        self.advance_with_decoder(io, EnterEnvelope::decode)
+    }
+    fn advance_with_decoder(
+        &mut self,
+        io: &mut impl PumpIo,
+        decode: impl FnOnce(&[u8]) -> Result<EnterEnvelope, weaver_types::state_flow::enter::CodecError>,
+    ) -> Result<ReceiveProgress, Failure> {
         if self.held.is_some() {
             // Keep completed input even when a later terminal observation fails.
             self.peer.check_terminal()?;
             return Ok(ReceiveProgress::Pending);
         }
         let message = self.peer.receive_message(|bytes| {
-            EnterEnvelope::decode(bytes).map_err(|error| {
+            // recvmsg has completed and every installed fd has an owner. Sample
+            // before parsing; decode/dispatch delay must spend the same window.
+            self.received_ns = Some(io.now().map_err(serde_json::Error::io)?);
+            decode(bytes).map_err(|error| {
                 serde_json::Error::io(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("replacement Enter: {error:?}"),
@@ -73,10 +97,50 @@ impl EnterReceiver {
             message,
             wire,
             adopted_origin: None,
+            received_ns: self
+                .received_ns
+                .expect("completed packet sampled before parse"),
+            observed_ns: std::cell::Cell::new(self.received_ns.expect("received clock")),
+            closed_unadmitted: None,
         })
     }
 }
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::flow) enum EnterTimeError {
+    Future,
+    Expired,
+    Clock(String),
+}
 impl ReceivedEnter {
+    pub(in crate::flow) fn check_window(&self, io: &mut impl PumpIo) -> Result<(), EnterTimeError> {
+        let weaver_types::state_flow::enter::EnterBinding::Serving { enter_window, .. } =
+            &self.envelope().enter().binding
+        else {
+            return Ok(());
+        };
+        if enter_window.began_ns.0 > self.received_ns {
+            return Err(EnterTimeError::Future);
+        }
+        let now = io.now().map_err(|e| EnterTimeError::Clock(e.to_string()))?;
+        if now < self.observed_ns.get() {
+            return Err(EnterTimeError::Clock(
+                "clock reversed after Enter receipt".into(),
+            ));
+        }
+        self.observed_ns.set(now);
+        if now >= enter_window.deadline_ns.0 {
+            return Err(EnterTimeError::Expired);
+        }
+        Ok(())
+    }
+    pub(in crate::flow) fn close_unadmitted(&mut self) {
+        if self.closed_unadmitted.is_none() {
+            self.closed_unadmitted =
+                Some((self.message.sink.is_some(), self.message.state.is_some()));
+            drop(self.message.sink.take());
+            drop(self.message.state.take());
+        }
+    }
     pub(in crate::flow) fn retire_failed(self) -> RetiredEnter {
         RetiredEnter {
             _peer: self.peer.retire_failed(),
@@ -85,6 +149,9 @@ impl ReceivedEnter {
             _had_sink: self.message.sink.is_some(),
             _had_state: self.message.state.is_some(),
             _adopted_origin: self.adopted_origin,
+            _received_ns: self.received_ns,
+            _observed_ns: self.observed_ns.get(),
+            _closed_unadmitted: self.closed_unadmitted,
         }
     }
     pub(in crate::flow) fn envelope(&self) -> &EnterEnvelope {
@@ -114,11 +181,19 @@ impl ReceivedEnter {
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn adopt(
         mut self,
-        remaining_enter_ns: u64,
         io: &mut impl PumpIo,
     ) -> Result<AdoptedEnter, AdoptionFailure> {
         use super::super::{channel::StateChannel, context::RecordingContext};
         use weaver_types::state_flow::enter::EnterBinding;
+        if let Err(error) = self.check_window(io) {
+            if error == EnterTimeError::Expired {
+                self.close_unadmitted();
+            }
+            return Err(AdoptionFailure {
+                source: self,
+                detail: format!("Enter window: {error:?}"),
+            });
+        }
         let result = (|| {
             self.peer
                 .check_terminal()
@@ -127,6 +202,7 @@ impl ReceivedEnter {
             let EnterBinding::Serving {
                 state_management,
                 start,
+                enter_window,
                 ..
             } = &payload.binding
             else {
@@ -160,13 +236,24 @@ impl ReceivedEnter {
                 payload.run.0.clone(),
                 payload.operator,
                 state_management.flow.clone(),
-                remaining_enter_ns,
+                super::super::clock::AbsoluteBound::from_absolute(
+                    enter_window.began_ns.0,
+                    enter_window.deadline_ns.0,
+                )
+                .map_err(|error| error.to_string())?,
                 io,
             )
             .map_err(|error| error.0)
         })();
         match result {
             Ok(context) => {
+                if context.origin_ns() < self.observed_ns.get() {
+                    return Err(AdoptionFailure {
+                        source: self,
+                        detail: "Enter clock reversed during context construction".into(),
+                    });
+                }
+                self.observed_ns.set(context.origin_ns());
                 self.adopted_origin = Some(std::sync::Arc::clone(context.enter_origin()));
                 Ok(AdoptedEnter {
                     source: self,

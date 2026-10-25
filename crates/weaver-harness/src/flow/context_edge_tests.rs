@@ -103,7 +103,7 @@ fn final_drain_leave_wait_preserves_queued_records_for_successful_retry() {
             "run".into(),
             42,
             config(),
-            1_000_000_000,
+            AbsoluteBound::after(100, 1_000_000_000).unwrap(),
             &mut clock,
         )
         .unwrap();

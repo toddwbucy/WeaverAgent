@@ -87,7 +87,7 @@ impl Fixture {
             "run".into(),
             42,
             declaration,
-            remaining_enter_ns,
+            AbsoluteBound::after(100, remaining_enter_ns).unwrap(),
             &mut clock,
         )
         .unwrap();

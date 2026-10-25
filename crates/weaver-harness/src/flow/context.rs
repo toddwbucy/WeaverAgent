@@ -392,7 +392,7 @@ impl RecordingContext {
         run: String,
         operator: u32,
         declaration: FlowConfig,
-        remaining_enter_ns: u64,
+        enter: AbsoluteBound,
         io: &mut impl PumpIo,
     ) -> Result<Self, ContextError> {
         declaration
@@ -403,6 +403,11 @@ impl RecordingContext {
         }
         // Capture before any state open or classifier bootstrap bytes can be sent.
         let origin = ClockOrigin::capture(io).map_err(|e| ContextError(e.to_string()))?;
+        if enter.expired(origin.raw()) {
+            return Err(ContextError(
+                "original Enter window expired before context construction".into(),
+            ));
+        }
         let author = ServingAuthor::new(session.clone(), run.clone(), operator, origin.raw())
             .map_err(|e| ContextError(format!("author identity: {e:?}")))?;
         let recorder = PreflightRecorder::receive(sink, RunRef(run.clone()), SessionRef(session))
@@ -418,11 +423,7 @@ impl RecordingContext {
         .map_err(|e| ContextError(e.detail))?;
         let mut deadlines = DeadlineRegistry::new();
         deadlines
-            .arm(
-                PumpDeadline::Enter,
-                AbsoluteBound::after(origin.raw(), remaining_enter_ns)
-                    .map_err(|e| ContextError(e.to_string()))?,
-            )
+            .arm(PumpDeadline::Enter, enter)
             .map_err(|e| ContextError(e.to_string()))?;
         let input = super::input::InputSlot::new(run.clone(), declaration.scheme.scheme_id.clone())
             .map_err(|error| ContextError(error.to_string()))?;

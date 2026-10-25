@@ -28,6 +28,7 @@
         },
         "binding": {
           "kind": "serving",
+          "enter_window": {"began_ns":"0","deadline_ns":"1000000000000000000"},
           "gate_instruction": {
             "access-rule": {
               "allowed-uids": [
