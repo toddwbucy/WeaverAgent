@@ -229,6 +229,12 @@ impl Files {
                         "expired-admit-held"
                     } else if mode == "expired-startup-admit-pending-complete" {
                         "expired-admit-unsent"
+                    } else if mode == "expired-startup-open-complete" {
+                        "expired-open-unanswered"
+                    } else if mode == "expired-startup-open-unsent-complete" {
+                        "expired-open-unsent"
+                    } else if mode == "expired-startup-open-release-wrong" {
+                        "expired-open-unanswered-wrong"
                     } else if mode.contains("-release-") && mode.starts_with("expired-startup-") {
                         match mode.rsplit('-').next().unwrap() {
                             "wrong" => "expired-release-wrong",
@@ -3149,6 +3155,22 @@ scenario!(
 scenario!(
     worker_startup_composition_expired_open,
     "expired-startup-open"
+);
+scenario!(
+    worker_startup_composition_expired_open_complete,
+    "expired-startup-open-complete"
+);
+scenario!(
+    worker_startup_composition_expired_open_unsent_complete,
+    "expired-startup-open-unsent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_open_record_complete,
+    "expired-startup-open-record-complete"
+);
+scenario!(
+    worker_startup_composition_expired_open_release_wrong,
+    "expired-startup-open-release-wrong"
 );
 scenario!(
     worker_startup_composition_expired_repair,

@@ -1081,6 +1081,18 @@ impl RecordBarrier {
         }
     }
 
+    /// Move the exact unadmitted boot record into rollback evidence.
+    pub(super) fn retain_boot_rollback_record(
+        &mut self,
+        permit: &super::context::boot_open_driver::BootReleasePermit,
+    ) -> StoppedStartupRecord {
+        assert!(permit.matches(self), "exact boot author custody");
+        StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        }
+    }
+
     /// Release this owner's unadmitted ticket on bounded incomplete teardown.
     pub(super) fn abandon_boot_author(&mut self, ticket: u64) -> bool {
         if self
@@ -1252,6 +1264,12 @@ pub(super) struct StoppedReadRecord {
 pub(super) struct StoppedStartupRecord {
     _pending: Option<(Event, RecordPurpose)>,
     _author: Option<AuthorTicket>,
+}
+#[cfg(test)]
+impl StoppedStartupRecord {
+    pub(super) fn test_record(&self) -> Option<(&Event, u64)> {
+        Some((&self._pending.as_ref()?.0, self._author.as_ref()?.ticket))
+    }
 }
 
 impl RecordBarrier {

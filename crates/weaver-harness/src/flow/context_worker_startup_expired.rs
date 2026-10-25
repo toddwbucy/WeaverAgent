@@ -67,6 +67,29 @@ impl ExpiredReleasePermit {
     }
 }
 
+/// Only the consuming rollback may detach its expired Open account before the
+/// new cleanup Grants read. This grants no decode, record or startup work.
+pub(in crate::flow::context) struct ExpiredBootAccountPermit {
+    origin: Arc<()>,
+    enter: AbsoluteBound,
+    leave: AbsoluteBound,
+}
+impl ExpiredBootAccountPermit {
+    pub(in crate::flow::context) fn allows(&self, context: &RecordingContext) -> bool {
+        Arc::ptr_eq(&self.origin, &context.read_origin)
+            && context.phase == RecordingPhase::Entered
+            && context.flow.phase() == crate::flow::coordinator::CoordinatorPhase::Active
+            && context.deadlines.get(PumpDeadline::Enter) == Some(self.enter)
+            && context.deadlines.get(PumpDeadline::Leave) == Some(self.leave)
+            && self.enter.expired(context.last_ns)
+            && !self.leave.expired(context.last_ns)
+            && context.boot_enter_cancelled
+            && context.flow.preinput_custody()
+            && context.failure.is_none()
+            && context.flow.halt().is_none()
+    }
+}
+
 /// Issued only by this consuming owner at its actual accepted Leave cap.
 /// It permits disposal of retained work, never an account retry or a record.
 pub(in crate::flow) struct ExpiredStartupDisposal {

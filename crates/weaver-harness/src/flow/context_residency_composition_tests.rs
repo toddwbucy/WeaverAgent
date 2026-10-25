@@ -101,7 +101,7 @@ fn residency_composition_child() {
                             )
                         },
                     };
-                    if mode == "expired-release-wrong" {
+                    if mode == "expired-release-wrong" || mode == "expired-open-unanswered-wrong" {
                         answer.exchange.ordinal += 1;
                     } else if mode == "expired-release-position" {
                         answer.position = Position::Open;
@@ -135,6 +135,7 @@ fn residency_composition_child() {
                     if matches!(
                         mode.as_str(),
                         "expired-release-wrong"
+                            | "expired-open-unanswered-wrong"
                             | "expired-release-position"
                             | "expired-release-arm"
                     ) {
@@ -231,9 +232,15 @@ fn residency_composition_child() {
                     || mode == "failed-startup"
                     || mode == "expired-admit-held"
                     || mode == "expired-admit-unsent"
+                    || mode.starts_with("expired-open-unanswered")
+                    || mode == "expired-open-unsent"
                     || mode.starts_with("expired-release-") => {}
             Ok(0) => return,
             Ok(n) => {
+                assert_ne!(
+                    mode, "expired-open-unsent",
+                    "expired Open sent its first byte"
+                );
                 assert!(admitted);
                 assert!(!opened);
                 let request: TokenDirective = serde_json::from_slice(&bytes[..n]).unwrap();
@@ -245,6 +252,13 @@ fn residency_composition_child() {
                 };
                 assert_eq!(messages.len(), 1);
                 opened = true;
+                if mode.starts_with("expired-open-unanswered") {
+                    let root = std::path::PathBuf::from(
+                        std::env::var_os("WEAVER_WORKER_INPUT_ROOT").unwrap(),
+                    );
+                    std::fs::write(root.join("open-unanswered"), b"received").unwrap();
+                    continue;
+                }
                 let rendered = "<system>Read caf\u{e9}.</system>";
                 let answer = TokenAnswer::Opened(weaver_types::Opened { session, prefix_tokens: 3, capacity: 16384,
                     generation_limit: 16, terminal_tokens: 1,

@@ -37,6 +37,7 @@ pub(super) struct ExpiredPreflightRollback {
     started: bool,
     returned: StoppedAuthor,
     sequence: Option<Sequence>,
+    answer_left: bool,
 }
 impl ExpiredPreflightRollback {
     /// The same terminal follows actual retired classifier/state custody. The
@@ -46,6 +47,7 @@ impl ExpiredPreflightRollback {
         dials: RollbackDials,
         surface: GrantSurface,
         spu: Option<ReleaseOutcome>,
+        account_complete: bool,
     ) -> Self {
         let context = &owner.run.context;
         assert_eq!(context.phase, RecordingPhase::Releasing);
@@ -67,6 +69,7 @@ impl ExpiredPreflightRollback {
             started: false,
             returned: StoppedAuthor::default(),
             sequence: None,
+            answer_left: account_complete,
         }
     }
     pub(super) fn complete(&self) -> bool {
@@ -117,6 +120,7 @@ impl FoundationExpiredRollback {
             started: false,
             returned: StoppedAuthor::default(),
             sequence: None,
+            answer_left: true,
         })
     }
 
@@ -271,6 +275,12 @@ impl ExpiredPreflightRollback {
                         Some(state) => return Err(format!("expired rollback child: {state:?}")),
                     }
                 }
+                if !self.answer_left {
+                    // HARNESS-OPEN forbids Left after incomplete accounting,
+                    // even when release and the actual terminal drain finish.
+                    self.finish(owner);
+                    return Ok(());
+                }
                 let dial = owner.dial.as_mut().unwrap();
                 dial.answer = Some(OrganEnvelope {
                     exchange: dial.message.as_ref().unwrap().envelope.exchange.clone(),
@@ -317,16 +327,7 @@ impl ExpiredPreflightRollback {
                             "expired preflight Left lacks its timely whole-send witness".into()
                         );
                     }
-                    self.retire_dials();
-                    let dial = owner.dial.take().unwrap();
-                    owner.retired_dial = Some(RetiredDial {
-                        _peer: dial.peer.retire_failed(),
-                        _read: dial.read,
-                        _message: dial.message,
-                        _answer: dial.answer,
-                        _send: dial.send,
-                    });
-                    self.stage = Stage::Complete;
+                    self.finish(owner);
                 } else {
                     io.wait(
                         &[WaitInterest {
@@ -341,5 +342,18 @@ impl ExpiredPreflightRollback {
             Stage::Complete => (),
         }
         Ok(())
+    }
+
+    fn finish(&mut self, owner: &mut FoundationExpiredRollback) {
+        self.retire_dials();
+        let dial = owner.dial.take().unwrap();
+        owner.retired_dial = Some(RetiredDial {
+            _peer: dial.peer.retire_failed(),
+            _read: dial.read,
+            _message: dial.message,
+            _answer: dial.answer,
+            _send: dial.send,
+        });
+        self.stage = Stage::Complete;
     }
 }

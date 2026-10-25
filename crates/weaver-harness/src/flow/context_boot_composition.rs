@@ -107,6 +107,14 @@ impl BootComposition<'_> {
         !self.decode.open_not_started() && !self.context.boot_open_account_settled()
     }
     #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_stage_open(&mut self, io: &mut impl PumpIo) {
+        assert_eq!(self.stage, BootStage::Open);
+        assert!(!self.started);
+        self.context.begin_boot_open(self.decode, io).unwrap();
+        self.started = true;
+        assert!(self.decode.open_not_started());
+    }
+    #[cfg(test)]
     pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
         self.context
     }

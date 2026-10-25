@@ -1,6 +1,7 @@
 //! Roll back settled startup accounts and release their actual organ resources.
 //! The actual Leave licenses a new Grants comparison, never another boot step.
 use super::*;
+use crate::flow::context::boot_open_driver::StoppedBootOpenAccount;
 use crate::flow::context::failed_enter_driver::ChildState;
 use crate::flow::context::failed_enter_driver::expired_residency::ExpiredResidencyRelease;
 use crate::flow::context::startup_composition::refusal::response::listener::{
@@ -12,6 +13,7 @@ use weaver_trace::GrantSurface;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
+    Open,
     Enter,
     Grants,
     Seal,
@@ -32,6 +34,7 @@ pub(super) struct ExpiredActiveRollback {
     surface: Option<GrantSurface>,
     pub(super) release: Option<ExpiredResidencyRelease>,
     pub(super) returned_admit: Option<ReceivedOrgan>,
+    pub(super) open: Option<StoppedBootOpenAccount>,
 }
 
 impl ExpiredActiveRollback {
@@ -48,9 +51,30 @@ impl ExpiredActiveRollback {
     ) -> Result<(), String> {
         let context = &mut owner.run.context;
         let leave = owner.leave.unwrap();
+        if self.stage == Stage::Open {
+            let permit = ExpiredBootAccountPermit {
+                origin: Arc::clone(&context.read_origin),
+                enter: owner.handoff.identity.enter,
+                leave,
+            };
+            self.open = Some(
+                context
+                    .detach_expired_boot_open(
+                        &permit,
+                        owner
+                            .run
+                            .resources
+                            .decode_mut()
+                            .expect("original boot decode"),
+                    )
+                    .map_err(|error| format!("expired Open accounting: {error:?}"))?,
+            );
+            self.stage = Stage::Enter;
+            return Ok(());
+        }
         if self.stage == Stage::Enter {
-            // This stage owns a completed startup, including both the Open
-            // measurement and initial Grants. No old request borrows Leave.
+            // The Open account has completed or is retained incomplete; no old
+            // request borrows Leave for the new cleanup Grants comparison.
             if context.deadlines.get(PumpDeadline::StateControl).is_some()
                 || context.inspection.is_some()
                 || context.read.is_some()
@@ -201,7 +225,7 @@ impl ExpiredActiveRollback {
                         self.stage = Stage::Terminal;
                     }
                 }
-                Stage::Enter | Stage::Terminal => unreachable!(),
+                Stage::Open | Stage::Enter | Stage::Terminal => unreachable!(),
             }
             Ok(())
         })();
@@ -229,6 +253,7 @@ impl ExpiredActiveRollback {
                 self.release
                     .as_ref()
                     .and_then(ExpiredResidencyRelease::outcome),
+                self.open.as_ref().is_none_or(|open| !open.incomplete()),
             ));
         }
         Ok(())
@@ -238,6 +263,17 @@ impl ExpiredActiveRollback {
 impl FoundationExpiredRollback {
     fn active_rollback(&mut self) -> Option<ExpiredActiveRollback> {
         let context = &self.run.context;
+        let permit = ExpiredBootAccountPermit {
+            origin: Arc::clone(&context.read_origin),
+            enter: self.handoff.identity.enter,
+            leave: self.leave?,
+        };
+        let detach_open = context.boot_open_blocks_external()
+            && self
+                .run
+                .resources
+                .decode_present_for_serving()
+                .is_some_and(|decode| context.can_detach_expired_boot_open(&permit, decode));
         if self.before_load
             || context.phase != RecordingPhase::Entered
             || context.flow.phase() != CoordinatorPhase::Active
@@ -252,15 +288,15 @@ impl FoundationExpiredRollback {
             || matches!(self.handoff.held.as_ref(), HeldStartup::Initial(_))
             || self.handoff.held.initial_grants().is_none()
             || context.deadlines.get(PumpDeadline::StateControl).is_some()
-            || context.boot_open_blocks_external()
+            || (context.boot_open_blocks_external() && !detach_open)
             || context.place_owed()
             || context.plan_summary.is_some()
             || context.repair.is_some()
             || context.boot_pairs.is_some()
             || context.read.is_some()
             || context.inspection.is_some()
-            || context.barrier.pending().is_some()
-            || context.barrier.pending_author().is_some()
+            || ((context.barrier.pending().is_some() || context.barrier.pending_author().is_some())
+                && !detach_open)
             || context.flow.pending_control().is_some()
             || context.flow.operation_completion().is_some()
             || !context.flow.state().outstanding().is_empty()
@@ -268,7 +304,11 @@ impl FoundationExpiredRollback {
             return None;
         }
         Some(ExpiredActiveRollback {
-            stage: Stage::Enter,
+            stage: if detach_open {
+                Stage::Open
+            } else {
+                Stage::Enter
+            },
             dials: Some(RollbackDials::new(self.handoff.listener.take()?)),
             retired_dials: None,
             inspecting: false,
@@ -276,6 +316,7 @@ impl FoundationExpiredRollback {
             surface: None,
             release: None,
             returned_admit: None,
+            open: None,
         })
     }
 

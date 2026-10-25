@@ -163,6 +163,12 @@ impl FoundationExpiredRollback {
 }
 
 impl FoundationExpiredRollbackExit {
+    #[cfg(test)]
+    pub(super) fn test_open(
+        &self,
+    ) -> Option<&crate::flow::context::boot_open_driver::StoppedBootOpenAccount> {
+        self.held.active.as_ref()?.open.as_ref()
+    }
     pub fn progress(&self) -> FoundationRollbackExitProgress {
         self.progress
     }

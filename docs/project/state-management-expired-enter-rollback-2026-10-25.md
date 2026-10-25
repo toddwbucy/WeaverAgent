@@ -190,6 +190,75 @@ the approved evidence root at
 Its manifest identifies every deposited file. This supersedes no earlier
 deposit and publishes no PR.
 
+## Open account continuation
+
+The consuming expired-startup owner now disposes its original Open account before
+the cleanup Grants read. A private permit binds the context, original expired
+Enter, exact accepted live Leave and original decode port. It moves the request,
+received raw answer, account bound and any pending placement event and ticket into
+the rollback owner. This detached account has no continuation or journal grant.
+Its evidence survives a later failed-exit handoff.
+
+Before the first Open byte, cancellation uses the existing unsent withdrawal.
+The same helper serves the earlier stopped-account path. Withdrawal touches no
+wire and creates no missing-answer obligation. A sent Open whose account has
+not completed by the original Enter bound is retained incomplete. Leave supplies
+no new time to send, receive or record that boot account. The cleanup can still
+compare actual Grants, seal, reap the classifier, release the SPU and member,
+and record and drain the original load's Unload. An incomplete Open prevents
+Left even after this cleanup finishes; the actual rollback peer is closed with
+its directive retained. An unsent withdrawal can finish the ordinary Left path.
+
+Four additional delegated circuits cover unanswered Open, unsent Open, pending
+placement recording under actual writer pressure, and failed Release after Open
+disposal. The pressure case compares the retained event and ticket and the raw
+Opened response with their originals. The unsent child rejects every Open byte.
+The old cap circuit now accepts the incomplete account in its new owner as well
+as in the context before detachment.
+
+The first expanded run found that old cap assertion and a fixture deadlock: a
+single test thread could not drain the writer while close_after_drain waited.
+Only its disposable systemd scope was terminated. The corrected pressure case
+starts its trace-reading thread after all children have been forked and joins it
+after the real terminal drain. Earlier failed logs remain in `open-checks/`.
+
+The first full harness run passed 1985 library tests and failed the existing
+`rollback_halt_composition_expired_leave` test: its immediate EOF assertion saw
+EAGAIN. The isolated rerun passed. A concurrent test fork can retain a socket
+until exec, so the fixture now allows a bounded two-second wait for EOF while
+rejecting any answer immediately. This changes no runtime deadline or release
+behavior. A compiled control that leaks the retired descriptor still fails this
+assertion. `open-final-checks/harness-eight.log`, the isolated rerun and
+`controls-open-eof/` retain the failure, correction and sensitivity evidence.
+
+`open-restored-checks/results.json` records all eight final gates passing after
+restoration: locks before and after, formatting, strict harness clippy, the full
+harness suite, the library build, all startup circuits and diff check. The library
+passes 1986 tests with 475 ignored; other targets add 45 tests and 24 doctests,
+for 2055 ordinary passes. The separate delegated run passes 118 startup cases,
+including 40 expired-startup cases. Other ignored families and the eight
+privileged admin-startup cases are not qualified by this run.
+
+`controls-open-final/results.json` records eleven compiled controls, each detected
+after its exact positive baseline passed. They cover incomplete-account Left,
+account disposal, pending event/ticket and raw answer retention, original account
+bound, context/Enter/Leave/decode identity, custody through failed exit and the
+forbidden first Open byte after cancellation. `controls-open-eof/results.json`
+adds the descriptor-leak control. Restored source hashes are verified before the
+final gates. The ten-control first pass remains separate in `controls-open/`.
+
+Manual review covered both callers of the shared unsent withdrawal, the private
+detach permit and its consuming startup caller, pending author custody, the
+failed-exit owner and the terminal's Left election. No new wire field, event,
+runtime limit or production selection is introduced. The required review skills
+remain unavailable; these results are author evidence, not Planner or production
+qualification. A fresh review/thread/comment audit of drafts #332 through #343
+found no new findings and is retained in `open-checks/review-audit.json`.
+
+This checkpoint's source archive and logs are preserved at the approved evidence
+root under `state-expired-open-local-20261025`; its manifest identifies every
+file. Earlier deposits remain separate. This is still unpublished work.
+
 ## Completion boundary
 
 This branch remains local work in progress, with no published PR and no serving
@@ -198,8 +267,8 @@ positions do not establish cleanup of all pending accounts or gate ownership.
 Those unsupported positions remain Accepted until the original Leave cap; this
 owner must not be wired into a dispatcher as completed cleanup.
 
-The same slice still owes retained Open/read/repair/summary accounting and
-other unfinished startup ownership, gate Lower and tool containment,
+The same slice still owes unfinished template, boot-read, repair and summary
+accounts and other startup ownership, gate Lower and tool containment,
 before-Load and gate-owned stopped cleanup, and the worker/dev_loop adapter. Successful
 Ready and pre-adoption expiry need their own lifecycle continuations. The full
 #146 scope additionally includes healthy Leave/save, capture cleanup, process

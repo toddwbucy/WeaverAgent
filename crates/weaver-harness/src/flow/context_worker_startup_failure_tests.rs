@@ -95,6 +95,7 @@ pub(in crate::flow::context::worker_startup) fn reached(
         ("failed-startup-open", EnterState::Boot(owner)) => {
             owner.stage() == BootStage::Open && owner.failure_test_open_sent()
         }
+        ("failed-startup-open-unsent", EnterState::Boot(owner)) => owner.stage() == BootStage::Open,
         ("failed-startup-repair", EnterState::Boot(owner)) => owner.stage() == BootStage::Repair,
         ("failed-startup-summary", EnterState::Boot(owner)) => owner.stage() == BootStage::Install,
         ("failed-startup-installed", EnterState::Gate(owner)) => {
@@ -513,7 +514,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
         assert!(bytes.is_empty(), "no fabricated pre-load bracket");
     }
 }
-fn fill_trace(context: &mut RecordingContext, clock: &mut FakePumpIo) {
+pub(in crate::flow::context::worker_startup) fn fill_trace(
+    context: &mut RecordingContext,
+    clock: &mut FakePumpIo,
+) {
     use crate::flow::recording::{RecordProgress, RecordPurpose};
     let payload =
         serde_json::value::to_raw_value(&serde_json::json!({"fixture":"x".repeat(32_768)}))

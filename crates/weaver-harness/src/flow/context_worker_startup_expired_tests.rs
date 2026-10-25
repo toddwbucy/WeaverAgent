@@ -104,6 +104,7 @@ pub(in crate::flow::context::worker_startup) fn enter(
     let suffix = suffix.strip_suffix("-cap").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-trace").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-complete").unwrap_or(suffix);
+    let suffix = suffix.strip_suffix("-record").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-pending").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-varied").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-unreadable").unwrap_or(suffix);
@@ -146,6 +147,34 @@ pub(in crate::flow::context::worker_startup) fn enter(
             panic!("actual Admit owner");
         };
         owner.failure_test_stage_admit();
+    }
+    if mode == "expired-startup-open-unsent-complete" {
+        let EnterState::Boot(owner) = guard.0.as_mut().unwrap().state.as_mut().unwrap() else {
+            panic!("actual Open owner");
+        };
+        owner.failure_test_stage_open(clock);
+    }
+    if mode == "expired-startup-open-record-complete" {
+        super::super::failed::tests::fill_trace(context(guard.0.as_mut().unwrap()), clock);
+        while !context(guard.0.as_mut().unwrap()).boot_owns_pending_author() {
+            assert!(
+                Instant::now() < limit,
+                "Open placement did not reach writer pressure"
+            );
+            // SAFETY: all original child owners remain in the fixture guard.
+            assert_eq!(
+                unsafe {
+                    guard
+                        .0
+                        .as_mut()
+                        .unwrap()
+                        .advance_with_io(&mut CircuitIo(clock))
+                },
+                FoundationEnterProgress::Pending
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(context(guard.0.as_mut().unwrap()).boot_open_raw().is_some());
     }
     let enter = context(guard.0.as_mut().unwrap())
         .deadlines
@@ -251,6 +280,14 @@ pub(in crate::flow::context::worker_startup) fn finish(
             .is_none()
     );
     let requests = member.requests.clone();
+    let open_request = owner.run.context.boot_open_request().cloned();
+    let open_raw = owner.run.context.boot_open_raw().map(<[u8]>::to_vec);
+    let pending_open = owner.run.context.boot_owns_pending_author().then(|| {
+        (
+            serde_json::to_vec(owner.run.context.barrier.pending().unwrap()).unwrap(),
+            owner.run.context.barrier.pending_author().unwrap().ticket,
+        )
+    });
     if mode.ends_with("-wait") {
         let path = path.to_owned();
         // Startup has already forked its children. This thread owns only the
@@ -436,6 +473,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         directive
     );
     let leave = owner.leave.unwrap();
+    let original_enter = owner.handoff.identity.enter;
     assert_eq!(leave.began_ns(), clock.now().unwrap());
     assert_eq!(
         leave.deadline_ns(),
@@ -487,6 +525,47 @@ pub(in crate::flow::context::worker_startup) fn finish(
         );
         std::fs::write(path.parent().unwrap().join("allow-admit-reply"), b"allowed").unwrap();
     }
+    if mode.starts_with("expired-startup-open-") {
+        let enter = owner.handoff.identity.enter;
+        let context = &owner.run.context;
+        let decode = owner.run.resources.decode_present_for_serving().unwrap();
+        for (origin, enter, leave) in [
+            (Arc::new(()), enter, leave),
+            (
+                Arc::clone(&context.read_origin),
+                AbsoluteBound::from_absolute(enter.began_ns() + 1, enter.deadline_ns()).unwrap(),
+                leave,
+            ),
+            (
+                Arc::clone(&context.read_origin),
+                enter,
+                AbsoluteBound::from_absolute(leave.began_ns() + 1, leave.deadline_ns()).unwrap(),
+            ),
+        ] {
+            let permit = ExpiredBootAccountPermit {
+                origin,
+                enter,
+                leave,
+            };
+            assert!(
+                !context.can_detach_expired_boot_open(&permit, decode),
+                "foreign rollback cannot detach the boot account"
+            );
+        }
+        let permit = ExpiredBootAccountPermit {
+            origin: Arc::clone(&context.read_origin),
+            enter,
+            leave,
+        };
+        assert!(context.can_detach_expired_boot_open(&permit, decode));
+        let (foreign, _peer) = crate::channel::DecodeChannel::pair().unwrap();
+        let foreign = DecodePort::from_channel(foreign).unwrap();
+        assert!(
+            !context.can_detach_expired_boot_open(&permit, &foreign),
+            "retain the exact decode port"
+        );
+        assert!(context.failure.is_none() && context.flow.halt().is_none());
+    }
     if mode.ends_with("-complete")
         || mode.contains("-release-")
         || mode.ends_with("-classifier-varied")
@@ -515,6 +594,29 @@ pub(in crate::flow::context::worker_startup) fn finish(
         let limit = Instant::now() + Duration::from_secs(4);
         let mut release_child = !mode.ends_with("-classifier-held");
         let mut release_spu = !mode.ends_with("-release-held");
+        let unsent_open = mode == "expired-startup-open-unsent-complete";
+        let incomplete_open = mode.starts_with("expired-startup-open-") && !unsent_open;
+        // Every child is already forked. Drain the real writer concurrently:
+        // close_after_drain is itself a blocking operation under its bound.
+        let trace_reader = pending_open.is_some().then(|| {
+            use std::io::BufRead;
+            let input = reader.try_clone().unwrap();
+            input
+                .set_read_timeout(Some(Duration::from_secs(8)))
+                .unwrap();
+            std::thread::spawn(move || {
+                let mut rows = vec![];
+                for line in std::io::BufReader::new(input).lines() {
+                    let row: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+                    let terminal = row["kind"] == "unload";
+                    rows.push(row);
+                    if terminal {
+                        return rows;
+                    }
+                }
+                panic!("pressure fixture reached EOF before Unload");
+            })
+        });
         let invalid_release = [
             "-release-wrong",
             "-release-arm",
@@ -595,6 +697,15 @@ pub(in crate::flow::context::worker_startup) fn finish(
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 assert!(!exit.0.abandoned());
+                if incomplete_open {
+                    let account = exit
+                        .0
+                        .test_open()
+                        .expect("failed exit retains Open account");
+                    assert!(account.incomplete());
+                    assert_eq!(account.request(), open_request.as_ref().unwrap());
+                    assert_eq!(account.test_bound(), original_enter.deadline_ns());
+                }
                 assert_eq!(exit.0.channel_fault(), Some(crate::ChannelFault::Closed));
                 assert!(matches!(
                     exit.0.test_spu_child(),
@@ -833,27 +944,71 @@ pub(in crate::flow::context::worker_startup) fn finish(
         expected_requests.push("grants".into());
         assert_eq!(member.requests, expected_requests);
         member.assert_closed_without_request();
-        let answer = packet(&peer).expect("actual Left after the terminal drain");
-        assert_eq!(answer.exchange, directive.exchange);
-        assert!(matches!(
-            answer.payload,
-            Payload::Answer(LifecycleAnswer::Left {
-                save_point: None,
-                forced: true,
-                no_state: false
-            })
-        ));
+        if incomplete_open {
+            let account = owner.active.as_ref().unwrap().open.as_ref().unwrap();
+            assert!(
+                account.incomplete(),
+                "unanswered Open has no successful account"
+            );
+            assert_eq!(account.request(), open_request.as_ref().unwrap());
+            assert_eq!(
+                account.test_bound(),
+                owner.handoff.identity.enter.deadline_ns()
+            );
+            if let Some((event, ticket)) = pending_open.as_ref() {
+                let (retained, retained_ticket) = account
+                    .test_record()
+                    .expect("retain exact pending placement");
+                assert_eq!(&serde_json::to_vec(retained).unwrap(), event);
+                assert_eq!(&retained_ticket, ticket);
+                assert_eq!(account.test_raw(), open_raw.as_deref());
+            } else {
+                assert!(path.parent().unwrap().join("open-unanswered").exists());
+            }
+            assert!(packet(&peer).is_none(), "incomplete Open cannot grant Left");
+            assert!(owner.retired_dial.as_ref().unwrap()._send.is_none());
+            assert!(
+                !leave.expired(clock.now().unwrap()),
+                "cleanup did not need the Leave cap"
+            );
+        } else {
+            if unsent_open {
+                let account = owner.active.as_ref().unwrap().open.as_ref().unwrap();
+                assert!(
+                    !account.incomplete(),
+                    "unsent cancellation needs no Open answer"
+                );
+                assert_eq!(account.request(), open_request.as_ref().unwrap());
+                assert_eq!(account.test_bound(), original_enter.deadline_ns());
+                assert!(account.test_raw().is_none());
+                assert!(account.test_record().is_none());
+            }
+            let answer = packet(&peer).expect("actual Left after the terminal drain");
+            assert_eq!(answer.exchange, directive.exchange);
+            assert!(matches!(
+                answer.payload,
+                Payload::Answer(LifecycleAnswer::Left {
+                    save_point: None,
+                    forced: true,
+                    no_state: false
+                })
+            ));
+        }
         let sequence = owner
             .unload_sequence()
             .expect("retained real Unload sequence");
-        reader.set_nonblocking(true).unwrap();
-        let rows = super::super::tests::trace_through(
-            reader,
-            vec![],
-            weaver_trace::Sequence(sequence),
-            limit,
-        )
-        .unwrap();
+        let rows = if let Some(trace_reader) = trace_reader {
+            trace_reader.join().unwrap()
+        } else {
+            reader.set_nonblocking(true).unwrap();
+            super::super::tests::trace_through(
+                reader,
+                vec![],
+                weaver_trace::Sequence(sequence),
+                limit,
+            )
+            .unwrap()
+        };
         let terminal = rows.last().unwrap();
         assert_eq!(terminal["kind"], "unload");
         assert_eq!(
@@ -885,10 +1040,11 @@ pub(in crate::flow::context::worker_startup) fn finish(
         } else {
             assert!(terminal["payload"]["release"].get("spu").is_none());
         }
-        assert!(
-            rows.iter()
-                .all(|row| !matches!(row["kind"].as_str(), Some("fault" | "refusal")))
-        );
+        assert!(rows.iter().all(|row| row["kind"] != "fault"
+            && (row["kind"] != "refusal" || row["payload"].get("fixture").is_some())));
+        if incomplete_open || unsent_open {
+            assert!(rows.iter().all(|row| row["kind"] != "state.placement"));
+        }
         assert!(!path.exists());
         assert_eq!(
             owner.advance_with_io(clock),
@@ -1089,7 +1245,14 @@ pub(in crate::flow::context::worker_startup) fn finish(
     );
     assert!(owner.run.context.boot_open_account_settled());
     if mode.ends_with("-open") {
-        assert!(owner.run.context.boot_open_incomplete().is_some());
+        assert!(
+            owner.run.context.boot_open_incomplete().is_some()
+                || owner
+                    .active
+                    .as_ref()
+                    .and_then(|active| active.open.as_ref())
+                    .is_some_and(|open| open.incomplete())
+        );
     }
     if let Some(gate) = &owner.handoff.gate {
         assert!(gate.port.is_none());
