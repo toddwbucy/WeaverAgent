@@ -537,7 +537,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                     session.detail().as_deref(),
                     Some("repair election: UncertifiedFamily")
                 );
-                let peer = management(socket, LifecycleDirective::Observe);
+                let peer = super::election_wait_tests::wake_session(
+                    session,
+                    socket,
+                    LifecycleDirective::Observe,
+                );
                 let end = Instant::now() + Duration::from_secs(3);
                 let raw = loop {
                     session.advance();
@@ -561,7 +565,8 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                         }
                     )
                 ));
-                let stop = management(
+                let stop = super::election_wait_tests::wake_session(
+                    session,
                     socket,
                     LifecycleDirective::Stop {
                         cause: weaver_types::Cause { uid: 73 },

@@ -2247,6 +2247,31 @@ scenario!(
 );
 
 scenario!(
+    worker_generation_composition_election_wait,
+    "input-generation-election-wait"
+);
+scenario!(
+    worker_generation_composition_election_wait_bound,
+    "input-generation-election-wait-bound"
+);
+scenario!(
+    worker_generation_composition_election_wait_held,
+    "input-generation-election-wait-held"
+);
+scenario!(
+    worker_generation_composition_election_wait_filing,
+    "input-generation-election-wait-filing"
+);
+scenario!(
+    worker_generation_composition_election_wait_first_failure,
+    "input-generation-election-wait-first-failure"
+);
+scenario!(
+    worker_generation_composition_election_wait_gate_failure,
+    "input-generation-election-wait-gate-failure"
+);
+
+scenario!(
     worker_stop_composition_inherited_deadline,
     "input-stop-inherited-deadline"
 );
