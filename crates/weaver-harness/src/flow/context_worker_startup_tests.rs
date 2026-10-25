@@ -203,10 +203,13 @@ impl Files {
                 classify: Some(self.child(
                     "checker",
                     "WEAVER_STARTUP_COMPOSITION_CHILD",
-                    if mode.starts_with("input-") {
+                    if mode == "expired-startup-classifier-held" {
+                        "rollback-held-exit"
+                    } else if mode.starts_with("input-") {
                         mode
                     } else if mode == "classifier-refusal"
                         || mode == "failed-startup-refusal"
+                        || mode == "expired-startup-refusal"
                         || mode.starts_with("rollback-")
                     {
                         "refuse"
@@ -354,7 +357,7 @@ impl Drop for RunGuard {
         }
     }
 }
-struct EnterGuard<'a>(Option<FoundationEnter<'a>>);
+pub(super) struct EnterGuard<'a>(pub(super) Option<FoundationEnter<'a>>);
 impl Drop for EnterGuard<'_> {
     fn drop(&mut self) {
         let child = match self.0.as_mut().and_then(|owner| owner.state.as_mut()) {
@@ -493,15 +496,24 @@ impl Member {
                                 assert_eq!(self.requests, ["open"]);
                             }
                             self.requests.push("grants".into());
-                            s::StateControlAnswer::Grants {
-                                surface: vec![
-                                    if mode == "rollback-varied" && self.requests.len() == 3 {
-                                        "owner:changed"
-                                    } else {
-                                        "owner:actual"
-                                    }
-                                    .into(),
-                                ],
+                            if mode == "rollback-grants-refused" && self.requests.len() == 3 {
+                                s::StateControlAnswer::ControlRefused {
+                                    code: s::ControlRefusalCode::Read(
+                                        s::ReadRefusalCode::AnswerTooLarge,
+                                    ),
+                                    detail: "exact rollback grants refusal".into(),
+                                }
+                            } else {
+                                s::StateControlAnswer::Grants {
+                                    surface: vec![
+                                        if mode == "rollback-varied" && self.requests.len() == 3 {
+                                            "owner:changed"
+                                        } else {
+                                            "owner:actual"
+                                        }
+                                        .into(),
+                                    ],
+                                }
                             }
                         }
                         s::StateControl::Read { selector } => {
@@ -665,6 +677,12 @@ fn circuit(mode: &str) {
     }
     let peer = dial(&path);
     let (sink, mut reader) = UnixStream::pair().unwrap();
+    if mode == "expired-startup-activation-trace" {
+        // A large actual Load blocks its writer on this small real socket.
+        // Nothing consumes the reader until the rollback deadline is checked.
+        nix::sys::socket::setsockopt(&sink, nix::sys::socket::sockopt::SndBuf, &1024).unwrap();
+        program.composer.binary = "worker".repeat(65536);
+    }
     let (state, member) = UnixStream::pair().unwrap();
     let (mut bootstrap, mut scheme, _) = classifier_fixture();
     if mode.contains("emission") {
@@ -1012,6 +1030,32 @@ fn circuit(mode: &str) {
                 mode,
             );
         }
+        return;
+    }
+    if mode.starts_with("expired-startup-") {
+        if mode == "expired-startup-refusal" {
+            super::expired::tests::refusal(guard.0.take().unwrap(), &mut member, &mut clock);
+            return;
+        }
+        let handoff = super::expired::tests::enter(
+            guard.0.take().unwrap(),
+            &mut member,
+            &mut reader,
+            &mut clock,
+            mode,
+        );
+        drop(guard);
+        super::expired::tests::finish(
+            run.take_boxed(),
+            handoff,
+            &peer,
+            &mut member,
+            &mut reader,
+            &mut clock,
+            &path,
+            &bytes,
+            mode,
+        );
         return;
     }
     let mut management = None;
@@ -2978,4 +3022,97 @@ scenario!(
 scenario!(
     worker_startup_composition_failed_rollback_recorded_cap,
     "rollback-failed-recorded-cap"
+);
+
+scenario!(
+    worker_startup_composition_expired_preopen,
+    "expired-startup-preopen"
+);
+scenario!(
+    worker_startup_composition_expired_opened,
+    "expired-startup-opened"
+);
+scenario!(
+    worker_startup_composition_expired_activation,
+    "expired-startup-activation"
+);
+scenario!(
+    worker_startup_composition_expired_loaded,
+    "expired-startup-loaded"
+);
+scenario!(
+    worker_startup_composition_expired_classifier,
+    "expired-startup-classifier"
+);
+scenario!(
+    worker_startup_composition_expired_classifier_complete,
+    "expired-startup-classifier-complete"
+);
+scenario!(
+    worker_startup_composition_expired_classifier_varied,
+    "expired-startup-classifier-varied"
+);
+scenario!(
+    worker_startup_composition_expired_classifier_unreadable,
+    "expired-startup-classifier-unreadable"
+);
+scenario!(
+    worker_startup_composition_expired_classifier_held,
+    "expired-startup-classifier-held"
+);
+scenario!(
+    worker_startup_composition_expired_admit,
+    "expired-startup-admit"
+);
+scenario!(
+    worker_startup_composition_expired_boot,
+    "expired-startup-boot"
+);
+scenario!(
+    worker_startup_composition_expired_open,
+    "expired-startup-open"
+);
+scenario!(
+    worker_startup_composition_expired_repair,
+    "expired-startup-repair"
+);
+scenario!(
+    worker_startup_composition_expired_summary,
+    "expired-startup-summary"
+);
+scenario!(
+    worker_startup_composition_expired_installed,
+    "expired-startup-installed"
+);
+scenario!(
+    worker_startup_composition_expired_raised,
+    "expired-startup-raised"
+);
+scenario!(
+    worker_startup_composition_expired_foreign,
+    "expired-startup-foreign"
+);
+scenario!(
+    worker_startup_composition_expired_observe,
+    "expired-startup-observe"
+);
+scenario!(
+    worker_startup_composition_expired_silent_peer,
+    "expired-startup-silent"
+);
+scenario!(
+    worker_startup_composition_expired_refusal,
+    "expired-startup-refusal"
+);
+scenario!(
+    worker_startup_composition_expired_blocking_wait,
+    "expired-startup-wait"
+);
+scenario!(
+    worker_startup_composition_expired_activation_cap,
+    "expired-startup-activation-cap"
+);
+scenario!(
+    worker_startup_composition_expired_activation_trace,
+    "expired-startup-activation-trace"
 );

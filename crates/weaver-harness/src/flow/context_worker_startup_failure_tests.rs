@@ -48,7 +48,9 @@ impl Drop for PanicReader {
     }
 }
 
-fn context<'b>(enter: &'b mut FoundationEnter<'_>) -> &'b mut RecordingContext {
+pub(in crate::flow::context::worker_startup) fn context<'b>(
+    enter: &'b mut FoundationEnter<'_>,
+) -> &'b mut RecordingContext {
     match enter.state.as_mut().unwrap() {
         EnterState::Startup(owner) => owner.failure_test_context(),
         EnterState::Residency(owner) => owner.failure_test_context(),
@@ -58,7 +60,10 @@ fn context<'b>(enter: &'b mut FoundationEnter<'_>) -> &'b mut RecordingContext {
         _ => panic!("unexpected failure injection stage"),
     }
 }
-fn reached(enter: &FoundationEnter<'_>, mode: &str) -> bool {
+pub(in crate::flow::context::worker_startup) fn reached(
+    enter: &FoundationEnter<'_>,
+    mode: &str,
+) -> bool {
     use crate::flow::context::boot_composition::BootStage;
     use crate::flow::context::startup_composition::StartupStage;
     match (mode, enter.state.as_ref().unwrap()) {

@@ -1123,6 +1123,22 @@ impl RecordingContext {
         }
     }
 
+    pub(super) fn dispose_expired_startup_summary(
+        &mut self,
+        permit: &super::worker_startup::expired::ExpiredStartupDisposal,
+    ) {
+        assert!(permit.allows(self), "exact expired startup disposal");
+        if self
+            .plan_summary
+            .as_ref()
+            .is_some_and(|work| !work.rollback.account_settled)
+        {
+            self.freeze_plan_summary_account_bound();
+            self.abandon_plan_summary_account("original Enter and accepted rollback Leave expired");
+        }
+        self.plan_cache.revoke();
+    }
+
     /// Bounded trace-only continuation after first-failure reporting. No new
     /// query, Release, filing, cache success or ordinary live call is admitted.
     pub(in crate::flow) fn advance_plan_summary_account(

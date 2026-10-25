@@ -1561,6 +1561,44 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         _io: &mut impl PumpIo,
     ) -> Result<Advance, FlowFailure> {
         self.require_enter_rollback(cx)?;
+        self.retire_unactivated_open(cx)
+    }
+
+    /// The consuming startup owner supplies actual expired Enter and accepted
+    /// rollback evidence. A loaded, unactivated bracket needs no refusal first.
+    pub(super) fn begin_expired_preflight_rollback(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        permit: &super::context::worker_startup::expired::preflight::ExpiredPreflightPermit,
+    ) -> Result<Advance, FlowFailure> {
+        self.observe_failures(cx)?;
+        if !permit.matches_record(&cx.barrier.author_identity())
+            || self.phase != CoordinatorPhase::Preflight
+            || !cx.barrier.is_loaded()
+            || cx.barrier.is_active()
+            || cx.barrier.is_refused()
+            || !self.open_pending
+            || self.observations.is_some()
+            || self.state_retired
+            || self.classifier_retired
+            || self.unused_open.is_some()
+            || self.classifier.is_some()
+            || self.starting_classifier.is_some()
+            || !self.clean_obligations(cx)
+        {
+            return Err(self.fail(
+                cx,
+                "barrier",
+                "expired preflight rollback lost its original bracket",
+            ));
+        }
+        self.retire_unactivated_open(cx)
+    }
+
+    fn retire_unactivated_open(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<Advance, FlowFailure> {
         let Some(owner) = &mut self.state else {
             return Err(self.fail(cx, "barrier", "enter rollback lost its state owner"));
         };
@@ -4035,6 +4073,24 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
     pub(super) fn retire_abandoned_rollback_ports(&mut self) -> Option<FailedFlowResources> {
         self.preinput_custody()
             .then(|| self.retire_failed_ports_owned())
+    }
+
+    /// Unadmitted Enter disposal closes only actual owned endpoints. A Load
+    /// receipt forbids this road even before semantic activation has completed.
+    pub(super) fn retire_unadmitted_ports(
+        &mut self,
+        barrier: &super::recording::RecordBarrier,
+    ) -> Option<FailedFlowResources> {
+        (!barrier.is_loaded()
+            && matches!(
+                self.phase,
+                CoordinatorPhase::Preflight | CoordinatorPhase::Opening
+            )
+            && self.halt.is_none()
+            && self.preinput_custody()
+            && self.classifier.is_none()
+            && self.starting_classifier.is_none())
+        .then(|| self.retire_failed_ports_owned())
     }
 
     fn retire_failed_ports_owned(&mut self) -> FailedFlowResources {

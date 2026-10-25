@@ -480,3 +480,6 @@ pub(crate) mod rollback;
 
 #[path = "context_worker_startup_failure.rs"]
 pub(crate) mod failed;
+
+#[path = "context_worker_startup_expired.rs"]
+pub(crate) mod expired;

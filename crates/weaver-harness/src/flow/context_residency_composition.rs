@@ -472,6 +472,19 @@ pub(super) mod tests;
 pub(in crate::flow) mod cleanup;
 
 impl ResidencyComposition<'_> {
+    pub(in crate::flow::context) fn expired_identity(
+        &self,
+    ) -> Option<super::worker_startup::expired::ExpiredEnterIdentity> {
+        (self.stage == ResidencyStage::Stopped)
+            .then(|| {
+                super::worker_startup::expired::ExpiredEnterIdentity::from_resources(
+                    self.context,
+                    self.resources,
+                    self.startup.original_enter.as_ref(),
+                )
+            })
+            .flatten()
+    }
     #[cfg(test)]
     pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
         self.context
@@ -488,10 +501,10 @@ impl ResidencyComposition<'_> {
             })
             .flatten()
     }
-    pub(in crate::flow::context) fn detach_failure(
+    pub(in crate::flow::context) fn detach_owned<I>(
         self,
-        identity: super::worker_startup::failed::StartupIdentity,
-    ) -> super::worker_startup::failed::DetachedStartup {
+        identity: I,
+    ) -> super::worker_startup::failed::DetachedStartup<I> {
         use super::worker_startup::failed::{DetachedStartup, HeldStartup};
         let (_, _, account) = self.into_stopped().ok().expect("checked stopped residency");
         DetachedStartup {
@@ -503,15 +516,24 @@ impl ResidencyComposition<'_> {
     }
 }
 impl AdmittedStartup<'_> {
+    pub(in crate::flow::context) fn expired_identity(
+        &self,
+    ) -> Option<super::worker_startup::expired::ExpiredEnterIdentity> {
+        super::worker_startup::expired::ExpiredEnterIdentity::from_resources(
+            self.context,
+            self.resources,
+            self.evidence.startup.original_enter.as_ref(),
+        )
+    }
     pub(in crate::flow::context) fn failed_identity(
         &self,
     ) -> Option<super::worker_startup::failed::StartupIdentity> {
         super::worker_startup::failed::StartupIdentity::from_resources(self.context, self.resources)
     }
-    pub(in crate::flow::context) fn detach_failure(
+    pub(in crate::flow::context) fn detach_owned<I>(
         self,
-        identity: super::worker_startup::failed::StartupIdentity,
-    ) -> super::worker_startup::failed::DetachedStartup {
+        identity: I,
+    ) -> super::worker_startup::failed::DetachedStartup<I> {
         use super::worker_startup::failed::{DetachedStartup, HeldStartup};
         let (_, _, inventory, evidence) = self.into_parts();
         DetachedStartup {

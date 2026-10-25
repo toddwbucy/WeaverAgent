@@ -4,7 +4,7 @@
 use super::*;
 use crate::flow::pump::{LifecycleListener, LifecycleMessage, LifecyclePeer};
 #[path = "context_rollback_listener.rs"]
-mod listener;
+pub(in crate::flow::context) mod listener;
 use crate::flow::pump_transport::{OrganSend, TrackedStage};
 use listener::RollbackDials;
 use weaver_trace::GrantSurface;

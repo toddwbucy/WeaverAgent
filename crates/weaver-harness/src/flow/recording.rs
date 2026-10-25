@@ -313,6 +313,9 @@ impl RecordBarrier {
     pub(super) fn abandon(&mut self) {
         self.recorder.abandon();
     }
+    pub(super) fn close_unadmitted(&mut self) -> Result<(), weaver_trace::Failure> {
+        self.recorder.close_unadmitted()
+    }
 
     /// Prepare once and retain the complete original until actual admission.
     /// Busy returns the new original intact and never replaces the first ticket.
@@ -1067,6 +1070,17 @@ impl RecordBarrier {
         })
     }
 
+    pub(super) fn retain_expired_startup_record(
+        &mut self,
+        permit: &super::context::worker_startup::expired::ExpiredStartupDisposal,
+    ) -> StoppedStartupRecord {
+        assert!(permit.matches_record(&self.author_identity()));
+        StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        }
+    }
+
     /// Release this owner's unadmitted ticket on bounded incomplete teardown.
     pub(super) fn abandon_boot_author(&mut self, ticket: u64) -> bool {
         if self
@@ -1229,6 +1243,13 @@ mod tests;
 /// Incomplete trace evidence retains prepared bytes and author identity. It has
 /// no admission sequence and cannot be submitted again after rollback.
 pub(super) struct StoppedReadRecord {
+    _pending: Option<(Event, RecordPurpose)>,
+    _author: Option<AuthorTicket>,
+}
+
+/// The expired startup's whole unadmitted author moves into terminal custody.
+/// Neither a receipt nor permission to resubmit follows this retained original.
+pub(super) struct StoppedStartupRecord {
     _pending: Option<(Event, RecordPurpose)>,
     _author: Option<AuthorTicket>,
 }

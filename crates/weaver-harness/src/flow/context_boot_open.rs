@@ -1107,6 +1107,22 @@ impl RecordingContext {
             });
         }
     }
+
+    pub(super) fn dispose_expired_startup_open(
+        &mut self,
+        permit: &super::worker_startup::expired::ExpiredStartupDisposal,
+        decode: &mut DecodePort,
+    ) {
+        assert!(permit.allows(self), "exact expired startup disposal");
+        assert!(
+            self.check_boot_open_port(decode).is_ok(),
+            "original decode port"
+        );
+        if !self.boot_open_account_settled() {
+            self.freeze_boot_account_bound();
+            self.abandon_boot_open(decode, "original Enter and accepted rollback Leave expired");
+        }
+    }
     fn retain_boot_wire(&mut self, decode: &mut DecodePort) {
         let Some(owner) = &mut self.boot_open else {
             return;

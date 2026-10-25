@@ -142,7 +142,17 @@ fn startup_composition_child() {
                 }
             }
             Ok(_) => {}
-            Err(_) => return,
+            Err(_) => {
+                if mode == "rollback-held-exit" {
+                    let root = PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
+                    std::fs::write(root.join("classifier-retired"), b"closed").unwrap();
+                    while !root.join("classifier-exit").exists() {
+                        assert!(Instant::now() < limit, "held classifier exit watchdog");
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+                return;
+            }
         }
         if channel.has_pending_send() {
             channel.try_send().unwrap();

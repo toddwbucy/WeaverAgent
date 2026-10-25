@@ -165,7 +165,18 @@ pub(in crate::flow::context) enum HeldStartup {
     },
 }
 impl HeldStartup {
-    fn retire_enter(&mut self) -> Option<RetiredEnter> {
+    pub(in crate::flow::context) fn original_enter(&self) -> Option<&ReceivedEnter> {
+        match self {
+            Self::Initial(account) => account.original_enter.as_ref(),
+            Self::Residency(account) => account.startup.original_enter.as_ref(),
+            Self::Admitted(_, resident) => resident.startup.original_enter.as_ref(),
+            Self::Boot(boot) => boot.resident.as_ref()?.startup.original_enter.as_ref(),
+            Self::Gate(gate) | Self::Ready { gate, .. } => {
+                gate.boot.resident.as_ref()?.startup.original_enter.as_ref()
+            }
+        }
+    }
+    pub(in crate::flow::context) fn retire_enter(&mut self) -> Option<RetiredEnter> {
         let source = match self {
             Self::Initial(account) => &mut account.original_enter,
             Self::Residency(account) => &mut account.startup.original_enter,
@@ -195,8 +206,8 @@ pub(in crate::flow::context) struct StartupGate {
     pub child: Option<OwnedChild>,
     pub tools: Option<ToolsCgroup>,
 }
-pub(in crate::flow::context) struct DetachedStartup {
-    pub identity: StartupIdentity,
+pub(in crate::flow::context) struct DetachedStartup<I = StartupIdentity> {
+    pub identity: I,
     pub held: Box<HeldStartup>,
     pub listener: Option<LifecycleListener>,
     pub gate: Option<StartupGate>,
@@ -242,13 +253,13 @@ impl FoundationEnter<'_> {
         };
         let state = self.state.take().unwrap();
         let mut parts = match state {
-            EnterState::Startup(owner) => owner.detach_failure(identity),
-            EnterState::Residency(owner) => owner.detach_failure(identity),
-            EnterState::Admitted(owner) => owner.detach_failure(identity),
-            EnterState::Boot(owner) => owner.detach_failure(identity),
-            EnterState::Gate(owner) => owner.detach_failure(identity),
-            EnterState::Raised(owner) => owner.detach_failure(identity),
-            EnterState::Ready(owner) => owner.detach_failure(identity),
+            EnterState::Startup(owner) => owner.detach_owned(identity),
+            EnterState::Residency(owner) => owner.detach_owned(identity),
+            EnterState::Admitted(owner) => owner.detach_owned(identity),
+            EnterState::Boot(owner) => owner.detach_owned(identity),
+            EnterState::Gate(owner) => owner.detach_owned(identity),
+            EnterState::Raised(owner) => owner.detach_owned(identity),
+            EnterState::Ready(owner) => owner.detach_owned(identity),
             EnterState::Entered(_) => unreachable!(),
         };
         let original = parts.held.retire_enter();

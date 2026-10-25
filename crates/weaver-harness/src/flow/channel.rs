@@ -390,8 +390,9 @@ impl StateChannel {
         })
     }
 
-    /// Only the coordinator's recorded preactivation refusal may elect this
-    /// disposal. Ordinary opened channels still require the recording barrier.
+    /// Only the coordinator's recorded preactivation refusal or its sealed
+    /// expired-Enter rollback may elect this disposal. Ordinary opened channels
+    /// still require the recording barrier.
     pub(super) fn abandon_unactivated_open(
         &mut self,
     ) -> Result<Option<UnusedOpen>, ChannelFailure> {
