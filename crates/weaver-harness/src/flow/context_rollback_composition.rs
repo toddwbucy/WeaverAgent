@@ -34,6 +34,54 @@ pub(in crate::flow) struct EnterRefusalResponse<'a> {
     original: Option<crate::flow::pump::enter::DetachedEnter>,
 }
 
+pub(in crate::flow::context) struct RetiredRefusalResponse {
+    refusal: RetiredRefusal,
+    peer: crate::flow::pump::RetiredLifecyclePeer,
+    stage: ResponseStage,
+    send: Option<OrganSend>,
+    returned: Option<OrganEnvelope>,
+    stop: Option<ResponseStop>,
+    original: Option<crate::flow::pump::enter::DetachedEnter>,
+}
+impl EnterRefusalResponse<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.refusal.failure_test_context()
+    }
+
+    pub(in crate::flow::context) fn failure_view(
+        &self,
+    ) -> crate::flow::context::worker_startup::rollback::failed::RollbackView<'_> {
+        let mut view = self.refusal.failure_view();
+        view.cause = self
+            .original
+            .as_ref()
+            .map(|original| original.payload().cause)
+            .or(view.cause);
+        view
+    }
+    pub(in crate::flow::context) fn retire_failure(self) -> RetiredRefusalResponse {
+        let Self {
+            refusal,
+            peer,
+            stage,
+            send,
+            returned,
+            stop,
+            original,
+        } = self;
+        RetiredRefusalResponse {
+            refusal: refusal.retire_failure(),
+            peer: peer.retire_failed(),
+            stage,
+            send,
+            returned,
+            stop,
+            original,
+        }
+    }
+}
+
 impl<'a> RecordedStartupRefusal<'a> {
     /// The caller supplies the original Enter connection; this does not invent
     /// proof of admin's entry judgment. The exact staged send is tied to this peer.
@@ -304,6 +352,56 @@ pub(in crate::flow) struct RollbackComposition<'a> {
     inspecting: bool,
     current: Option<InspectionCompletion>,
     stop: Option<RollbackStop>,
+}
+
+pub(in crate::flow::context) struct RetiredRollback {
+    response: RetiredRefusalResponse,
+    peer: crate::flow::pump::RetiredLifecyclePeer,
+    dials: listener::RetiredRollbackDials,
+    directive: crate::flow::pump::RetiredLifecycleMessage,
+    leave: AbsoluteBound,
+    stage: RollbackStage,
+    inspecting: bool,
+    current: Option<InspectionCompletion>,
+    stop: Option<RollbackStop>,
+}
+impl RollbackComposition<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.response.failure_test_context()
+    }
+
+    pub(in crate::flow::context) fn failure_view(
+        &self,
+    ) -> crate::flow::context::worker_startup::rollback::failed::RollbackView<'_> {
+        let mut view = self.response.failure_view();
+        view.leave = Some(self.leave);
+        view
+    }
+    pub(in crate::flow::context) fn retire_failure(self) -> RetiredRollback {
+        let Self {
+            response,
+            peer,
+            dials,
+            directive,
+            leave,
+            stage,
+            inspecting,
+            current,
+            stop,
+        } = self;
+        RetiredRollback {
+            response: response.retire_failure(),
+            peer: peer.retire_failed(),
+            dials: dials.retire_failed(),
+            directive: directive.retire_failed(),
+            leave,
+            stage,
+            inspecting,
+            current,
+            stop,
+        }
+    }
 }
 
 impl<'a> EnterRefusalResponse<'a> {
@@ -607,6 +705,33 @@ pub(in crate::flow) struct PreparedRollback<'a> {
     grant_surface: GrantSurface,
 }
 
+pub(in crate::flow::context) struct RetiredPreparedRollback {
+    owner: RetiredRollback,
+    grant_surface: GrantSurface,
+}
+impl PreparedRollback<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.owner.failure_test_context()
+    }
+
+    pub(in crate::flow::context) fn failure_view(
+        &self,
+    ) -> crate::flow::context::worker_startup::rollback::failed::RollbackView<'_> {
+        self.owner.failure_view()
+    }
+    pub(in crate::flow::context) fn retire_failure(self) -> RetiredPreparedRollback {
+        let Self {
+            owner,
+            grant_surface,
+        } = self;
+        RetiredPreparedRollback {
+            owner: owner.retire_failure(),
+            grant_surface,
+        }
+    }
+}
+
 impl PreparedRollback<'_> {
     pub(in crate::flow) fn grant_surface(&self) -> GrantSurface {
         self.grant_surface
@@ -639,3 +764,45 @@ pub(in crate::flow) mod halt;
 
 #[path = "context_rollback_terminal.rs"]
 pub(in crate::flow) mod terminal;
+
+#[cfg(test)]
+impl RetiredRefusalResponse {
+    pub(in crate::flow::context) fn retained_enter_wire(&self) -> &[u8] {
+        self.original.as_ref().unwrap().retained_wire()
+    }
+}
+
+#[cfg(test)]
+impl RetiredRollback {
+    pub(in crate::flow::context) fn retained_enter_wire(&self) -> &[u8] {
+        self.response.retained_enter_wire()
+    }
+}
+
+#[cfg(test)]
+impl RetiredPreparedRollback {
+    pub(in crate::flow::context) fn retained_comparison(
+        &self,
+    ) -> (
+        &InspectionCompletion,
+        &InspectionCompletion,
+        &OrganEnvelope,
+        GrantSurface,
+    ) {
+        (
+            self.owner
+                .response
+                .refusal
+                .startup
+                .initial_grants
+                .as_ref()
+                .unwrap(),
+            self.owner.current.as_ref().unwrap(),
+            &self.owner.directive.envelope,
+            self.grant_surface,
+        )
+    }
+    pub(in crate::flow::context) fn retained_enter_wire(&self) -> &[u8] {
+        self.owner.retained_enter_wire()
+    }
+}

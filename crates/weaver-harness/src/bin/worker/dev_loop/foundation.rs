@@ -15,6 +15,31 @@ pub mod session;
 pub type FailedOwner<'a> =
     Result<Box<FoundationInput<'a>>, Box<weaver_harness::FoundationManagement<'a>>>;
 
+/// Finish stopped rollback under its original accepted Leave/halt deadline.
+/// The returned Closed evidence grants only failed worker exit, never Left.
+#[allow(clippy::result_large_err)]
+pub fn failed_rollback_exit(
+    run: Box<FoundationRun>,
+    handoff: Box<weaver_harness::FoundationRollbackHandoff>,
+) -> Result<
+    Box<weaver_harness::FoundationRollbackExit>,
+    (
+        Box<FoundationRun>,
+        Box<weaver_harness::FoundationRollbackHandoff>,
+    ),
+> {
+    let mut owner = run.failed_rollback_exit(handoff)?;
+    loop {
+        match owner.advance() {
+            weaver_harness::FoundationRollbackExitProgress::Progress => {}
+            weaver_harness::FoundationRollbackExitProgress::Pending => {
+                owner.wait_for_progress();
+            }
+            weaver_harness::FoundationRollbackExitProgress::Closed => return Ok(owner),
+        }
+    }
+}
+
 /// Finish the original latched startup failure. A refused join retains both
 /// inputs; Closed grants only failed worker exit, never lifecycle Left.
 #[allow(clippy::result_large_err)]

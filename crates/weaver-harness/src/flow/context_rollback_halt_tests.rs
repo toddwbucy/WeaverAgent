@@ -308,7 +308,7 @@ pub(in crate::flow::context::startup_composition::refusal::response) fn drive(
         !rows
             .iter()
             .any(|row| row.line.contains("\"kind\":\"unload\"")),
-        "no-SPU Unload rule is not merged"
+        "private retirement retains the account; outer cleanup owns Unload"
     );
     if matches!(mode, "response-halt-cap" | "response-halt-clock") {
         assert!(retired.expired());

@@ -48,6 +48,11 @@ pub(in crate::flow) struct DetachedEnter {
     _closed_unadmitted: Option<(bool, bool)>,
 }
 impl DetachedEnter {
+    #[cfg(test)]
+    pub(in crate::flow) fn retained_wire(&self) -> &[u8] {
+        &self._wire
+    }
+
     pub(in crate::flow) fn payload(&self) -> &weaver_types::state_flow::enter::EnterPayload {
         self.message.envelope.enter()
     }

@@ -3997,9 +3997,11 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
     }
 
     pub(super) fn preinput_failed_owner(&self) -> bool {
-        self.phase == CoordinatorPhase::Failed
-            && self.halt.is_some()
-            && self.last_input_id == 0
+        self.phase == CoordinatorPhase::Failed && self.halt.is_some() && self.preinput_custody()
+    }
+
+    pub(super) fn preinput_custody(&self) -> bool {
+        self.last_input_id == 0
             && self.input_account.is_none()
             && self.reuse.is_none()
             && self.capture.is_none()
@@ -4025,6 +4027,14 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
             return None;
         }
         Some(self.retire_failed_ports_owned())
+    }
+
+    /// Consuming rollback uses this only after its actual Leave expired or its
+    /// terminal Unload was Recorded. No halt, new completion or live grant is
+    /// synthesized; all framing/partial-request evidence stays owned.
+    pub(super) fn retire_abandoned_rollback_ports(&mut self) -> Option<FailedFlowResources> {
+        self.preinput_custody()
+            .then(|| self.retire_failed_ports_owned())
     }
 
     fn retire_failed_ports_owned(&mut self) -> FailedFlowResources {

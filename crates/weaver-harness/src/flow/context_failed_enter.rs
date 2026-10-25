@@ -483,6 +483,8 @@ pub(in crate::flow) struct FailedRunCleanup {
     trace_drained: bool,
     member_stood: bool,
     member_failed: bool,
+    rollback_cause: Option<weaver_types::Cause>,
+    rollback_read: Option<super::startup_composition::refusal::response::halt::FailedRollbackRead>,
 }
 
 impl RecordingContext {
@@ -602,6 +604,17 @@ impl RecordingContext {
 }
 
 impl FailedRunCleanup {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn rollback_test_read(
+        &self,
+    ) -> Option<&super::startup_composition::refusal::response::halt::FailedRollbackRead> {
+        self.rollback_read.as_ref()
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn rollback_test_measurement(&self) -> Option<Vec<u8>> {
+        let state = self.retired.as_ref()?.state.as_ref()?;
+        Some(serde_json::to_vec(state.held_measurement()?).unwrap())
+    }
     /// Only the consuming public startup handoff calls this, after matching its
     /// original context/ports and retaining every extracted boot proof. It does
     /// not widen the primitive-only failed-enter admission gate.
@@ -610,6 +623,30 @@ impl FailedRunCleanup {
         resources: FailedEnterResources,
     ) -> Self {
         Self::new(context, resources, false)
+    }
+
+    /// The consuming public rollback has retained the actual directive, load
+    /// cause and original window. It has not recorded Unload on this route.
+    pub(in crate::flow::context) fn after_rollback(
+        context: RecordingContext,
+        resources: FailedEnterResources,
+        leave: Option<AbsoluteBound>,
+        cause: Option<weaver_types::Cause>,
+    ) -> Self {
+        let mut owner = Self::new(context, resources, false);
+        if let Some(leave) = leave {
+            owner.deadline = owner
+                .deadline
+                .map(|deadline| deadline.min(leave.deadline_ns()));
+            owner.rollback_cause = cause;
+            if owner.context.inspection.is_some() {
+                match super::startup_composition::refusal::response::halt::FailedRollbackRead::capture(&owner.context, leave) {
+                    Ok(account) => owner.rollback_read = Some(account),
+                    Err(error) => owner.secondary(format!("failed rollback Grants account: {error}")),
+                }
+            }
+        }
+        owner
     }
 
     fn new(context: RecordingContext, mut resources: FailedEnterResources, serving: bool) -> Self {
@@ -651,6 +688,8 @@ impl FailedRunCleanup {
             trace_drained: false,
             member_stood,
             member_failed,
+            rollback_cause: None,
+            rollback_read: None,
         }
     }
 
@@ -1043,6 +1082,11 @@ impl FailedRunCleanup {
     }
 
     pub(in crate::flow::context) fn advance_accounts(&mut self, io: &mut impl PumpIo) -> bool {
+        if let Some(account) = &mut self.rollback_read
+            && !account.record_once(&mut self.context, io, self.deadline.unwrap())
+        {
+            return false;
+        }
         let mut observed = AccountClock {
             io,
             last: self.context.last_ns,
@@ -1280,9 +1324,12 @@ impl FailedRunCleanup {
             .map(|sequence| sequence.0.into());
         let payload = serving::payloads::UnloadClose {
             grant_surface: self.member_stood.then_some(GrantSurface::Unreadable),
-            // This admitted domain has no accepted Leave/capture/turn cause.
-            cause: None,
-            forced: false,
+            // An accepted rollback keeps the load cause and forced fact. Other
+            // admitted failed routes have no accepted Leave/capture/turn cause.
+            cause: self
+                .rollback_cause
+                .map(|cause| weaver_trace::Cause { uid: cause.uid }),
+            forced: self.rollback_cause.is_some(),
             forced_by: None,
             release: serving::payloads::Release {
                 spu: self.resources.spu.is_some().then_some(self.release),

@@ -340,6 +340,13 @@ pub(super) fn reap(child: &mut OwnedChild) {
     assert_ne!(child.state(), ChildState::Running);
 }
 struct RunGuard(Option<FoundationRun>);
+impl RunGuard {
+    // Keep the large move out of the circuit's debug stack frame. Every branch
+    // consumes the same actual owner; no evidence is reconstructed.
+    fn take_boxed(&mut self) -> Box<FoundationRun> {
+        Box::new(self.0.take().unwrap())
+    }
+}
 impl Drop for RunGuard {
     fn drop(&mut self) {
         if let Some(run) = &mut self.0 {
@@ -603,6 +610,10 @@ impl Member {
             };
             let hold_control = match &request {
                 s::StateFrame::Control {
+                    frame: s::StateControl::Grants {},
+                    ..
+                } => self.hold_control == Some("grants"),
+                s::StateFrame::Control {
                     frame:
                         s::StateControl::Read {
                             selector: s::ReadSelector::History { .. },
@@ -714,6 +725,7 @@ fn circuit(mode: &str) {
     let now = if mode == "worker"
         || mode.starts_with("input-worker")
         || mode == "failed-startup-worker"
+        || mode == "rollback-failed-worker"
     {
         crate::flow::clock::monotonic_ns().unwrap()
     } else {
@@ -766,11 +778,13 @@ fn circuit(mode: &str) {
         wire.len()
     );
     drop((sink, state));
-    let mut clock = FakePumpIo::new(if mode == "failed-startup-worker" {
-        now
-    } else {
-        100
-    });
+    let mut clock = FakePumpIo::new(
+        if mode == "failed-startup-worker" || mode == "rollback-failed-worker" {
+            now
+        } else {
+            100
+        },
+    );
     let received = if mode == "worker" || mode.starts_with("input-worker") {
         admission.advance()
     } else {
@@ -919,7 +933,7 @@ fn circuit(mode: &str) {
                     mode,
                 );
                 if mode.contains("-exit") {
-                    let actual = Box::new(run.0.take().unwrap());
+                    let actual = run.take_boxed();
                     super::input::halt::exit::tests::finish(
                         actual,
                         &mut member,
@@ -987,7 +1001,7 @@ fn circuit(mode: &str) {
         drop(guard);
         if let Some(handoff) = handoff {
             super::failed::tests::finish(
-                Box::new(run.0.take().unwrap()),
+                run.take_boxed(),
                 handoff,
                 &peer,
                 &mut member,
@@ -1041,6 +1055,33 @@ fn circuit(mode: &str) {
         member.step(clock.now().unwrap(), mode);
         std::thread::sleep(Duration::from_millis(1));
     }
+    if mode.starts_with("rollback-failed-") {
+        let case = super::rollback::failed::tests::enter(
+            guard.0.take().unwrap(),
+            &peer,
+            &mut member,
+            &mut reader,
+            &mut clock,
+            &path,
+            mode,
+        );
+        drop(guard);
+        if let Some(case) = case {
+            super::rollback::failed::tests::finish(
+                run.take_boxed(),
+                case,
+                &peer,
+                &mut member,
+                &mut reader,
+                &mut clock,
+                &path,
+                &bytes,
+                envelope.enter().cause,
+                mode,
+            );
+        }
+        return;
+    }
     if mode.starts_with("rollback-") {
         assert_eq!(
             guard.0.as_ref().unwrap().progress(),
@@ -1083,7 +1124,7 @@ fn circuit(mode: &str) {
                     &mut reader,
                     &mut clock,
                 );
-                let actual = Box::new(run.0.take().unwrap());
+                let actual = run.take_boxed();
                 super::input::halt::exit::tests::finish(
                     actual,
                     &mut member,
@@ -1105,7 +1146,7 @@ fn circuit(mode: &str) {
                     mode,
                 );
                 if mode.contains("-exit") {
-                    let actual = Box::new(run.0.take().unwrap());
+                    let actual = run.take_boxed();
                     super::input::halt::exit::tests::finish(
                         actual,
                         &mut member,
@@ -2827,4 +2868,114 @@ scenario!(
 scenario!(
     worker_startup_composition_failed_exit_lower_silent,
     "failed-startup-lower-silent"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_record,
+    "rollback-failed-record"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_recorded,
+    "rollback-failed-recorded"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_response,
+    "rollback-failed-response"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_await,
+    "rollback-failed-await"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_transition,
+    "rollback-failed-transition"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_grants,
+    "rollback-failed-grants"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_prepared,
+    "rollback-failed-prepared"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_seal,
+    "rollback-failed-seal"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_state,
+    "rollback-failed-state"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_unload,
+    "rollback-failed-unload"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_observer,
+    "rollback-failed-observer"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_drain_cap,
+    "rollback-failed-drain-cap"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_left_peer,
+    "rollback-failed-left-peer"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_leave_cap,
+    "rollback-failed-leave-cap"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_trace,
+    "rollback-failed-trace"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_foreign,
+    "rollback-failed-foreign"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_worker,
+    "rollback-failed-worker"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_wait,
+    "rollback-failed-wait"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_healthy,
+    "rollback-failed-healthy"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_grant_pressure,
+    "rollback-failed-grant-pressure"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_grant_recorded,
+    "rollback-failed-grant-recorded"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_recorded_cap,
+    "rollback-failed-recorded-cap"
 );
