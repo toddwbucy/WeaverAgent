@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #268
+**Landing PR:** #348
 
 **Version:** 0.18 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
