@@ -389,8 +389,8 @@ impl ReceivedOrgan {
         self.identity.clone()
     }
 
-    pub(super) fn belongs_to(&self, port: &OrganPort) -> bool {
-        self.identity.matches(port)
+    pub(super) fn belongs_to<End>(&self, port: &PacketPort<OrganEnvelope, End>) -> bool {
+        Arc::ptr_eq(&self.identity.0, &port.identity.0)
     }
 
     pub(super) fn into_parts(self) -> (OrganEnvelope, Vec<u8>) {

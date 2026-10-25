@@ -15,6 +15,31 @@ pub mod session;
 pub type FailedOwner<'a> =
     Result<Box<FoundationInput<'a>>, Box<weaver_harness::FoundationManagement<'a>>>;
 
+/// Consume the successful Ready seat's checked rollback handoff into its actual
+/// run. Only this worker loop drives the retained cleanup owner to closure.
+#[allow(clippy::result_large_err)]
+pub fn entered_rollback(
+    run: Box<FoundationRun>,
+    handoff: Box<weaver_harness::FoundationEnteredRollbackHandoff>,
+) -> Result<
+    Box<weaver_harness::FoundationEnteredRollback>,
+    (
+        Box<FoundationRun>,
+        Box<weaver_harness::FoundationEnteredRollbackHandoff>,
+    ),
+> {
+    let mut owner = run.entered_rollback(handoff)?;
+    loop {
+        match owner.advance() {
+            weaver_harness::FoundationEnteredRollbackProgress::Progress => (),
+            weaver_harness::FoundationEnteredRollbackProgress::Pending => {
+                owner.wait_for_progress();
+            }
+            weaver_harness::FoundationEnteredRollbackProgress::Closed => return Ok(owner),
+        }
+    }
+}
+
 /// Finish stopped rollback under its original accepted Leave/halt deadline.
 /// The returned Closed evidence grants only failed worker exit, never Left.
 #[allow(clippy::result_large_err)]

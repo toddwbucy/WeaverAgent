@@ -1,13 +1,13 @@
 //! The same gate account after a component halt; no ordinary author is resumed.
 use super::*;
 use crate::flow::context::failed_enter_driver::FailedRunCleanup;
-use crate::flow::context::worker_startup::failed::HeldGate;
 
-impl ExpiredGateRollback {
+impl RollbackGate {
     /// Build custody only. Reporting still precedes every gate syscall. An
     /// existing driver is moved instead, retaining its earlier Lower bound.
-    pub(in crate::flow::context::worker_startup::expired) fn failed_new(
-        handoff: &FoundationExpiredEnter,
+    pub(in crate::flow::context::worker_startup) fn failed_new(
+        gate: GateRollbackEvidence<'_>,
+        arms: &StartupGate,
         leave: Option<AbsoluteBound>,
         deadline: Option<u64>,
         now: u64,
@@ -17,26 +17,17 @@ impl ExpiredGateRollback {
         let end = deadline
             .map(|end| end.min(began.saturating_add(weaver_types::LOWER_BOUND_MS * 1_000_000)));
         let bound = end.and_then(|end| AbsoluteBound::from_absolute(began, end).ok());
-        let gate = match handoff.held.as_ref() {
-            HeldStartup::Gate(gate) | HeldStartup::Ready { gate, .. } => gate,
-            _ => unreachable!("checked actual gate handoff"),
-        };
-        let raised = handoff
-            .gate
-            .as_ref()
-            .and_then(|arms| arms.port.as_ref())
-            .is_some_and(|port| {
-                gate.enter == Some(handoff.identity.enter)
-                    && gate.send.as_ref().is_some_and(|send| {
-                        send.sent()
-                            && send.belongs_to(port)
-                            && send.matches_exchange(&gate.raise.exchange)
-                            && send.sent_at().is_some_and(|at| {
-                                at >= handoff.identity.enter.began_ns()
-                                    && !handoff.identity.enter.expired(at)
-                            })
-                    })
-            });
+        let raised = arms.port.as_ref().is_some_and(|port| {
+            gate.gate_enter == Some(gate.enter)
+                && gate.send.as_ref().is_some_and(|send| {
+                    send.sent()
+                        && send.belongs_to(port)
+                        && send.matches_exchange(&gate.raise.exchange)
+                        && send.sent_at().is_some_and(|at| {
+                            at >= gate.enter.began_ns() && !gate.enter.expired(at)
+                        })
+                })
+        });
         let lower = (allow_lower && bound.is_some() && raised)
             .then(|| gate.raise.exchange.ordinal.checked_add(1))
             .flatten()
@@ -49,9 +40,9 @@ impl ExpiredGateRollback {
                 payload: WirePayload::Directive(LifecycleDirective::Lower),
             });
         Self {
-            // With no remaining cap, keep the original expired interval as
+            // With no remaining cap, keep the original Enter interval as
             // evidence. Only nonblocking disposal can use that carrier.
-            bound: bound.unwrap_or(handoff.identity.enter),
+            bound: bound.unwrap_or(gate.enter),
             lower,
             send: None,
             raise_reply: None,
@@ -91,7 +82,7 @@ impl ExpiredGateRollback {
         }
     }
 
-    pub(in crate::flow::context::worker_startup::expired) fn failed_dispose(
+    pub(in crate::flow::context::worker_startup) fn failed_dispose(
         &mut self,
         arms: &mut StartupGate,
     ) {
@@ -102,7 +93,7 @@ impl ExpiredGateRollback {
     /// The first halt stays primary; available later facts become secondary.
     fn failed_receive(
         &mut self,
-        gate: &HeldGate,
+        gate: GateRollbackEvidence<'_>,
         arms: &mut StartupGate,
         tail: &mut FailedRunCleanup,
     ) {
@@ -122,7 +113,7 @@ impl ExpiredGateRollback {
                     && send.belongs_to(port)
                     && send.matches_exchange(&frame.exchange)
                     && send.sent_at().is_some_and(|at| {
-                        gate.enter
+                        gate.gate_enter
                             .is_some_and(|enter| at >= enter.began_ns() && !enter.expired(at))
                     })
             });
@@ -178,9 +169,10 @@ impl ExpiredGateRollback {
         self.failed_end(arms, !stopped, false);
     }
 
-    pub(in crate::flow::context::worker_startup::expired) fn failed_step(
+    pub(in crate::flow::context::worker_startup) fn failed_step(
         &mut self,
-        handoff: &mut FoundationExpiredEnter,
+        gate: GateRollbackEvidence<'_>,
+        arms: &mut StartupGate,
         sweep_reported: &mut bool,
         tail: &mut FailedRunCleanup,
         io: &mut impl PumpIo,
@@ -188,11 +180,6 @@ impl ExpiredGateRollback {
         if !tail.clock(io) {
             return Err("failed gate original cap or clock");
         }
-        let gate = match handoff.held.as_ref() {
-            HeldStartup::Gate(gate) | HeldStartup::Ready { gate, .. } => gate,
-            _ => unreachable!("checked actual gate handoff"),
-        };
-        let arms = handoff.gate.as_mut().expect("actual gate resources");
         if self.bound.expired(tail.context.last_ns)
             || (!self.transport_done && self.lower.is_none())
         {
@@ -288,9 +275,9 @@ impl ExpiredGateRollback {
         }
     }
 
-    pub(in crate::flow::context::worker_startup::expired) fn failed_wait(
+    pub(in crate::flow::context::worker_startup) fn failed_wait(
         &self,
-        handoff: &FoundationExpiredEnter,
+        arms: &StartupGate,
         tail: &mut FailedRunCleanup,
         io: &mut impl PumpIo,
     ) -> bool {
@@ -314,7 +301,7 @@ impl ExpiredGateRollback {
             events: PollFlags::POLLIN,
         }];
         if !self.transport_done
-            && let Some(port) = handoff.gate.as_ref().and_then(|arms| arms.port.as_ref())
+            && let Some(port) = arms.port.as_ref()
         {
             interests.push(WaitInterest {
                 fd: port.fd(),

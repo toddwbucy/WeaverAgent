@@ -8,6 +8,9 @@ use weaver_types::{AgentState, LifecycleAnswer, LifecycleDirective};
 pub(in crate::flow::context::worker_startup) mod stop;
 use stop::StopWork;
 
+#[path = "context_worker_entered_rollback_handoff.rs"]
+mod rollback_handoff;
+
 enum ManagementAnswer {
     Observation(ObservationEnvelope),
     Lifecycle(OrganEnvelope),

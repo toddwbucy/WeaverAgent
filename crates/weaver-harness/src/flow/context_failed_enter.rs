@@ -474,7 +474,7 @@ pub(in crate::flow) struct FailedRunCleanup {
     release_reply: Option<ReceivedOrgan>,
     prior_residency: Option<ResidencyRequest>,
     prior_residency_reply: Option<ReceivedOrgan>,
-    expired_release: Option<Box<expired_residency::ExpiredResidencyRelease>>,
+    expired_release: Option<Box<expired_residency::RollbackResidencyRelease>>,
     release_failure: Option<String>,
     release_blocked: bool,
     refused_release: Option<LifecycleDirective>,
@@ -659,7 +659,7 @@ impl FailedRunCleanup {
         resources: FailedEnterResources,
         leave: Option<AbsoluteBound>,
         cause: Option<weaver_types::Cause>,
-        release: Option<expired_residency::ExpiredResidencyRelease>,
+        release: Option<expired_residency::RollbackResidencyRelease>,
         admit_reply: Option<ReceivedOrgan>,
     ) -> Self {
         let mut owner = Self::after_rollback(context, resources, leave, cause);

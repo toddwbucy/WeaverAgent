@@ -62,6 +62,9 @@ fn frame(index: usize, malformed: bool) -> OrganEnvelope {
     }
 }
 pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
+    if ready_rollback::is_mode(mode) {
+        return ready_rollback::gate(mode, root, fd);
+    }
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
     packet!(fd, &frame(0, mode.ends_with("refused")));
     if mode.ends_with("queued") {
@@ -312,6 +315,12 @@ fn management(socket: &Path, directive: LifecycleDirective) -> std::os::fd::Owne
     );
     peer
 }
+
+#[path = "context_worker_ready_rollback_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod ready_rollback;
+
+#[path = "context_worker_ready_rollback_edges_tests.rs"]
+mod ready_rollback_edges;
 
 pub(in crate::flow::context::worker_startup) fn exercise(
     serving: FoundationServing<'_>,
