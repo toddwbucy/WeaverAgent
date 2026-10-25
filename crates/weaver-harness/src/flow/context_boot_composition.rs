@@ -135,6 +135,15 @@ impl BootComposition<'_> {
         self.started = true;
     }
     #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_stage_summary(&mut self, io: &mut impl PumpIo) {
+        assert_eq!(self.stage, BootStage::Summary);
+        assert!(!self.started);
+        self.context
+            .begin_boot_plan_summary(self.repaired.take().unwrap(), io)
+            .unwrap();
+        self.started = true;
+    }
+    #[cfg(test)]
     pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
         self.context
     }

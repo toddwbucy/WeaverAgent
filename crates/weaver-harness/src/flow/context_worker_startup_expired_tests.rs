@@ -2,8 +2,8 @@ use super::super::failed::tests::{context, reached};
 use super::super::tests::{EnterGuard, Member, dial, packet, reap};
 use super::*;
 use crate::flow::clock::testing::FakePumpIo;
-use crate::flow::context::BootPairsProgress;
 use crate::flow::context::startup_composition::tests::CircuitIo;
+use crate::flow::context::{BootPairsProgress, InspectionKind};
 use crate::flow::coordinator::{FlowRecording, OperationCompletion};
 use crate::flow::pump::PumpPorts;
 use nix::sys::socket::{MsgFlags, send};
@@ -130,7 +130,10 @@ pub(in crate::flow::context::worker_startup) fn enter(
     let template_pressure = mode.contains("-template-record-")
         || mode.contains("-template-component-")
         || mode.contains("-template-foreign-");
-    let target = if mode.starts_with("expired-startup-repair-") {
+    let summary_account = mode.starts_with("expired-startup-summary-account-");
+    let target = if summary_account {
+        "failed-startup-summary-read".to_owned()
+    } else if mode.starts_with("expired-startup-repair-") {
         "failed-startup-repair".to_owned()
     } else if mode.starts_with("expired-startup-admission-") {
         "failed-startup-before-classifier".to_owned()
@@ -147,6 +150,21 @@ pub(in crate::flow::context::worker_startup) fn enter(
         .starts_with("expired-startup-classifying")
         .then(|| root.join("classifier-bootstrap"));
     let repair_filing = mode.starts_with("expired-startup-repair-filing-");
+    if summary_account && mode.contains("-populated-") {
+        let corpus: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("fixtures/recall-sources.json")).unwrap();
+        member.summary = Some(
+            serde_json::from_value(
+                corpus
+                    .iter()
+                    .find(|row| row["case"] == "plan_current_populated")
+                    .unwrap()["result"]
+                    .clone(),
+            )
+            .unwrap(),
+        );
+    }
+
     if matches!(
         mode,
         "expired-startup-repair-filed-complete" | "expired-startup-repair-proposed-complete"
@@ -237,6 +255,66 @@ pub(in crate::flow::context::worker_startup) fn enter(
         }
         member.step(clock.now().unwrap(), "ready");
         std::thread::sleep(Duration::from_millis(1));
+    }
+    if summary_account {
+        let EnterState::Boot(owner) = guard.0.as_mut().unwrap().state.as_mut().unwrap() else {
+            panic!("original summary boot owner");
+        };
+        owner.failure_test_stage_summary(&mut CircuitIo(clock));
+        let context = context(guard.0.as_mut().unwrap());
+        if !mode.contains("-unstarted-") {
+            loop {
+                assert!(Instant::now() < limit, "original summary did not settle");
+                let mut ports = PumpPorts {
+                    lifecycle: LifecyclePorts {
+                        listener: None,
+                        peer: None,
+                        residency: None,
+                        dial: None,
+                        leave_peer: None,
+                    },
+                    gate: None,
+                    decode: None,
+                    label: None,
+                    io: &mut CircuitIo(clock),
+                };
+                let progress = context.advance_plan_summary(&mut ports).unwrap();
+                if progress == crate::flow::context::PlanSummaryProgress::Complete {
+                    break;
+                }
+                member.step(
+                    clock.now().unwrap(),
+                    if mode.contains("-refused-") {
+                        "summary-refused"
+                    } else {
+                        "ready"
+                    },
+                );
+                if progress == crate::flow::context::PlanSummaryProgress::Pending {
+                    context
+                        .pump_once(&mut PumpPorts {
+                            lifecycle: LifecyclePorts {
+                                listener: None,
+                                peer: None,
+                                residency: None,
+                                dial: None,
+                                leave_peer: None,
+                            },
+                            gate: None,
+                            decode: None,
+                            label: None,
+                            io: &mut CircuitIo(clock),
+                        })
+                        .unwrap();
+                }
+            }
+            assert_eq!(
+                context.previous_plan_summary().is_some(),
+                mode.contains("-populated-")
+            );
+        }
+        assert!(context.plan_summary.is_some());
+        assert!(context.read.is_none());
     }
     if [
         "expired-startup-repair-unstarted-complete",
@@ -865,6 +943,20 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
         assert!(owner.run.context.flow.standing_classifier().is_none());
     }
+    let summary_evidence = owner
+        .run
+        .context
+        .plan_summary
+        .as_ref()
+        .filter(|_| owner.run.context.read.is_none())
+        .map(|work| work.expired_test_evidence());
+    let summary_cache = summary_evidence
+        .as_ref()
+        .map(|_| owner.run.context.expired_summary_cache_evidence());
+    let extracted_summary = match owner.handoff.held.as_ref() {
+        HeldStartup::Boot(boot) => boot.summary.as_ref().map(|summary| format!("{summary:?}")),
+        _ => None,
+    };
     let boot_pair_evidence = owner
         .run
         .context
@@ -1506,6 +1598,94 @@ pub(in crate::flow::context::worker_startup) fn finish(
             .unwrap();
         assert!(context.can_park_expired_startup_read(&permit));
     }
+    if summary_evidence.is_some() {
+        let context = &mut owner.run.context;
+        for (origin, enter, held_leave) in [
+            (Arc::new(()), original_enter, leave),
+            (
+                Arc::clone(&context.read_origin),
+                AbsoluteBound::from_absolute(
+                    original_enter.began_ns() + 1,
+                    original_enter.deadline_ns(),
+                )
+                .unwrap(),
+                leave,
+            ),
+            (
+                Arc::clone(&context.read_origin),
+                original_enter,
+                AbsoluteBound::from_absolute(leave.began_ns() + 1, leave.deadline_ns()).unwrap(),
+            ),
+        ] {
+            assert!(
+                !context.can_detach_expired_boot_summary(&ExpiredStartupAccountPermit {
+                    origin,
+                    enter,
+                    leave: held_leave
+                })
+            );
+        }
+        context.expired_summary_guard_probes(&ExpiredStartupAccountPermit {
+            origin: Arc::clone(&context.read_origin),
+            enter: original_enter,
+            leave,
+        });
+    }
+    if mode.starts_with("expired-startup-summary-account-") {
+        assert_eq!(
+            owner.advance_with_io(&mut CircuitIo(clock)),
+            FoundationExpiredRollbackProgress::Accepted
+        );
+        assert!(
+            owner.active.is_some(),
+            "expired summary account must enter actual cleanup"
+        );
+    }
+    if mode.starts_with("expired-startup-summary-account-") && !mode.ends_with("-cap") {
+        assert_eq!(
+            owner.advance_with_io(&mut CircuitIo(clock)),
+            FoundationExpiredRollbackProgress::Accepted
+        );
+        let context = &mut owner.run.context;
+        assert!(context.deadlines.get(PumpDeadline::Enter).is_none());
+        let ordinary = context
+            .begin_inspection(InspectionKind::Grants, None, &mut CircuitIo(clock))
+            .unwrap_err();
+        assert!(!ordinary.retained && ordinary.failure.is_none());
+        let account = owner.active.as_ref().unwrap().summary.as_ref().unwrap();
+        for (origin, enter, held_leave) in [
+            (Arc::new(()), original_enter, leave),
+            (
+                Arc::clone(&context.read_origin),
+                AbsoluteBound::from_absolute(
+                    original_enter.began_ns() + 1,
+                    original_enter.deadline_ns(),
+                )
+                .unwrap(),
+                leave,
+            ),
+            (
+                Arc::clone(&context.read_origin),
+                original_enter,
+                AbsoluteBound::from_absolute(leave.began_ns() + 1, leave.deadline_ns()).unwrap(),
+            ),
+        ] {
+            let refused = context
+                .begin_expired_summary_grants(
+                    account,
+                    &ExpiredStartupGrantsPermit {
+                        origin,
+                        enter,
+                        leave: held_leave,
+                    },
+                    &mut CircuitIo(clock),
+                )
+                .unwrap_err();
+            assert!(!refused.retained && refused.failure.is_none());
+            assert!(context.inspection.is_none());
+            assert!(context.deadlines.get(PumpDeadline::StateControl).is_none());
+        }
+    }
     if mode.ends_with("-complete")
         || mode.contains("-release-")
         || mode.ends_with("-classifier-varied")
@@ -1871,7 +2051,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         exit.0.test_boot_pairs().unwrap().test_filing().as_ref(),
                         Some(author)
                     );
-                    let context = exit.0.test_filing_context().unwrap();
+                    let context = exit.0.test_context().unwrap();
                     assert_eq!(
                         Some(context.flow.test_boot_filing_evidence()).as_ref(),
                         filing_flow.as_ref()
@@ -1884,6 +2064,22 @@ pub(in crate::flow::context::worker_startup) fn finish(
                     assert!(context.flow.test_boot_filing_progress_current());
                     assert!(context.filing.is_none());
                     member.assert_closed_without_request();
+                }
+                if let Some(expected) = summary_evidence.as_ref() {
+                    assert_eq!(
+                        &exit
+                            .0
+                            .test_summary()
+                            .expect("failed exit retains summary account")
+                            .expired_test_evidence(),
+                        expected
+                    );
+                    let context = exit.0.test_context().unwrap();
+                    assert!(context.plan_summary.is_none());
+                    assert_eq!(
+                        Some(context.expired_summary_cache_evidence()).as_ref(),
+                        summary_cache.as_ref()
+                    );
                 }
                 if template_target {
                     let account = exit
@@ -2154,6 +2350,48 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
         assert_eq!(member.requests, expected_requests);
         member.assert_closed_without_request();
+        if let Some(expected) = summary_evidence.as_ref() {
+            assert_eq!(
+                &owner
+                    .active
+                    .as_ref()
+                    .unwrap()
+                    .summary
+                    .as_ref()
+                    .expect("retain exact summary account")
+                    .expired_test_evidence(),
+                expected
+            );
+            if mode.contains("-refused-") {
+                let account = owner.active.as_ref().unwrap().summary.as_ref().unwrap();
+                assert_eq!(
+                    account.refusal(),
+                    Some(&crate::flow::read::ReadFailure::Refused {
+                        code: s::ReadRefusalCode::ResultTooLarge,
+                        detail: "original boot summary refusal".into(),
+                    })
+                );
+                assert!(
+                    account.recorded_read().is_none(),
+                    "refused summary is not a recorded null"
+                );
+            }
+            assert!(owner.run.context.plan_summary.is_none());
+            assert_eq!(
+                Some(owner.run.context.expired_summary_cache_evidence()).as_ref(),
+                summary_cache.as_ref()
+            );
+            assert!(matches!(
+                owner.run.context.committed_plan_summary(),
+                Err(crate::flow::plan::PlanSummaryUnavailable::Revoked)
+            ));
+        }
+        if let Some(expected) = extracted_summary.as_ref() {
+            let HeldStartup::Boot(boot) = owner.handoff.held.as_ref() else {
+                panic!("original boot summary handoff");
+            };
+            assert_eq!(&format!("{:?}", boot.summary.as_ref().unwrap()), expected);
+        }
         if let Some(expected) = boot_pair_evidence.as_ref() {
             let account = boot_pair_account(owner).expect("retained original boot repair");
             assert_eq!(&account.test_evidence(), expected);
@@ -2392,6 +2630,20 @@ pub(in crate::flow::context::worker_startup) fn finish(
             .unwrap()
         };
         let terminal = rows.last().unwrap();
+        if summary_evidence.is_some() || extracted_summary.is_some() {
+            let expected =
+                usize::from(!mode.contains("-unstarted-") && !mode.contains("-refused-"));
+            assert_eq!(
+                rows.iter()
+                    .filter(|row| row["kind"] == "recall"
+                        && row["payload"]["read"]["selector"]
+                            .get("plan_current")
+                            .is_some())
+                    .count(),
+                expected,
+                "rollback neither invents nor repeats summary recall"
+            );
+        }
         if let Some(files) = boot_pair_filings.as_ref() {
             let terminals: Vec<_> = rows
                 .iter()
@@ -2731,6 +2983,24 @@ pub(in crate::flow::context::worker_startup) fn finish(
             "cap grants no new Unload"
         );
         member.assert_closed_without_request();
+    }
+    if let Some(expected) = summary_evidence.as_ref() {
+        assert_eq!(
+            &owner
+                .active
+                .as_ref()
+                .unwrap()
+                .summary
+                .as_ref()
+                .expect("cap retains exact summary account")
+                .expired_test_evidence(),
+            expected
+        );
+        assert!(owner.run.context.plan_summary.is_none());
+        assert_eq!(
+            Some(owner.run.context.expired_summary_cache_evidence()).as_ref(),
+            summary_cache.as_ref()
+        );
     }
     assert!(owner.run.resources.decode_present_for_serving().is_none());
     assert!(owner.run.resources.residency_port().is_none());

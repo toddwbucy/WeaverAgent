@@ -177,7 +177,11 @@ impl FoundationExpiredRollbackExit {
         }
     }
     #[cfg(test)]
-    pub(super) fn test_filing_context(&self) -> Option<&RecordingContext> {
+    pub(super) fn test_summary(&self) -> Option<&crate::flow::context::PlanSummaryAccount> {
+        self.held.active.as_ref()?.summary.as_ref()
+    }
+    #[cfg(test)]
+    pub(super) fn test_context(&self) -> Option<&RecordingContext> {
         match &self.driver {
             Driver::Halt(tail) => Some(tail.context()),
             Driver::Recorded(_) => None,

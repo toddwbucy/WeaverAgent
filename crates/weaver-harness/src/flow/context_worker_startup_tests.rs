@@ -134,6 +134,7 @@ fn worker_fixture_clock_waits_for_complete_request_receipt() {
         hold_control: None,
         held_control: None,
         boot_pairs: vec![],
+        summary: None,
     };
     let samples = std::cell::Cell::new(0);
     let sample = || {
@@ -231,6 +232,7 @@ impl Files {
                         || mode == "expired-startup-summary-read-held"
                         || mode == "expired-startup-repair-read-held"
                         || mode == "expired-startup-repair-filing-pending-classifier-held"
+                        || mode == "expired-startup-summary-account-retained-classifier-held"
                     {
                         "rollback-held-exit"
                     } else if mode.starts_with("input-") {
@@ -443,6 +445,7 @@ pub(super) struct Member {
     pub(super) hold_control: Option<&'static str>,
     pub(super) held_control: Option<s::StateFrame>,
     pub(super) boot_pairs: Vec<s::ReadPair>,
+    pub(super) summary: Option<s::QueryResult>,
 }
 impl Member {
     pub(super) fn assert_closed_without_request(&mut self) {
@@ -602,7 +605,7 @@ impl Member {
                                 }
                                 s::ReadSelector::PlanCurrent {} => {
                                     self.requests.push("summary".into());
-                                    br#"{"plan_current":{"current":null,"next_plan_id":"40","next_step_id":"50"}}"#.to_vec()
+                                    self.summary.as_ref().map(|result| serde_json::to_vec(result).unwrap()).unwrap_or_else(|| br#"{"plan_current":{"current":null,"next_plan_id":"40","next_step_id":"50"}}"#.to_vec())
                                 }
                                 s::ReadSelector::Marks {} if mode.contains("generation") => {
                                     self.requests.push("marks".into());
@@ -640,6 +643,15 @@ impl Member {
                                         s::ReadRefusalCode::ResultTooLarge,
                                     ),
                                     detail: "whole history exceeds the fixture bound".into(),
+                                }
+                            } else if mode == "summary-refused"
+                                && matches!(selector, s::ReadSelector::PlanCurrent {})
+                            {
+                                s::StateControlAnswer::ControlRefused {
+                                    code: s::ControlRefusalCode::Read(
+                                        s::ReadRefusalCode::ResultTooLarge,
+                                    ),
+                                    detail: "original boot summary refusal".into(),
                                 }
                             } else if mode == "prompt-refusal"
                                 || (mode.ends_with("read-refusal")
@@ -1019,6 +1031,7 @@ fn circuit(mode: &str) {
         hold_control: None,
         held_control: None,
         boot_pairs: vec![],
+        summary: None,
     };
     if mode == "worker" || mode.starts_with("input-worker") {
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -3504,4 +3517,44 @@ scenario!(
 scenario!(
     worker_startup_composition_expired_repair_filing_pending_partial_complete,
     "expired-startup-repair-filing-pending-partial-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_unstarted_complete,
+    "expired-startup-summary-account-unstarted-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_retained_complete,
+    "expired-startup-summary-account-retained-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_populated_complete,
+    "expired-startup-summary-account-populated-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_complete,
+    "expired-startup-summary-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_refused_complete,
+    "expired-startup-summary-account-refused-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_retained_cap,
+    "expired-startup-summary-account-retained-cap"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_retained_release_wrong,
+    "expired-startup-summary-account-retained-release-wrong"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_retained_classifier_held,
+    "expired-startup-summary-account-retained-classifier-held"
 );

@@ -68,6 +68,30 @@ impl ExpiredReleasePermit {
     }
 }
 
+/// The actual rollback Leave permits its Grants comparison after Enter retires.
+/// It grants no ordinary inspection or boot continuation.
+pub(in crate::flow::context) struct ExpiredStartupGrantsPermit {
+    origin: Arc<()>,
+    enter: AbsoluteBound,
+    leave: AbsoluteBound,
+}
+impl ExpiredStartupGrantsPermit {
+    pub(in crate::flow::context) fn allows(&self, context: &RecordingContext) -> bool {
+        Arc::ptr_eq(&self.origin, &context.read_origin)
+            && context.phase == RecordingPhase::Entered
+            && context.flow.phase() == crate::flow::coordinator::CoordinatorPhase::Active
+            && context.retired_enter == Some(self.enter)
+            && context.deadlines.get(PumpDeadline::Enter).is_none()
+            && context.deadlines.get(PumpDeadline::Leave) == Some(self.leave)
+            && self.enter.expired(context.last_ns)
+            && !self.leave.expired(context.last_ns)
+            && context.boot_enter_cancelled
+            && context.flow.preinput_custody()
+            && context.failure.is_none()
+            && context.flow.halt().is_none()
+    }
+}
+
 /// Only the consuming rollback may dispose its original expired startup account.
 /// This grants no query, decode, record or startup work.
 pub(in crate::flow::context) struct ExpiredStartupAccountPermit {

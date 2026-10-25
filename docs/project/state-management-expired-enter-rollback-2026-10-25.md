@@ -10,7 +10,7 @@ explicit rollback and retains the actual startup account through disposal. It
 does not turn elapsed Enter time into a component failure or renew boot work.
 
 Authority: merged HARNESS-ENTER-WINDOW, HARNESS-OPEN, HARNESS-READ, HARNESS-CLASSIFY,
-HARNESS-PLAN-SUMMARY, HARNESS-RECORD-LIFETIME, HARNESS-HALT and HARNESS-CLOCK,
+HARNESS-PLAN, HARNESS-RECORD-LIFETIME, HARNESS-HALT and HARNESS-CLOCK,
 HARNESS-BOOT, Spec 05 BOOT-REPAIR, and weaver-harness-Spec section 6's rollback row.
 The intended composition site is worker/dev_loop's unselected foundation adapter;
 its connection to this owner is still owed.
@@ -644,15 +644,80 @@ unavailable; these author checks are not a Planner grade or production
 qualification. No wire shape, event, dependency, production limit or serving
 selection changes.
 
+## Summary account continuation
+
+Rollback now retains a boot summary between reads: before its first read,
+after a null or populated result has completed, or after the actual typed read
+refusal. The move keeps the entire original transaction, repaired-boot proof,
+Recorded read, cache allocation, disposition and accounting bound. Cache use is
+revoked separately; the stopped account gains no successful boot grant. A
+summary already extracted by the boot owner remains in that owner's handoff.
+
+The new path requires the exact root rollback permit, expired registered Enter,
+checked Open and journal, an idle read seam and no foreign work. It does not
+send or repeat plan_current. The coordinator checks fatal foreign work before
+the recoverable held-input check. An active read still uses the earlier parked
+read path and cannot lend its occupied member seam to a Grants comparison.
+
+Revoking the cache also blocks ordinary inspection. Cleanup's private Grants
+entry therefore requires the retained summary account and a separate permit
+for the actual accepted Leave after the original Enter retires. It bypasses
+only the revoked-summary admission check; all other inspection guards and the
+ordinary bounded request, measurement and completion path remain in force.
+Foreign context, Enter or Leave identities allocate neither an inspection nor
+a deadline. This entry grants no Shape inspection, ordinary query or generation.
+
+Eight new delegated cases cover unstarted, completed null, populated, refused
+and already-extracted summaries, delayed classifier exit, Leave expiry and a
+wrong SPU Release. They retain the original account and cache through cleanup
+and failed exit, check the exact refusal code/detail, reject ordinary inspection
+and foreign cleanup permits, and count the actual plan_current recall without
+inventing or repeating one. The targeted run includes three existing summary
+read cases; all eleven pass.
+
+The three initial reproductions failed at the missing summary handoff. The
+first implementation run exposed the revoked cache's inspection guard, which
+led to the private cleanup entry above. Test corrections used recall's actual
+read wrapper and held the cap fixture before its next blocking Grants step.
+Failed runs and intermediate build errors remain in `summary-account-checks/`;
+none is counted as a passing gate.
+
+All thirteen compiled protective changes were detected after six exact positive
+baselines. They remove the rollback permit, Enter key, non-driving guard or
+checked boot proof; change the original disposition, Recorded read or refusal;
+drop cache revocation or its retained allocation; substitute the cleanup Enter
+or Leave; or discard the account at the cap or failed-exit handoff. All four
+controlled source files were restored byte-for-byte. The first final gate
+attempt required rustfmt's test-import ordering; that correction changes no
+controlled file or behavior, and the failed formatting log remains evidence.
+
+All ten final gates passed in `summary-account-final-checks/results.json`: first
+and last lock checks, formatting, strict trace and harness clippy, both complete
+crate suites, the harness library build, all delegated startup cases and diff
+check. The harness passes 1986 library tests, 43 binary/integration tests and 26
+doctests (2055 total), with 534 library cases ignored. Trace passes 166 tests and
+doctests. The delegated run passes 177 startup cases, including 99 expired-startup
+cases. The final manifest covers 710 crate/configuration files. Other ignored
+families, privileged admin-startup cases and production artifacts remain outside
+these runs.
+
+The approved evidence root's `state-expired-summary-account-local-20261025`
+deposit carries the exact source archive, per-file hashes and accumulated
+checkpoint logs. `summary-account-checks/manual-review.json` follows the new
+entry's callers and original ownership through cleanup and failed exit. The
+review audit finds #343 unchanged at `9cb76cc2`, still draft with no reviews or
+threads. No review was requested. Required review skills remain unavailable;
+these author checks are not a Planner grade or production qualification.
+
 ## Completion boundary
 
-This branch remains local work in progress, with no published PR and no serving
-selection. In particular, the handoff and cap disposal tests for later startup
+Branch `code/state-expired-enter-rollback` is draft work above #343, with no
+serving selection. In particular, the handoff and cap disposal tests for later startup
 positions do not establish cleanup of all pending accounts or gate ownership.
 Those unsupported positions have no ordinary rollback-completion claim. This
 owner must not be wired into a dispatcher as completed cleanup.
 
-The same slice still owes other summary transitions,
+The same slice still owes full composition coverage of summary clock boundaries,
 gate Lower and tool containment,
 before-Load and gate-owned stopped cleanup, and the worker/dev_loop adapter. Successful
 Ready and pre-adoption expiry need their own lifecycle continuations. The full
@@ -660,6 +725,6 @@ Ready and pre-adoption expiry need their own lifecycle continuations. The full
 exit and dispatcher selection, production artifacts and prompt qualification,
 measured limits, security disposition and the operator's coupled cutover.
 
-The filing cases above establish only the named boot-repair rollback boundaries.
+The cases above establish only the named expired-startup rollback boundaries.
 They do not establish gate teardown, the remaining worker adapter or production
 qualification.

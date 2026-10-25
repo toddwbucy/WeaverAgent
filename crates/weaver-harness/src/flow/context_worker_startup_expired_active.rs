@@ -16,6 +16,7 @@ use weaver_trace::GrantSurface;
 enum Stage {
     Admission,
     BootPairs,
+    Summary,
     Templates,
     Read,
     Open,
@@ -46,6 +47,7 @@ pub(super) struct ExpiredActiveRollback {
         Option<crate::flow::context::expired_admission_driver::StoppedAdmissionAccount>,
     classifier_started: bool,
     pub(super) boot_pairs: Option<crate::flow::context::boot_pair_driver::StoppedBootPairsAccount>,
+    pub(super) summary: Option<PlanSummaryAccount>,
     member: weaver_trace::MemberRelease,
 }
 
@@ -71,6 +73,20 @@ impl ExpiredActiveRollback {
     ) -> Result<(), String> {
         let context = &mut owner.run.context;
         let leave = owner.leave.unwrap();
+        if self.stage == Stage::Summary {
+            let permit = ExpiredStartupAccountPermit {
+                origin: Arc::clone(&context.read_origin),
+                enter: owner.handoff.identity.enter,
+                leave,
+            };
+            self.summary = Some(
+                context
+                    .detach_expired_boot_summary(&permit, io)
+                    .map_err(|error| format!("expired boot summary: {error:?}"))?,
+            );
+            self.stage = Stage::Enter;
+            return Ok(());
+        }
         if self.stage == Stage::BootPairs {
             let permit = ExpiredStartupAccountPermit {
                 origin: Arc::clone(&context.read_origin),
@@ -188,7 +204,20 @@ impl ExpiredActiveRollback {
             match self.stage {
                 Stage::Grants => {
                     if !self.inspecting {
-                        match context.begin_inspection(InspectionKind::Grants, None, io) {
+                        let begin = if let Some(summary) = &self.summary {
+                            context.begin_expired_summary_grants(
+                                summary,
+                                &ExpiredStartupGrantsPermit {
+                                    origin: Arc::clone(&context.read_origin),
+                                    enter: owner.handoff.identity.enter,
+                                    leave,
+                                },
+                                io,
+                            )
+                        } else {
+                            context.begin_inspection(InspectionKind::Grants, None, io)
+                        };
+                        match begin {
                             Ok(()) => self.inspecting = true,
                             Err(error) => {
                                 self.inspecting = error.retained;
@@ -363,6 +392,7 @@ impl ExpiredActiveRollback {
                 }
                 Stage::Admission
                 | Stage::BootPairs
+                | Stage::Summary
                 | Stage::Templates
                 | Stage::Read
                 | Stage::Open
@@ -431,6 +461,7 @@ impl FoundationExpiredRollback {
         let detach_templates = context.can_detach_expired_templates(&permit);
         let detach_admission = context.can_detach_expired_admission(&permit);
         let detach_boot_pairs = context.can_detach_expired_boot_pairs(&permit);
+        let detach_summary = context.can_detach_expired_boot_summary(&permit);
         let initial = matches!(self.handoff.held.as_ref(), HeldStartup::Initial(account)
             if account.load_sequence.is_some() && account.opened.is_some() && account.initial_grants.is_some());
         if self.before_load
@@ -452,7 +483,7 @@ impl FoundationExpiredRollback {
             || (context.deadlines.get(PumpDeadline::StateControl).is_some() && !park_read)
             || (context.boot_open_blocks_external() && !detach_open)
             || context.place_owed()
-            || (context.plan_summary.is_some() && !park_read)
+            || (context.plan_summary.is_some() && !park_read && !detach_summary)
             || context.repair.is_some()
             || (context.boot_pairs.is_some() && !detach_boot_pairs)
             || (context.read.is_some() && !park_read)
@@ -478,6 +509,8 @@ impl FoundationExpiredRollback {
                 Stage::Templates
             } else if park_read {
                 Stage::Read
+            } else if detach_summary {
+                Stage::Summary
             } else if detach_boot_pairs {
                 Stage::BootPairs
             } else if detach_open {
@@ -498,6 +531,7 @@ impl FoundationExpiredRollback {
             admission: None,
             classifier_started: self.run.resources.classifier_child().is_some(),
             boot_pairs: None,
+            summary: None,
             member: weaver_trace::MemberRelease::Closed,
         })
     }
