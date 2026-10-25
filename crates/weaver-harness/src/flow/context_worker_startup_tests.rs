@@ -203,7 +203,20 @@ impl Files {
                 classify: Some(self.child(
                     "checker",
                     "WEAVER_STARTUP_COMPOSITION_CHILD",
-                    if mode == "expired-startup-classifier-held"
+                    if mode.contains("-template-component-") {
+                        "template-component"
+                    } else if mode == "expired-startup-template-held" {
+                        "template-silent-held"
+                    } else if mode.contains("-template-record-")
+                        || mode.contains("-template-between-")
+                        || mode.contains("-template-completion-")
+                        || mode.contains("-template-recorded-")
+                        || mode.contains("-template-foreign-")
+                    {
+                        "ready"
+                    } else if mode.starts_with("expired-startup-template-") {
+                        "template-silent"
+                    } else if mode == "expired-startup-classifier-held"
                         || mode == "expired-startup-summary-read-held"
                     {
                         "rollback-held-exit"
@@ -3191,6 +3204,50 @@ scenario!(
 scenario!(
     worker_startup_composition_expired_prompt_read,
     "expired-startup-prompt-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template,
+    "expired-startup-template-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_unsent,
+    "expired-startup-template-unsent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_between,
+    "expired-startup-template-between-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_record,
+    "expired-startup-template-record-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_held,
+    "expired-startup-template-held"
+);
+scenario!(
+    worker_startup_composition_expired_template_release_wrong,
+    "expired-startup-template-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_template_cap,
+    "expired-startup-template-cap"
+);
+scenario!(
+    worker_startup_composition_expired_template_component,
+    "expired-startup-template-component-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_foreign,
+    "expired-startup-template-foreign-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_completion,
+    "expired-startup-template-completion-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_recorded,
+    "expired-startup-template-recorded-complete"
 );
 scenario!(
     worker_startup_composition_expired_summary_read,

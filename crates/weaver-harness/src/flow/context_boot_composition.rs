@@ -107,6 +107,17 @@ impl BootComposition<'_> {
         !self.decode.open_not_started() && !self.context.boot_open_account_settled()
     }
     #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_template_sent(&self) -> bool {
+        self.context.flow.pending_check().is_some()
+            && self
+                .context
+                .flow
+                .standing_classifier()
+                .is_some_and(|classifier| {
+                    classifier.outstanding().is_some() && !classifier.wants_write()
+                })
+    }
+    #[cfg(test)]
     pub(in crate::flow::context) fn failure_test_stage_open(&mut self, io: &mut impl PumpIo) {
         assert_eq!(self.stage, BootStage::Open);
         assert!(!self.started);
@@ -116,6 +127,10 @@ impl BootComposition<'_> {
     }
     #[cfg(test)]
     pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.context
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context_ref(&self) -> &RecordingContext {
         self.context
     }
     pub(in crate::flow::context) fn failed_identity(&self) -> Option<StartupIdentity> {

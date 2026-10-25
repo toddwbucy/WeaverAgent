@@ -93,7 +93,30 @@ fn startup_composition_child() {
                     assert_eq!(message.tag, Tag::Request);
                     let request: s::Ste100Request =
                         serde_json::from_slice(&message.payload).unwrap();
-                    let reply = if let s::Ste100Target::Input { .. } = request.target {
+                    if mode.starts_with("template-silent") {
+                        assert!(matches!(request.target, s::Ste100Target::Template { .. }));
+                        let root =
+                            PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
+                        assert!(
+                            !root.join("template-request").exists(),
+                            "no second expired template request"
+                        );
+                        std::fs::write(root.join("template-request"), &message.payload).unwrap();
+                        continue;
+                    }
+                    let reply = if mode == "template-component" {
+                        assert!(matches!(request.target, s::Ste100Target::Template { .. }));
+                        refusing = true;
+                        s::Ste100Reply {
+                            request_id: request.request_id,
+                            target: request.target,
+                            scheme_id: request.scheme_id,
+                            result: s::Ste100Result::ComponentFailed {
+                                code: s::Ste100ComponentCode::NoResult,
+                                detail: "exact template no-result".into(),
+                            },
+                        }
+                    } else if let s::Ste100Target::Input { .. } = request.target {
                         assert!(mode.starts_with("input-"), "unexpected input check");
                         if mode == "input-check-eof" {
                             return;
@@ -143,7 +166,7 @@ fn startup_composition_child() {
             }
             Ok(_) => {}
             Err(_) => {
-                if mode == "rollback-held-exit" {
+                if mode == "rollback-held-exit" || mode == "template-silent-held" {
                     let root = PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
                     std::fs::write(root.join("classifier-retired"), b"closed").unwrap();
                     while !root.join("classifier-exit").exists() {

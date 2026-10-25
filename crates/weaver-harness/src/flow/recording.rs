@@ -1070,6 +1070,31 @@ impl RecordBarrier {
         })
     }
 
+    pub(super) fn pending_classifier_result_matches(
+        &self,
+        reply: &weaver_types::state_flow::Ste100Reply,
+    ) -> bool {
+        matches!(&self.pending, Some((event, RecordPurpose::Classifier(expected)))
+            if expected == reply && event.envelope.turn.is_none())
+            && self
+                .pending_author
+                .as_ref()
+                .is_some_and(|author| author.event.turn.is_none())
+    }
+
+    pub(super) fn retain_template_rollback_record(
+        &mut self,
+        permit: &super::context::TemplateRollbackPermit,
+    ) -> Result<StoppedStartupRecord, &'static str> {
+        if !permit.matches_record(self) {
+            return Err("template rollback lost its exact record");
+        }
+        Ok(StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        })
+    }
+
     pub(super) fn retain_expired_startup_record(
         &mut self,
         permit: &super::context::worker_startup::expired::ExpiredStartupDisposal,

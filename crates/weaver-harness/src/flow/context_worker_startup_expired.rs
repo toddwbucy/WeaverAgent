@@ -37,8 +37,9 @@ pub(in crate::flow::context) struct ExpiredEnterIdentity {
     residency: Option<PortIdentity>,
 }
 
-/// Issued after the actual rollback seal and classifier reap. Its Leave permits
-/// only release of this run's original resources, never another startup write.
+/// Issued after the actual rollback seal. Its Leave permits only release of
+/// this run's original resources, never another startup write. The caller still
+/// completes classifier reap before releasing the SPU or member.
 pub(in crate::flow::context) struct ExpiredReleasePermit {
     origin: Arc<()>,
     enter: AbsoluteBound,
@@ -650,6 +651,7 @@ impl FoundationExpiredRollback {
             preflight.retire_dials();
         }
         if let Some(active) = &mut self.active {
+            active.retire_accounts();
             active.retire_dials();
         }
         self.retired_dial = self.dial.take().map(|dial| RetiredDial {

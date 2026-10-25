@@ -2445,6 +2445,7 @@ pub(in crate::flow) mod boot_composition;
 
 #[path = "context_templates.rs"]
 mod template_driver;
+pub(super) use template_driver::TemplateRollbackPermit;
 #[allow(unused_imports)] // Dormant certification boundary, consumed by enter at cutover.
 pub(super) use template_driver::{TemplateBeginError, TemplateBeginRefusal, TemplateProgress};
 

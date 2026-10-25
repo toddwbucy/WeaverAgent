@@ -3,6 +3,7 @@ use super::super::tests::{EnterGuard, Member, dial, packet, reap};
 use super::*;
 use crate::flow::clock::testing::FakePumpIo;
 use crate::flow::context::startup_composition::tests::CircuitIo;
+use crate::flow::coordinator::OperationCompletion;
 use nix::sys::socket::{MsgFlags, send};
 use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -111,7 +112,18 @@ pub(in crate::flow::context::worker_startup) fn enter(
     let suffix = suffix.strip_suffix("-held").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-cursor").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-measurement").unwrap_or(suffix);
-    let target = format!("failed-startup-{suffix}");
+    let template_pressure = mode.contains("-template-record-")
+        || mode.contains("-template-component-")
+        || mode.contains("-template-foreign-");
+    let target = if template_pressure {
+        "failed-startup-template-record".to_owned()
+    } else if mode.contains("-template-completion-") {
+        "failed-startup-template-recorded".to_owned()
+    } else {
+        format!("failed-startup-{suffix}")
+    };
+    let mut template_pressure_filled = false;
+    let mut template_probe_interrupted = false;
     let read_target = matches!(suffix, "prompt" | "summary-read");
     if read_target && !mode.contains("-cursor-") {
         member.hold_control = Some(if suffix == "prompt" {
@@ -128,6 +140,22 @@ pub(in crate::flow::context::worker_startup) fn enter(
             "target {target}: {:?}",
             guard.0.as_ref().unwrap().detail()
         );
+        if template_pressure
+            && !template_pressure_filled
+            && reached(guard.0.as_ref().unwrap(), "failed-startup-boot")
+        {
+            super::super::failed::tests::fill_trace(context(guard.0.as_mut().unwrap()), clock);
+            template_pressure_filled = true;
+        }
+        if (mode.contains("-template-recorded-") || mode.contains("-template-completion-"))
+            && !template_probe_interrupted
+            && reached(guard.0.as_ref().unwrap(), "failed-startup-boot")
+        {
+            context(guard.0.as_mut().unwrap())
+                .flow
+                .interrupt_classifier_terminal_probes_for_test(8);
+            template_probe_interrupted = true;
+        }
         // SAFETY: the original fixture guards reap all actual children.
         let progress = unsafe {
             guard
@@ -147,6 +175,44 @@ pub(in crate::flow::context::worker_startup) fn enter(
         }
         member.step(clock.now().unwrap(), "ready");
         std::thread::sleep(Duration::from_millis(1));
+    }
+    if mode.contains("-template-completion-") {
+        // Reduce the actual Recorded classifier proof without letting the boot
+        // driver consume it into the transcript in the same call. This exercises
+        // the intermediate coordinator owner, with no fabricated result/proof.
+        let context = context(guard.0.as_mut().unwrap());
+        while context.flow.operation_completion().is_none() {
+            assert!(
+                Instant::now() < limit,
+                "Recorded classifier did not release"
+            );
+            context.reduce_flow(&mut CircuitIo(clock)).unwrap();
+        }
+        assert!(matches!(
+            context.flow.operation_completion(),
+            Some(OperationCompletion::Check(_))
+        ));
+        assert_eq!(context.template_transcript().unwrap().accepted_count(), 0);
+    }
+    if mode.contains("-template-foreign-") {
+        use crate::flow::recording::{RecordProgress, RecordPurpose};
+        let context = context(guard.0.as_mut().unwrap());
+        let author = context.barrier.pending_author().unwrap();
+        let event = author.event.clone();
+        let ticket = author.ticket;
+        assert!(context.barrier.abandon_boot_author(ticket));
+        assert!(matches!(
+            context.barrier.submit_authored_with_clock(
+                event,
+                RecordPurpose::Observation,
+                &context.author,
+                1,
+                &mut context.inbox,
+                &mut context.budget,
+                &mut || clock.now()
+            ),
+            RecordProgress::Pending
+        ));
     }
     guard.0 = Some(
         guard
@@ -369,6 +435,65 @@ pub(in crate::flow::context::worker_startup) fn finish(
             .is_none()
     );
     let requests = member.requests.clone();
+    let template_target = mode.contains("-template-");
+    let template_request = template_target
+        .then(|| owner.run.context.flow.classifier().outstanding().cloned())
+        .flatten();
+    let template_reply = template_target
+        .then(|| {
+            owner
+                .run
+                .context
+                .flow
+                .classifier()
+                .held()
+                .cloned()
+                .or_else(|| match owner.run.context.flow.operation_completion() {
+                    Some(OperationCompletion::Check(record)) => Some(record.reply().clone()),
+                    _ => None,
+                })
+        })
+        .flatten();
+    let template_extra_recorded = usize::from(
+        template_target
+            && (owner
+                .run
+                .context
+                .flow
+                .pending_classifier_recorded()
+                .is_some()
+                || matches!(
+                    owner.run.context.flow.operation_completion(),
+                    Some(OperationCompletion::Check(_))
+                )),
+    );
+    let template_records = template_target.then(|| {
+        owner
+            .run
+            .context
+            .template_transcript()
+            .unwrap()
+            .records()
+            .iter()
+            .map(|record| {
+                (
+                    record.operation().clone(),
+                    record.reply().clone(),
+                    record.result_source().clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    });
+    let template_record = template_target
+        .then(|| {
+            owner.run.context.barrier.pending().map(|event| {
+                (
+                    serde_json::to_vec(event).unwrap(),
+                    owner.run.context.barrier.pending_author().unwrap().ticket,
+                )
+            })
+        })
+        .flatten();
     let read_evidence = owner.run.context.read.as_ref().map(|read| {
         (
             read.plan_bound(),
@@ -697,6 +822,41 @@ pub(in crate::flow::context::worker_startup) fn finish(
         );
         assert!(context.failure.is_none() && context.flow.halt().is_none());
     }
+    if template_target {
+        let context = &owner.run.context;
+        for (origin, enter, leave) in [
+            (Arc::new(()), original_enter, leave),
+            (
+                Arc::clone(&context.read_origin),
+                AbsoluteBound::from_absolute(
+                    original_enter.began_ns() + 1,
+                    original_enter.deadline_ns(),
+                )
+                .unwrap(),
+                leave,
+            ),
+            (
+                Arc::clone(&context.read_origin),
+                original_enter,
+                AbsoluteBound::from_absolute(leave.began_ns() + 1, leave.deadline_ns()).unwrap(),
+            ),
+        ] {
+            assert!(
+                !context.can_detach_expired_templates(&ExpiredStartupAccountPermit {
+                    origin,
+                    enter,
+                    leave
+                })
+            );
+        }
+        assert!(
+            context.can_detach_expired_templates(&ExpiredStartupAccountPermit {
+                origin: Arc::clone(&context.read_origin),
+                enter: original_enter,
+                leave,
+            })
+        );
+    }
     if pending_read {
         let context = &mut owner.run.context;
         for (origin, enter, leave) in [
@@ -758,6 +918,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         || mode.ends_with("-classifier-unreadable")
         || mode.ends_with("-classifier-held")
         || mode.ends_with("-read-held")
+        || mode.ends_with("-template-held")
     {
         // This cleanup waits for child exit with no socket descriptors. The
         // general circuit fake only supplies readiness for actual interests.
@@ -779,14 +940,18 @@ pub(in crate::flow::context::worker_startup) fn finish(
             }
         }
         let limit = Instant::now() + Duration::from_secs(4);
-        let mut release_child =
-            !(mode.ends_with("-classifier-held") || mode.ends_with("-read-held"));
+        let mut release_child = !(mode.ends_with("-classifier-held")
+            || mode.ends_with("-read-held")
+            || mode.ends_with("-template-held"));
         let mut release_spu = !mode.ends_with("-release-held");
         let unsent_open = mode == "expired-startup-open-unsent-complete";
         let incomplete_open = mode.starts_with("expired-startup-open-") && !unsent_open;
         // Every child is already forked. Drain the real writer concurrently:
         // close_after_drain is itself a blocking operation under its bound.
-        let trace_reader = (pending_open.is_some() || pending_read_record.is_some()).then(|| {
+        let trace_reader = (pending_open.is_some()
+            || pending_read_record.is_some()
+            || template_record.is_some())
+        .then(|| {
             use std::io::BufRead;
             let input = reader.try_clone().unwrap();
             input
@@ -820,6 +985,93 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 owner.detail()
             );
             let progress = owner.advance_with_io(&mut CleanupIo(clock));
+            let template_failure =
+                mode.contains("-template-component-") || mode.contains("-template-foreign-");
+            if template_failure && progress == FoundationExpiredRollbackProgress::Stopped {
+                let expected_reason = if mode.contains("-component-") {
+                    FlowHaltReason::ClassifierFailed
+                } else {
+                    FlowHaltReason::ProtocolFailed
+                };
+                assert!(
+                    matches!(owner.run.context.failure.as_ref(), Some(RunFailure::Flow { reason, .. }) if *reason == expected_reason)
+                );
+                assert_eq!(
+                    owner.run.context.flow.classifier().held(),
+                    template_reply.as_ref()
+                );
+                assert!(
+                    owner.active.as_ref().unwrap().templates.is_none(),
+                    "failure retains original context custody"
+                );
+                assert!(owner.unload_sequence().is_none() && packet(&peer).is_none());
+                let first = owner.run.context.failure.clone().unwrap();
+                let mut exit = ExitGuard(
+                    guard
+                        .0
+                        .take()
+                        .unwrap()
+                        .failed_exit()
+                        .ok()
+                        .expect("actual failed template rollback"),
+                );
+                use super::super::rollback::failed::FoundationRollbackExitProgress as ExitProgress;
+                loop {
+                    assert!(
+                        Instant::now() < limit,
+                        "failed template rollback did not close"
+                    );
+                    assert_eq!(exit.0.failure(), Some(&first));
+                    assert!(exit.0.deadline().unwrap() <= leave.deadline_ns());
+                    if exit.0.advance_with_io(&mut CleanupIo(clock)) == ExitProgress::Closed {
+                        break;
+                    }
+                    if exit.0.progress() == ExitProgress::Pending {
+                        exit.0.wait_with_io(&mut CleanupIo(clock));
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert!(!exit.0.abandoned());
+                assert!(
+                    packet(&peer).is_none(),
+                    "failed template rollback grants no Left"
+                );
+                let sequence = exit
+                    .0
+                    .unload_sequence()
+                    .expect("bounded failed template Unload");
+                let rows = trace_reader.unwrap().join().unwrap();
+                assert_eq!(rows.iter().filter(|row| row["kind"] == "unload").count(), 1);
+                assert!(rows.iter().any(|row| row["kind"] == "fault"));
+                if mode.contains("-template-component-") {
+                    let results = rows
+                        .iter()
+                        .filter(|row| row["kind"] == "ste100.result")
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        results.len(),
+                        1,
+                        "the actual failure reply records once under the halt cap"
+                    );
+                    assert_eq!(
+                        results[0]["payload"],
+                        serde_json::to_value(template_reply.as_ref().unwrap()).unwrap()
+                    );
+                }
+                assert_eq!(
+                    rows.last().unwrap()["sequence"]
+                        .as_str()
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap(),
+                    sequence
+                );
+                assert_eq!(
+                    rows.last().unwrap()["payload"]["end_reason"],
+                    "component_failure"
+                );
+                return;
+            }
             if invalid_release && progress == FoundationExpiredRollbackProgress::Stopped {
                 assert!(owner.run.context.flow.halt().is_some());
                 assert!(owner.unload_sequence().is_none());
@@ -911,6 +1163,16 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         expected
                     );
                 }
+                if template_target {
+                    let account = exit
+                        .0
+                        .test_templates()
+                        .expect("failed exit retains template account");
+                    assert_eq!(account.check.request(), template_request.as_ref());
+                    assert_eq!(account.check.reply(), template_reply.as_ref());
+                    assert_eq!(account.enter(), original_enter);
+                    assert!(account.check.transport_retired());
+                }
                 assert_eq!(exit.0.channel_fault(), Some(crate::ChannelFault::Closed));
                 assert!(matches!(
                     exit.0.test_spu_child(),
@@ -947,7 +1209,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
             );
             if progress == FoundationExpiredRollbackProgress::Closed {
                 assert!(
-                    release_child && release_spu && !invalid_release,
+                    release_child && release_spu && !invalid_release && !template_failure,
                     "Left cannot precede the actual classifier reap"
                 );
                 break;
@@ -1157,6 +1419,46 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
         assert_eq!(member.requests, expected_requests);
         member.assert_closed_without_request();
+        if template_target {
+            let account = owner
+                .active
+                .as_ref()
+                .unwrap()
+                .templates
+                .as_ref()
+                .expect("original template account");
+            assert_eq!(account.check.request(), template_request.as_ref());
+            assert_eq!(account.check.reply(), template_reply.as_ref());
+            assert_eq!(account.enter(), original_enter);
+            assert!(account.check.transport_retired());
+            let retained = account
+                .transcript()
+                .records()
+                .iter()
+                .map(|record| {
+                    (
+                        record.operation().clone(),
+                        record.reply().clone(),
+                        record.result_source().clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(&retained, template_records.as_ref().unwrap());
+            if let Some((event, ticket)) = template_record.as_ref() {
+                let (retained, retained_ticket) = account
+                    .check
+                    .test_record()
+                    .expect("pending template result retained");
+                assert_eq!(&serde_json::to_vec(retained).unwrap(), event);
+                assert_eq!(&retained_ticket, ticket);
+            }
+            if mode.contains("-unsent-") {
+                assert!(
+                    !path.parent().unwrap().join("template-request").exists(),
+                    "expired unsent request touched the wire"
+                );
+            }
+        }
         if let Some(expected) = read_evidence.as_ref() {
             let read = owner
                 .active
@@ -1261,6 +1563,33 @@ pub(in crate::flow::context::worker_startup) fn finish(
             .unwrap()
         };
         let terminal = rows.last().unwrap();
+        if let Some(records) = template_records.as_ref() {
+            assert_eq!(
+                rows.iter()
+                    .filter(|row| row["kind"] == "ste100.result")
+                    .count(),
+                records.len() + template_extra_recorded,
+                "expired check cannot author a fresh result or repeat a prior one"
+            );
+            if template_extra_recorded != 0 {
+                let account = owner.active.as_ref().unwrap().templates.as_ref().unwrap();
+                let source = account
+                    .check
+                    .test_recorded_source()
+                    .expect("Recorded proof retained");
+                let row = rows
+                    .iter()
+                    .rev()
+                    .find(|row| row["kind"] == "ste100.result")
+                    .unwrap();
+                assert_eq!(row["sequence"], source.block_id.sequence.0.to_string());
+                assert_eq!(row["run"], source.block_id.run);
+                assert_eq!(
+                    row["payload"],
+                    serde_json::to_value(account.check.reply().unwrap()).unwrap()
+                );
+            }
+        }
         assert_eq!(terminal["kind"], "unload");
         assert_eq!(
             terminal["payload"]["cause"]["uid"],
@@ -1447,6 +1776,20 @@ pub(in crate::flow::context::worker_startup) fn finish(
     }
     assert!(!owner.abandoned());
     assert!(owner.channel_fault().is_none());
+    if mode == "expired-startup-template-cap" {
+        assert_eq!(
+            owner.advance_with_io(&mut CircuitIo(clock)),
+            FoundationExpiredRollbackProgress::Accepted
+        );
+        let account = owner
+            .active
+            .as_ref()
+            .unwrap()
+            .templates
+            .as_ref()
+            .expect("template account moved before cap");
+        assert!(!account.check.transport_retired());
+    }
     let had_gate_port = owner
         .handoff
         .gate
@@ -1478,6 +1821,15 @@ pub(in crate::flow::context::worker_startup) fn finish(
     );
     assert!(owner.run.resources.decode_present_for_serving().is_none());
     assert!(owner.run.resources.residency_port().is_none());
+    if mode == "expired-startup-template-cap" {
+        let account = owner.active.as_ref().unwrap().templates.as_ref().unwrap();
+        assert!(
+            account.check.transport_retired(),
+            "cap closes actual retained classifier descriptor"
+        );
+        assert_eq!(account.check.request(), template_request.as_ref());
+        assert_eq!(account.enter(), original_enter);
+    }
     assert!(!path.exists());
     assert!(owner.handoff.listener.is_none());
     assert!(

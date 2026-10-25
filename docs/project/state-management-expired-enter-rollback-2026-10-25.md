@@ -9,7 +9,7 @@ classifier-refusal rollback. This act connects an original Enter expiry to root'
 explicit rollback and retains the actual startup account through disposal. It
 does not turn elapsed Enter time into a component failure or renew boot work.
 
-Authority: merged HARNESS-ENTER-WINDOW, HARNESS-OPEN, HARNESS-READ,
+Authority: merged HARNESS-ENTER-WINDOW, HARNESS-OPEN, HARNESS-READ, HARNESS-CLASSIFY,
 HARNESS-PLAN-SUMMARY, HARNESS-RECORD-LIFETIME, HARNESS-HALT and HARNESS-CLOCK,
 and weaver-harness-Spec section 6's rollback row.
 The intended composition site is worker/dev_loop's unselected foundation adapter;
@@ -331,6 +331,73 @@ The immutable evidence destination is the approved root's
 all retained logs, control patches and a manifest. This remains an unpublished
 local checkpoint.
 
+## Template check continuation
+
+An incomplete template check now moves into the consuming rollback before that
+owner retires Enter. The first real circuit corrected the earlier source-only
+diagnosis: `complete_wait(Enter)` already refused to retire a bound whose template
+owner could still certify. Cleanup treated that refusal as terminal. The new
+transfer preserves that guard and moves the entire template transcript, original
+Enter, classifier request/reply, pending event/ticket and any Recorded proof into
+an account that grants no boot continuation or template certificate.
+
+The exact context, expired Enter and accepted live Leave authorize this transfer.
+The coordinator checks the template operation and request, source run, classifier
+state and record ownership before moving anything. Foreign work is refused. A
+received ComponentFailed remains a real classifier failure with its first cause;
+the ordinary failed-exit path keeps that reply and bounds terminal accounting.
+Neither this path nor healthy expiry sends another template check or records an
+unrecorded result under a renewed Enter allowance.
+
+Custody transfer does not close the endpoint. The cleanup Grants comparison and
+lifecycle seal still precede actual classifier closure, and actual classifier
+reap precedes SPU/member release. Leave expiry and a later failure explicitly
+close the detached endpoint while retaining its semantic and framing evidence.
+The retired port implements no classifier transport interface. Recorded proof
+and completion evidence stay associated with their actual trace source.
+
+Eleven added delegated cases cover a sent unanswered check, an unsent check, the
+gap after the first accepted template, a result under real trace pressure, an
+interrupted final proof release, a released completion, a held classifier child,
+failed SPU Release, Leave expiry, ComponentFailed and foreign record purpose.
+The released-completion fixture advances the actual coordinator after its
+interrupted proof release and before the boot driver consumes that completion;
+it constructs no proof or result. Its first version ran past that intended
+boundary, and the initial failure and corrected run remain in `template-checks/`.
+The test-only missing import and initial reproduction are retained there too.
+
+`template-restored-checks/results.json` records all eight final gates passing:
+both locks, formatting, strict harness clippy, the complete harness suite,
+library build, all delegated startup cases and diff check. The ordinary suite
+passes 1986 library tests, 45 other tests and 24 doctests, or 2055 total, with
+494 library cases ignored. The delegated run passes 137 startup cases, including
+59 expired-startup cases. Other ignored families, privileged admin-startup cases
+and production artifacts remain outside this run.
+
+All fourteen compiled controls in `controls-template/results.json` were detected
+after their ten exact positive baselines passed. They cover transfer before Enter
+retirement, the exact root permit, request/reply/ticket/proof/completion retention,
+seal and reap ordering, actual endpoint closure at the cap, custody through failed
+exit, real component failure, foreign record purpose and the forbidden first
+check byte after expiry. The failure logs name the intended assertions. All 704
+gated source/config hashes were restored before final review. That review then
+corrected a release-permit comment and strengthened the component-failure case to
+require its exact reply once on trace under the halt cap. The final eight gates
+above cover both edits and record the final 704 source/config hashes.
+
+Manual review traced the new detach permit and its sole caller, the coordinator's
+unrecorded/Recorded/completed ownership states, generic read-only access after
+transport retirement, the actual seal/reap order, cap disposal and failed exit.
+No wire shape, event, limit, dependency or production selection changes. The
+required review skills remain unavailable; no skill invocation, Planner grade or
+production qualification is claimed. The audit in `template-checks/review-audit.json`
+found no reviewer submissions or threads on drafts #332 through #343, only the
+existing draft-skip comments.
+
+The immutable source and evidence destination is the approved root's
+`state-expired-template-local-20261025` directory. The manifest names every file;
+earlier deposits remain separate. This is an unpublished local checkpoint.
+
 ## Completion boundary
 
 This branch remains local work in progress, with no published PR and no serving
@@ -339,7 +406,7 @@ positions do not establish cleanup of all pending accounts or gate ownership.
 Those unsupported positions have no ordinary rollback-completion claim. This
 owner must not be wired into a dispatcher as completed cleanup.
 
-The same slice still owes unfinished template/classifier checks, boot-pair repair
+The same slice still owes initial classifier admission, boot-pair repair
 and other summary transitions, gate Lower and tool containment,
 before-Load and gate-owned stopped cleanup, and the worker/dev_loop adapter. Successful
 Ready and pre-adoption expiry need their own lifecycle continuations. The full
@@ -347,8 +414,6 @@ Ready and pre-adoption expiry need their own lifecycle continuations. The full
 exit and dispatcher selection, production artifacts and prompt qualification,
 measured limits, security disposition and the operator's coupled cutover.
 
-The next template circuit must start with an outstanding classifier check.
-Source review found that the settled-account entry does not screen that check
-before completing Enter, while `begin_inspection` refuses it. That source finding
-has no new runtime reproduction here. Resolve this entry as part of the pending
-template composition before treating the owner as complete cleanup.
+The initial classifier admission and boot-repair accounts still need consuming
+cleanup under their original bounds. The template cases above do not establish
+those accounts, gate teardown or the remaining worker adapter.

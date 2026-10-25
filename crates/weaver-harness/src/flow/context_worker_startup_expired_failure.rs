@@ -86,6 +86,7 @@ impl FoundationExpiredRollback {
             None
         };
         if let Some(active) = &mut self.active {
+            active.retire_accounts();
             active.retire_dials();
         }
         if let Some(preflight) = &mut self.preflight {
@@ -163,6 +164,12 @@ impl FoundationExpiredRollback {
 }
 
 impl FoundationExpiredRollbackExit {
+    #[cfg(test)]
+    pub(super) fn test_templates(
+        &self,
+    ) -> Option<&crate::flow::context::template_driver::StoppedTemplateAccount> {
+        self.held.active.as_ref()?.templates.as_ref()
+    }
     #[cfg(test)]
     pub(super) fn test_read(&self) -> Option<&crate::flow::context::read_driver::ReadTransaction> {
         Some(self.held.active.as_ref()?.read.as_ref()?.evidence())

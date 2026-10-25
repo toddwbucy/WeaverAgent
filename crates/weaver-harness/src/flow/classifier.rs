@@ -171,7 +171,11 @@ impl<P: Ste100Port> Classifier<P> {
     pub(crate) fn readiness(&self) -> BorrowedFd<'_> {
         self.port.readiness()
     }
+}
 
+// Read-only evidence survives consuming transport retirement. A retired port
+// implements no Ste100Port, so these accessors cannot restart classifier work.
+impl<P> Classifier<P> {
     pub(crate) fn state(&self) -> ClassifierState {
         self.state
     }
@@ -196,7 +200,9 @@ impl<P: Ste100Port> Classifier<P> {
     pub(crate) fn failure(&self) -> Option<&PortFailure> {
         self.failure.as_ref()
     }
+}
 
+impl<P: Ste100Port> Classifier<P> {
     /// Observe terminal descriptor status without reading another completion
     /// into the full result slot. A readable second reply stays with the port;
     /// a peer close or transport error freezes the exact held account. A valid

@@ -92,6 +92,42 @@ pub(in crate::flow::context::worker_startup) fn reached(
             owner.stage() == ResidencyStage::Admit && owner.failure_test_admit_sent()
         }
         ("failed-startup-boot", EnterState::Boot(owner)) => owner.stage() == BootStage::Templates,
+        ("failed-startup-template", EnterState::Boot(owner)) => {
+            owner.stage() == BootStage::Templates && owner.failure_test_template_sent()
+        }
+        ("failed-startup-template-unsent", EnterState::Boot(owner)) => {
+            owner.stage() == BootStage::Templates
+                && owner
+                    .failure_test_context_ref()
+                    .flow
+                    .standing_classifier()
+                    .is_some_and(|classifier| classifier.wants_write())
+        }
+        ("failed-startup-template-between", EnterState::Boot(owner)) => {
+            let context = owner.failure_test_context_ref();
+            owner.stage() == BootStage::Templates
+                && context.flow.pending_check().is_none()
+                && context.flow.operation_completion().is_none()
+                && context
+                    .template_transcript()
+                    .is_some_and(|t| t.accepted_count() == 1)
+        }
+        ("failed-startup-template-recorded", EnterState::Boot(owner)) => {
+            owner.stage() == BootStage::Templates
+                && owner
+                    .failure_test_context_ref()
+                    .flow
+                    .pending_classifier_recorded()
+                    .is_some()
+        }
+        ("failed-startup-template-record", EnterState::Boot(owner)) => {
+            owner.stage() == BootStage::Templates
+                && owner
+                    .failure_test_context_ref()
+                    .barrier
+                    .pending()
+                    .is_some_and(|event| event.envelope.kind == Kind::Ste100Result)
+        }
         ("failed-startup-prompt", EnterState::Boot(owner)) => owner.stage() == BootStage::Prompt,
         ("failed-startup-summary-read", EnterState::Boot(owner)) => {
             owner.stage() == BootStage::Summary

@@ -14,6 +14,7 @@ use weaver_trace::GrantSurface;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
+    Templates,
     Read,
     Open,
     Enter,
@@ -38,10 +39,16 @@ pub(super) struct ExpiredActiveRollback {
     pub(super) returned_admit: Option<ReceivedOrgan>,
     pub(super) open: Option<StoppedBootOpenAccount>,
     pub(super) read: Option<ExpiredReadAccount>,
+    pub(super) templates: Option<crate::flow::context::template_driver::StoppedTemplateAccount>,
     member: weaver_trace::MemberRelease,
 }
 
 impl ExpiredActiveRollback {
+    pub(super) fn retire_accounts(&mut self) {
+        if let Some(account) = &mut self.templates {
+            account.retire_transport();
+        }
+    }
     pub(super) fn retire_dials(&mut self) {
         if let Some(dials) = self.dials.take() {
             self.retired_dials = Some(dials.retire_failed());
@@ -55,6 +62,20 @@ impl ExpiredActiveRollback {
     ) -> Result<(), String> {
         let context = &mut owner.run.context;
         let leave = owner.leave.unwrap();
+        if self.stage == Stage::Templates {
+            let permit = ExpiredStartupAccountPermit {
+                origin: Arc::clone(&context.read_origin),
+                enter: owner.handoff.identity.enter,
+                leave,
+            };
+            self.templates = Some(
+                context
+                    .detach_expired_templates(&permit, io)
+                    .map_err(|error| format!("expired template account: {error:?}"))?,
+            );
+            self.stage = Stage::Enter;
+            return Ok(());
+        }
         if self.stage == Stage::Read {
             let permit = ExpiredStartupAccountPermit {
                 origin: Arc::clone(&context.read_origin),
@@ -190,6 +211,18 @@ impl ExpiredActiveRollback {
                     self.stage = Stage::Classifier;
                 }
                 Stage::Classifier => {
+                    if let Some(account) = &mut self.templates {
+                        context.live(io)?;
+                        let permit = ExpiredReleasePermit {
+                            origin: Arc::clone(&context.read_origin),
+                            enter: owner.handoff.identity.enter,
+                            leave,
+                        };
+                        if !permit.allows(context) {
+                            return Err(RunFailure::TemplateBlocked);
+                        }
+                        account.retire_transport();
+                    }
                     if context.retire_classifier(io)? == Advance::Progress {
                         self.stage = Stage::Child;
                     }
@@ -262,7 +295,9 @@ impl ExpiredActiveRollback {
                         self.stage = Stage::Terminal;
                     }
                 }
-                Stage::Read | Stage::Open | Stage::Enter | Stage::Terminal => unreachable!(),
+                Stage::Templates | Stage::Read | Stage::Open | Stage::Enter | Stage::Terminal => {
+                    unreachable!()
+                }
             }
             Ok(())
         })();
@@ -313,6 +348,7 @@ impl FoundationExpiredRollback {
                 .decode_present_for_serving()
                 .is_some_and(|decode| context.can_detach_expired_boot_open(&permit, decode));
         let park_read = context.can_park_expired_startup_read(&permit);
+        let detach_templates = context.can_detach_expired_templates(&permit);
         if self.before_load
             || context.phase != RecordingPhase::Entered
             || context.flow.phase() != CoordinatorPhase::Active
@@ -326,6 +362,8 @@ impl FoundationExpiredRollback {
             || self.handoff.gate.is_some()
             || matches!(self.handoff.held.as_ref(), HeldStartup::Initial(_))
             || self.handoff.held.initial_grants().is_none()
+            || (context.templates_block_content() && !detach_templates)
+            || (context.flow.pending_check().is_some() && !detach_templates)
             || (context.deadlines.get(PumpDeadline::StateControl).is_some() && !park_read)
             || (context.boot_open_blocks_external() && !detach_open)
             || context.place_owed()
@@ -336,15 +374,18 @@ impl FoundationExpiredRollback {
             || context.inspection.is_some()
             || ((context.barrier.pending().is_some() || context.barrier.pending_author().is_some())
                 && !detach_open
-                && !park_read)
+                && !park_read
+                && !detach_templates)
             || (context.flow.pending_control().is_some() && !park_read)
-            || (context.flow.operation_completion().is_some() && !park_read)
+            || (context.flow.operation_completion().is_some() && !park_read && !detach_templates)
             || (!context.flow.state().outstanding().is_empty() && !park_read)
         {
             return None;
         }
         Some(ExpiredActiveRollback {
-            stage: if park_read {
+            stage: if detach_templates {
+                Stage::Templates
+            } else if park_read {
                 Stage::Read
             } else if detach_open {
                 Stage::Open
@@ -360,6 +401,7 @@ impl FoundationExpiredRollback {
             returned_admit: None,
             open: None,
             read: None,
+            templates: None,
             member: weaver_trace::MemberRelease::Closed,
         })
     }

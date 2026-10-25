@@ -30,6 +30,10 @@ use super::observation::{
 use super::recording::{RecordBarrier, RecordProgress, RecordProof, RecordPurpose};
 use super::report::{HaltLatch, SecondaryFailure};
 
+#[path = "coordinator_expired_templates.rs"]
+mod expired_templates;
+pub(super) use expired_templates::StoppedTemplateCheck;
+
 #[path = "output.rs"]
 mod output;
 // The later repair owner names each block capability through this private port.
