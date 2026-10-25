@@ -209,6 +209,9 @@ impl ReadTransaction {
     pub(super) fn is_summary(&self) -> bool {
         matches!(self.purpose, ReadPurpose::PlanSummary)
     }
+    pub(super) fn is_boot_pairs(&self) -> bool {
+        matches!(self.purpose, ReadPurpose::BootPairs)
+    }
     pub(super) fn boot_prompt_enter(&self) -> Option<AbsoluteBound> {
         match self.purpose {
             ReadPurpose::Boot { enter, .. } => Some(enter),

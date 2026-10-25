@@ -11,7 +11,7 @@ does not turn elapsed Enter time into a component failure or renew boot work.
 
 Authority: merged HARNESS-ENTER-WINDOW, HARNESS-OPEN, HARNESS-READ, HARNESS-CLASSIFY,
 HARNESS-PLAN-SUMMARY, HARNESS-RECORD-LIFETIME, HARNESS-HALT and HARNESS-CLOCK,
-and weaver-harness-Spec section 6's rollback row.
+HARNESS-BOOT, Spec 05 BOOT-REPAIR, and weaver-harness-Spec section 6's rollback row.
 The intended composition site is worker/dev_loop's unselected foundation adapter;
 its connection to this owner is still owed.
 
@@ -108,7 +108,7 @@ state member, classifier and model answers are declared doubles.
 `classifier-checks/results.json` records passing lock gates, formatting, clippy
 for both affected crates, the complete trace suite and the complete harness
 suite with eight test threads and no filters. The harness library reports 1986
-passed and 458 ignored; binary/integration targets add 45 passed and doctests 24.
+passed and 458 ignored; binary/integration targets add 43 passed and doctests 26.
 The separate delegated startup run passes 101 scenarios, including 23 expired
 startup cases. The trace targets pass 145 tests and 21 doctests. Ignored tests not
 selected by that delegated run have not been qualified here.
@@ -174,8 +174,8 @@ source's checks.
 `spu-final-checks/results.json` records all ten final gates passing: first and
 last lock gates, formatting, strict trace and harness clippy, the complete trace
 and harness suites, the library build, all startup circuits, and diff check.
-The harness library passes 1986 tests with 471 ignored; other targets pass 45
-tests and 24 doctests. The trace suite passes 145 tests and 21 doctests. The
+The harness library passes 1986 tests with 471 ignored; other targets pass 43
+tests and 26 doctests. The trace suite passes 145 tests and 21 doctests. The
 delegated startup run passes all 114 cases. Ignores outside that run remain
 outside this qualification.
 
@@ -236,7 +236,7 @@ assertion. `open-final-checks/harness-eight.log`, the isolated rerun and
 `open-restored-checks/results.json` records all eight final gates passing after
 restoration: locks before and after, formatting, strict harness clippy, the full
 harness suite, the library build, all startup circuits and diff check. The library
-passes 1986 tests with 475 ignored; other targets add 45 tests and 24 doctests,
+passes 1986 tests with 475 ignored; other targets add 43 tests and 26 doctests,
 for 2055 ordinary passes. The separate delegated run passes 118 startup cases,
 including 40 expired-startup cases. Other ignored families and the eight
 privileged admin-startup cases are not qualified by this run.
@@ -303,7 +303,7 @@ The first final-gate attempt found an unnecessary unit expression; the corrected
 strict lint passed. `read-restored-checks/results.json` records all eight gates:
 both locks, fmt, strict harness clippy, full harness, library build, all startup
 circuits and diff check. Ordinary harness results remain 1986 library tests plus
-45 other tests and 24 doctests, or 2055 passed; 483 library cases are ignored in
+43 other tests and 26 doctests, or 2055 passed; 483 library cases are ignored in
 that command. The delegated startup run separately passes 126 cases, including
 48 expired-startup cases. These counts do not qualify other ignored families,
 the privileged admin-startup cases or production artifacts.
@@ -370,7 +370,7 @@ The test-only missing import and initial reproduction are retained there too.
 `template-restored-checks/results.json` records all eight final gates passing:
 both locks, formatting, strict harness clippy, the complete harness suite,
 library build, all delegated startup cases and diff check. The ordinary suite
-passes 1986 library tests, 45 other tests and 24 doctests, or 2055 total, with
+passes 1986 library tests, 43 other tests and 26 doctests, or 2055 total, with
 494 library cases ignored. The delegated run passes 137 startup cases, including
 59 expired-startup cases. Other ignored families, privileged admin-startup cases
 and production artifacts remain outside this run.
@@ -451,7 +451,7 @@ finds no reviews or threads on drafts #332 through #343, only draft-skip comment
 `admission-final-checks/results.json` records all eight final gates passing:
 first/last lock checks, formatting, strict harness clippy, the full harness
 suite, library build, all delegated startup cases and diff check. The ordinary
-suite passes 1986 library tests, 45 other tests and 24 doctests (2055 total),
+suite passes 1986 library tests, 43 other tests and 26 doctests (2055 total),
 with 503 library cases ignored. The separate delegated run passes 146 startup
 cases, including 68 expired-startup cases. Other ignored families, privileged
 admin-startup cases and production artifacts remain outside this run.
@@ -472,6 +472,82 @@ Source and logs are preserved at the approved evidence root's
 `state-expired-admission-local-20261025` deposit, with a per-file manifest and
 exact source archive. This remains an unpublished local checkpoint.
 
+## Boot-pair repair continuation
+
+Expired repair now transfers its complete original transaction before Enter
+retires, provided no terminal filing is active. The stopped account retains the
+checked Open proof, StartIdentity, initial and recheck results, every completed
+terminal receipt, any prepared terminal and its original Decision bound. It
+provides no RepairedBootPairs proof or boot continuation. The transfer requires
+the same context, original Enter, accepted live Leave, boot head and registered
+waits. Foreign or unfinished unrelated work cannot borrow this authority.
+
+A pending initial or recheck read retains its original StateControl exchange,
+snapshot, bytes, recall ticket and any pending measurement. The coordinator parks
+the actual member endpoint until classifier reap. That exchange precludes a new
+cleanup Grants query, so the actual terminal reports Unreadable. When no read is
+active, the ordinary cleanup Grants comparison runs under Leave after the repair
+account moves. Neither path sends another open_pairs query or begins a terminal
+filing under renewed authority. Earlier independent Decision failure still uses
+the existing failure path; the prepared-terminal case exercises a bound capped
+by Enter itself.
+
+The initial reproduction reached the actual pending open_pairs read and failed
+the rollback admission assertion. Eleven added delegated cases cover that read,
+the recheck, unstarted repair, completed untaken repair, one actually filed
+terminal, an unstarted prepared terminal, a retained snapshot cursor, a pending
+measurement under trace pressure, Leave expiry, held classifier exit and failed
+SPU Release. The filed case checks the original CallId, actual StartIdentity,
+abandoned_at_load fate, exact PairFile and Filed receipt, and the matching single
+trace terminal. Cleanup cannot repeat that filing. Complete account evidence is
+compared after healthy cleanup, the Leave cap and failed-exit handoff.
+
+The fixture uses the normal repair driver after consuming the actual checked
+Open prerequisite. Its member response contains a declared prior-run pair from
+the existing corpus. Initial fixture corrections added the missing pump between
+pending driver steps, recognized the parked member at the cap, fixed test-only
+imports and serialized receipt comparisons, and left enough fake-clock time to
+reach the prepared-terminal boundary. The failed builds and runs remain in
+`boot-pairs-checks/`; none is a passing gate.
+
+Manual review follows both detach callers, their exact permit and original wait
+checks, actual read/record ownership, lifecycle seal and classifier reap before
+member closure, cap disposal, and failed-exit retention. No wire shape, event,
+dependency, production limit or serving selection changes. The required review
+skills remain unavailable; these are author checks, not a Planner grade or
+production qualification. `boot-pairs-checks/review-audit.json` finds no reviews
+or threads on drafts #332 through #343, only the existing draft-skip comments.
+
+All twelve compiled controls in `controls-boot-pairs/results.json` were detected
+after nine exact positive baselines passed. They remove repair-owner admission,
+the exact rollback permit, actual StartIdentity, Decision registration, checked
+Open, initial read, recheck, completed receipts or the prepared terminal; close
+the member before classifier reap; or discard the account at the cap or during
+failed exit. The member-order control is caught by the actual endpoint's early
+EOF, and failed-exit loss is caught first by the original read assertion. Every
+failure log identifies its assertion. The four controlled source files were
+restored byte-for-byte before final gates.
+
+`boot-pairs-final-checks/results.json` records all eight final gates passing:
+first and last lock checks, formatting, strict harness clippy, the complete
+harness suite, library build, all delegated startup cases and diff check. The
+ordinary suite passes 1986 library tests, 43 binary/integration tests and 26
+doctests (2055 total), with 514 library cases ignored. Cargo reports the two
+compile-fail doctests separately from its 24 other doctests; the earlier totals
+in this record remain unchanged, with those categories corrected against the
+preserved logs. The delegated run passes 157 startup cases, including 79 expired
+startup cases. The final source manifest covers 707 crate/configuration files.
+Other ignored families, privileged admin-startup cases and production artifacts
+remain outside these runs.
+
+The evidence destination is the approved root's
+`state-expired-boot-pairs-local-20261025` directory, with an exact source archive
+and per-file hashes. Earlier deposits remain immutable.
+
+This remains an unpublished local checkpoint. In-flight repair filing still
+needs consuming cleanup of its author, PairCopy, ledger reservation and exact
+receipt exchange. The completed-receipt case does not establish that road.
+
 ## Completion boundary
 
 This branch remains local work in progress, with no published PR and no serving
@@ -480,7 +556,7 @@ positions do not establish cleanup of all pending accounts or gate ownership.
 Those unsupported positions have no ordinary rollback-completion claim. This
 owner must not be wired into a dispatcher as completed cleanup.
 
-The same slice still owes boot-pair repair and other summary transitions,
+The same slice still owes in-flight boot-pair filing and other summary transitions,
 gate Lower and tool containment,
 before-Load and gate-owned stopped cleanup, and the worker/dev_loop adapter. Successful
 Ready and pre-adoption expiry need their own lifecycle continuations. The full
@@ -488,6 +564,6 @@ Ready and pre-adoption expiry need their own lifecycle continuations. The full
 exit and dispatcher selection, production artifacts and prompt qualification,
 measured limits, security disposition and the operator's coupled cutover.
 
-Boot-repair accounts still need consuming cleanup under their original bounds.
-The admission and template cases above do not establish those accounts, gate
-teardown or the remaining worker adapter.
+In-flight boot-repair filings still need consuming cleanup under their original
+bounds. The repair cases above do not establish those filings, gate teardown or
+the remaining worker adapter.

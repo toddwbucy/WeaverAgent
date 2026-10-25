@@ -133,6 +133,7 @@ fn worker_fixture_clock_waits_for_complete_request_receipt() {
         held_file: None,
         hold_control: None,
         held_control: None,
+        boot_pairs: vec![],
     };
     let samples = std::cell::Cell::new(0);
     let sample = || {
@@ -228,6 +229,7 @@ impl Files {
                         "template-silent"
                     } else if mode == "expired-startup-classifier-held"
                         || mode == "expired-startup-summary-read-held"
+                        || mode == "expired-startup-repair-read-held"
                     {
                         "rollback-held-exit"
                     } else if mode.starts_with("input-") {
@@ -439,6 +441,7 @@ pub(super) struct Member {
     pub(super) held_file: Option<s::StateFrame>,
     pub(super) hold_control: Option<&'static str>,
     pub(super) held_control: Option<s::StateFrame>,
+    pub(super) boot_pairs: Vec<s::ReadPair>,
 }
 impl Member {
     pub(super) fn assert_closed_without_request(&mut self) {
@@ -581,7 +584,9 @@ impl Member {
                                 }
                                 s::ReadSelector::OpenPairs {} => {
                                     self.requests.push("pairs".into());
-                                    br#"{"open_pairs":{"pairs":[]}}"#.to_vec()
+                                    let pairs = self.boot_pairs.iter().filter(|pair| !self.filings.iter().any(|file| matches!(file, s::StateFrame::FilePair { filing, .. } if matches!(&filing.pair, s::PairRecord::Ended(ended) if ended.call_id == pair.call_id)))).cloned().collect();
+                                    serde_json::to_vec(&s::QueryResult::OpenPairs { pairs })
+                                        .unwrap()
                                 }
                                 s::ReadSelector::PlanCurrent {} => {
                                     self.requests.push("summary".into());
@@ -678,6 +683,22 @@ impl Member {
                 _ => panic!("unexpected request {request:?}"),
             };
             let hold_control = match &request {
+                s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::OpenPairs {},
+                        },
+                    ..
+                } => {
+                    self.hold_control == Some("pairs")
+                        || (self.hold_control == Some("pairs-recheck")
+                            && self
+                                .requests
+                                .iter()
+                                .filter(|request| request.as_str() == "pairs")
+                                .count()
+                                == 2)
+                }
                 s::StateFrame::Control {
                     frame: s::StateControl::Grants {},
                     ..
@@ -985,6 +1006,7 @@ fn circuit(mode: &str) {
         held_file: None,
         hold_control: None,
         held_control: None,
+        boot_pairs: vec![],
     };
     if mode == "worker" || mode.starts_with("input-worker") {
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -3125,6 +3147,14 @@ scenario!(
     "expired-startup-classifying-complete"
 );
 scenario!(
+    worker_startup_composition_expired_repair_read_complete,
+    "expired-startup-repair-read-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_recheck_complete,
+    "expired-startup-repair-recheck-complete"
+);
+scenario!(
     worker_startup_composition_expired_admission_before_fork_complete,
     "expired-startup-admission-before-fork-complete"
 );
@@ -3367,4 +3397,41 @@ scenario!(
 scenario!(
     worker_startup_composition_expired_activation_trace,
     "expired-startup-activation-trace"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_unstarted_complete,
+    "expired-startup-repair-unstarted-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_retained_complete,
+    "expired-startup-repair-retained-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_filed_complete,
+    "expired-startup-repair-filed-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_proposed_complete,
+    "expired-startup-repair-proposed-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_measurement_complete,
+    "expired-startup-repair-read-measurement-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_cursor_complete,
+    "expired-startup-repair-read-cursor-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_cap,
+    "expired-startup-repair-read-cap"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_held,
+    "expired-startup-repair-read-held"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_release_wrong,
+    "expired-startup-repair-read-release-wrong"
 );

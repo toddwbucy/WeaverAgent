@@ -165,6 +165,18 @@ impl FoundationExpiredRollback {
 
 impl FoundationExpiredRollbackExit {
     #[cfg(test)]
+    pub(super) fn test_boot_pairs(
+        &self,
+    ) -> Option<&crate::flow::context::boot_pair_driver::StoppedBootPairsAccount> {
+        let active = self.held.active.as_ref()?;
+        match active.read.as_ref() {
+            Some(crate::flow::context::expired_read_driver::ExpiredReadAccount::BootPairs(
+                account,
+            )) => Some(account),
+            _ => active.boot_pairs.as_ref(),
+        }
+    }
+    #[cfg(test)]
     pub(super) fn test_admission(
         &self,
     ) -> Option<&crate::flow::context::expired_admission_driver::StoppedAdmissionAccount> {

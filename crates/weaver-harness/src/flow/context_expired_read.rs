@@ -7,6 +7,7 @@ use super::*;
 pub(super) enum ExpiredReadAccount {
     Prompt(Box<ReadTransaction>),
     Summary(PlanSummaryAccount),
+    BootPairs(super::boot_pair_driver::StoppedBootPairsAccount),
 }
 
 impl ExpiredReadAccount {
@@ -14,6 +15,7 @@ impl ExpiredReadAccount {
         match self {
             Self::Prompt(read) => read,
             Self::Summary(account) => account.read_evidence().expect("original summary read"),
+            Self::BootPairs(account) => account.read_evidence().expect("original boot pair read"),
         }
     }
 }
@@ -28,6 +30,7 @@ impl RecordingContext {
                 read.plan_bound().expired(self.last_ns)
                     && read.rollback_wait_matches(self)
                     && (read.boot_prompt_enter() == self.deadlines.get(PumpDeadline::Enter)
+                        || (read.is_boot_pairs() && self.can_detach_expired_boot_pairs(permit))
                         || (read.is_summary()
                             && self.plan_summary.is_some()
                             && self.plan_summary_is_boot_cleanup()))
@@ -43,6 +46,11 @@ impl RecordingContext {
         self.release_live(io)?;
         if !self.can_park_expired_startup_read(permit) {
             return Err(RunFailure::ReadOwned);
+        }
+        if self.read.as_ref().unwrap().is_boot_pairs() {
+            return self
+                .detach_expired_boot_pairs(permit, io)
+                .map(ExpiredReadAccount::BootPairs);
         }
         if self.read.as_ref().unwrap().is_summary() {
             return self

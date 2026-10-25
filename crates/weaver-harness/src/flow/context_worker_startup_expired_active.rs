@@ -15,6 +15,7 @@ use weaver_trace::GrantSurface;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
     Admission,
+    BootPairs,
     Templates,
     Read,
     Open,
@@ -44,6 +45,7 @@ pub(super) struct ExpiredActiveRollback {
     pub(super) admission:
         Option<crate::flow::context::expired_admission_driver::StoppedAdmissionAccount>,
     classifier_started: bool,
+    pub(super) boot_pairs: Option<crate::flow::context::boot_pair_driver::StoppedBootPairsAccount>,
     member: weaver_trace::MemberRelease,
 }
 
@@ -69,6 +71,20 @@ impl ExpiredActiveRollback {
     ) -> Result<(), String> {
         let context = &mut owner.run.context;
         let leave = owner.leave.unwrap();
+        if self.stage == Stage::BootPairs {
+            let permit = ExpiredStartupAccountPermit {
+                origin: Arc::clone(&context.read_origin),
+                enter: owner.handoff.identity.enter,
+                leave,
+            };
+            self.boot_pairs = Some(
+                context
+                    .detach_expired_boot_pairs(&permit, io)
+                    .map_err(|error| format!("expired boot repair: {error:?}"))?,
+            );
+            self.stage = Stage::Enter;
+            return Ok(());
+        }
         if self.stage == Stage::Admission {
             let permit = ExpiredStartupAccountPermit {
                 origin: Arc::clone(&context.read_origin),
@@ -323,6 +339,7 @@ impl ExpiredActiveRollback {
                     }
                 }
                 Stage::Admission
+                | Stage::BootPairs
                 | Stage::Templates
                 | Stage::Read
                 | Stage::Open
@@ -386,6 +403,7 @@ impl FoundationExpiredRollback {
         let park_read = context.can_park_expired_startup_read(&permit);
         let detach_templates = context.can_detach_expired_templates(&permit);
         let detach_admission = context.can_detach_expired_admission(&permit);
+        let detach_boot_pairs = context.can_detach_expired_boot_pairs(&permit);
         let initial = matches!(self.handoff.held.as_ref(), HeldStartup::Initial(account)
             if account.load_sequence.is_some() && account.opened.is_some() && account.initial_grants.is_some());
         if self.before_load
@@ -409,7 +427,7 @@ impl FoundationExpiredRollback {
             || context.place_owed()
             || (context.plan_summary.is_some() && !park_read)
             || context.repair.is_some()
-            || context.boot_pairs.is_some()
+            || (context.boot_pairs.is_some() && !detach_boot_pairs)
             || (context.read.is_some() && !park_read)
             || context.inspection.is_some()
             || ((context.barrier.pending().is_some() || context.barrier.pending_author().is_some())
@@ -429,6 +447,8 @@ impl FoundationExpiredRollback {
                 Stage::Templates
             } else if park_read {
                 Stage::Read
+            } else if detach_boot_pairs {
+                Stage::BootPairs
             } else if detach_open {
                 Stage::Open
             } else {
@@ -446,6 +466,7 @@ impl FoundationExpiredRollback {
             templates: None,
             admission: None,
             classifier_started: self.run.resources.classifier_child().is_some(),
+            boot_pairs: None,
             member: weaver_trace::MemberRelease::Closed,
         })
     }

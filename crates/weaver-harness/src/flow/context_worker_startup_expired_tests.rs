@@ -2,16 +2,30 @@ use super::super::failed::tests::{context, reached};
 use super::super::tests::{EnterGuard, Member, dial, packet, reap};
 use super::*;
 use crate::flow::clock::testing::FakePumpIo;
+use crate::flow::context::BootPairsProgress;
 use crate::flow::context::startup_composition::tests::CircuitIo;
 use crate::flow::coordinator::{FlowRecording, OperationCompletion};
+use crate::flow::pump::PumpPorts;
 use nix::sys::socket::{MsgFlags, send};
 use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
+use weaver_types::state_flow as s;
 
 struct Guard(Option<Box<FoundationExpiredRollback>>);
+fn boot_pair_account(
+    owner: &FoundationExpiredRollback,
+) -> Option<&crate::flow::context::boot_pair_driver::StoppedBootPairsAccount> {
+    let active = owner.active.as_ref()?;
+    match active.read.as_ref() {
+        Some(crate::flow::context::expired_read_driver::ExpiredReadAccount::BootPairs(account)) => {
+            Some(account)
+        }
+        _ => active.boot_pairs.as_ref(),
+    }
+}
 impl Drop for Guard {
     fn drop(&mut self) {
         let Some(owner) = self.0.as_mut() else {
@@ -116,7 +130,9 @@ pub(in crate::flow::context::worker_startup) fn enter(
     let template_pressure = mode.contains("-template-record-")
         || mode.contains("-template-component-")
         || mode.contains("-template-foreign-");
-    let target = if mode.starts_with("expired-startup-admission-") {
+    let target = if mode.starts_with("expired-startup-repair-") {
+        "failed-startup-repair".to_owned()
+    } else if mode.starts_with("expired-startup-admission-") {
         "failed-startup-before-classifier".to_owned()
     } else if template_pressure {
         "failed-startup-template-record".to_owned()
@@ -130,9 +146,39 @@ pub(in crate::flow::context::worker_startup) fn enter(
     let admission_received = mode
         .starts_with("expired-startup-classifying")
         .then(|| root.join("classifier-bootstrap"));
-    let read_target = matches!(suffix, "prompt" | "summary-read");
+    if matches!(
+        mode,
+        "expired-startup-repair-filed-complete" | "expired-startup-repair-proposed-complete"
+    ) {
+        let corpus: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("fixtures/recall-sources.json")).unwrap();
+        let mut pair = corpus
+            .iter()
+            .find(|case| case["case"] == "open_pairs_original_blocks")
+            .unwrap()["result"]["open_pairs"]["pairs"][0]
+            .clone();
+        fn prior_run(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::String(s) if s == "run" => *s = "expired-previous-run".into(),
+                serde_json::Value::Array(xs) => xs.iter_mut().for_each(prior_run),
+                serde_json::Value::Object(xs) => xs.values_mut().for_each(prior_run),
+                _ => {}
+            }
+        }
+        prior_run(&mut pair);
+        member
+            .boot_pairs
+            .push(serde_json::from_value(pair).unwrap());
+    }
+    let read_target = matches!(suffix, "prompt" | "summary-read")
+        || mode.starts_with("expired-startup-repair-read-")
+        || mode.starts_with("expired-startup-repair-recheck-");
     if read_target && !mode.contains("-cursor-") {
-        member.hold_control = Some(if suffix == "prompt" {
+        member.hold_control = Some(if mode.starts_with("expired-startup-repair-read-") {
+            "pairs"
+        } else if mode.starts_with("expired-startup-repair-recheck-") {
+            "pairs-recheck"
+        } else if suffix == "prompt" {
             "prompt"
         } else {
             "summary"
@@ -184,6 +230,100 @@ pub(in crate::flow::context::worker_startup) fn enter(
         }
         member.step(clock.now().unwrap(), "ready");
         std::thread::sleep(Duration::from_millis(1));
+    }
+    if [
+        "expired-startup-repair-unstarted-complete",
+        "expired-startup-repair-retained-complete",
+        "expired-startup-repair-filed-complete",
+        "expired-startup-repair-proposed-complete",
+    ]
+    .contains(&mode)
+    {
+        let proposed = mode == "expired-startup-repair-proposed-complete";
+        if proposed {
+            let context = context(guard.0.as_mut().unwrap());
+            let enter = context.deadlines.get(PumpDeadline::Enter).unwrap();
+            let remaining = (context
+                .load_duty
+                .as_ref()
+                .unwrap()
+                .instruction
+                .decision_wait
+                .elapsed_ns
+                .0
+                / 2)
+            .min(1_000_000);
+            assert!(remaining > 100);
+            // Exercise a receipt wait capped by Enter. An independently
+            // earlier Decision expiry still belongs to ordinary failed exit.
+            clock.advance_to(enter.deadline_ns() - remaining).unwrap();
+        }
+        let EnterState::Boot(owner) = guard.0.as_mut().unwrap().state.as_mut().unwrap() else {
+            panic!("original boot owner");
+        };
+        owner.failure_test_stage_repair(&mut CircuitIo(clock));
+        if !mode.contains("-unstarted-") {
+            let context = context(guard.0.as_mut().unwrap());
+            loop {
+                assert!(Instant::now() < limit, "boot repair did not settle");
+                let progress = context
+                    .advance_boot_pairs(&mut PumpPorts {
+                        lifecycle: LifecyclePorts {
+                            listener: None,
+                            peer: None,
+                            residency: None,
+                            dial: None,
+                            leave_peer: None,
+                        },
+                        gate: None,
+                        decode: None,
+                        label: None,
+                        io: &mut CircuitIo(clock),
+                    })
+                    .unwrap();
+                if proposed && let Some(bound) = context.deadlines.get(PumpDeadline::Decision) {
+                    assert_eq!(
+                        bound.deadline_ns(),
+                        context
+                            .deadlines
+                            .get(PumpDeadline::Enter)
+                            .unwrap()
+                            .deadline_ns()
+                    );
+                    assert!(context.filing.is_none());
+                    assert!(
+                        member
+                            .filings
+                            .iter()
+                            .all(|file| !matches!(file, s::StateFrame::FilePair { .. }))
+                    );
+                    break;
+                }
+                if progress == BootPairsProgress::Complete {
+                    assert!(!proposed, "fixture must retain the unstarted terminal");
+                    break;
+                }
+                member.step(clock.now().unwrap(), "ready");
+                if progress == BootPairsProgress::Pending {
+                    context
+                        .pump_once(&mut PumpPorts {
+                            lifecycle: LifecyclePorts {
+                                listener: None,
+                                peer: None,
+                                residency: None,
+                                dial: None,
+                                leave_peer: None,
+                            },
+                            gate: None,
+                            decode: None,
+                            label: None,
+                            io: &mut CircuitIo(clock),
+                        })
+                        .unwrap();
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
     }
     if mode.starts_with("expired-startup-admission-") && !mode.contains("-before-fork-") {
         let EnterState::Startup(owner) = guard.0.as_mut().unwrap().state.as_mut().unwrap() else {
@@ -524,6 +664,64 @@ pub(in crate::flow::context::worker_startup) fn finish(
             );
         }
         assert!(owner.run.context.flow.standing_classifier().is_none());
+    }
+    let boot_pair_evidence = owner
+        .run
+        .context
+        .boot_pairs
+        .as_ref()
+        .map(|work| work.expired_test_evidence());
+    let boot_pair_filings = boot_pair_evidence.as_ref().map(|_| {
+        member
+            .filings
+            .iter()
+            .filter_map(|file| match file {
+                s::StateFrame::FilePair { filing, .. } => Some(filing.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    });
+    if mode == "expired-startup-repair-filed-complete" {
+        let [filing] = boot_pair_filings.as_ref().unwrap().as_slice() else {
+            panic!("one actual repair filing before expiry");
+        };
+        let s::PairRecord::Ended(ended) = &filing.pair else {
+            panic!("actual abandonment terminal");
+        };
+        assert_eq!(ended.call_id, member.boot_pairs[0].call_id);
+        assert_eq!(ended.loaded_from, owner.run.context.open_start);
+        assert_eq!(ended.fate, s::TerminalPairFate::Failed);
+        assert_eq!(ended.reason, Some(s::PairFailure::AbandonedAtLoad {}));
+        assert!(ended.execution.is_none() && ended.outcome.is_none());
+        let [terminal] = owner
+            .run
+            .context
+            .boot_pairs
+            .as_ref()
+            .unwrap()
+            .expired_test_terminals()
+        else {
+            panic!("retain the actual repair receipt");
+        };
+        let mut dispositions = terminal.receipts().dispositions();
+        let Some(crate::flow::ledger::SourceDisposition::Committed(source)) = dispositions.next()
+        else {
+            panic!("repair filing must be committed");
+        };
+        assert!(dispositions.next().is_none());
+        let crate::flow::ledger::LedgerFile::Pair(file) = source.file() else {
+            panic!("retain the exact PairFile");
+        };
+        assert_eq!(
+            serde_json::to_vec(file).unwrap(),
+            serde_json::to_vec(filing).unwrap()
+        );
+        assert!(
+            matches!(source.receipt(), s::StateFrame::Filed { block_id, .. } if block_id == source.source())
+        );
+        assert_eq!(source.source().run, filing.source.run);
+        assert_eq!(source.source().sequence, filing.source.sequence);
+        assert_eq!(source.source().block.0, 0);
     }
     let template_target = mode.contains("-template-");
     let template_request = template_target
@@ -963,6 +1161,70 @@ pub(in crate::flow::context::worker_startup) fn finish(
             })
         );
     }
+    if boot_pair_evidence.is_some() {
+        let context = &mut owner.run.context;
+        for (origin, enter, leave) in [
+            (Arc::new(()), original_enter, leave),
+            (
+                Arc::clone(&context.read_origin),
+                AbsoluteBound::from_absolute(
+                    original_enter.began_ns() + 1,
+                    original_enter.deadline_ns(),
+                )
+                .unwrap(),
+                leave,
+            ),
+            (
+                Arc::clone(&context.read_origin),
+                original_enter,
+                AbsoluteBound::from_absolute(leave.began_ns() + 1, leave.deadline_ns()).unwrap(),
+            ),
+        ] {
+            assert!(
+                !context.can_detach_expired_boot_pairs(&ExpiredStartupAccountPermit {
+                    origin,
+                    enter,
+                    leave,
+                }),
+                "foreign rollback cannot detach boot repair"
+            );
+        }
+        let permit = ExpiredStartupAccountPermit {
+            origin: Arc::clone(&context.read_origin),
+            enter: original_enter,
+            leave,
+        };
+        assert!(context.can_detach_expired_boot_pairs(&permit));
+        let start = context.open_start.take();
+        assert!(
+            !context.can_detach_expired_boot_pairs(&permit),
+            "retain the actual StartIdentity"
+        );
+        context.open_start = start;
+        let head = context.boot_head.take();
+        assert!(
+            !context.can_detach_expired_boot_pairs(&permit),
+            "retain the original checked boot head"
+        );
+        context.boot_head = head;
+        let decision = context.deadlines.disarm(PumpDeadline::Decision);
+        context
+            .deadlines
+            .arm(PumpDeadline::Decision, leave)
+            .unwrap();
+        assert!(
+            !context.can_detach_expired_boot_pairs(&permit),
+            "foreign Decision wait cannot become cleanup"
+        );
+        context.deadlines.disarm(PumpDeadline::Decision);
+        if let Some(decision) = decision {
+            context
+                .deadlines
+                .arm(PumpDeadline::Decision, decision)
+                .unwrap();
+        }
+        assert!(context.can_detach_expired_boot_pairs(&permit));
+    }
     if pending_read {
         let context = &mut owner.run.context;
         for (origin, enter, leave) in [
@@ -1367,6 +1629,16 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         expected
                     );
                 }
+                if let Some(expected) = boot_pair_evidence.as_ref() {
+                    assert_eq!(
+                        &exit
+                            .0
+                            .test_boot_pairs()
+                            .expect("failed exit retains original boot repair")
+                            .test_evidence(),
+                        expected
+                    );
+                }
                 if template_target {
                     let account = exit
                         .0
@@ -1627,6 +1899,24 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
         assert_eq!(member.requests, expected_requests);
         member.assert_closed_without_request();
+        if let Some(expected) = boot_pair_evidence.as_ref() {
+            let account = boot_pair_account(owner).expect("retained original boot repair");
+            assert_eq!(&account.test_evidence(), expected);
+            assert!(owner.run.context.boot_pairs.is_none());
+            let actual: Vec<_> = member
+                .filings
+                .iter()
+                .filter_map(|file| match file {
+                    s::StateFrame::FilePair { filing, .. } => Some(filing.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                serde_json::to_vec(&actual).unwrap(),
+                serde_json::to_vec(boot_pair_filings.as_ref().unwrap()).unwrap(),
+                "rollback cannot start or repeat boot-pair filings"
+            );
+        }
         if initial_admission {
             assert!(owner.run.context.flow.starting_classifier().is_none());
             assert!(owner.run.context.flow.standing_classifier().is_none());
@@ -1812,6 +2102,25 @@ pub(in crate::flow::context::worker_startup) fn finish(
             .unwrap()
         };
         let terminal = rows.last().unwrap();
+        if let Some(files) = boot_pair_filings.as_ref() {
+            let terminals: Vec<_> = rows
+                .iter()
+                .filter(|row| row["kind"] == "tool.call.completed")
+                .collect();
+            assert_eq!(terminals.len(), files.len());
+            for (row, filing) in terminals.iter().zip(files) {
+                let s::PairRecord::Ended(ended) = &filing.pair else {
+                    unreachable!()
+                };
+                assert_eq!(row["sequence"], filing.source.sequence.0.to_string());
+                assert_eq!(row["run"], filing.source.run);
+                assert!(row["turn"].is_null());
+                assert_eq!(
+                    row["payload"],
+                    serde_json::to_value(crate::flow::mirror::pair_ended(ended)).unwrap()
+                );
+            }
+        }
         if let Some(records) = template_records.as_ref() {
             assert_eq!(
                 rows.iter()
@@ -2078,8 +2387,17 @@ pub(in crate::flow::context::worker_startup) fn finish(
     assert!(owner.run.context.flow.standing_state().is_none());
     assert!(
         owner.retired.as_ref().unwrap().state.is_some()
+            || owner.retired.as_ref().unwrap().has_stopped_plan_read()
             || owner.run.context.flow.unused_open().is_some()
     );
+    if let Some(expected) = boot_pair_evidence.as_ref() {
+        assert_eq!(
+            &boot_pair_account(owner)
+                .expect("cap retains boot repair")
+                .test_evidence(),
+            expected
+        );
+    }
     assert!(owner.run.resources.decode_present_for_serving().is_none());
     assert!(owner.run.resources.residency_port().is_none());
     if initial_admission {
