@@ -1059,7 +1059,7 @@ impl RecordBarrier {
 
     pub(super) fn retain_summary_rollback_record(
         &mut self,
-        permit: &super::context::plan_summary_driver::PlanReadRollbackPermit,
+        permit: &super::context::ReadRollbackPermit,
     ) -> Result<StoppedReadRecord, &'static str> {
         if !permit.matches_record(self) {
             return Err("summary rollback lost its exact record");
@@ -1257,6 +1257,15 @@ mod tests;
 pub(super) struct StoppedReadRecord {
     _pending: Option<(Event, RecordPurpose)>,
     _author: Option<AuthorTicket>,
+}
+#[cfg(test)]
+impl StoppedReadRecord {
+    pub(super) fn test_record(&self) -> Option<(&Event, Option<u64>)> {
+        Some((
+            &self._pending.as_ref()?.0,
+            self._author.as_ref().map(|author| author.ticket),
+        ))
+    }
 }
 
 /// The expired startup's whole unadmitted author moves into terminal custody.

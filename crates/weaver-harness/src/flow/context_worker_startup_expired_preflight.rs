@@ -48,6 +48,7 @@ impl ExpiredPreflightRollback {
         surface: GrantSurface,
         spu: Option<ReleaseOutcome>,
         account_complete: bool,
+        member: MemberRelease,
     ) -> Self {
         let context = &owner.run.context;
         assert_eq!(context.phase, RecordingPhase::Releasing);
@@ -65,7 +66,7 @@ impl ExpiredPreflightRollback {
             stage: Stage::Unload,
             dials: Some(dials),
             retired_dials: None,
-            unload: Some(unload(cause, surface, spu)),
+            unload: Some(unload(cause, surface, spu, member)),
             started: false,
             returned: StoppedAuthor::default(),
             sequence: None,
@@ -116,7 +117,12 @@ impl FoundationExpiredRollback {
             retired_dials: None,
             // No initial semantic reading ever stood on this road. The
             // retained unused Open is not a fabricated Grants read.
-            unload: Some(unload(cause, GrantSurface::Unreadable, None)),
+            unload: Some(unload(
+                cause,
+                GrantSurface::Unreadable,
+                None,
+                MemberRelease::Closed,
+            )),
             started: false,
             returned: StoppedAuthor::default(),
             sequence: None,
@@ -141,6 +147,7 @@ fn unload(
     cause: weaver_types::Cause,
     surface: GrantSurface,
     spu: Option<ReleaseOutcome>,
+    member: MemberRelease,
 ) -> AuthoredEvent {
     AuthoredEvent {
         kind: Kind::Unload,
@@ -156,7 +163,7 @@ fn unload(
                 forced_by: None,
                 release: serving::payloads::Release {
                     spu,
-                    member: Some(MemberRelease::Closed),
+                    member: Some(member),
                 },
                 end_reason: None,
                 state_flow_failure: None,

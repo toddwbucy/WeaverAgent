@@ -164,6 +164,10 @@ impl FoundationExpiredRollback {
 
 impl FoundationExpiredRollbackExit {
     #[cfg(test)]
+    pub(super) fn test_read(&self) -> Option<&crate::flow::context::read_driver::ReadTransaction> {
+        Some(self.held.active.as_ref()?.read.as_ref()?.evidence())
+    }
+    #[cfg(test)]
     pub(super) fn test_open(
         &self,
     ) -> Option<&crate::flow::context::boot_open_driver::StoppedBootOpenAccount> {

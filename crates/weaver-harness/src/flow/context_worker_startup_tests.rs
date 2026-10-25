@@ -203,7 +203,9 @@ impl Files {
                 classify: Some(self.child(
                     "checker",
                     "WEAVER_STARTUP_COMPOSITION_CHILD",
-                    if mode == "expired-startup-classifier-held" {
+                    if mode == "expired-startup-classifier-held"
+                        || mode == "expired-startup-summary-read-held"
+                    {
                         "rollback-held-exit"
                     } else if mode.starts_with("input-") {
                         mode
@@ -664,6 +666,20 @@ impl Member {
                         },
                     ..
                 } => self.hold_control == Some("read"),
+                s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::SystemPrompt {},
+                        },
+                    ..
+                } => self.hold_control == Some("prompt"),
+                s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::PlanCurrent {},
+                        },
+                    ..
+                } => self.hold_control == Some("summary"),
                 s::StateFrame::Control {
                     frame: s::StateControl::Release { .. },
                     ..
@@ -3171,6 +3187,38 @@ scenario!(
 scenario!(
     worker_startup_composition_expired_open_release_wrong,
     "expired-startup-open-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_prompt_read,
+    "expired-startup-prompt-complete"
+);
+scenario!(
+    worker_startup_composition_expired_summary_read,
+    "expired-startup-summary-read-complete"
+);
+scenario!(
+    worker_startup_composition_expired_prompt_cursor,
+    "expired-startup-prompt-cursor-complete"
+);
+scenario!(
+    worker_startup_composition_expired_summary_cursor,
+    "expired-startup-summary-read-cursor-complete"
+);
+scenario!(
+    worker_startup_composition_expired_read_classifier_held,
+    "expired-startup-summary-read-held"
+);
+scenario!(
+    worker_startup_composition_expired_read_release_wrong,
+    "expired-startup-summary-read-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_prompt_measurement,
+    "expired-startup-prompt-measurement-complete"
+);
+scenario!(
+    worker_startup_composition_expired_summary_measurement,
+    "expired-startup-summary-read-measurement-complete"
 );
 scenario!(
     worker_startup_composition_expired_repair,

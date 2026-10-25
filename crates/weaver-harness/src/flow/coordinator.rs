@@ -1668,7 +1668,19 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     pub(super) fn begin_plan_read_rollback(
         &mut self,
         cx: &mut FlowRecording<'_>,
-        permit: &super::context::plan_summary_driver::PlanReadRollbackPermit,
+        permit: &super::context::ReadRollbackPermit,
+    ) -> Result<(), FlowFailure> {
+        self.park_boot_read_rollback(cx, permit)?;
+        self.close_parked_boot_read();
+        Ok(())
+    }
+
+    /// Remove only this read's slots from the pump while retaining its live
+    /// endpoint. The composed rollback closes it after actual classifier reap.
+    pub(super) fn park_boot_read_rollback(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        permit: &super::context::ReadRollbackPermit,
     ) -> Result<(), FlowFailure> {
         // Deliberately do not call require_active/live after expired Enter.
         // Every waived obligation below must belong to this exact read.
@@ -1692,9 +1704,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         });
         let pending_matches = match self.pending_record {
             None => !permit.measurement_pending(),
-            Some(PendingRecord::State | PendingRecord::StateRelease) => {
+            Some(PendingRecord::State) => expected.is_some() && permit.measurement_pending(),
+            Some(PendingRecord::StateRelease) => {
                 expected.is_some()
-                    && (permit.measurement_pending() || cx.barrier.pending().is_none())
+                    && cx.barrier.pending().is_none()
+                    && cx.barrier.pending_author().is_none()
             }
             _ => false,
         };
@@ -1742,12 +1756,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 detail: detail.into(),
             })?;
         let state = self.state.take().expect("validated exact read channel");
-        // Remove the descriptor from the common pump before shutdown. Partial
-        // frames and received answers remain owned here through final close.
-        let close_error = state
-            .close_failed_read()
-            .err()
-            .map(|error| error.to_string());
+        // This is custody, not closure. Partial frames and received answers
+        // remain owned while the classifier is still alive.
         self.stopped_plan_read = Some(Box::new(StoppedPlanRead {
             _state: state,
             _operation: self.state_operation.take(),
@@ -1756,16 +1766,58 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             _recorded_ns: self.state_recorded_ns.take(),
             _release_timing: self.state_release_timing.take(),
             _record: record,
-            close_error,
+            close_error: None,
         }));
-        self.state_retired = true;
         self.phase = CoordinatorPhase::Releasing;
         Ok(())
+    }
+
+    fn close_parked_boot_read(&mut self) -> weaver_trace::MemberRelease {
+        let read = self.stopped_plan_read.as_mut().expect("parked boot read");
+        read.close_error = read
+            ._state
+            .close_failed_read()
+            .err()
+            .map(|error| error.to_string());
+        self.state_retired = true;
+        if read.close_error.is_some() {
+            weaver_trace::MemberRelease::Unconfirmed
+        } else {
+            weaver_trace::MemberRelease::Closed
+        }
+    }
+
+    pub(super) fn retire_parked_boot_read(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<weaver_trace::MemberRelease, FlowFailure> {
+        self.observe_failures(cx)?;
+        if self.phase != CoordinatorPhase::Releasing
+            || self.state_retired
+            || self.state.is_some()
+            || self.stopped_plan_read.is_none()
+            || !self.classifier_retired
+            || self.starting_classifier.is_some()
+            || !self.clean_obligations(cx)
+        {
+            return Err(self.fail(
+                cx,
+                "barrier",
+                "parked read release requires retired classifier and settled evidence",
+            ));
+        }
+        Ok(self.close_parked_boot_read())
     }
     pub(super) fn stopped_plan_read_close_error(&self) -> Option<&str> {
         self.stopped_plan_read
             .as_ref()
             .and_then(|account| account.close_error.as_deref())
+    }
+    #[cfg(test)]
+    pub(super) fn test_parked_read_record(
+        &self,
+    ) -> Option<(&weaver_trace::serving::Event, Option<u64>)> {
+        self.stopped_plan_read.as_ref()?._record.test_record()
     }
 
     pub(super) fn require_releasing(

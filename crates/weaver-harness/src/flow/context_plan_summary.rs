@@ -218,34 +218,6 @@ pub(in crate::flow) enum PlanSummaryCompletion {
     Cancelled(PlanSummaryAccount),
 }
 
-/// A rollback-only seal from this owner's immutable read and recorder slots.
-/// No caller can construct it or use it to resume a query or authorize success.
-pub(in crate::flow) struct PlanReadRollbackPermit {
-    expected: Option<(
-        weaver_types::state_flow::DecimalU64,
-        weaver_types::state_flow::StateControl,
-    )>,
-    ticket: Option<u64>,
-    record_kind: Option<Kind>,
-}
-impl PlanReadRollbackPermit {
-    pub(in crate::flow) fn matches_record(&self, barrier: &RecordBarrier) -> bool {
-        barrier.pending_author().map(|held| held.ticket) == self.ticket
-            && barrier.pending().map(|event| event.envelope.kind) == self.record_kind
-    }
-    pub(in crate::flow) fn expected(
-        &self,
-    ) -> Option<&(
-        weaver_types::state_flow::DecimalU64,
-        weaver_types::state_flow::StateControl,
-    )> {
-        self.expected.as_ref()
-    }
-    pub(in crate::flow) fn measurement_pending(&self) -> bool {
-        self.record_kind == Some(Kind::StateStoreMeasurement) && self.ticket.is_none()
-    }
-}
-
 /// Only a completely released summary result can owe this stopped recall.
 pub(in crate::flow) struct OwedPlanRecall {
     event: AuthoredEvent,
@@ -903,6 +875,40 @@ impl RecordingContext {
         leave: AbsoluteBound,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
+        self.begin_boot_plan_summary_release_owned(leave, false, io)
+    }
+
+    pub(super) fn park_expired_boot_plan_summary(
+        &mut self,
+        permit: &super::worker_startup::expired::ExpiredStartupAccountPermit,
+        io: &mut impl PumpIo,
+    ) -> Result<PlanSummaryAccount, RunFailure> {
+        self.release_live(io)?;
+        if !permit.allows(self)
+            || self.plan_summary.as_ref().is_none_or(|work| {
+                work.effect()
+                    || work.rollback.key != PumpDeadline::Enter
+                    || Some(work.rollback.bound) != self.deadlines.get(PumpDeadline::Enter)
+                    || work.rollback.account_deadline > self.last_ns
+            })
+        {
+            return Err(RunFailure::PlanSummaryOwned);
+        }
+        self.begin_boot_plan_summary_release_owned(
+            self.deadlines.get(PumpDeadline::Leave).unwrap(),
+            true,
+            io,
+        )?;
+        self.take_stopped_plan_summary()?
+            .ok_or(RunFailure::PlanSummaryOwned)
+    }
+
+    fn begin_boot_plan_summary_release_owned(
+        &mut self,
+        leave: AbsoluteBound,
+        defer_close: bool,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
         // An unheld release attempt already revokes future use, even when a
         // later prerequisite refuses the transition. Custody alone must not
         // initiate that cancellation; admitted reads keep their continuation.
@@ -981,17 +987,18 @@ impl RecordingContext {
                     self.plan_summary_fault(io, format!("summary rollback Leave: {error}"))
                 })?;
         }
-        self.flow
-            .begin_plan_read_rollback(
-                &mut FlowRecording {
-                    barrier: &mut self.barrier,
-                    inbox: &mut self.inbox,
-                    budget: &mut self.budget,
-                    author: &self.author,
-                },
-                &permit,
-            )
-            .map_err(|failure| self.flow_failed(io, failure))?;
+        let mut cx = FlowRecording {
+            barrier: &mut self.barrier,
+            inbox: &mut self.inbox,
+            budget: &mut self.budget,
+            author: &self.author,
+        };
+        let result = if defer_close {
+            self.flow.park_boot_read_rollback(&mut cx, &permit)
+        } else {
+            self.flow.begin_plan_read_rollback(&mut cx, &permit)
+        };
+        result.map_err(|failure| self.flow_failed(io, failure))?;
         self.phase = RecordingPhase::Releasing;
         self.freeze_plan_summary_account_bound();
         let incomplete = (!self.plan_summary.as_ref().unwrap().rollback.account_settled)
@@ -1012,28 +1019,12 @@ impl RecordingContext {
         Ok(())
     }
 
-    fn plan_read_rollback_permit(&self) -> Result<PlanReadRollbackPermit, RunFailure> {
-        let read = self.read.as_ref();
-        if read.is_some_and(|read| !read.is_summary()) {
+    fn plan_read_rollback_permit(&self) -> Result<ReadRollbackPermit, RunFailure> {
+        if self.read.as_ref().is_some_and(|read| !read.is_summary()) {
             return Err(RunFailure::PlanSummaryOwned);
         }
-        let ticket = self.barrier.pending_author().map(|held| held.ticket);
-        let record_kind = self.barrier.pending().map(|event| event.envelope.kind);
-        match record_kind {
-            Some(Kind::Recall)
-                if read.is_some_and(|read| {
-                    read.plan_ticket().is_some() && read.plan_ticket() == ticket
-                }) => {}
-            Some(Kind::StateStoreMeasurement)
-                if ticket.is_none() && read.is_some_and(|read| read.plan_expected().is_some()) => {}
-            None if ticket.is_none() => {}
-            _ => return Err(RunFailure::PlanSummaryOwned),
-        }
-        Ok(PlanReadRollbackPermit {
-            expected: read.and_then(|read| read.plan_expected()).cloned(),
-            ticket,
-            record_kind,
-        })
+        self.read_rollback_permit()
+            .map_err(|_| RunFailure::PlanSummaryOwned)
     }
 
     pub(super) fn plan_owns_pending_recall(&self) -> bool {

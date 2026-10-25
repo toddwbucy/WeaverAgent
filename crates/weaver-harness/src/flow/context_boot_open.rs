@@ -1164,7 +1164,7 @@ impl RecordingContext {
 
     pub(super) fn can_detach_expired_boot_open(
         &self,
-        permit: &super::worker_startup::expired::ExpiredBootAccountPermit,
+        permit: &super::worker_startup::expired::ExpiredStartupAccountPermit,
         decode: &DecodePort,
     ) -> bool {
         permit.allows(self)
@@ -1181,7 +1181,7 @@ impl RecordingContext {
 
     pub(super) fn detach_expired_boot_open(
         &mut self,
-        permit: &super::worker_startup::expired::ExpiredBootAccountPermit,
+        permit: &super::worker_startup::expired::ExpiredStartupAccountPermit,
         decode: &mut DecodePort,
     ) -> Result<StoppedBootOpenAccount, RunFailure> {
         if !self.can_detach_expired_boot_open(permit, decode) {

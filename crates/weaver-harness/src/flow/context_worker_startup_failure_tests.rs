@@ -92,6 +92,10 @@ pub(in crate::flow::context::worker_startup) fn reached(
             owner.stage() == ResidencyStage::Admit && owner.failure_test_admit_sent()
         }
         ("failed-startup-boot", EnterState::Boot(owner)) => owner.stage() == BootStage::Templates,
+        ("failed-startup-prompt", EnterState::Boot(owner)) => owner.stage() == BootStage::Prompt,
+        ("failed-startup-summary-read", EnterState::Boot(owner)) => {
+            owner.stage() == BootStage::Summary
+        }
         ("failed-startup-open", EnterState::Boot(owner)) => {
             owner.stage() == BootStage::Open && owner.failure_test_open_sent()
         }

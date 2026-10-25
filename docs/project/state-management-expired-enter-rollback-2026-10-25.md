@@ -9,8 +9,9 @@ classifier-refusal rollback. This act connects an original Enter expiry to root'
 explicit rollback and retains the actual startup account through disposal. It
 does not turn elapsed Enter time into a component failure or renew boot work.
 
-Authority: merged HARNESS-ENTER-WINDOW, HARNESS-OPEN, HARNESS-RECORD-LIFETIME,
-HARNESS-HALT and HARNESS-CLOCK, and weaver-harness-Spec section 6's rollback row.
+Authority: merged HARNESS-ENTER-WINDOW, HARNESS-OPEN, HARNESS-READ,
+HARNESS-PLAN-SUMMARY, HARNESS-RECORD-LIFETIME, HARNESS-HALT and HARNESS-CLOCK,
+and weaver-harness-Spec section 6's rollback row.
 The intended composition site is worker/dev_loop's unselected foundation adapter;
 its connection to this owner is still owed.
 
@@ -259,18 +260,95 @@ This checkpoint's source archive and logs are preserved at the approved evidence
 root under `state-expired-open-local-20261025`; its manifest identifies every
 file. Earlier deposits remain separate. This is still unpublished work.
 
+## Prompt and summary read continuation
+
+An expired boot prompt or boot plan-summary read can now join the consuming
+rollback. The same private startup-account permit binds its context, original
+expired Enter and accepted live Leave. Its read purpose, original StateControl
+bound, request identity, snapshot, bytes, recall ticket and prior summary/repair
+evidence remain owned. It issues no query, snapshot Release, recall retry or boot
+success after the original read bound. An earlier read timeout still follows the
+existing first-failure path; Enter expiry does not reclassify it.
+
+The coordinator separates custody from closure. It moves only that read's exact
+operation, completion, channel and pending record out of the pump, retaining the
+endpoint until the listener is sealed and the classifier child is actually reaped.
+The SPU release then runs before member closure, followed by the actual Unload,
+drain, SPU reap and Left. A pending read occupies the serial member exchange, so
+there is no fresh Grants comparison: Unload reports Unreadable. The actual member
+close outcome supplies Closed or Unconfirmed. A later real SPU release failure
+retains the read through the existing failed-exit handoff.
+
+The previous summary helper assumed that a pending state measurement had no
+author ticket. The new writer-pressure circuits exposed that assumption: both
+prompt and summary rollback were refused while their actual measurement waited.
+The shared read permit now requires the held measurement's request and operation,
+the exact pending record purpose/payload and its current author ticket. Recall
+still requires its read-owned ticket. The coordinator distinguishes a pending
+measurement from a Recorded measurement awaiting the final release probe.
+
+Eight additional delegated circuits cover prompt and summary answers withheld,
+both reads holding an acquired snapshot while Release is unanswered, classifier
+exit held while the member remains open, a later invalid SPU Release, and prompt
+and summary measurements held by the real writer queue. They compare retained
+read evidence and assert no fresh member requests. The pressure cases inject
+foreign record purpose/payload, reject them, restore the channel's actual
+measurement, and compare the final retained event and ticket. Context, Enter,
+Leave and StateControl-bound mismatches cannot acquire the disposal permit.
+
+`read-checks/` retains the initial 46-case pass, the two pressure failures, their
+48-case corrected pass, and a compile failure from two test-only namespace names.
+The first final-gate attempt found an unnecessary unit expression; the corrected
+strict lint passed. `read-restored-checks/results.json` records all eight gates:
+both locks, fmt, strict harness clippy, full harness, library build, all startup
+circuits and diff check. Ordinary harness results remain 1986 library tests plus
+45 other tests and 24 doctests, or 2055 passed; 483 library cases are ignored in
+that command. The delegated startup run separately passes 126 cases, including
+48 expired-startup cases. These counts do not qualify other ignored families,
+the privileged admin-startup cases or production artifacts.
+
+All fourteen compiled controls in `controls-read/results.json` were detected
+after their exact positive baselines. They cover classifier-before-member
+closure, actual closure, original bound and request retention, Unreadable rather
+than invented Grants, context/Enter/Leave/read-bound identity, retained pending
+record and ticket, exact measurement ownership, ticket-bearing measurement
+admission and custody through failed exit. Every changed source was restored.
+`read-after-controls/` then rebuilt the ordinary binary and passed all seven
+named positive cases again, formatting, both locks and diff check. All 703
+source/config hashes match the tree that passed the complete gates; the full
+suite's evidence therefore applies to the restored source, not a mutation.
+
+Manual review traced both callers of the shared read permit, immediate versus
+deferred summary closure, actual classifier reap, original read bounds, pending
+record custody, failed exit and the member outcome in Unload. No wire shape,
+event kind, runtime limit or production selection changes. The required review
+skills remain unavailable, so this is author evidence, not a Planner grade. The
+fresh audit in `read-checks/review-audit.json` found no reviewer submissions or
+threads on drafts #332 through #343, only their existing draft-skip comments.
+
+The immutable evidence destination is the approved root's
+`state-expired-read-local-20261025` directory, with source archive, source hashes,
+all retained logs, control patches and a manifest. This remains an unpublished
+local checkpoint.
+
 ## Completion boundary
 
 This branch remains local work in progress, with no published PR and no serving
 selection. In particular, the handoff and cap disposal tests for later startup
 positions do not establish cleanup of all pending accounts or gate ownership.
-Those unsupported positions remain Accepted until the original Leave cap; this
+Those unsupported positions have no ordinary rollback-completion claim. This
 owner must not be wired into a dispatcher as completed cleanup.
 
-The same slice still owes unfinished template, boot-read, repair and summary
-accounts and other startup ownership, gate Lower and tool containment,
+The same slice still owes unfinished template/classifier checks, boot-pair repair
+and other summary transitions, gate Lower and tool containment,
 before-Load and gate-owned stopped cleanup, and the worker/dev_loop adapter. Successful
 Ready and pre-adoption expiry need their own lifecycle continuations. The full
 #146 scope additionally includes healthy Leave/save, capture cleanup, process
 exit and dispatcher selection, production artifacts and prompt qualification,
 measured limits, security disposition and the operator's coupled cutover.
+
+The next template circuit must start with an outstanding classifier check.
+Source review found that the settled-account entry does not screen that check
+before completing Enter, while `begin_inspection` refuses it. That source finding
+has no new runtime reproduction here. Resolve this entry as part of the pending
+template composition before treating the owner as complete cleanup.

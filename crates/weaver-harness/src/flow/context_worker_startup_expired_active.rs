@@ -2,6 +2,7 @@
 //! The actual Leave licenses a new Grants comparison, never another boot step.
 use super::*;
 use crate::flow::context::boot_open_driver::StoppedBootOpenAccount;
+use crate::flow::context::expired_read_driver::ExpiredReadAccount;
 use crate::flow::context::failed_enter_driver::ChildState;
 use crate::flow::context::failed_enter_driver::expired_residency::ExpiredResidencyRelease;
 use crate::flow::context::startup_composition::refusal::response::listener::{
@@ -13,6 +14,7 @@ use weaver_trace::GrantSurface;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
+    Read,
     Open,
     Enter,
     Grants,
@@ -35,6 +37,8 @@ pub(super) struct ExpiredActiveRollback {
     pub(super) release: Option<ExpiredResidencyRelease>,
     pub(super) returned_admit: Option<ReceivedOrgan>,
     pub(super) open: Option<StoppedBootOpenAccount>,
+    pub(super) read: Option<ExpiredReadAccount>,
+    member: weaver_trace::MemberRelease,
 }
 
 impl ExpiredActiveRollback {
@@ -51,8 +55,28 @@ impl ExpiredActiveRollback {
     ) -> Result<(), String> {
         let context = &mut owner.run.context;
         let leave = owner.leave.unwrap();
+        if self.stage == Stage::Read {
+            let permit = ExpiredStartupAccountPermit {
+                origin: Arc::clone(&context.read_origin),
+                enter: owner.handoff.identity.enter,
+                leave,
+            };
+            match context.park_expired_startup_read(&permit, io) {
+                Ok(read) => {
+                    self.read = Some(read);
+                    // The expired read still owns the serial member exchange.
+                    // No current Grants read can reuse or renew that channel.
+                    self.surface = Some(GrantSurface::Unreadable);
+                    self.stage = Stage::Seal;
+                }
+                Err(RunFailure::Busy(_) | RunFailure::ReadOwned | RunFailure::PlanSummaryOwned) => {
+                }
+                Err(error) => return Err(format!("expired startup read: {error:?}")),
+            }
+            return Ok(());
+        }
         if self.stage == Stage::Open {
-            let permit = ExpiredBootAccountPermit {
+            let permit = ExpiredStartupAccountPermit {
                 origin: Arc::clone(&context.read_origin),
                 enter: owner.handoff.identity.enter,
                 leave,
@@ -154,7 +178,11 @@ impl ExpiredActiveRollback {
                 }
                 Stage::Seal => {
                     if dials.seal_step(context, leave, io)? {
-                        self.stage = Stage::Release;
+                        self.stage = if self.read.is_some() {
+                            Stage::Classifier
+                        } else {
+                            Stage::Release
+                        };
                     }
                 }
                 Stage::Release => {
@@ -221,11 +249,20 @@ impl ExpiredActiveRollback {
                     }
                 }
                 Stage::State => {
-                    if context.retire_state(io)? == Advance::Progress {
+                    if self.read.is_some() {
+                        if !matches!(
+                            owner.run.resources.classifier_child(),
+                            Some(ChildState::Reaped(_))
+                        ) {
+                            return Err(RunFailure::ReadOwned);
+                        }
+                        self.member = context.retire_expired_startup_read(io)?;
+                        self.stage = Stage::Terminal;
+                    } else if context.retire_state(io)? == Advance::Progress {
                         self.stage = Stage::Terminal;
                     }
                 }
-                Stage::Open | Stage::Enter | Stage::Terminal => unreachable!(),
+                Stage::Read | Stage::Open | Stage::Enter | Stage::Terminal => unreachable!(),
             }
             Ok(())
         })();
@@ -254,6 +291,7 @@ impl ExpiredActiveRollback {
                     .as_ref()
                     .and_then(ExpiredResidencyRelease::outcome),
                 self.open.as_ref().is_none_or(|open| !open.incomplete()),
+                self.member,
             ));
         }
         Ok(())
@@ -263,7 +301,7 @@ impl ExpiredActiveRollback {
 impl FoundationExpiredRollback {
     fn active_rollback(&mut self) -> Option<ExpiredActiveRollback> {
         let context = &self.run.context;
-        let permit = ExpiredBootAccountPermit {
+        let permit = ExpiredStartupAccountPermit {
             origin: Arc::clone(&context.read_origin),
             enter: self.handoff.identity.enter,
             leave: self.leave?,
@@ -274,6 +312,7 @@ impl FoundationExpiredRollback {
                 .resources
                 .decode_present_for_serving()
                 .is_some_and(|decode| context.can_detach_expired_boot_open(&permit, decode));
+        let park_read = context.can_park_expired_startup_read(&permit);
         if self.before_load
             || context.phase != RecordingPhase::Entered
             || context.flow.phase() != CoordinatorPhase::Active
@@ -287,24 +326,27 @@ impl FoundationExpiredRollback {
             || self.handoff.gate.is_some()
             || matches!(self.handoff.held.as_ref(), HeldStartup::Initial(_))
             || self.handoff.held.initial_grants().is_none()
-            || context.deadlines.get(PumpDeadline::StateControl).is_some()
+            || (context.deadlines.get(PumpDeadline::StateControl).is_some() && !park_read)
             || (context.boot_open_blocks_external() && !detach_open)
             || context.place_owed()
-            || context.plan_summary.is_some()
+            || (context.plan_summary.is_some() && !park_read)
             || context.repair.is_some()
             || context.boot_pairs.is_some()
-            || context.read.is_some()
+            || (context.read.is_some() && !park_read)
             || context.inspection.is_some()
             || ((context.barrier.pending().is_some() || context.barrier.pending_author().is_some())
-                && !detach_open)
-            || context.flow.pending_control().is_some()
-            || context.flow.operation_completion().is_some()
-            || !context.flow.state().outstanding().is_empty()
+                && !detach_open
+                && !park_read)
+            || (context.flow.pending_control().is_some() && !park_read)
+            || (context.flow.operation_completion().is_some() && !park_read)
+            || (!context.flow.state().outstanding().is_empty() && !park_read)
         {
             return None;
         }
         Some(ExpiredActiveRollback {
-            stage: if detach_open {
+            stage: if park_read {
+                Stage::Read
+            } else if detach_open {
                 Stage::Open
             } else {
                 Stage::Enter
@@ -317,6 +359,8 @@ impl FoundationExpiredRollback {
             release: None,
             returned_admit: None,
             open: None,
+            read: None,
+            member: weaver_trace::MemberRelease::Closed,
         })
     }
 

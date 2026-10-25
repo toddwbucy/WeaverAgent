@@ -67,14 +67,14 @@ impl ExpiredReleasePermit {
     }
 }
 
-/// Only the consuming rollback may detach its expired Open account before the
-/// new cleanup Grants read. This grants no decode, record or startup work.
-pub(in crate::flow::context) struct ExpiredBootAccountPermit {
+/// Only the consuming rollback may dispose its original expired startup account.
+/// This grants no query, decode, record or startup work.
+pub(in crate::flow::context) struct ExpiredStartupAccountPermit {
     origin: Arc<()>,
     enter: AbsoluteBound,
     leave: AbsoluteBound,
 }
-impl ExpiredBootAccountPermit {
+impl ExpiredStartupAccountPermit {
     pub(in crate::flow::context) fn allows(&self, context: &RecordingContext) -> bool {
         Arc::ptr_eq(&self.origin, &context.read_origin)
             && context.phase == RecordingPhase::Entered

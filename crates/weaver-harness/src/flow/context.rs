@@ -2565,12 +2565,15 @@ pub(in crate::flow) use plan_summary_driver::{
     PlanSummaryBeginRefusal, PlanSummaryCompletion, PlanSummaryProgress,
 };
 
+#[path = "context_expired_read.rs"]
+pub(super) mod expired_read_driver;
 #[path = "context_read.rs"]
 mod read_driver;
 #[allow(unused_imports)] // Composed by dependent boot, recall and placement primitives.
 pub(super) use read_driver::{
     BootHead, BootReadBeginError, BootReadBeginRefusal, BootReadCompletion, CancelledRead,
-    ReadBeginError, ReadBeginRefusal, ReadCompletion, ReadProgress, RecordedRead,
+    ReadBeginError, ReadBeginRefusal, ReadCompletion, ReadProgress, ReadRollbackPermit,
+    RecordedRead,
 };
 
 #[path = "context_freshness.rs"]

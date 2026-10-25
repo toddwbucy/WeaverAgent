@@ -109,8 +109,20 @@ pub(in crate::flow::context::worker_startup) fn enter(
     let suffix = suffix.strip_suffix("-varied").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-unreadable").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-held").unwrap_or(suffix);
+    let suffix = suffix.strip_suffix("-cursor").unwrap_or(suffix);
+    let suffix = suffix.strip_suffix("-measurement").unwrap_or(suffix);
     let target = format!("failed-startup-{suffix}");
-    while !reached(guard.0.as_ref().unwrap(), &target) {
+    let read_target = matches!(suffix, "prompt" | "summary-read");
+    if read_target && !mode.contains("-cursor-") {
+        member.hold_control = Some(if suffix == "prompt" {
+            "prompt"
+        } else {
+            "summary"
+        });
+    }
+    while !reached(guard.0.as_ref().unwrap(), &target)
+        || (read_target && member.held_control.is_none())
+    {
         assert!(
             Instant::now() < limit,
             "target {target}: {:?}",
@@ -130,6 +142,9 @@ pub(in crate::flow::context::worker_startup) fn enter(
             "{:?}",
             guard.0.as_ref().unwrap().detail()
         );
+        if read_target && mode.contains("-cursor-") && reached(guard.0.as_ref().unwrap(), &target) {
+            member.hold_control = Some("release");
+        }
         member.step(clock.now().unwrap(), "ready");
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -142,6 +157,80 @@ pub(in crate::flow::context::worker_startup) fn enter(
             .err()
             .expect("not expired"),
     );
+    if read_target && mode.contains("-measurement-") {
+        super::super::failed::tests::fill_trace(context(guard.0.as_mut().unwrap()), clock);
+        member.hold_control = None;
+        member.step(clock.now().unwrap(), "ready");
+        while context(guard.0.as_mut().unwrap())
+            .barrier
+            .pending()
+            .is_none()
+        {
+            assert!(
+                Instant::now() < limit,
+                "read measurement did not reach writer pressure"
+            );
+            // SAFETY: all original child owners remain in the fixture guard.
+            assert_eq!(
+                unsafe {
+                    guard
+                        .0
+                        .as_mut()
+                        .unwrap()
+                        .advance_with_io(&mut CircuitIo(clock))
+                },
+                FoundationEnterProgress::Pending
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            context(guard.0.as_mut().unwrap())
+                .barrier
+                .pending()
+                .unwrap()
+                .envelope
+                .kind,
+            weaver_trace::serving::Kind::StateStoreMeasurement
+        );
+        // The same trace kind alone is not this read's authority. Exercise
+        // foreign purpose and payload under real writer pressure, then restore
+        // the actual channel measurement before taking the final evidence.
+        let context = context(guard.0.as_mut().unwrap());
+        let original = context.barrier.pending_author().unwrap().event.clone();
+        let measurement = context.flow.state().held_measurement().unwrap().clone();
+        let mut foreign = measurement.clone();
+        foreign.observation.request_id = (foreign.observation.request_id.0 + 1).into();
+        let mut foreign_event = original.clone();
+        foreign_event.payload = Some(weaver_trace::serving::Payload::StateStoreMeasurement(
+            Box::new(crate::flow::mirror::measurement(&foreign)),
+        ));
+        use crate::flow::recording::{RecordProgress, RecordPurpose};
+        for (event, purpose, valid) in [
+            (original.clone(), RecordPurpose::Observation, false),
+            (foreign_event, RecordPurpose::State(foreign), false),
+            (original, RecordPurpose::State(measurement), true),
+        ] {
+            let ticket = context.barrier.pending_author().unwrap().ticket;
+            assert!(context.barrier.abandon_boot_author(ticket));
+            assert!(matches!(
+                context.barrier.submit_authored_with_clock(
+                    event,
+                    purpose,
+                    &context.author,
+                    1,
+                    &mut context.inbox,
+                    &mut context.budget,
+                    &mut || clock.now()
+                ),
+                RecordProgress::Pending
+            ));
+            assert_eq!(
+                context.read_rollback_permit().is_ok(),
+                valid,
+                "read measurement must match exact owner"
+            );
+        }
+    }
     if mode == "expired-startup-admit-pending-complete" {
         let EnterState::Residency(owner) = guard.0.as_mut().unwrap().state.as_mut().unwrap() else {
             panic!("actual Admit owner");
@@ -280,6 +369,48 @@ pub(in crate::flow::context::worker_startup) fn finish(
             .is_none()
     );
     let requests = member.requests.clone();
+    let read_evidence = owner.run.context.read.as_ref().map(|read| {
+        (
+            read.plan_bound(),
+            read.plan_expected().cloned(),
+            read.acquired_snapshot(),
+            read.assembled_bytes().to_vec(),
+            read.plan_ticket(),
+            read.plan_recorded(),
+        )
+    });
+    let pending_read = read_evidence.is_some();
+    let pending_read_record = pending_read
+        .then(|| {
+            owner.run.context.barrier.pending().map(|event| {
+                (
+                    serde_json::to_vec(event).unwrap(),
+                    owner
+                        .run
+                        .context
+                        .barrier
+                        .pending_author()
+                        .map(|author| author.ticket),
+                )
+            })
+        })
+        .flatten();
+    if pending_read {
+        assert_eq!(
+            member.held_control.is_none(),
+            mode.contains("-measurement-")
+        );
+        let read = owner.run.context.read.as_ref().unwrap();
+        assert!(read.plan_expected().is_some());
+        assert_eq!(
+            read.acquired_snapshot().is_some(),
+            mode.contains("-cursor-")
+        );
+        assert_eq!(
+            !read.assembled_bytes().is_empty(),
+            mode.contains("-cursor-")
+        );
+    }
     let open_request = owner.run.context.boot_open_request().cloned();
     let open_raw = owner.run.context.boot_open_raw().map(<[u8]>::to_vec);
     let pending_open = owner.run.context.boot_owns_pending_author().then(|| {
@@ -542,7 +673,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 AbsoluteBound::from_absolute(leave.began_ns() + 1, leave.deadline_ns()).unwrap(),
             ),
         ] {
-            let permit = ExpiredBootAccountPermit {
+            let permit = ExpiredStartupAccountPermit {
                 origin,
                 enter,
                 leave,
@@ -552,7 +683,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 "foreign rollback cannot detach the boot account"
             );
         }
-        let permit = ExpiredBootAccountPermit {
+        let permit = ExpiredStartupAccountPermit {
             origin: Arc::clone(&context.read_origin),
             enter,
             leave,
@@ -566,11 +697,67 @@ pub(in crate::flow::context::worker_startup) fn finish(
         );
         assert!(context.failure.is_none() && context.flow.halt().is_none());
     }
+    if pending_read {
+        let context = &mut owner.run.context;
+        for (origin, enter, leave) in [
+            (Arc::new(()), original_enter, leave),
+            (
+                Arc::clone(&context.read_origin),
+                AbsoluteBound::from_absolute(
+                    original_enter.began_ns() + 1,
+                    original_enter.deadline_ns(),
+                )
+                .unwrap(),
+                leave,
+            ),
+            (
+                Arc::clone(&context.read_origin),
+                original_enter,
+                AbsoluteBound::from_absolute(leave.began_ns() + 1, leave.deadline_ns()).unwrap(),
+            ),
+        ] {
+            assert!(
+                !context.can_park_expired_startup_read(&ExpiredStartupAccountPermit {
+                    origin,
+                    enter,
+                    leave
+                }),
+                "foreign rollback cannot dispose this read"
+            );
+        }
+        let permit = ExpiredStartupAccountPermit {
+            origin: Arc::clone(&context.read_origin),
+            enter: original_enter,
+            leave,
+        };
+        assert!(context.can_park_expired_startup_read(&permit));
+        let original = context
+            .deadlines
+            .disarm(PumpDeadline::StateControl)
+            .unwrap();
+        let changed =
+            AbsoluteBound::from_absolute(original.began_ns() + 1, original.deadline_ns()).unwrap();
+        context
+            .deadlines
+            .arm(PumpDeadline::StateControl, changed)
+            .unwrap();
+        assert!(
+            !context.can_park_expired_startup_read(&permit),
+            "read wait must remain exact"
+        );
+        context.deadlines.disarm(PumpDeadline::StateControl);
+        context
+            .deadlines
+            .arm(PumpDeadline::StateControl, original)
+            .unwrap();
+        assert!(context.can_park_expired_startup_read(&permit));
+    }
     if mode.ends_with("-complete")
         || mode.contains("-release-")
         || mode.ends_with("-classifier-varied")
         || mode.ends_with("-classifier-unreadable")
         || mode.ends_with("-classifier-held")
+        || mode.ends_with("-read-held")
     {
         // This cleanup waits for child exit with no socket descriptors. The
         // general circuit fake only supplies readiness for actual interests.
@@ -592,13 +779,14 @@ pub(in crate::flow::context::worker_startup) fn finish(
             }
         }
         let limit = Instant::now() + Duration::from_secs(4);
-        let mut release_child = !mode.ends_with("-classifier-held");
+        let mut release_child =
+            !(mode.ends_with("-classifier-held") || mode.ends_with("-read-held"));
         let mut release_spu = !mode.ends_with("-release-held");
         let unsent_open = mode == "expired-startup-open-unsent-complete";
         let incomplete_open = mode.starts_with("expired-startup-open-") && !unsent_open;
         // Every child is already forked. Drain the real writer concurrently:
         // close_after_drain is itself a blocking operation under its bound.
-        let trace_reader = pending_open.is_some().then(|| {
+        let trace_reader = (pending_open.is_some() || pending_read_record.is_some()).then(|| {
             use std::io::BufRead;
             let input = reader.try_clone().unwrap();
             input
@@ -705,6 +893,23 @@ pub(in crate::flow::context::worker_startup) fn finish(
                     assert!(account.incomplete());
                     assert_eq!(account.request(), open_request.as_ref().unwrap());
                     assert_eq!(account.test_bound(), original_enter.deadline_ns());
+                }
+                if let Some(expected) = read_evidence.as_ref() {
+                    let read = exit
+                        .0
+                        .test_read()
+                        .expect("failed exit retains original read");
+                    assert_eq!(
+                        &(
+                            read.plan_bound(),
+                            read.plan_expected().cloned(),
+                            read.acquired_snapshot(),
+                            read.assembled_bytes().to_vec(),
+                            read.plan_ticket(),
+                            read.plan_recorded()
+                        ),
+                        expected
+                    );
                 }
                 assert_eq!(exit.0.channel_fault(), Some(crate::ChannelFault::Closed));
                 assert!(matches!(
@@ -881,10 +1086,13 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         owner.unload_sequence().is_none(),
                         "healthy Unload requires classifier reap first"
                     );
-                    assert!(
-                        owner.run.context.flow.standing_state().is_some(),
-                        "healthy member release follows classifier reap"
-                    );
+                    member.assert_no_request();
+                    if !pending_read {
+                        assert!(
+                            owner.run.context.flow.standing_state().is_some(),
+                            "healthy member release follows classifier reap"
+                        );
+                    }
                 }
                 let root = path.parent().unwrap();
                 std::fs::write(root.join("classifier-exit"), b"exit").unwrap();
@@ -927,7 +1135,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
             assert!(owner.run.resources.spu_child().is_none());
         }
         assert!(owner.run.context.flow.standing_state().is_none());
-        assert!(owner.active.as_ref().unwrap().current.is_some());
+        assert_eq!(
+            owner.active.as_ref().unwrap().current.is_none(),
+            pending_read
+        );
         if mode == "expired-startup-admit-sent-complete" {
             let release = owner.active.as_ref().unwrap().release.as_ref().unwrap();
             let prior = release
@@ -941,9 +1152,49 @@ pub(in crate::flow::context::worker_startup) fn finish(
             assert_eq!(release.received_reply().unwrap().exchange.ordinal, 2);
         }
         let mut expected_requests = requests.clone();
-        expected_requests.push("grants".into());
+        if !pending_read {
+            expected_requests.push("grants".into());
+        }
         assert_eq!(member.requests, expected_requests);
         member.assert_closed_without_request();
+        if let Some(expected) = read_evidence.as_ref() {
+            let read = owner
+                .active
+                .as_ref()
+                .unwrap()
+                .read
+                .as_ref()
+                .expect("retain expired read")
+                .evidence();
+            assert_eq!(
+                &(
+                    read.plan_bound(),
+                    read.plan_expected().cloned(),
+                    read.acquired_snapshot(),
+                    read.assembled_bytes().to_vec(),
+                    read.plan_ticket(),
+                    read.plan_recorded()
+                ),
+                expected,
+                "rollback retains exact original read custody"
+            );
+            assert_eq!(
+                read.plan_bound().deadline_ns(),
+                original_enter.deadline_ns()
+            );
+            assert!(owner.run.context.read.is_none());
+            assert!(owner.run.context.plan_summary.is_none());
+        }
+        if let Some((expected, ticket)) = pending_read_record.as_ref() {
+            let (event, retained_ticket) = owner
+                .run
+                .context
+                .flow
+                .test_parked_read_record()
+                .expect("retained original read record");
+            assert_eq!(&serde_json::to_vec(event).unwrap(), expected);
+            assert_eq!(&retained_ticket, ticket);
+        }
         if incomplete_open {
             let account = owner.active.as_ref().unwrap().open.as_ref().unwrap();
             assert!(
@@ -1017,7 +1268,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         );
         assert_eq!(
             terminal["payload"]["grant_surface"],
-            if mode.ends_with("-unreadable") {
+            if pending_read || mode.ends_with("-unreadable") {
                 "unreadable"
             } else if mode.ends_with("-varied") {
                 "varied"
