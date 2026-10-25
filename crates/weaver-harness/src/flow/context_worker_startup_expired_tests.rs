@@ -14,6 +14,18 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use weaver_types::state_flow as s;
 
+#[path = "context_worker_startup_expired_summary_boundary_tests.rs"]
+mod summary_boundary;
+
+#[path = "context_worker_startup_expired_gate_tests.rs"]
+mod gate_cases;
+
+#[path = "context_worker_startup_expired_gate_failure_tests.rs"]
+mod gate_failure;
+
+#[path = "context_worker_startup_expired_gate_last_word_tests.rs"]
+mod gate_last_word;
+
 struct Guard(Option<Box<FoundationExpiredRollback>>);
 fn boot_pair_account(
     owner: &FoundationExpiredRollback,
@@ -130,8 +142,11 @@ pub(in crate::flow::context::worker_startup) fn enter(
     let template_pressure = mode.contains("-template-record-")
         || mode.contains("-template-component-")
         || mode.contains("-template-foreign-");
-    let summary_account = mode.starts_with("expired-startup-summary-account-");
-    let target = if summary_account {
+    let summary_account =
+        mode.starts_with("expired-startup-summary-account-") || summary_boundary::is_mode(mode);
+    let target = if gate_cases::is_mode(mode) {
+        "failed-startup-raised".to_owned()
+    } else if summary_account {
         "failed-startup-summary-read".to_owned()
     } else if mode.starts_with("expired-startup-repair-") {
         "failed-startup-repair".to_owned()
@@ -209,8 +224,14 @@ pub(in crate::flow::context::worker_startup) fn enter(
             "summary"
         });
     }
-    while !reached(guard.0.as_ref().unwrap(), &target)
-        || (read_target && member.held_control.is_none())
+    while !(if mode == "expired-startup-installed-unsent-complete" {
+        matches!(guard.0.as_ref().unwrap().state.as_ref(), Some(EnterState::Gate(gate))
+            if gate.stage() == crate::flow::context::boot_composition::gate_startup::GateStartupStage::Raise)
+    } else if gate_cases::is_mode(mode) {
+        gate_cases::reached(guard.0.as_ref().unwrap(), mode)
+    } else {
+        reached(guard.0.as_ref().unwrap(), &target)
+    }) || (read_target && member.held_control.is_none())
         || admission_received
             .as_ref()
             .is_some_and(|path| !path.exists())
@@ -262,7 +283,9 @@ pub(in crate::flow::context::worker_startup) fn enter(
         };
         owner.failure_test_stage_summary(&mut CircuitIo(clock));
         let context = context(guard.0.as_mut().unwrap());
-        if !mode.contains("-unstarted-") {
+        if summary_boundary::is_mode(mode) {
+            summary_boundary::prepare(context, member, clock, limit, mode);
+        } else if !mode.contains("-unstarted-") {
             loop {
                 assert!(Instant::now() < limit, "original summary did not settle");
                 let mut ports = PumpPorts {
@@ -314,7 +337,7 @@ pub(in crate::flow::context::worker_startup) fn enter(
             );
         }
         assert!(context.plan_summary.is_some());
-        assert!(context.read.is_none());
+        assert_eq!(context.read.is_none(), !summary_boundary::is_mode(mode));
     }
     if [
         "expired-startup-repair-unstarted-complete",
@@ -816,18 +839,58 @@ pub(in crate::flow::context::worker_startup) fn enter(
         .get(PumpDeadline::Enter)
         .unwrap();
     let origin = Arc::clone(&context(guard.0.as_mut().unwrap()).read_origin);
-    clock.advance_to(enter.deadline_ns()).unwrap();
-    // SAFETY: as above. The real stage observes exact-deadline expiry itself.
-    assert_eq!(
+    if summary_boundary::is_mode(mode) {
+        summary_boundary::expire(context(guard.0.as_mut().unwrap()), clock, mode);
+    }
+    let progress = if mode == "expired-startup-installed-unsent-complete" {
+        // The original owner's first sample checks live Enter. Production then
+        // stages its original Raise before the common pump checks live again.
+        // Expire that second sample, before any transport send is attempted.
+        struct BeforeRaiseSend<'a> {
+            clock: &'a mut FakePumpIo,
+            end: u64,
+            samples: usize,
+        }
+        impl PumpIo for BeforeRaiseSend<'_> {
+            fn now(&mut self) -> std::io::Result<u64> {
+                self.samples += 1;
+                if self.samples == 2 {
+                    self.clock.advance_to(self.end)?;
+                }
+                self.clock.now()
+            }
+            fn wait(
+                &mut self,
+                _: &[WaitInterest<'_>],
+                _: Option<u64>,
+            ) -> std::io::Result<crate::flow::clock::WaitOutcome> {
+                panic!("original Enter expiry must precede the first Raise send or wait");
+            }
+        }
+        let mut io = BeforeRaiseSend {
+            clock,
+            end: enter.deadline_ns(),
+            samples: 0,
+        };
+        // SAFETY: the original fixture retains the serving thread and child.
+        let progress = unsafe { guard.0.as_mut().unwrap().advance_with_io(&mut io) };
+        assert_eq!(
+            io.samples, 2,
+            "pin the production stage/first-send boundary"
+        );
+        progress
+    } else {
+        clock.advance_to(enter.deadline_ns()).unwrap();
+        // SAFETY: as above. The real stage observes exact-deadline expiry itself.
         unsafe {
             guard
                 .0
                 .as_mut()
                 .unwrap()
                 .advance_with_io(&mut CircuitIo(clock))
-        },
-        FoundationEnterProgress::Stopped
-    );
+        }
+    };
+    assert_eq!(progress, FoundationEnterProgress::Stopped);
     assert!(
         context(guard.0.as_mut().unwrap()).failure().is_none(),
         "expiry is not failure"
@@ -915,6 +978,46 @@ pub(in crate::flow::context::worker_startup) fn finish(
             .is_none()
     );
     let requests = member.requests.clone();
+    let unsent_gate = matches!(
+        mode,
+        "expired-startup-installed-complete" | "expired-startup-installed-unsent-complete"
+    )
+    .then(|| {
+        let HeldStartup::Gate(held) = owner.handoff.held.as_ref() else {
+            panic!("original unraised gate account");
+        };
+        let arms = owner.handoff.gate.as_ref().unwrap();
+        assert!(held.reply.is_none() && held.returned.is_none());
+        let queued = mode == "expired-startup-installed-unsent-complete";
+        assert_eq!(held.send.is_some(), queued);
+        assert_eq!(arms.port.is_some(), queued);
+        assert_eq!(arms.child.is_some(), queued);
+        if let Some(send) = &held.send {
+            assert!(!send.sent() && send.sent_at().is_none());
+            assert!(send.belongs_to(arms.port.as_ref().unwrap()));
+            assert!(send.matches_exchange(&held.raise.exchange));
+        }
+        let outgoing = arms
+            .port
+            .as_ref()
+            .and_then(|port| port.test_outgoing_packet())
+            .map(|(bytes, offset)| {
+                assert_eq!(offset, 0, "the original Raise is wholly unsent");
+                assert_eq!(
+                    serde_json::from_slice::<OrganEnvelope>(bytes).unwrap(),
+                    held.raise
+                );
+                (bytes.to_vec(), bytes.as_ptr() as usize, offset)
+            });
+        assert_eq!(outgoing.is_some(), queued);
+        (serde_json::to_vec(&held.raise).unwrap(), outgoing)
+    });
+    if gate_failure::before_leave(mode) {
+        gate_failure::finish(
+            &mut guard, member, reader, clock, path, enter_peer, &requests, mode,
+        );
+        return;
+    }
     let initial_admission = mode.starts_with("expired-startup-classifying")
         || mode.starts_with("expired-startup-admission-");
     let admission_evidence = owner
@@ -943,6 +1046,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
         assert!(owner.run.context.flow.standing_classifier().is_none());
     }
+    let summary_boundary_evidence = summary_boundary::evidence(&owner.run.context, member, mode);
     let summary_evidence = owner
         .run
         .context
@@ -1123,7 +1227,12 @@ pub(in crate::flow::context::worker_startup) fn finish(
             })
         })
         .flatten();
-    if pending_read {
+    if pending_read && summary_boundary::is_mode(mode) {
+        assert!(member.held_control.is_none());
+        let read = owner.run.context.read.as_ref().unwrap();
+        assert!(read.plan_expected().is_none());
+        assert!(read.plan_recorded().is_some());
+    } else if pending_read {
         assert_eq!(
             member.held_control.is_none(),
             mode.contains("-measurement-")
@@ -1358,6 +1467,24 @@ pub(in crate::flow::context::worker_startup) fn finish(
         member.requests, requests,
         "no new boot work during rollback admission"
     );
+    if gate_failure::is_mode(mode) {
+        gate_failure::finish(
+            &mut guard, member, reader, clock, path, &peer, &requests, mode,
+        );
+        return;
+    }
+    if gate_last_word::is_mode(mode) {
+        gate_last_word::finish(
+            &mut guard, member, reader, clock, path, &peer, &directive, &requests, mode,
+        );
+        return;
+    }
+    if gate_cases::is_mode(mode) {
+        gate_cases::finish(
+            owner, member, reader, clock, path, &peer, &directive, &requests, mode,
+        );
+        return;
+    }
     if admission_evidence.is_some() {
         let context = &owner.run.context;
         for (origin, enter, leave) in [
@@ -1577,12 +1704,11 @@ pub(in crate::flow::context::worker_startup) fn finish(
             leave,
         };
         assert!(context.can_park_expired_startup_read(&permit));
-        let original = context
-            .deadlines
-            .disarm(PumpDeadline::StateControl)
-            .unwrap();
+        let original = context.deadlines.disarm(PumpDeadline::StateControl);
+        let read_bound = context.read.as_ref().unwrap().plan_bound();
         let changed =
-            AbsoluteBound::from_absolute(original.began_ns() + 1, original.deadline_ns()).unwrap();
+            AbsoluteBound::from_absolute(read_bound.began_ns() + 1, read_bound.deadline_ns())
+                .unwrap();
         context
             .deadlines
             .arm(PumpDeadline::StateControl, changed)
@@ -1592,10 +1718,12 @@ pub(in crate::flow::context::worker_startup) fn finish(
             "read wait must remain exact"
         );
         context.deadlines.disarm(PumpDeadline::StateControl);
-        context
-            .deadlines
-            .arm(PumpDeadline::StateControl, original)
-            .unwrap();
+        if let Some(original) = original {
+            context
+                .deadlines
+                .arm(PumpDeadline::StateControl, original)
+                .unwrap();
+        }
         assert!(context.can_park_expired_startup_read(&permit));
     }
     if summary_evidence.is_some() {
@@ -1631,7 +1759,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
             leave,
         });
     }
-    if mode.starts_with("expired-startup-summary-account-") {
+    if mode.starts_with("expired-startup-summary-account-") || summary_boundary::is_settled(mode) {
         assert_eq!(
             owner.advance_with_io(&mut CircuitIo(clock)),
             FoundationExpiredRollbackProgress::Accepted
@@ -1641,7 +1769,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
             "expired summary account must enter actual cleanup"
         );
     }
-    if mode.starts_with("expired-startup-summary-account-") && !mode.ends_with("-cap") {
+    if (mode.starts_with("expired-startup-summary-account-") || summary_boundary::is_settled(mode))
+        && !mode.ends_with("-cap")
+    {
         assert_eq!(
             owner.advance_with_io(&mut CircuitIo(clock)),
             FoundationExpiredRollbackProgress::Accepted
@@ -1762,6 +1892,17 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 owner.detail()
             );
             let progress = owner.advance_with_io(&mut CleanupIo(clock));
+            if unsent_gate.is_some()
+                && let Some(gate) = owner
+                    .active
+                    .as_ref()
+                    .and_then(|active| active.gate.as_ref())
+            {
+                assert!(
+                    gate.test_lower().is_none(),
+                    "unraised gate must never construct a Lower"
+                );
+            }
             if mode.contains("-admission-unsent-failure-")
                 && owner
                     .active
@@ -2302,6 +2443,43 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
         assert!(!owner.abandoned());
         assert!(owner.run.context.failure.is_none() && owner.run.context.flow.halt().is_none());
+        if let Some((raise, outgoing)) = &unsent_gate {
+            let HeldStartup::Gate(held) = owner.handoff.held.as_ref() else {
+                panic!("original unraised gate remains owned");
+            };
+            assert_eq!(&serde_json::to_vec(&held.raise).unwrap(), raise);
+            assert!(
+                held.send
+                    .as_ref()
+                    .is_none_or(|send| !send.sent() && send.sent_at().is_none()),
+                "rollback never flushes the original Raise"
+            );
+            assert!(held.reply.is_none() && held.returned.is_none());
+            let gate = owner.active.as_ref().unwrap().gate.as_ref().unwrap();
+            assert!(
+                gate.test_lower().is_none(),
+                "an unsent Raise cannot produce Lower"
+            );
+            assert!(gate.test_replies().0.is_none() && gate.test_replies().1.is_none());
+            let retained = gate
+                .test_retired_outgoing()
+                .map(|(bytes, offset)| (bytes.to_vec(), bytes.as_ptr() as usize, offset));
+            assert_eq!(
+                &retained, outgoing,
+                "retirement preserves the exact original outgoing buffer and offset"
+            );
+            let arms = owner.handoff.gate.as_ref().unwrap();
+            assert!(arms.port.is_none());
+            if outgoing.is_some() {
+                assert!(gate.test_retired());
+                assert!(matches!(
+                    arms.child.as_ref().unwrap().state(),
+                    crate::flow::context::failed_enter_driver::ChildState::Reaped(_)
+                ));
+            } else {
+                assert!(arms.child.is_none() && !gate.test_retired());
+            }
+        }
         assert_eq!(
             owner.run.context.retired_enter,
             Some(owner.handoff.identity.enter)
@@ -2385,6 +2563,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 owner.run.context.committed_plan_summary(),
                 Err(crate::flow::plan::PlanSummaryUnavailable::Revoked)
             ));
+        }
+        if let Some(expected) = summary_boundary_evidence.as_ref() {
+            summary_boundary::assert_cleanup(owner, expected, mode);
         }
         if let Some(expected) = extracted_summary.as_ref() {
             let HeldStartup::Boot(boot) = owner.handoff.held.as_ref() else {
@@ -2630,6 +2811,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
             .unwrap()
         };
         let terminal = rows.last().unwrap();
+        if let Some(expected) = summary_boundary_evidence.as_ref() {
+            summary_boundary::assert_trace(&rows, expected);
+        }
         if summary_evidence.is_some() || extracted_summary.is_some() {
             let expected =
                 usize::from(!mode.contains("-unstarted-") && !mode.contains("-refused-"));

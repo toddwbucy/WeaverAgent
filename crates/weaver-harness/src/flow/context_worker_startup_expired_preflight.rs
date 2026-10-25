@@ -38,8 +38,20 @@ pub(super) struct ExpiredPreflightRollback {
     returned: StoppedAuthor,
     sequence: Option<Sequence>,
     answer_left: bool,
+    refusal: Option<LifecycleRefusal>,
 }
 impl ExpiredPreflightRollback {
+    pub(super) fn recover_clock(
+        &mut self,
+        context: &mut RecordingContext,
+        error: RunFailure,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        match self.dials.as_mut() {
+            Some(dials) => dials.recover(context, error, io),
+            None => Err(error),
+        }
+    }
     /// The same terminal follows actual retired classifier/state custody. The
     /// caller retains both measured Grants readings in its preceding owner.
     pub(super) fn released(
@@ -49,6 +61,7 @@ impl ExpiredPreflightRollback {
         spu: Option<ReleaseOutcome>,
         account_complete: bool,
         member: MemberRelease,
+        refusal: Option<LifecycleRefusal>,
     ) -> Self {
         let context = &owner.run.context;
         assert_eq!(context.phase, RecordingPhase::Releasing);
@@ -56,6 +69,17 @@ impl ExpiredPreflightRollback {
         assert!(context.flow.classifier_retired());
         assert!(context.flow.standing_state().is_none());
         assert_eq!(owner.run.resources.spu_child().is_some(), spu.is_some());
+        assert!(
+            owner
+                .handoff
+                .gate
+                .as_ref()
+                .and_then(|gate| gate.child.as_ref())
+                .is_none_or(|child| matches!(
+                    child.state(),
+                    crate::flow::context::failed_enter_driver::ChildState::Reaped(_)
+                ))
+        );
         assert!(
             owner
                 .run
@@ -77,6 +101,7 @@ impl ExpiredPreflightRollback {
             returned: StoppedAuthor::default(),
             sequence: None,
             answer_left: account_complete,
+            refusal,
         }
     }
     pub(super) fn complete(&self) -> bool {
@@ -133,6 +158,7 @@ impl FoundationExpiredRollback {
             returned: StoppedAuthor::default(),
             sequence: None,
             answer_left: true,
+            refusal: None,
         })
     }
 
@@ -271,6 +297,12 @@ impl ExpiredPreflightRollback {
             Stage::Children => {
                 use crate::flow::context::failed_enter_driver::ChildState;
                 for child in [
+                    owner
+                        .handoff
+                        .gate
+                        .as_mut()
+                        .and_then(|gate| gate.child.as_mut())
+                        .map(|child| child.poll()),
                     owner.run.resources.poll_classifier_child(),
                     owner.run.resources.poll_spu_child(),
                 ] {
@@ -298,11 +330,16 @@ impl ExpiredPreflightRollback {
                 dial.answer = Some(OrganEnvelope {
                     exchange: dial.message.as_ref().unwrap().envelope.exchange.clone(),
                     position: Position::Close,
-                    payload: WirePayload::Answer(LifecycleAnswer::Left {
-                        save_point: None,
-                        forced: true,
-                        no_state: false,
-                    }),
+                    payload: self.refusal.clone().map_or_else(
+                        || {
+                            WirePayload::Answer(LifecycleAnswer::Left {
+                                save_point: None,
+                                forced: true,
+                                no_state: false,
+                            })
+                        },
+                        WirePayload::Refusal,
+                    ),
                 });
                 self.stage = Stage::Answer;
             }

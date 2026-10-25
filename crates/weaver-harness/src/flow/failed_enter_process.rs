@@ -56,6 +56,13 @@ impl OwnedChild {
     pub(in crate::flow::context) fn state(&self) -> ChildState {
         self.state
     }
+    /// Read the actual stderr owner without consuming its word or waiting on
+    /// its reader. The lifecycle owner supplies the existing settlement cap.
+    pub(in crate::flow::context) fn last_word_snapshot(
+        &self,
+    ) -> Option<crate::spawn::LastWordSnapshot> {
+        self._last_word.snapshot()
+    }
     pub(super) fn kill_attempt(&self) -> Option<Result<(), Errno>> {
         self.kill_attempt
     }

@@ -2117,6 +2117,7 @@ impl RecordingContext {
             PumpDeadline::StateControl => (FlowHaltReason::ControlBound, BlockedStage::Control),
             PumpDeadline::Enter
             | PumpDeadline::Leave
+            | PumpDeadline::Lower
             | PumpDeadline::Label
             | PumpDeadline::AdminRead
             | PumpDeadline::CaptureResult

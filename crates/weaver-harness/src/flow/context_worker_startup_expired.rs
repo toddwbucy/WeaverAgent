@@ -12,6 +12,8 @@ use std::sync::Arc;
 mod active;
 #[path = "context_worker_startup_expired_failure.rs"]
 pub(super) mod failure;
+#[path = "context_worker_startup_expired_gate.rs"]
+mod gate;
 #[path = "context_worker_startup_expired_preflight.rs"]
 pub(in crate::flow) mod preflight;
 
@@ -384,7 +386,24 @@ impl FoundationExpiredRollback {
             self.run.context.last_ns = now;
             return Ok(now);
         }
-        match self.run.context.live(io) {
+        let clock = match self.run.context.live(io) {
+            Err(
+                error @ RunFailure::Wait {
+                    key: PumpDeadline::AdminRead,
+                    ..
+                },
+            ) => {
+                if let Some(owner) = &mut self.preflight {
+                    owner.recover_clock(&mut self.run.context, error, io)
+                } else if let Some(owner) = &mut self.active {
+                    owner.recover_clock(&mut self.run.context, error, io)
+                } else {
+                    Err(error)
+                }
+            }
+            result => result,
+        };
+        match clock {
             Ok(()) => {}
             Err(RunFailure::Wait {
                 key: PumpDeadline::Enter,
@@ -394,6 +413,14 @@ impl FoundationExpiredRollback {
                 key: PumpDeadline::Leave,
                 bound,
             }) if self.leave == Some(bound) => {}
+            Err(RunFailure::Wait {
+                key: PumpDeadline::Lower,
+                bound,
+            }) if self
+                .active
+                .as_ref()
+                .and_then(|active| active.gate.as_ref())
+                .is_some_and(|gate| gate.bound() == bound) => {}
             Err(error) => return Err(format!("expired Enter rollback: {error:?}")),
         }
         Ok(self.run.context.last_ns)
@@ -654,16 +681,20 @@ impl FoundationExpiredRollback {
         assert!(self.retired.is_some(), "exact pre-input rollback owner");
         self.run.resources.close_at_cap();
         if let Some(gate) = &mut self.handoff.gate {
-            self.retired_gate = gate.port.take().map(|port| port.retire_failed());
-            if let Some(tools) = &gate.tools
-                && let Err(error) = tools.kill()
-            {
-                self.detail
-                    .get_or_insert_with(|| format!("rollback tools kill: {error}"));
-                tools.signal_pinned_pass();
-            }
-            if let Some(child) = &mut gate.child {
-                child.stop_at_cap();
+            if let Some(account) = self.active.as_mut().and_then(|active| active.gate.as_mut()) {
+                account.dispose(gate);
+            } else {
+                self.retired_gate = gate.port.take().map(|port| port.retire_failed());
+                if let Some(tools) = &gate.tools
+                    && let Err(error) = tools.kill()
+                {
+                    self.detail
+                        .get_or_insert_with(|| format!("rollback tools kill: {error}"));
+                    tools.signal_pinned_pass();
+                }
+                if let Some(child) = &mut gate.child {
+                    child.stop_at_cap();
+                }
             }
         }
         self.retired_listener = self
