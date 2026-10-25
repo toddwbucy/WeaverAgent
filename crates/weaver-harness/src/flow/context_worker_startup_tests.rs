@@ -1963,6 +1963,43 @@ scenario!(
 );
 
 scenario!(
+    worker_external_composition_queued_input_stop_running,
+    "input-generation-emission-pairs-external-queued-input-stop-running"
+);
+scenario!(
+    worker_external_composition_queued_input_stop_running_late,
+    "input-generation-emission-pairs-external-queued-input-stop-running-late"
+);
+scenario!(
+    worker_external_composition_queued_input_leave,
+    "input-generation-emission-pairs-external-queued-input-leave"
+);
+scenario!(
+    worker_external_composition_queued_input_duplicate_current,
+    "input-generation-emission-pairs-external-queued-input-duplicate-current"
+);
+scenario!(
+    worker_external_composition_queued_input_duplicate_queued,
+    "input-generation-emission-pairs-external-queued-input-duplicate-queued"
+);
+scenario!(
+    worker_external_composition_queued_input_not_open,
+    "input-generation-emission-pairs-external-queued-input-not-open"
+);
+scenario!(
+    worker_final_composition_queued_input,
+    "input-worker-generation-emission-final-return-external-queued-input"
+);
+scenario!(
+    worker_final_composition_queued_input_capacity,
+    "input-worker-generation-emission-final-return-external-queued-input-capacity"
+);
+scenario!(
+    worker_final_composition_queued_input_held_terminal,
+    "input-worker-generation-emission-final-return-external-queued-input-held-terminal"
+);
+
+scenario!(
     worker_final_composition_text,
     "input-worker-generation-emission-final-text"
 );

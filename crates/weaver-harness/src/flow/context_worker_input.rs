@@ -91,6 +91,43 @@ pub struct FoundationInput<'a> {
 }
 
 impl<'a> FoundationServing<'a> {
+    /// A later world frame belongs to the serving owner, not the active pair.
+    /// The gate admits one unanswered input per retained connection. Keep its
+    /// exact receipt here until serialized intake, with no new check or clock.
+    fn retain_queued_input(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        let owner = &mut self.owner;
+        let Some(frame) = owner.gate.held() else {
+            return Ok(());
+        };
+        if frame.exchange.opener != Opener::Gate || !matches!(frame.payload, Payload::Frame(_)) {
+            return Ok(());
+        }
+        if frame.position != Position::Open
+            || self.gate_exchanges.contains(&frame.exchange.ordinal)
+            || self
+                .queued_inputs
+                .iter()
+                .any(|queued| queued.envelope().exchange == frame.exchange)
+        {
+            return Err(owner.context.fail(
+                io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                "queued gate frame is not a fresh opening exchange",
+            ));
+        }
+        let received = owner
+            .gate
+            .take_received()
+            .map_err(|failure| RunFailure::Transport {
+                source: PumpSource::Gate,
+                failure,
+            })?
+            .expect("held original gate input");
+        self.queued_inputs.push_back(received);
+        Ok(())
+    }
+
     /// Consume the unique serving seat. Frames behind this owner remain queued
     /// without an input ID or a new gate deadline.
     pub fn input(self) -> Box<FoundationInput<'a>> {
@@ -296,16 +333,16 @@ impl<'a> FoundationInput<'a> {
                     return Ok(());
                 }
                 if self.received.is_none() {
-                    self.received =
-                        ports
-                            .gate
-                            .as_deref_mut()
-                            .unwrap()
-                            .take_received()
-                            .map_err(|failure| RunFailure::Transport {
-                                source: PumpSource::Gate,
-                                failure,
-                            })?;
+                    self.received = self.serving.queued_inputs.pop_front();
+                    if self.received.is_none() {
+                        self.received =
+                            ports.gate.as_deref_mut().unwrap().take_received().map_err(
+                                |failure| RunFailure::Transport {
+                                    source: PumpSource::Gate,
+                                    failure,
+                                },
+                            )?;
+                    }
                 }
                 let Some(received) = self.received.as_ref() else {
                     owner.context.pump_once(&mut ports)?;

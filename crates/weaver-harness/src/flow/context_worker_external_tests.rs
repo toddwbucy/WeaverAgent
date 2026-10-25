@@ -2,6 +2,7 @@
 use super::super::tests::{FAMILY, selection, sequence, stop};
 use super::*;
 use crate::flow::clock::testing::FakePumpIo;
+use crate::flow::context::worker_startup::input::generation::queued_input_tests as queued;
 use crate::flow::context::worker_startup::input::generation::tests::{step, until};
 use crate::flow::context::worker_startup::input::management::tests::{Guard, trace};
 use crate::flow::context::worker_startup::tests::{Member, trace_through, worker};
@@ -94,7 +95,10 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                             position: Position::Close,
                             payload: Payload::ToolAnswer(expected(mode, ordinal)),
                         };
-                        if mode.contains("stop-running") {
+                        if mode.contains("queued-input") && !mode.contains("late") && ordinal == 2 {
+                            queued::queue_packets(mode, root, fd);
+                        }
+                        if mode.contains("stop-running") || mode.contains("queued-input-leave") {
                             pending = Some(answer);
                             continue;
                         }
@@ -133,22 +137,6 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                                 Ok(raw.len())
                             );
                         }
-                        if mode.contains("queued-input") {
-                            packet(
-                                fd,
-                                &OrganEnvelope {
-                                    exchange: ExchangeId {
-                                        opener: Opener::Gate,
-                                        ordinal: 102,
-                                    },
-                                    position: Position::Open,
-                                    payload: Payload::Frame(weaver_types::TurnFrame::carry_from(
-                                        br#"{"text":"Read next."}"#,
-                                        42,
-                                    )),
-                                },
-                            );
-                        }
                         packet(fd, &answer);
                         previous = Some(answer);
                     }
@@ -164,12 +152,28 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         cancels += 1;
                         assert_eq!(cancels, 1, "one cancel on the original execution");
                         std::fs::write(root.join("cancel.json"), &bytes[..n]).unwrap();
+                        if mode.contains("queued-input") && mode.contains("late") {
+                            queued::queue_packets(mode, root, fd);
+                        }
                         if let Some(answer) = pending.take() {
                             packet(fd, &answer);
                         }
                     }
                     Payload::Frame(close) => {
                         assert_eq!(frame.position, Position::Close);
+                        if mode.contains("queued-input") && frame.exchange.ordinal >= 102 {
+                            let value: serde_json::Value =
+                                serde_json::from_slice(&close.octets().unwrap()).unwrap();
+                            assert_eq!(frame.exchange.opener, Opener::Gate);
+                            assert_eq!(value["kind"], "refused");
+                            assert!(value.get("turn").is_none() && value.get("run").is_none());
+                            std::fs::write(
+                                root.join(format!("queued-close-{}.json", frame.exchange.ordinal)),
+                                &bytes[..n],
+                            )
+                            .unwrap();
+                            continue;
+                        }
                         assert_eq!(
                             frame.exchange,
                             ExchangeId {
@@ -190,6 +194,9 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         );
                         assert_eq!(value["turn"], "generation-turn");
                         std::fs::write(root.join("closed.json"), &bytes[..n]).unwrap();
+                        if mode.contains("queued-input") {
+                            queued::fresh_packet(mode, root, fd);
+                        }
                     }
                     other => panic!("unexpected gate request: {other:?}"),
                 }
@@ -298,41 +305,17 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         }
         input.execute(request.call_id.clone()).unwrap();
         assert!(input.execute(request.call_id.clone()).is_err());
-        if mode.contains("queued-input") {
-            for _ in 0..1000 {
-                assert_eq!(
-                    step(input, member, clock, mode),
-                    FoundationInputProgress::Pending
-                );
-                if input.serving.owner.gate.held().is_some() {
-                    break;
-                }
+        if index == 0 && mode.contains("queued-input") {
+            if mode.contains("duplicate-") || mode.contains("not-open") {
+                queued::invalid(input, member, clock, root, mode);
+                return;
             }
-            assert_eq!(
-                input.serving.owner.gate.held().unwrap().exchange,
-                ExchangeId {
-                    opener: Opener::Gate,
-                    ordinal: 102
-                }
-            );
-            for _ in 0..16 {
-                assert_eq!(
-                    step(input, member, clock, mode),
-                    FoundationInputProgress::Pending
-                );
-                assert!(input.pair_outcome(&request.call_id).is_none());
+            if mode.contains("queued-input-leave") {
+                return queued::leave(guard, member, clock, socket, root, mode);
             }
-            assert!(
-                input
-                    .serving
-                    .owner
-                    .context
-                    .deadlines
-                    .get(PumpDeadline::Decision)
-                    .is_none()
-            );
-            assert!(!root.join("external-3.json").exists());
-            return; // Reproduces the held-input routing carry, not a completed turn.
+            if mode.contains("stop-running") && !mode.contains("late") {
+                queued::wait_queued(input, member, clock, mode);
+            }
         }
         if mode.contains("gate-death") {
             for _ in 0..1000 {
@@ -512,6 +495,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 .filter(|r| r["kind"] == "tool.call.completed")
                 .all(|r| sequence(r) < sequence(close))
         );
+        if mode.contains("queued-input") {
+            queued::handoff(&mut guard, member, reader, clock, root, mode);
+        }
         return;
     }
     until(

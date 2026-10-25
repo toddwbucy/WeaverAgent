@@ -18,6 +18,13 @@ pub(in crate::flow::context::worker_startup) struct Guard<'a> {
     pub(in crate::flow::context::worker_startup) management: Option<Box<FoundationManagement<'a>>>,
 }
 impl Guard<'_> {
+    pub(in crate::flow::context::worker_startup) fn owned_input(&self) -> &FoundationInput<'_> {
+        self.input
+            .as_deref()
+            .or_else(|| self.management.as_deref().map(|m| &*m.input))
+            .expect("fixture retains its input owner")
+    }
+
     pub(in crate::flow::context::worker_startup) fn recorded_sequence(
         &self,
     ) -> weaver_trace::Sequence {
