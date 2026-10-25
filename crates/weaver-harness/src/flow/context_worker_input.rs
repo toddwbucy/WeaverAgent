@@ -17,6 +17,9 @@ pub(crate) mod generation;
 #[path = "context_worker_management.rs"]
 pub(crate) mod management;
 
+#[path = "context_worker_halt.rs"]
+pub(crate) mod halt;
+
 #[path = "context_worker_close.rs"]
 mod close;
 

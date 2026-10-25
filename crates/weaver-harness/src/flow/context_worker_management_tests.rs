@@ -574,3 +574,77 @@ pub(in super::super::super) fn exercise(
         );
     }
 }
+
+pub(in crate::flow::context::worker_startup) fn halt_facts(
+    owner: &FoundationManagement<'_>,
+) -> (usize, i32, OrganEnvelope, bool) {
+    (
+        owner as *const _ as usize,
+        owner.peer.fd().as_raw_fd(),
+        owner.message.as_ref().unwrap().envelope.clone(),
+        owner.send.as_ref().unwrap().sent(),
+    )
+}
+
+pub(in crate::flow::context::worker_startup) fn hold_for_halt(
+    guard: &mut Guard<'_>,
+    member: &mut Member,
+    clock: &mut FakePumpIo,
+    socket: &Path,
+    mode: &str,
+) -> OwnedFd {
+    let peer = dial(socket);
+    let frame = OrganEnvelope {
+        exchange: ExchangeId {
+            opener: Opener::Admin,
+            ordinal: 301,
+        },
+        position: Position::Open,
+        payload: Payload::Directive(LifecycleDirective::Observe),
+    };
+    let bytes = serde_json::to_vec(&frame).unwrap();
+    assert_eq!(
+        send(peer.as_raw_fd(), &bytes, MsgFlags::MSG_NOSIGNAL).unwrap(),
+        bytes.len()
+    );
+    for _ in 0..1000 {
+        if guard
+            .input
+            .as_mut()
+            .unwrap()
+            .advance_with_io(&mut CircuitIo(clock))
+            == FoundationInputProgress::ManagementPending
+        {
+            break;
+        }
+        member.step(clock.now().unwrap(), mode);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    guard.management = Some(guard.input.take().unwrap().management().ok().unwrap());
+    let owner = guard.management.as_mut().unwrap();
+    loop {
+        match send(
+            owner.peer.fd().as_raw_fd(),
+            &[b'x'; 4096],
+            MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL,
+        ) {
+            Ok(4096) => {}
+            Err(nix::errno::Errno::EAGAIN) => break,
+            other => panic!("fill retained Observe: {other:?}"),
+        }
+    }
+    for _ in 0..1000 {
+        assert_eq!(
+            owner.advance_with_io(&mut CircuitIo(clock)),
+            FoundationManagementProgress::Pending
+        );
+        if owner.send.is_some() {
+            break;
+        }
+        member.step(clock.now().unwrap(), mode);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(owner.message.as_ref().unwrap().envelope, frame);
+    assert!(!owner.send.as_ref().unwrap().sent());
+    peer
+}

@@ -12,6 +12,29 @@ pub mod turn;
 #[path = "foundation_session.rs"]
 pub mod session;
 
+pub type FailedOwner<'a> =
+    Result<Box<FoundationInput<'a>>, Box<weaver_harness::FoundationManagement<'a>>>;
+
+/// Drive the retained failed owner only through report and gate interruption.
+/// The result still owes closing, actual release and final failed drain.
+pub fn halt(
+    owner: FailedOwner<'_>,
+) -> Result<Box<weaver_harness::FoundationHalt<'_>>, FailedOwner<'_>> {
+    let mut halt = match owner {
+        Ok(input) => input.halt().map_err(Ok)?,
+        Err(management) => management.halt().map_err(Err)?,
+    };
+    loop {
+        match halt.advance() {
+            weaver_harness::FoundationHaltProgress::Progress => {}
+            weaver_harness::FoundationHaltProgress::Pending => {
+                halt.wait_for_progress();
+            }
+            _ => return Ok(halt),
+        }
+    }
+}
+
 /// Workflow choices are separate from the harness's protocol transitions. The
 /// caller chooses when to start a task, select its source and use its placement.
 /// Management and refusal return the same owner for the loop's next decision.

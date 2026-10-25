@@ -29,6 +29,10 @@ pub(in crate::flow::context) mod queued_input_tests;
 pub(in crate::flow::context) mod election_wait_tests;
 
 #[cfg(test)]
+#[path = "context_worker_halt_tests.rs"]
+pub(in crate::flow::context) mod halt_tests;
+
+#[cfg(test)]
 #[path = "context_worker_return_tests.rs"]
 pub(in crate::flow::context) mod return_tests;
 
