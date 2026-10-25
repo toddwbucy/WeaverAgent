@@ -16,6 +16,10 @@ pub(super) fn holds_generation(mode: &str) -> bool {
     mode.contains("-active-generation")
 }
 
+pub(super) fn is_correction(mode: &str) -> bool {
+    is_mode(mode) && mode.contains("-correction-")
+}
+
 fn active_turn(mode: &str) -> bool {
     mode.ends_with("-source-file")
         || mode.ends_with("-source-pending")
@@ -24,6 +28,7 @@ fn active_turn(mode: &str) -> bool {
         || mode.contains("-placement")
         || mode.ends_with("-placed-clock-failure")
         || holds_generation(mode)
+        || is_correction(mode)
         || mode.contains("-external-")
 }
 
@@ -173,6 +178,28 @@ pub(super) fn gate(mode: &str, root: &Path, fd: i32) {
             assert_eq!(reply.position, Position::Open);
             std::fs::write(root.join("serving-rollback-execution.json"), &bytes[..n]).unwrap();
             execution = Some(reply);
+            if mode.ends_with("-external-rejection-pending") {
+                wait_file(root, "serving-rollback-send-rejection");
+                let rejected = OrganEnvelope {
+                    exchange: weaver_types::ExchangeId {
+                        opener: Opener::Harness,
+                        ordinal: 999,
+                    },
+                    position: Position::Close,
+                    payload: Payload::ToolAnswer(weaver_types::ToolOutcome::Result {
+                        content: "unrelated \"result\" with original whitespace".into(),
+                    }),
+                };
+                let raw = format!(
+                    " \t\r\n{}\n\t ",
+                    serde_json::to_string_pretty(&rejected).unwrap()
+                );
+                std::fs::write(root.join("serving-rollback-rejection.json"), &raw).unwrap();
+                assert_eq!(
+                    send(fd, raw.as_bytes(), MsgFlags::MSG_NOSIGNAL),
+                    Ok(raw.len())
+                );
+            }
             if mode.ends_with("-external-interrupt-blocked") {
                 wait_file(root, "serving-rollback-interrupt-drain");
             }
@@ -329,6 +356,7 @@ pub(in crate::flow::context::worker_startup) struct Handoff {
     world_recorded: Option<weaver_trace::Sequence>,
     world_probe: Option<Box<dyn Fn() -> (bool, bool) + Send>>,
     pending_turn_ticket: Option<u64>,
+    pending_rejection: Option<(u64, usize, AbsoluteBound)>,
 }
 
 pub(in crate::flow::context::worker_startup) fn handoff(
@@ -369,9 +397,23 @@ pub(in crate::flow::context::worker_startup) fn handoff(
     let trace_pause = AtomicBool::new(false);
     let trace_paused = AtomicBool::new(false);
     let mut pending_peer = None;
+    let leave_at_held_member = mode.ends_with("-source-file")
+        || mode.ends_with("-task-read")
+        || mode.ends_with("-mark-file");
+    let root_leave = || {
+        management(
+            socket,
+            LifecycleDirective::Leave {
+                cause: weaver_types::Cause { uid: 74 },
+                forced: true,
+                rollback: true,
+            },
+        )
+    };
     reader.set_nonblocking(true).unwrap();
     let (peer, before) = std::thread::scope(|scope| {
         let responder = scope.spawn(|| {
+            let mut peer = None;
             while !done.load(Ordering::SeqCst) {
                 member.step_live(mode);
                 if member.held_file.is_some() || member.held_control.is_some() {
@@ -380,9 +422,16 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                         b"original response held",
                     )
                     .unwrap();
+                    // The worker may already be waiting on this held response.
+                    // Wake that real wait through root management immediately,
+                    // rather than waiting for advance() to return to the test.
+                    if leave_at_held_member && peer.is_none() {
+                        peer = Some(root_leave());
+                    }
                 }
                 std::thread::sleep(Duration::from_millis(1));
             }
+            peer
         });
         let recorder = scope.spawn(|| {
             let mut bytes = vec![];
@@ -422,7 +471,13 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                 && !mode.ends_with("-source-pending")
             {
                 session.start_turn(TurnKey("session-0".into())).unwrap();
-                let marker = if mode.contains("-external-") {
+                let marker = if is_correction(mode) {
+                    if mode.ends_with("-placement") {
+                        "serving-rollback-correction-measured.json"
+                    } else {
+                        "serving-rollback-correction-generation.json"
+                    }
+                } else if mode.contains("-external-") {
                     "serving-rollback-execution.json"
                 } else if holds_generation(mode) {
                     "session-generation-0.json"
@@ -443,6 +498,7 @@ pub(in crate::flow::context::worker_startup) fn handoff(
             || mode.ends_with("-world-blocked")
             || mode.ends_with("-external-interrupt-blocked")
             || mode.ends_with("-external-unload-queued")
+            || mode.ends_with("-external-rejection-pending")
         {
             let input = match guard.0.take().unwrap().into_owner() {
                 Ok(input) => input,
@@ -542,7 +598,9 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                     }
                 }
             }
-            if mode.ends_with("-external-unload-queued") {
+            if mode.ends_with("-external-unload-queued")
+                || mode.ends_with("-external-rejection-pending")
+            {
                 let input = direct.as_mut().unwrap().input.as_mut().unwrap();
                 trace_pause.store(true, Ordering::SeqCst);
                 let end = Instant::now() + Duration::from_secs(3);
@@ -561,18 +619,54 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                         &mut clock
                     ) > 0
                 );
+                if mode.ends_with("-external-rejection-pending") {
+                    std::fs::write(
+                        root.join("serving-rollback-send-rejection"),
+                        b"trace writer is blocked",
+                    )
+                    .unwrap();
+                    wait_file(root, "serving-rollback-rejection.json");
+                    let end = Instant::now() + Duration::from_secs(5);
+                    while input
+                        .serving
+                        .owner
+                        .context
+                        .pairs
+                        .pending_rejection()
+                        .is_none()
+                    {
+                        assert!(
+                            Instant::now() < end,
+                            "actual wrong return must reach its original pair owner"
+                        );
+                        assert_eq!(input.advance(), FoundationInputProgress::Pending);
+                    }
+                    let mut io = RootDuringAuthorWait { socket, peer: None };
+                    assert_eq!(
+                        input.advance_with_io(&mut io),
+                        FoundationInputProgress::ManagementPending
+                    );
+                    pending_peer = Some(
+                        io.peer
+                            .expect("actual root Leave heard during rejected-return author wait"),
+                    );
+                    assert_eq!(
+                        input
+                            .serving
+                            .owner
+                            .context
+                            .pending_author()
+                            .unwrap()
+                            .event
+                            .kind,
+                        serving::Kind::ToolReturnRejected
+                    );
+                }
             }
         }
-        let peer = pending_peer.take().unwrap_or_else(|| {
-            management(
-                socket,
-                LifecycleDirective::Leave {
-                    cause: weaver_types::Cause { uid: 74 },
-                    forced: true,
-                    rollback: true,
-                },
-            )
-        });
+        let peer = pending_peer
+            .take()
+            .or_else(|| (!leave_at_held_member).then(&root_leave));
         if let Some(held) = &mut direct {
             let end = Instant::now() + Duration::from_secs(10);
             let input = held.input.as_mut().unwrap();
@@ -594,9 +688,9 @@ pub(in crate::flow::context::worker_startup) fn handoff(
         } else {
             drive(guard.0.as_mut().unwrap(), Progress::DirectivePending);
         }
-        assert!(read_packet(&peer).is_none());
         done.store(true, Ordering::SeqCst);
-        responder.join().unwrap();
+        let peer = peer.or(responder.join().unwrap()).unwrap();
+        assert!(read_packet(&peer).is_none());
         (peer, recorder.join().unwrap())
     });
     let management = match direct.as_mut().and_then(|held| held.management.take()) {
@@ -732,6 +826,44 @@ pub(in crate::flow::context::worker_startup) fn handoff(
             .unwrap()
             .ticket
     });
+    let pending_rejection = mode.ends_with("-external-rejection-pending").then(|| {
+        let context = &management.input.serving.owner.context;
+        let rejected = context.pairs.pending_rejection().unwrap();
+        assert_eq!(
+            rejected.raw_bytes(),
+            std::fs::read(root.join("serving-rollback-rejection.json")).unwrap()
+        );
+        assert!(context.pair_rejected_authoring);
+        (
+            context.pending_author().unwrap().ticket,
+            rejected.raw_bytes().as_ptr() as usize,
+            context.deadlines.get(PumpDeadline::Decision).unwrap(),
+        )
+    });
+    if is_correction(mode) {
+        assert!(!root.join("serving-rollback-lower.json").exists());
+        assert!(root.join("session-generation-0.json").exists());
+        let context = &management.input.serving.owner.context;
+        assert!(context.open_turn.is_some());
+        if mode.ends_with("-placement") {
+            assert!(
+                context.measure.is_some(),
+                "the original correction measurement is in flight"
+            );
+            assert!(context.generation.is_none());
+            assert!(
+                !root
+                    .join("serving-rollback-correction-generation.json")
+                    .exists()
+            );
+        } else {
+            assert!(
+                context.generation.is_some(),
+                "the original correction generation is in flight"
+            );
+            assert!(!root.join("serving-rollback-cancel.json").exists());
+        }
+    }
     let world_recorded = management
         .input
         .engine
@@ -807,6 +939,7 @@ pub(in crate::flow::context::worker_startup) fn handoff(
         world_recorded,
         world_probe,
         pending_turn_ticket,
+        pending_rejection,
     }
 }
 
@@ -1356,6 +1489,102 @@ fn drive_queued_pressure(
     assert!(owner.test_gate().unwrap().test_recorded().is_some());
     assert!(owner.test_gate().unwrap().test_pending_frame().is_none());
 }
+struct ReleaseRejectedTrace<'a> {
+    root: &'a Path,
+    trace_release: &'a AtomicBool,
+    end: Instant,
+    released: bool,
+}
+impl crate::flow::clock::PumpIo for ReleaseRejectedTrace<'_> {
+    fn now(&mut self) -> std::io::Result<u64> {
+        MonotonicIo.now()
+    }
+    fn wait(
+        &mut self,
+        interests: &[crate::flow::clock::WaitInterest<'_>],
+        deadline: Option<u64>,
+    ) -> std::io::Result<crate::flow::clock::WaitOutcome> {
+        loop {
+            if Instant::now() >= self.end {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "rejected-return rollback fixture watchdog",
+                ));
+            }
+            let now = MonotonicIo.now()?;
+            if deadline.is_some_and(|deadline| now >= deadline) {
+                return Ok(crate::flow::clock::WaitOutcome::Timeout);
+            }
+            if !self.released
+                && self.root.join("serving-rollback-lower.json").exists()
+                && self.root.join("serving-rollback-tool-answer.json").exists()
+            {
+                self.trace_release.store(true, Ordering::SeqCst);
+                self.released = true;
+            }
+            let local = now.saturating_add(5_000_000);
+            match MonotonicIo.wait(
+                interests,
+                Some(deadline.map_or(local, |deadline| deadline.min(local))),
+            )? {
+                ready @ crate::flow::clock::WaitOutcome::Ready(_) => return Ok(ready),
+                // Probe the child marker without reporting a synthetic expiry
+                // to the worker's real wait owner.
+                crate::flow::clock::WaitOutcome::Timeout => (),
+            }
+        }
+    }
+}
+
+fn drive_rejected_pressure(
+    owner: &mut crate::flow::context::worker_startup::entered_rollback::FoundationEnteredRollback,
+    root: &Path,
+    trace_release: &AtomicBool,
+    original: (u64, usize, AbsoluteBound),
+) {
+    let mut io = ReleaseRejectedTrace {
+        root,
+        trace_release,
+        end: Instant::now() + Duration::from_secs(15),
+        released: false,
+    };
+    assert!(!trace_release.load(Ordering::SeqCst));
+    while owner.progress() != FoundationEnteredRollbackProgress::Closed {
+        assert!(
+            Instant::now() < io.end,
+            "rejected return must settle after actual Lower"
+        );
+        if !io.released {
+            let context = owner.test_context();
+            assert_eq!(context.pending_author().unwrap().ticket, original.0);
+            assert_eq!(
+                context
+                    .pairs
+                    .pending_rejection()
+                    .unwrap()
+                    .raw_bytes()
+                    .as_ptr() as usize,
+                original.1
+            );
+            assert_eq!(
+                context.deadlines.get(PumpDeadline::Decision),
+                Some(original.2)
+            );
+        }
+        owner.advance_with_io(&mut io);
+        assert!(
+            owner.test_context().failure().is_none(),
+            "{:?}",
+            owner.detail()
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        io.released,
+        "pending trace must release only after actual Lower and ToolAnswer"
+    );
+}
+
 impl crate::flow::clock::PumpIo for BrokenClock<'_> {
     fn now(&mut self) -> std::io::Result<u64> {
         if !self.broken {
@@ -1398,6 +1627,7 @@ fn finish_failed(
         input_bound,
         world_recorded: _,
         world_probe: _,
+        pending_rejection: _,
         pending_turn_ticket: _,
     } = handoff;
     let leave = actual.leave;
@@ -1699,6 +1929,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         world_recorded,
         world_probe,
         pending_turn_ticket,
+        pending_rejection,
     } = handoff;
     let leave = actual.leave;
     let outgoing = actual.gate_outgoing;
@@ -1712,6 +1943,22 @@ pub(in crate::flow::context::worker_startup) fn finish(
         assert!(run.context.input_turn.is_some());
         assert!(run.context.open_turn.is_none());
     }
+    if let Some((ticket, original, bound)) = pending_rejection {
+        assert_eq!(run.context.pending_author().unwrap().ticket, ticket);
+        assert_eq!(
+            run.context
+                .pairs
+                .pending_rejection()
+                .unwrap()
+                .raw_bytes()
+                .as_ptr() as usize,
+            original
+        );
+        assert_eq!(
+            run.context.deadlines.get(PumpDeadline::Decision),
+            Some(bound)
+        );
+    }
     let requests = member.requests.clone();
     assert_eq!(run.context.deadlines.get(PumpDeadline::Gate), input_bound);
     std::fs::write(
@@ -1723,7 +1970,8 @@ pub(in crate::flow::context::worker_startup) fn finish(
     member.hold_mark = false;
     member.hold_control = None;
     let done = AtomicBool::new(false);
-    let trace_release = AtomicBool::new(!mode.ends_with("-external-unload-queued"));
+    let trace_release =
+        AtomicBool::new(!mode.ends_with("-external-unload-queued") && pending_rejection.is_none());
     let (mut owner, bytes) = std::thread::scope(|scope| {
         let responder = scope.spawn(|| {
             while !done.load(Ordering::SeqCst) {
@@ -1748,7 +1996,8 @@ pub(in crate::flow::context::worker_startup) fn finish(
         let manual = mode.ends_with("-external-silent")
             || mode.ends_with("-world-blocked")
             || mode.ends_with("-external-interrupt-blocked")
-            || mode.ends_with("-external-unload-queued");
+            || mode.ends_with("-external-unload-queued")
+            || pending_rejection.is_some();
         let result = if manual {
             run.entered_rollback(actual)
         } else {
@@ -1766,7 +2015,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
         };
         if manual {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                if mode.ends_with("-external-silent") {
+                if let Some(original) = pending_rejection {
+                    drive_rejected_pressure(&mut owner, root, &trace_release, original);
+                } else if mode.ends_with("-external-silent") {
                     drive_silent_reap(&mut owner, root);
                 } else if mode.ends_with("-external-interrupt-blocked") {
                     drive_blocked_interrupt(&mut owner, root, &socket);
@@ -1997,6 +2248,20 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
     }
     if mode.contains("-external-") {
+        if pending_rejection.is_some() {
+            let rejected: Vec<_> = rows
+                .iter()
+                .filter(|row| row["kind"] == "tool.return_rejected")
+                .collect();
+            assert_eq!(rejected.len(), 1);
+            assert_eq!(rejected[0]["payload"]["reason"], "unexpected_exchange");
+            assert_eq!(
+                rejected[0]["payload"]["raw_envelope"].as_str().unwrap(),
+                std::fs::read_to_string(root.join("serving-rollback-rejection.json")).unwrap()
+            );
+            assert!(!run.context.pair_rejected_authoring);
+            assert!(run.context.pairs.pending_rejection().is_none());
+        }
         let ends: Vec<_> = member
             .filings
             .iter()
@@ -2075,8 +2340,31 @@ pub(in crate::flow::context::worker_startup) fn finish(
     assert!(!root.join("session-generation-1.json").exists());
     assert_eq!(
         root.join("session-generation-0.json").exists(),
-        clean_turn(mode) || holds_generation(mode) || mode.contains("-external-")
+        clean_turn(mode)
+            || holds_generation(mode)
+            || is_correction(mode)
+            || mode.contains("-external-")
     );
+    if is_correction(mode) {
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row["kind"] == "loop.instruction")
+                .count(),
+            1
+        );
+        assert_eq!(
+            root.join("serving-rollback-correction-generation.json")
+                .exists(),
+            mode.ends_with("-generation"),
+            "a cancelled correction measurement cannot append its instruction",
+        );
+        assert_eq!(
+            root.join("serving-rollback-cancel.json").exists(),
+            mode.ends_with("-generation")
+        );
+        assert!(run.context.measure.is_none());
+        assert!(run.context.generation.is_none());
+    }
     assert_eq!(owner.advance(), FoundationEnteredRollbackProgress::Closed);
     assert!(read_packet(&peer).is_none(), "Left is sent only once");
 }

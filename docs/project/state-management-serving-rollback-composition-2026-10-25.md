@@ -72,7 +72,7 @@ The original Load uid is 73 and rollback Leave uid is 74. Tests distinguish
 those causes and require no new decode after cancellation. These doubles do
 not qualify model artifacts or production capacity.
 
-All 20 final checks passed: first/last lock gates, formatting, strict
+At `a4de1ee4`, all 20 author checks passed: first/last lock gates, formatting, strict
 harness clippy for all targets, harness and admin test builds, the full
 harness suite, twelve delegated families and diff check.
 
@@ -167,12 +167,65 @@ When sharing cancellation mechanics, run the existing Stop family before the
 long mutation pass; this act found the send-order regression only in the full
 regression run, after the new rollback controls had passed.
 
+## Correction and rejected-return coverage
+
+Three further process cases extend the combined Lower coverage from 23 to 26.
+They run on exact draft #347 at a4de1ee4 with only the three fixture files
+changed, in `/tmp/weaveragent-347-rollback-coverage`. The unpublished forced
+Leave/save code remains in its separate worktree.
+
+The correction placement case drives actual rejected output, restatement and
+measurement. Its decoder withholds DeltaMeasured until actual Lower reaches
+the gate. The correction generation case drives the same repair into actual
+AppendAndGenerate and withholds completion until actual Cancel and Lower.
+Both retain the original turn, complete owed cleanup and finish the real
+release, Unload and Left. Cancelled measurement permits no correction append.
+Neither case grants a new correction attempt or deadline.
+
+The rejected-return case sends a wrong-exchange ToolAnswer while the real
+trace sink is full. It retains the same rejection allocation, author ticket
+and Decision bound across root Leave and rollback handoff. The sink resumes
+only after actual Lower and the legitimate ToolAnswer. Exactly one rejection
+record retains the original String, including whitespace, and the real pair
+filing and child reap precede terminal completion.
+
+The first broader run in the unpublished union passed 52 of 53 session cases.
+The existing task-read fixture could withhold a response and then wait for
+advance() to return before sending Leave, so its own scheduling could exhaust
+the real control bound. Source-file, task-read and mark-file fixtures now send
+the actual root Leave from the member responder at the withholding point.
+No production deadline or transport behavior changes. That union's restored
+session and Stop runs passed 53 and 17 cases. Isolated checks below identify
+the exact publishable tree, independently of that earlier union.
+
+The isolated harness suite passed 2,065 ordinary tests/doctests, with 601
+library cases ignored in that invocation. Strict harness clippy, formatting,
+diff and both lock gates passed. Three compiled controls withheld Lower while
+correction measurement, correction generation or rejected-return authoring
+remained pending. All three were detected. Placement and rejected-author
+controls reached the original Decision bound. The generation control reached
+the fixture watchdog, so it proves lost progress rather than a typed deadline
+outcome. The production file was restored byte-for-byte and rebuilt. The final
+session and Stop families passed 53 and 17 cases, including all 26 rollback
+cases. All 727 source/configuration hashes match before and after the checks.
+
+These checks use pinned nightly, locked dependencies and private target
+`/tmp/weaver-state-146-rollback-combination-target`. The matching isolated
+admin test binary is supplied to the delegated circuits. Cargo and Git
+mutations remain serial. The broader delegated families from a4de1ee4 were
+not rerun for this test-only update. Evidence and the complete source snapshot
+are under this path.
+
+```text
+/bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/state-serving-rollback-combination-20261025/
+```
+
 ## Completion boundary
 
 This advances #146's serving rollback and failed-run teardown integration. It
-does not close a broad epic checkbox. Rollback during correction placement or
-generation and during a pending rejected-answer author has no new combined
-Lower test in this act; existing Stop cases are narrower evidence.
+does not close a broad epic checkbox. Combined Lower cases now cover correction
+placement, correction generation and a pending rejected-answer author. Their
+scripted peers do not qualify production language or state persistence.
 
 Healthy Leave/save, capture cleanup, remaining admission/author composition,
 dispatcher/process exit, production language/dictionary/corpus and classifier

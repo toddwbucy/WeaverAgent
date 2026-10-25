@@ -2816,6 +2816,14 @@ scenario!(
     "input-worker-generation-emission-session-serving-rollback-active-generation"
 );
 scenario!(
+    worker_session_composition_serving_rollback_correction_placement,
+    "input-worker-generation-emission-session-serving-rollback-correction-placement"
+);
+scenario!(
+    worker_session_composition_serving_rollback_correction_generation,
+    "input-worker-generation-emission-session-serving-rollback-correction-generation"
+);
+scenario!(
     worker_session_composition_serving_rollback_active_generation_queued,
     "input-worker-generation-emission-session-serving-rollback-active-generation-queued"
 );
@@ -2838,6 +2846,10 @@ scenario!(
 scenario!(
     worker_session_composition_serving_rollback_external_interrupt_blocked,
     "input-worker-generation-emission-session-serving-rollback-external-interrupt-blocked"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_rejection_pending,
+    "input-worker-generation-emission-session-serving-rollback-external-rejection-pending"
 );
 scenario!(
     worker_session_composition_serving_rollback_final_close,
