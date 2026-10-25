@@ -56,10 +56,16 @@ impl ExpiredPreflightRollback {
         assert!(context.flow.classifier_retired());
         assert!(context.flow.standing_state().is_none());
         assert_eq!(owner.run.resources.spu_child().is_some(), spu.is_some());
-        assert!(matches!(
-            owner.run.resources.classifier_child(),
-            Some(crate::flow::context::failed_enter_driver::ChildState::Reaped(_))
-        ));
+        assert!(
+            owner
+                .run
+                .resources
+                .classifier_child()
+                .is_none_or(|state| matches!(
+                    state,
+                    crate::flow::context::failed_enter_driver::ChildState::Reaped(_)
+                ))
+        );
         let cause = owner.original.as_ref().unwrap().payload().cause;
         Self {
             permit: None,

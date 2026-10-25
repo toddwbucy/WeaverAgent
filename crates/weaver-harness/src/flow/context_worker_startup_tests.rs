@@ -203,7 +203,17 @@ impl Files {
                 classify: Some(self.child(
                     "checker",
                     "WEAVER_STARTUP_COMPOSITION_CHILD",
-                    if mode.contains("-template-component-") {
+                    if mode == "expired-startup-classifying-held" {
+                        "admission-silent-held"
+                    } else if mode == "expired-startup-admission-partial-complete" {
+                        "admission-partial"
+                    } else if mode == "expired-startup-admission-refused-complete" {
+                        "refuse"
+                    } else if mode.starts_with("expired-startup-classifying")
+                        || mode == "expired-startup-admission-unsent-complete"
+                    {
+                        "admission-silent"
+                    } else if mode.contains("-template-component-") {
                         "template-component"
                     } else if mode == "expired-startup-template-held" {
                         "template-silent-held"
@@ -1104,6 +1114,7 @@ fn circuit(mode: &str) {
             &mut reader,
             &mut clock,
             mode,
+            &files.0,
         );
         drop(guard);
         super::expired::tests::finish(
@@ -3108,6 +3119,42 @@ scenario!(
 scenario!(
     worker_startup_composition_expired_classifying,
     "expired-startup-classifying"
+);
+scenario!(
+    worker_startup_composition_expired_classifying_complete,
+    "expired-startup-classifying-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_before_fork_complete,
+    "expired-startup-admission-before-fork-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_unsent_complete,
+    "expired-startup-admission-unsent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_unsent_failure_complete,
+    "expired-startup-admission-unsent-failure-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_ready_complete,
+    "expired-startup-admission-ready-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_refused_complete,
+    "expired-startup-admission-refused-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_partial_complete,
+    "expired-startup-admission-partial-complete"
+);
+scenario!(
+    worker_startup_composition_expired_classifying_held,
+    "expired-startup-classifying-held"
+);
+scenario!(
+    worker_startup_composition_expired_classifying_cap,
+    "expired-startup-classifying-cap"
 );
 scenario!(
     worker_startup_composition_expired_classifier_complete,

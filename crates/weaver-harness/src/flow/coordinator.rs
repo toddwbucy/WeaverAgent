@@ -33,6 +33,9 @@ use super::report::{HaltLatch, SecondaryFailure};
 #[path = "coordinator_expired_templates.rs"]
 mod expired_templates;
 pub(super) use expired_templates::StoppedTemplateCheck;
+#[path = "coordinator_expired_admission.rs"]
+mod expired_admission;
+pub(super) use expired_admission::StoppedClassifierAdmission;
 
 #[path = "output.rs"]
 mod output;
@@ -1505,6 +1508,10 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     }
 
     fn settled_except_author(&self, cx: &FlowRecording<'_>) -> bool {
+        self.settled_except_author_and_admission(cx) && self.admission_completion.is_none()
+    }
+
+    fn settled_except_author_and_admission(&self, cx: &FlowRecording<'_>) -> bool {
         self.receipt_reservation.is_none()
             && self.output_checks.is_none()
             && self.instruction_check.is_none()
@@ -1521,7 +1528,6 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             && self.reuse.is_none()
             && self.state_operation.is_none()
             && self.check_operation.is_none()
-            && self.admission_completion.is_none()
     }
 
     pub(super) fn unused_open(&self) -> Option<&UnusedOpen> {

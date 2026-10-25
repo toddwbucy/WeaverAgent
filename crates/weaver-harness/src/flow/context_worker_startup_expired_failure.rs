@@ -165,6 +165,12 @@ impl FoundationExpiredRollback {
 
 impl FoundationExpiredRollbackExit {
     #[cfg(test)]
+    pub(super) fn test_admission(
+        &self,
+    ) -> Option<&crate::flow::context::expired_admission_driver::StoppedAdmissionAccount> {
+        self.held.active.as_ref()?.admission.as_ref()
+    }
+    #[cfg(test)]
     pub(super) fn test_templates(
         &self,
     ) -> Option<&crate::flow::context::template_driver::StoppedTemplateAccount> {

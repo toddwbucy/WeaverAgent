@@ -52,10 +52,24 @@ fn startup_composition_child() {
     let mut channel = Channel::from_owned(fd, 262144).unwrap();
     let limit = Instant::now() + Duration::from_secs(10);
     let mut refusing = false;
+    let mut held_fragment = false;
     while Instant::now() < limit {
         match channel.try_receive() {
             Ok(Receive::Complete(message)) => {
                 if message.tag == Tag::Bootstrap {
+                    if mode.starts_with("admission-silent") || mode == "admission-partial" {
+                        let root =
+                            PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
+                        assert!(
+                            !root.join("classifier-bootstrap").exists(),
+                            "one original bootstrap only"
+                        );
+                        std::fs::write(root.join("classifier-bootstrap"), &message.payload)
+                            .unwrap();
+                        if mode.starts_with("admission-silent") {
+                            continue;
+                        }
+                    }
                     let bootstrap: s::Ste100Bootstrap =
                         serde_json::from_slice(&message.payload).unwrap();
                     let (_, _, mut ready) = classifier_fixture();
@@ -84,6 +98,10 @@ fn startup_composition_child() {
                                 .unwrap(),
                             )
                             .unwrap();
+                    } else if mode == "admission-partial" {
+                        let mut payload = vec![b' '; 70_000];
+                        payload.extend(serde_json::to_vec(&ready).unwrap());
+                        channel.begin_send(Tag::Ready, 0, payload).unwrap();
                     } else {
                         channel
                             .begin_send(Tag::Ready, 0, serde_json::to_vec(&ready).unwrap())
@@ -166,7 +184,10 @@ fn startup_composition_child() {
             }
             Ok(_) => {}
             Err(_) => {
-                if mode == "rollback-held-exit" || mode == "template-silent-held" {
+                if mode == "rollback-held-exit"
+                    || mode == "template-silent-held"
+                    || mode == "admission-silent-held"
+                {
                     let root = PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
                     std::fs::write(root.join("classifier-retired"), b"closed").unwrap();
                     while !root.join("classifier-exit").exists() {
@@ -177,8 +198,16 @@ fn startup_composition_child() {
                 return;
             }
         }
-        if channel.has_pending_send() {
-            channel.try_send().unwrap();
+        if channel.has_pending_send() && !held_fragment {
+            let progress = channel.try_send().unwrap();
+            if mode == "admission-partial" {
+                assert!(
+                    channel.has_pending_send(),
+                    "one fragment cannot complete Ready"
+                );
+                held_fragment =
+                    progress == super::super::super::ste100_channel::SendProgress::Progress;
+            }
         }
         if refusing && !channel.has_pending_send() {
             // SAFETY: this is the isolated exec child, after its complete refusal.

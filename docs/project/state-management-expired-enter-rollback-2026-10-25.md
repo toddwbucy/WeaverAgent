@@ -74,9 +74,10 @@ uses the shared no-record drain, retaining that terminal and appending nothing.
 These exercised paths contain no gate. A caller cannot consume a progressing
 healthy rollback through this failure interface.
 
-A forked classifier still awaiting its admission is not a settled startup.
-That initial account stays retained under its original Enter and accepted Leave;
-it cannot start a new Grants read or enter the completed-admission release path.
+A classifier still awaiting admission moves into a stopped account before the
+cleanup Grants comparison. The original bootstrap, Enter, held completion and
+framing remain retained; this transfer grants no admission or boot continuation.
+The admission continuation below records the exercised boundaries.
 
 The paired TRACE-STOP edit resolves its preactivation wording against the already
 merged HARNESS-ENTER-WINDOW rollback rule. A recorded Load can be closed by actual
@@ -398,6 +399,79 @@ The immutable source and evidence destination is the approved root's
 `state-expired-template-local-20261025` directory. The manifest names every file;
 earlier deposits remain separate. This is an unpublished local checkpoint.
 
+## Initial classifier admission continuation
+
+The actual admission circuit reproduced a rollback stall: the root owner accepted
+Leave but excluded the retained initial-startup account from active cleanup.
+Admission now moves out of the pump before Enter retires. The private transfer
+requires the same context, expired Enter, accepted live Leave and clean pre-input
+ownership. The coordinator checks its record identity, admission phase and scheme,
+and refuses unrelated state, classifier, record or content obligations.
+
+The held startup retains its original Bootstrap. The stopped admission retains
+its exact Ready/refusal if one arrived, pending send or partial receive, original
+framing cursor and admission state. Only the later lifecycle seal and release
+phase close this detached endpoint. An actual child must reap before SPU/member
+release and Unload. Before the classifier was forked, rollback has no classifier
+reap to claim; it also omits SPU release if no SPU was forked.
+
+An unsent Bootstrap sends no first byte after expiry. Neither a held Ready nor
+cleanup grants templates or renewed admission. An actual unrecorded admission
+refusal remains retained under its expired Enter: cleanup may close resources and
+the load bracket, but that incomplete account permits no Left or new refusal
+record. The original Leave cap closes retained endpoints without manufacturing a
+terminal or successful answer. A later real clock failure preserves the first
+failure and stopped admission through bounded failed-run cleanup.
+
+Nine added delegated cases cover sent pending admission, before classifier fork,
+unsent Bootstrap, held Ready, held refusal, a 65,510-byte partial Ready frame,
+held classifier exit, Leave expiry and clock failure after transfer. The earlier
+pending-admission cap case now exercises the transfer instead of asserting the
+old stall. The before-send and held-completion fixtures step actual spawn and
+coordinator transport operations at their existing intermediate boundaries; they
+construct no admission result or lifecycle proof. Byte/cursor evidence and buffer
+addresses are compared before and after transfer and endpoint retirement.
+
+The first reproduction had a parent/child fixture-path mistake. Its corrected run
+reached the actual four-second stall. The first owner run then exposed the old
+fixture's assumption that an SPU already existed during classifier admission.
+That assertion now follows actual fork ownership. Two missing-import builds and
+one build rejected at the shared target's read-only lock are retained in
+`admission-checks/`; all successful compilation uses the private target. No test
+result is claimed from those failed commands.
+
+Manual review follows the sole detach caller, actual admission consumption,
+shared settled-work predicates, original Enter/Leave permits, endpoint release,
+real reap, incomplete-account terminal permission, cap disposal and failed exit.
+No wire shape, event, dependency, limit or production selection changes. The
+required review skills remain unavailable; this is author evidence, not a Planner
+grade or production qualification. The fresh `admission-checks/review-audit.json`
+finds no reviews or threads on drafts #332 through #343, only draft-skip comments.
+
+`admission-final-checks/results.json` records all eight final gates passing:
+first/last lock checks, formatting, strict harness clippy, the full harness
+suite, library build, all delegated startup cases and diff check. The ordinary
+suite passes 1986 library tests, 45 other tests and 24 doctests (2055 total),
+with 503 library cases ignored. The separate delegated run passes 146 startup
+cases, including 68 expired-startup cases. Other ignored families, privileged
+admin-startup cases and production artifacts remain outside this run.
+
+All twelve compiled controls in `controls-admission/results.json` were detected
+after their exact positive baselines passed. They remove initial cleanup,
+rollback identity checking, original Enter retention, unsent/partial framing,
+held Ready custody, refusal's incomplete-account guard, cap closure, real reap,
+failed-exit custody or the no-send rule, and force a fabricated child requirement
+before fork. The logs show the intended failure sites, including the terminal
+constructor's independent reap assertion. All five controlled source files were
+restored byte-for-byte. Final review then made the partial-frame fixture retry a
+pending send and asserted that initial admission precedes SPU fork; the final
+gates above cover those two test changes. The final manifest covers all 706
+crate/configuration source files.
+
+Source and logs are preserved at the approved evidence root's
+`state-expired-admission-local-20261025` deposit, with a per-file manifest and
+exact source archive. This remains an unpublished local checkpoint.
+
 ## Completion boundary
 
 This branch remains local work in progress, with no published PR and no serving
@@ -406,14 +480,14 @@ positions do not establish cleanup of all pending accounts or gate ownership.
 Those unsupported positions have no ordinary rollback-completion claim. This
 owner must not be wired into a dispatcher as completed cleanup.
 
-The same slice still owes initial classifier admission, boot-pair repair
-and other summary transitions, gate Lower and tool containment,
+The same slice still owes boot-pair repair and other summary transitions,
+gate Lower and tool containment,
 before-Load and gate-owned stopped cleanup, and the worker/dev_loop adapter. Successful
 Ready and pre-adoption expiry need their own lifecycle continuations. The full
 #146 scope additionally includes healthy Leave/save, capture cleanup, process
 exit and dispatcher selection, production artifacts and prompt qualification,
 measured limits, security disposition and the operator's coupled cutover.
 
-The initial classifier admission and boot-repair accounts still need consuming
-cleanup under their original bounds. The template cases above do not establish
-those accounts, gate teardown or the remaining worker adapter.
+Boot-repair accounts still need consuming cleanup under their original bounds.
+The admission and template cases above do not establish those accounts, gate
+teardown or the remaining worker adapter.

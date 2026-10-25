@@ -85,6 +85,9 @@ pub(in crate::flow::context::worker_startup) fn reached(
         ("failed-startup-classifying", EnterState::Startup(owner)) => {
             owner.failure_test_classifying()
         }
+        ("failed-startup-before-classifier", EnterState::Startup(owner)) => {
+            owner.stage() == StartupStage::Classifier
+        }
         ("failed-startup-admit", EnterState::Residency(owner)) => {
             owner.stage() == ResidencyStage::Admit
         }

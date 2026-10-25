@@ -2446,6 +2446,9 @@ pub(in crate::flow) mod boot_composition;
 #[path = "context_templates.rs"]
 mod template_driver;
 pub(super) use template_driver::TemplateRollbackPermit;
+#[path = "context_expired_admission.rs"]
+mod expired_admission_driver;
+pub(super) use expired_admission_driver::ClassifierAdmissionRollbackPermit;
 #[allow(unused_imports)] // Dormant certification boundary, consumed by enter at cutover.
 pub(super) use template_driver::{TemplateBeginError, TemplateBeginRefusal, TemplateProgress};
 

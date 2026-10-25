@@ -14,6 +14,7 @@ use weaver_trace::GrantSurface;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
+    Admission,
     Templates,
     Read,
     Open,
@@ -40,11 +41,17 @@ pub(super) struct ExpiredActiveRollback {
     pub(super) open: Option<StoppedBootOpenAccount>,
     pub(super) read: Option<ExpiredReadAccount>,
     pub(super) templates: Option<crate::flow::context::template_driver::StoppedTemplateAccount>,
+    pub(super) admission:
+        Option<crate::flow::context::expired_admission_driver::StoppedAdmissionAccount>,
+    classifier_started: bool,
     member: weaver_trace::MemberRelease,
 }
 
 impl ExpiredActiveRollback {
     pub(super) fn retire_accounts(&mut self) {
+        if let Some(account) = &mut self.admission {
+            account.retire_transport();
+        }
         if let Some(account) = &mut self.templates {
             account.retire_transport();
         }
@@ -62,6 +69,20 @@ impl ExpiredActiveRollback {
     ) -> Result<(), String> {
         let context = &mut owner.run.context;
         let leave = owner.leave.unwrap();
+        if self.stage == Stage::Admission {
+            let permit = ExpiredStartupAccountPermit {
+                origin: Arc::clone(&context.read_origin),
+                enter: owner.handoff.identity.enter,
+                leave,
+            };
+            self.admission = Some(
+                context
+                    .detach_expired_admission(&permit, io)
+                    .map_err(|error| format!("expired classifier admission: {error:?}"))?,
+            );
+            self.stage = Stage::Enter;
+            return Ok(());
+        }
         if self.stage == Stage::Templates {
             let permit = ExpiredStartupAccountPermit {
                 origin: Arc::clone(&context.read_origin),
@@ -211,7 +232,7 @@ impl ExpiredActiveRollback {
                     self.stage = Stage::Classifier;
                 }
                 Stage::Classifier => {
-                    if let Some(account) = &mut self.templates {
+                    if self.templates.is_some() || self.admission.is_some() {
                         context.live(io)?;
                         let permit = ExpiredReleasePermit {
                             origin: Arc::clone(&context.read_origin),
@@ -221,13 +242,19 @@ impl ExpiredActiveRollback {
                         if !permit.allows(context) {
                             return Err(RunFailure::TemplateBlocked);
                         }
-                        account.retire_transport();
+                        if let Some(account) = &mut self.templates {
+                            account.retire_transport();
+                        }
+                        if let Some(account) = &mut self.admission {
+                            account.retire_transport();
+                        }
                     }
                     if context.retire_classifier(io)? == Advance::Progress {
                         self.stage = Stage::Child;
                     }
                 }
                 Stage::Child => match owner.run.resources.poll_classifier_child() {
+                    None if !self.classifier_started => self.stage = Stage::Spu,
                     Some(ChildState::Reaped(_)) => self.stage = Stage::Spu,
                     Some(ChildState::Running) => {
                         let wake = context
@@ -295,7 +322,12 @@ impl ExpiredActiveRollback {
                         self.stage = Stage::Terminal;
                     }
                 }
-                Stage::Templates | Stage::Read | Stage::Open | Stage::Enter | Stage::Terminal => {
+                Stage::Admission
+                | Stage::Templates
+                | Stage::Read
+                | Stage::Open
+                | Stage::Enter
+                | Stage::Terminal => {
                     unreachable!()
                 }
             }
@@ -325,7 +357,11 @@ impl ExpiredActiveRollback {
                 self.release
                     .as_ref()
                     .and_then(ExpiredResidencyRelease::outcome),
-                self.open.as_ref().is_none_or(|open| !open.incomplete()),
+                self.open.as_ref().is_none_or(|open| !open.incomplete())
+                    && self
+                        .admission
+                        .as_ref()
+                        .is_none_or(|account| account.admission.account_complete()),
                 self.member,
             ));
         }
@@ -349,6 +385,9 @@ impl FoundationExpiredRollback {
                 .is_some_and(|decode| context.can_detach_expired_boot_open(&permit, decode));
         let park_read = context.can_park_expired_startup_read(&permit);
         let detach_templates = context.can_detach_expired_templates(&permit);
+        let detach_admission = context.can_detach_expired_admission(&permit);
+        let initial = matches!(self.handoff.held.as_ref(), HeldStartup::Initial(account)
+            if account.load_sequence.is_some() && account.opened.is_some() && account.initial_grants.is_some());
         if self.before_load
             || context.phase != RecordingPhase::Entered
             || context.flow.phase() != CoordinatorPhase::Active
@@ -358,9 +397,10 @@ impl FoundationExpiredRollback {
             || context.deadlines.get(PumpDeadline::Enter) != Some(self.handoff.identity.enter)
             || context.deadlines.get(PumpDeadline::Leave) != self.leave
             || self.leave?.expired(context.last_ns)
-            || self.run.resources.classifier_child().is_none()
+            || (self.run.resources.classifier_child().is_none() && !initial)
             || self.handoff.gate.is_some()
-            || matches!(self.handoff.held.as_ref(), HeldStartup::Initial(_))
+            || (matches!(self.handoff.held.as_ref(), HeldStartup::Initial(_)) && !initial)
+            || (context.flow.starting_classifier().is_some() && !detach_admission)
             || self.handoff.held.initial_grants().is_none()
             || (context.templates_block_content() && !detach_templates)
             || (context.flow.pending_check().is_some() && !detach_templates)
@@ -383,7 +423,9 @@ impl FoundationExpiredRollback {
             return None;
         }
         Some(ExpiredActiveRollback {
-            stage: if detach_templates {
+            stage: if detach_admission {
+                Stage::Admission
+            } else if detach_templates {
                 Stage::Templates
             } else if park_read {
                 Stage::Read
@@ -402,6 +444,8 @@ impl FoundationExpiredRollback {
             open: None,
             read: None,
             templates: None,
+            admission: None,
+            classifier_started: self.run.resources.classifier_child().is_some(),
             member: weaver_trace::MemberRelease::Closed,
         })
     }

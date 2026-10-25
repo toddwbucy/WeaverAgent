@@ -95,6 +95,7 @@ impl std::fmt::Display for Fault {
 
 impl std::error::Error for Fault {}
 
+#[cfg_attr(test, derive(Debug))]
 struct Partial {
     tag: Tag,
     id: u64,
@@ -102,6 +103,7 @@ struct Partial {
     bytes: Vec<u8>,
 }
 
+#[cfg_attr(test, derive(Debug))]
 struct Outbound {
     tag: Tag,
     id: u64,
@@ -126,6 +128,28 @@ pub(super) struct Channel<E = OwnedFd> {
     // must perform another receive attempt before allowing outgoing progress.
     receive_interrupted: bool,
     failed: bool,
+}
+
+#[cfg(test)]
+impl<E> Channel<E> {
+    pub(super) fn test_evidence(&self) -> String {
+        format!(
+            "{:?}",
+            (
+                self.limit,
+                &self.partial,
+                self.partial.as_ref().map(|p| p.bytes.as_ptr() as usize),
+                &self.outbound,
+                self.outbound.as_ref().map(|p| p.bytes.as_ptr() as usize),
+                self.zero_received,
+                self.receive_interrupted,
+                self.failed,
+            )
+        )
+    }
+    pub(super) fn test_partial_bytes(&self) -> usize {
+        self.partial.as_ref().map_or(0, |p| p.bytes.len())
+    }
 }
 
 impl Channel {

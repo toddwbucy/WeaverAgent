@@ -529,6 +529,22 @@ impl StartupComposition<'_> {
     pub(in crate::flow::context) fn failure_test_classifying(&self) -> bool {
         self.stage == StartupStage::Classifier && self.context.flow.starting_classifier().is_some()
     }
+    #[cfg(test)]
+    pub(in crate::flow::context) unsafe fn failure_test_stage_classifier(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) {
+        assert_eq!(self.stage, StartupStage::Classifier);
+        assert!(!self.started);
+        // SAFETY: the fixture carries the same single serving-thread contract
+        // as advance and retains the actual resource owner until child reap.
+        unsafe {
+            self.resources
+                .spawn_classifier(self.context, &self.binary, self.bootstrap.clone(), io)
+        }
+        .unwrap();
+        self.started = true;
+    }
     pub(in crate::flow::context) fn failed_identity(
         &self,
     ) -> Option<super::worker_startup::failed::StartupIdentity> {

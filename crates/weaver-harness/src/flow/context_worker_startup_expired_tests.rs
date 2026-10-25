@@ -3,7 +3,7 @@ use super::super::tests::{EnterGuard, Member, dial, packet, reap};
 use super::*;
 use crate::flow::clock::testing::FakePumpIo;
 use crate::flow::context::startup_composition::tests::CircuitIo;
-use crate::flow::coordinator::OperationCompletion;
+use crate::flow::coordinator::{FlowRecording, OperationCompletion};
 use nix::sys::socket::{MsgFlags, send};
 use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -96,6 +96,7 @@ pub(in crate::flow::context::worker_startup) fn enter(
     reader: &mut UnixStream,
     clock: &mut FakePumpIo,
     mode: &str,
+    root: &Path,
 ) -> Box<FoundationExpiredEnter> {
     let _reader = PanicReader(reader.try_clone().unwrap());
     let mut guard = EnterGuard(Some(enter));
@@ -115,7 +116,9 @@ pub(in crate::flow::context::worker_startup) fn enter(
     let template_pressure = mode.contains("-template-record-")
         || mode.contains("-template-component-")
         || mode.contains("-template-foreign-");
-    let target = if template_pressure {
+    let target = if mode.starts_with("expired-startup-admission-") {
+        "failed-startup-before-classifier".to_owned()
+    } else if template_pressure {
         "failed-startup-template-record".to_owned()
     } else if mode.contains("-template-completion-") {
         "failed-startup-template-recorded".to_owned()
@@ -124,6 +127,9 @@ pub(in crate::flow::context::worker_startup) fn enter(
     };
     let mut template_pressure_filled = false;
     let mut template_probe_interrupted = false;
+    let admission_received = mode
+        .starts_with("expired-startup-classifying")
+        .then(|| root.join("classifier-bootstrap"));
     let read_target = matches!(suffix, "prompt" | "summary-read");
     if read_target && !mode.contains("-cursor-") {
         member.hold_control = Some(if suffix == "prompt" {
@@ -134,6 +140,9 @@ pub(in crate::flow::context::worker_startup) fn enter(
     }
     while !reached(guard.0.as_ref().unwrap(), &target)
         || (read_target && member.held_control.is_none())
+        || admission_received
+            .as_ref()
+            .is_some_and(|path| !path.exists())
     {
         assert!(
             Instant::now() < limit,
@@ -175,6 +184,59 @@ pub(in crate::flow::context::worker_startup) fn enter(
         }
         member.step(clock.now().unwrap(), "ready");
         std::thread::sleep(Duration::from_millis(1));
+    }
+    if mode.starts_with("expired-startup-admission-") && !mode.contains("-before-fork-") {
+        let EnterState::Startup(owner) = guard.0.as_mut().unwrap().state.as_mut().unwrap() else {
+            panic!("original initial startup owner");
+        };
+        // SAFETY: the actual child remains owned by the fixture's reap guard.
+        unsafe { owner.failure_test_stage_classifier(&mut CircuitIo(clock)) };
+        if !mode.contains("-unsent-") {
+            let context = context(guard.0.as_mut().unwrap());
+            while context.flow.held_admission().is_none()
+                && context
+                    .flow
+                    .starting_classifier()
+                    .unwrap()
+                    .test_partial_bytes()
+                    == 0
+            {
+                assert!(Instant::now() < limit, "held admission did not arrive");
+                context
+                    .flow
+                    .advance_classifier_admission(&mut FlowRecording {
+                        barrier: &mut context.barrier,
+                        inbox: &mut context.inbox,
+                        budget: &mut context.budget,
+                        author: &context.author,
+                    })
+                    .unwrap();
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            use crate::flow::ste100_socket::AdmissionPoll;
+            if mode.contains("-ready-") {
+                assert!(matches!(
+                    context.flow.held_admission(),
+                    Some(AdmissionPoll::Ready(_))
+                ));
+            } else if mode.contains("-refused-") {
+                assert!(matches!(
+                    context.flow.held_admission(),
+                    Some(AdmissionPoll::Refused(_))
+                ));
+            } else {
+                assert!(mode.contains("-partial-"));
+                assert!(context.flow.held_admission().is_none());
+                assert_eq!(
+                    context
+                        .flow
+                        .starting_classifier()
+                        .unwrap()
+                        .test_partial_bytes(),
+                    65_510
+                );
+            }
+        }
     }
     if mode.contains("-template-completion-") {
         // Reduce the actual Recorded classifier proof without letting the boot
@@ -435,6 +497,34 @@ pub(in crate::flow::context::worker_startup) fn finish(
             .is_none()
     );
     let requests = member.requests.clone();
+    let initial_admission = mode.starts_with("expired-startup-classifying")
+        || mode.starts_with("expired-startup-admission-");
+    let admission_evidence = owner
+        .run
+        .context
+        .flow
+        .starting_classifier()
+        .map(|port| port.test_evidence());
+    let admission_completion = owner.run.context.flow.held_admission().cloned();
+    let classifier_started = owner.run.resources.classifier_child().is_some();
+    let spu_started = owner.run.resources.spu_child().is_some();
+    if initial_admission {
+        assert!(
+            !spu_started,
+            "initial classifier admission precedes SPU fork"
+        );
+        assert_eq!(classifier_started, !mode.contains("-before-fork-"));
+        let HeldStartup::Initial(held) = owner.handoff.held.as_ref() else {
+            panic!("retain initial bootstrap");
+        };
+        if mode.starts_with("expired-startup-classifying") || mode.contains("-partial-") {
+            assert_eq!(
+                std::fs::read(path.parent().unwrap().join("classifier-bootstrap")).unwrap(),
+                serde_json::to_vec(&held.bootstrap).unwrap()
+            );
+        }
+        assert!(owner.run.context.flow.standing_classifier().is_none());
+    }
     let template_target = mode.contains("-template-");
     let template_request = template_target
         .then(|| owner.run.context.flow.classifier().outstanding().cloned())
@@ -755,25 +845,41 @@ pub(in crate::flow::context::worker_startup) fn finish(
         member.requests, requests,
         "no new boot work during rollback admission"
     );
-    if mode.ends_with("-classifying") {
-        assert!(owner.run.resources.classifier_child().is_some());
-        for _ in 0..6 {
-            assert_eq!(
-                owner.advance_with_io(&mut CircuitIo(clock)),
-                FoundationExpiredRollbackProgress::Accepted
-            );
-            assert!(owner.run.context.failure.is_none());
-            assert!(owner.run.context.flow.halt().is_none());
-            assert_eq!(
-                owner.run.context.deadlines.get(PumpDeadline::Enter),
-                Some(owner.handoff.identity.enter)
-            );
-            member.step(clock.now().unwrap(), "ready");
-            assert_eq!(
-                member.requests, requests,
-                "unfinished classifier cannot start Grants or release"
+    if admission_evidence.is_some() {
+        let context = &owner.run.context;
+        for (origin, enter, leave) in [
+            (Arc::new(()), original_enter, leave),
+            (
+                Arc::clone(&context.read_origin),
+                AbsoluteBound::from_absolute(
+                    original_enter.began_ns() + 1,
+                    original_enter.deadline_ns(),
+                )
+                .unwrap(),
+                leave,
+            ),
+            (
+                Arc::clone(&context.read_origin),
+                original_enter,
+                AbsoluteBound::from_absolute(leave.began_ns() + 1, leave.deadline_ns()).unwrap(),
+            ),
+        ] {
+            assert!(
+                !context.can_detach_expired_admission(&ExpiredStartupAccountPermit {
+                    origin,
+                    enter,
+                    leave
+                }),
+                "foreign rollback cannot detach admission"
             );
         }
+        assert!(
+            context.can_detach_expired_admission(&ExpiredStartupAccountPermit {
+                origin: Arc::clone(&context.read_origin),
+                enter: original_enter,
+                leave,
+            })
+        );
     }
     if mode == "expired-startup-admit-sent-complete" {
         assert!(
@@ -919,6 +1025,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         || mode.ends_with("-classifier-held")
         || mode.ends_with("-read-held")
         || mode.ends_with("-template-held")
+        || mode.ends_with("-classifying-held")
     {
         // This cleanup waits for child exit with no socket descriptors. The
         // general circuit fake only supplies readiness for actual interests.
@@ -942,7 +1049,8 @@ pub(in crate::flow::context::worker_startup) fn finish(
         let limit = Instant::now() + Duration::from_secs(4);
         let mut release_child = !(mode.ends_with("-classifier-held")
             || mode.ends_with("-read-held")
-            || mode.ends_with("-template-held"));
+            || mode.ends_with("-template-held")
+            || mode.ends_with("-classifying-held"));
         let mut release_spu = !mode.ends_with("-release-held");
         let unsent_open = mode == "expired-startup-open-unsent-complete";
         let incomplete_open = mode.starts_with("expired-startup-open-") && !unsent_open;
@@ -985,6 +1093,102 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 owner.detail()
             );
             let progress = owner.advance_with_io(&mut CleanupIo(clock));
+            if mode.contains("-admission-unsent-failure-")
+                && owner
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.admission.is_some())
+            {
+                struct BrokenOnce<'a> {
+                    clock: &'a mut FakePumpIo,
+                    broken: bool,
+                }
+                impl PumpIo for BrokenOnce<'_> {
+                    fn now(&mut self) -> std::io::Result<u64> {
+                        if !self.broken {
+                            self.broken = true;
+                            Err(std::io::Error::other("admission rollback clock failed"))
+                        } else {
+                            self.clock.now()
+                        }
+                    }
+                    fn wait(
+                        &mut self,
+                        _: &[WaitInterest<'_>],
+                        _: Option<u64>,
+                    ) -> std::io::Result<crate::flow::clock::WaitOutcome> {
+                        panic!("clock failure cannot wait");
+                    }
+                }
+                assert_eq!(
+                    owner.advance_with_io(&mut BrokenOnce {
+                        clock,
+                        broken: false
+                    }),
+                    FoundationExpiredRollbackProgress::Stopped
+                );
+                let first = owner.run.context.failure.clone().unwrap();
+                assert!(matches!(
+                    first,
+                    RunFailure::Flow {
+                        reason: FlowHaltReason::TraceFailed,
+                        ..
+                    }
+                ));
+                let mut exit = ExitGuard(
+                    guard
+                        .0
+                        .take()
+                        .unwrap()
+                        .failed_exit()
+                        .ok()
+                        .expect("failed admission rollback"),
+                );
+                use super::super::rollback::failed::FoundationRollbackExitProgress as ExitProgress;
+                loop {
+                    assert!(Instant::now() < limit, "failed admission cleanup");
+                    assert_eq!(exit.0.failure(), Some(&first));
+                    assert!(exit.0.deadline().unwrap() <= leave.deadline_ns());
+                    let account = exit
+                        .0
+                        .test_admission()
+                        .expect("failed exit retains admission");
+                    assert_eq!(account.enter, original_enter);
+                    assert_eq!(
+                        &account.admission.test_evidence(),
+                        admission_evidence.as_ref().unwrap()
+                    );
+                    assert!(account.admission.transport_retired());
+                    if exit.0.advance_with_io(&mut CleanupIo(clock)) == ExitProgress::Closed {
+                        break;
+                    }
+                    if exit.0.progress() == ExitProgress::Pending {
+                        exit.0.wait_with_io(&mut CleanupIo(clock));
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert!(!exit.0.abandoned());
+                assert!(exit.0.test_spu_child().is_none());
+                assert!(packet(&peer).is_none(), "failed admission grants no Left");
+                assert!(!path.parent().unwrap().join("classifier-bootstrap").exists());
+                reader.set_nonblocking(true).unwrap();
+                let rows = super::super::tests::trace_through(
+                    reader,
+                    vec![],
+                    weaver_trace::Sequence(exit.0.unload_sequence().unwrap()),
+                    limit,
+                )
+                .unwrap();
+                assert_eq!(rows.iter().filter(|row| row["kind"] == "unload").count(), 1);
+                assert!(rows.iter().any(|row| row["kind"] == "fault"));
+                assert!(!rows.iter().any(|row| row["kind"] == "ste100.result"));
+                assert!(
+                    rows.last().unwrap()["payload"]["release"]
+                        .get("spu")
+                        .is_none()
+                );
+                return;
+            }
             let template_failure =
                 mode.contains("-template-component-") || mode.contains("-template-foreign-");
             if template_failure && progress == FoundationExpiredRollbackProgress::Stopped {
@@ -1379,11 +1583,15 @@ pub(in crate::flow::context::worker_startup) fn finish(
             owner.run.context.retired_enter,
             Some(owner.handoff.identity.enter)
         );
-        assert!(matches!(
-            owner.run.resources.classifier_child(),
-            Some(crate::flow::context::failed_enter_driver::ChildState::Reaped(_))
-        ));
-        let spu = !mode.contains("-classifier-");
+        if classifier_started {
+            assert!(matches!(
+                owner.run.resources.classifier_child(),
+                Some(crate::flow::context::failed_enter_driver::ChildState::Reaped(_))
+            ));
+        } else {
+            assert!(owner.run.resources.classifier_child().is_none());
+        }
+        let spu = spu_started;
         if spu {
             assert!(matches!(
                 owner.run.resources.spu_child(),
@@ -1419,6 +1627,34 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
         assert_eq!(member.requests, expected_requests);
         member.assert_closed_without_request();
+        if initial_admission {
+            assert!(owner.run.context.flow.starting_classifier().is_none());
+            assert!(owner.run.context.flow.standing_classifier().is_none());
+            if let Some(expected) = admission_evidence.as_ref() {
+                let account = owner
+                    .active
+                    .as_ref()
+                    .unwrap()
+                    .admission
+                    .as_ref()
+                    .expect("retained admission account");
+                assert_eq!(account.enter, original_enter);
+                assert_eq!(
+                    account.admission.completion(),
+                    admission_completion.as_ref()
+                );
+                assert_eq!(&account.admission.test_evidence(), expected);
+                assert!(account.admission.transport_retired());
+            } else {
+                assert!(owner.active.as_ref().unwrap().admission.is_none());
+            }
+            if mode.contains("-unsent-") || mode.contains("-before-fork-") {
+                assert!(
+                    !path.parent().unwrap().join("classifier-bootstrap").exists(),
+                    "expired admission sent bootstrap bytes"
+                );
+            }
+        }
         if template_target {
             let account = owner
                 .active
@@ -1497,7 +1733,20 @@ pub(in crate::flow::context::worker_startup) fn finish(
             assert_eq!(&serde_json::to_vec(event).unwrap(), expected);
             assert_eq!(&retained_ticket, ticket);
         }
-        if incomplete_open {
+        if matches!(
+            admission_completion,
+            Some(crate::flow::ste100_socket::AdmissionPoll::Refused(_))
+        ) {
+            assert!(
+                packet(&peer).is_none(),
+                "unrecorded original refusal cannot grant Left"
+            );
+            assert!(owner.retired_dial.as_ref().unwrap()._send.is_none());
+            assert!(
+                !leave.expired(clock.now().unwrap()),
+                "no new refusal accounting window"
+            );
+        } else if incomplete_open {
             let account = owner.active.as_ref().unwrap().open.as_ref().unwrap();
             assert!(
                 account.incomplete(),
@@ -1776,6 +2025,18 @@ pub(in crate::flow::context::worker_startup) fn finish(
     }
     assert!(!owner.abandoned());
     assert!(owner.channel_fault().is_none());
+    if initial_admission {
+        assert_eq!(
+            owner.advance_with_io(&mut CircuitIo(clock)),
+            FoundationExpiredRollbackProgress::Accepted
+        );
+        let account = owner.active.as_ref().unwrap().admission.as_ref().unwrap();
+        assert!(!account.admission.transport_retired());
+        assert_eq!(
+            &account.admission.test_evidence(),
+            admission_evidence.as_ref().unwrap()
+        );
+    }
     if mode == "expired-startup-template-cap" {
         assert_eq!(
             owner.advance_with_io(&mut CircuitIo(clock)),
@@ -1821,6 +2082,18 @@ pub(in crate::flow::context::worker_startup) fn finish(
     );
     assert!(owner.run.resources.decode_present_for_serving().is_none());
     assert!(owner.run.resources.residency_port().is_none());
+    if initial_admission {
+        let account = owner.active.as_ref().unwrap().admission.as_ref().unwrap();
+        assert!(
+            account.admission.transport_retired(),
+            "cap closes admission descriptor"
+        );
+        assert_eq!(
+            &account.admission.test_evidence(),
+            admission_evidence.as_ref().unwrap()
+        );
+        assert_eq!(account.enter, original_enter);
+    }
     if mode == "expired-startup-template-cap" {
         let account = owner.active.as_ref().unwrap().templates.as_ref().unwrap();
         assert!(
