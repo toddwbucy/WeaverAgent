@@ -278,7 +278,7 @@ enum RollbackDriver {
     Halt(Box<FailedRunCleanup>),
     NoRecord(Box<NoRecordExit>),
 }
-struct NoRecordExit {
+pub(in crate::flow::context) struct NoRecordExit {
     context: RecordingContext,
     resources: FailedEnterResources,
     retired: FailedFlowResources,
@@ -298,7 +298,7 @@ impl FoundationRun {
             return Err((self, handoff));
         }
         let FoundationRun {
-            mut context,
+            context,
             resources,
             listener: _,
             original: _,
@@ -314,20 +314,12 @@ impl FoundationRun {
         } else {
             // These routes cannot append anything: Unload is already Recorded,
             // or the actual healthy Leave has expired. Retain all framing bytes.
-            let retired = context
-                .flow
-                .retire_abandoned_rollback_ports()
-                .expect("checked pre-input custody");
-            RollbackDriver::NoRecord(Box::new(NoRecordExit {
+            RollbackDriver::NoRecord(Box::new(NoRecordExit::new(
                 context,
                 resources,
-                retired,
-                deadline: identity.deadline,
-                expired: identity.route == ExitRoute::Expired,
-                drained: false,
-                abandoned: false,
-                detail: None,
-            }))
+                identity.deadline,
+                identity.route == ExitRoute::Expired,
+            )))
         };
         Ok(Box::new(FoundationRollbackExit {
             handoff,
@@ -341,6 +333,37 @@ impl FoundationRun {
 #[path = "context_worker_rollback_failure_tests.rs"]
 pub(in crate::flow::context::worker_startup) mod tests;
 impl NoRecordExit {
+    /// The caller has retained an actual terminal or expired-Leave proof.
+    /// No ordinary author or terminal retry is exposed by this driver.
+    pub(in crate::flow::context) fn new(
+        mut context: RecordingContext,
+        resources: FailedEnterResources,
+        deadline: Option<u64>,
+        expired: bool,
+    ) -> Self {
+        let retired = context
+            .flow
+            .retire_abandoned_rollback_ports()
+            .expect("checked pre-input custody");
+        Self {
+            context,
+            resources,
+            retired,
+            deadline,
+            expired,
+            drained: false,
+            abandoned: false,
+            detail: None,
+        }
+    }
+    pub(in crate::flow::context) fn abandoned(&self) -> bool {
+        self.abandoned
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn reap_composition_test_children(&mut self) {
+        self.resources.reap_startup_test_children();
+        self.context.barrier.abandon();
+    }
     fn abort(&mut self) {
         self.resources.close_at_cap();
         self.context.barrier.abandon();
@@ -364,7 +387,10 @@ impl NoRecordExit {
             }
         }
     }
-    fn advance(&mut self, io: &mut impl PumpIo) -> FoundationRollbackExitProgress {
+    pub(in crate::flow::context) fn advance(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> FoundationRollbackExitProgress {
         use FoundationRollbackExitProgress as Progress;
         if self.expired {
             self.abort();
@@ -394,7 +420,10 @@ impl NoRecordExit {
             Progress::Pending
         }
     }
-    fn wait(&mut self, io: &mut impl PumpIo) -> FoundationRollbackExitProgress {
+    pub(in crate::flow::context) fn wait(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> FoundationRollbackExitProgress {
         use FoundationRollbackExitProgress as Progress;
         if !self.clock(io) {
             return Progress::Closed;

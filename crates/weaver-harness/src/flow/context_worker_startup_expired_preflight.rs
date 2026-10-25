@@ -1,12 +1,12 @@
-//! Complete explicit rollback before SPU creation. An unactivated Load retains
-//! its unused Open; admitted classifier cleanup supplies its actual Grants.
+//! Shared terminal for explicit rollback. An unactivated Load retains its
+//! unused Open; admitted-organ cleanup supplies actual Grants and release facts.
 use super::*;
 use crate::flow::context::startup_composition::refusal::response::listener::{
     RetiredRollbackDials, RollbackDials,
 };
 use crate::flow::context::*;
 use crate::flow::coordinator::FlowRecording;
-use weaver_trace::{GrantSurface, MemberRelease, Sequence, Subsystem};
+use weaver_trace::{GrantSurface, MemberRelease, ReleaseOutcome, Sequence, Subsystem};
 use weaver_types::Payload as WirePayload;
 
 pub(in crate::flow) struct ExpiredPreflightPermit {
@@ -45,20 +45,25 @@ impl ExpiredPreflightRollback {
         owner: &mut FoundationExpiredRollback,
         dials: RollbackDials,
         surface: GrantSurface,
+        spu: Option<ReleaseOutcome>,
     ) -> Self {
         let context = &owner.run.context;
         assert_eq!(context.phase, RecordingPhase::Releasing);
         assert!(context.failure.is_none() && context.flow.halt().is_none());
         assert!(context.flow.classifier_retired());
         assert!(context.flow.standing_state().is_none());
-        assert!(owner.run.resources.spu_child().is_none());
+        assert_eq!(owner.run.resources.spu_child().is_some(), spu.is_some());
+        assert!(matches!(
+            owner.run.resources.classifier_child(),
+            Some(crate::flow::context::failed_enter_driver::ChildState::Reaped(_))
+        ));
         let cause = owner.original.as_ref().unwrap().payload().cause;
         Self {
             permit: None,
-            stage: Stage::Seal,
+            stage: Stage::Unload,
             dials: Some(dials),
             retired_dials: None,
-            unload: Some(unload(cause, surface)),
+            unload: Some(unload(cause, surface, spu)),
             started: false,
             returned: StoppedAuthor::default(),
             sequence: None,
@@ -108,7 +113,7 @@ impl FoundationExpiredRollback {
             retired_dials: None,
             // No initial semantic reading ever stood on this road. The
             // retained unused Open is not a fabricated Grants read.
-            unload: Some(unload(cause, GrantSurface::Unreadable)),
+            unload: Some(unload(cause, GrantSurface::Unreadable, None)),
             started: false,
             returned: StoppedAuthor::default(),
             sequence: None,
@@ -116,11 +121,11 @@ impl FoundationExpiredRollback {
     }
 
     pub(super) fn advance_preflight(&mut self, io: &mut impl PumpIo) -> Result<(), String> {
-        if self.preflight.is_none() && self.classifier.is_none() {
+        if self.preflight.is_none() && self.active.is_none() {
             self.preflight = self.preflight_rollback();
         }
         let Some(mut preflight) = self.preflight.take() else {
-            return self.advance_classifier(io);
+            return self.advance_active(io);
         };
         let result = preflight.step(self, io);
         self.preflight = Some(preflight);
@@ -128,7 +133,11 @@ impl FoundationExpiredRollback {
     }
 }
 
-fn unload(cause: weaver_types::Cause, surface: GrantSurface) -> AuthoredEvent {
+fn unload(
+    cause: weaver_types::Cause,
+    surface: GrantSurface,
+    spu: Option<ReleaseOutcome>,
+) -> AuthoredEvent {
     AuthoredEvent {
         kind: Kind::Unload,
         subsystem: Subsystem::Harness,
@@ -142,7 +151,7 @@ fn unload(cause: weaver_types::Cause, surface: GrantSurface) -> AuthoredEvent {
                 forced: true,
                 forced_by: None,
                 release: serving::payloads::Release {
-                    spu: None,
+                    spu,
                     member: Some(MemberRelease::Closed),
                 },
                 end_reason: None,
@@ -244,18 +253,23 @@ impl ExpiredPreflightRollback {
             }
             Stage::Children => {
                 use crate::flow::context::failed_enter_driver::ChildState;
-                match owner.run.resources.poll_classifier_child() {
-                    None | Some(ChildState::Reaped(_)) => {}
-                    Some(ChildState::Running) => {
-                        let wake = context
-                            .last_ns
-                            .saturating_add(10_000_000)
-                            .min(leave.deadline_ns());
-                        io.wait(&[], Some(wake))
-                            .map_err(|error| format!("expired rollback child wait: {error}"))?;
-                        return Ok(());
+                for child in [
+                    owner.run.resources.poll_classifier_child(),
+                    owner.run.resources.poll_spu_child(),
+                ] {
+                    match child {
+                        None | Some(ChildState::Reaped(_)) => {}
+                        Some(ChildState::Running) => {
+                            let wake = context
+                                .last_ns
+                                .saturating_add(10_000_000)
+                                .min(leave.deadline_ns());
+                            io.wait(&[], Some(wake))
+                                .map_err(|error| format!("expired rollback child wait: {error}"))?;
+                            return Ok(());
+                        }
+                        Some(state) => return Err(format!("expired rollback child: {state:?}")),
                     }
-                    Some(state) => return Err(format!("expired rollback child: {state:?}")),
                 }
                 let dial = owner.dial.as_mut().unwrap();
                 dial.answer = Some(OrganEnvelope {

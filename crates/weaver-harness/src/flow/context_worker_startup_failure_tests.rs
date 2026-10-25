@@ -82,8 +82,14 @@ pub(in crate::flow::context::worker_startup) fn reached(
         ("failed-startup-classifier", EnterState::Residency(owner)) => {
             owner.stage() == ResidencyStage::Fork
         }
+        ("failed-startup-classifying", EnterState::Startup(owner)) => {
+            owner.failure_test_classifying()
+        }
         ("failed-startup-admit", EnterState::Residency(owner)) => {
             owner.stage() == ResidencyStage::Admit
+        }
+        ("failed-startup-admit-sent", EnterState::Residency(owner)) => {
+            owner.stage() == ResidencyStage::Admit && owner.failure_test_admit_sent()
         }
         ("failed-startup-boot", EnterState::Boot(owner)) => owner.stage() == BootStage::Templates,
         ("failed-startup-open", EnterState::Boot(owner)) => {

@@ -10,11 +10,13 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-struct Guard(Box<FoundationExpiredRollback>);
+struct Guard(Option<Box<FoundationExpiredRollback>>);
 impl Drop for Guard {
     fn drop(&mut self) {
-        if let Some(child) = self
-            .0
+        let Some(owner) = self.0.as_mut() else {
+            return;
+        };
+        if let Some(child) = owner
             .handoff
             .gate
             .as_mut()
@@ -22,8 +24,14 @@ impl Drop for Guard {
         {
             reap(child);
         }
-        self.0.run.resources.reap_startup_test_children();
-        self.0.run.context.barrier.abandon();
+        owner.run.resources.reap_startup_test_children();
+        owner.run.context.barrier.abandon();
+    }
+}
+struct ExitGuard(Box<super::failure::FoundationExpiredRollbackExit>);
+impl Drop for ExitGuard {
+    fn drop(&mut self) {
+        self.0.reap_composition_test_children();
     }
 }
 struct PanicReader(UnixStream);
@@ -92,9 +100,11 @@ pub(in crate::flow::context::worker_startup) fn enter(
     let mut guard = EnterGuard(Some(enter));
     let limit = Instant::now() + Duration::from_secs(8);
     let suffix = mode.strip_prefix("expired-startup-").unwrap();
+    let suffix = suffix.split("-release-").next().unwrap();
     let suffix = suffix.strip_suffix("-cap").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-trace").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-complete").unwrap_or(suffix);
+    let suffix = suffix.strip_suffix("-pending").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-varied").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-unreadable").unwrap_or(suffix);
     let suffix = suffix.strip_suffix("-held").unwrap_or(suffix);
@@ -131,6 +141,12 @@ pub(in crate::flow::context::worker_startup) fn enter(
             .err()
             .expect("not expired"),
     );
+    if mode == "expired-startup-admit-pending-complete" {
+        let EnterState::Residency(owner) = guard.0.as_mut().unwrap().state.as_mut().unwrap() else {
+            panic!("actual Admit owner");
+        };
+        owner.failure_test_stage_admit();
+    }
     let enter = context(guard.0.as_mut().unwrap())
         .deadlines
         .get(PumpDeadline::Enter)
@@ -178,6 +194,13 @@ pub(in crate::flow::context::worker_startup) fn finish(
     mode: &str,
 ) {
     let _reader = PanicReader(reader.try_clone().unwrap());
+    if mode.ends_with("-release-early") {
+        let until = Instant::now() + Duration::from_secs(2);
+        while !path.parent().unwrap().join("release-early").exists() {
+            assert!(Instant::now() < until, "early Release fixture did not send");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
     assert_eq!(handoff.held.original_enter().unwrap().wire(), original);
     let address = handoff.held.original_enter().unwrap().wire().as_ptr();
     assert!(path.exists());
@@ -209,8 +232,8 @@ pub(in crate::flow::context::worker_startup) fn finish(
             address
         );
     }
-    let mut guard = Guard(run.expired_rollback(handoff).ok().expect("exact run"));
-    let owner = &mut guard.0;
+    let mut guard = Guard(Some(run.expired_rollback(handoff).ok().expect("exact run")));
+    let owner = guard.0.as_mut().unwrap();
     assert_eq!(
         owner.progress(),
         FoundationExpiredRollbackProgress::AwaitRollback
@@ -438,7 +461,34 @@ pub(in crate::flow::context::worker_startup) fn finish(
         member.requests, requests,
         "no new boot work during rollback admission"
     );
-    if mode.ends_with("-classifier-complete")
+    if mode.ends_with("-classifying") {
+        assert!(owner.run.resources.classifier_child().is_some());
+        for _ in 0..6 {
+            assert_eq!(
+                owner.advance_with_io(&mut CircuitIo(clock)),
+                FoundationExpiredRollbackProgress::Accepted
+            );
+            assert!(owner.run.context.failure.is_none());
+            assert!(owner.run.context.flow.halt().is_none());
+            assert_eq!(
+                owner.run.context.deadlines.get(PumpDeadline::Enter),
+                Some(owner.handoff.identity.enter)
+            );
+            member.step(clock.now().unwrap(), "ready");
+            assert_eq!(
+                member.requests, requests,
+                "unfinished classifier cannot start Grants or release"
+            );
+        }
+    }
+    if mode == "expired-startup-admit-sent-complete" {
+        assert!(
+            matches!(owner.handoff.held.as_ref(), HeldStartup::Residency(held) if held.reply.is_none())
+        );
+        std::fs::write(path.parent().unwrap().join("allow-admit-reply"), b"allowed").unwrap();
+    }
+    if mode.ends_with("-complete")
+        || mode.contains("-release-")
         || mode.ends_with("-classifier-varied")
         || mode.ends_with("-classifier-unreadable")
         || mode.ends_with("-classifier-held")
@@ -464,6 +514,15 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
         let limit = Instant::now() + Duration::from_secs(4);
         let mut release_child = !mode.ends_with("-classifier-held");
+        let mut release_spu = !mode.ends_with("-release-held");
+        let invalid_release = [
+            "-release-wrong",
+            "-release-arm",
+            "-release-position",
+            "-release-early",
+        ]
+        .iter()
+        .any(|suffix| mode.ends_with(suffix));
         loop {
             assert!(
                 Instant::now() < limit,
@@ -471,6 +530,99 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 owner.detail()
             );
             let progress = owner.advance_with_io(&mut CleanupIo(clock));
+            if invalid_release && progress == FoundationExpiredRollbackProgress::Stopped {
+                assert!(owner.run.context.flow.halt().is_some());
+                assert!(owner.unload_sequence().is_none());
+                assert!(packet(&peer).is_none(), "invalid Release granted Left");
+                let release = owner.active.as_ref().unwrap().release.as_ref().unwrap();
+                let reply = release
+                    .received_reply()
+                    .expect("retain actual invalid reply");
+                assert!(release.outcome().is_none());
+                assert!(
+                    matches!(
+                        owner.run.context.failure.as_ref(),
+                        Some(RunFailure::Flow {
+                            reason: FlowHaltReason::ProtocolFailed,
+                            ..
+                        })
+                    ),
+                    "{:?}",
+                    owner.run.context.failure
+                );
+                if mode.ends_with("-early") {
+                    assert!(!release.release_sent(), "reply preceded every Release byte");
+                    assert!(matches!(
+                        reply.payload,
+                        Payload::Answer(LifecycleAnswer::Released)
+                    ));
+                } else if mode.ends_with("-arm") {
+                    assert!(matches!(
+                        reply.payload,
+                        Payload::Answer(LifecycleAnswer::Admitted)
+                    ));
+                } else if mode.ends_with("-position") {
+                    assert_eq!(reply.position, Position::Open);
+                } else {
+                    assert_eq!(reply.exchange.ordinal, 3);
+                }
+                let first = owner.run.context.failure.clone().unwrap();
+                let leave = owner.leave.unwrap();
+                let cause = owner.original.as_ref().unwrap().payload().cause.uid;
+                let mut exit = ExitGuard(
+                    guard
+                        .0
+                        .take()
+                        .unwrap()
+                        .failed_exit()
+                        .ok()
+                        .expect("actual stopped rollback"),
+                );
+                use super::super::rollback::failed::FoundationRollbackExitProgress as ExitProgress;
+                loop {
+                    assert!(
+                        Instant::now() < limit,
+                        "failed expired rollback did not close"
+                    );
+                    assert_eq!(exit.0.failure(), Some(&first));
+                    assert!(exit.0.deadline().unwrap() <= leave.deadline_ns());
+                    if exit.0.advance_with_io(&mut CleanupIo(clock)) == ExitProgress::Closed {
+                        break;
+                    }
+                    if exit.0.progress() == ExitProgress::Pending {
+                        exit.0.wait_with_io(&mut CleanupIo(clock));
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert!(!exit.0.abandoned());
+                assert_eq!(exit.0.channel_fault(), Some(crate::ChannelFault::Closed));
+                assert!(matches!(
+                    exit.0.test_spu_child(),
+                    Some(
+                        crate::flow::context::failed_enter_driver::ChildState::Reaped(
+                            nix::sys::wait::WaitStatus::Exited(_, 0)
+                        )
+                    )
+                ));
+                assert!(packet(&peer).is_none(), "failed exit cannot grant Left");
+                let sequence = exit.0.unload_sequence().expect("bounded failure Unload");
+                reader.set_nonblocking(true).unwrap();
+                let rows = super::super::tests::trace_through(
+                    reader,
+                    vec![],
+                    weaver_trace::Sequence(sequence),
+                    limit,
+                )
+                .unwrap();
+                assert_eq!(rows.iter().filter(|row| row["kind"] == "unload").count(), 1);
+                assert!(rows.iter().any(|row| row["kind"] == "fault"));
+                let terminal = rows.last().unwrap();
+                assert_eq!(terminal["kind"], "unload");
+                assert_eq!(terminal["payload"]["cause"]["uid"], cause);
+                assert_eq!(terminal["payload"]["release"]["spu"], "unconfirmed");
+                assert_eq!(terminal["payload"]["end_reason"], "component_failure");
+                return;
+            }
             assert_ne!(
                 progress,
                 FoundationExpiredRollbackProgress::Stopped,
@@ -479,12 +631,131 @@ pub(in crate::flow::context::worker_startup) fn finish(
             );
             if progress == FoundationExpiredRollbackProgress::Closed {
                 assert!(
-                    release_child,
+                    release_child && release_spu && !invalid_release,
                     "Left cannot precede the actual classifier reap"
                 );
                 break;
             }
-            if !release_child && owner.unload_sequence().is_some() {
+            if mode.ends_with("-release-recorded") && owner.unload_sequence().is_some() {
+                struct BrokenOnce<'a> {
+                    clock: &'a mut FakePumpIo,
+                    broken: bool,
+                }
+                impl PumpIo for BrokenOnce<'_> {
+                    fn now(&mut self) -> std::io::Result<u64> {
+                        if !self.broken {
+                            self.broken = true;
+                            Err(std::io::Error::other("post-Unload clock failed"))
+                        } else {
+                            self.clock.now()
+                        }
+                    }
+                    fn wait(
+                        &mut self,
+                        _: &[WaitInterest<'_>],
+                        _: Option<u64>,
+                    ) -> std::io::Result<crate::flow::clock::WaitOutcome> {
+                        panic!("post-Unload clock failure cannot wait")
+                    }
+                }
+                let sequence = owner.unload_sequence().unwrap();
+                assert_eq!(
+                    owner.advance_with_io(&mut BrokenOnce {
+                        clock,
+                        broken: false
+                    }),
+                    FoundationExpiredRollbackProgress::Stopped
+                );
+                let mut exit = ExitGuard(
+                    guard
+                        .0
+                        .take()
+                        .unwrap()
+                        .failed_exit()
+                        .ok()
+                        .expect("actual Recorded terminal"),
+                );
+                use super::super::rollback::failed::FoundationRollbackExitProgress as ExitProgress;
+                loop {
+                    assert!(Instant::now() < limit);
+                    assert_eq!(exit.0.unload_sequence(), Some(sequence));
+                    if exit.0.advance_with_io(&mut CleanupIo(clock)) == ExitProgress::Closed {
+                        break;
+                    }
+                    exit.0.wait_with_io(&mut CleanupIo(clock));
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert!(!exit.0.abandoned());
+                assert!(packet(&peer).is_none());
+                reader.set_nonblocking(true).unwrap();
+                let rows = super::super::tests::trace_through(
+                    reader,
+                    vec![],
+                    weaver_trace::Sequence(sequence),
+                    limit,
+                )
+                .unwrap();
+                assert_eq!(rows.iter().filter(|row| row["kind"] == "unload").count(), 1);
+                assert!(!rows.iter().any(|row| row["kind"] == "fault"));
+                let terminal = rows.last().unwrap();
+                assert_eq!(terminal["payload"]["release"]["spu"], "confirmed");
+                assert!(
+                    terminal["payload"]
+                        .get("end_reason")
+                        .is_none_or(serde_json::Value::is_null)
+                );
+                return;
+            }
+            if mode.ends_with("-release-silent")
+                && path.parent().unwrap().join("release-received").exists()
+            {
+                let leave = owner.leave.unwrap();
+                assert!(clock.now().unwrap() < leave.deadline_ns());
+                // No ready descriptor: the actual release wait must consume the
+                // original Leave, then retain and abandon without a terminal.
+                assert_eq!(
+                    owner.advance_with_io(clock),
+                    FoundationExpiredRollbackProgress::Closed
+                );
+                assert_eq!(clock.now().unwrap(), leave.deadline_ns());
+                assert!(owner.abandoned());
+                assert!(owner.run.context.failure.is_none());
+                assert!(owner.unload_sequence().is_none());
+                assert!(packet(&peer).is_none());
+                assert!(
+                    owner
+                        .active
+                        .as_ref()
+                        .unwrap()
+                        .release
+                        .as_ref()
+                        .unwrap()
+                        .outcome()
+                        .is_none()
+                );
+                return;
+            }
+            if !release_spu && owner.unload_sequence().is_some() {
+                assert!(path.parent().unwrap().join("release-replied").exists());
+                assert!(matches!(
+                    owner.run.resources.spu_child(),
+                    Some(crate::flow::context::failed_enter_driver::ChildState::Running)
+                ));
+                for _ in 0..4 {
+                    assert_eq!(
+                        owner.advance_with_io(&mut CleanupIo(clock)),
+                        FoundationExpiredRollbackProgress::Accepted
+                    );
+                    assert!(packet(&peer).is_none(), "Left requires actual SPU reap");
+                }
+                std::fs::write(path.parent().unwrap().join("spu-exit"), b"exit").unwrap();
+                release_spu = true;
+            }
+            if !release_child && path.parent().unwrap().join("classifier-retired").exists() {
+                assert!(
+                    !path.exists(),
+                    "the lifecycle seal must precede classifier release"
+                );
                 assert!(matches!(
                     owner.run.resources.classifier_child(),
                     Some(crate::flow::context::failed_enter_driver::ChildState::Running)
@@ -495,16 +766,16 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         FoundationExpiredRollbackProgress::Accepted
                     );
                     assert!(packet(&peer).is_none(), "no Left before the actual reap");
+                    assert!(
+                        owner.unload_sequence().is_none(),
+                        "healthy Unload requires classifier reap first"
+                    );
+                    assert!(
+                        owner.run.context.flow.standing_state().is_some(),
+                        "healthy member release follows classifier reap"
+                    );
                 }
                 let root = path.parent().unwrap();
-                let until = Instant::now() + Duration::from_secs(1);
-                while !root.join("classifier-retired").exists() {
-                    assert!(
-                        Instant::now() < until,
-                        "classifier did not observe its socket close"
-                    );
-                    std::thread::sleep(Duration::from_millis(1));
-                }
                 std::fs::write(root.join("classifier-exit"), b"exit").unwrap();
                 release_child = true;
             }
@@ -531,10 +802,36 @@ pub(in crate::flow::context::worker_startup) fn finish(
             owner.run.resources.classifier_child(),
             Some(crate::flow::context::failed_enter_driver::ChildState::Reaped(_))
         ));
-        assert!(owner.run.resources.spu_child().is_none());
+        let spu = !mode.contains("-classifier-");
+        if spu {
+            assert!(matches!(
+                owner.run.resources.spu_child(),
+                Some(
+                    crate::flow::context::failed_enter_driver::ChildState::Reaped(
+                        nix::sys::wait::WaitStatus::Exited(_, 0)
+                    )
+                )
+            ));
+        } else {
+            assert!(owner.run.resources.spu_child().is_none());
+        }
         assert!(owner.run.context.flow.standing_state().is_none());
-        assert!(owner.classifier.as_ref().unwrap().current.is_some());
-        assert_eq!(member.requests, ["open", "grants", "grants"]);
+        assert!(owner.active.as_ref().unwrap().current.is_some());
+        if mode == "expired-startup-admit-sent-complete" {
+            let release = owner.active.as_ref().unwrap().release.as_ref().unwrap();
+            let prior = release
+                .prior_reply()
+                .expect("retain actual late Admit reply");
+            assert_eq!(prior.exchange.ordinal, 1);
+            assert!(matches!(
+                prior.payload,
+                Payload::Answer(LifecycleAnswer::Admitted)
+            ));
+            assert_eq!(release.received_reply().unwrap().exchange.ordinal, 2);
+        }
+        let mut expected_requests = requests.clone();
+        expected_requests.push("grants".into());
+        assert_eq!(member.requests, expected_requests);
         member.assert_closed_without_request();
         let answer = packet(&peer).expect("actual Left after the terminal drain");
         assert_eq!(answer.exchange, directive.exchange);
@@ -574,7 +871,20 @@ pub(in crate::flow::context::worker_startup) fn finish(
             }
         );
         assert_eq!(terminal["payload"]["release"]["member"], "closed");
-        assert!(terminal["payload"]["release"].get("spu").is_none());
+        if spu {
+            assert_eq!(
+                terminal["payload"]["release"]["spu"],
+                if mode == "expired-startup-admit-complete"
+                    || mode == "expired-startup-admit-pending-complete"
+                {
+                    "unconfirmed"
+                } else {
+                    "confirmed"
+                }
+            );
+        } else {
+            assert!(terminal["payload"]["release"].get("spu").is_none());
+        }
         assert!(
             rows.iter()
                 .all(|row| !matches!(row["kind"].as_str(), Some("fault" | "refusal")))
@@ -764,7 +1074,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
     assert!(!path.exists());
     assert!(owner.handoff.listener.is_none());
     assert!(
-        owner.retired_listener.is_some() || owner.preflight.is_some() || owner.classifier.is_some()
+        owner.retired_listener.is_some() || owner.preflight.is_some() || owner.active.is_some()
     );
     let retained = owner.retired_dial.as_ref().unwrap();
     assert_eq!(retained._message.as_ref().unwrap().envelope, directive);

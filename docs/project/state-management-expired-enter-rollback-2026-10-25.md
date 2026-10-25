@@ -40,17 +40,42 @@ Observe, Stop and other directives do not grant that authority. A complete recei
 directive survives the peer's following EOF. The original Enter bytes and bound
 remain retained, and no old boot request is pumped while waiting for root.
 
-Two healthy cleanup paths reach the actual terminal:
+The local cleanup paths with settled startup accounts reach the actual terminal:
 
 - Before semantic activation, retain the unused structural Open, retire its
   channel, seal the listener, record Unload through ordinary capacity, drain, and
   answer Left on the actual Leave exchange. No initial Grants reading stood, so
   the terminal reports Unreadable and omits SPU release.
-- After completed classifier admission and before SPU creation, use the accepted
-  Leave to read current Grants, retain both actual readings, close the classifier
-  and state, and use the same terminal. The trace is attempted before waiting for
-  classifier exit. Left requires its actual reap and the completed trace drain.
+- After completed classifier admission, use the accepted Leave to read current
+  Grants, retain both actual readings, seal the listener, close and reap the
+  classifier, then release the actual SPU and state before Unload. Left requires
+  actual child reaps and the completed trace drain.
   A typed Grants refusal records Unreadable without becoming a component halt.
+- An SPU child that was forked but never admitted receives its single Release;
+  an exact NoResidency reply reports Unconfirmed. An admitted SPU reports
+  Confirmed only for its actual matching Released after the complete Release
+  send. The owner retains both the original Admit and Release exchanges,
+  including any late Admit reply, without granting Open or new boot work.
+  An unfinished Admit write is retained and closed, never resumed under Leave.
+
+The unpublished checkpoint `95a6aacb` incorrectly placed the healthy classifier
+reap after Unload. Harness Spec section 6 requires it before SPU or member
+release. This order and the held-child circuit have been corrected locally.
+The classifier is now held alive while the test proves that the member still
+stands, no Unload exists and no Left is sent. The two old reap/order mutation
+results below cannot establish conformance to this healthy release rule.
+
+On an actual bad Release reply, the consuming failure handoff preserves the
+first fault, original Leave, exact prior request/reply and Release owner. The
+existing failed-run driver records the failure and terminal under its original
+cap. It cannot acquire a second Release. A later failure after Recorded Unload
+uses the shared no-record drain, retaining that terminal and appending nothing.
+These exercised paths contain no gate. A caller cannot consume a progressing
+healthy rollback through this failure interface.
+
+A forked classifier still awaiting its admission is not a settled startup.
+That initial account stays retained under its original Enter and accepted Leave;
+it cannot start a new Grants read or enter the completed-admission release path.
 
 The paired TRACE-STOP edit resolves its preactivation wording against the already
 merged HARNESS-ENTER-WINDOW rollback rule. A recorded Load can be closed by actual
@@ -109,28 +134,73 @@ all 22 compiled controls in `controls-classifier/results.json`, with positive
 baselines first and byte-identical source restoration afterward. This runner
 uses exact scenario names and adds five controls: current Grants must be read,
 changed and refused readings must be distinguished, Left must wait for the
-actual reap, and Unload must precede the child wait.
+actual reap, and Unload must precede the child wait. The last two controls were
+based on the incorrect healthy cleanup ordering described above; their logs
+remain evidence of what was run, not evidence of conformance.
 `classifier-restored-checks/results.json` records the subsequent clean rebuild,
 trace suite, all 23 expired-startup circuits, formatting, locks and diff check.
-The complete suite/lint source is byte-identical to this restored code; only this
-working record was expanded after those gates.
+Those complete suite/lint results belong to checkpoint `95a6aacb`, not to the
+subsequent classifier ordering correction or SPU implementation.
 
 Manual source review and invoked gates are author evidence. The required
 code-review and verification-before-completion skills are not available in this
 session, so neither skill invocation nor a Planner grade is claimed.
 
+## SPU continuation evidence
+
+The continuation adds actual Release/NoResidency, late and queued Admit,
+wrong-exchange/position/arm and premature Release replies, silent Release at the
+original Leave cap, actual SPU reap, failed release cleanup, Recorded-Unload
+precedence, and unfinished classifier admission circuits. The current startup
+run passes 114 cases, including 36 expired-startup cases. The model and classifier
+remain declared protocol doubles; this is not GPU or production qualification.
+
+The first expanded full startup run caught an incorrect fixture condition: its
+new rollback Grants handling also matched the initial Grants read. The condition
+now distinguishes the first read from the one actual rollback read, retaining
+the prior request history. The failing log is preserved in
+`spu-checks/startup-circuits.log`; the corrected run is
+`spu-startup-all-2.log`.
+
+The first SPU mutation run found that the seal test checked eventual unlink but
+not its order. The held-classifier test now checks that the lifecycle pathname
+has already been unlinked while that child remains alive and the member still
+stands. The complete final control and gate results are recorded beside the
+source snapshot. Older logs remain separate and do not substitute for the final
+source's checks.
+
+`spu-final-checks/results.json` records all ten final gates passing: first and
+last lock gates, formatting, strict trace and harness clippy, the complete trace
+and harness suites, the library build, all startup circuits, and diff check.
+The harness library passes 1986 tests with 471 ignored; other targets pass 45
+tests and 24 doctests. The trace suite passes 145 tests and 21 doctests. The
+delegated startup run passes all 114 cases. Ignores outside that run remain
+outside this qualification.
+
+`controls-spu-final/results.json` records 15 compiled deliberate mutations,
+each detected by its named exact test after all positive baselines passed.
+They cover classifier admission and reap, the lifecycle seal, exact Release
+send/exchange/position/answer, NoResidency, late and unsent Admit, the original
+Leave, actual SPU reap, decode retirement, no Release retry, and the Recorded
+terminal's precedence. Source restoration is verified before the final gates.
+
+The checkpoint's archive, source hashes, controls and logs are preserved under
+the approved evidence root at
+`/bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/state-expired-spu-local-20261025`.
+Its manifest identifies every deposited file. This supersedes no earlier
+deposit and publishes no PR.
+
 ## Completion boundary
 
 This branch remains local work in progress, with no published PR and no serving
 selection. In particular, the handoff and cap disposal tests for later startup
-positions are not a normal SPU/gate rollback implementation. Before its cap those
-positions currently remain Accepted; they must not be wired into a dispatcher as
-completed cleanup.
+positions do not establish cleanup of all pending accounts or gate ownership.
+Those unsupported positions remain Accepted until the original Leave cap; this
+owner must not be wired into a dispatcher as completed cleanup.
 
-The same slice still owes normal cleanup after SPU creation, retained Open/read/
-repair/summary accounting, gate Lower and tool containment, actual SPU Release
-correlation, stopped rollback recovery (including failure after a terminal
-receipt), and the worker/dev_loop adapter. Successful
+The same slice still owes retained Open/read/repair/summary accounting and
+other unfinished startup ownership, gate Lower and tool containment,
+before-Load and gate-owned stopped cleanup, and the worker/dev_loop adapter. Successful
 Ready and pre-adoption expiry need their own lifecycle continuations. The full
 #146 scope additionally includes healthy Leave/save, capture cleanup, process
 exit and dispatcher selection, production artifacts and prompt qualification,

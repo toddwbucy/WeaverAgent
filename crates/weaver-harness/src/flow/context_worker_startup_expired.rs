@@ -8,8 +8,10 @@ use crate::flow::pump::PumpDeadline;
 use crate::flow::pump_transport::{DecodePort, PortIdentity};
 use std::sync::Arc;
 
-#[path = "context_worker_startup_expired_classifier.rs"]
-mod classifier;
+#[path = "context_worker_startup_expired_active.rs"]
+mod active;
+#[path = "context_worker_startup_expired_failure.rs"]
+pub(super) mod failure;
 #[path = "context_worker_startup_expired_preflight.rs"]
 pub(in crate::flow) mod preflight;
 
@@ -33,6 +35,36 @@ pub(in crate::flow::context) struct ExpiredEnterIdentity {
     enter: AbsoluteBound,
     decode: Option<PortIdentity>,
     residency: Option<PortIdentity>,
+}
+
+/// Issued after the actual rollback seal and classifier reap. Its Leave permits
+/// only release of this run's original resources, never another startup write.
+pub(in crate::flow::context) struct ExpiredReleasePermit {
+    origin: Arc<()>,
+    enter: AbsoluteBound,
+    leave: AbsoluteBound,
+}
+impl ExpiredReleasePermit {
+    pub(in crate::flow::context) fn allows(&self, context: &RecordingContext) -> bool {
+        Arc::ptr_eq(&self.origin, &context.read_origin)
+            && context.phase == RecordingPhase::Releasing
+            && context.retired_enter == Some(self.enter)
+            && context.deadlines.get(PumpDeadline::Enter).is_none()
+            && context.deadlines.get(PumpDeadline::Leave) == Some(self.leave)
+            && self.enter.expired(context.last_ns)
+            && !self.leave.expired(context.last_ns)
+            && context.failure.is_none()
+            && context.flow.halt().is_none()
+    }
+    pub(in crate::flow::context) fn original_send(&self, at: u64) -> bool {
+        at >= self.enter.began_ns() && !self.enter.expired(at)
+    }
+    pub(in crate::flow::context) fn release_send(&self, at: u64) -> bool {
+        at >= self.leave.began_ns() && !self.leave.expired(at)
+    }
+    pub(in crate::flow::context) fn deadline(&self) -> u64 {
+        self.leave.deadline_ns()
+    }
 }
 
 /// Issued only by this consuming owner at its actual accepted Leave cap.
@@ -208,7 +240,7 @@ pub struct FoundationExpiredRollback {
     retired_dial: Option<RetiredDial>,
     retired_gate: Option<PacketPort<OrganEnvelope, ()>>,
     preflight: Option<preflight::ExpiredPreflightRollback>,
-    classifier: Option<classifier::ExpiredClassifierRollback>,
+    active: Option<active::ExpiredActiveRollback>,
 }
 
 impl FoundationRun {
@@ -236,7 +268,7 @@ impl FoundationRun {
             retired_dial: None,
             retired_gate: None,
             preflight: None,
-            classifier: None,
+            active: None,
         });
         if before_load {
             owner.retired = owner
@@ -594,8 +626,8 @@ impl FoundationExpiredRollback {
         if let Some(preflight) = &mut self.preflight {
             preflight.retire_dials();
         }
-        if let Some(classifier) = &mut self.classifier {
-            classifier.retire_dials();
+        if let Some(active) = &mut self.active {
+            active.retire_dials();
         }
         self.retired_dial = self.dial.take().map(|dial| RetiredDial {
             _peer: dial.peer.retire_failed(),

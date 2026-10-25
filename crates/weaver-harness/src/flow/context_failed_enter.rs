@@ -17,6 +17,8 @@ use weaver_types::{
     ExchangeId, LifecycleAnswer, LifecycleDirective, Opener, OrganEnvelope, Position,
 };
 
+#[path = "context_expired_residency.rs"]
+pub(in crate::flow::context) mod expired_residency;
 #[path = "failed_enter_process.rs"]
 mod process;
 pub(in crate::flow) use process::ChildState;
@@ -472,6 +474,7 @@ pub(in crate::flow) struct FailedRunCleanup {
     release_reply: Option<ReceivedOrgan>,
     prior_residency: Option<ResidencyRequest>,
     prior_residency_reply: Option<ReceivedOrgan>,
+    expired_release: Option<Box<expired_residency::ExpiredResidencyRelease>>,
     release_failure: Option<String>,
     release_blocked: bool,
     refused_release: Option<LifecycleDirective>,
@@ -649,6 +652,28 @@ impl FailedRunCleanup {
         owner
     }
 
+    /// The consuming expired rollback retains its original release owner. A
+    /// failure cannot restart Release after that owner has acquired it.
+    pub(in crate::flow::context) fn after_expired_rollback(
+        context: RecordingContext,
+        resources: FailedEnterResources,
+        leave: Option<AbsoluteBound>,
+        cause: Option<weaver_types::Cause>,
+        release: Option<expired_residency::ExpiredResidencyRelease>,
+        admit_reply: Option<ReceivedOrgan>,
+    ) -> Self {
+        let mut owner = Self::after_rollback(context, resources, leave, cause);
+        if let Some(release) = release {
+            assert!(owner.prior_residency.is_none() && admit_reply.is_none());
+            owner.release = release.outcome().unwrap_or(ReleaseOutcome::Unconfirmed);
+            owner.release_blocked = true;
+            owner.expired_release = Some(Box::new(release));
+        } else if let Some(reply) = admit_reply {
+            owner.retain_residency_completion(reply);
+        }
+        owner
+    }
+
     fn new(context: RecordingContext, mut resources: FailedEnterResources, serving: bool) -> Self {
         let deadline = context.flow.halt().and_then(|halt| halt.deadline().ok());
         let member_stood = context.flow.failed_cleanup_state_stood();
@@ -677,6 +702,7 @@ impl FailedRunCleanup {
             release_reply: None,
             prior_residency,
             prior_residency_reply: None,
+            expired_release: None,
             release_failure: None,
             release_blocked: false,
             refused_release: None,

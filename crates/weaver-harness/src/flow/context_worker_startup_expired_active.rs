@@ -1,32 +1,40 @@
-//! Roll back completed classifier admission before any SPU child was created.
+//! Roll back settled startup accounts and release their actual organ resources.
 //! The actual Leave licenses a new Grants comparison, never another boot step.
 use super::*;
+use crate::flow::context::failed_enter_driver::ChildState;
+use crate::flow::context::failed_enter_driver::expired_residency::ExpiredResidencyRelease;
 use crate::flow::context::startup_composition::refusal::response::listener::{
     RetiredRollbackDials, RollbackDials,
 };
 use crate::flow::context::*;
+use crate::flow::pump_transport::ReceivedOrgan;
 use weaver_trace::GrantSurface;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
     Enter,
     Grants,
+    Seal,
     Release,
     Classifier,
+    Child,
+    Spu,
     State,
     Terminal,
 }
 
-pub(super) struct ExpiredClassifierRollback {
+pub(super) struct ExpiredActiveRollback {
     stage: Stage,
     dials: Option<RollbackDials>,
     retired_dials: Option<RetiredRollbackDials>,
     inspecting: bool,
     pub(super) current: Option<InspectionCompletion>,
     surface: Option<GrantSurface>,
+    pub(super) release: Option<ExpiredResidencyRelease>,
+    pub(super) returned_admit: Option<ReceivedOrgan>,
 }
 
-impl ExpiredClassifierRollback {
+impl ExpiredActiveRollback {
     pub(super) fn retire_dials(&mut self) {
         if let Some(dials) = self.dials.take() {
             self.retired_dials = Some(dials.retire_failed());
@@ -86,40 +94,43 @@ impl ExpiredClassifierRollback {
                     };
                     let progress = context.advance_inspection(&mut ports)?;
                     if let Some(reading) = context.take_inspection(ports.io)? {
-                        let HeldStartup::Residency(held) = owner.handoff.held.as_ref() else {
-                            unreachable!("constructor retained the original classifier startup")
-                        };
-                        self.surface = match (&held.startup.initial_grants, &reading) {
-                            (
-                                InspectionCompletion::Grants {
-                                    surface: initial, ..
-                                },
-                                InspectionCompletion::Grants {
-                                    surface: current, ..
-                                },
-                            ) => Some(if initial == current {
-                                GrantSurface::Unchanged
-                            } else {
-                                GrantSurface::Varied
-                            }),
-                            (
-                                InspectionCompletion::Grants { .. }
-                                | InspectionCompletion::Refused { .. },
-                                InspectionCompletion::Refused { .. },
-                            )
-                            | (
-                                InspectionCompletion::Refused { .. },
-                                InspectionCompletion::Grants { .. },
-                            ) => Some(GrantSurface::Unreadable),
-                            _ => None,
-                        };
+                        self.surface =
+                            match (owner.handoff.held.initial_grants().unwrap(), &reading) {
+                                (
+                                    InspectionCompletion::Grants {
+                                        surface: initial, ..
+                                    },
+                                    InspectionCompletion::Grants {
+                                        surface: current, ..
+                                    },
+                                ) => Some(if initial == current {
+                                    GrantSurface::Unchanged
+                                } else {
+                                    GrantSurface::Varied
+                                }),
+                                (
+                                    InspectionCompletion::Grants { .. }
+                                    | InspectionCompletion::Refused { .. },
+                                    InspectionCompletion::Refused { .. },
+                                )
+                                | (
+                                    InspectionCompletion::Refused { .. },
+                                    InspectionCompletion::Grants { .. },
+                                ) => Some(GrantSurface::Unreadable),
+                                _ => None,
+                            };
                         self.current = Some(reading);
                         if self.surface.is_none() {
                             return Err(RunFailure::InspectionOwned);
                         }
-                        self.stage = Stage::Release;
+                        self.stage = Stage::Seal;
                     } else if progress == InspectionProgress::Pending {
                         context.pump_once(&mut ports)?;
+                    }
+                }
+                Stage::Seal => {
+                    if dials.seal_step(context, leave, io)? {
+                        self.stage = Stage::Release;
                     }
                 }
                 Stage::Release => {
@@ -128,10 +139,61 @@ impl ExpiredClassifierRollback {
                 }
                 Stage::Classifier => {
                     if context.retire_classifier(io)? == Advance::Progress {
-                        // Terminal authoring precedes any child wait. The
-                        // shared terminal still requires its actual reap for Left.
-                        owner.run.resources.poll_classifier_child();
+                        self.stage = Stage::Child;
+                    }
+                }
+                Stage::Child => match owner.run.resources.poll_classifier_child() {
+                    Some(ChildState::Reaped(_)) => self.stage = Stage::Spu,
+                    Some(ChildState::Running) => {
+                        let wake = context
+                            .last_ns
+                            .saturating_add(10_000_000)
+                            .min(leave.deadline_ns());
+                        if let Err(error) = io.wait(&[], Some(wake)) {
+                            return Err(context.fail(
+                                io,
+                                FlowHaltReason::TraceFailed,
+                                HaltPoint::Author,
+                                format!("expired classifier child wait: {error}"),
+                            ));
+                        }
+                    }
+                    _ => return Err(RunFailure::InspectionOwned),
+                },
+                Stage::Spu => {
+                    if owner.run.resources.spu_child().is_none() {
                         self.stage = Stage::State;
+                    } else {
+                        if self.release.is_none() {
+                            let permit = ExpiredReleasePermit {
+                                origin: Arc::clone(&context.read_origin),
+                                enter: owner.handoff.identity.enter,
+                                leave,
+                            };
+                            let reply = owner.handoff.held.take_admit_reply();
+                            match owner
+                                .run
+                                .resources
+                                .begin_expired_release(context, permit, reply)
+                            {
+                                Ok(release) => self.release = Some(release),
+                                Err((reply, detail)) => {
+                                    self.returned_admit = reply;
+                                    return Err(context.fail(
+                                        io,
+                                        FlowHaltReason::ProtocolFailed,
+                                        HaltPoint::Barrier,
+                                        detail,
+                                    ));
+                                }
+                            }
+                        }
+                        let release = self.release.as_mut().unwrap();
+                        if release.advance(&mut owner.run.resources, context, io)? {
+                            self.stage = Stage::State;
+                        } else {
+                            release.wait(&owner.run.resources, context, io)?;
+                        }
                     }
                 }
                 Stage::State => {
@@ -164,6 +226,9 @@ impl ExpiredClassifierRollback {
                 owner,
                 self.dials.take().unwrap(),
                 self.surface.unwrap(),
+                self.release
+                    .as_ref()
+                    .and_then(ExpiredResidencyRelease::outcome),
             ));
         }
         Ok(())
@@ -171,7 +236,7 @@ impl ExpiredClassifierRollback {
 }
 
 impl FoundationExpiredRollback {
-    fn classifier_rollback(&mut self) -> Option<ExpiredClassifierRollback> {
+    fn active_rollback(&mut self) -> Option<ExpiredActiveRollback> {
         let context = &self.run.context;
         if self.before_load
             || context.phase != RecordingPhase::Entered
@@ -182,31 +247,47 @@ impl FoundationExpiredRollback {
             || context.deadlines.get(PumpDeadline::Enter) != Some(self.handoff.identity.enter)
             || context.deadlines.get(PumpDeadline::Leave) != self.leave
             || self.leave?.expired(context.last_ns)
-            || self.run.resources.spu_child().is_some()
             || self.run.resources.classifier_child().is_none()
-            || !matches!(self.handoff.held.as_ref(), HeldStartup::Residency(_))
+            || self.handoff.gate.is_some()
+            || matches!(self.handoff.held.as_ref(), HeldStartup::Initial(_))
+            || self.handoff.held.initial_grants().is_none()
+            || context.deadlines.get(PumpDeadline::StateControl).is_some()
+            || context.boot_open_blocks_external()
+            || context.place_owed()
+            || context.plan_summary.is_some()
+            || context.repair.is_some()
+            || context.boot_pairs.is_some()
+            || context.read.is_some()
+            || context.inspection.is_some()
+            || context.barrier.pending().is_some()
+            || context.barrier.pending_author().is_some()
+            || context.flow.pending_control().is_some()
+            || context.flow.operation_completion().is_some()
+            || !context.flow.state().outstanding().is_empty()
         {
             return None;
         }
-        Some(ExpiredClassifierRollback {
+        Some(ExpiredActiveRollback {
             stage: Stage::Enter,
             dials: Some(RollbackDials::new(self.handoff.listener.take()?)),
             retired_dials: None,
             inspecting: false,
             current: None,
             surface: None,
+            release: None,
+            returned_admit: None,
         })
     }
 
-    pub(super) fn advance_classifier(&mut self, io: &mut impl PumpIo) -> Result<(), String> {
-        if self.classifier.is_none() {
-            self.classifier = self.classifier_rollback();
+    pub(super) fn advance_active(&mut self, io: &mut impl PumpIo) -> Result<(), String> {
+        if self.active.is_none() {
+            self.active = self.active_rollback();
         }
-        let Some(mut classifier) = self.classifier.take() else {
+        let Some(mut active) = self.active.take() else {
             return Ok(());
         };
-        let result = classifier.step(self, io);
-        self.classifier = Some(classifier);
+        let result = active.step(self, io);
+        self.active = Some(active);
         result
     }
 }

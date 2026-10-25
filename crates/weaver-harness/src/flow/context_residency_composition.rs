@@ -472,6 +472,22 @@ pub(super) mod tests;
 pub(in crate::flow) mod cleanup;
 
 impl ResidencyComposition<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_admit_sent(&self) -> bool {
+        self.resources
+            .residency_request()
+            .is_some_and(|request| request.send().sent())
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_stage_admit(&mut self) {
+        assert_eq!(self.stage, ResidencyStage::Admit);
+        self.resources
+            .stage_residency(LifecycleDirective::Admit {
+                instruction: self.request.instruction.clone(),
+            })
+            .unwrap();
+        assert!(!self.resources.residency_request().unwrap().send().sent());
+    }
     pub(in crate::flow::context) fn expired_identity(
         &self,
     ) -> Option<super::worker_startup::expired::ExpiredEnterIdentity> {

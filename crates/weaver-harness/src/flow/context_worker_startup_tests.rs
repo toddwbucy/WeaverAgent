@@ -225,6 +225,23 @@ impl Files {
                         mode
                     } else if mode.starts_with("failed-startup-") {
                         "failed-startup"
+                    } else if mode == "expired-startup-admit-sent-complete" {
+                        "expired-admit-held"
+                    } else if mode == "expired-startup-admit-pending-complete" {
+                        "expired-admit-unsent"
+                    } else if mode.contains("-release-") && mode.starts_with("expired-startup-") {
+                        match mode.rsplit('-').next().unwrap() {
+                            "wrong" => "expired-release-wrong",
+                            "arm" => "expired-release-arm",
+                            "position" => "expired-release-position",
+                            "early" => "expired-release-early",
+                            "silent" => "expired-release-silent",
+                            "held" => "expired-release-held",
+                            "recorded" => "cleanup-ready",
+                            _ => panic!("unknown expired Release fixture"),
+                        }
+                    } else if mode.starts_with("expired-startup-") {
+                        "cleanup-ready"
                     } else if mode == "spu-refusal" {
                         "refuse"
                     } else {
@@ -490,13 +507,22 @@ impl Member {
                 s::StateFrame::Control { frame, .. } => {
                     let frame = match frame {
                         s::StateControl::Grants {} => {
-                            if mode.starts_with("rollback-") && self.requests.len() == 2 {
-                                assert_eq!(self.requests, ["open", "grants"]);
+                            let rollback_read =
+                                mode.starts_with("rollback-") && self.requests.len() > 1;
+                            if rollback_read {
+                                assert_eq!(&self.requests[..2], ["open", "grants"]);
+                                assert_eq!(
+                                    self.requests
+                                        .iter()
+                                        .filter(|request| *request == "grants")
+                                        .count(),
+                                    1
+                                );
                             } else {
                                 assert_eq!(self.requests, ["open"]);
                             }
                             self.requests.push("grants".into());
-                            if mode == "rollback-grants-refused" && self.requests.len() == 3 {
+                            if mode == "rollback-grants-refused" && rollback_read {
                                 s::StateControlAnswer::ControlRefused {
                                     code: s::ControlRefusalCode::Read(
                                         s::ReadRefusalCode::AnswerTooLarge,
@@ -506,7 +532,7 @@ impl Member {
                             } else {
                                 s::StateControlAnswer::Grants {
                                     surface: vec![
-                                        if mode == "rollback-varied" && self.requests.len() == 3 {
+                                        if mode == "rollback-varied" && rollback_read {
                                             "owner:changed"
                                         } else {
                                             "owner:actual"
@@ -3045,6 +3071,10 @@ scenario!(
     "expired-startup-classifier"
 );
 scenario!(
+    worker_startup_composition_expired_classifying,
+    "expired-startup-classifying"
+);
+scenario!(
     worker_startup_composition_expired_classifier_complete,
     "expired-startup-classifier-complete"
 );
@@ -3063,6 +3093,54 @@ scenario!(
 scenario!(
     worker_startup_composition_expired_admit,
     "expired-startup-admit"
+);
+scenario!(
+    worker_startup_composition_expired_admit_complete,
+    "expired-startup-admit-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admit_sent_complete,
+    "expired-startup-admit-sent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admit_pending_complete,
+    "expired-startup-admit-pending-complete"
+);
+scenario!(
+    worker_startup_composition_expired_boot_complete,
+    "expired-startup-boot-complete"
+);
+scenario!(
+    worker_startup_composition_expired_release_wrong,
+    "expired-startup-boot-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_release_arm,
+    "expired-startup-boot-release-arm"
+);
+scenario!(
+    worker_startup_composition_expired_release_position,
+    "expired-startup-boot-release-position"
+);
+scenario!(
+    worker_startup_composition_expired_release_early,
+    "expired-startup-boot-release-early"
+);
+scenario!(
+    worker_startup_composition_expired_release_silent,
+    "expired-startup-boot-release-silent"
+);
+scenario!(
+    worker_startup_composition_expired_release_held,
+    "expired-startup-boot-release-held"
+);
+scenario!(
+    worker_startup_composition_expired_release_recorded,
+    "expired-startup-boot-release-recorded"
+);
+scenario!(
+    worker_startup_composition_expired_repair_complete,
+    "expired-startup-repair-complete"
 );
 scenario!(
     worker_startup_composition_expired_boot,

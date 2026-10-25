@@ -525,6 +525,10 @@ impl StartupComposition<'_> {
     pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
         self.context
     }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_classifying(&self) -> bool {
+        self.stage == StartupStage::Classifier && self.context.flow.starting_classifier().is_some()
+    }
     pub(in crate::flow::context) fn failed_identity(
         &self,
     ) -> Option<super::worker_startup::failed::StartupIdentity> {

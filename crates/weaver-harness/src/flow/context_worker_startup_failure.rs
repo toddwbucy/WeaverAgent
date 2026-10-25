@@ -188,7 +188,18 @@ impl HeldStartup {
         };
         source.take().map(|original| original.retire_failed())
     }
-    fn take_admit_reply(&mut self) -> Option<ReceivedOrgan> {
+    pub(in crate::flow::context) fn initial_grants(&self) -> Option<&InspectionCompletion> {
+        match self {
+            Self::Initial(account) => account.initial_grants.as_ref(),
+            Self::Residency(account) => Some(&account.startup.initial_grants),
+            Self::Admitted(_, resident) => Some(&resident.startup.initial_grants),
+            Self::Boot(boot) => Some(&boot.resident.as_ref()?.startup.initial_grants),
+            Self::Gate(gate) | Self::Ready { gate, .. } => {
+                Some(&gate.boot.resident.as_ref()?.startup.initial_grants)
+            }
+        }
+    }
+    pub(in crate::flow::context) fn take_admit_reply(&mut self) -> Option<ReceivedOrgan> {
         match self {
             Self::Residency(account) => account.reply.take(),
             Self::Initial(_) => None,
