@@ -1,5 +1,5 @@
-//! Consuming Failed-only pre-input cleanup. The live context cannot escape this
-//! owner while teardown progresses, and every terminal result remains failed.
+//! Failed-run release and drain. Pre-input admission and the consuming serving
+//! handoff have distinct gates; neither returns a reusable context or healthy Left.
 
 use super::*;
 use crate::flow::author::AuthoredSource;
@@ -66,6 +66,9 @@ impl ResidencyRequest {
 }
 
 impl FailedEnterResources {
+    pub(in crate::flow::context) fn decode_present_for_serving(&self) -> Option<&DecodePort> {
+        self.decode_present()
+    }
     #[cfg(test)]
     pub(super) fn poll_startup_test_children(&mut self) -> bool {
         self.poll_children()
@@ -321,7 +324,7 @@ impl FailedEnterResources {
         self.spu.as_ref()?.residency.as_ref()
     }
 
-    fn original_ports(&self) -> bool {
+    pub(in crate::flow::context) fn original_ports(&self) -> bool {
         self.spu.as_ref().is_none_or(|spu| {
             spu.decode
                 .as_ref()
@@ -364,7 +367,7 @@ impl FailedEnterResources {
     pub(in crate::flow) fn spu_child(&self) -> Option<ChildState> {
         self.spu.as_ref().map(|spu| spu.child.state())
     }
-    fn child_failures(&self) -> [Option<String>; 2] {
+    pub(in crate::flow::context) fn child_failures(&self) -> [Option<String>; 2] {
         [
             self.spu.as_ref().map(|spu| &spu.child),
             self.classifier.as_ref(),
@@ -384,7 +387,7 @@ impl FailedEnterResources {
         })
     }
 
-    fn close_at_cap(&mut self) {
+    pub(in crate::flow::context) fn close_at_cap(&mut self) {
         if let Some(spu) = &mut self.spu {
             if let Some(port) = spu.decode.take() {
                 spu.retired_decode = Some(port.retire_failed());
@@ -399,7 +402,7 @@ impl FailedEnterResources {
         }
     }
 
-    fn poll_children(&mut self) -> bool {
+    pub(in crate::flow::context) fn poll_children(&mut self) -> bool {
         if let Some(spu) = &mut self.spu {
             spu.child.poll();
         }
@@ -451,8 +454,11 @@ enum Stage {
     Closed,
 }
 
-pub(in crate::flow) struct FailedEnterCleanup {
-    context: RecordingContext,
+pub(in crate::flow) type FailedEnterCleanup = FailedRunCleanup;
+
+pub(in crate::flow) struct FailedRunCleanup {
+    serving: bool,
+    pub(in crate::flow::context) context: RecordingContext,
     resources: FailedEnterResources,
     stage: Stage,
     deadline: Option<u64>,
@@ -551,7 +557,7 @@ impl RecordingContext {
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn into_failed_enter_cleanup(
         self,
-        mut resources: FailedEnterResources,
+        resources: FailedEnterResources,
     ) -> Result<FailedEnterCleanup, FailedEnterRejected> {
         let refusal = if self.phase != RecordingPhase::Failed
             || self.failure.is_none()
@@ -591,17 +597,28 @@ impl RecordingContext {
                 refusal,
             });
         }
-        let deadline = self.flow.halt().and_then(|halt| halt.deadline().ok());
-        let member_stood = self.flow.failed_cleanup_state_stood();
-        let member_failed = self.flow.failed_cleanup_state_failed();
+        Ok(FailedRunCleanup::new(self, resources, false))
+    }
+}
+
+impl FailedRunCleanup {
+    fn new(context: RecordingContext, mut resources: FailedEnterResources, serving: bool) -> Self {
+        let deadline = context.flow.halt().and_then(|halt| halt.deadline().ok());
+        let member_stood = context.flow.failed_cleanup_state_stood();
+        let member_failed = context.flow.failed_cleanup_state_failed();
         let prior_residency = resources
             .spu
             .as_mut()
             .and_then(|spu| spu.residency_request.take());
-        Ok(FailedEnterCleanup {
-            context: self,
+        Self {
+            serving,
+            context,
             resources,
-            stage: Stage::Reporting,
+            stage: if serving {
+                Stage::Accounts
+            } else {
+                Stage::Reporting
+            },
             deadline,
             report_unavailable: None,
             account_failure: None,
@@ -624,7 +641,16 @@ impl RecordingContext {
             trace_drained: false,
             member_stood,
             member_failed,
-        })
+        }
+    }
+
+    /// Called only after the public serving handoff has matched the original
+    /// run and all its resource identities. This does not weaken pre-input entry.
+    pub(in crate::flow::context) fn after_serving(
+        context: RecordingContext,
+        resources: FailedEnterResources,
+    ) -> Self {
+        Self::new(context, resources, true)
     }
 }
 
@@ -687,7 +713,7 @@ pub(super) fn admit_reply_is_terminal(envelope: &OrganEnvelope) -> bool {
     )
 }
 
-impl FailedEnterCleanup {
+impl FailedRunCleanup {
     /// The composition owner has already consumed this exact packet. Retain it
     /// before cleanup runs; it cannot be read a second time from the port.
     pub(super) fn retain_residency_completion(&mut self, reply: ReceivedOrgan) {
@@ -757,7 +783,10 @@ impl FailedEnterCleanup {
         &self.resources
     }
 
-    fn secondary(&mut self, detail: impl Into<String>) {
+    pub(in crate::flow::context) fn secondary(&mut self, detail: impl Into<String>) {
+        self.secondary_at(Some(self.context.last_ns), detail);
+    }
+    fn secondary_at(&mut self, observed: Option<u64>, detail: impl Into<String>) {
         let detail = detail.into();
         // Repeated account polling preserves the first observation of each
         // distinct error instead of growing the account once per wake.
@@ -784,32 +813,35 @@ impl FailedEnterCleanup {
             .append_secondary(SecondaryFailure {
                 reason: FlowHaltReason::ProtocolFailed,
                 point: HaltPoint::Teardown,
-                observed_ns: Some(self.context.last_ns.into()),
+                observed_ns: observed.map(Into::into),
                 detail,
             });
     }
 
-    fn clock(&mut self, io: &mut impl PumpIo) -> bool {
+    pub(in crate::flow::context) fn clock(&mut self, io: &mut impl PumpIo) -> bool {
         if let Some(leave) = self.context.deadlines.get(PumpDeadline::Leave) {
             self.deadline = self.deadline.map(|bound| bound.min(leave.deadline_ns()));
         }
-        match io.now() {
+        let reading = io.now();
+        let observed = reading.as_ref().ok().copied();
+        match reading {
             Ok(now) if now >= self.context.last_ns => {
                 self.context.last_ns = now;
                 if self.deadline.is_some_and(|deadline| now < deadline) {
                     return true;
                 }
-                self.secondary(
+                self.secondary_at(
+                    observed,
                     "failed Enter cleanup reached its original cap or has no clock anchor",
                 );
             }
-            Ok(_) => self.secondary("failed Enter cleanup clock reversed"),
-            Err(error) => self.secondary(format!("failed Enter cleanup clock: {error}")),
+            Ok(_) => self.secondary_at(observed, "failed cleanup clock reversed"),
+            Err(error) => self.secondary_at(None, format!("failed cleanup clock: {error}")),
         }
         false
     }
 
-    fn abort(&mut self) {
+    pub(in crate::flow::context) fn abort(&mut self) {
         // At expiry no account or writer may keep a descriptor or blocking wait.
         // Original unfinished owners remain in context, never relabelled settled.
         self.retire_flow();
@@ -825,7 +857,11 @@ impl FailedEnterCleanup {
 
     fn retire_flow(&mut self) {
         if self.retired.is_none() {
-            self.retired = self.context.flow.retire_failed_ports();
+            self.retired = if self.serving {
+                self.context.flow.retire_failed_serving_ports()
+            } else {
+                self.context.flow.retire_failed_ports()
+            };
         }
     }
 
@@ -879,7 +915,9 @@ impl FailedEnterCleanup {
                     self.abort();
                     return FailedEnterProgress::Closed;
                 }
-                if !self.context.boot_open_account_settled() {
+                if !self.context.boot_open_account_settled()
+                    || (self.serving && self.context.place_owed())
+                {
                     FailedEnterProgress::Pending
                 } else {
                     if let Some(decode) = self
@@ -971,6 +1009,7 @@ impl FailedEnterCleanup {
                     }
                 }
                 if self.trace_drained && children_done {
+                    self.context.barrier.abandon();
                     self.context.phase = RecordingPhase::Closed;
                     self.stage = Stage::Closed;
                     FailedEnterProgress::Closed
@@ -988,7 +1027,7 @@ impl FailedEnterCleanup {
         result
     }
 
-    fn advance_accounts(&mut self, io: &mut impl PumpIo) -> bool {
+    pub(in crate::flow::context) fn advance_accounts(&mut self, io: &mut impl PumpIo) -> bool {
         let mut observed = AccountClock {
             io,
             last: self.context.last_ns,
@@ -1006,6 +1045,15 @@ impl FailedEnterCleanup {
         if observed.unavailable {
             return false;
         }
+        if self.serving
+            && self.context.pairs.pending_rejection().is_some()
+            && let Err(error) = self.context.advance_halt_rejection()
+        {
+            self.secondary(format!("failed serving rejected-return account: {error}"));
+        }
+        if observed.unavailable {
+            return false;
+        }
         if self.context.boot_open.is_some()
             && !self.context.boot_open_account_settled()
             && let Some(decode) = self
@@ -1018,6 +1066,24 @@ impl FailedEnterCleanup {
                 .advance_boot_open_account(decode, &mut observed)
         {
             self.secondary(format!("failed Enter Open account: {error:?}"));
+        }
+        if observed.unavailable {
+            return false;
+        }
+        if self.serving
+            && self.context.place_owed()
+            && let Some(decode) = self.resources.decode_mut()
+        {
+            let mut ports = PumpPorts {
+                lifecycle: Default::default(),
+                gate: None,
+                decode: Some(decode),
+                label: None,
+                io: &mut observed,
+            };
+            if let Err(error) = self.context.advance_place_account(&mut ports) {
+                self.secondary(format!("failed serving placement account: {error:?}"));
+            }
         }
         if observed.unavailable {
             return false;
@@ -1094,7 +1160,8 @@ impl FailedEnterCleanup {
         match port.take_received() {
             Ok(Some(reply)) => {
                 let envelope = reply.envelope();
-                let prior_reply = self.prior_residency_reply.is_none()
+                let prior_reply = !self.serving
+                    && self.prior_residency_reply.is_none()
                     && self.prior_residency.as_ref().is_some_and(|prior| {
                         prior.send.sent()
                             && prior.send.belongs_to(port)

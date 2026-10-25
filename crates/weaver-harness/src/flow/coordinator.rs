@@ -3990,6 +3990,19 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
         if !self.preinput_failed_owner() {
             return None;
         }
+        Some(self.retire_failed_ports_owned())
+    }
+
+    /// The consuming serving cleanup retains the entire frozen coordinator.
+    /// No live grant, filing or healthy release is produced by closing its FDs.
+    pub(super) fn retire_failed_serving_ports(&mut self) -> Option<FailedFlowResources> {
+        if self.phase != CoordinatorPhase::Failed || self.halt.is_none() || self.capture.is_some() {
+            return None;
+        }
+        Some(self.retire_failed_ports_owned())
+    }
+
+    fn retire_failed_ports_owned(&mut self) -> FailedFlowResources {
         let retired = FailedFlowResources {
             state: self.state.take().map(StateChannel::retire_failed),
             _stopped_plan_read: self
@@ -4007,7 +4020,7 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
         };
         self.state_retired = true;
         self.classifier_retired = true;
-        Some(retired)
+        retired
     }
 
     pub(super) fn begin_classifier_admission(

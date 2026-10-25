@@ -13,6 +13,16 @@ pub(in crate::flow) struct ReceivedEnter {
     wire: Vec<u8>,
     adopted_origin: Option<std::sync::Arc<()>>,
 }
+
+/// Complete original Enter evidence after its actual handles have closed.
+pub(in crate::flow) struct RetiredEnter {
+    _peer: RetiredLifecyclePeer,
+    _envelope: EnterEnvelope,
+    _wire: Vec<u8>,
+    _had_sink: bool,
+    _had_state: bool,
+    _adopted_origin: Option<std::sync::Arc<()>>,
+}
 impl EnterReceiver {
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn from_peer(peer: LifecyclePeer) -> Result<Self, LifecyclePeer> {
@@ -67,6 +77,16 @@ impl EnterReceiver {
     }
 }
 impl ReceivedEnter {
+    pub(in crate::flow) fn retire_failed(self) -> RetiredEnter {
+        RetiredEnter {
+            _peer: self.peer.retire_failed(),
+            _envelope: self.message.envelope,
+            _wire: self.wire,
+            _had_sink: self.message.sink.is_some(),
+            _had_state: self.message.state.is_some(),
+            _adopted_origin: self.adopted_origin,
+        }
+    }
     pub(in crate::flow) fn envelope(&self) -> &EnterEnvelope {
         &self.message.envelope
     }

@@ -334,10 +334,12 @@ pub(super) fn reap(child: &mut OwnedChild) {
     }
     assert_ne!(child.state(), ChildState::Running);
 }
-struct RunGuard(FoundationRun);
+struct RunGuard(Option<FoundationRun>);
 impl Drop for RunGuard {
     fn drop(&mut self) {
-        self.0.resources.reap_startup_test_children();
+        if let Some(run) = &mut self.0 {
+            run.resources.reap_startup_test_children();
+        }
     }
 }
 struct EnterGuard<'a>(Option<FoundationEnter<'a>>);
@@ -376,6 +378,14 @@ pub(super) struct Member {
     pub(super) held_control: Option<s::StateFrame>,
 }
 impl Member {
+    pub(super) fn assert_closed_without_request(&mut self) {
+        let mut byte = [0];
+        assert_eq!(
+            self.peer.read(&mut byte).unwrap(),
+            0,
+            "failed run must close the actual member without another request"
+        );
+    }
     pub(super) fn stop_responses(&self) {
         self.peer.shutdown(std::net::Shutdown::Write).unwrap();
     }
@@ -738,20 +748,32 @@ fn circuit(mode: &str) {
         assert!(packet(&peer).is_none());
         return;
     }
-    let mut run = RunGuard(adopted.map_err(|a| a.detail).ok().unwrap());
+    let mut run = RunGuard(Some(adopted.map_err(|a| a.detail).ok().unwrap()));
     if matches!(mode, "missing-checker" | "bad-checker-path") {
         program.organs.classify = if mode == "missing-checker" {
             None
         } else {
             Some(PathBuf::from("/synthetic/not-in-enter-stack"))
         };
-        assert!(run.0.begin(program).is_err());
-        assert_eq!(run.0.original.as_ref().unwrap().wire(), bytes);
-        assert!(run.0.resources.classifier_child().is_none());
+        assert!(run.0.as_mut().unwrap().begin(program).is_err());
+        assert_eq!(
+            run.0.as_mut().unwrap().original.as_ref().unwrap().wire(),
+            bytes
+        );
+        assert!(
+            run.0
+                .as_mut()
+                .unwrap()
+                .resources
+                .classifier_child()
+                .is_none()
+        );
         program = files.program("ready");
     }
     let bound = run
         .0
+        .as_mut()
+        .unwrap()
         .context
         .deadlines
         .get(super::super::PumpDeadline::Enter)
@@ -790,7 +812,7 @@ fn circuit(mode: &str) {
             member
         });
         // SAFETY: the fixture keeps this serving thread alive through actual reap.
-        let result = unsafe { worker::enter(&mut run.0, program) }.unwrap();
+        let result = unsafe { worker::enter(run.0.as_mut().unwrap(), program) }.unwrap();
         done.store(true, std::sync::atomic::Ordering::SeqCst);
         member = responder.join().unwrap();
         let mut serving = match result {
@@ -813,6 +835,17 @@ fn circuit(mode: &str) {
                     &files.0,
                     mode,
                 );
+                if mode.contains("-exit") {
+                    let actual = Box::new(run.0.take().unwrap());
+                    super::input::halt::exit::tests::finish(
+                        actual,
+                        &mut member,
+                        &mut reader,
+                        &mut clock,
+                        &files.0,
+                        mode,
+                    );
+                }
                 return;
             }
             if mode.contains("stop-") {
@@ -853,7 +886,7 @@ fn circuit(mode: &str) {
         }
         return;
     }
-    let mut guard = EnterGuard(Some(run.0.begin(program).unwrap()));
+    let mut guard = EnterGuard(Some(run.0.as_mut().unwrap().begin(program).unwrap()));
     let mut owner = guard.0.take().unwrap();
     owner = owner
         .finish()
@@ -915,9 +948,28 @@ fn circuit(mode: &str) {
             owner.detail()
         );
         let mut serving = guard.0.take().unwrap().finish().ok().unwrap();
+        drop(guard);
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-") {
             drop(peer); // Normal admin departure does not revoke serving.
+            if mode.contains("start-pending") {
+                super::input::halt::exit::tests::start_pending(
+                    serving,
+                    &mut member,
+                    &mut reader,
+                    &mut clock,
+                );
+                let actual = Box::new(run.0.take().unwrap());
+                super::input::halt::exit::tests::finish(
+                    actual,
+                    &mut member,
+                    &mut reader,
+                    &mut clock,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
             if mode.contains("generation") {
                 super::input::generation::tests::exercise(
                     serving,
@@ -928,6 +980,17 @@ fn circuit(mode: &str) {
                     &files.0,
                     mode,
                 );
+                if mode.contains("-exit") {
+                    let actual = Box::new(run.0.take().unwrap());
+                    super::input::halt::exit::tests::finish(
+                        actual,
+                        &mut member,
+                        &mut reader,
+                        &mut clock,
+                        &files.0,
+                        mode,
+                    );
+                }
                 return;
             }
             if mode.contains("stop-") {
@@ -2345,4 +2408,112 @@ scenario!(
 scenario!(
     worker_external_composition_halt_gate_clock_reverse,
     "input-generation-emission-external-halt-gate-clock-reverse"
+);
+
+scenario!(
+    worker_external_composition_failed_exit,
+    "input-generation-emission-external-halt-gate-exit"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_eof,
+    "input-generation-emission-external-halt-gate-eof-exit"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_control,
+    "input-generation-emission-external-halt-gate-control-exit"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_deadline,
+    "input-generation-emission-external-halt-gate-deadline-exit"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_late,
+    "input-generation-emission-external-halt-gate-exit-late"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_pressure_hold_late,
+    "input-generation-emission-external-halt-gate-exit-pressure-hold-late"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_trace_loss,
+    "input-generation-emission-external-halt-gate-exit-trace-loss"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_management,
+    "input-generation-emission-external-halt-gate-exit-management"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_lower_silent,
+    "input-generation-emission-external-halt-gate-exit-lower-silent"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_lower_wrong,
+    "input-generation-emission-external-halt-gate-exit-lower-wrong"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_release_silent,
+    "input-generation-emission-external-halt-gate-exit-release-silent"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_release_wrong,
+    "input-generation-emission-external-halt-gate-exit-release-wrong"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_clock_error,
+    "input-generation-emission-external-halt-gate-exit-clock-error"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_clock_reverse,
+    "input-generation-emission-external-halt-gate-exit-clock-reverse"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_worker,
+    "input-generation-emission-external-halt-gate-worker-exit"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_pending_world,
+    "input-generation-emission-external-halt-gate-exit-pending-world"
+);
+scenario!(
+    worker_external_composition_failed_exit_sent_world,
+    "input-generation-emission-external-halt-gate-exit-sent-world"
+);
+scenario!(
+    worker_external_composition_failed_exit_world_silent,
+    "input-generation-emission-external-halt-gate-exit-world-silent"
+);
+scenario!(
+    worker_external_composition_failed_exit_live_tools,
+    "input-generation-emission-external-halt-gate-eof-exit-live-tools"
+);
+scenario!(
+    worker_external_composition_failed_exit_live_tools_after_lower,
+    "input-generation-emission-external-halt-gate-exit-live-tools"
+);
+scenario!(
+    worker_external_composition_failed_exit_lower_late,
+    "input-generation-emission-external-halt-gate-exit-lower-late"
+);
+scenario!(
+    worker_external_composition_failed_exit_start_pending,
+    "input-generation-external-halt-gate-exit-start-pending"
+);
+scenario!(
+    worker_external_composition_failed_exit_start_pending_expiry,
+    "input-generation-external-halt-gate-exit-start-pending-start-expiry"
 );

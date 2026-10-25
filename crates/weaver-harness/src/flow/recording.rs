@@ -841,7 +841,8 @@ impl RecordBarrier {
     pub(super) fn admitted_before_failure(&self) -> Option<Sequence> {
         self.admitted_before_failure
     }
-    /// Latest ordinary admission after tap stop, excluding terminal reserves.
+    /// Latest pending-author admission after tap stop, including an owed
+    /// terminal promoted to its halt reservation. Fresh terminal acts are separate.
     pub(super) fn last_trace_only_sequence(&self) -> Option<Sequence> {
         self.last_trace_only_sequence
     }
@@ -1084,6 +1085,22 @@ impl RecordBarrier {
     /// An ordinary event already owed to the trace may land after the halt.
     /// It receives no completion proof, reservation or state copy.
     pub(super) fn resume_trace_only(&mut self) -> Result<Option<Sequence>, weaver_trace::Failure> {
+        self.resume_stopped_record(false)
+    }
+
+    /// The consuming halt closer may spend the matching unused terminal
+    /// reservation on an already pending terminal, retaining its exact ticket.
+    /// A refusal leaves the original pending event untouched.
+    pub(super) fn resume_halt_terminal(
+        &mut self,
+    ) -> Result<Option<Sequence>, weaver_trace::Failure> {
+        self.resume_stopped_record(true)
+    }
+
+    fn resume_stopped_record(
+        &mut self,
+        terminal: bool,
+    ) -> Result<Option<Sequence>, weaver_trace::Failure> {
         if !self.recorder.tap_stopped() {
             return Err(weaver_trace::Failure::RefusedOnSubmit {
                 reason: weaver_trace::SubmitRefusal::PayloadMalformed,
@@ -1097,7 +1114,25 @@ impl RecordBarrier {
                 reason: weaver_trace::SubmitRefusal::PayloadMalformed,
             });
         }
-        match self.recorder.submit(event.clone())? {
+        if terminal
+            && !matches!(
+                event.envelope.kind,
+                Kind::ToolCallCompleted
+                    | Kind::MessageToolResult
+                    | Kind::TurnClosed
+                    | Kind::SessionClosed
+            )
+        {
+            return Err(weaver_trace::Failure::RefusedOnSubmit {
+                reason: weaver_trace::SubmitRefusal::PayloadMalformed,
+            });
+        }
+        let attempt = if terminal {
+            SubmitAttempt::Recorded(self.recorder.submit_terminal(event.clone())?)
+        } else {
+            self.recorder.submit(event.clone())?
+        };
+        match attempt {
             SubmitAttempt::CapacityPending(_) => Ok(None),
             SubmitAttempt::Recorded(submission) => {
                 self.pending = None;

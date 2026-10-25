@@ -10,6 +10,9 @@ use crate::flow::halt_snapshot::ExternalFacts;
 use crate::flow::report::SecondaryFailure;
 use nix::poll::PollFlags;
 
+#[path = "context_worker_exit.rs"]
+pub(crate) mod exit;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoundationHaltProgress {
     Pending,

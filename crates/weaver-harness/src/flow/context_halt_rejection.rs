@@ -43,6 +43,13 @@ impl OwedRejectedReturn {
 }
 
 impl RecordingContext {
+    fn rejection_turn(&self) -> Option<weaver_trace::TurnRef> {
+        self.open_turn.clone().or_else(|| {
+            (self.phase == RecordingPhase::Failed)
+                .then(|| self.pairs.active_turn().cloned())
+                .flatten()
+        })
+    }
     pub(in crate::flow::context) fn bind_rejected_author(&mut self, sequence: Sequence) {
         if let Some(owner) = &mut self.pair_rejected_claim
             && owner.ticket.is_some()
@@ -63,7 +70,7 @@ impl RecordingContext {
         AuthoredEvent {
             kind: Kind::ToolReturnRejected,
             subsystem: Subsystem::Gate,
-            turn: self.open_turn.clone(),
+            turn: self.rejection_turn(),
             source: AuthoredSource::Tool,
             causal_parent: record
                 .call_id
@@ -151,11 +158,11 @@ impl RecordingContext {
         };
         let source = SourcePosition {
             block_id: weaver_types::state_flow::SourceBlockId {
-                run: self.flow.state().identity().1.to_owned(),
+                run: self.flow.run().to_owned(),
                 sequence: sequence.0.into(),
                 block: 0.into(),
             },
-            turn: self.open_turn.as_ref().map(|turn| turn.0.clone()),
+            turn: self.rejection_turn().map(|turn| turn.0),
         };
         self.pairs
             .ack_rejection_recorded(source)

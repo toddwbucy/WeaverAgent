@@ -532,6 +532,39 @@ impl PairLedger {
         Some((entry.ending.as_ref()?, entry.received.as_ref()?.raw_bytes()))
     }
 
+    /// A frozen, actually received gate terminal can use the halt's reserved
+    /// record. A healthy author already owns its original attempt if started.
+    pub(super) fn unclaimed_halt_terminal(&self) -> Option<(&PairEnded, &weaver_trace::TurnRef)> {
+        if !self.frozen {
+            return None;
+        }
+        let batch = self.active.as_ref()?;
+        let entry = batch.entries.iter().find(|entry| {
+            entry.received.is_some()
+                && entry.gate_terminal
+                && !entry.terminal_authoring
+                && entry.terminal_source.is_none()
+                && entry.completed.is_none()
+        })?;
+        Some((
+            entry.ending.as_ref()?,
+            &batch.proof.original().generation().original().turn,
+        ))
+    }
+
+    pub(super) fn active_turn(&self) -> Option<&weaver_trace::TurnRef> {
+        Some(
+            &self
+                .active
+                .as_ref()?
+                .proof
+                .original()
+                .generation()
+                .original()
+                .turn,
+        )
+    }
+
     /// No terminal can be attributed to the gate without the owned packet.
     /// A frozen flow may retain its trace-only outcome, but cannot file it.
     #[allow(clippy::result_large_err)]

@@ -1552,8 +1552,38 @@ impl RecordingContext {
     /// witness. No later trace-only author may replace it before its owner
     /// retains the admitted facts. Boot/read callers retain their own proofs.
     fn resume_trace_only_and_bind(&mut self) -> Result<Option<Sequence>, weaver_trace::Failure> {
-        let recorded = self.barrier.resume_trace_only()?;
+        self.resume_stopped_and_bind(false)
+    }
+
+    fn resume_halt_terminal_and_bind(&mut self) -> Result<Option<Sequence>, weaver_trace::Failure> {
+        self.resume_stopped_and_bind(true)
+    }
+
+    fn resume_stopped_and_bind(
+        &mut self,
+        terminal: bool,
+    ) -> Result<Option<Sequence>, weaver_trace::Failure> {
+        let pending_turn = self
+            .barrier
+            .pending_author()
+            .map(|author| (author.event.kind, author.event.turn.clone()));
+        let recorded = if terminal {
+            self.barrier.resume_halt_terminal()?
+        } else {
+            self.barrier.resume_trace_only()?
+        };
         if let Some(sequence) = recorded {
+            if pending_turn.is_some()
+                && pending_turn == self.author_turn
+                && let Some((kind, turn)) = self.author_turn.take()
+            {
+                if kind == Kind::TurnStarted {
+                    self.ever_started_turn = true;
+                    self.open_turn = turn;
+                } else if kind == Kind::TurnClosed && self.open_turn == turn {
+                    self.open_turn = None;
+                }
+            }
             self.bind_place_measure_author(sequence);
             self.bind_place_author(sequence);
             self.bind_enter_refusal_author(sequence);

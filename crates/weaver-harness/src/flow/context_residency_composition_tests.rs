@@ -173,6 +173,13 @@ fn residency_composition_child() {
                         &mode,
                         decode.as_raw_fd(),
                     );
+                    if mode.contains("-exit") {
+                        super::super::worker_startup::input::halt::exit::tests::release_peer(
+                            &mode,
+                            lifecycle.as_raw_fd(),
+                            decode.as_raw_fd(),
+                        );
+                    }
                     return;
                 }
             }

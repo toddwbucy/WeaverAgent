@@ -15,6 +15,31 @@ pub mod session;
 pub type FailedOwner<'a> =
     Result<Box<FoundationInput<'a>>, Box<weaver_harness::FoundationManagement<'a>>>;
 
+/// Continue the original failed run from its consumed serving seat. Only this
+/// loop waits; the harness transitions keep every actual resource and receipt.
+#[allow(clippy::result_large_err)]
+pub fn failed_exit(
+    run: Box<FoundationRun>,
+    handoff: Box<weaver_harness::FoundationFailedHandoff>,
+) -> Result<
+    Box<weaver_harness::FoundationFailedExit>,
+    (
+        Box<FoundationRun>,
+        Box<weaver_harness::FoundationFailedHandoff>,
+    ),
+> {
+    let mut owner = run.failed_exit(handoff)?;
+    loop {
+        match owner.advance() {
+            weaver_harness::FoundationExitProgress::Progress => {}
+            weaver_harness::FoundationExitProgress::Pending => {
+                owner.wait_for_progress();
+            }
+            weaver_harness::FoundationExitProgress::Closed => return Ok(owner),
+        }
+    }
+}
+
 /// Drive the retained failed owner only through report and gate interruption.
 /// The result still owes closing, actual release and final failed drain.
 pub fn halt(

@@ -89,6 +89,22 @@ impl HaltGate {
 }
 
 impl RecordingContext {
+    pub(in crate::flow::context) fn failed_gate_terminal_event(&self) -> Option<AuthoredEvent> {
+        if self.phase != RecordingPhase::Failed {
+            return None;
+        }
+        let (ended, turn) = self.pairs.unclaimed_halt_terminal()?;
+        Some(AuthoredEvent {
+            kind: Kind::ToolCallCompleted,
+            subsystem: weaver_trace::Subsystem::Gate,
+            turn: Some(turn.clone()),
+            source: crate::flow::author::AuthoredSource::Tool,
+            causal_parent: Some(Sequence(ended.call_id.sequence.0)),
+            payload: Some(Payload::PairEnded(Box::new(
+                crate::flow::mirror::pair_ended(ended),
+            ))),
+        })
+    }
     /// This primitive has no publication owner. An installed capture account
     /// therefore keeps its prior Reporting obligation and refuses this entry.
     pub(in crate::flow) fn begin_halt_gate(

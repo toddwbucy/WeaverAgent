@@ -133,6 +133,9 @@ pub use flow::context::worker_startup::input::generation::FoundationGeneration;
 pub use flow::context::worker_startup::input::generation::emission::{
     FoundationEmission, FoundationOutbound, FoundationRepairAdmission, FoundationRestatement,
 };
+pub use flow::context::worker_startup::input::halt::exit::{
+    FoundationExitProgress, FoundationFailedExit, FoundationFailedHandoff,
+};
 pub use flow::context::worker_startup::input::halt::{FoundationHalt, FoundationHaltProgress};
 pub use flow::context::worker_startup::input::management::{
     FoundationManagement, FoundationManagementProgress,
