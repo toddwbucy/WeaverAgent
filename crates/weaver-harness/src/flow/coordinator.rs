@@ -633,6 +633,31 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         let detail = first.detail.clone();
         self.halt = Some(HaltLatch::new(first, leave_deadline));
         self.fail(cx, "halt", detail);
+        // A valid Open can be held across load/activation when failure arrives
+        // before its ordinary measurement is Recorded. FLOW-COUNTS starts at
+        // the actual confirmation, not at release of that measurement. Retain
+        // that original timestamp for the final sample without releasing the
+        // completion, authoring a measurement, or inventing a pre-open clock.
+        if self.observations.is_none()
+            && self.open_pending
+            && let Some(confirmed) = self.state.as_ref().and_then(|state| {
+                state.opened_identity()?;
+                state
+                    .held_measurement()
+                    .map(|measurement| measurement.harness_received_ns.0)
+            })
+            && let Some((interval, alarm)) = self.observation_config.take()
+        {
+            match Observation::new(self.run.clone(), confirmed, interval, alarm) {
+                Ok(owner) => self.observations = Some(owner),
+                Err(error) => {
+                    self.snapshot_failure = Some(FlowFailure {
+                        point: "observation",
+                        detail: error.to_string(),
+                    })
+                }
+            }
+        }
         if self.observations.is_none() {
             return;
         }

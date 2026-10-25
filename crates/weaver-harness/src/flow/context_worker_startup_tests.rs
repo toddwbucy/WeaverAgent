@@ -205,7 +205,10 @@ impl Files {
                     "WEAVER_STARTUP_COMPOSITION_CHILD",
                     if mode.starts_with("input-") {
                         mode
-                    } else if mode == "classifier-refusal" || mode.starts_with("rollback-") {
+                    } else if mode == "classifier-refusal"
+                        || mode == "failed-startup-refusal"
+                        || mode.starts_with("rollback-")
+                    {
                         "refuse"
                     } else {
                         "ready"
@@ -217,6 +220,8 @@ impl Files {
                     "WEAVER_RESIDENCY_COMPOSITION_CHILD",
                     if mode.contains("generation") {
                         mode
+                    } else if mode.starts_with("failed-startup-") {
+                        "failed-startup"
                     } else if mode == "spu-refusal" {
                         "refuse"
                     } else {
@@ -227,7 +232,7 @@ impl Files {
                 gate: self.child(
                     "gate",
                     "WEAVER_GATE_STARTUP_CHILD",
-                    if mode.starts_with("input-") {
+                    if mode.starts_with("input-") || mode.starts_with("failed-startup-") {
                         mode
                     } else if mode == "gate-refusal" {
                         "refuse"
@@ -706,7 +711,10 @@ fn circuit(mode: &str) {
         envelope
     };
     let mut envelope = envelope;
-    let now = if mode == "worker" || mode.starts_with("input-worker") {
+    let now = if mode == "worker"
+        || mode.starts_with("input-worker")
+        || mode == "failed-startup-worker"
+    {
         crate::flow::clock::monotonic_ns().unwrap()
     } else {
         100
@@ -758,7 +766,11 @@ fn circuit(mode: &str) {
         wire.len()
     );
     drop((sink, state));
-    let mut clock = FakePumpIo::new(100);
+    let mut clock = FakePumpIo::new(if mode == "failed-startup-worker" {
+        now
+    } else {
+        100
+    });
     let received = if mode == "worker" || mode.starts_with("input-worker") {
         admission.advance()
     } else {
@@ -964,6 +976,30 @@ fn circuit(mode: &str) {
         .err()
         .expect("unfinished Enter cannot grant a seat");
     guard.0 = Some(owner);
+    if mode.starts_with("failed-startup-") {
+        let handoff = super::failed::tests::enter(
+            guard.0.take().unwrap(),
+            &mut member,
+            &mut reader,
+            &mut clock,
+            mode,
+        );
+        drop(guard);
+        if let Some(handoff) = handoff {
+            super::failed::tests::finish(
+                Box::new(run.0.take().unwrap()),
+                handoff,
+                &peer,
+                &mut member,
+                &mut reader,
+                &mut clock,
+                &path,
+                &bytes,
+                mode,
+            );
+        }
+        return;
+    }
     let mut management = None;
     if mode == "expiry" {
         clock.advance_to(bound.deadline_ns()).unwrap();
@@ -2683,4 +2719,112 @@ scenario!(
 scenario!(
     worker_startup_composition_refusal_rollback_drain_expired,
     "rollback-drain-expired"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_preopen,
+    "failed-startup-preopen"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_loaded,
+    "failed-startup-loaded"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_classifier,
+    "failed-startup-classifier"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_admit,
+    "failed-startup-admit"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_boot,
+    "failed-startup-boot"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_open,
+    "failed-startup-open"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_repair,
+    "failed-startup-repair"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_summary,
+    "failed-startup-summary"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_installed,
+    "failed-startup-installed"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_raised,
+    "failed-startup-raised"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_worker,
+    "failed-startup-worker"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_cap,
+    "failed-startup-cap"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_wait,
+    "failed-startup-wait"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_trace,
+    "failed-startup-trace"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_foreign,
+    "failed-startup-foreign"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_expiry,
+    "failed-startup-expiry"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_refusal,
+    "failed-startup-refusal"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_opened,
+    "failed-startup-opened"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_activation,
+    "failed-startup-activation"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_lower_wrong,
+    "failed-startup-lower-wrong"
+);
+scenario!(
+    worker_startup_composition_failed_exit_lower_early,
+    "failed-startup-lower-early"
+);
+scenario!(
+    worker_startup_composition_failed_exit_lower_silent,
+    "failed-startup-lower-silent"
 );

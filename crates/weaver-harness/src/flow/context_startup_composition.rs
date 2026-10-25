@@ -506,3 +506,35 @@ pub(super) mod tests;
 
 #[path = "context_enter_refusal_composition.rs"]
 pub(in crate::flow) mod refusal;
+
+impl StartupComposition<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.context
+    }
+    pub(in crate::flow::context) fn failed_identity(
+        &self,
+    ) -> Option<super::worker_startup::failed::StartupIdentity> {
+        (self.stage == StartupStage::Stopped)
+            .then(|| {
+                super::worker_startup::failed::StartupIdentity::from_resources(
+                    self.context,
+                    self.resources,
+                )
+            })
+            .flatten()
+    }
+    pub(in crate::flow::context) fn detach_failure(
+        self,
+        identity: super::worker_startup::failed::StartupIdentity,
+    ) -> super::worker_startup::failed::DetachedStartup {
+        use super::worker_startup::failed::{DetachedStartup, HeldStartup};
+        let (_, _, account) = self.into_stopped().ok().expect("checked stopped startup");
+        DetachedStartup {
+            identity,
+            held: Box::new(HeldStartup::Initial(account)),
+            listener: None,
+            gate: None,
+        }
+    }
+}

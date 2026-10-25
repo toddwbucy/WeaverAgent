@@ -602,6 +602,16 @@ impl RecordingContext {
 }
 
 impl FailedRunCleanup {
+    /// Only the consuming public startup handoff calls this, after matching its
+    /// original context/ports and retaining every extracted boot proof. It does
+    /// not widen the primitive-only failed-enter admission gate.
+    pub(in crate::flow::context) fn after_startup(
+        context: RecordingContext,
+        resources: FailedEnterResources,
+    ) -> Self {
+        Self::new(context, resources, false)
+    }
+
     fn new(context: RecordingContext, mut resources: FailedEnterResources, serving: bool) -> Self {
         let deadline = context.flow.halt().and_then(|halt| halt.deadline().ok());
         let member_stood = context.flow.failed_cleanup_state_stood();
@@ -740,6 +750,11 @@ impl FailedRunCleanup {
     #[cfg(test)]
     pub(super) fn reap_composition_test_children(&mut self) {
         self.resources.reap_startup_test_children();
+    }
+
+    #[cfg(test)]
+    pub(super) fn startup_test_admit_reply(&self) -> Option<&ReceivedOrgan> {
+        self.prior_residency_reply.as_ref()
     }
 
     pub(in crate::flow) fn failure(&self) -> &RunFailure {

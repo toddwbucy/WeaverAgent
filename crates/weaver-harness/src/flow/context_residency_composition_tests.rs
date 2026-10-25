@@ -81,7 +81,7 @@ fn residency_composition_child() {
                     request.payload,
                     weaver_types::Payload::Directive(LifecycleDirective::Release)
                 ) {
-                    assert!(admitted);
+                    assert!(admitted || mode == "failed-startup");
                     assert_eq!(
                         recv(decode.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
                         Ok(0)
@@ -91,7 +91,13 @@ fn residency_composition_child() {
                         &OrganEnvelope {
                             exchange: request.exchange,
                             position: Position::Close,
-                            payload: weaver_types::Payload::Answer(LifecycleAnswer::Released),
+                            payload: if admitted {
+                                weaver_types::Payload::Answer(LifecycleAnswer::Released)
+                            } else {
+                                weaver_types::Payload::Refusal(
+                                    weaver_types::LifecycleRefusal::NoResidency,
+                                )
+                            },
                         }
                     );
                     return;
@@ -148,7 +154,7 @@ fn residency_composition_child() {
             other => panic!("residency child receive {other:?}"),
         }
         match recv(decode.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
-            Ok(0) if mode == "cleanup-ready" => {}
+            Ok(0) if mode == "cleanup-ready" || mode == "failed-startup" => {}
             Ok(0) => return,
             Ok(n) => {
                 assert!(admitted);

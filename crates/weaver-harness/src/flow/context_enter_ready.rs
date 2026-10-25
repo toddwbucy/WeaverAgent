@@ -31,6 +31,44 @@ pub(in crate::flow) struct EnterReady<'a> {
     stop: Option<ReadyStop>,
 }
 
+impl EnterReady<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.raised.owner.boot.context
+    }
+    pub(in crate::flow::context) fn failed_identity(&self) -> Option<StartupIdentity> {
+        self.raised.failed_identity()
+    }
+    pub(in crate::flow::context) fn detach_failure(
+        self,
+        identity: StartupIdentity,
+    ) -> DetachedStartup {
+        let Self {
+            raised,
+            answer,
+            enter,
+            stage,
+            send,
+            returned,
+            stop,
+        } = self;
+        let mut parts = raised.detach_failure(identity);
+        let HeldStartup::Gate(gate) = *parts.held else {
+            unreachable!("actual raised gate")
+        };
+        parts.held = Box::new(HeldStartup::Ready {
+            gate,
+            answer,
+            enter,
+            stage,
+            send,
+            returned,
+            stop,
+        });
+        parts
+    }
+}
+
 /// The consumed successful handoff keeps every owned transport and evidence item.
 /// The original admin peer may close normally after receiving its Ready answer.
 pub(in crate::flow) struct EnteredServing<'a> {

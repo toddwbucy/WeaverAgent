@@ -87,6 +87,81 @@ pub(in crate::flow) struct StoppedBoot<'a> {
     pub summary: Option<BootPlanSummary>,
 }
 
+use super::worker_startup::failed::{DetachedStartup, HeldBoot, HeldStartup, StartupIdentity};
+impl BootComposition<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_open_sent(&self) -> bool {
+        !self.decode.open_not_started() && !self.context.boot_open_account_settled()
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.context
+    }
+    pub(in crate::flow::context) fn failed_identity(&self) -> Option<StartupIdentity> {
+        (self.stage == BootStage::Stopped)
+            .then(|| StartupIdentity::from_boot(self.context, self.decode, self.resident.as_ref()))
+            .flatten()
+    }
+    pub(in crate::flow::context) fn detach_failure(
+        self,
+        identity: StartupIdentity,
+    ) -> DetachedStartup {
+        let Self {
+            resident,
+            context: _,
+            decode: _,
+            stage,
+            inventory,
+            certificate,
+            prior,
+            repaired,
+            summary,
+            started,
+            stop,
+        } = self;
+        DetachedStartup {
+            identity,
+            held: Box::new(HeldStartup::Boot(HeldBoot {
+                resident: resident.map(|arms| arms.evidence.into()),
+                inventory,
+                certificate,
+                prior,
+                repaired,
+                summary,
+                stage,
+                started,
+                stop,
+            })),
+            listener: None,
+            gate: None,
+        }
+    }
+}
+impl ComposedBoot<'_> {
+    pub(in crate::flow::context) fn failed_identity(&self) -> Option<StartupIdentity> {
+        StartupIdentity::from_boot(self.context, self.decode, self.resident.as_ref())
+    }
+    pub(in crate::flow::context) fn detach_failure(self) -> HeldBoot {
+        let Self {
+            resident,
+            context: _,
+            decode: _,
+            certificate,
+        } = self;
+        HeldBoot {
+            resident: resident.map(|arms| arms.evidence.into()),
+            inventory: None,
+            certificate: Some(certificate),
+            prior: None,
+            repaired: None,
+            summary: None,
+            stage: BootStage::Complete,
+            started: false,
+            stop: None,
+        }
+    }
+}
+
 impl<'a> ComposedBoot<'a> {
     pub(in crate::flow::context) fn into_parts(
         self,

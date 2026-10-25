@@ -105,7 +105,7 @@ fn gate_startup_child() {
     }
     if mode != "silent" && mode != "early" {
         let mut answer = OrganEnvelope {
-            exchange: request.exchange,
+            exchange: request.exchange.clone(),
             position: Position::Close,
             payload: if mode == "refuse" {
                 weaver_types::Payload::Refusal(weaver_types::LifecycleRefusal::BindFailed)
@@ -132,6 +132,53 @@ fn gate_startup_child() {
             answer.payload = weaver_types::Payload::Answer(LifecycleAnswer::Ready);
             packet(3, &answer);
         }
+    }
+    if mode.starts_with("failed-startup-") {
+        if mode.ends_with("-lower-early") {
+            packet(
+                3,
+                &OrganEnvelope {
+                    exchange: weaver_types::ExchangeId {
+                        opener: Opener::Harness,
+                        ordinal: request.exchange.ordinal + 1,
+                    },
+                    position: Position::Close,
+                    payload: weaver_types::Payload::Answer(LifecycleAnswer::GateStopped),
+                },
+            );
+        }
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            match recv(port.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
+                Ok(0) => return,
+                Ok(n) => {
+                    let lower: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
+                    assert_eq!(
+                        lower.payload,
+                        weaver_types::Payload::Directive(LifecycleDirective::Lower)
+                    );
+                    if mode.ends_with("-lower-silent") {
+                        continue;
+                    }
+                    let mut exchange = lower.exchange;
+                    if mode.ends_with("-lower-wrong") {
+                        exchange.ordinal += 1;
+                    }
+                    packet(
+                        3,
+                        &OrganEnvelope {
+                            exchange,
+                            position: Position::Close,
+                            payload: weaver_types::Payload::Answer(LifecycleAnswer::GateStopped),
+                        },
+                    );
+                    return;
+                }
+                Err(nix::errno::Errno::EAGAIN) => std::thread::sleep(Duration::from_millis(1)),
+                other => panic!("failed startup Lower: {other:?}"),
+            }
+        }
+        panic!("failed startup gate watchdog");
     }
     // The test owner closes the gate port before reaping; no live deployment.
     while recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()).unwrap_or(0) > 0 {}

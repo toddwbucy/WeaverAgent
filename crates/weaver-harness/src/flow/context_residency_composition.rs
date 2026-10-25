@@ -470,3 +470,55 @@ pub(super) mod tests;
 
 #[path = "context_residency_cleanup.rs"]
 pub(in crate::flow) mod cleanup;
+
+impl ResidencyComposition<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.context
+    }
+    pub(in crate::flow::context) fn failed_identity(
+        &self,
+    ) -> Option<super::worker_startup::failed::StartupIdentity> {
+        (self.stage == ResidencyStage::Stopped)
+            .then(|| {
+                super::worker_startup::failed::StartupIdentity::from_resources(
+                    self.context,
+                    self.resources,
+                )
+            })
+            .flatten()
+    }
+    pub(in crate::flow::context) fn detach_failure(
+        self,
+        identity: super::worker_startup::failed::StartupIdentity,
+    ) -> super::worker_startup::failed::DetachedStartup {
+        use super::worker_startup::failed::{DetachedStartup, HeldStartup};
+        let (_, _, account) = self.into_stopped().ok().expect("checked stopped residency");
+        DetachedStartup {
+            identity,
+            held: Box::new(HeldStartup::Residency(account)),
+            listener: None,
+            gate: None,
+        }
+    }
+}
+impl AdmittedStartup<'_> {
+    pub(in crate::flow::context) fn failed_identity(
+        &self,
+    ) -> Option<super::worker_startup::failed::StartupIdentity> {
+        super::worker_startup::failed::StartupIdentity::from_resources(self.context, self.resources)
+    }
+    pub(in crate::flow::context) fn detach_failure(
+        self,
+        identity: super::worker_startup::failed::StartupIdentity,
+    ) -> super::worker_startup::failed::DetachedStartup {
+        use super::worker_startup::failed::{DetachedStartup, HeldStartup};
+        let (_, _, inventory, evidence) = self.into_parts();
+        DetachedStartup {
+            identity,
+            held: Box::new(HeldStartup::Admitted(inventory, evidence.into())),
+            listener: None,
+            gate: None,
+        }
+    }
+}

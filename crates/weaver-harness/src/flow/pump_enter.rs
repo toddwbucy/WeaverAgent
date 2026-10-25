@@ -30,6 +30,12 @@ pub(in crate::flow) struct RetiredEnter {
     _observed_ns: u64,
     _closed_unadmitted: Option<(bool, bool)>,
 }
+#[cfg(test)]
+impl RetiredEnter {
+    pub(in crate::flow) fn retained_wire(&self) -> &[u8] {
+        &self._wire
+    }
+}
 
 /// The original received Enter after its authenticated peer moves into a
 /// response owner. This keeps its bytes and descriptor history, not a new port.
