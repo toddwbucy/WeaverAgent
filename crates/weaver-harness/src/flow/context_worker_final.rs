@@ -65,6 +65,14 @@ impl FoundationInput<'_> {
             return Ok(());
         }
         let work = self.engine.as_ref().unwrap();
+        if work.stage == EngineStage::Refused && work.admission.is_some() {
+            let close = WorldClose::refused_admission(self).ok_or(self.progress())?;
+            let work = self.engine.as_mut().unwrap();
+            work.answer = Some(close);
+            work.stage = EngineStage::Answer;
+            return Ok(());
+        }
+        let work = self.engine.as_ref().unwrap();
         if work.stage != EngineStage::Refused
             || !(matches!(work.task, Some(TaskCompletion::Refused { .. }))
                 || matches!(work.generation, Some(GenerationCompletion::Refused(_))))

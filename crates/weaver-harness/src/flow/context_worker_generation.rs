@@ -3,6 +3,7 @@
 //! message, caller receipt or raw decoder answer can substitute for these owners.
 use super::*;
 use crate::flow::clock::AbsoluteBound;
+use crate::flow::context::marks_driver::BeginTaskRefusal;
 use crate::flow::context::{
     GenerationCompletion, PlacementCompletion, RecordingContext, TaskCompletion,
 };
@@ -14,6 +15,22 @@ use weaver_types::state_flow::{CutMethod, PlacementContext};
 #[cfg(test)]
 #[path = "context_worker_generation_tests.rs"]
 pub(in crate::flow::context) mod tests;
+
+#[cfg(test)]
+#[path = "context_worker_admission_tests.rs"]
+pub(in crate::flow::context) mod admission_tests;
+
+#[cfg(test)]
+#[path = "context_worker_queued_input_tests.rs"]
+pub(in crate::flow::context) mod queued_input_tests;
+
+#[cfg(test)]
+#[path = "context_worker_election_wait_tests.rs"]
+pub(in crate::flow::context) mod election_wait_tests;
+
+#[cfg(test)]
+#[path = "context_worker_halt_tests.rs"]
+pub(in crate::flow::context) mod halt_tests;
 
 #[cfg(test)]
 #[path = "context_worker_return_tests.rs"]
@@ -53,6 +70,7 @@ enum EngineStage {
 
 pub(super) struct EngineWork {
     stage: EngineStage,
+    admission: Option<BeginTaskRefusal>,
     task: Option<TaskCompletion>,
     material: Option<HeldMaterial>,
     selection: Option<(String, CutMethod)>,
@@ -98,6 +116,7 @@ impl<'a> FoundationInput<'a> {
         self.stage = Stage::Engine;
         self.engine = Some(Box::new(EngineWork {
             stage: EngineStage::StartTask,
+            admission: None,
             task: None,
             material: None,
             selection: None,
@@ -277,10 +296,11 @@ impl<'a> FoundationInput<'a> {
             work.answer = Some(close);
             work.stage = EngineStage::Answer;
         }
+        self.serving.owner.context.live(io)?;
+        self.serving.retain_queued_input(io)?;
         let owner = &mut self.serving.owner;
         let work = self.engine.as_mut().unwrap();
         let context = &mut owner.context;
-        context.live(io)?;
         let mut ports = PumpPorts {
             lifecycle: LifecyclePorts {
                 listener: Some(&mut owner.listener),
@@ -315,9 +335,13 @@ impl<'a> FoundationInput<'a> {
                     if let Some(failure) = error.failure {
                         return Err(failure);
                     }
-                    work.detail = Some(format!("begin_task: {:?}", error.refusal));
-                    context.complete_wait(PumpDeadline::Decision);
-                    work.stage = EngineStage::Refused;
+                    if error.refusal == BeginTaskRefusal::Busy {
+                        context.pump_once(&mut ports)?;
+                    } else {
+                        work.detail = Some(format!("begin_task: {:?}", error.refusal));
+                        work.admission = Some(error.refusal);
+                        work.stage = EngineStage::Refused;
+                    }
                 } else {
                     work.stage = EngineStage::Task;
                 }

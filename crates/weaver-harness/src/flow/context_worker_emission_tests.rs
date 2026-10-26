@@ -88,6 +88,7 @@ fn author_failure_worker_emission_keeps_exact_refusal_after_cancel() {
 pub(in crate::flow::context) fn templates(mode: &str) -> &'static [s::TemplateSpec] {
     static ALL: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     static NO_SORT: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
+    static NO_TASK: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     let all = ALL.get_or_init(|| {
         let mut all = super::super::tests::templates().to_vec();
         all.push(s::TemplateSpec {
@@ -109,7 +110,14 @@ pub(in crate::flow::context) fn templates(mode: &str) -> &'static [s::TemplateSp
         });
         all
     });
-    if mode.contains("no-sort") {
+    if mode.contains("no-task") {
+        NO_TASK.get_or_init(|| {
+            all.iter()
+                .filter(|t| t.template_id != "mark.begin_task")
+                .cloned()
+                .collect()
+        })
+    } else if mode.contains("no-sort") {
         NO_SORT.get_or_init(|| {
             all.iter()
                 .filter(|t| t.template_id != "sort.outbound")

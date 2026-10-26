@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 use weaver_traits::{ContentBlock, Message, Role};
 use weaver_types::{Finish, Generation, TokenAnswer, TokenDirective};
 
+#[path = "context_worker_correction_admission_tests.rs"]
+mod admission;
+
 fn generated(mode: &str, attempt: usize, stopped: bool) -> TokenAnswer {
     let content = if attempt == 0 {
         super::super::tests::content(mode)
@@ -383,21 +386,8 @@ pub(in crate::flow::context) fn exercise(
                 Some(GenerationCompletion::Refused(account)) if account.refusal() == Some(&weaver_types::TokenRefusal::MalformedDelta)));
             return;
         }
-        if mode.ends_with("held-decode") {
-            use crate::flow::context::held_input_tests::hold;
-            let held = hold(
-                input.serving.owner.context,
-                crate::flow::context::HeldInput::Both,
-            );
-            for _ in 0..24 {
-                assert_eq!(
-                    step(input, member, clock, mode),
-                    FoundationInputProgress::Pending
-                );
-                held.assert_held(input.serving.owner.context);
-            }
-            assert!(!root.join("correction-appended-1.json").exists());
-            held.take(input.serving.owner.context);
+        if mode.contains("held-decode") && admission::exercise(input, clock, root, mode) {
+            return;
         }
         if mode.ends_with("stop-generation") || mode.ends_with("stop-checks") {
             let end = Instant::now() + Duration::from_secs(5);

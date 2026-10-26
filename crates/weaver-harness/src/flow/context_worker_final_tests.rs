@@ -205,6 +205,12 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             })
         ));
     }
+    if mode.contains("no-task") {
+        assert_eq!(progress, worker::turn::Progress::Refused, "{detail:?}");
+        super::admission_tests::assert_refused(input, root, &rows);
+        super::admission_tests::next_input(&mut guard, member, clock, mode);
+        return;
+    }
     if mode.contains("operation-refusal") {
         if progress != worker::turn::Progress::Refused {
             eprintln!(
@@ -397,6 +403,10 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     );
     // Only the original begin_task mark exists; a turn close adds no task end.
     assert_eq!(rows.iter().filter(|r| r["kind"] == "state.mark").count(), 1);
+    if mode.contains("queued-input") {
+        super::queued_input_tests::handoff(&mut guard, member, reader, clock, root, mode);
+        return;
+    }
     let FoundationInputResult::Completed(serving) =
         guard.input.take().unwrap().finish().ok().unwrap()
     else {
