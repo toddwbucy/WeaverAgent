@@ -173,19 +173,100 @@ impl WorldClose {
     pub(super) fn completed(&self) -> Stage {
         self.completed
     }
-    pub(super) fn advance<I: PumpIo>(
+    pub(super) fn rollback(turn: TurnRef, exchange: ExchangeId, cause: Cause) -> Self {
+        Self::new(
+            CloseTarget::Turn {
+                turn,
+                outcome: TurnClose::Stopped {
+                    reason: StopReason::Unload,
+                    cause: Some(weaver_trace::Cause { uid: cause.uid }),
+                },
+            },
+            exchange,
+            None,
+            "The agent is leaving.".into(),
+            false,
+            Stage::Aborted,
+        )
+    }
+
+    /// Lower owns world disposal. Keep an existing whole send or the exact
+    /// withdrawn datagram, but never send another world frame after Lower.
+    pub(super) fn prepare_rollback_transport(
+        &mut self,
+        gate: &mut crate::flow::pump_transport::OrganPort,
+    ) -> Result<bool, RunFailure> {
+        let Some(send) = &self.send else {
+            return Ok(true);
+        };
+        if !send.belongs_to(gate) || !send.matches_exchange(&self.exchange) {
+            return Err(RunFailure::PlaceOwned);
+        }
+        if send.sent() {
+            return if send.sent_at().is_some() {
+                Ok(true)
+            } else {
+                Err(RunFailure::Closed)
+            };
+        }
+        if send.withdrawn() {
+            return Ok(true);
+        }
+        let returned =
+            gate.withdraw_pending(&self.exchange)
+                .map_err(|failure| RunFailure::Transport {
+                    source: PumpSource::Gate,
+                    failure,
+                })?;
+        if let Some(returned) = returned {
+            self.close = Some(returned);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    pub(super) fn advance_after_lower<I: PumpIo>(
         &mut self,
         context: &mut RecordingContext,
         ports: &mut PumpPorts<'_, I>,
+        proof: &crate::flow::context::worker_startup::expired::gate::RollbackGateClosed,
     ) -> Result<bool, RunFailure> {
-        if context.deadlines.get(PumpDeadline::Decision).is_none() {
-            if let Some(bound) = self.bound {
-                context.arm(PumpDeadline::Decision, bound, ports.io)?;
-            } else {
-                generation::decision(context, ports.io)?;
-                self.bound = context.deadlines.get(PumpDeadline::Decision);
-            }
+        if !proof.allows(context) {
+            return Err(RunFailure::PlaceOwned);
         }
+        self.prepare_rollback_record(context, ports)?;
+        if matches!(self.target, CloseTarget::Input(_)) && context.input.snapshot().is_some() {
+            context.input_closed_by_lower(proof, ports.io)?;
+            context.finish_input(ports.io)?;
+        }
+        context.complete_wait(PumpDeadline::Decision);
+        Ok(true)
+    }
+
+    /// An already-started close keeps its one original record even while Lower
+    /// is still reading queued frames. This continuation carries no world data.
+    pub(super) fn prepare_rollback_record<I: PumpIo>(
+        &mut self,
+        context: &mut RecordingContext,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<(), RunFailure> {
+        // A close already begun before Leave keeps its existing absolute wait.
+        if self.recorded.is_none()
+            && context.deadlines.get(PumpDeadline::Decision).is_none()
+            && let Some(bound) = self.bound
+        {
+            context.arm(PumpDeadline::Decision, bound, ports.io)?;
+        }
+        self.prepare(context, ports, true)?;
+        Ok(())
+    }
+
+    fn prepare<I: PumpIo>(
+        &mut self,
+        context: &mut RecordingContext,
+        ports: &mut PumpPorts<'_, I>,
+        lowered: bool,
+    ) -> Result<bool, RunFailure> {
         let preparing = self.close.is_none() && self.send.is_none();
         if preparing {
             match &self.target {
@@ -221,22 +302,30 @@ impl WorldClose {
                     // The rejected admission never consumed this input or opened a
                     // turn. Revoke the exact accepted capability, then retain its
                     // owner until the original gate exchange has fully closed.
-                    context
-                        .input
-                        .validate_accepted(
-                            token,
-                            context.flow.run(),
-                            &context.declaration.scheme.scheme_id,
-                        )
-                        .map_err(|error| {
-                            context.fail(
-                                ports.io,
-                                FlowHaltReason::ProtocolFailed,
-                                HaltPoint::Barrier,
-                                format!("refused admission input: {error}"),
+                    if !lowered {
+                        context
+                            .input
+                            .validate_accepted(
+                                token,
+                                context.flow.run(),
+                                &context.declaration.scheme.scheme_id,
                             )
-                        })?;
-                    context.cancel_input(ports.io)?;
+                            .map_err(|error| {
+                                context.fail(
+                                    ports.io,
+                                    FlowHaltReason::ProtocolFailed,
+                                    HaltPoint::Barrier,
+                                    format!("refused admission input: {error}"),
+                                )
+                            })?;
+                    }
+                    if !context
+                        .input
+                        .snapshot()
+                        .is_some_and(|input| input.cancelled)
+                    {
+                        context.cancel_input(ports.io)?;
+                    }
                 }
             }
             let answered = self.completed == Stage::Completed;
@@ -255,6 +344,23 @@ impl WorldClose {
                 payload: Payload::Frame(TurnFrame::carry(frame.as_bytes())),
             });
         }
+        Ok(preparing)
+    }
+
+    pub(super) fn advance<I: PumpIo>(
+        &mut self,
+        context: &mut RecordingContext,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<bool, RunFailure> {
+        if context.deadlines.get(PumpDeadline::Decision).is_none() {
+            if let Some(bound) = self.bound {
+                context.arm(PumpDeadline::Decision, bound, ports.io)?;
+            } else {
+                generation::decision(context, ports.io)?;
+                self.bound = context.deadlines.get(PumpDeadline::Decision);
+            }
+        }
+        let preparing = self.prepare(context, ports, false)?;
         if let Some(close) = self.close.take() {
             match ports.gate.as_deref_mut().unwrap().stage_tracked(close) {
                 Ok(TrackedStage::Queued(send)) => self.send = Some(send),

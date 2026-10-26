@@ -1,10 +1,53 @@
-//! One Release under an accepted rollback. The expired Admit is retained and
+//! One Release under an accepted rollback. The original Admit is retained and
 //! never resumes its write leg or grants a boot capability.
 use super::*;
+use crate::flow::context::worker_startup::entered_rollback::EnteredRollbackReleasePermit;
 use crate::flow::context::worker_startup::expired::ExpiredReleasePermit;
 
-pub(in crate::flow::context) struct ExpiredResidencyRelease {
-    permit: ExpiredReleasePermit,
+enum RollbackReleasePermit {
+    Expired(ExpiredReleasePermit),
+    Entered(EnteredRollbackReleasePermit),
+}
+
+impl RollbackReleasePermit {
+    fn allows(&self, context: &RecordingContext) -> bool {
+        match self {
+            Self::Expired(permit) => permit.allows(context),
+            Self::Entered(permit) => permit.allows(context),
+        }
+    }
+
+    fn original_send(&self, at: u64) -> bool {
+        match self {
+            Self::Expired(permit) => permit.original_send(at),
+            Self::Entered(permit) => permit.original_send(at),
+        }
+    }
+
+    fn release_send(&self, at: u64) -> bool {
+        match self {
+            Self::Expired(permit) => permit.release_send(at),
+            Self::Entered(permit) => permit.release_send(at),
+        }
+    }
+
+    fn deadline(&self) -> u64 {
+        match self {
+            Self::Expired(permit) => permit.deadline(),
+            Self::Entered(permit) => permit.deadline(),
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Expired(_) => "expired",
+            Self::Entered(_) => "entered rollback",
+        }
+    }
+}
+
+pub(in crate::flow::context) struct RollbackResidencyRelease {
+    permit: RollbackReleasePermit,
     prior: Option<ResidencyRequest>,
     prior_reply: Option<ReceivedOrgan>,
     request: Option<ResidencyRequest>,
@@ -12,6 +55,8 @@ pub(in crate::flow::context) struct ExpiredResidencyRelease {
     refused: Option<LifecycleDirective>,
     outcome: Option<ReleaseOutcome>,
 }
+
+pub(in crate::flow::context) type ExpiredResidencyRelease = RollbackResidencyRelease;
 
 impl FailedEnterResources {
     #[allow(clippy::result_large_err)] // Return the actual prior reply on rejection.
@@ -21,6 +66,42 @@ impl FailedEnterResources {
         permit: ExpiredReleasePermit,
         reply: Option<ReceivedOrgan>,
     ) -> Result<ExpiredResidencyRelease, (Option<ReceivedOrgan>, String)> {
+        self.begin_rollback_release(context, RollbackReleasePermit::Expired(permit), reply)
+            .map_err(|(permit, reply, detail)| {
+                let RollbackReleasePermit::Expired(_) = permit else {
+                    unreachable!("expired admission retains its original permit variant")
+                };
+                (reply, detail)
+            })
+    }
+
+    #[allow(clippy::result_large_err)] // Return the actual Ready proof and prior reply on rejection.
+    pub(in crate::flow::context) fn begin_entered_release(
+        &mut self,
+        context: &RecordingContext,
+        permit: EnteredRollbackReleasePermit,
+        reply: Option<ReceivedOrgan>,
+    ) -> Result<
+        RollbackResidencyRelease,
+        (EnteredRollbackReleasePermit, Option<ReceivedOrgan>, String),
+    > {
+        self.begin_rollback_release(context, RollbackReleasePermit::Entered(permit), reply)
+            .map_err(|(permit, reply, detail)| {
+                let RollbackReleasePermit::Entered(permit) = permit else {
+                    unreachable!("entered admission retains its original permit variant")
+                };
+                (permit, reply, detail)
+            })
+    }
+
+    #[allow(clippy::result_large_err)] // Return the actual authority and prior reply on rejection.
+    fn begin_rollback_release(
+        &mut self,
+        context: &RecordingContext,
+        permit: RollbackReleasePermit,
+        reply: Option<ReceivedOrgan>,
+    ) -> Result<RollbackResidencyRelease, (RollbackReleasePermit, Option<ReceivedOrgan>, String)>
+    {
         if !permit.allows(context)
             || !self.matches(context)
             || !self.original_ports()
@@ -35,18 +116,18 @@ impl FailedEnterResources {
                         .is_some_and(|port| context.can_retire_boot_decode(port))
             })
         {
-            return Err((
-                reply,
-                "expired Release requires settled original resources and actual classifier reap"
-                    .into(),
-            ));
+            let detail = format!(
+                "{} Release requires settled original resources and actual classifier reap",
+                permit.label()
+            );
+            return Err((permit, reply, detail));
         }
         let spu = self.spu.as_mut().unwrap();
         let prior = spu.residency_request.take();
         // Keep framing, reservation and send evidence after closing the seam.
         // The admission predicate above forbids this while Open is still owed.
         spu.retired_decode = spu.decode.take().map(DecodePort::retire_failed);
-        Ok(ExpiredResidencyRelease {
+        Ok(RollbackResidencyRelease {
             permit,
             prior,
             prior_reply: reply,
@@ -62,7 +143,7 @@ impl FailedEnterResources {
     }
 }
 
-impl ExpiredResidencyRelease {
+impl RollbackResidencyRelease {
     #[cfg(test)]
     pub(in crate::flow::context) fn received_reply(&self) -> Option<&OrganEnvelope> {
         self.reply.as_ref().map(ReceivedOrgan::envelope)
@@ -94,12 +175,13 @@ impl ExpiredResidencyRelease {
         io: &mut impl PumpIo,
     ) -> Result<bool, RunFailure> {
         context.live(io)?;
+        let release = self.permit.label();
         if !self.permit.allows(context) || !resources.matches(context) {
             return Err(context.fail(
                 io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Barrier,
-                "expired Release lost its original accepted rollback",
+                format!("{release} Release lost its original accepted rollback"),
             ));
         }
         if self.outcome.is_some() {
@@ -108,7 +190,7 @@ impl ExpiredResidencyRelease {
         let spu = resources.spu.as_ref().unwrap();
         let port = spu.residency.as_ref().unwrap();
         if self.prior.as_ref().is_some_and(|prior| !prior.send.sent()) {
-            // Leave cannot complete any portion of an expired Admit. Closing
+            // Leave cannot complete any portion of the original Admit. Closing
             // preserves its original bytes and reports no Release confirmation.
             self.finish(resources, ReleaseOutcome::Unconfirmed);
             return Ok(true);
@@ -136,7 +218,7 @@ impl ExpiredResidencyRelease {
                 io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Barrier,
-                "expired Release has invalid retained Admit evidence",
+                format!("{release} Release has invalid retained Admit evidence"),
             ));
         }
         if self.request.is_none() {
@@ -148,7 +230,7 @@ impl ExpiredResidencyRelease {
                         io,
                         FlowHaltReason::ProtocolFailed,
                         HaltPoint::Barrier,
-                        format!("expired Release stage: {detail}"),
+                        format!("{release} Release stage: {detail}"),
                     ));
                 }
             }
@@ -177,7 +259,9 @@ impl ExpiredResidencyRelease {
                             io,
                             FlowHaltReason::ProtocolFailed,
                             HaltPoint::Barrier,
-                            "expired Admit reply was neither Admitted nor an Admit refusal",
+                            format!(
+                                "{release} Admit reply was neither Admitted nor an Admit refusal"
+                            ),
                         ));
                     }
                     return Ok(false);
@@ -208,7 +292,7 @@ impl ExpiredResidencyRelease {
                 self.reply = Some(reply);
                 let Some(outcome) = outcome else {
                     return Err(context.fail(io, FlowHaltReason::ProtocolFailed, HaltPoint::Barrier,
-                        "expired Release reply lacks the exact whole-send witness or terminal answer"));
+                        format!("{release} Release reply lacks the exact whole-send witness or terminal answer")));
                 };
                 self.finish(resources, outcome);
                 Ok(true)
@@ -219,7 +303,7 @@ impl ExpiredResidencyRelease {
                         io,
                         FlowHaltReason::ProtocolFailed,
                         HaltPoint::Barrier,
-                        format!("expired Release receive: {failure:?}"),
+                        format!("{release} Release receive: {failure:?}"),
                     ));
                 }
                 context.live(io)?;
@@ -239,7 +323,7 @@ impl ExpiredResidencyRelease {
                         } else {
                             HaltPoint::Barrier
                         },
-                        format!("expired Release send: {failure:?}"),
+                        format!("{release} Release send: {failure:?}"),
                     )
                 })?;
                 Ok(false)
@@ -248,7 +332,7 @@ impl ExpiredResidencyRelease {
                 io,
                 FlowHaltReason::ProtocolFailed,
                 HaltPoint::Barrier,
-                format!("expired Release completion: {failure:?}"),
+                format!("{release} Release completion: {failure:?}"),
             )),
         }
     }
@@ -260,12 +344,13 @@ impl ExpiredResidencyRelease {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         context.live(io)?;
+        let release = self.permit.label();
         context.barrier.drain_capacity_wake().map_err(|error| {
             context.fail(
                 io,
                 FlowHaltReason::TraceFailed,
                 HaltPoint::Author,
-                format!("expired Release trace wake: {error:?}"),
+                format!("{release} Release trace wake: {error:?}"),
             )
         })?;
         let port = resources.spu.as_ref().unwrap().residency.as_ref().unwrap();
@@ -295,7 +380,7 @@ impl ExpiredResidencyRelease {
                 io,
                 FlowHaltReason::TraceFailed,
                 HaltPoint::Author,
-                format!("expired Release wait: {error}"),
+                format!("{release} Release wait: {error}"),
             )
         })?;
         context.live(io)

@@ -71,7 +71,7 @@ enum RefusalElection {
 pub(super) struct EmissionWork {
     template: Option<&'static RestatementTemplate>,
     stage: EmissionStage,
-    cancelled: bool,
+    cancelled: Option<NonDispatchCause>,
     original: Option<OriginalRequests>,
     restatement: Option<RestatementRequest>,
     corrections: Vec<CorrectionWork>,
@@ -99,6 +99,21 @@ pub(super) struct EmissionWork {
 }
 
 impl EmissionWork {
+    pub(super) fn retire_failed_placement_grants(
+        &mut self,
+        context: &mut RecordingContext,
+    ) -> Result<(), RunFailure> {
+        if context.phase != crate::flow::context::RecordingPhase::Failed
+            || context.failure().is_none()
+        {
+            return Err(RunFailure::PlaceOwned);
+        }
+        if let Some(correction) = self.corrections.last_mut() {
+            correction.retire_failed_placement_grants(context)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn selected_answer(&self) -> Option<(String, weaver_types::Finish)> {
         let effective = self.execution.as_ref()?.completed_effective()?;
         // A decoder's own stop token/capacity finish is a checked model answer.
@@ -110,7 +125,7 @@ impl EmissionWork {
         Self {
             template,
             stage: EmissionStage::Begin,
-            cancelled: false,
+            cancelled: None,
             original: None,
             restatement: None,
             corrections: vec![],
@@ -137,9 +152,9 @@ impl EmissionWork {
             unexpected_refusal: None,
         }
     }
-    pub(super) fn stopped() -> Self {
+    pub(super) fn cancelled(cause: NonDispatchCause) -> Self {
         let mut work = Self::new(None);
-        work.cancelled = true;
+        work.cancelled = Some(cause);
         work
     }
     pub(super) fn progress(&self) -> FoundationInputProgress {
@@ -169,7 +184,7 @@ impl EmissionWork {
     }
     pub(super) fn close_refusal(&mut self) -> bool {
         if self.stage != EmissionStage::Refused
-            || self.cancelled
+            || self.cancelled.is_some()
             || self.closing_refusal.is_some()
             || !(self.refused.is_some()
                 || self.exhausted.is_some()
@@ -184,7 +199,7 @@ impl EmissionWork {
     }
 
     fn finish_accounting(&mut self, context: &mut RecordingContext) {
-        self.stage = if self.closing_refusal.is_some() && !self.cancelled {
+        self.stage = if self.closing_refusal.is_some() && self.cancelled.is_none() {
             // The same operation still owes its trace close and world
             // delivery. WorldClose inherits this bound.
             EmissionStage::RefusalClose
@@ -196,12 +211,14 @@ impl EmissionWork {
 
     pub(super) fn cancel(
         &mut self,
+        cause: NonDispatchCause,
         context: &mut RecordingContext,
         decode: Option<&mut crate::flow::pump_transport::DecodePort>,
         gate: Option<&mut crate::flow::pump_transport::OrganPort>,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
-        self.cancelled = true;
+        retain_cancellation(&mut self.cancelled, cause);
+        let cause = self.cancelled.unwrap();
         if self.stage == EmissionStage::RefusalClose {
             // A later Stop can replace an ordinary refusal before its close
             // author starts. Its completed account cannot be filed again.
@@ -209,9 +226,12 @@ impl EmissionWork {
             return Ok(());
         }
         if self.stage == EmissionStage::Execution {
-            self.execution.as_mut().unwrap().cancel(context, gate, io)?;
+            self.execution
+                .as_mut()
+                .unwrap()
+                .cancel(cause, context, gate, io)?;
         } else if context.repair.is_some() {
-            context.cancel_repair(NonDispatchCause::Stop, io)?;
+            context.cancel_repair(cause, io)?;
             if self.stage == EmissionStage::Correction {
                 self.corrections
                     .last_mut()
@@ -234,6 +254,36 @@ impl EmissionWork {
         Ok(())
     }
 
+    pub(super) fn cancel_control(
+        &self,
+    ) -> Option<(&OrganEnvelope, &crate::flow::pump_transport::OrganSend)> {
+        self.execution.as_ref()?.cancel_control()
+    }
+
+    pub(super) fn advance_cancel_control(
+        &mut self,
+        context: &mut RecordingContext,
+        gate: &mut crate::flow::pump_transport::OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        match self.execution.as_mut() {
+            Some(work) => work.advance_cancel_control(context, gate, io),
+            None => Ok(true),
+        }
+    }
+
+    pub(super) fn route_cancel_reply(
+        &mut self,
+        context: &mut RecordingContext,
+        gate: &mut crate::flow::pump_transport::OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        match self.execution.as_mut() {
+            Some(work) => work.route_cancel_reply(context, gate, io),
+            None => Ok(false),
+        }
+    }
+
     pub(super) fn advance<I: PumpIo>(
         &mut self,
         generation: &mut Option<GenerationCompletion>,
@@ -245,7 +295,9 @@ impl EmissionWork {
             EmissionStage::Execution => {
                 let work = self.execution.as_mut().unwrap();
                 work.advance(&self.selected.as_ref().unwrap().1, context, ports)?;
-                if self.cancelled && work.progress() == FoundationInputProgress::PairsComplete {
+                if self.cancelled.is_some()
+                    && work.progress() == FoundationInputProgress::PairsComplete
+                {
                     self.stage = EmissionStage::Cancelled;
                 }
             }
@@ -258,7 +310,7 @@ impl EmissionWork {
             EmissionStage::Correction => {
                 let correction = self.corrections.last_mut().unwrap();
                 if correction.advance(context, ports)? {
-                    self.stage = if correction.refused() && !self.cancelled {
+                    self.stage = if correction.refused() && self.cancelled.is_none() {
                         self.detail = correction.detail().map(str::to_owned);
                         EmissionStage::Refused
                     } else {
@@ -293,13 +345,18 @@ impl EmissionWork {
                 let certified = certificate.take().unwrap();
                 let begin = match self.template {
                     Some(template) => context.begin_repair(original, certified, template, ports.io),
-                    None => context.begin_stopped_emission(original, certified, ports.io),
+                    None => context.begin_cancelled_emission(
+                        original,
+                        certified,
+                        self.cancelled.expect("cancelled emission"),
+                        ports.io,
+                    ),
                 };
                 match begin {
                     Ok(()) => {
                         self.stage = EmissionStage::Repair;
-                        if self.cancelled {
-                            context.cancel_repair(NonDispatchCause::Stop, ports.io)?;
+                        if let Some(cause) = self.cancelled {
+                            context.cancel_repair(cause, ports.io)?;
                         }
                     }
                     Err(error) => {
@@ -453,7 +510,7 @@ impl EmissionWork {
                 };
                 self.refusal_record = Some(sequence);
                 context.complete_wait(PumpDeadline::Decision);
-                self.stage = if self.cancelled {
+                self.stage = if self.cancelled.is_some() {
                     EmissionStage::CancelAccount
                 } else {
                     EmissionStage::Refused
@@ -506,10 +563,10 @@ impl EmissionWork {
                     .account
                     .take()
                     .expect("completed emission retains its account");
-                let cause = if self.closing_refusal.is_some() && !self.cancelled {
+                let cause = if self.closing_refusal.is_some() && self.cancelled.is_none() {
                     NonDispatchCause::PassPurpose
                 } else {
-                    NonDispatchCause::Stop
+                    self.cancelled.unwrap_or(NonDispatchCause::Stop)
                 };
                 match context.begin_repair_not_dispatched(account, cause, ports.io) {
                     Ok(()) => self.stage = EmissionStage::Pairs,

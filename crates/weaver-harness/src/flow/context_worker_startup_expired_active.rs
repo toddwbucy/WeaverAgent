@@ -87,7 +87,7 @@ impl ExpiredActiveRollback {
         if self.stage == Stage::Gate {
             if self.gate.is_none() {
                 self.gate = Some(
-                    super::gate::ExpiredGateRollback::new(owner, io)
+                    super::gate::ExpiredGateRollback::new(&mut owner.gate_host(), io)
                         .map_err(|error| format!("expired gate rollback: {error:?}"))?,
                 );
             }
@@ -95,7 +95,12 @@ impl ExpiredActiveRollback {
                 .gate
                 .as_mut()
                 .unwrap()
-                .step(owner, self.dials.as_mut().unwrap(), io)
+                .step(
+                    &mut owner.gate_host(),
+                    self.dials.as_mut().unwrap(),
+                    true,
+                    io,
+                )
                 .map_err(|error| format!("expired gate rollback: {error:?}"))?
             {
                 self.stage = Stage::Grants;

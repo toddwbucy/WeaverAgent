@@ -1151,6 +1151,17 @@ impl RecordBarrier {
         }
     }
 
+    pub(super) fn retain_entered_rollback_record(
+        &mut self,
+        permit: &super::context::worker_startup::entered_rollback::EnteredRollbackDisposal,
+    ) -> StoppedStartupRecord {
+        assert!(permit.matches_record(&self.author_identity()));
+        StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        }
+    }
+
     /// Move the exact unadmitted boot record into rollback evidence.
     pub(super) fn retain_boot_rollback_record(
         &mut self,
