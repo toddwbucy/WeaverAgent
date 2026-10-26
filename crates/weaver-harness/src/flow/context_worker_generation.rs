@@ -21,6 +21,18 @@ pub(in crate::flow::context) mod tests;
 pub(in crate::flow::context) mod admission_tests;
 
 #[cfg(test)]
+#[path = "context_worker_queued_input_tests.rs"]
+pub(in crate::flow::context) mod queued_input_tests;
+
+#[cfg(test)]
+#[path = "context_worker_election_wait_tests.rs"]
+pub(in crate::flow::context) mod election_wait_tests;
+
+#[cfg(test)]
+#[path = "context_worker_halt_tests.rs"]
+pub(in crate::flow::context) mod halt_tests;
+
+#[cfg(test)]
 #[path = "context_worker_return_tests.rs"]
 pub(in crate::flow::context) mod return_tests;
 
@@ -284,10 +296,11 @@ impl<'a> FoundationInput<'a> {
             work.answer = Some(close);
             work.stage = EngineStage::Answer;
         }
+        self.serving.owner.context.live(io)?;
+        self.serving.retain_queued_input(io)?;
         let owner = &mut self.serving.owner;
         let work = self.engine.as_mut().unwrap();
         let context = &mut owner.context;
-        context.live(io)?;
         let mut ports = PumpPorts {
             lifecycle: LifecyclePorts {
                 listener: Some(&mut owner.listener),

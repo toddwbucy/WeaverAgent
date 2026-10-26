@@ -384,6 +384,7 @@ impl<'a> FoundationEnter<'a> {
             gate_outgoing: owner.gate_raise.exchange.ordinal,
             owner,
             gate_exchanges: Default::default(),
+            queued_inputs: Default::default(),
         })
     }
 }
@@ -407,6 +408,7 @@ fn ports(listener: &mut Option<Box<LifecycleListener>>) -> LifecyclePorts<'_> {
 pub struct FoundationServing<'a> {
     owner: Box<EnteredServing<'a>>,
     gate_exchanges: std::collections::HashSet<u64>,
+    queued_inputs: std::collections::VecDeque<crate::flow::pump_transport::ReceivedOrgan>,
     gate_outgoing: u64,
 }
 
