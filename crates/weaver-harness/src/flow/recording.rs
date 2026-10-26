@@ -280,6 +280,9 @@ impl RecordBarrier {
     pub(super) fn is_loaded(&self) -> bool {
         self.recorder.is_loaded()
     }
+    pub(super) fn latest_recorded(&self) -> Option<Sequence> {
+        self.recorder.latest_recorded()
+    }
     pub(super) fn run(&self) -> &str {
         &self.run
     }

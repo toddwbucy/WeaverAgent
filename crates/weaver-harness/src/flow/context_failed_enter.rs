@@ -466,6 +466,7 @@ pub(in crate::flow) struct FailedRunCleanup {
     deadline: Option<u64>,
     report_unavailable: Option<String>,
     account_failure: Option<HaltAccountFailure>,
+    capture: Option<Box<super::leave_capture::FailedCapture>>,
     retired: Option<FailedFlowResources>,
     summary_account: Option<PlanSummaryAccount>,
     placement_accounts: Vec<PlaceAccount>,
@@ -616,6 +617,27 @@ impl RecordingContext {
 }
 
 impl FailedRunCleanup {
+    /// Only the failed capture parent can supply this retired lifecycle owner.
+    /// Install it before Reporting, preserving the existing first failure and
+    /// min(Leave, halt) cap. An existing frozen account can never be rewritten.
+    pub(in crate::flow::context) fn retain_failed_capture(
+        &mut self,
+        capture: Box<super::leave_capture::FailedCapture>,
+    ) -> Result<(), Box<super::leave_capture::FailedCapture>> {
+        if self.stage != Stage::Reporting
+            || self.capture.is_some()
+            || self
+                .context
+                .flow
+                .halt()
+                .is_none_or(|halt| halt.account().is_some())
+            || !capture.matches(&self.context)
+        {
+            return Err(capture);
+        }
+        self.capture = Some(capture);
+        Ok(())
+    }
     #[cfg(test)]
     pub(in crate::flow::context) fn rollback_test_read(
         &self,
@@ -731,6 +753,7 @@ impl FailedRunCleanup {
             deadline,
             report_unavailable: None,
             account_failure: None,
+            capture: None,
             retired: None,
             summary_account: None,
             placement_accounts: Vec::new(),
@@ -960,7 +983,25 @@ impl FailedRunCleanup {
         false
     }
 
+    fn freeze_account(&mut self) {
+        if self.context.flow.halt().unwrap().account().is_none() && self.account_failure.is_none() {
+            let facts = ExternalFacts {
+                outstanding_pairs: self.context.outstanding_pairs(),
+                capture: self.capture.as_ref().map(|capture| capture.facts().clone()),
+                wait: self.context.halt_wait().cloned(),
+                input_id: self.context.input.snapshot().map(|input| input.input_id),
+            };
+            if let Err(error) = self.context.freeze_halt_account(facts) {
+                self.report_unavailable = Some(format!("failed Enter frozen account: {error:?}"));
+                self.account_failure = Some(error);
+            }
+        }
+    }
+
     pub(in crate::flow::context) fn abort(&mut self) {
+        // Preserve the stopped owners even when expiry precedes Reporting.
+        // Freezing an account performs no transport or trace write.
+        self.freeze_account();
         // At expiry no account or writer may keep a descriptor or blocking wait.
         // Original unfinished owners remain in context, never relabelled settled.
         self.retire_flow();
@@ -976,7 +1017,13 @@ impl FailedRunCleanup {
 
     fn retire_flow(&mut self) {
         if self.retired.is_none() {
-            self.retired = if self.serving {
+            self.retired = if let Some(capture) = &self.capture {
+                capture.disposal(&self.context).and_then(|permit| {
+                    self.context
+                        .flow
+                        .retire_failed_capture_ports(&permit, &self.context.barrier)
+                })
+            } else if self.serving {
                 self.context.flow.retire_failed_serving_ports()
             } else {
                 self.context.flow.retire_failed_ports()
@@ -996,19 +1043,7 @@ impl FailedRunCleanup {
         }
         let result = match self.stage {
             Stage::Reporting => {
-                if self.context.flow.halt().unwrap().account().is_none() {
-                    let facts = ExternalFacts {
-                        outstanding_pairs: self.context.outstanding_pairs(),
-                        capture: None,
-                        wait: self.context.halt_wait().cloned(),
-                        input_id: self.context.input.snapshot().map(|input| input.input_id),
-                    };
-                    if let Err(error) = self.context.freeze_halt_account(facts) {
-                        self.report_unavailable =
-                            Some(format!("failed Enter frozen account: {error:?}"));
-                        self.account_failure = Some(error);
-                    }
-                }
+                self.freeze_account();
                 if self.context.flow.halt().unwrap().account().is_some() {
                     if self.context.halt_report.is_none()
                         && let Err(error) = self.context.begin_halt_report()

@@ -14,7 +14,7 @@ fn write(path: &Path, bytes: &[u8], mode: u32) {
     fs::write(path, bytes).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
-fn setup(fixture: &Fixture) -> StartIdentity {
+pub(crate) fn setup(fixture: &Fixture) -> StartIdentity {
     fs::create_dir_all(&fixture.config.coordination_root).unwrap();
     fs::set_permissions(
         &fixture.config.coordination_root,

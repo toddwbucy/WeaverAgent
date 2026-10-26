@@ -1,5 +1,6 @@
 //! Multiple real worker turns and management exchanges share one entered
-//! context. The member/model peers are scripted and do not qualify deployment.
+//! context. Model peers are scripted; forced-save SQLite cases use the normal
+//! member. The synthetic language fixtures do not qualify deployment.
 use super::emission::tests::FAMILY;
 use super::*;
 use crate::flow::clock::testing::FakePumpIo;
@@ -25,6 +26,12 @@ macro_rules! packet {
         assert_eq!(send($fd, &bytes, MsgFlags::MSG_NOSIGNAL), Ok(bytes.len()));
     }};
 }
+#[path = "context_worker_graceful_quiesce_tests.rs"]
+pub(in crate::flow::context) mod quiesce;
+
+#[path = "context_worker_wind_down_tests.rs"]
+pub(in crate::flow::context) mod wind_down;
+
 fn wait_file(root: &Path, name: &str) {
     let end = Instant::now() + Duration::from_secs(25);
     while !root.join(name).exists() {
@@ -62,6 +69,15 @@ fn frame(index: usize, malformed: bool) -> OrganEnvelope {
     }
 }
 pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
+    if wind_down::is_mode(mode) {
+        return wind_down::gate(mode, root, fd);
+    }
+    if quiesce::is_mode(mode) {
+        return quiesce::gate(mode, root, fd);
+    }
+    if forced_leave::is_mode(mode) {
+        return ready_rollback::gate(mode, root, fd);
+    }
     if ready_rollback::is_mode(mode) {
         return ready_rollback::gate(mode, root, fd);
     }
@@ -118,6 +134,17 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
 }
 
 pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
+    if forced_leave::wind_conversion::is_mode(mode) {
+        return forced_leave::wind_conversion::spu(mode, fd);
+    }
+    let converted_generation =
+        mode.contains("-session-graceful-save-sqlite-drain-") && mode.ends_with("-generation");
+    if mode.contains("-session-graceful-save") && !converted_generation {
+        return wind_down::spu(mode, fd);
+    }
+    if wind_down::is_mode(mode) {
+        return wind_down::spu(mode, fd);
+    }
     let root = std::path::PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
     let correction = serving_rollback::is_correction(mode);
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
@@ -217,6 +244,12 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                     &bytes[..n],
                 )
                 .unwrap();
+                if mode.ends_with("graceful-active")
+                    || mode.ends_with("quiesce-active")
+                    || mode.ends_with("quiesce-queued")
+                {
+                    wait_file(&root, "graceful-resume-generation");
+                }
                 if mode.ends_with("decoder-failure") {
                     return;
                 }
@@ -263,7 +296,9 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                 };
                 generated += 1;
                 if (index == 0
-                    && (mode.ends_with("stop-active") || serving_rollback::holds_generation(mode)))
+                    && (mode.ends_with("stop-active")
+                        || serving_rollback::holds_generation(mode)
+                        || converted_generation))
                     || (correction && index == 1 && mode.ends_with("-generation"))
                 {
                     pending = Some((turn, generation));
@@ -281,9 +316,17 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                 if correction {
                     wait_file(&root, "serving-rollback-lower.json");
                 }
+                if converted_generation {
+                    assert!(!root.join("graceful-drain-cancel.json").exists());
+                    std::fs::write(root.join("graceful-drain-cancel.json"), &bytes[..n]).unwrap();
+                    wait_file(&root, "ready-rollback-lower.json");
+                }
                 generation.finish = Finish::Stopped;
                 packet!(fd, &TokenAnswer::Generated(generation));
                 packet!(fd, &TokenAnswer::AtRest);
+                if converted_generation {
+                    return;
+                }
             }
             other => panic!("unexpected session decode: {other:?}"),
         }
@@ -390,6 +433,9 @@ pub(in crate::flow::context::worker_startup) mod ready_rollback;
 #[path = "context_worker_ready_rollback_edges_tests.rs"]
 mod ready_rollback_edges;
 
+#[path = "context_worker_forced_leave_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod forced_leave;
+
 #[path = "context_worker_serving_rollback_tests.rs"]
 pub(in crate::flow::context::worker_startup) mod serving_rollback;
 
@@ -402,6 +448,15 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if wind_down::is_mode(mode) {
+        return wind_down::exercise(serving, member, reader, socket, root, mode);
+    }
+    if quiesce::is_mode(mode) {
+        return quiesce::exercise(serving, member, reader, socket, root, mode);
+    }
+    if mode.contains("-session-graceful-") {
+        return graceful_session(serving, member, reader, socket, root, mode);
+    }
     let context_identity = std::ptr::from_ref(&*serving.owner.context);
     static MISSING: weaver_harness::FoundationRestatement =
         weaver_harness::FoundationRestatement::new("fixture.missing");
@@ -839,5 +894,205 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 > super::emission::tests::sequence(closes[0]),
             "queued input intake waits for the old world close"
         );
+    }
+}
+
+fn graceful_session(
+    serving: FoundationServing<'_>,
+    member: &mut Member,
+    reader: &mut UnixStream,
+    socket: &Path,
+    root: &Path,
+    mode: &str,
+) {
+    let active = mode.ends_with("active");
+    let mut guard = SessionGuard(Some(Session::begin(serving, &FAMILY, CutMethod::Flush)));
+    let done = AtomicBool::new(false);
+    reader.set_nonblocking(true).unwrap();
+    let (primary, bytes) = std::thread::scope(|scope| {
+        let responder = scope.spawn(|| {
+            let mut primary = None;
+            let end = Instant::now() + Duration::from_secs(20);
+            while !done.load(Ordering::SeqCst) && Instant::now() < end {
+                member.step_live(mode);
+                if primary.is_none()
+                    && root
+                        .join(if active {
+                            "session-generation-0.json"
+                        } else {
+                            "graceful-request"
+                        })
+                        .exists()
+                {
+                    primary = Some(management(
+                        socket,
+                        LifecycleDirective::Leave {
+                            cause: weaver_types::Cause { uid: 74 },
+                            forced: false,
+                            rollback: false,
+                        },
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            primary.expect("actual root Leave")
+        });
+        let recorder = scope.spawn(|| {
+            let mut bytes = vec![];
+            while !done.load(Ordering::SeqCst) {
+                let _ = reader.read_to_end(&mut bytes);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let _ = reader.read_to_end(&mut bytes);
+            bytes
+        });
+        let _stop = StopThreads(&done);
+        let session = guard.0.as_mut().unwrap();
+        drive(session, Progress::Accepted);
+        if active {
+            session.start_turn(TurnKey("session-0".into())).unwrap();
+        } else {
+            std::fs::write(root.join("graceful-request"), b"go").unwrap();
+        }
+        drive(session, Progress::DirectivePending);
+        assert!(!session.join_graceful_leave(), "a Leave is not a JoinLeave");
+        assert!(session.defer_graceful_leave());
+        assert!(session.start_turn(TurnKey("forbidden".into())).is_err());
+        assert!(session.next_input().is_err());
+        if active {
+            std::fs::write(root.join("graceful-resume-generation"), b"go").unwrap();
+            drive(session, Progress::LeavePending);
+            wait_file(root, "session-close-0.json");
+        } else {
+            assert_eq!(session.progress(), Progress::LeavePending);
+            assert!(!root.join("session-generation-0.json").exists());
+        }
+        // At the next-phase boundary the same listener still services Observe.
+        let observed = management(socket, LifecycleDirective::Observe);
+        let end = Instant::now() + Duration::from_secs(5);
+        let bytes = loop {
+            session.advance();
+            if let Some(bytes) = read_packet(&observed) {
+                break bytes;
+            }
+            assert!(Instant::now() < end, "pending Leave starved Observe");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let answer: weaver_types::state_flow::enter::ObservationEnvelope =
+            serde_json::from_slice(&bytes).unwrap();
+        assert!(matches!(
+            answer.payload,
+            weaver_types::state_flow::enter::ObservationContent::Answer(
+                weaver_types::state_flow::enter::ObservationAnswer::InTransition { .. }
+            )
+        ));
+        while session.progress() != Progress::LeavePending {
+            session.advance();
+        }
+        // A silent secondary dial receives its original two-second allowance,
+        // then drops without displacing or answering the graceful holder.
+        let silent = dial(socket);
+        let began = Instant::now();
+        let mut accepted = false;
+        loop {
+            let p = session.advance();
+            accepted |= p == Progress::Pending;
+            if accepted && p == Progress::LeavePending {
+                break;
+            }
+            assert!(
+                began.elapsed() < Duration::from_secs(4),
+                "silent Leave dial stalled the holder"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(began.elapsed() >= Duration::from_millis(1900));
+        assert!(read_packet(&silent).is_none());
+        let mut joins = vec![];
+        for uid in [81, 82] {
+            joins.push(management(
+                socket,
+                LifecycleDirective::JoinLeave {
+                    cause: weaver_types::Cause { uid },
+                },
+            ));
+            let end = Instant::now() + Duration::from_secs(5);
+            while session.progress() != Progress::DirectivePending {
+                session.advance();
+                assert!(Instant::now() < end);
+            }
+            assert!(
+                !session.defer_graceful_leave(),
+                "a join is not a new graceful request"
+            );
+            assert!(session.join_graceful_leave());
+            assert_eq!(session.progress(), Progress::LeavePending);
+        }
+        assert!(joins.iter().all(|peer| read_packet(peer).is_none()));
+        done.store(true, Ordering::SeqCst);
+        (responder.join().unwrap(), recorder.join().unwrap())
+    });
+    assert!(read_packet(&primary).is_none());
+    let input = guard
+        .0
+        .take()
+        .unwrap()
+        .into_owner()
+        .ok()
+        .expect("retained input");
+    let retained = Guard {
+        input: Some(input),
+        management: None,
+    };
+    let input = retained.owned_input();
+    let leave = input.serving.graceful.as_ref().unwrap();
+    assert_eq!(leave.cause.uid, 74);
+    assert!(leave.forced);
+    assert_eq!(leave.forced_by.map(|cause| cause.uid), Some(81));
+    assert_eq!(leave.joins.len(), 2);
+    assert!(
+        input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(crate::flow::pump::PumpDeadline::Leave)
+            .is_none()
+    );
+    assert!(
+        input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(crate::flow::pump::PumpDeadline::AdminRead)
+            .is_none()
+    );
+    assert!(input.serving.owner.context.failure().is_none());
+    let rows = trace_through(
+        reader,
+        bytes,
+        retained.recorded_sequence(),
+        Instant::now() + Duration::from_secs(5),
+    )
+    .unwrap();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["kind"] == "turn.started")
+            .count(),
+        usize::from(active)
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["kind"] == "turn.closed")
+            .count(),
+        usize::from(active)
+    );
+    if active {
+        let close = rows
+            .iter()
+            .find(|row| row["kind"] == "turn.closed")
+            .unwrap();
+        assert_eq!(close["payload"]["close"], "clean");
     }
 }

@@ -441,6 +441,7 @@ impl<'a> FoundationEnter<'a> {
             owner,
             gate_exchanges: Default::default(),
             queued_inputs: Default::default(),
+            graceful: None,
         })
     }
 }
@@ -466,6 +467,7 @@ pub struct FoundationServing<'a> {
     gate_exchanges: std::collections::HashSet<u64>,
     queued_inputs: std::collections::VecDeque<crate::flow::pump_transport::ReceivedOrgan>,
     gate_outgoing: u64,
+    graceful: Option<Box<input::graceful::PendingGraceful>>,
 }
 
 #[path = "context_worker_input.rs"]

@@ -373,4 +373,4 @@ fn select(config: &ServiceConfig, agent: &AgentName) -> Result<VerifiedArtifact,
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

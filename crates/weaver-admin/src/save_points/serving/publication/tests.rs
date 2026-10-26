@@ -10,6 +10,7 @@ use weaver_types::state_flow::SourceBlockId;
 use weaver_types::{TraceSink, parse_serving_draft};
 
 mod failures;
+mod leave_actor;
 
 const SEED_BYTES: &[u8] = b"the member, not admin, judges this image";
 const CAPTURE_BYTES: &[u8] = b"a complete captured state image";
@@ -282,6 +283,46 @@ fn report(identity: &StartIdentity, capture: u64) -> SavePointReport {
         event_run: run(),
         event_sequence: DecimalU64(81),
     }
+}
+
+#[test]
+fn capture_prepared_corpus_matches_actual_publication_identity() {
+    use weaver_types::state_flow::capture::{
+        CaptureArtifact, CaptureEnvelope, CapturePayload, CaptureSender,
+    };
+    let fixture = Fixture::new();
+    let mut repo = fixture.repository();
+    let loaded = fixture.seed_complete(&mut repo);
+    let mut publication = fixture.capture(&mut repo, &loaded, 1, PersistenceCause::ForcedUnload);
+    let identity = publication
+        .image_finished(&run(), 1.into(), "capture-1.sqlite", &mut alive)
+        .unwrap();
+    let corpus = CaptureEnvelope::decode(
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../weaver-types/tests/fixtures/state-capture-prepared.json"
+        )),
+        CaptureSender::Admin,
+    )
+    .unwrap();
+    let expected = CapturePayload::SavePointPrepared(CaptureArtifact {
+        capture_id: 1.into(),
+        artifact_id: identity.artifact_id,
+        dump_sha256: identity.dump_sha256,
+        config_sha256: identity.config_sha256,
+    });
+    assert_eq!(
+        corpus.payload, expected,
+        "the harness consumes this same publisher corpus"
+    );
+    let encoded = corpus.encode(CaptureSender::Admin).unwrap();
+    assert_eq!(
+        CaptureEnvelope::decode(&encoded, CaptureSender::Admin).unwrap(),
+        corpus
+    );
+    // This is an identity/codec corpus. No Commit or final lifecycle outcome
+    // was received, so it grants no publication or load permission.
+    assert_eq!(fixture.index().len(), 1);
 }
 
 #[test]

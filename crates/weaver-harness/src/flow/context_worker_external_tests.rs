@@ -248,6 +248,19 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         if mode.contains("queued-input") && !mode.contains("late") && ordinal == 2 {
                             queued::queue_packets(mode, root, fd);
                         }
+                        if mode.contains("graceful-running")
+                            || mode.contains("graceful-held")
+                            || mode.contains("graceful-expiry")
+                        {
+                            pending = Some(OrganEnvelope {
+                                payload: Payload::ToolAnswer(ToolOutcome::Killed {
+                                    by: KillCause::Unload,
+                                    partial: Some("retained partial".into()),
+                                }),
+                                ..answer
+                            });
+                            continue;
+                        }
                         if mode.contains("stop-running") || mode.contains("queued-input-leave") {
                             pending = Some(answer);
                             continue;
@@ -288,6 +301,9 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                             );
                         }
                         packet(fd, &answer);
+                        if mode.contains("graceful") {
+                            std::fs::write(root.join("graceful-result-sent"), b"sent").unwrap();
+                        }
                         previous = Some(answer);
                     }
                     Payload::ToolInterrupt {
@@ -322,6 +338,30 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                             // original halt cap closes/kills this fixture.
                             loop {
                                 std::thread::sleep(Duration::from_millis(10));
+                            }
+                        }
+                    }
+                    Payload::ToolInterrupt {
+                        by: KillCause::Unload,
+                    } if mode.contains("graceful") => {
+                        assert_eq!(frame.position, Position::Continue);
+                        assert_eq!(
+                            frame.exchange,
+                            ExchangeId {
+                                opener: Opener::Harness,
+                                ordinal: 2
+                            }
+                        );
+                        assert!(!root.join("graceful-interrupt.json").exists());
+                        std::fs::write(root.join("graceful-interrupt.json"), &bytes[..n]).unwrap();
+                        if !mode.contains("graceful-expiry") {
+                            if let Some(answer) = pending.take() {
+                                packet(fd, &answer);
+                            } else {
+                                assert!(
+                                    mode.contains("graceful-crossed")
+                                        || mode.contains("graceful-result")
+                                );
                             }
                         }
                     }
@@ -371,7 +411,7 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                             serde_json::from_slice(&close.octets().unwrap()).unwrap();
                         assert_eq!(
                             value["kind"],
-                            if mode.contains("-final-") {
+                            if mode.contains("-final-") || mode.contains("graceful-result") {
                                 "answered"
                             } else {
                                 "stopped"
@@ -405,6 +445,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if mode.contains("graceful") {
+        return crate::flow::context::worker_startup::input::generation::graceful_tests::exercise(
+            guard, member, reader, clock, socket, root, mode,
+        );
+    }
     let input = guard.input.as_mut().unwrap();
     input.repair(&FAMILY).unwrap();
     until(

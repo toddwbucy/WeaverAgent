@@ -4,6 +4,7 @@
 //! FOUNDATION-TRANSITION keeps the existing wire and deployment grammar in force
 //! until the complete replacement passes its cutover review.
 
+pub mod capture;
 pub(crate) mod codec;
 mod content;
 mod declaration;

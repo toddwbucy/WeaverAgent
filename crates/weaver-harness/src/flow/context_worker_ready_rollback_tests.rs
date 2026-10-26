@@ -13,6 +13,38 @@ pub(in crate::flow::context::worker_startup) fn is_mode(mode: &str) -> bool {
 }
 
 pub(super) fn gate(mode: &str, root: &Path, fd: i32) {
+    if super::forced_leave::quiesce_conversion::is_mode(mode) {
+        return super::forced_leave::quiesce_conversion::gate(mode, root, fd);
+    }
+    if super::forced_leave::wind_conversion::is_mode(mode) {
+        return super::forced_leave::wind_conversion::gate(mode, root, fd);
+    }
+    let converted_drain = mode.contains("-session-graceful-save-sqlite-drain-");
+    if mode.contains("-session-graceful-save") && !converted_drain {
+        let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
+        let n = recv(fd, &mut bytes, MsgFlags::empty()).unwrap();
+        let quiesce: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
+        assert_eq!(
+            quiesce.payload,
+            Payload::Directive(LifecycleDirective::Quiesce)
+        );
+        assert_eq!(quiesce.exchange.ordinal, 2);
+        packet!(
+            fd,
+            &OrganEnvelope {
+                exchange: quiesce.exchange,
+                position: Position::Close,
+                payload: Payload::Answer(LifecycleAnswer::GateQuiesced),
+            }
+        );
+    }
+    if (mode.contains("-forced-save-sqlite") || converted_drain)
+        && (mode.ends_with("-held-filing")
+            || mode.ends_with("-accepted")
+            || (converted_drain && mode.ends_with("-generation")))
+    {
+        packet!(fd, &frame(0, false));
+    }
     // Ready was produced by the ordinary gate fixture. Only the queued case
     // offers content, after the actual root rollback has won management.
     if mode.ends_with("-queued") {
@@ -23,11 +55,28 @@ pub(super) fn gate(mode: &str, root: &Path, fd: i32) {
         std::fs::write(root.join("ready-rollback-queued"), b"sent").unwrap();
     }
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
-    let n = recv(fd, &mut bytes, MsgFlags::empty()).unwrap_or(0);
+    let mut n = recv(fd, &mut bytes, MsgFlags::empty()).unwrap_or(0);
     if n == 0 {
         return;
     }
-    let lower: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
+    let mut lower: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
+    if (mode.contains("-forced-save-sqlite") || converted_drain)
+        && (mode.ends_with("-held-filing")
+            || mode.ends_with("-accepted")
+            || (converted_drain && mode.ends_with("-generation")))
+        && matches!(lower.payload, Payload::Frame(_))
+    {
+        assert_eq!(lower.exchange, frame(0, false).exchange);
+        assert_eq!(lower.position, Position::Close);
+        let Payload::Frame(world) = &lower.payload else {
+            unreachable!()
+        };
+        let value: serde_json::Value = serde_json::from_slice(&world.octets().unwrap()).unwrap();
+        assert_eq!(value["kind"], "stopped");
+        std::fs::write(root.join("forced-save-world.json"), &bytes[..n]).unwrap();
+        n = recv(fd, &mut bytes, MsgFlags::empty()).unwrap();
+        lower = serde_json::from_slice(&bytes[..n]).unwrap();
+    }
     assert_eq!(lower.position, Position::Open);
     assert_eq!(lower.exchange.opener, weaver_types::Opener::Harness);
     assert_eq!(lower.payload, Payload::Directive(LifecycleDirective::Lower));

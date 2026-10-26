@@ -565,6 +565,35 @@ impl OrganPort {
         }
     }
 
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_capture(
+        &mut self,
+        input: weaver_types::state_flow::capture::CaptureEnvelope,
+    ) -> Result<
+        TrackedStage<weaver_types::state_flow::capture::CaptureEnvelope>,
+        StageFailure<weaver_types::state_flow::capture::CaptureEnvelope>,
+    > {
+        use weaver_types::state_flow::capture::{CaptureCodecError, CaptureSender};
+        let bytes = match input.encode(CaptureSender::Harness) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let failure = match error {
+                    CaptureCodecError::TooLarge => Failure::truncated(MAX_ENVELOPE_BYTES),
+                    _ => Failure::invalid(format!("replacement capture: {error}")),
+                };
+                return Err(StageFailure {
+                    input,
+                    failure: self.fail(failure),
+                });
+            }
+        };
+        let exchange = input.exchange.clone();
+        match self.stage_encoded(input, |_| Ok(bytes))? {
+            Stage::Queued => Ok(TrackedStage::Queued(self.track_staged(exchange))),
+            Stage::Busy(input) => Ok(TrackedStage::Busy(input)),
+        }
+    }
+
     /// Withdraw only this exact exchange's wholly unsent organ datagram. A
     /// successful SEQPACKET send removes it atomically, so absence after send
     /// never becomes a claim that the operation was not dispatched. A failed
@@ -591,6 +620,48 @@ impl OrganPort {
         }
         self.send_interrupted = false;
         Ok(Some(pending))
+    }
+
+    /// The paired projection keeps its exact port-minted send witness. It may
+    /// withdraw only that still-unsent datagram, never a matching scalar alone.
+    pub(super) fn withdraw_capture_pending(
+        &mut self,
+        send: &OrganSend,
+    ) -> Result<Option<weaver_types::state_flow::capture::CaptureEnvelope>, Failure> {
+        use weaver_types::state_flow::capture::{CaptureEnvelope, CaptureSender};
+        self.live()?;
+        let Some(outbound) = self.outgoing.as_ref() else {
+            return Ok(None);
+        };
+        if !send.belongs_to(self)
+            || outbound
+                .tracked
+                .as_ref()
+                .is_none_or(|tracked| !Arc::ptr_eq(tracked, &send.tracked))
+        {
+            return Ok(None);
+        }
+        if outbound.preamble.is_some() || outbound.preamble_sent || outbound.offset != 0 {
+            return Err(self.fail(Failure::invalid(
+                "capture withdrawal requires a wholly unsent datagram",
+            )));
+        }
+        let original = CaptureEnvelope::decode(&outbound.body, CaptureSender::Harness)
+            .map_err(|error| self.fail(Failure::invalid(format!("capture withdrawal: {error}"))))?;
+        if !send.matches_exchange(&original.exchange) || send.sent() {
+            return Err(self.fail(Failure::invalid(
+                "capture withdrawal changed its original ticket",
+            )));
+        }
+        self.outgoing
+            .take()
+            .unwrap()
+            .tracked
+            .unwrap()
+            .status
+            .store(SEND_WITHDRAWN, Ordering::Release);
+        self.send_interrupted = false;
+        Ok(Some(original))
     }
 
     /// Transfer the typed envelope and exact received datagram atomically.

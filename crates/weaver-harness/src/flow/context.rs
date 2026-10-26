@@ -323,6 +323,7 @@ pub(crate) struct RecordingContext {
     input_turn: Option<input_driver::InputTurn>,
     input_turns: std::collections::BTreeSet<String>,
     member_capture: Option<capture_driver::MemberCapture>,
+    next_capture_id: Option<u64>,
     freshness: Option<freshness_driver::FreshnessTransaction>,
     read: Option<read_driver::ReadTransaction>,
     place_engine: Option<super::place::PlaceEngine>,
@@ -365,9 +366,17 @@ pub(crate) struct RecordingContext {
     pair_refused_gate: Option<crate::flow::pump_transport::ReceivedOrgan>,
     repair: Option<repair_driver::RepairTransaction>,
     repair_certificate: Option<super::templates::TemplateCertificate>,
+    // Caller-admission probes distinguish ordinary author receipts from flow
+    // observations. Capture uses the recorder's complete watermark instead.
+    #[cfg(test)]
     last_author_sequence: Option<Sequence>,
     author_turn: Option<(Kind, Option<weaver_trace::TurnRef>)>,
     open_turn: Option<weaver_trace::TurnRef>,
+    // Set only by the retained graceful Leave after its exact Quiesce completes.
+    wind_down: Option<(
+        weaver_trace::TurnRef,
+        Option<weaver_types::state_flow::SourceBlockId>,
+    )>,
     ever_started_turn: bool,
     failed_enter_resources_issued: bool,
     /// A caller's source remains owned if refusal happens before a ticket.
@@ -468,6 +477,7 @@ impl RecordingContext {
             input_turn: None,
             input_turns: std::collections::BTreeSet::new(),
             member_capture: None,
+            next_capture_id: Some(1),
             freshness: None,
             read: None,
             place_engine: None,
@@ -509,9 +519,11 @@ impl RecordingContext {
             pair_refused_gate: None,
             repair: None,
             repair_certificate: None,
+            #[cfg(test)]
             last_author_sequence: None,
             author_turn: None,
             open_turn: None,
+            wind_down: None,
             ever_started_turn: false,
             failed_enter_resources_issued: false,
             refused_author: None,
@@ -1782,7 +1794,10 @@ impl RecordingContext {
     /// One writer owns the caller result at its existing completion boundary.
     /// Release retains it before observers; content owners first bind their proof.
     fn retain_recorded_author(&mut self, sequence: Sequence) {
-        self.last_author_sequence = Some(sequence);
+        #[cfg(test)]
+        {
+            self.last_author_sequence = Some(sequence);
+        }
         self.completed_author = Some(sequence);
         self.retain_release_recorded(sequence);
     }
@@ -2182,6 +2197,8 @@ impl RecordingContext {
             PumpDeadline::StateControl => (FlowHaltReason::ControlBound, BlockedStage::Control),
             PumpDeadline::Enter
             | PumpDeadline::Leave
+            | PumpDeadline::GracefulDrain
+            | PumpDeadline::WindDown
             | PumpDeadline::Lower
             | PumpDeadline::Label
             | PumpDeadline::AdminRead
@@ -2497,8 +2514,12 @@ mod input_tests;
 
 #[path = "context_capture.rs"]
 mod capture_driver;
+
+#[path = "context_leave_capture.rs"]
+mod leave_capture;
 #[allow(unused_imports)] // Dormant member port, consumed by the paired save lifecycle.
 pub(super) use capture_driver::{CaptureAnswer, CaptureProgress};
+pub(super) use leave_capture::FailedCaptureDisposal;
 
 #[cfg(test)]
 #[path = "context_capture_tests.rs"]

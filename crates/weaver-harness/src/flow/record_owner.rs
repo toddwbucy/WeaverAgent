@@ -7,7 +7,7 @@ use weaver_trace::serving::{
     AwaitingLoad, CapacityWake, Closed, DrainStatus, Event, Kind, Loaded, PreflightAttempt,
     PreflightRecorder, Recorder, Refused, Submission, SubmitAttempt, ValidatedPartition,
 };
-use weaver_trace::{Failure, SubmitRefusal};
+use weaver_trace::{Failure, Sequence, SubmitRefusal};
 
 enum Phase {
     AwaitingLoad(PreflightRecorder<AwaitingLoad>),
@@ -23,6 +23,7 @@ pub(super) struct RunRecorder {
     phase: Option<Phase>,
     stopped: bool,
     unloaded: bool,
+    latest_recorded: Option<Sequence>,
 }
 
 macro_rules! dispatch {
@@ -43,15 +44,28 @@ impl RunRecorder {
             phase: Some(Phase::AwaitingLoad(recorder)),
             stopped: false,
             unloaded: false,
+            latest_recorded: None,
         }
     }
 
     pub(super) fn active(recorder: Recorder) -> Self {
+        let latest_recorded = recorder
+            .structure()
+            .iter()
+            .last()
+            .map(|record| record.sequence);
         Self {
             phase: Some(Phase::Active(recorder)),
             stopped: false,
             unloaded: false,
+            latest_recorded,
         }
+    }
+
+    /// Actual admission across every author path in this run. This says
+    /// nothing about filing, capture content or survival of the sink.
+    pub(super) fn latest_recorded(&self) -> Option<Sequence> {
+        self.latest_recorded
     }
 
     pub(super) fn is_loaded(&self) -> bool {
@@ -179,8 +193,13 @@ impl RunRecorder {
                 Err(refused())
             }
         };
-        if unload && matches!(result, Ok(SubmitAttempt::Recorded(_))) {
-            self.unloaded = true;
+        if let Ok(SubmitAttempt::Recorded(submission)) = &result {
+            // Retain admission before the caller's tap, clock or lifecycle
+            // checks can fail. CapacityPending supplies no sequence.
+            self.latest_recorded = Some(submission.sequence);
+            if unload {
+                self.unloaded = true;
+            }
         }
         result
     }
@@ -231,8 +250,11 @@ impl RunRecorder {
                 Err(refused())
             }
         };
-        if unload && result.is_ok() {
-            self.unloaded = true;
+        if let Ok(submission) = &result {
+            self.latest_recorded = Some(submission.sequence);
+            if unload {
+                self.unloaded = true;
+            }
         }
         result
     }

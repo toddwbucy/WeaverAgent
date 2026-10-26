@@ -136,6 +136,20 @@ fn startup_composition_child() {
                         }
                     } else if let s::Ste100Target::Input { .. } = request.target {
                         assert!(mode.starts_with("input-"), "unexpected input check");
+                        if mode.ends_with("quiesce-checking") {
+                            let root =
+                                PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
+                            std::fs::write(root.join("quiesce-check-started"), &message.payload)
+                                .unwrap();
+                            let end = Instant::now() + Duration::from_secs(10);
+                            while !root.join("quiesce-check-release").exists() {
+                                assert!(
+                                    Instant::now() < end,
+                                    "Quiesce never disposed checked input"
+                                );
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                        }
                         if mode == "input-check-eof" {
                             return;
                         }
@@ -161,6 +175,13 @@ fn startup_composition_child() {
                         } else {
                             super::super::input_tests::accepted(&request)
                         };
+                        if mode.ends_with("wind-down-component") && request.text == "Read summary."
+                        {
+                            reply.result = s::Ste100Result::ComponentFailed {
+                                code: s::Ste100ComponentCode::NoResult,
+                                detail: "wind-down classifier failure".into(),
+                            };
+                        }
                         if mode.ends_with("output-refusal") && request.text == "Read result." {
                             reply.result = s::Ste100Result::NotSte100 {
                                 code: s::Ste100DefectCode::NonSte100,

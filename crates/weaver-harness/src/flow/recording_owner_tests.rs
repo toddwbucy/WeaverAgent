@@ -346,6 +346,7 @@ fn post_admission_tap_and_intake_failure_keep_sequence_not_pending_author() {
             RecordProgress::Failed
         ));
         assert_eq!(barrier.admitted_before_failure(), Some(Sequence(1)));
+        assert_eq!(barrier.latest_recorded(), Some(Sequence(1)));
         assert!(barrier.pending_author().is_none());
         assert!(barrier.pending().is_none());
         assert_eq!(barrier.recorder().structure().len(), 2);
@@ -367,6 +368,7 @@ fn terminal_reserve_bypasses_ticket_then_trace_only_resume_never_files() {
     let mut inbox = FlowInbox::new();
     let mut budget = budget(1);
     let original = authored("Read trace-only pending source.");
+    let before = barrier.latest_recorded();
     assert!(matches!(
         barrier.submit_authored_with_clock(
             original.clone(),
@@ -380,6 +382,7 @@ fn terminal_reserve_bypasses_ticket_then_trace_only_resume_never_files() {
         RecordProgress::Pending
     ));
     assert!(barrier.resume_trace_only().is_err());
+    assert_eq!(barrier.latest_recorded(), before, "pending has no sequence");
     let premature = barrier
         .submit_terminal_authored(fault(), &author(), 1_002, 2)
         .unwrap_err();
@@ -392,12 +395,14 @@ fn terminal_reserve_bypasses_ticket_then_trace_only_resume_never_files() {
     let first_fault = barrier
         .submit_terminal_authored(fault(), &author(), 1_002, 2)
         .unwrap();
+    assert_eq!(barrier.latest_recorded(), Some(first_fault));
     assert_eq!(barrier.recorder().structure().len(), count + 1);
     same_original(&barrier.pending_author().unwrap().event, &original);
     let duplicate = barrier
         .submit_terminal_authored(fault(), &author(), 1_003, 3)
         .unwrap_err();
     same_original(&duplicate.event, &fault());
+    assert_eq!(barrier.latest_recorded(), Some(first_fault));
     let reader = drain(reader);
     let deadline = Instant::now() + Duration::from_secs(8);
     let sequence = loop {
@@ -408,6 +413,7 @@ fn terminal_reserve_bypasses_ticket_then_trace_only_resume_never_files() {
         std::thread::yield_now();
     };
     assert!(sequence.0 > first_fault.0);
+    assert_eq!(barrier.latest_recorded(), Some(sequence));
     assert!(barrier.pending_author().is_none());
     assert_eq!(barrier.resume_trace_only().unwrap(), None);
     assert_eq!(budget.gauges(), (0, 0));

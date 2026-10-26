@@ -105,6 +105,15 @@ pub fn render_refusal(refusal: &LifecycleRefusal) -> String {
     serde_json::to_string(refusal).expect("the floor's wire types render")
 }
 
+/// The paired serving projection carries FailedRun without altering the legacy
+/// command dispatcher before the qualified cutover.
+#[allow(dead_code)]
+pub(crate) fn render_serving_refusal(
+    refusal: &weaver_types::state_flow::capture::CaptureRefusal,
+) -> String {
+    serde_json::to_string(refusal).expect("the floor's serving refusal renders")
+}
+
 /// Whether a descriptor carries close-on-exec, for the walks that assert it.
 // #118: a test-only hook, kept beside the production code it observes.
 #[cfg(test)]

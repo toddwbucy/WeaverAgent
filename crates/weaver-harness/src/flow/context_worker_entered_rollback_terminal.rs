@@ -1,4 +1,4 @@
-//! The accepted rollback's final account and answer retain their actual receipts.
+//! The accepted Leave's final account and answer retain their actual receipts.
 //! Once Unload records, errors return custody for disposal without another author.
 use crate::flow::author::{AuthoredEvent, AuthoredSource};
 use crate::flow::clock::{AbsoluteBound, PumpIo, WaitInterest};
@@ -10,6 +10,7 @@ use crate::flow::pump_transport::{Failure, OrganSend, TrackedStage};
 use nix::poll::PollFlags;
 use weaver_trace::serving::{self, Kind};
 use weaver_trace::{GrantSurface, MemberRelease, ReleaseOutcome, Sequence, Subsystem};
+use weaver_types::state_flow::{SavePointReport, capture::*};
 use weaver_types::{Cause, LifecycleAnswer, LifecycleRefusal, OrganEnvelope, Payload, Position};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -21,6 +22,33 @@ enum Stage {
     Complete,
 }
 
+#[derive(Clone)]
+enum AnswerCarry {
+    Rollback(OrganEnvelope),
+    Captured(CaptureEnvelope),
+}
+impl AnswerCarry {
+    #[allow(clippy::result_large_err)] // Return the original envelope and transport failure together.
+    fn stage(self, peer: &mut LifecyclePeer) -> Result<TrackedStage<Self>, (Self, Failure)> {
+        match self {
+            Self::Rollback(envelope) => match peer.stage_tracked(envelope) {
+                Ok(TrackedStage::Queued(send)) => Ok(TrackedStage::Queued(send)),
+                Ok(TrackedStage::Busy(envelope)) => {
+                    Ok(TrackedStage::Busy(Self::Rollback(envelope)))
+                }
+                Err(error) => Err((Self::Rollback(error.input), error.failure)),
+            },
+            Self::Captured(envelope) => match peer.stage_capture(envelope) {
+                Ok(TrackedStage::Queued(send)) => Ok(TrackedStage::Queued(send)),
+                Ok(TrackedStage::Busy(envelope)) => {
+                    Ok(TrackedStage::Busy(Self::Captured(envelope)))
+                }
+                Err(error) => Err((Self::Captured(error.input), error.failure)),
+            },
+        }
+    }
+}
+
 pub(super) struct EnteredRollbackTerminal {
     stage: Stage,
     unload: Option<AuthoredEvent>,
@@ -29,9 +57,11 @@ pub(super) struct EnteredRollbackTerminal {
     sequence: Option<Sequence>,
     spu_stood: bool,
     refusal: Option<LifecycleRefusal>,
-    answer: Option<OrganEnvelope>,
+    answer: Option<AnswerCarry>,
+    capture: Option<SavePointReport>,
+    forced: bool,
     send: Option<OrganSend>,
-    _returned_answer: Option<OrganEnvelope>,
+    _returned_answer: Option<AnswerCarry>,
     _answer_failure: Option<Failure>,
     stopped: Option<String>,
 }
@@ -73,10 +103,35 @@ impl EnteredRollbackTerminal {
             spu_stood: spu.is_some(),
             refusal,
             answer: None,
+            capture: None,
+            forced: true,
             send: None,
             _returned_answer: None,
             _answer_failure: None,
             stopped: None,
+        }
+    }
+
+    pub(super) fn captured(&mut self, report: SavePointReport) {
+        assert!(self.stage == Stage::Unload && self.capture.is_none());
+        self.capture = Some(report);
+    }
+
+    pub(super) fn leave_outcome(&mut self, forced: bool, forced_by: Option<Cause>) {
+        assert!(self.stage == Stage::Unload && !self.started);
+        let Some(serving::Payload::Unload(unload)) = &mut self.unload.as_mut().unwrap().payload
+        else {
+            unreachable!("original terminal Unload");
+        };
+        unload.forced = forced;
+        unload.forced_by = forced_by.map(|cause| weaver_trace::Cause { uid: cause.uid });
+        self.forced = forced;
+    }
+
+    pub(super) fn capture_answer(&self) -> Option<&CaptureEnvelope> {
+        match &self.answer {
+            Some(AnswerCarry::Captured(answer)) if self.complete() => Some(answer),
+            _ => None,
         }
     }
 
@@ -216,33 +271,50 @@ impl EnteredRollbackTerminal {
                         }
                     }
                 }
-                self.answer = Some(OrganEnvelope {
-                    exchange: message.envelope.exchange.clone(),
-                    position: Position::Close,
-                    payload: self.refusal.clone().map_or_else(
-                        || {
-                            Payload::Answer(LifecycleAnswer::Left {
-                                save_point: None,
-                                forced: true,
-                                no_state: false,
-                            })
-                        },
-                        Payload::Refusal,
-                    ),
+                self.answer = Some(if let Some(report) = &self.capture {
+                    AnswerCarry::Captured(CaptureEnvelope {
+                        exchange: message.envelope.exchange.clone(),
+                        position: Position::Close,
+                        payload: self.refusal.clone().map_or_else(
+                            || {
+                                CapturePayload::Answer(CaptureAnswer::Left {
+                                    save_point: Some(report.clone()),
+                                    forced: self.forced,
+                                    no_state: false,
+                                })
+                            },
+                            |refusal| CapturePayload::Refusal(CaptureRefusal::Lifecycle(refusal)),
+                        ),
+                    })
+                } else {
+                    AnswerCarry::Rollback(OrganEnvelope {
+                        exchange: message.envelope.exchange.clone(),
+                        position: Position::Close,
+                        payload: self.refusal.clone().map_or_else(
+                            || {
+                                Payload::Answer(LifecycleAnswer::Left {
+                                    save_point: None,
+                                    forced: self.forced,
+                                    no_state: false,
+                                })
+                            },
+                            Payload::Refusal,
+                        ),
+                    })
                 });
                 self.stage = Stage::Answer;
             }
             Stage::Answer => {
                 if self.send.is_none() {
-                    match peer.stage_tracked(self.answer.as_ref().unwrap().clone()) {
+                    match self.answer.as_ref().unwrap().clone().stage(peer) {
                         Ok(TrackedStage::Queued(send)) => self.send = Some(send),
                         Ok(TrackedStage::Busy(answer)) => {
                             self._returned_answer = Some(answer);
                             return Err("entered rollback answer has a competing sender".into());
                         }
-                        Err(error) => {
-                            self._returned_answer = Some(error.input);
-                            self._answer_failure = Some(error.failure);
+                        Err((input, failure)) => {
+                            self._returned_answer = Some(input);
+                            self._answer_failure = Some(failure);
                             self.stage = Stage::Complete;
                             return Ok(true);
                         }

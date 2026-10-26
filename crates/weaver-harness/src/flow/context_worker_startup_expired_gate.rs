@@ -178,6 +178,34 @@ impl<'a> GateRollbackEvidence<'a> {
     }
 }
 
+fn preceding_quiesce_reply(
+    original: GateRollbackEvidence<'_>,
+    port: &crate::flow::pump_transport::OrganPort,
+    received: &ReceivedOrgan,
+) -> bool {
+    let Some((request, send)) = original.control else {
+        return false;
+    };
+    let reply = received.envelope();
+    request.position == Position::Open
+        && request.exchange.opener == Opener::Harness
+        && matches!(
+            request.payload,
+            WirePayload::Directive(LifecycleDirective::Quiesce)
+        )
+        && reply.position == Position::Close
+        && reply.exchange == request.exchange
+        && matches!(
+            reply.payload,
+            WirePayload::Answer(LifecycleAnswer::GateQuiesced)
+        )
+        && received.belongs_to(port)
+        && send.belongs_to(port)
+        && send.matches_exchange(&request.exchange)
+        && send.sent()
+        && send.sent_at().is_some()
+}
+
 /// An accepted rollback Leave borrows the actual resources and retained Raise.
 /// Successful Ready and expired Enter project their own retained accounts.
 pub(in crate::flow::context::worker_startup) struct GateRollbackHost<'a> {
@@ -194,6 +222,7 @@ pub(in crate::flow::context::worker_startup) struct RollbackGate {
     lower: Option<OrganEnvelope>,
     send: Option<OrganSend>,
     raise_reply: Option<ReceivedOrgan>,
+    quiesce_reply: Option<ReceivedOrgan>,
     lower_reply: Option<ReceivedOrgan>,
     pending: Option<GateRecord>,
     // At most one further frame can be held by the pump during authoring.
@@ -525,6 +554,7 @@ impl RollbackGate {
             lower,
             send: None,
             raise_reply: None,
+            quiesce_reply: None,
             lower_reply: None,
             pending: None,
             received: None,
@@ -727,6 +757,18 @@ impl RollbackGate {
     }
 
     fn receive(&mut self, host: &mut GateRollbackHost<'_>, received: ReceivedOrgan, timely: bool) {
+        if self.quiesce_reply.is_none()
+            && host
+                .arms
+                .port
+                .as_ref()
+                .is_some_and(|port| preceding_quiesce_reply(host.original, port, &received))
+        {
+            // This is retained evidence of the preceding control. It grants
+            // neither GateStopped nor a completed graceful phase.
+            self.quiesce_reply = Some(received);
+            return;
+        }
         let frame = received.envelope();
         if frame.exchange.opener == Opener::Gate
             && frame.position == Position::Open

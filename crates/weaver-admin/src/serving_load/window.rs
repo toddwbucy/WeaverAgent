@@ -64,7 +64,7 @@ impl LoadWindow {
         })
     }
 }
-fn raw_ns() -> std::io::Result<u64> {
+pub(crate) fn raw_ns() -> std::io::Result<u64> {
     let mut time = nix::libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,

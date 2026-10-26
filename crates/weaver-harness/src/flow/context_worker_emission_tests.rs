@@ -95,6 +95,7 @@ fn author_failure_worker_emission_keeps_exact_refusal_after_cancel() {
 pub(in crate::flow::context) fn templates(mode: &str) -> &'static [s::TemplateSpec] {
     static ALL: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     static NO_SORT: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
+    static WIND_DOWN: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     static NO_TASK: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     let all = ALL.get_or_init(|| {
         let mut all = super::super::tests::templates().to_vec();
@@ -117,7 +118,19 @@ pub(in crate::flow::context) fn templates(mode: &str) -> &'static [s::TemplateSp
         });
         all
     });
-    if mode.contains("no-task") {
+    if (mode.contains("-wind-down-") || mode.contains("-graceful-save"))
+        && !mode.ends_with("template-absent")
+    {
+        WIND_DOWN.get_or_init(|| {
+            let mut templates = all.clone();
+            templates.push(s::TemplateSpec {
+                template_id: "wind_down".into(),
+                kind: "loop.instruction".into(),
+                parts: vec![s::TemplatePart::Literal("Read summary.".into())],
+            });
+            templates
+        })
+    } else if mode.contains("no-task") {
         NO_TASK.get_or_init(|| {
             all.iter()
                 .filter(|t| t.template_id != "mark.begin_task")
@@ -193,6 +206,9 @@ pub(in crate::flow::context) fn content(mode: &str) -> Vec<ContentBlock> {
                 arguments: "opaque first command".into(),
             }),
         ];
+        if mode.contains("graceful-result") {
+            return blocks;
+        }
         if mode.contains("mixed") {
             blocks.push(text("Recall archive."));
         }
@@ -289,6 +305,7 @@ pub(in crate::flow::context) fn reply(request: &s::Ste100Request, mode: &str) ->
         return result;
     }
     let rejected = request.text == "Read bad."
+        || (mode.ends_with("wind-down-template-refused") && request.text == "Read summary.")
         || (mode.contains("sort-refusal") && request.text == "Read identity.")
         || (mode.contains("repair-refusal") && request.text == "Read correction.");
     let result = if rejected {

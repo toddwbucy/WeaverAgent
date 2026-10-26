@@ -31,6 +31,11 @@ use nix::sys::socket::{
 };
 use weaver_types::{MAX_ENVELOPE_BYTES, OrganEnvelope};
 
+#[allow(dead_code)]
+#[path = "channel_capture.rs"]
+mod capture;
+pub(crate) use capture::ReceivedCapture;
+
 /// A fault below the exchange layer on the coordination channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChannelFault {
@@ -287,6 +292,32 @@ fn clear_nonblocking(fd: &OwnedFd) -> Result<(), ChannelFault> {
 }
 
 impl Coordination {
+    /// Observe and Leave use separate exchanges/connections. The invocation
+    /// keeps the first socket until this check: kernel pidfds, not a reused
+    /// numeric PID, pin the worker whose loaded facts authorized the directive.
+    pub(crate) fn require_same_worker(&self, observed: &Self) -> Result<(), ChannelFault> {
+        use nix::sys::socket::{getsockopt, sockopt};
+        let peer = getsockopt(&self.fd, sockopt::PeerCredentials)
+            .map_err(|_| ChannelFault::Undecodable)?;
+        let prior = getsockopt(&observed.fd, sockopt::PeerCredentials)
+            .map_err(|_| ChannelFault::Undecodable)?;
+        let current_pidfd =
+            getsockopt(&self.fd, sockopt::PeerPidfd).map_err(|_| ChannelFault::Undecodable)?;
+        let observed_pidfd =
+            getsockopt(&observed.fd, sockopt::PeerPidfd).map_err(|_| ChannelFault::Undecodable)?;
+        if peer.pid() != prior.pid()
+            || peer.uid() != prior.uid()
+            || pidfd_pid(&current_pidfd) != Some(peer.pid())
+            || pidfd_pid(&observed_pidfd) != Some(prior.pid())
+        {
+            return Err(ChannelFault::WrongPeer {
+                uid: peer.uid(),
+                pid: peer.pid(),
+            });
+        }
+        Ok(())
+    }
+
     /// The next exchange identity: ordinals assigned serially by this crate,
     /// per `weaver-organ-channel` section 1.
     pub fn next_ordinal(&mut self) -> u64 {

@@ -102,6 +102,18 @@ impl WorldClose {
             Stage::Refused,
         )
     }
+    pub(super) fn unloading(input: &FoundationInput<'_>, cause: Cause) -> Option<Self> {
+        Self::begin(
+            input,
+            TurnClose::Stopped {
+                reason: StopReason::Unload,
+                cause: Some(weaver_trace::Cause { uid: cause.uid }),
+            },
+            "the agent is unloading".into(),
+            false,
+            Stage::Aborted,
+        )
+    }
     pub(super) fn refused_admission(input: &mut FoundationInput<'_>) -> Option<Self> {
         let context = &input.serving.owner.context;
         let request = input.received.as_ref()?;

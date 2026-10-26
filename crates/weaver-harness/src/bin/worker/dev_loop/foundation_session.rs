@@ -13,6 +13,9 @@ pub enum Progress {
     ElectionRefused,
     Aborted,
     DirectivePending,
+    LeavePending,
+    Quiesced,
+    WindDownComplete,
     Stopped,
 }
 
@@ -29,6 +32,7 @@ pub struct Session<'a> {
     state: Option<State<'a>>,
     family: &'static FoundationRestatement,
     method: CutMethod,
+    wind_down: Option<Box<super::wind_down::Policy>>,
 }
 
 impl<'a> Session<'a> {
@@ -41,6 +45,7 @@ impl<'a> Session<'a> {
             state: Some(State::Input(serving.input())),
             family,
             method,
+            wind_down: None,
         }
     }
 
@@ -52,6 +57,22 @@ impl<'a> Session<'a> {
                 FoundationInputProgress::Refused => Progress::Refused,
                 FoundationInputProgress::Aborted => Progress::Aborted,
                 FoundationInputProgress::Stopped => Progress::Stopped,
+                FoundationInputProgress::LeavePending => Progress::LeavePending,
+                FoundationInputProgress::Quiesced => Progress::Quiesced,
+                FoundationInputProgress::WindDown
+                    if input.wind_down_progress()
+                        == Some(weaver_harness::FoundationWindDownProgress::Complete) =>
+                {
+                    Progress::WindDownComplete
+                }
+                FoundationInputProgress::WindDown
+                    if self
+                        .wind_down
+                        .as_ref()
+                        .is_some_and(|policy| policy.detail().is_some()) =>
+                {
+                    Progress::ElectionRefused
+                }
                 _ => Progress::Pending,
             },
             State::Management(owner) => match owner.progress() {
@@ -66,12 +87,18 @@ impl<'a> Session<'a> {
                 turn::Progress::ElectionRefused => Progress::ElectionRefused,
                 turn::Progress::Aborted => Progress::Aborted,
                 turn::Progress::DirectivePending => Progress::DirectivePending,
+                turn::Progress::LeavePending => Progress::LeavePending,
+                turn::Progress::Quiesced => Progress::Quiesced,
+                turn::Progress::WindDownComplete => Progress::WindDownComplete,
                 turn::Progress::Stopped => Progress::Stopped,
             },
         }
     }
 
     pub fn detail(&self) -> Option<String> {
+        if let Some(detail) = self.wind_down.as_ref().and_then(|policy| policy.detail()) {
+            return Some(detail.into());
+        }
         match self.state.as_ref().unwrap() {
             State::Input(input) => input.detail().or_else(|| {
                 matches!(
@@ -88,10 +115,84 @@ impl<'a> Session<'a> {
         }
     }
 
+    /// Elect graceful drain without replacing the current turn policy or
+    /// accepting a later input. The retained lifecycle request outlives it.
+    pub fn defer_graceful_leave(&mut self) -> bool {
+        self.route_graceful_leave(false)
+    }
+
+    pub fn join_graceful_leave(&mut self) -> bool {
+        self.route_graceful_leave(true)
+    }
+
+    fn route_graceful_leave(&mut self, joining: bool) -> bool {
+        if let Some(State::Turn(flow)) = self.state.as_mut() {
+            return if joining {
+                flow.join_graceful_leave()
+            } else {
+                flow.defer_graceful_leave()
+            };
+        }
+        if !matches!(self.state.as_ref(), Some(State::Management(owner)) if owner.progress() == FoundationManagementProgress::DirectivePending)
+        {
+            return false;
+        }
+        let State::Management(owner) = self.state.take().unwrap() else {
+            unreachable!()
+        };
+        match if joining {
+            owner.join_graceful_leave()
+        } else {
+            owner.defer_graceful_leave()
+        } {
+            Ok(input) => {
+                self.state = Some(State::Input(input));
+                true
+            }
+            Err(owner) => {
+                self.state = Some(State::Management(owner));
+                false
+            }
+        }
+    }
+
+    /// The worker elects the next Leave phase without replacing the retained
+    /// turn, input checks or original lifecycle holder.
+    pub fn begin_graceful_quiesce(&mut self) -> bool {
+        match self.state.as_mut().unwrap() {
+            State::Input(input) => input.begin_graceful_quiesce(),
+            State::Turn(flow) => flow.begin_graceful_quiesce(),
+            State::Management(_) => false,
+        }
+    }
+
+    pub fn begin_graceful_wind_down(
+        &mut self,
+        turn: TurnKey,
+        passes: usize,
+    ) -> Result<(), TurnKey> {
+        let Some(policy) = super::wind_down::Policy::new(passes, self.family) else {
+            return Err(turn);
+        };
+        match self.state.as_mut().unwrap() {
+            State::Input(input) => {
+                input.begin_graceful_wind_down(turn, self.method)?;
+                self.wind_down = Some(Box::new(policy));
+                Ok(())
+            }
+            State::Turn(flow) => flow.begin_graceful_wind_down(turn, passes),
+            State::Management(_) => Err(turn),
+        }
+    }
+
     pub fn advance(&mut self) -> Progress {
         if !matches!(
             self.progress(),
-            Progress::Pending | Progress::Accepted | Progress::ElectionRefused
+            Progress::Pending
+                | Progress::Accepted
+                | Progress::ElectionRefused
+                | Progress::LeavePending
+                | Progress::Quiesced
         ) {
             return self.progress();
         }
@@ -99,7 +200,14 @@ impl<'a> Session<'a> {
         // explicit, checked ownership moves below, never around advance().
         match self.state.as_mut().unwrap() {
             State::Input(input) => {
-                input.advance();
+                if input.progress() == FoundationInputProgress::WindDown {
+                    self.wind_down
+                        .as_mut()
+                        .expect("worker wind-down election")
+                        .advance(input);
+                } else {
+                    input.advance();
+                }
             }
             State::Management(owner) => {
                 owner.advance();

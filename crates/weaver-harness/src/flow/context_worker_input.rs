@@ -17,6 +17,12 @@ pub(crate) mod generation;
 #[path = "context_worker_management.rs"]
 pub(crate) mod management;
 
+#[path = "context_worker_wind_down.rs"]
+pub(crate) mod wind_down;
+
+#[path = "context_worker_graceful_leave.rs"]
+pub(in crate::flow::context::worker_startup) mod graceful;
+
 #[path = "context_worker_halt.rs"]
 pub(crate) mod halt;
 
@@ -53,6 +59,15 @@ pub enum FoundationInputProgress {
     /// The actual root connection is retained for management judgment. Mere
     /// acceptance is not a Leave and does not revoke input or grant cleanup.
     ManagementPending,
+    /// The accepted graceful Leave retains this seat. Its drain has ended or
+    /// needs forced continuation; no new turn or serving seat is available.
+    LeavePending,
+    /// Quiesce was answered on its exact exchange, all unserved frames have
+    /// Recorded refusals and sent replies, and any input check has settled.
+    /// Wind-down and the Leave/save tail still require their own elections.
+    Quiesced,
+    /// The lifecycle wind-down owns a real turn and no world dialer.
+    WindDown,
     Stopped,
 }
 
@@ -163,6 +178,18 @@ impl<'a> FoundationInput<'a> {
         if self.serving.owner.listener.held().is_some() {
             return FoundationInputProgress::ManagementPending;
         }
+        if let Some(progress) = self.wind_down_input_progress() {
+            return progress;
+        }
+        if let Some(progress) = self.quiesce_progress() {
+            return progress;
+        }
+        if self.graceful_waiting() {
+            return FoundationInputProgress::LeavePending;
+        }
+        if self.graceful_pairs_need_step() {
+            return FoundationInputProgress::Pending;
+        }
         match self.stage {
             Stage::Accepted => FoundationInputProgress::Accepted,
             Stage::Turn => FoundationInputProgress::Turn,
@@ -223,7 +250,10 @@ impl<'a> FoundationInput<'a> {
                     .context
                     .reduce_flow(io)
                     .and_then(|_| self.observe_with_wait(io, true))
-            } else if self.progress() == FoundationInputProgress::Pending {
+            } else if matches!(
+                self.progress(),
+                FoundationInputProgress::Pending | FoundationInputProgress::WindDown
+            ) {
                 self.step(io)
             } else {
                 Ok(())
@@ -231,6 +261,9 @@ impl<'a> FoundationInput<'a> {
         });
         self.serving.owner.context.management_listener = previous_listener;
         if let Err(mut failure) = result {
+            if self.retain_graceful_expiry(&failure) || self.retain_quiesce_gate_end(&failure) {
+                return self.progress();
+            }
             if matches!(failure, RunFailure::ManagementPending)
                 && listener.matches(&self.serving.owner.listener)
                 && self.serving.owner.listener.held().is_some()
@@ -300,12 +333,8 @@ impl<'a> FoundationInput<'a> {
         Ok(())
     }
 
-    fn step(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
-        if self.stage == Stage::Engine {
-            return self.advance_engine(None, io);
-        }
+    fn advance_report(&mut self, io: &mut impl PumpIo) -> Result<bool, RunFailure> {
         let owner = &mut self.serving.owner;
-        owner.context.live(io)?;
         let mut ports = PumpPorts {
             lifecycle: LifecyclePorts {
                 listener: Some(&mut owner.listener),
@@ -355,8 +384,37 @@ impl<'a> FoundationInput<'a> {
             }
             self.report = None;
             self.report_started = false;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn step(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        if self.progress() == FoundationInputProgress::WindDown {
+            return self.advance_wind_down(io);
+        }
+        if self.quiesce_progress() == Some(FoundationInputProgress::Pending) {
+            return self.advance_quiesce(io);
+        }
+        if self.stage == Stage::Engine {
+            return self.advance_engine(None, io);
+        }
+        if self.advance_report(io)? {
             return Ok(());
         }
+        let owner = &mut self.serving.owner;
+        owner.context.live(io)?;
+        let mut ports = PumpPorts {
+            lifecycle: LifecyclePorts {
+                listener: Some(&mut owner.listener),
+                residency: Some(owner.resident.residency),
+                ..Default::default()
+            },
+            gate: Some(&mut owner.gate),
+            decode: Some(owner.decode),
+            label: None,
+            io,
+        };
         match self.stage {
             Stage::Waiting => {
                 owner.context.reduce_flow(ports.io)?;

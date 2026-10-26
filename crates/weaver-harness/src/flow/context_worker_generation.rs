@@ -52,6 +52,10 @@ pub(in crate::flow::context) mod final_tests;
 #[path = "context_worker_session_tests.rs"]
 pub(in crate::flow::context) mod session_tests;
 
+#[cfg(test)]
+#[path = "context_worker_graceful_leave_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod graceful_tests;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EngineStage {
     StartTask,
@@ -94,6 +98,13 @@ struct RetainedRound {
     _emission: Option<Box<emission::EmissionWork>>,
 }
 impl EngineWork {
+    pub(super) fn graceful_pairs_need_step(&self, context: &RecordingContext) -> bool {
+        self.stage == EngineStage::Emission
+            && self
+                .emission
+                .as_ref()
+                .is_some_and(|work| work.graceful_pairs_need_step(context))
+    }
     /// The failed handoff keeps the actual grant and its revoked account in
     /// the same slot. This is custody retirement, not engine continuation.
     pub(super) fn retire_failed_placement_grants(
@@ -476,6 +487,36 @@ impl<'a> FoundationInput<'a> {
         peer: Option<&mut LifecyclePeer>,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
+        if self.has_graceful_leave()
+            && self
+                .engine
+                .as_ref()
+                .is_some_and(|work| work.cancelled.is_none() && work.stage == EngineStage::Emission)
+        {
+            self.serving.retain_queued_input(io)?;
+            let owner = &mut self.serving.owner;
+            let ended = self
+                .engine
+                .as_mut()
+                .unwrap()
+                .emission
+                .as_mut()
+                .unwrap()
+                .drain_pairs_for_leave(owner.context, &mut owner.gate, io)?;
+            if ended {
+                let cause = self.serving.graceful.as_ref().unwrap().cause;
+                let close = super::close::WorldClose::unloading(self, cause).ok_or_else(|| {
+                    fault(
+                        self.serving.owner.context,
+                        io,
+                        "graceful drain lost its actual turn".into(),
+                    )
+                })?;
+                let work = self.engine.as_mut().unwrap();
+                work.answer = Some(close);
+                work.stage = EngineStage::Answer;
+            }
+        }
         if self.engine.as_ref().is_some_and(|work| {
             work.stage == EngineStage::Emission
                 && work
@@ -781,7 +822,7 @@ impl<'a> FoundationInput<'a> {
 
 /// Revocation consumes only the exact grant already issued by this context.
 /// Failure never licenses ordinary work or replaces the first failure reason.
-fn retire_failed_placement_grant(
+pub(super) fn retire_failed_placement_grant(
     placement: &mut Option<PlacementCompletion>,
     context: &mut RecordingContext,
 ) -> Result<(), RunFailure> {

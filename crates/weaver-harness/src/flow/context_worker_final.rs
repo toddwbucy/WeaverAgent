@@ -10,6 +10,7 @@ impl FoundationInput<'_> {
         };
         [
             self.send.as_ref(),
+            self.quiesce_input_send(),
             self.engine
                 .as_ref()
                 .and_then(|work| work.answer.as_ref())
@@ -24,11 +25,13 @@ impl FoundationInput<'_> {
         })
     }
     pub(in crate::flow::context::worker_startup::input) fn final_send_clock_failed(&self) -> bool {
-        self.engine
-            .as_ref()
-            .and_then(|work| work.answer.as_ref())
-            .and_then(WorldClose::send)
-            .is_some_and(|send| send.sent() && send.sent_at().is_none())
+        self.quiesce_send_clock_failed()
+            || self
+                .engine
+                .as_ref()
+                .and_then(|work| work.answer.as_ref())
+                .and_then(WorldClose::send)
+                .is_some_and(|send| send.sent() && send.sent_at().is_none())
     }
     #[cfg(test)]
     pub(super) fn final_send_probe_for_test(&self) -> Box<dyn Fn() -> bool> {

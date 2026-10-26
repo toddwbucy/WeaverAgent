@@ -26,7 +26,7 @@ use execution::WorkerPairs;
 /// A compiled worker choice of restatement family. The actual entered run's
 /// certificate, not this name, proves that the family can be used.
 pub struct FoundationRestatement {
-    template: RestatementTemplate,
+    pub(in crate::flow::context::worker_startup::input) template: RestatementTemplate,
 }
 impl FoundationRestatement {
     pub const fn new(template_id: &'static str) -> Self {
@@ -68,7 +68,7 @@ enum RefusalElection {
     Operation,
 }
 
-pub(super) struct EmissionWork {
+pub(in crate::flow::context::worker_startup::input) struct EmissionWork {
     template: Option<&'static RestatementTemplate>,
     stage: EmissionStage,
     cancelled: Option<NonDispatchCause>,
@@ -99,7 +99,7 @@ pub(super) struct EmissionWork {
 }
 
 impl EmissionWork {
-    pub(super) fn retire_failed_placement_grants(
+    pub(in crate::flow::context::worker_startup::input) fn retire_failed_placement_grants(
         &mut self,
         context: &mut RecordingContext,
     ) -> Result<(), RunFailure> {
@@ -114,6 +114,21 @@ impl EmissionWork {
         Ok(())
     }
 
+    pub(in crate::flow::context::worker_startup::input) fn finish_wind_down(
+        &mut self,
+    ) -> Option<bool> {
+        if self.stage != EmissionStage::Effective {
+            return None;
+        }
+        let calls = !self.effective.as_ref()?.requests().is_empty()
+            || self.effective.as_ref()?.attempted_call();
+        // S5 admits no tool execution. Retain the complete repair account and
+        // close every associated request through the existing unload terminal.
+        self.cancelled = Some(NonDispatchCause::Unload);
+        self.stage = EmissionStage::CancelAccount;
+        Some(calls)
+    }
+
     pub(super) fn selected_answer(&self) -> Option<(String, weaver_types::Finish)> {
         let effective = self.execution.as_ref()?.completed_effective()?;
         // A decoder's own stop token/capacity finish is a checked model answer.
@@ -121,7 +136,9 @@ impl EmissionWork {
         let (_, acts) = self.selected.as_ref()?;
         Some((effective.answer_text(acts).ok()?, *effective.finish()))
     }
-    fn new(template: Option<&'static RestatementTemplate>) -> Self {
+    pub(in crate::flow::context::worker_startup::input) fn new(
+        template: Option<&'static RestatementTemplate>,
+    ) -> Self {
         Self {
             template,
             stage: EmissionStage::Begin,
@@ -152,12 +169,16 @@ impl EmissionWork {
             unexpected_refusal: None,
         }
     }
-    pub(super) fn cancelled(cause: NonDispatchCause) -> Self {
+    pub(in crate::flow::context::worker_startup::input) fn cancelled(
+        cause: NonDispatchCause,
+    ) -> Self {
         let mut work = Self::new(None);
         work.cancelled = Some(cause);
         work
     }
-    pub(super) fn progress(&self) -> FoundationInputProgress {
+    pub(in crate::flow::context::worker_startup::input) fn progress(
+        &self,
+    ) -> FoundationInputProgress {
         match self.stage {
             EmissionStage::Restatement => FoundationInputProgress::Restatement,
             EmissionStage::Correction => self.corrections.last().unwrap().progress(),
@@ -170,8 +191,29 @@ impl EmissionWork {
             _ => FoundationInputProgress::Pending,
         }
     }
-    pub(super) fn settled(&self) -> bool {
+    pub(in crate::flow::context::worker_startup::input) fn settled(&self) -> bool {
         self.stage == EmissionStage::Cancelled
+    }
+    pub(super) fn graceful_pairs_need_step(&self, context: &RecordingContext) -> bool {
+        self.stage == EmissionStage::Execution
+            && self
+                .execution
+                .as_ref()
+                .is_some_and(|pairs| pairs.graceful_needs_step(context))
+    }
+
+    pub(super) fn drain_pairs_for_leave(
+        &mut self,
+        context: &mut RecordingContext,
+        gate: &mut OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        if self.stage != EmissionStage::Execution {
+            return Ok(false);
+        }
+        let pairs = self.execution.as_mut().expect("execution owns its pairs");
+        pairs.drain_for_leave(context, gate, io)?;
+        Ok(pairs.ended_by_unload(context))
     }
     pub(super) fn detail(&self) -> Option<&str> {
         self.detail.as_deref()
@@ -179,10 +221,10 @@ impl EmissionWork {
     pub(super) fn closing_correction(&self) -> bool {
         self.closing_refusal == Some(RefusalElection::Placement)
     }
-    pub(super) fn ready_to_close_refusal(&self) -> bool {
+    pub(in crate::flow::context::worker_startup::input) fn ready_to_close_refusal(&self) -> bool {
         self.stage == EmissionStage::RefusalClose
     }
-    pub(super) fn close_refusal(&mut self) -> bool {
+    pub(in crate::flow::context::worker_startup::input) fn close_refusal(&mut self) -> bool {
         if self.stage != EmissionStage::Refused
             || self.cancelled.is_some()
             || self.closing_refusal.is_some()
@@ -209,7 +251,7 @@ impl EmissionWork {
         };
     }
 
-    pub(super) fn cancel(
+    pub(in crate::flow::context::worker_startup::input) fn cancel(
         &mut self,
         cause: NonDispatchCause,
         context: &mut RecordingContext,
@@ -284,7 +326,7 @@ impl EmissionWork {
         }
     }
 
-    pub(super) fn advance<I: PumpIo>(
+    pub(in crate::flow::context::worker_startup::input) fn advance<I: PumpIo>(
         &mut self,
         generation: &mut Option<GenerationCompletion>,
         certificate: &mut Option<TemplateCertificate>,

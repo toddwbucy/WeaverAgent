@@ -129,6 +129,12 @@ pub use channel::{
 };
 pub use engine::{Ports, TurnError, TurnOutcome};
 pub use failure::{AdoptionFault, ChannelFault, Outcome, UnlicensedMessage};
+pub use flow::context::worker_startup::entered_rollback::forced::{
+    FoundationForcedLeave, FoundationForcedLeaveHandoff, FoundationForcedLeaveProgress,
+};
+pub use flow::context::worker_startup::entered_rollback::graceful_exit::{
+    FoundationGracefulLeave, FoundationGracefulLeaveHandoff, FoundationGracefulLeaveProgress,
+};
 pub use flow::context::worker_startup::entered_rollback::{
     FoundationEnteredRollback, FoundationEnteredRollbackHandoff, FoundationEnteredRollbackProgress,
 };
@@ -146,6 +152,7 @@ pub use flow::context::worker_startup::input::halt::{FoundationHalt, FoundationH
 pub use flow::context::worker_startup::input::management::{
     FoundationManagement, FoundationManagementProgress,
 };
+pub use flow::context::worker_startup::input::wind_down::FoundationWindDownProgress;
 pub use flow::context::worker_startup::input::{
     FoundationInput, FoundationInputProgress, FoundationInputResult, FoundationTurn,
 };

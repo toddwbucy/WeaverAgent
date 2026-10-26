@@ -78,6 +78,12 @@ impl<'a> FoundationInput<'a> {
 }
 
 impl RollbackInputWork {
+    pub(in crate::flow::context::worker_startup) fn original_input(
+        &self,
+    ) -> Option<&ReceivedOrgan> {
+        self.received.as_ref()
+    }
+
     pub(in crate::flow::context::worker_startup) fn retire_failed_placement_grants(
         &mut self,
         context: &mut RecordingContext,

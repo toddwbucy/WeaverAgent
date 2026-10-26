@@ -298,6 +298,40 @@ impl FoundationInput<'_> {
             .emission
             .as_mut()
             .ok_or(FoundationInputProgress::OperationRefused)?;
+        work.close_correction_refusal()
+    }
+
+    /// Place only this attempt's certified, actually filed instruction. The
+    /// existing turn argument stays intact; repair never selects a cut.
+    pub fn place_restatement(&mut self, label: String, method: CutMethod) -> Result<(), String> {
+        if self.progress() != FoundationInputProgress::Restatement || label.is_empty() {
+            return Err(label);
+        }
+        let work = self.engine.as_mut().unwrap().emission.as_mut().unwrap();
+        work.place_restatement(label, method)
+    }
+
+    /// Use the actual measured grant once. Completion returns to repair and
+    /// may yield another restatement, exhaustion, or checked effective output.
+    pub fn generate_correction(&mut self) -> Result<(), FoundationInputProgress> {
+        if self.progress() != FoundationInputProgress::CorrectionPlaced {
+            return Err(self.progress());
+        }
+        self.engine
+            .as_mut()
+            .unwrap()
+            .emission
+            .as_mut()
+            .unwrap()
+            .generate_correction()
+    }
+}
+
+impl EmissionWork {
+    pub(in crate::flow::context::worker_startup::input) fn close_correction_refusal(
+        &mut self,
+    ) -> Result<(), FoundationInputProgress> {
+        let work = self;
         if !work.corrections.last().is_some_and(|correction| {
             matches!(correction.placement, Some(PlacementCompletion::Refused(_)))
                 || matches!(
@@ -321,13 +355,15 @@ impl FoundationInput<'_> {
         work.stage = EmissionStage::CorrectionRefusal;
         Ok(())
     }
-    /// Place only this attempt's certified, actually filed instruction. The
-    /// existing turn argument stays intact; repair never selects a cut.
-    pub fn place_restatement(&mut self, label: String, method: CutMethod) -> Result<(), String> {
+    pub(in crate::flow::context::worker_startup::input) fn place_restatement(
+        &mut self,
+        label: String,
+        method: CutMethod,
+    ) -> Result<(), String> {
         if self.progress() != FoundationInputProgress::Restatement || label.is_empty() {
             return Err(label);
         }
-        let work = self.engine.as_mut().unwrap().emission.as_mut().unwrap();
+        let work = self;
         work.corrections.push(CorrectionWork {
             stage: CorrectionStage::Prepare,
             restatement: work.restatement.take().unwrap(),
@@ -344,22 +380,13 @@ impl FoundationInput<'_> {
         work.stage = EmissionStage::Correction;
         Ok(())
     }
-    /// Use the actual measured grant once. Completion returns to repair and
-    /// may yield another restatement, exhaustion, or checked effective output.
-    pub fn generate_correction(&mut self) -> Result<(), FoundationInputProgress> {
+    pub(in crate::flow::context::worker_startup::input) fn generate_correction(
+        &mut self,
+    ) -> Result<(), FoundationInputProgress> {
         if self.progress() != FoundationInputProgress::CorrectionPlaced {
             return Err(self.progress());
         }
-        self.engine
-            .as_mut()
-            .unwrap()
-            .emission
-            .as_mut()
-            .unwrap()
-            .corrections
-            .last_mut()
-            .unwrap()
-            .stage = CorrectionStage::Start;
+        self.corrections.last_mut().unwrap().stage = CorrectionStage::Start;
         Ok(())
     }
 }

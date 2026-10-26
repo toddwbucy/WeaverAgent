@@ -29,6 +29,7 @@ pub struct FoundationFailedHandoff {
     world_already_sent: bool,
     input: FailedInput,
     management: Option<super::super::management::FailedManagement>,
+    _graceful: Option<super::super::graceful::FailedGraceful>,
     gate: Option<OrganPort>,
     gate_child: OwnedChild,
     tools: Option<ToolsCgroup>,
@@ -119,6 +120,7 @@ impl FoundationHalt<'_> {
             gate_exchanges,
             queued_inputs,
             gate_outgoing,
+            graceful,
         } = serving;
         let crate::flow::context::boot_composition::gate_startup::ready::EnteredServing {
             context,
@@ -153,6 +155,7 @@ impl FoundationHalt<'_> {
             deadline,
             progress,
             world_already_sent,
+            _graceful: graceful.map(|leave| leave.retire_failed()),
             input: FailedInput {
                 received: original,
                 turn,

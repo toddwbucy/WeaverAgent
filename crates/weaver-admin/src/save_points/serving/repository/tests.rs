@@ -17,6 +17,9 @@ mod restore;
 #[path = "seed_tests.rs"]
 mod seed;
 
+#[path = "loaded_tests.rs"]
+mod loaded;
+
 struct Fixture {
     path: PathBuf,
     owner: Owner,

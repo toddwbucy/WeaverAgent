@@ -187,6 +187,87 @@ impl Repository {
         self.verify(entry.clone(), scope)
     }
 
+    /// A loaded save is authorized by the authenticated worker's retained
+    /// StartIdentity and B, not by a later edit to the territory draft. Keep
+    /// the ordinary index/guard/custody/hash checks, then require that exact
+    /// observed identity and a sink in the independently judged territory.
+    pub(crate) fn verify_loaded(
+        &self,
+        expected: &StartIdentity,
+        session: &SessionId,
+        declaration: &str,
+        territory: &Path,
+    ) -> Result<VerifiedArtifact, Fault> {
+        if expected.config_sha256.as_str() != declaration {
+            return Err(binding_fault("observed declaration differs from loaded B"));
+        }
+        let selector = ArtifactId::parse(&expected.artifact_id)
+            .map_err(|_| binding_fault("invalid observed artifact ID"))?;
+        let index = self.read_index()?;
+        let entry = index
+            .iter()
+            .rev()
+            .find(|entry| entry.artifact_id == selector)
+            .ok_or_else(|| layout("observed artifact has no index entry"))?;
+        self.refuse_guard(&selector)?;
+        let artifact = self.verify_files(entry.clone())?;
+        if artifact.identity() != *expected {
+            return Err(binding_fault(
+                "indexed artifact differs from the observed start",
+            ));
+        }
+        let agent = artifact.declaration().agent();
+        if agent.session != *session
+            || crate::inventory::sink_directory(&agent.trace_sink) != territory
+        {
+            return Err(configuration_fault(
+                "loaded identity or sink disagrees with its observed session and judged territory",
+            ));
+        }
+        Ok(artifact)
+    }
+
+    /// A joined Left can conclude only an already completed publication. It
+    /// never removes a guard or becomes a second publisher. This grants no load
+    /// proof: the current draft's session and inventory are not consulted here.
+    pub(crate) fn verify_completed_leave(
+        &self,
+        report: &weaver_types::state_flow::SavePointReport,
+        territory: &Path,
+    ) -> Result<(), Fault> {
+        let selector = ArtifactId::parse(&report.start.artifact_id)
+            .map_err(|_| binding_fault("invalid joined artifact ID"))?;
+        let index = self.read_index()?;
+        let entry = index
+            .iter()
+            .find(|entry| entry.artifact_id == selector && entry.arrival == Arrival::Published)
+            .ok_or_else(|| layout("joined artifact has no publication entry"))?;
+        if !matches!(
+            entry.cause,
+            PersistenceCause::GracefulUnload | PersistenceCause::ForcedUnload
+        ) || entry.confirmation
+            != (weaver_types::state_flow::Confirmation::Serving {
+                run_id: report.event_run.0.clone(),
+                capture_id: report.capture_id,
+            })
+        {
+            return Err(binding_fault(
+                "joined report differs from the published capture",
+            ));
+        }
+        self.refuse_guard(&selector)?;
+        let artifact = self.verify_files(entry.clone())?;
+        if artifact.identity() != report.start
+            || crate::inventory::sink_directory(&artifact.declaration().agent().trace_sink)
+                != territory
+        {
+            return Err(binding_fault(
+                "joined artifact differs from the report or territory",
+            ));
+        }
+        Ok(())
+    }
+
     /// Append an explicit selection of a verified indexed artifact. The caller
     /// owns root authorization and the invocation/run locks of an unloaded agent.
     /// Checkpoints judge whether that caller may continue, not remote liveness.
@@ -317,6 +398,18 @@ impl Repository {
         entry: StateIndexEntry,
         scope: &LoadScope<'_>,
     ) -> Result<VerifiedArtifact, Fault> {
+        let artifact = self.verify_files(entry)?;
+        let agent = artifact.declaration.agent();
+        let trace_path = super::trace_path(&agent.trace_sink);
+        if agent.session != *scope.session || trace_path != scope.trace_path {
+            return Err(configuration_fault(
+                "agent.toml identity or trace path disagrees with judged territory",
+            ));
+        }
+        Ok(artifact)
+    }
+
+    fn verify_files(&self, entry: StateIndexEntry) -> Result<VerifiedArtifact, Fault> {
         entry
             .validate()
             .map_err(|error| layout(format!("invalid expected publication entry: {error}")))?;
@@ -359,13 +452,6 @@ impl Repository {
             .map_err(|e| configuration_fault(format!("agent.toml does not parse: {e:?}")))?;
         if declaration.state_management().start.dump_sha256 != binding.dump_sha256 {
             return Err(binding_fault("agent.toml names a different dump_sha256"));
-        }
-        let agent = declaration.agent();
-        let trace_path = super::trace_path(&agent.trace_sink);
-        if agent.session != *scope.session || trace_path != scope.trace_path {
-            return Err(configuration_fault(
-                "agent.toml identity or trace path disagrees with judged territory",
-            ));
         }
         Ok(VerifiedArtifact {
             entry,
