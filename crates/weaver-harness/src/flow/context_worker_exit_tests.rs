@@ -265,6 +265,121 @@ impl Drop for Guard {
     }
 }
 
+struct LatePressure {
+    through_unload: bool,
+    wake: bool,
+    filled: bool,
+    ticket: Option<u64>,
+    attempts: usize,
+    released: bool,
+}
+impl LatePressure {
+    fn fill(&mut self, owner: &mut FoundationFailedExit, clock: &mut FakePumpIo) {
+        if self.filled || owner.stage != ExitStage::Lower {
+            return;
+        }
+        assert!(owner.tail.context.open_turn.is_none());
+        assert!(owner.tail.context.pairs.pending_rejection().is_none());
+        let event = owner
+            .tail
+            .context
+            .author
+            .prepare(
+                &AuthoredEvent {
+                    kind: serving::Kind::Refusal,
+                    subsystem: Subsystem::Harness,
+                    turn: None,
+                    source: AuthoredSource::Runtime,
+                    causal_parent: None,
+                    payload: Some(serving::Payload::Refusal(
+                        serde_json::value::to_raw_value(
+                            &serde_json::json!({"fixture":"x".repeat(32_768)}),
+                        )
+                        .unwrap(),
+                    )),
+                },
+                clock.now().unwrap(),
+                1,
+            )
+            .unwrap();
+        owner
+            .tail
+            .context
+            .barrier
+            .fill_stopped_writer_for_test(event);
+        self.filled = true;
+    }
+
+    fn observe(&mut self, owner: &FoundationFailedExit, root: &Path) {
+        if !self.filled || self.released {
+            return;
+        }
+        if self.through_unload && owner.unload_sequence().is_some() {
+            assert!(
+                self.attempts >= 3,
+                "tail must retain the original through retries"
+            );
+            assert!(owner.tail.rejection_unavailable);
+            assert!(owner.tail.context.pending_author().is_none());
+            assert_eq!(
+                owner
+                    .tail
+                    .context
+                    .pair_rejected_claim
+                    .as_ref()
+                    .unwrap()
+                    .ticket,
+                self.ticket
+            );
+            assert_eq!(
+                owner
+                    .tail
+                    .context
+                    .pairs
+                    .pending_rejection()
+                    .unwrap()
+                    .raw_bytes(),
+                std::fs::read(root.join("halt-lower-late.json")).unwrap()
+            );
+            self.released = true;
+            return;
+        }
+        let Some(rejection) = owner.tail.context.pairs.pending_rejection() else {
+            return;
+        };
+        assert!(
+            !owner.tail.rejection_unavailable,
+            "temporary Lower pressure must retain the rejection for a later account step"
+        );
+        assert_eq!(
+            rejection.raw_bytes(),
+            std::fs::read(root.join("halt-lower-late.json")).unwrap()
+        );
+        let claim = owner.tail.context.pair_rejected_claim.as_ref().unwrap();
+        assert!(claim.turn.is_none() && claim.sequence.is_none());
+        let ticket = claim
+            .ticket
+            .expect("the exact rejection owns its ordinary ticket");
+        assert_eq!(*self.ticket.get_or_insert(ticket), ticket);
+        assert_eq!(owner.tail.context.pending_author().unwrap().ticket, ticket);
+        self.attempts += 1;
+        if !self.through_unload
+            && !self.wake
+            && owner.stage == ExitStage::Release
+            && matches!(
+                owner.tail.release_outcome(),
+                weaver_trace::ReleaseOutcome::Confirmed
+            )
+        {
+            assert!(
+                self.attempts >= 3,
+                "pressure must cross Lower into the tail"
+            );
+            self.released = true;
+        }
+    }
+}
+
 pub(in crate::flow::context) fn release_peer(mode: &str, residency: i32, decode: i32) {
     let root = std::path::PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
     let end = Instant::now() + Duration::from_secs(10);
@@ -463,6 +578,14 @@ pub(in crate::flow::context::worker_startup) fn finish(
     let mut triggered = false;
     let mut trace_released =
         !mode.contains("pressure-hold") || mode.contains("rejection-unavailable");
+    let mut late_pressure = mode.contains("lower-backlog").then_some(LatePressure {
+        through_unload: mode.contains("lower-backlog-terminal"),
+        wake: mode.contains("lower-backlog-wake"),
+        filled: false,
+        ticket: None,
+        attempts: 0,
+        released: false,
+    });
     if mode.contains("start-expiry") {
         clock.advance_to(deadline).unwrap();
         assert_eq!(owner.advance_with_io(clock), FoundationExitProgress::Closed);
@@ -509,7 +632,48 @@ pub(in crate::flow::context::worker_startup) fn finish(
         );
     }
     while owner.progress() != FoundationExitProgress::Closed && Instant::now() < end {
+        if let Some(pressure) = &mut late_pressure {
+            pressure.fill(owner, clock);
+        }
         owner.advance_with_io(clock);
+        if let Some(pressure) = &mut late_pressure {
+            pressure.observe(owner, root);
+            if pressure.wake
+                && !pressure.released
+                && owner.stage == ExitStage::Lower
+                && owner.progress() == FoundationExitProgress::Pending
+                && owner
+                    .handoff
+                    .gate
+                    .as_ref()
+                    .unwrap()
+                    .held()
+                    .is_some_and(|frame| matches!(frame.payload, Payload::ToolAnswer(_)))
+            {
+                let through = owner
+                    .tail
+                    .context
+                    .barrier
+                    .recorder()
+                    .boundary()
+                    .admitted
+                    .unwrap();
+                rows.extend(trace_through(reader, vec![], through, end).unwrap());
+                let mut wake = CapacityWake {
+                    now: clock.now().unwrap(),
+                    deadline,
+                    capacity_fd: owner.tail.context.barrier.capacity_fd().as_raw_fd(),
+                    seen: false,
+                };
+                owner.wait_with_io(&mut wake);
+                assert!(
+                    wake.seen,
+                    "blocked second return must wait on actual writer readiness"
+                );
+                pressure.released = true;
+            }
+            trace_released = !pressure.filled || pressure.released;
+        }
         if mode.contains("placement-pending-trace-loss")
             && owner.stage == ExitStage::Release
             && owner.progress() == FoundationExitProgress::Pending
@@ -639,6 +803,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
     }
     member.assert_closed_without_request();
     assert!(trace_released);
+    if let Some(pressure) = &late_pressure {
+        assert!(pressure.filled && pressure.released && pressure.ticket.is_some());
+    }
     assert!(!root.join("external-3.json").exists());
     let expired = mode.contains("deadline")
         || mode.contains("clock-")
@@ -803,20 +970,39 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
         if mode.contains("lower-late") && !mode.contains("rejection-unavailable") {
             let rejects = by_kind("tool.return_rejected");
-            assert_eq!(rejects.len(), 3);
-            let last = rejects.last().unwrap();
-            assert_eq!(
-                last["payload"]["raw_envelope"].as_str().unwrap().as_bytes(),
-                std::fs::read(root.join("halt-lower-late.json")).unwrap()
-            );
-            assert!(last.get("turn").is_none());
+            let unfinished = mode.contains("lower-backlog-terminal");
+            let late_returns = if unfinished {
+                0
+            } else if mode.contains("lower-backlog-wake") {
+                2
+            } else {
+                1
+            };
+            assert_eq!(rejects.len(), 2 + late_returns);
             assert!(
                 rejects[..2]
                     .iter()
                     .all(|row| row["turn"] == "generation-turn")
             );
-            assert_eq!(last["payload"]["reason"], "duplicate_return");
-            assert!(!last["payload"]["call_id"].is_null());
+            for (index, last) in rejects[2..].iter().enumerate() {
+                let name = if index == 0 {
+                    "halt-lower-late.json"
+                } else {
+                    "halt-lower-second.json"
+                };
+                assert_eq!(
+                    last["payload"]["raw_envelope"].as_str().unwrap().as_bytes(),
+                    std::fs::read(root.join(name)).unwrap()
+                );
+                assert!(last.get("turn").is_none());
+                assert_eq!(last["payload"]["reason"], "duplicate_return");
+                assert!(!last["payload"]["call_id"].is_null());
+                let sequence = |row: &serde_json::Value| {
+                    row["sequence"].as_str().unwrap().parse::<u64>().unwrap()
+                };
+                assert!(sequence(closes[0]) < sequence(last));
+                assert!(sequence(last) < sequence(by_kind("session.closed")[0]));
+            }
         }
         if mode.contains("pressure-hold") {
             let rejects = by_kind("tool.return_rejected");
@@ -857,6 +1043,46 @@ pub(in crate::flow::context::worker_startup) fn finish(
     reap(&mut owner.handoff.gate_child);
     owner.tail.reap_composition_test_children();
     assert_ne!(owner.handoff.gate_child.state(), ChildState::Running);
+}
+
+struct CapacityWake {
+    now: u64,
+    deadline: u64,
+    capacity_fd: i32,
+    seen: bool,
+}
+impl PumpIo for CapacityWake {
+    fn now(&mut self) -> std::io::Result<u64> {
+        Ok(self.now)
+    }
+    fn wait(
+        &mut self,
+        interests: &[WaitInterest<'_>],
+        deadline: Option<u64>,
+    ) -> std::io::Result<WaitOutcome> {
+        assert_eq!(deadline, Some(self.deadline));
+        let index = interests
+            .iter()
+            .position(|i| i.fd.as_raw_fd() == self.capacity_fd)
+            .expect("pending rejection requires the capacity descriptor");
+        let mut fds = interests
+            .iter()
+            .map(|i| nix::poll::PollFd::new(i.fd, i.events))
+            .collect::<Vec<_>>();
+        nix::poll::poll(&mut fds, 40u16).unwrap();
+        assert!(
+            fds[index]
+                .revents()
+                .unwrap()
+                .contains(nix::poll::PollFlags::POLLIN),
+            "restored trace capacity must wake Lower without losing its notification"
+        );
+        self.seen = true;
+        Ok(WaitOutcome::Ready(vec![crate::flow::clock::ReadyFd {
+            index,
+            events: fds[index].revents().unwrap(),
+        }]))
+    }
 }
 
 struct BadClock(Option<u64>);

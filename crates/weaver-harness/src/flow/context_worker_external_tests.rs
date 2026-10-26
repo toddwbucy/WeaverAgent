@@ -135,7 +135,12 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         if mode.contains("lower-silent") {
                             continue;
                         }
-                        if mode.contains("lower-late") {
+                        let late_returns = if mode.contains("lower-backlog-wake") {
+                            2
+                        } else {
+                            usize::from(mode.contains("lower-late"))
+                        };
+                        for index in 0..late_returns {
                             let rejected = OrganEnvelope {
                                 exchange: ExchangeId {
                                     opener: Opener::Harness,
@@ -143,14 +148,19 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                                 },
                                 position: Position::Close,
                                 payload: Payload::ToolAnswer(ToolOutcome::Result {
-                                    content: "late exact output".into(),
+                                    content: format!("late exact output {index}"),
                                 }),
                             };
                             let raw = format!(
                                 " \n{}\n ",
                                 serde_json::to_string_pretty(&rejected).unwrap()
                             );
-                            std::fs::write(root.join("halt-lower-late.json"), &raw).unwrap();
+                            let name = if index == 0 {
+                                "halt-lower-late.json"
+                            } else {
+                                "halt-lower-second.json"
+                            };
+                            std::fs::write(root.join(name), &raw).unwrap();
                             assert_eq!(
                                 send(fd, raw.as_bytes(), MsgFlags::MSG_NOSIGNAL),
                                 Ok(raw.len())

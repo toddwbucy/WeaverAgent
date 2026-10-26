@@ -642,6 +642,16 @@ impl FoundationFailedExit {
 
     fn lower(&mut self, io: &mut impl PumpIo) -> FoundationExitProgress {
         if self.tail.context.pairs.pending_rejection().is_some() {
+            // Drain before attempting admission. Capacity freed after that
+            // attempt must leave its notification readable for the wait.
+            if !self.tail.rejection_unavailable
+                && !self.handoff._capacity_unavailable
+                && let Err(error) = self.tail.context.barrier.drain_capacity_wake()
+            {
+                self.handoff._capacity_unavailable = true;
+                self.tail
+                    .secondary(format!("failed serving Lower capacity wake: {error:?}"));
+            }
             self.tail.advance_serving_rejection();
             if !self.clock(io) {
                 return FoundationExitProgress::Closed;
@@ -821,16 +831,10 @@ impl FoundationFailedExit {
             && !self.tail.rejection_unavailable
             && !self.handoff._capacity_unavailable
         {
-            if let Err(error) = self.tail.context.barrier.drain_capacity_wake() {
-                self.handoff._capacity_unavailable = true;
-                self.tail
-                    .secondary(format!("failed serving Lower capacity wake: {error:?}"));
-            } else {
-                interests.push(WaitInterest {
-                    fd: self.tail.context.barrier.capacity_fd(),
-                    events: PollFlags::POLLIN,
-                });
-            }
+            interests.push(WaitInterest {
+                fd: self.tail.context.barrier.capacity_fd(),
+                events: PollFlags::POLLIN,
+            });
         }
         if matches!(self.stage, ExitStage::World | ExitStage::Lower)
             && let Some(gate) = &self.handoff.gate

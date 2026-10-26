@@ -2841,6 +2841,18 @@ scenario!(
     "input-generation-emission-external-halt-gate-exit-lower-late"
 );
 scenario!(
+    worker_external_composition_failed_exit_lower_pressure,
+    "input-generation-emission-external-halt-gate-exit-lower-late-lower-backlog"
+);
+scenario!(
+    worker_external_composition_failed_exit_lower_pressure_unload,
+    "input-generation-emission-external-halt-gate-exit-lower-late-lower-backlog-terminal"
+);
+scenario!(
+    worker_external_composition_failed_exit_lower_pressure_wake,
+    "input-generation-emission-external-halt-gate-exit-lower-late-lower-backlog-wake"
+);
+scenario!(
     worker_external_composition_failed_exit_start_pending,
     "input-generation-external-halt-gate-exit-start-pending"
 );

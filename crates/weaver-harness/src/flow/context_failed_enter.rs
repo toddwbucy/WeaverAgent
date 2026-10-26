@@ -1289,9 +1289,9 @@ impl FailedRunCleanup {
         Some(true)
     }
 
-    /// A newly observed post-turn return is run-scoped. If its ordinary entry
-    /// cannot be recorded now, keep its one exact owner and continue Lower and
-    /// Unload. A permanently retained rejection also cannot block later packets.
+    /// A newly observed post-turn return is run-scoped. Ordinary pressure keeps
+    /// its exact owner eligible for later Lower and tail steps. Only an actual
+    /// unavailable driver, or the session-close boundary, retires this author.
     pub(in crate::flow::context) fn advance_serving_rejection(&mut self) -> bool {
         if self.rejection_unavailable || self.context.pairs.pending_rejection().is_none() {
             return false;
@@ -1301,7 +1301,7 @@ impl FailedRunCleanup {
         } else {
             match self.context.advance_halt_rejection() {
                 Ok(Some(_)) => return true,
-                Ok(None) => "failed serving rejection waits on ordinary trace capacity".into(),
+                Ok(None) => return false,
                 Err(detail) => detail,
             }
         };
@@ -1322,6 +1322,12 @@ impl FailedRunCleanup {
     fn close_serving_session(&mut self) {
         if !self.serving || self.session_close_attempted {
             return;
+        }
+        if !self.rejection_unavailable && self.context.pairs.pending_rejection().is_some() {
+            let detail = "failed serving rejection incomplete before session close";
+            self.rejection_unavailable = true;
+            self.context.abandon_halt_rejection(detail);
+            self.secondary(detail);
         }
         self.session_close_attempted = true;
         // Lower retired the gate; accounts settled or remain incomplete evidence.
