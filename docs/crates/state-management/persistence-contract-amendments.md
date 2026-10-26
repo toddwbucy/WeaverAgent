@@ -2,9 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #348
-
-**Version:** 0.11 **Date filed:** 2026-10-20
+**Version:** 0.12 **Date filed:** 2026-10-20
 
 ## 0. Scope and parties
 
@@ -81,6 +79,13 @@ complete immutable image of the retained content after every selected source thr
 that frozen boundary is settled. No selected source from the current run beyond that
 boundary may enter the image. Admin may prepare a publication only from the matching
 capture result. [PERSIST-1, PERSIST-4, FLOW-3, SEAM-2, MARK-4]
+
+Before a sole force-unload sends Leave, admin may be unable to establish the loaded
+facts and declaration needed for capture. Foundation PERSIST-FORCE-ADMISSION and
+ADMIN-FORCE-ADMISSION then govern its bounded run end without capture. No new wire
+exchange, save claim or successful Left follows from that end. A known failed worker
+keeps the failed-run outcome. This does not change the obligations of an admitted
+capture or grant an unverified request to the harness. [PERSIST-3, PERSIST-4, FLOW-5]
 
 The harness-local watermark is not sent as a member control field or substituted for
 the image's SourcePosition. That position names the member's last committed content

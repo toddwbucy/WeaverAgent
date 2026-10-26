@@ -2,9 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #348
-
-**Version:** 0.21 **Date filed:** 2026-10-20 **Document ID:**
+**Version:** 0.22 **Date filed:** 2026-10-20 **Document ID:**
 `state-management-foundation-Spec` **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -709,10 +707,26 @@ transit follows queued expiry, not a renewed timer. Reason: one absolute window 
 transport delay without electing another clock or resetting a bound at a later phase.
 [PERSIST-1, PERSIST-4, CLASS-8, COST-4]
 
+**PERSIST-FORCE-ADMISSION.** Before a sole force-unload has sent Leave, capture
+admission can fail because no trustworthy loaded facts or declaration copy is
+available. The admin amendment's ADMIN-FORCE-ADMISSION owns the direct, bounded
+escalation in that case. No capture actor starts, no member request is sent, and no
+healthy capture, Commit, Left or publication is inferred. The root-held containment
+identity bounds the run admin may end. A known worker failure keeps FLOW-5's failed
+outcome and prior marker instead of becoming an operator-force conclusion.
+[PERSIST-3, PERSIST-4, FLOW-3, FLOW-5]
+
+This election permits loss of unsaved state and unwritten trace to preserve the
+operator's ability to end the run when a save cannot be admitted. Existing completed
+artifacts remain eligible by their existing checks. Incomplete publications remain
+guarded for manual repair. The exception supplies no bypass for graceful unload,
+on-demand save or an already admitted capture. [PERSIST-3, PERSIST-4, FLOW-5]
+
 **PERSIST-LEAVE-TIME.** Leave and JoinLeave keep their existing drain, wind-down, force
-and escalation rules in admin Spec 3.0. No save window runs during S4 or S5. If either
-declared lifecycle bound is absent, the graceful phase remains unbounded. After the
-lower, at entry to the save stage, the harness samples began_ns and computes the capture
+and escalation rules in admin Spec 3.0, with ADMIN-FORCE-ADMISSION's pre-capture
+exception. No save window runs during S4 or S5. If either declared lifecycle bound is
+absent, the graceful phase remains unbounded. After the lower, at entry to the save
+stage, the harness samples began_ns and computes the capture
 deadline from save_wait, capped by its existing shared leave deadline. That shared
 window still starts at the recorded interrupt/lower anchor, under harness Spec 6, and
 uses LEAVE_BOUND_MS. A rollback or flow halt starts no capture. Reason: a save's budget
