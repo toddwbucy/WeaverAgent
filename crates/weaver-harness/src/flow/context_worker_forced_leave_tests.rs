@@ -879,11 +879,29 @@ pub(in crate::flow::context::worker_startup) fn finish(
             std::fs::write(std::path::Path::new(&path).join("trace.jsonl"), &bytes).unwrap();
         }
     }
-    let rows: Vec<serde_json::Value> = bytes
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-        .map(|line| serde_json::from_slice(line).unwrap())
-        .collect();
+    let rows: Vec<serde_json::Value> =
+        if owner.0.progress() == FoundationForcedLeaveProgress::CaptureRefused {
+            // CaptureRefused proves Recorded admission, not writer completion.
+            // Read through that actual sequence for explicit refusals and timeouts.
+            trace_through(
+                reader,
+                bytes,
+                owner
+                    .0
+                    .test_inner()
+                    .test_context()
+                    .last_author_sequence
+                    .expect("capture refusal has its Recorded sequence"),
+                Instant::now() + Duration::from_secs(3),
+            )
+            .expect("the capture refusal's Recorded trace must reach its reader")
+        } else {
+            bytes
+                .split(|byte| *byte == b'\n')
+                .filter(|line| !line.is_empty())
+                .map(|line| serde_json::from_slice(line).unwrap())
+                .collect()
+        };
     if let Some(probe) = &capture_wait {
         probe.assert_finished(&mut owner.0, member, &packets, &rows, report.as_ref());
         return;
