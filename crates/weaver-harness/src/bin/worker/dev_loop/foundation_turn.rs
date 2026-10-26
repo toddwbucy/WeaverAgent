@@ -126,9 +126,9 @@ impl<'a> Workflow<'a> {
         }
         let input = self.input.as_mut().unwrap();
         if self.detail.is_some() && input.progress() != FoundationInputProgress::ManagementPending {
-            // Observe the actual management listener even while the loop cannot
-            // make another election. A refused election grants no new operation.
-            input.advance();
+            // Wait on the actual transports while the loop cannot make another
+            // election. A wake grants no new operation or replacement deadline.
+            input.wait_for_wake();
             return self.progress();
         }
         let result: Result<(), String> = match input.progress() {

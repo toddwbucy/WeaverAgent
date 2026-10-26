@@ -194,6 +194,7 @@ impl CorrectionWork {
                 }
             }
             CorrectionStage::Start => {
+                decision(context, ports.io)?;
                 let Some(PlacementCompletion::Granted(grant)) = self.placement.take() else {
                     unreachable!()
                 };
