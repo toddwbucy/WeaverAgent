@@ -186,6 +186,7 @@ enum AuthorClaim {
     Placement(std::sync::Arc<()>),
     Measurement(std::sync::Arc<()>),
     EnterRefusal(std::sync::Arc<()>),
+    PairRejection(std::sync::Arc<()>),
 }
 
 impl AuthorClaim {
@@ -193,7 +194,8 @@ impl AuthorClaim {
         match (self, other) {
             (Self::Placement(a), Self::Placement(b))
             | (Self::Measurement(a), Self::Measurement(b))
-            | (Self::EnterRefusal(a), Self::EnterRefusal(b)) => std::sync::Arc::ptr_eq(a, b),
+            | (Self::EnterRefusal(a), Self::EnterRefusal(b))
+            | (Self::PairRejection(a), Self::PairRejection(b)) => std::sync::Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -349,6 +351,7 @@ pub(crate) struct RecordingContext {
     pair_work: Option<pair_driver::PairTransaction>,
     pair_gate_identity: Option<crate::flow::pump_transport::PortIdentity>,
     pair_rejected_authoring: bool,
+    pair_rejected_claim: Option<halt_rejection::RejectedAuthor>,
     pair_rejected_return: StoppedAuthor,
     pair_rejection_wait: Option<(AbsoluteBound, bool)>,
     pair_refused_gate: Option<crate::flow::pump_transport::ReceivedOrgan>,
@@ -488,6 +491,7 @@ impl RecordingContext {
             pair_work: None,
             pair_gate_identity: None,
             pair_rejected_authoring: false,
+            pair_rejected_claim: None,
             pair_rejected_return: StoppedAuthor::default(),
             pair_rejection_wait: None,
             pair_refused_gate: None,
@@ -1284,10 +1288,18 @@ impl RecordingContext {
         if let Some(failure) = self.failure.clone() {
             return Err(failure.into());
         }
-        if claim.is_some() && self.phase != RecordingPhase::Entered {
+        let claim_phase = match &claim {
+            Some(AuthorClaim::PairRejection(_)) => matches!(
+                self.phase,
+                RecordingPhase::Entered | RecordingPhase::Releasing
+            ),
+            _ => self.phase == RecordingPhase::Entered,
+        };
+        if claim.is_some() && !claim_phase {
             return Err((match claim {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
+                Some(AuthorClaim::PairRejection(_)) => RunFailure::PairOwned,
                 _ => RunFailure::MeasureOwned,
             })
             .into());
@@ -1310,6 +1322,7 @@ impl RecordingContext {
             return Err((match claim {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
+                Some(AuthorClaim::PairRejection(_)) => RunFailure::PairOwned,
                 _ => RunFailure::MeasureOwned,
             })
             .into());
@@ -1400,6 +1413,10 @@ impl RecordingContext {
                             .enter_refusal_record
                             .as_mut()
                             .is_some_and(|record| record.claim(&identity, ticket)),
+                        AuthorClaim::PairRejection(identity) => self
+                            .pair_rejected_claim
+                            .as_mut()
+                            .is_some_and(|owner| owner.claim(&identity, ticket)),
                         AuthorClaim::Measurement(identity) => {
                             self.claim_measure_author_ticket(&identity, ticket)
                         }
@@ -1540,6 +1557,10 @@ impl RecordingContext {
             self.bind_place_measure_author(sequence);
             self.bind_place_author(sequence);
             self.bind_enter_refusal_author(sequence);
+            self.bind_rejected_author(sequence);
+            if let Some(report) = &mut self.halt_report {
+                report.retain_trace_sequence(sequence);
+            }
         }
         Ok(recorded)
     }
@@ -1563,6 +1584,7 @@ impl RecordingContext {
                 self.bind_place_measure_author(sequence);
                 self.bind_place_author(sequence);
                 self.bind_enter_refusal_author(sequence);
+                self.bind_rejected_author(sequence);
             }
             // Other completion hooks keep their existing successful boundary.
             if let RecordProgress::Recorded {
@@ -1576,6 +1598,7 @@ impl RecordingContext {
                 self.bind_place_measure_author(*sequence);
                 self.bind_place_author(*sequence);
                 self.bind_enter_refusal_author(*sequence);
+                self.bind_rejected_author(*sequence);
                 self.bind_marks_author(*sequence, ports.io)?;
                 self.bind_repair_author(*sequence, ports.io)?;
                 self.bind_pair_author(*sequence, ports.io)?;
@@ -2539,6 +2562,9 @@ pub(super) use measure_driver::{
 #[cfg(test)]
 #[path = "context_measure_tests.rs"]
 mod measure_tests;
+
+#[path = "context_halt_rejection.rs"]
+pub(in crate::flow) mod halt_rejection;
 
 #[path = "context_halt.rs"]
 mod halt_driver;

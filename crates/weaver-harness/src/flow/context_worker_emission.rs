@@ -48,7 +48,7 @@ enum EmissionStage {
     Repair,
     Restatement,
     Correction,
-    PlacementRefusal,
+    CorrectionRefusal,
     RefusalClose,
     Effective,
     BeginOutbound,
@@ -62,6 +62,12 @@ enum EmissionStage {
     Cancelled,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RefusalElection {
+    Placement,
+    Operation,
+}
+
 pub(super) struct EmissionWork {
     template: Option<&'static RestatementTemplate>,
     stage: EmissionStage,
@@ -69,7 +75,7 @@ pub(super) struct EmissionWork {
     original: Option<OriginalRequests>,
     restatement: Option<RestatementRequest>,
     corrections: Vec<CorrectionWork>,
-    closing_correction: bool,
+    closing_refusal: Option<RefusalElection>,
     effective: Option<EffectiveEmission>,
     refused: Option<RepairRefused>,
     exhausted: Option<RepairExhausted>,
@@ -108,7 +114,7 @@ impl EmissionWork {
             original: None,
             restatement: None,
             corrections: vec![],
-            closing_correction: false,
+            closing_refusal: None,
             effective: None,
             refused: None,
             exhausted: None,
@@ -156,10 +162,36 @@ impl EmissionWork {
         self.detail.as_deref()
     }
     pub(super) fn closing_correction(&self) -> bool {
-        self.closing_correction
+        self.closing_refusal == Some(RefusalElection::Placement)
     }
     pub(super) fn ready_to_close_refusal(&self) -> bool {
         self.stage == EmissionStage::RefusalClose
+    }
+    pub(super) fn close_refusal(&mut self) -> bool {
+        if self.stage != EmissionStage::Refused
+            || self.cancelled
+            || self.closing_refusal.is_some()
+            || !(self.refused.is_some()
+                || self.exhausted.is_some()
+                || self.outbound.is_some()
+                || matches!(self.result, Some(OutboundCompletion::Refused { .. })))
+        {
+            return false;
+        }
+        self.closing_refusal = Some(RefusalElection::Operation);
+        self.stage = EmissionStage::CancelAccount;
+        true
+    }
+
+    fn finish_accounting(&mut self, context: &mut RecordingContext) {
+        self.stage = if self.closing_refusal.is_some() && !self.cancelled {
+            // The same operation still owes its trace close and world
+            // delivery. WorldClose inherits this bound.
+            EmissionStage::RefusalClose
+        } else {
+            context.complete_wait(PumpDeadline::Decision);
+            EmissionStage::Cancelled
+        };
     }
 
     pub(super) fn cancel(
@@ -170,6 +202,12 @@ impl EmissionWork {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         self.cancelled = true;
+        if self.stage == EmissionStage::RefusalClose {
+            // A later Stop can replace an ordinary refusal before its close
+            // author starts. Its completed account cannot be filed again.
+            self.finish_accounting(context);
+            return Ok(());
+        }
         if self.stage == EmissionStage::Execution {
             self.execution.as_mut().unwrap().cancel(context, gate, io)?;
         } else if context.repair.is_some() {
@@ -211,7 +249,7 @@ impl EmissionWork {
                     self.stage = EmissionStage::Cancelled;
                 }
             }
-            EmissionStage::PlacementRefusal => {
+            EmissionStage::CorrectionRefusal => {
                 let correction = self.corrections.last().unwrap();
                 self.account = Some(correction.finish_refusal(context, ports.io)?);
                 *certificate = context.take_repair_certificate(ports.io)?;
@@ -422,6 +460,7 @@ impl EmissionWork {
                 };
             }
             EmissionStage::CancelAccount => {
+                decision(context, ports.io)?;
                 if let Some(effective) = self.effective.take() {
                     self.account = Some(effective.into_account());
                 }
@@ -458,15 +497,16 @@ impl EmissionWork {
                 }
                 if let Some(exhausted) = self.exhausted.take() {
                     self.account = Some(exhausted.into_account());
-                    self.stage = EmissionStage::Cancelled; // Exhaustion already settled every pair.
+                    // Exhaustion already settled every pair; do not submit
+                    // its completed account for another terminal filing.
+                    self.finish_accounting(context);
                     return Ok(());
                 }
-                decision(context, ports.io)?;
                 let account = self
                     .account
                     .take()
                     .expect("completed emission retains its account");
-                let cause = if self.closing_correction && !self.cancelled {
+                let cause = if self.closing_refusal.is_some() && !self.cancelled {
                     NonDispatchCause::PassPurpose
                 } else {
                     NonDispatchCause::Stop
@@ -496,14 +536,7 @@ impl EmissionWork {
                     .map_err(|failure| self.returned_pair_filing.retain(failure))?;
                 if let Some(account) = context.take_repair_accounting(ports.io)? {
                     self.account = Some(account);
-                    self.stage = if self.closing_correction && !self.cancelled {
-                        // The same operation still owes its trace close and
-                        // world delivery. WorldClose inherits this bound.
-                        EmissionStage::RefusalClose
-                    } else {
-                        context.complete_wait(PumpDeadline::Decision);
-                        EmissionStage::Cancelled
-                    };
+                    self.finish_accounting(context);
                 } else if progress == crate::flow::context::PairProgress::Pending {
                     context.pump_once(ports)?;
                 }

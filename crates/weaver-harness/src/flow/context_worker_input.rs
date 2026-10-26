@@ -17,6 +17,9 @@ pub(crate) mod generation;
 #[path = "context_worker_management.rs"]
 pub(crate) mod management;
 
+#[path = "context_worker_halt.rs"]
+pub(crate) mod halt;
+
 #[path = "context_worker_close.rs"]
 mod close;
 
@@ -91,6 +94,43 @@ pub struct FoundationInput<'a> {
 }
 
 impl<'a> FoundationServing<'a> {
+    /// A later world frame belongs to the serving owner, not the active pair.
+    /// The gate admits one unanswered input per retained connection. Keep its
+    /// exact receipt here until serialized intake, with no new check or clock.
+    fn retain_queued_input(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        let owner = &mut self.owner;
+        let Some(frame) = owner.gate.held() else {
+            return Ok(());
+        };
+        if frame.exchange.opener != Opener::Gate || !matches!(frame.payload, Payload::Frame(_)) {
+            return Ok(());
+        }
+        if frame.position != Position::Open
+            || self.gate_exchanges.contains(&frame.exchange.ordinal)
+            || self
+                .queued_inputs
+                .iter()
+                .any(|queued| queued.envelope().exchange == frame.exchange)
+        {
+            return Err(owner.context.fail(
+                io,
+                FlowHaltReason::ProtocolFailed,
+                HaltPoint::Barrier,
+                "queued gate frame is not a fresh opening exchange",
+            ));
+        }
+        let received = owner
+            .gate
+            .take_received()
+            .map_err(|failure| RunFailure::Transport {
+                source: PumpSource::Gate,
+                failure,
+            })?
+            .expect("held original gate input");
+        self.queued_inputs.push_back(received);
+        Ok(())
+    }
+
     /// Consume the unique serving seat. Frames behind this owner remain queued
     /// without an input ID or a new gate deadline.
     pub fn input(self) -> Box<FoundationInput<'a>> {
@@ -139,18 +179,44 @@ impl<'a> FoundationInput<'a> {
         self.advance_with_io(&mut MonotonicIo)
     }
 
+    /// Wait for lifecycle or transport readiness without electing or advancing
+    /// an input operation. Existing absolute bounds still apply. Completions
+    /// stay with their owners, and a terminal input returns without waiting.
+    pub fn wait_for_wake(&mut self) -> FoundationInputProgress {
+        self.drive_with_io(&mut MonotonicIo, true)
+    }
+
     fn advance_with_io(&mut self, io: &mut impl PumpIo) -> FoundationInputProgress {
+        self.drive_with_io(io, false)
+    }
+
+    fn drive_with_io(&mut self, io: &mut impl PumpIo, wait: bool) -> FoundationInputProgress {
         if matches!(
             self.progress(),
             FoundationInputProgress::Stopped | FoundationInputProgress::ManagementPending
-        ) {
+        ) || (wait
+            && matches!(
+                self.progress(),
+                FoundationInputProgress::Completed
+                    | FoundationInputProgress::Refused
+                    | FoundationInputProgress::Aborted
+            ))
+        {
             return self.progress();
         }
         let result = self.observe(io).and_then(|()| {
-            if self.progress() != FoundationInputProgress::Pending {
+            if self.progress() == FoundationInputProgress::ManagementPending {
                 Ok(())
-            } else {
+            } else if wait {
+                self.serving
+                    .owner
+                    .context
+                    .reduce_flow(io)
+                    .and_then(|_| self.observe_with_wait(io, true))
+            } else if self.progress() == FoundationInputProgress::Pending {
                 self.step(io)
+            } else {
+                Ok(())
             }
         });
         if let Err(mut failure) = result {
@@ -191,20 +257,27 @@ impl<'a> FoundationInput<'a> {
     }
 
     fn observe(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
-        // The sole pump observes actual ready transports without waiting or
-        // altering a deadline before source authoring or response completion.
+        self.observe_with_wait(io, false)
+    }
+
+    fn observe_with_wait(&mut self, io: &mut impl PumpIo, wait: bool) -> Result<(), RunFailure> {
+        // The same pump owns both observation and an explicitly elected wait.
+        // Neither changes the operation's clocks or consumes its completion.
         let owner = &mut self.serving.owner;
-        owner.context.observe_ready(&mut PumpPorts {
-            lifecycle: LifecyclePorts {
-                listener: Some(&mut owner.listener),
-                residency: Some(owner.resident.residency),
-                ..Default::default()
+        owner.context.pump_with_wait(
+            &mut PumpPorts {
+                lifecycle: LifecyclePorts {
+                    listener: Some(&mut owner.listener),
+                    residency: Some(owner.resident.residency),
+                    ..Default::default()
+                },
+                gate: Some(&mut owner.gate),
+                decode: Some(owner.decode),
+                label: None,
+                io,
             },
-            gate: Some(&mut owner.gate),
-            decode: Some(owner.decode),
-            label: None,
-            io,
-        })?;
+            wait,
+        )?;
         Ok(())
     }
 
@@ -296,16 +369,16 @@ impl<'a> FoundationInput<'a> {
                     return Ok(());
                 }
                 if self.received.is_none() {
-                    self.received =
-                        ports
-                            .gate
-                            .as_deref_mut()
-                            .unwrap()
-                            .take_received()
-                            .map_err(|failure| RunFailure::Transport {
-                                source: PumpSource::Gate,
-                                failure,
-                            })?;
+                    self.received = self.serving.queued_inputs.pop_front();
+                    if self.received.is_none() {
+                        self.received =
+                            ports.gate.as_deref_mut().unwrap().take_received().map_err(
+                                |failure| RunFailure::Transport {
+                                    source: PumpSource::Gate,
+                                    failure,
+                                },
+                            )?;
+                    }
                 }
                 let Some(received) = self.received.as_ref() else {
                     owner.context.pump_once(&mut ports)?;

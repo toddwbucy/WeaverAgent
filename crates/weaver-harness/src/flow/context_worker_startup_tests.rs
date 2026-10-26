@@ -376,6 +376,19 @@ pub(super) struct Member {
     pub(super) held_control: Option<s::StateFrame>,
 }
 impl Member {
+    pub(super) fn stop_responses(&self) {
+        self.peer.shutdown(std::net::Shutdown::Write).unwrap();
+    }
+
+    pub(super) fn assert_no_request(&mut self) {
+        let mut byte = [0];
+        assert!(
+            matches!(self.peer.read(&mut byte), Err(error)
+            if error.kind() == std::io::ErrorKind::WouldBlock),
+            "failed serving must issue no new member request"
+        );
+    }
+
     pub(super) fn step(&mut self, now: u64, mode: &str) {
         self.step_observed(mode, || now);
     }
@@ -1637,6 +1650,16 @@ scenario!(
 );
 
 scenario!(
+    worker_correction_composition_held_decode_deadline,
+    "input-generation-emission-correction-held-decode-deadline"
+);
+
+scenario!(
+    worker_correction_composition_held_decode_inherited,
+    "input-generation-emission-correction-held-decode-inherited"
+);
+
+scenario!(
     worker_correction_composition_fit_refusal_close_stop,
     "input-generation-emission-correction-fit-refusal-close-stop"
 );
@@ -1953,8 +1976,112 @@ scenario!(
 );
 
 scenario!(
+    worker_external_composition_queued_input_stop_running,
+    "input-generation-emission-pairs-external-queued-input-stop-running"
+);
+scenario!(
+    worker_external_composition_queued_input_stop_running_late,
+    "input-generation-emission-pairs-external-queued-input-stop-running-late"
+);
+scenario!(
+    worker_external_composition_queued_input_leave,
+    "input-generation-emission-pairs-external-queued-input-leave"
+);
+scenario!(
+    worker_external_composition_queued_input_duplicate_current,
+    "input-generation-emission-pairs-external-queued-input-duplicate-current"
+);
+scenario!(
+    worker_external_composition_queued_input_duplicate_queued,
+    "input-generation-emission-pairs-external-queued-input-duplicate-queued"
+);
+scenario!(
+    worker_external_composition_queued_input_not_open,
+    "input-generation-emission-pairs-external-queued-input-not-open"
+);
+scenario!(
+    worker_final_composition_queued_input,
+    "input-worker-generation-emission-final-return-external-queued-input"
+);
+scenario!(
+    worker_final_composition_queued_input_capacity,
+    "input-worker-generation-emission-final-return-external-queued-input-capacity"
+);
+scenario!(
+    worker_final_composition_queued_input_held_terminal,
+    "input-worker-generation-emission-final-return-external-queued-input-held-terminal"
+);
+
+scenario!(
     worker_final_composition_text,
     "input-worker-generation-emission-final-text"
+);
+
+scenario!(
+    worker_emission_composition_operation_refusal_stop,
+    "input-generation-emission-sort-refusal-operation-close-stop"
+);
+
+scenario!(
+    worker_final_composition_task_admission_refusal,
+    "input-worker-generation-emission-final-operation-refusal-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_busy,
+    "input-generation-task-admission-busy"
+);
+scenario!(
+    worker_generation_composition_task_admission_busy_deadline,
+    "input-generation-task-admission-busy-deadline"
+);
+scenario!(
+    worker_generation_composition_task_admission_refusal_proof,
+    "input-generation-emission-task-admission-operation-refusal-proof-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_revoked_election,
+    "input-generation-emission-task-admission-operation-refusal-revoked-election-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_revoked_use,
+    "input-generation-emission-task-admission-operation-refusal-revoked-use-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_refusal_gate_pressure,
+    "input-generation-emission-task-admission-operation-refusal-gate-pressure-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_refusal_gate_deadline,
+    "input-generation-emission-task-admission-operation-refusal-gate-deadline-no-task"
+);
+
+scenario!(
+    worker_final_composition_operation_repair_refusal,
+    "input-worker-generation-emission-final-operation-refusal-repair-refusal"
+);
+scenario!(
+    worker_final_composition_operation_outbound_refusal,
+    "input-worker-generation-emission-final-operation-refusal-sort-refusal"
+);
+scenario!(
+    worker_final_composition_operation_outbound_template_refusal,
+    "input-worker-generation-emission-final-operation-refusal-no-sort"
+);
+scenario!(
+    worker_final_composition_operation_outbound_refusal_held,
+    "input-worker-generation-emission-final-operation-refusal-sort-refusal-held-terminal"
+);
+scenario!(
+    worker_final_composition_operation_repair_exhausted,
+    "input-worker-generation-emission-final-correction-operation-refusal-cap"
+);
+scenario!(
+    worker_final_composition_operation_decode_refusal,
+    "input-worker-generation-emission-final-correction-operation-refusal-decode-refusal"
+);
+scenario!(
+    worker_correction_composition_decode_refusal_proof,
+    "input-generation-emission-correction-decode-refusal-proof"
 );
 
 scenario!(
@@ -2133,6 +2260,89 @@ scenario!(
 );
 
 scenario!(
+    worker_generation_composition_election_wait,
+    "input-generation-election-wait"
+);
+scenario!(
+    worker_generation_composition_election_wait_bound,
+    "input-generation-election-wait-bound"
+);
+scenario!(
+    worker_generation_composition_election_wait_held,
+    "input-generation-election-wait-held"
+);
+scenario!(
+    worker_generation_composition_election_wait_filing,
+    "input-generation-election-wait-filing"
+);
+scenario!(
+    worker_generation_composition_election_wait_first_failure,
+    "input-generation-election-wait-first-failure"
+);
+scenario!(
+    worker_generation_composition_election_wait_gate_failure,
+    "input-generation-election-wait-gate-failure"
+);
+
+scenario!(
+    worker_external_composition_halt_gate,
+    "input-generation-emission-external-halt-gate"
+);
+scenario!(
+    worker_external_composition_halt_gate_late,
+    "input-generation-emission-external-halt-gate-late"
+);
+scenario!(
+    worker_external_composition_halt_gate_pressure,
+    "input-generation-emission-external-halt-gate-pressure-late"
+);
+scenario!(
+    worker_external_composition_halt_gate_pressure_hold,
+    "input-generation-emission-external-halt-gate-pressure-hold-late"
+);
+scenario!(
+    worker_external_composition_halt_gate_trace_loss,
+    "input-generation-emission-external-halt-gate-trace-loss"
+);
+scenario!(
+    worker_external_composition_halt_gate_trace_loss_late,
+    "input-generation-emission-external-halt-gate-trace-loss-late"
+);
+scenario!(
+    worker_external_composition_halt_gate_deadline,
+    "input-generation-emission-external-halt-gate-deadline"
+);
+scenario!(
+    worker_external_composition_halt_gate_eof,
+    "input-generation-emission-external-halt-gate-eof"
+);
+scenario!(
+    worker_external_composition_halt_gate_control,
+    "input-generation-emission-external-halt-gate-control"
+);
+scenario!(
+    worker_external_composition_halt_gate_unsent,
+    "input-generation-emission-external-halt-gate-unsent"
+);
+scenario!(
+    worker_external_composition_halt_gate_worker,
+    "input-generation-emission-external-halt-gate-worker"
+);
+scenario!(
+    worker_external_composition_halt_gate_management,
+    "input-generation-emission-external-halt-gate-management"
+);
+
+scenario!(
     worker_stop_composition_inherited_deadline,
     "input-stop-inherited-deadline"
+);
+
+scenario!(
+    worker_external_composition_halt_gate_clock_error,
+    "input-generation-emission-external-halt-gate-clock-error"
+);
+scenario!(
+    worker_external_composition_halt_gate_clock_reverse,
+    "input-generation-emission-external-halt-gate-clock-reverse"
 );

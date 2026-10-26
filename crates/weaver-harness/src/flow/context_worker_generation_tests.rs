@@ -403,6 +403,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if mode.contains("task-admission-") {
+        return super::admission_tests::exercise(serving, member, reader, clock, root, mode);
+    }
     if mode.contains("-session-") {
         return super::session_tests::exercise(serving, member, reader, clock, socket, root, mode);
     }
@@ -653,6 +656,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             }
         }
     }
+    if mode.ends_with("election-wait-filing") {
+        member.hold_kind = Some("message.assistant");
+    }
     input.generate().unwrap();
     if mode.contains("slow-decode") {
         slow_generation(input, member, clock, root, mode, "appended.json");
@@ -691,6 +697,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         !root.join("closed.json").exists(),
         "generation is no final-answer election"
     );
+    if mode.contains("election-wait") {
+        return super::election_wait_tests::exercise(guard, member, clock, socket, root, mode);
+    }
     let work = input.engine.as_mut().unwrap();
     let Some(GenerationCompletion::Generated(proof)) = &mut work.generation else {
         panic!("actual proof")

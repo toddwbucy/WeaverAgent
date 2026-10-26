@@ -88,6 +88,7 @@ fn author_failure_worker_emission_keeps_exact_refusal_after_cancel() {
 pub(in crate::flow::context) fn templates(mode: &str) -> &'static [s::TemplateSpec] {
     static ALL: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     static NO_SORT: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
+    static NO_TASK: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     let all = ALL.get_or_init(|| {
         let mut all = super::super::tests::templates().to_vec();
         all.push(s::TemplateSpec {
@@ -109,7 +110,14 @@ pub(in crate::flow::context) fn templates(mode: &str) -> &'static [s::TemplateSp
         });
         all
     });
-    if mode.contains("no-sort") {
+    if mode.contains("no-task") {
+        NO_TASK.get_or_init(|| {
+            all.iter()
+                .filter(|t| t.template_id != "mark.begin_task")
+                .cloned()
+                .collect()
+        })
+    } else if mode.contains("no-sort") {
         NO_SORT.get_or_init(|| {
             all.iter()
                 .filter(|t| t.template_id != "sort.outbound")
@@ -148,7 +156,10 @@ fn text(words: &str) -> ContentBlock {
     ContentBlock::Text { text: words.into() }
 }
 pub(in crate::flow::context) fn content(mode: &str) -> Vec<ContentBlock> {
-    if mode.contains("-final-") && !mode.contains("-external-") {
+    if mode.contains("-final-")
+        && !mode.contains("-external-")
+        && !mode.contains("operation-refusal")
+    {
         if mode.contains("-round-") {
             return vec![text("Recall archive."), text("Recall ledger.")];
         }
@@ -786,6 +797,37 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         }
         if let Some(bound) = completed_bound {
             observe_completed_after_bound(&mut guard, clock, socket, bound);
+        }
+        if mode.ends_with("operation-close-stop") {
+            let input = guard.input.as_mut().unwrap();
+            input.close_operation_refusal().unwrap();
+            for _ in 0..2000 {
+                if input
+                    .engine
+                    .as_ref()
+                    .unwrap()
+                    .emission
+                    .as_ref()
+                    .unwrap()
+                    .ready_to_close_refusal()
+                {
+                    break;
+                }
+                assert_eq!(
+                    step(input, member, clock, mode),
+                    FoundationInputProgress::Pending
+                );
+            }
+            assert!(
+                input
+                    .engine
+                    .as_ref()
+                    .unwrap()
+                    .emission
+                    .as_ref()
+                    .unwrap()
+                    .ready_to_close_refusal()
+            );
         }
         stop(&mut guard, member, clock, mode, socket, root);
         assert_terminals(reader, 2);

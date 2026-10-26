@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 use weaver_traits::{ContentBlock, Message, Role};
 use weaver_types::{Finish, Generation, TokenAnswer, TokenDirective};
 
+#[path = "context_worker_correction_admission_tests.rs"]
+mod admission;
+
 fn generated(mode: &str, attempt: usize, stopped: bool) -> TokenAnswer {
     let content = if attempt == 0 {
         super::super::tests::content(mode)
@@ -153,7 +156,17 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                             format!("correction-appended-{attempt}.json")
                         };
                         std::fs::write(root.join(file), &bytes[..n]).unwrap();
-                        if attempt == 1 && mode.ends_with("stop-generation") {
+                        if attempt == 1 && mode.contains("decode-refusal") {
+                            let refused =
+                                serde_json::to_vec(&weaver_types::TokenRefusal::MalformedDelta)
+                                    .unwrap();
+                            assert_eq!(
+                                send(fd, &refused, MsgFlags::MSG_NOSIGNAL),
+                                Ok(refused.len())
+                            );
+                            std::fs::write(root.join("correction-decode-refused.json"), refused)
+                                .unwrap();
+                        } else if attempt == 1 && mode.ends_with("stop-generation") {
                             pending = Some(attempt);
                         } else {
                             packet(fd, generated(mode, attempt, false));
@@ -234,7 +247,7 @@ pub(in crate::flow::context) fn exercise(
                 .place_restatement("duplicate".into(), CutMethod::Flush)
                 .is_err()
         );
-        if mode.contains("refusal") {
+        if mode.contains("fit-refusal") || mode.ends_with("measure-refusal") {
             until(
                 input,
                 member,
@@ -328,21 +341,53 @@ pub(in crate::flow::context) fn exercise(
         }
         input.generate_correction().unwrap();
         assert!(input.generate_correction().is_err());
-        if mode.ends_with("held-decode") {
-            use crate::flow::context::held_input_tests::hold;
-            let held = hold(
-                input.serving.owner.context,
-                crate::flow::context::HeldInput::Both,
+        if mode.contains("decode-refusal-proof") {
+            until(
+                input,
+                member,
+                clock,
+                mode,
+                FoundationInputProgress::OperationRefused,
             );
-            for _ in 0..24 {
-                assert_eq!(
-                    step(input, member, clock, mode),
-                    FoundationInputProgress::Pending
-                );
-                held.assert_held(input.serving.owner.context);
-            }
-            assert!(!root.join("correction-appended-1.json").exists());
-            held.take(input.serving.owner.context);
+            let correction = input
+                .engine
+                .as_ref()
+                .unwrap()
+                .emission
+                .as_ref()
+                .unwrap()
+                .corrections
+                .last()
+                .unwrap();
+            let context = &mut input.serving.owner.context;
+            let before = context.last_author_sequence;
+            let origin = std::mem::replace(&mut context.read_origin, std::sync::Arc::new(()));
+            assert!(matches!(
+                correction.finish_refusal(context, clock),
+                Err(RunFailure::RepairOwned)
+            ));
+            context.read_origin = origin;
+            let turn = context
+                .open_turn
+                .replace(weaver_trace::TurnRef("foreign-turn".into()));
+            assert!(matches!(
+                correction.finish_refusal(context, clock),
+                Err(RunFailure::RepairOwned)
+            ));
+            context.open_turn = turn;
+            assert!(context.repair.is_some());
+            assert_eq!(context.last_author_sequence, before);
+            input.close_operation_refusal().unwrap();
+            until(input, member, clock, mode, FoundationInputProgress::Refused);
+            assert_public_refusal(input, root);
+            let work = input.engine.as_ref().unwrap().emission.as_ref().unwrap();
+            assert!(work.account.is_some());
+            assert!(matches!(&work.corrections.last().unwrap().generation,
+                Some(GenerationCompletion::Refused(account)) if account.refusal() == Some(&weaver_types::TokenRefusal::MalformedDelta)));
+            return;
+        }
+        if mode.contains("held-decode") && admission::exercise(input, clock, root, mode) {
+            return;
         }
         if mode.ends_with("stop-generation") || mode.ends_with("stop-checks") {
             let end = Instant::now() + Duration::from_secs(5);
@@ -519,6 +564,52 @@ pub(in crate::flow::context) fn exercise(
         assert!(id < sequence(placement));
     }
     assert!(rows.iter().any(|r| r["kind"] == "sort.decision"));
+}
+
+pub(in crate::flow::context::worker_startup) fn assert_refusal_account(
+    input: &FoundationInput<'_>,
+    mode: &str,
+    rows: &[serde_json::Value],
+) {
+    let work = input.engine.as_ref().unwrap().emission.as_ref().unwrap();
+    assert!(work.account.is_some());
+    if mode.contains("decode-refusal") {
+        assert!(matches!(&work.corrections.last().unwrap().generation,
+                Some(GenerationCompletion::Refused(account)) if account.refusal() == Some(&weaver_types::TokenRefusal::MalformedDelta)));
+        assert!(
+            work.account
+                .as_ref()
+                .unwrap()
+                .failed_corrections()
+                .is_empty()
+        );
+        assert!(work.account.as_ref().unwrap().corrections().is_empty());
+    }
+    if mode.ends_with("cap") {
+        assert_eq!(work.account.as_ref().unwrap().failed_corrections().len(), 2);
+    }
+    let work = input.engine.as_ref().unwrap().emission.as_ref().unwrap();
+    for request in work.account.as_ref().unwrap().requests() {
+        assert!(rows.iter().any(|row| row["kind"] == "tool.call.completed"
+            && row["payload"]["call_id"] == serde_json::to_value(&request.call_id).unwrap()));
+    }
+}
+
+pub(in crate::flow::context::worker_startup) fn refusal_state(
+    input: &FoundationInput<'_>,
+) -> String {
+    let work = input.engine.as_ref().unwrap();
+    let emission = work.emission.as_ref().unwrap();
+    format!(
+        "engine emission {}; emission {:?}; correction {:?}; account {}; exhausted {}; repair {}; pair work {}",
+        work.stage == EngineStage::Emission,
+        emission.stage,
+        emission.corrections.last().map(|c| c.stage),
+        emission.account.is_some(),
+        emission.exhausted.is_some(),
+        input.serving.owner.context.repair.is_some(),
+        input.serving.owner.context.pair_work.is_some()
+    )
 }
 
 pub(in crate::flow::context::worker_startup) fn assert_public_refusal(

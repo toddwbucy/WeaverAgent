@@ -54,6 +54,9 @@ impl HaltReport {
     pub(in crate::flow) fn last_trace_sequence(&self) -> Option<Sequence> {
         self.last_trace_sequence
     }
+    pub(super) fn retain_trace_sequence(&mut self, sequence: Sequence) {
+        self.last_trace_sequence = Some(sequence);
+    }
     /// This reporting road cannot continue. A rejected ordinary obligation also
     /// stops it, so this value alone does not prove an operating-system sink loss.
     pub(in crate::flow) fn trace_unavailable(&self) -> bool {
@@ -92,6 +95,35 @@ impl RecordingContext {
 
     pub(in crate::flow) fn halt_report(&self) -> Option<&HaltReport> {
         self.halt_report.as_ref()
+    }
+
+    /// Retain the actual failed snapshot attempt without inventing an account
+    /// or a recorded fault. Missing reporting must not prevent the interrupt.
+    pub(in crate::flow::context) fn unavailable_halt_report(
+        &mut self,
+        failure: &HaltAccountFailure,
+    ) -> Result<(), HaltReportRefusal> {
+        if self.phase != RecordingPhase::Failed
+            || self.failure.is_none()
+            || self.flow.halt().is_none()
+        {
+            return Err(HaltReportRefusal::NotFailed);
+        }
+        if self.halt_report.is_some() {
+            return Err(HaltReportRefusal::AlreadyStarted);
+        }
+        let detail = format!("halt account unavailable: {failure:?}");
+        self.halt_report = Some(HaltReport {
+            attempted: true,
+            event: None,
+            fault_sequence: None,
+            last_trace_sequence: self.barrier.last_trace_only_sequence(),
+            unavailable: Some(detail.clone()),
+            aborted: None,
+            trace_unavailable: self.barrier.standing_failure().is_some(),
+        });
+        self.halt_report_secondary(Some(self.last_ns), detail);
+        Ok(())
     }
 
     /// One terminal attempt or one opportunistic ordinary trace step. This never

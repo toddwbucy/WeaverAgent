@@ -45,14 +45,31 @@ impl FoundationInput<'_> {
         work.stage = EngineStage::Answer;
         Ok(())
     }
-    /// Elect the existing refused close after a task/read or decoder refusal
-    /// has returned its complete account. No raw text or caller receipt grants
-    /// this transition. Correction placement retains its dedicated accounting.
+    /// Elect the existing refused close after an operation returns its account.
+    /// Emission refusals first settle all owed terminals. No raw text or caller
+    /// receipt grants this transition.
     pub fn close_operation_refusal(&mut self) -> Result<(), FoundationInputProgress> {
         if self.progress() != FoundationInputProgress::OperationRefused {
             return Err(self.progress());
         }
         if self.close_correction_refusal().is_ok() {
+            return Ok(());
+        }
+        let work = self.engine.as_mut().unwrap();
+        if work.stage == EngineStage::Emission
+            && work
+                .emission
+                .as_mut()
+                .is_some_and(|work| work.close_refusal())
+        {
+            return Ok(());
+        }
+        let work = self.engine.as_ref().unwrap();
+        if work.stage == EngineStage::Refused && work.admission.is_some() {
+            let close = WorldClose::refused_admission(self).ok_or(self.progress())?;
+            let work = self.engine.as_mut().unwrap();
+            work.answer = Some(close);
+            work.stage = EngineStage::Answer;
             return Ok(());
         }
         let work = self.engine.as_ref().unwrap();

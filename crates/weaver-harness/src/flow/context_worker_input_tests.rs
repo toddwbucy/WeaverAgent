@@ -112,6 +112,19 @@ fn worker_input_gate_child() {
     if mode == "input-queued" {
         packet(3, &frame(&mode, 102));
     }
+    if mode.contains("election-wait-held") || mode.contains("election-wait-gate-failure") {
+        let end = Instant::now() + Duration::from_secs(5);
+        while !root.join("election-wake").exists() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(root.join("election-wake").exists());
+        if mode.contains("gate-failure") {
+            return;
+        }
+        let raw = serde_json::to_vec(&frame(&mode, 102)).unwrap();
+        std::fs::write(root.join("election-queued.json"), &raw).unwrap();
+        assert_eq!(send(3, &raw, MsgFlags::MSG_NOSIGNAL), Ok(raw.len()));
+    }
     if mode == "input-pressure"
         || mode == "input-stop-gate-pressure"
         || mode.contains("final-manual-gate-pressure")
@@ -119,6 +132,7 @@ fn worker_input_gate_child() {
         || mode.contains("final-manual-deadline")
         || mode.contains("final-manual-send-clock")
         || mode.contains("refusal-boundary-gate-")
+        || mode.contains("task-admission-operation-refusal-gate-")
     {
         let end = Instant::now() + Duration::from_secs(5);
         while !root.join("drain").exists() && Instant::now() < end {
@@ -126,6 +140,7 @@ fn worker_input_gate_child() {
         }
         assert!(root.join("drain").exists());
     }
+    let mut next_after_refusal = false;
     loop {
         let n = recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()).unwrap_or(0);
         if n == 0 {
@@ -145,13 +160,21 @@ fn worker_input_gate_child() {
                 serde_json::from_slice(&frame.octets().unwrap()).unwrap();
             assert_eq!(
                 value["kind"],
-                if mode.contains("-final-") && !mode.contains("stop-before") {
+                if mode.contains("-final-")
+                    && !mode.contains("stop-before")
+                    && !mode.contains("operation-refusal")
+                {
                     "answered"
                 } else {
                     "stopped"
                 }
             );
-            assert_eq!(value["turn"], "generation-turn");
+            if mode.contains("no-task") {
+                assert!(value.get("turn").is_none());
+                assert!(value.get("run").is_none());
+            } else {
+                assert_eq!(value["turn"], "generation-turn");
+            }
         } else if mode.contains("stop-") {
             let Payload::Frame(frame) = &reply.payload else {
                 panic!("actual stopped frame")
@@ -171,6 +194,10 @@ fn worker_input_gate_child() {
             );
         }
         std::fs::write(root.join("closed.json"), &bytes[..n]).unwrap();
+        if mode.contains("operation-refusal") && !next_after_refusal {
+            next_after_refusal = true;
+            packet(3, &frame(&mode, 102));
+        }
         if mode == "input-duplicate" {
             packet(3, &frame(&mode, 101));
         }
