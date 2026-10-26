@@ -2,6 +2,101 @@
 
 use super::*;
 
+fn wait_snapshot(word: &LastWord, ready: impl Fn(&LastWordSnapshot) -> bool) -> LastWordSnapshot {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Some(snapshot) = word.snapshot().filter(&ready) {
+            return snapshot;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "stderr snapshot did not arrive"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn last_word_snapshot_retains_typed_lines_without_consuming_or_waiting_for_eof() {
+    use std::io::Write;
+    let (word, write_end) = LastWord::stand().unwrap();
+    let mut writer = std::fs::File::from(write_end);
+    let empty = wait_snapshot(&word, |_| true);
+    assert!(!empty.eof);
+    assert!(empty.word.is_none());
+    writer.write_all(b"not json\n{\"stage\":1}\n").unwrap();
+    let first = wait_snapshot(&word, |snapshot| snapshot.word.is_some());
+    assert!(!first.eof, "the actual pipe writer remains open");
+    assert_eq!(first.word, Some(serde_json::json!({"stage": 1})));
+    assert_eq!(wait_snapshot(&word, |_| true), first);
+
+    writer
+        .write_all(b"[\"final\",2]\nstill not json\n")
+        .unwrap();
+    drop(writer);
+    let final_word = wait_snapshot(&word, |snapshot| snapshot.eof);
+    assert_eq!(final_word.word, Some(serde_json::json!(["final", 2])));
+    assert_eq!(wait_snapshot(&word, |_| true), final_word);
+    assert_eq!(word.take().as_deref(), Some("[\"final\",2]"));
+    assert_eq!(wait_snapshot(&word, |_| true), final_word);
+    assert_eq!(word.take().as_deref(), Some("[\"final\",2]"));
+}
+
+#[test]
+fn last_word_snapshot_eof_without_json_keeps_the_word_absent() {
+    use std::io::Write;
+    for bytes in [b"".as_slice(), b"garble only\n".as_slice()] {
+        let (word, write_end) = LastWord::stand().unwrap();
+        let mut writer = std::fs::File::from(write_end);
+        writer.write_all(bytes).unwrap();
+        drop(writer);
+        let snapshot = wait_snapshot(&word, |snapshot| snapshot.eof);
+        assert!(snapshot.word.is_none());
+        assert_eq!(wait_snapshot(&word, |_| true), snapshot);
+        assert!(word.take().is_none());
+    }
+}
+
+#[test]
+fn last_word_snapshot_does_not_wait_for_the_reader_mutex() {
+    let (word, write_end) = LastWord::stand().unwrap();
+    std::thread::scope(|scope| {
+        let guard = word.cell.0.lock().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let observed = &word;
+        let worker = scope.spawn(move || sender.send(observed.snapshot()).unwrap());
+        let received = receiver.recv_timeout(std::time::Duration::from_secs(5));
+        // Release the lock before failing or joining, so a blocking regression
+        // fails this assertion instead of trapping the scoped worker forever.
+        drop(guard);
+        worker.join().unwrap();
+        assert_eq!(received.expect("snapshot waited on the held mutex"), None);
+    });
+    drop(write_end);
+    assert!(wait_snapshot(&word, |snapshot| snapshot.eof).word.is_none());
+}
+
+#[test]
+fn last_word_snapshot_preserves_the_pipe_evidence_after_mutex_poisoning() {
+    use std::io::Write;
+    let (word, write_end) = LastWord::stand().unwrap();
+    let mut writer = std::fs::File::from(write_end);
+    writer.write_all(b"{\"died\":\"typed reason\"}\n").unwrap();
+    drop(writer);
+    let expected = wait_snapshot(&word, |snapshot| snapshot.eof);
+    let cell = word.cell.clone();
+    assert!(
+        std::thread::spawn(move || {
+            let _guard = cell.0.lock().unwrap();
+            panic!("poison only after actual stderr evidence settled");
+        })
+        .join()
+        .is_err()
+    );
+    assert_eq!(word.snapshot(), Some(expected));
+    assert_eq!(word.take().as_deref(), Some("{\"died\":\"typed reason\"}"));
+}
+
 /// **The pipe carries the dying organ's last typed line**, per
 /// `weaver-harness-Spec` section 2.2, through a real fork and exec.
 ///

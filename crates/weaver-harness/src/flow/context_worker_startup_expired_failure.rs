@@ -1,4 +1,5 @@
 //! Consume a stopped expired rollback without retrying its Release or Unload.
+use super::gate::ExpiredGateRollback;
 use super::*;
 use crate::flow::context::failed_enter_driver::{FailedEnterProgress, FailedRunCleanup};
 use crate::flow::context::worker_startup::rollback::failed::{
@@ -10,6 +11,9 @@ pub struct FoundationExpiredRollbackExit {
     held: RetainedExpiredRollback,
     driver: Driver,
     progress: FoundationRollbackExitProgress,
+    gate_reported: bool,
+    gate_sweep_reported: bool,
+    gate_done: bool,
 }
 
 enum Driver {
@@ -29,6 +33,7 @@ struct RetainedExpiredRollback {
     dial: Option<RetiredDial>,
     prior_dial: Option<RetiredDial>,
     gate: Option<PacketPort<OrganEnvelope, ()>>,
+    gate_work: Option<ExpiredGateRollback>,
     preflight: Option<preflight::ExpiredPreflightRollback>,
     active: Option<active::ExpiredActiveRollback>,
     recorded: Option<u64>,
@@ -46,7 +51,16 @@ impl FoundationExpiredRollback {
             && context.flow.preinput_failed_owner();
         if self.progress() != FoundationExpiredRollbackProgress::Stopped
             || self.before_load
-            || self.handoff.gate.is_some()
+            || (self.handoff.gate.is_some()
+                && !matches!(
+                    self.handoff.held.as_ref(),
+                    HeldStartup::Gate(_) | HeldStartup::Ready { .. }
+                ))
+            || (self
+                .active
+                .as_ref()
+                .is_some_and(|active| active.gate.is_some())
+                && self.handoff.gate.is_none())
             || !self.run.resources.matches(context)
             || !Arc::ptr_eq(&self.handoff.identity.origin, &context.read_origin)
             || !context.flow.preinput_custody()
@@ -68,6 +82,25 @@ impl FoundationExpiredRollback {
                 .map(|end| self.leave.map_or(end, |leave| end.min(leave.deadline_ns()))),
             None => self.leave.map(AbsoluteBound::deadline_ns),
         };
+        // Move an existing Lower, its exact send/receive and any stopped author
+        // as one account. Construction before gate work is custody only; the
+        // first failed-run fault attempt still precedes all gate actions.
+        let gate_work = self
+            .active
+            .as_mut()
+            .and_then(|active| active.gate.take())
+            .or_else(|| {
+                self.handoff.gate.as_ref().map(|_| {
+                    ExpiredGateRollback::failed_new(
+                        &self.handoff,
+                        self.leave,
+                        deadline,
+                        self.run.context.last_ns,
+                        recorded.is_none(),
+                    )
+                })
+            });
+        let gate_done = gate_work.is_none();
         // Receipt precedence: after Recorded Unload even a later real fault
         // cannot authorize a second terminal or append a fault afterward.
         let release = if recorded.is_none() {
@@ -153,17 +186,36 @@ impl FoundationExpiredRollback {
                 dial,
                 prior_dial: retired_dial,
                 gate: retired_gate,
+                gate_work,
                 preflight,
                 active,
                 recorded,
             },
             driver,
             progress: FoundationRollbackExitProgress::Progress,
+            gate_reported: false,
+            gate_sweep_reported: false,
+            gate_done,
         }))
     }
 }
 
 impl FoundationExpiredRollbackExit {
+    #[cfg(test)]
+    pub(super) fn test_gate(&self) -> Option<&ExpiredGateRollback> {
+        self.held.gate_work.as_ref()
+    }
+    #[cfg(test)]
+    pub(super) fn test_gate_resources(&self) -> Option<&StartupGate> {
+        self.held.handoff.gate.as_ref()
+    }
+    #[cfg(test)]
+    pub(super) fn test_original_gate(&self) -> Option<&super::super::failed::HeldGate> {
+        match self.held.handoff.held.as_ref() {
+            HeldStartup::Gate(gate) | HeldStartup::Ready { gate, .. } => Some(gate),
+            _ => None,
+        }
+    }
     #[cfg(test)]
     pub(super) fn test_boot_pairs(
         &self,
@@ -242,8 +294,55 @@ impl FoundationExpiredRollbackExit {
             return self.progress;
         }
         self.progress = match &mut self.driver {
+            Driver::Halt(tail) if !self.gate_done => {
+                let work = self.held.gate_work.as_mut().expect("actual gate account");
+                if !self.gate_reported {
+                    self.gate_reported = true;
+                    let progress = convert(tail.advance(io));
+                    if progress == FoundationRollbackExitProgress::Closed {
+                        work.failed_dispose(self.held.handoff.gate.as_mut().unwrap());
+                        self.gate_done = true;
+                    }
+                    progress
+                } else if !tail.clock(io) || !tail.advance_accounts(io) {
+                    work.failed_dispose(self.held.handoff.gate.as_mut().unwrap());
+                    self.gate_done = true;
+                    tail.abort();
+                    FoundationRollbackExitProgress::Closed
+                } else {
+                    match work.failed_step(
+                        &mut self.held.handoff,
+                        &mut self.gate_sweep_reported,
+                        tail,
+                        io,
+                    ) {
+                        Ok(true) => {
+                            self.gate_done = true;
+                            FoundationRollbackExitProgress::Progress
+                        }
+                        Ok(false) => FoundationRollbackExitProgress::Pending,
+                        Err(detail) => {
+                            tail.secondary(detail);
+                            work.failed_dispose(self.held.handoff.gate.as_mut().unwrap());
+                            self.gate_done = true;
+                            tail.abort();
+                            FoundationRollbackExitProgress::Closed
+                        }
+                    }
+                }
+            }
             Driver::Halt(tail) => convert(tail.advance(io)),
-            Driver::Recorded(tail) => tail.advance(io),
+            Driver::Recorded(tail) => {
+                if !self.gate_done {
+                    self.held
+                        .gate_work
+                        .as_mut()
+                        .unwrap()
+                        .failed_dispose(self.held.handoff.gate.as_mut().unwrap());
+                    self.gate_done = true;
+                }
+                tail.advance(io)
+            }
         };
         self.progress
     }
@@ -252,6 +351,17 @@ impl FoundationExpiredRollbackExit {
             return self.progress;
         }
         self.progress = match &mut self.driver {
+            Driver::Halt(tail) if !self.gate_done => {
+                let work = self.held.gate_work.as_mut().unwrap();
+                if work.failed_wait(&self.held.handoff, tail, io) {
+                    FoundationRollbackExitProgress::Pending
+                } else {
+                    work.failed_dispose(self.held.handoff.gate.as_mut().unwrap());
+                    self.gate_done = true;
+                    tail.abort();
+                    FoundationRollbackExitProgress::Closed
+                }
+            }
             Driver::Halt(tail) => convert(tail.wait_for_progress(io)),
             Driver::Recorded(tail) => tail.wait(io),
         };
@@ -259,6 +369,15 @@ impl FoundationExpiredRollbackExit {
     }
     #[cfg(test)]
     pub(super) fn reap_composition_test_children(&mut self) {
+        if let Some(child) = self
+            .held
+            .handoff
+            .gate
+            .as_mut()
+            .and_then(|gate| gate.child.as_mut())
+        {
+            super::super::tests::reap(child);
+        }
         match &mut self.driver {
             Driver::Halt(tail) => tail.reap_composition_test_children(),
             Driver::Recorded(tail) => tail.reap_composition_test_children(),

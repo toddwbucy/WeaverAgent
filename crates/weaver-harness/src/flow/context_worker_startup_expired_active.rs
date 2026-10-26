@@ -21,6 +21,7 @@ enum Stage {
     Read,
     Open,
     Enter,
+    Gate,
     Grants,
     Seal,
     Release,
@@ -48,10 +49,22 @@ pub(super) struct ExpiredActiveRollback {
     classifier_started: bool,
     pub(super) boot_pairs: Option<crate::flow::context::boot_pair_driver::StoppedBootPairsAccount>,
     pub(super) summary: Option<PlanSummaryAccount>,
+    pub(super) gate: Option<super::gate::ExpiredGateRollback>,
     member: weaver_trace::MemberRelease,
 }
 
 impl ExpiredActiveRollback {
+    pub(super) fn recover_clock(
+        &mut self,
+        context: &mut RecordingContext,
+        error: RunFailure,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        match self.dials.as_mut() {
+            Some(dials) => dials.recover(context, error, io),
+            None => Err(error),
+        }
+    }
     pub(super) fn retire_accounts(&mut self) {
         if let Some(account) = &mut self.admission {
             account.retire_transport();
@@ -71,6 +84,24 @@ impl ExpiredActiveRollback {
         owner: &mut FoundationExpiredRollback,
         io: &mut impl PumpIo,
     ) -> Result<(), String> {
+        if self.stage == Stage::Gate {
+            if self.gate.is_none() {
+                self.gate = Some(
+                    super::gate::ExpiredGateRollback::new(owner, io)
+                        .map_err(|error| format!("expired gate rollback: {error:?}"))?,
+                );
+            }
+            if self
+                .gate
+                .as_mut()
+                .unwrap()
+                .step(owner, self.dials.as_mut().unwrap(), io)
+                .map_err(|error| format!("expired gate rollback: {error:?}"))?
+            {
+                self.stage = Stage::Grants;
+            }
+            return Ok(());
+        }
         let context = &mut owner.run.context;
         let leave = owner.leave.unwrap();
         if self.stage == Stage::Summary {
@@ -192,7 +223,11 @@ impl ExpiredActiveRollback {
             if context.complete_wait(PumpDeadline::Enter) != Some(owner.handoff.identity.enter) {
                 return Err("expired classifier rollback lost its original Enter".into());
             }
-            self.stage = Stage::Grants;
+            self.stage = if owner.handoff.gate.is_some() {
+                Stage::Gate
+            } else {
+                Stage::Grants
+            };
             return Ok(());
         }
         if self.stage == Stage::Terminal {
@@ -397,6 +432,7 @@ impl ExpiredActiveRollback {
                 | Stage::Read
                 | Stage::Open
                 | Stage::Enter
+                | Stage::Gate
                 | Stage::Terminal => {
                     unreachable!()
                 }
@@ -437,6 +473,7 @@ impl ExpiredActiveRollback {
                         .as_ref()
                         .is_none_or(|account| account.admission.account_complete()),
                 self.member,
+                self.gate.as_ref().and_then(|gate| gate.refusal()).cloned(),
             ));
         }
         Ok(())
@@ -474,7 +511,6 @@ impl FoundationExpiredRollback {
             || context.deadlines.get(PumpDeadline::Leave) != self.leave
             || self.leave?.expired(context.last_ns)
             || (self.run.resources.classifier_child().is_none() && !initial)
-            || self.handoff.gate.is_some()
             || (matches!(self.handoff.held.as_ref(), HeldStartup::Initial(_)) && !initial)
             || (context.flow.starting_classifier().is_some() && !detach_admission)
             || self.handoff.held.initial_grants().is_none()
@@ -532,6 +568,7 @@ impl FoundationExpiredRollback {
             classifier_started: self.run.resources.classifier_child().is_some(),
             boot_pairs: None,
             summary: None,
+            gate: None,
             member: weaver_trace::MemberRelease::Closed,
         })
     }

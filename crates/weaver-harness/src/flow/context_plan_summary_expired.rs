@@ -3,6 +3,10 @@
 use super::*;
 use crate::flow::context::worker_startup::expired::ExpiredStartupAccountPermit;
 
+#[cfg(test)]
+#[path = "context_plan_summary_boundary_test_support.rs"]
+mod boundary_test_support;
+
 impl PlanSummaryTransaction {
     fn expired_boot_owner_matches(&self, context: &RecordingContext) -> bool {
         Some(self.rollback.bound) == context.deadlines.get(PumpDeadline::Enter)

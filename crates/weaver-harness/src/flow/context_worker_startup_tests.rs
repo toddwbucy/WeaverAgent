@@ -288,7 +288,10 @@ impl Files {
                 gate: self.child(
                     "gate",
                     "WEAVER_GATE_STARTUP_CHILD",
-                    if mode.starts_with("input-") || mode.starts_with("failed-startup-") {
+                    if mode.starts_with("input-")
+                        || mode.starts_with("failed-startup-")
+                        || mode.starts_with("expired-startup-raised")
+                    {
                         mode
                     } else if mode == "gate-refusal" {
                         "refuse"
@@ -3396,6 +3399,110 @@ scenario!(
     "expired-startup-raised"
 );
 scenario!(
+    worker_startup_composition_expired_installed_complete,
+    "expired-startup-installed-complete"
+);
+scenario!(
+    worker_startup_composition_expired_installed_unsent_complete,
+    "expired-startup-installed-unsent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_raised_complete,
+    "expired-startup-raised-complete"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_frames,
+    "expired-startup-raised-lower-frames"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_pressure,
+    "expired-startup-raised-lower-pressure"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_silent,
+    "expired-startup-raised-lower-silent"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_held,
+    "expired-startup-raised-lower-held"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_transport_loss,
+    "expired-startup-raised-lower-transport-loss"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_delayed,
+    "expired-startup-raised-lower-last-word-delayed"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_timeout,
+    "expired-startup-raised-lower-last-word-timeout"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_lower_cap,
+    "expired-startup-raised-lower-last-word-lower-cap"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_leave_cap,
+    "expired-startup-raised-lower-last-word-leave-cap"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_failure,
+    "expired-startup-raised-lower-last-word-failure"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_early,
+    "expired-startup-raised-lower-early"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_wrong,
+    "expired-startup-raised-lower-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_refused,
+    "expired-startup-raised-lower-refused"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_unreplied,
+    "expired-startup-raised-lower-unreplied"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_silent_admin,
+    "expired-startup-raised-lower-silent-admin"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_cap,
+    "expired-startup-raised-lower-cap"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_before_leave,
+    "expired-startup-raised-lower-failure-before"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_pending_frame,
+    "expired-startup-raised-lower-failure-lower-pressure"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_pending_ticket,
+    "expired-startup-raised-lower-failure-pending-ticket-lower-pressure"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_stopped_child,
+    "expired-startup-raised-lower-failure-lower-held"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_original_cap,
+    "expired-startup-raised-lower-failure-lower-cap"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_release,
+    "expired-startup-raised-lower-failure-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_recorded,
+    "expired-startup-raised-lower-failure-recorded"
+);
+scenario!(
     worker_startup_composition_expired_foreign,
     "expired-startup-foreign"
 );
@@ -3557,4 +3664,24 @@ scenario!(
 scenario!(
     worker_startup_composition_expired_summary_account_retained_classifier_held,
     "expired-startup-summary-account-retained-classifier-held"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_boundary_recorded,
+    "expired-startup-summary-boundary-recorded-populated-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_boundary_read_complete,
+    "expired-startup-summary-boundary-read-complete-populated-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_boundary_read_settled,
+    "expired-startup-summary-boundary-read-settled-populated-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_boundary_refused,
+    "expired-startup-summary-boundary-refused-complete"
 );
