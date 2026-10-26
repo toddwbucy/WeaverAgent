@@ -9,15 +9,17 @@ pub(in crate::flow::context) struct RejectedAuthor {
     pub(super) identity: Arc<()>,
     pub(super) ticket: Option<u64>,
     pub(super) sequence: Option<Sequence>,
+    pub(super) turn: Option<weaver_trace::TurnRef>,
     event: Option<AuthoredEvent>,
     unavailable: Option<String>,
 }
 impl RejectedAuthor {
-    pub(in crate::flow::context) fn new() -> Self {
+    pub(in crate::flow::context) fn new(turn: Option<weaver_trace::TurnRef>) -> Self {
         Self {
             identity: Arc::new(()),
             ticket: None,
             sequence: None,
+            turn,
             event: None,
             unavailable: None,
         }
@@ -43,13 +45,6 @@ impl OwedRejectedReturn {
 }
 
 impl RecordingContext {
-    fn rejection_turn(&self) -> Option<weaver_trace::TurnRef> {
-        self.open_turn.clone().or_else(|| {
-            (self.phase == RecordingPhase::Failed)
-                .then(|| self.pairs.active_turn().cloned())
-                .flatten()
-        })
-    }
     pub(in crate::flow::context) fn bind_rejected_author(&mut self, sequence: Sequence) {
         if let Some(owner) = &mut self.pair_rejected_claim
             && owner.ticket.is_some()
@@ -70,7 +65,10 @@ impl RecordingContext {
         AuthoredEvent {
             kind: Kind::ToolReturnRejected,
             subsystem: Subsystem::Gate,
-            turn: self.rejection_turn(),
+            // A return first observed after the turn closed is run-scoped
+            // teardown evidence. Its original CallId, exchange and causal
+            // parent still identify the closed execution; it opens no turn.
+            turn: self.open_turn.clone(),
             source: AuthoredSource::Tool,
             causal_parent: record
                 .call_id
@@ -94,7 +92,7 @@ impl RecordingContext {
             return Err("returned rejected-return attempt remains with its stopped author".into());
         }
         if self.pair_rejected_claim.is_none() {
-            let mut owner = RejectedAuthor::new();
+            let mut owner = RejectedAuthor::new(self.open_turn.clone());
             owner.event = Some(self.rejected_event());
             self.pair_rejected_claim = Some(owner);
         }
@@ -162,10 +160,16 @@ impl RecordingContext {
                 sequence: sequence.0.into(),
                 block: 0.into(),
             },
-            turn: self.rejection_turn().map(|turn| turn.0),
+            turn: self
+                .pair_rejected_claim
+                .as_ref()
+                .unwrap()
+                .turn
+                .as_ref()
+                .map(|turn| turn.0.clone()),
         };
         self.pairs
-            .ack_rejection_recorded(source)
+            .ack_halt_rejection_recorded(source)
             .map_err(|error| format!("recorded halt rejection: {error:?}"))?;
         self.pair_rejected_claim = None;
         self.pair_rejected_authoring = false;

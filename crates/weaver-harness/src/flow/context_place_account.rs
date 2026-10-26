@@ -433,6 +433,10 @@ impl RecordingContext {
                 &format!("stopped placement accounting failed: {error:?}"),
             );
         }
+        // A resumed final placement author can finish its owner in this step.
+        // Keep the recorder's Unload guard in step with that actual disposition,
+        // even when the caller has no further placement work to advance.
+        self.barrier.set_place_owed(self.place_owed());
         result
     }
     fn advance_place_account_inner<I: PumpIo>(

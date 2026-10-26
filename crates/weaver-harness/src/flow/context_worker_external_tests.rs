@@ -122,7 +122,12 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         assert_eq!(frame.exchange.opener, Opener::Harness);
                         assert_eq!(
                             frame.exchange.ordinal,
-                            if mode.contains("start-pending") { 2 } else { 3 }
+                            if mode.contains("start-pending") || mode.contains("placement-pending")
+                            {
+                                2
+                            } else {
+                                3
+                            }
                         );
                         assert!(pending.is_none());
                         assert!(!root.join("halt-lower.json").exists());

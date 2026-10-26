@@ -97,6 +97,12 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                         )
                         .unwrap();
                         measured = Some((delta.clone(), tool_schemas.clone()));
+                        if mode.contains("placement-pending") {
+                            while !root.join("release-measure").exists() {
+                                assert!(Instant::now() < end);
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                        }
                         answer(
                             fd,
                             TokenAnswer::DeltaMeasured {

@@ -236,6 +236,7 @@ pub struct FoundationFailedExit {
     terminal_events: Vec<AuthoredEvent>,
     terminal_sequences: Vec<Sequence>,
     terminal_attempted: bool,
+    pending_turn_close: Option<crate::flow::recording::DeferredHaltClose>,
     abandoned: bool,
 }
 
@@ -302,6 +303,7 @@ impl FoundationRun {
             terminal_events: vec![],
             terminal_sequences: vec![],
             terminal_attempted: false,
+            pending_turn_close: None,
             abandoned,
         }))
     }
@@ -446,20 +448,22 @@ impl FoundationFailedExit {
             self.stage = ExitStage::World;
             return FoundationExitProgress::Progress;
         }
-        // An already pending close retains its original author. Its exact
-        // stopped-tap receipt updates open_turn before this independent attempt.
+        // Move the one prepared close into the consuming owner before driving
+        // earlier obligations. Neither its ticket nor its payload is replaced.
+        if !self.tail.context.place_owns_pending_author()
+            && let Some(close) = self.tail.context.barrier.defer_halt_close()
+        {
+            if close.kind() == serving::Kind::SessionClosed {
+                self.tail.pending_session_close = Some(close);
+            } else {
+                self.pending_turn_close = Some(close);
+            }
+        }
         let context = &mut self.tail.context;
-        let session_owned = context
-            .barrier
-            .pending_author()
-            .is_some_and(|author| author.event.kind == serving::Kind::SessionClosed);
         let existing_terminal = context.barrier.pending_author().is_some_and(|author| {
             matches!(
                 author.event.kind,
-                serving::Kind::ToolCallCompleted
-                    | serving::Kind::MessageToolResult
-                    | serving::Kind::TurnClosed
-                    | serving::Kind::SessionClosed
+                serving::Kind::ToolCallCompleted | serving::Kind::MessageToolResult
             )
         });
         if existing_terminal {
@@ -470,34 +474,27 @@ impl FoundationFailedExit {
                     .tail
                     .secondary(format!("failed serving pending terminal: {error:?}")),
             }
-        } else {
-            let _ = context.advance_halt_trace(io);
+        }
+        if !self.tail.advance_accounts(io) {
+            self.abort();
+            return FoundationExitProgress::Closed;
         }
         if !self.clock(io) {
             return FoundationExitProgress::Closed;
         }
-        let context = &mut self.tail.context;
-        // A retained start can still become Recorded on the stopped tap. Close
-        // only after its actual disposition, or it could open a turn behind
-        // session.closed. This waits on ordinary capacity under the same cap;
-        // an unavailable trace leaves the exact unadmitted original retained.
-        if context
-            .barrier
-            .pending_author()
-            .is_some_and(|author| author.event.kind == serving::Kind::TurnStarted)
-            && !context.halt_report.as_ref().unwrap().trace_unavailable()
-        {
+        // Every pre-existing ordinary author keeps its ordinary capacity and
+        // earlier bound. The stopped account drivers grant no continuation.
+        if self.tail.serving_accounts_pending() {
             return FoundationExitProgress::Pending;
         }
+        let context = &mut self.tail.context;
         self.terminal_attempted = true;
         if let Some(event) = context.failed_gate_terminal_event() {
             self.terminal_events.push(event);
         }
-        let pending_close = context
-            .barrier
-            .pending_author()
-            .is_some_and(|author| author.event.kind == serving::Kind::TurnClosed);
-        if !pending_close && let Some(turn) = context.open_turn.clone() {
+        if self.pending_turn_close.is_none()
+            && let Some(turn) = context.open_turn.clone()
+        {
             self.terminal_events.push(AuthoredEvent {
                 kind: serving::Kind::TurnClosed,
                 subsystem: Subsystem::Harness,
@@ -508,16 +505,6 @@ impl FoundationFailedExit {
                     reason: StopReason::Fault,
                     cause: None,
                 })),
-            });
-        }
-        if !session_owned {
-            self.terminal_events.push(AuthoredEvent {
-                kind: serving::Kind::SessionClosed,
-                subsystem: Subsystem::Harness,
-                turn: None,
-                source: AuthoredSource::Runtime,
-                causal_parent: None,
-                payload: None,
             });
         }
         for index in 0..self.terminal_events.len() {
@@ -548,6 +535,24 @@ impl FoundationFailedExit {
                 Err(error) => self
                     .tail
                     .secondary(format!("failed serving terminal {:?}: {error}", event.kind)),
+            }
+        }
+        if self.pending_turn_close.is_some() {
+            if !self.clock(io) {
+                return FoundationExitProgress::Closed;
+            }
+            match self
+                .tail
+                .context
+                .resume_deferred_halt_close(&mut self.pending_turn_close)
+            {
+                Ok(Some(sequence)) => self.terminal_sequences.push(sequence),
+                Ok(None) => self
+                    .tail
+                    .secondary("failed serving turn close remains unrecorded"),
+                Err(error) => self
+                    .tail
+                    .secondary(format!("failed serving turn close: {error:?}")),
             }
         }
         self.stage = ExitStage::World;
@@ -786,7 +791,7 @@ impl FoundationFailedExit {
         if !self.clock(io) {
             return self.progress;
         }
-        if self.stage == ExitStage::Release {
+        if matches!(self.stage, ExitStage::Terminals | ExitStage::Release) {
             if self.tail.wait_for_progress(io) == FailedEnterProgress::Closed {
                 self.abort();
             }
@@ -802,9 +807,8 @@ impl FoundationFailedExit {
             deadline
         };
         let mut interests = vec![];
-        if (self.stage == ExitStage::Terminals
-            || (self.stage == ExitStage::Lower
-                && self.tail.context.pairs.pending_rejection().is_some()))
+        if self.stage == ExitStage::Lower
+            && self.tail.context.pairs.pending_rejection().is_some()
             && !self.handoff._capacity_unavailable
         {
             if let Err(error) = self.tail.context.barrier.drain_capacity_wake() {

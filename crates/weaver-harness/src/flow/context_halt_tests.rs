@@ -126,7 +126,7 @@ fn halt_report_fault_keeps_the_actual_recorded_open_turn() {
 
 #[test]
 fn halt_close_promotes_the_exact_pending_terminal_without_ordinary_capacity() {
-    for reserved in [true, false] {
+    for (reserved, deferred) in [(true, false), (false, false), (true, true)] {
         let mut member = Member::new();
         let mut started = super::super::tests::event(Kind::TurnStarted, None);
         started.turn = Some(TurnRef("pending-halt-close".into()));
@@ -165,7 +165,34 @@ fn halt_close_promotes_the_exact_pending_terminal_without_ordinary_capacity() {
             HaltTraceProgress::FaultRecorded(_)
         ));
         assert!(member.run.context.open_turn.is_some());
-        let sequence = if reserved {
+        let sequence = if deferred {
+            super::recall_tests::drain_admitted(&mut member);
+            assert_eq!(
+                advance(&mut member),
+                HaltTraceProgress::Pending,
+                "reporting must not admit a close even after capacity returns"
+            );
+            let close = member.run.context.barrier.defer_halt_close().unwrap();
+            assert!(member.run.context.pending_author().is_none());
+            assert!(member.run.context.open_turn.is_some());
+            let mut foreign = Member::new();
+            bound_failure(&mut foreign);
+            let close = foreign
+                .run
+                .context
+                .barrier
+                .restore_halt_close(close)
+                .expect_err("foreign recorder returns the exact original");
+            let mut close = Some(close);
+            let sequence = member
+                .run
+                .context
+                .resume_deferred_halt_close(&mut close)
+                .unwrap()
+                .unwrap();
+            assert!(close.is_none());
+            sequence
+        } else if reserved {
             member
                 .run
                 .context
@@ -204,7 +231,7 @@ fn halt_close_promotes_the_exact_pending_terminal_without_ordinary_capacity() {
                 .unwrap()
                 .is_none()
         );
-        if reserved {
+        if reserved && !deferred {
             super::recall_tests::drain_admitted(&mut member);
         } else {
             member.run._reader.set_nonblocking(false).unwrap();

@@ -544,6 +544,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             },
         )
         .unwrap();
+    if mode.contains("placement-pending") {
+        return super::super::halt::exit::tests::placement_pending(
+            guard, member, reader, clock, root, mode,
+        );
+    }
     if mode.ends_with("observe-measure") {
         for _ in 0..2000 {
             step(input, member, clock, mode);

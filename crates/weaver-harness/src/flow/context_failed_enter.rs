@@ -482,6 +482,11 @@ pub(in crate::flow) struct FailedRunCleanup {
     unload_sequence: Option<Sequence>,
     unload_attempted: bool,
     unload_unavailable: Option<String>,
+    pub(in crate::flow::context) pending_session_close:
+        Option<crate::flow::recording::DeferredHaltClose>,
+    session_close: Option<AuthoredEvent>,
+    session_close_sequence: Option<Sequence>,
+    session_close_attempted: bool,
     abandoned: bool,
     trace_drained: bool,
     member_stood: bool,
@@ -710,6 +715,17 @@ impl FailedRunCleanup {
             unload_sequence: None,
             unload_attempted: false,
             unload_unavailable: None,
+            pending_session_close: None,
+            session_close: serving.then_some(AuthoredEvent {
+                kind: Kind::SessionClosed,
+                subsystem: Subsystem::Harness,
+                turn: None,
+                source: AuthoredSource::Runtime,
+                causal_parent: None,
+                payload: None,
+            }),
+            session_close_sequence: None,
+            session_close_attempted: false,
             abandoned: false,
             trace_drained: false,
             member_stood,
@@ -1059,9 +1075,12 @@ impl FailedRunCleanup {
                     self.abort();
                     return FailedEnterProgress::Closed;
                 }
-                if self.context.plan_summary.is_some() {
+                if self.context.plan_summary.is_some()
+                    || (self.serving && self.serving_accounts_pending())
+                {
                     FailedEnterProgress::Pending
                 } else {
+                    self.close_serving_session();
                     if self.attempt_unload(io) {
                         self.stage = Stage::Drain;
                         FailedEnterProgress::Progress
@@ -1184,6 +1203,50 @@ impl FailedRunCleanup {
             }
         }
         !observed.unavailable
+    }
+
+    pub(in crate::flow::context) fn serving_accounts_pending(&self) -> bool {
+        self.context.place_owed()
+            || self.context.plan_summary.is_some()
+            || (!self
+                .context
+                .halt_report
+                .as_ref()
+                .is_some_and(|report| report.trace_unavailable())
+                && (self.context.barrier.pending().is_some()
+                    || self.context.pairs.pending_rejection().is_some()
+                    || self.context.has_owed_measure_refusal()))
+    }
+
+    fn close_serving_session(&mut self) {
+        if !self.serving || self.session_close_attempted {
+            return;
+        }
+        self.session_close_attempted = true;
+        // Lower has retired the gate and all remaining accounts have settled.
+        // From this point the only author is Unload, in this same stage.
+        let result = if self.pending_session_close.is_some() {
+            self.context
+                .resume_deferred_halt_close(&mut self.pending_session_close)
+                .map_err(|error| format!("pending session close: {error:?}"))
+        } else {
+            wall_ms().and_then(|wall| {
+                self.context
+                    .barrier
+                    .submit_terminal_authored_ref(
+                        self.session_close.as_ref().unwrap(),
+                        &self.context.author,
+                        self.context.last_ns,
+                        wall,
+                    )
+                    .map(Some)
+            })
+        };
+        match result {
+            Ok(Some(sequence)) => self.session_close_sequence = Some(sequence),
+            Ok(None) => self.secondary("failed serving session close remains unrecorded"),
+            Err(error) => self.secondary(error),
+        }
     }
 
     fn advance_release(&mut self, io: &mut impl PumpIo) -> FailedEnterProgress {

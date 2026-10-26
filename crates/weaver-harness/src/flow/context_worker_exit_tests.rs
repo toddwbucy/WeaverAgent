@@ -46,6 +46,7 @@ pub(in crate::flow::context::worker_startup) fn start_pending(
         clock,
         member,
         fired: false,
+        preceding_waits: 0,
     };
     assert_eq!(
         input.advance_with_io(&mut fail),
@@ -76,6 +77,7 @@ struct StateEofOnWait<'a> {
     clock: &'a mut FakePumpIo,
     member: &'a Member,
     fired: bool,
+    preceding_waits: usize,
 }
 impl PumpIo for StateEofOnWait<'_> {
     fn now(&mut self) -> std::io::Result<u64> {
@@ -86,13 +88,119 @@ impl PumpIo for StateEofOnWait<'_> {
         interests: &[WaitInterest<'_>],
         deadline: Option<u64>,
     ) -> std::io::Result<WaitOutcome> {
-        if !self.fired {
+        if self.preceding_waits != 0 {
+            self.preceding_waits -= 1;
+        } else if !self.fired {
             self.member.stop_responses();
             self.fired = true;
         }
         crate::flow::context::startup_composition::tests::CircuitIo(self.clock)
             .wait(interests, deadline)
     }
+}
+
+pub(in crate::flow::context::worker_startup) fn pending_close(
+    input: &mut FoundationInput<'_>,
+    clock: &mut FakePumpIo,
+    mode: &str,
+) {
+    if !mode.contains("pending-turn") && !mode.contains("pending-session") {
+        return;
+    }
+    use crate::flow::recording::{RecordProgress, RecordPurpose};
+    let context = &mut input.serving.owner.context;
+    let turn_close = mode.contains("pending-turn");
+    let event = AuthoredEvent {
+        kind: if turn_close {
+            serving::Kind::TurnClosed
+        } else {
+            serving::Kind::SessionClosed
+        },
+        subsystem: Subsystem::Harness,
+        turn: turn_close.then(|| context.open_turn.clone().unwrap()),
+        source: AuthoredSource::Runtime,
+        causal_parent: None,
+        payload: turn_close.then_some(serving::Payload::TurnClosed(TurnClose::Stopped {
+            reason: StopReason::Directive,
+            cause: Some(weaver_trace::Cause { uid: 42 }),
+        })),
+    };
+    context.author_turn = Some((event.kind, event.turn.clone()));
+    assert!(matches!(
+        context.barrier.submit_authored_with_clock(
+            event,
+            RecordPurpose::Observation,
+            &context.author,
+            1,
+            &mut context.inbox,
+            &mut context.budget,
+            &mut || clock.now(),
+        ),
+        RecordProgress::Pending
+    ));
+}
+
+pub(in crate::flow::context::worker_startup) fn placement_pending(
+    mut guard: super::super::super::management::tests::Guard<'_>,
+    member: &mut Member,
+    reader: &mut UnixStream,
+    clock: &mut FakePumpIo,
+    root: &Path,
+    mode: &str,
+) {
+    let input = guard.input.as_mut().unwrap();
+    let end = Instant::now() + Duration::from_secs(5);
+    while !root.join("measured.json").exists() {
+        assert!(Instant::now() < end, "actual MeasureDelta send watchdog");
+        input.advance_with_io(
+            &mut crate::flow::context::startup_composition::tests::CircuitIo(clock),
+        );
+        member.step(clock.now().unwrap(), mode);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    reader.set_nonblocking(true).unwrap();
+    let through = input
+        .serving
+        .owner
+        .context
+        .barrier
+        .recorder()
+        .boundary()
+        .admitted
+        .unwrap();
+    let rows = trace_through(reader, vec![], through, end).unwrap();
+    super::super::super::management::stop::tests::fill_trace(input.serving.owner.context, clock);
+    std::fs::write(root.join("release-measure"), []).unwrap();
+    // Wait for the actual decoder answer before injecting EOF at the author's
+    // capacity wait, so the stopped record belongs to measured placement.
+    let mut ready = [nix::poll::PollFd::new(
+        input.serving.owner.decode.fd(),
+        nix::poll::PollFlags::POLLIN,
+    )];
+    assert_eq!(nix::poll::poll(&mut ready, 1000u16).unwrap(), 1);
+    let mut fail = StateEofOnWait {
+        clock,
+        member,
+        fired: false,
+        preceding_waits: 1,
+    };
+    while input.advance_with_io(&mut fail) != FoundationInputProgress::Stopped {
+        assert!(Instant::now() < end, "placement author watchdog");
+    }
+    assert!(fail.fired);
+    let context = &input.serving.owner.context;
+    assert_eq!(
+        context.pending_author().unwrap().event.kind,
+        serving::Kind::StatePlacement
+    );
+    assert!(context.place_owed());
+    assert!(context.open_turn.is_some());
+    assert!(!root.join("appended.json").exists());
+    let mut halt = guard.input.take().unwrap().halt().ok().unwrap();
+    while halt.advance_with_io(clock) != FoundationHaltProgress::Prepared {
+        assert!(Instant::now() < end, "placement halt watchdog");
+    }
+    retain(halt.handoff().ok().unwrap(), rows);
 }
 
 pub(in crate::flow::context::worker_startup) fn stage_prior_world(
@@ -288,7 +396,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
     }
     let end = Instant::now() + Duration::from_secs(8);
     let mut triggered = false;
-    let mut retired_before_trace = !mode.contains("pressure-hold");
+    let mut trace_released = !mode.contains("pressure-hold");
     if mode.contains("start-pending") {
         assert_eq!(
             owner.advance_with_io(clock),
@@ -309,6 +417,20 @@ pub(in crate::flow::context::worker_startup) fn finish(
             assert!(owner.tail.context.open_turn.is_none());
             triggered = true;
         }
+    }
+    if mode.contains("placement-pending") {
+        assert_eq!(
+            owner.advance_with_io(clock),
+            FoundationExitProgress::Pending
+        );
+        assert!(owner.stage == ExitStage::Terminals);
+        assert!(!owner.terminal_attempted);
+        assert_eq!(
+            owner.tail.context.pending_author().unwrap().event.kind,
+            serving::Kind::StatePlacement
+        );
+        assert!(owner.tail.context.open_turn.is_some());
+        assert!(!root.join("closed.json").exists());
     }
     while owner.progress() != FoundationExitProgress::Closed && Instant::now() < end {
         owner.advance_with_io(clock);
@@ -351,15 +473,17 @@ pub(in crate::flow::context::worker_startup) fn finish(
             );
             triggered = true;
         }
-        if !retired_before_trace && std::fs::read_link(format!("/proc/self/fd/{state_fd}")).is_err()
-        {
+        if !trace_released && owner.stage == ExitStage::Terminals {
             assert!(
                 owner.tail.context.pairs.pending_rejection().is_some(),
-                "raw return must still be owed at actual state retirement"
+                "raw return must remain owed while trace capacity is held"
             );
-            retired_before_trace = true;
+            assert!(!owner.terminal_attempted);
+            assert!(std::fs::read_link(format!("/proc/self/fd/{state_fd}")).is_ok());
+            assert!(!root.join("closed.json").exists());
+            trace_released = true;
         }
-        if !mode.contains("trace-loss") && retired_before_trace {
+        if !mode.contains("trace-loss") && trace_released {
             let through = owner
                 .tail
                 .context
@@ -418,7 +542,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         );
     }
     member.assert_closed_without_request();
-    assert!(retired_before_trace);
+    assert!(trace_released);
     assert!(!root.join("external-3.json").exists());
     let expired = mode.contains("deadline")
         || mode.contains("clock-")
@@ -449,11 +573,49 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 .filter(|row| row["kind"] == kind)
                 .collect::<Vec<_>>()
         };
+        let mut closed_turns = std::collections::HashSet::new();
+        let mut session_closed = false;
+        for row in &rows {
+            let kind = row["kind"].as_str().unwrap();
+            assert!(
+                !session_closed || kind == "unload",
+                "{kind} followed session.closed: {row}"
+            );
+            if let Some(turn) = row["turn"].as_str() {
+                assert!(
+                    !closed_turns.contains(turn),
+                    "{kind} followed turn.closed({turn}): {row}"
+                );
+                if kind == "turn.closed" {
+                    closed_turns.insert(turn);
+                }
+            }
+            session_closed |= kind == "session.closed";
+        }
         assert_eq!(by_kind("fault").len(), 1);
         let closes = by_kind("turn.closed");
         assert_eq!(closes.len(), 1);
         assert_eq!(closes[0]["turn"], "generation-turn");
-        assert_eq!(closes[0]["payload"]["reason"], "fault");
+        assert_eq!(
+            closes[0]["payload"]["reason"],
+            if mode.contains("pending-turn") {
+                "directive"
+            } else {
+                "fault"
+            }
+        );
+        if mode.contains("pending-turn") {
+            assert_eq!(closes[0]["payload"]["cause"]["uid"], 42);
+        }
+        if mode.contains("placement-pending") {
+            let placements: Vec<_> = by_kind("state.placement")
+                .into_iter()
+                .filter(|row| row["turn"] == "generation-turn")
+                .collect();
+            assert_eq!(placements.len(), 1);
+            assert!(!owner.tail.context.place_owed());
+            assert!(!root.join("appended.json").exists());
+        }
         assert_eq!(by_kind("session.closed").len(), 1);
         if mode.contains("start-pending") {
             let starts = by_kind("turn.started");
@@ -486,7 +648,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         } else {
             assert_eq!(
                 by_kind("tool.call.completed").len(),
-                usize::from(!mode.contains("start-pending"))
+                usize::from(!mode.contains("start-pending") && !mode.contains("placement-pending"))
             );
             assert!(root.join("closed.json").exists());
             let wire: OrganEnvelope =
@@ -532,7 +694,12 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 last["payload"]["raw_envelope"].as_str().unwrap().as_bytes(),
                 std::fs::read(root.join("halt-lower-late.json")).unwrap()
             );
-            assert_eq!(last["turn"], "generation-turn");
+            assert!(last.get("turn").is_none());
+            assert!(
+                rejects[..2]
+                    .iter()
+                    .all(|row| row["turn"] == "generation-turn")
+            );
             assert_eq!(last["payload"]["reason"], "duplicate_return");
             assert!(!last["payload"]["call_id"].is_null());
         }

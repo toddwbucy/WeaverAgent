@@ -2850,6 +2850,19 @@ scenario!(
 );
 
 scenario!(
+    worker_external_composition_failed_exit_pending_turn,
+    "input-generation-emission-external-halt-gate-exit-pressure-pending-turn"
+);
+scenario!(
+    worker_external_composition_failed_exit_pending_session,
+    "input-generation-emission-external-halt-gate-exit-pressure-pending-session"
+);
+scenario!(
+    worker_external_composition_failed_exit_placement_pending,
+    "input-generation-external-halt-gate-exit-placement-pending"
+);
+
+scenario!(
     worker_startup_composition_original_window_future_refused,
     "window-future"
 );
