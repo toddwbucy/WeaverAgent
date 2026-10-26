@@ -33,7 +33,7 @@ pub enum FoundationManagementProgress {
 /// }
 /// ```
 pub struct FoundationManagement<'a> {
-    input: Box<FoundationInput<'a>>,
+    pub(super) input: Box<FoundationInput<'a>>,
     peer: LifecyclePeer,
     message: Option<LifecycleMessage>,
     answer: Option<ManagementAnswer>,

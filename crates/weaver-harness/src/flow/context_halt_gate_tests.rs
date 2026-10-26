@@ -125,6 +125,148 @@ fn assert_interrupt(peer: &OwnedFd) {
 }
 
 #[test]
+fn failed_snapshot_attempt_still_allows_the_exact_gate_interrupt() {
+    let mut fx = fixture(true);
+    let call = ready(&mut fx);
+    let (mut gate, peer) = gate();
+    sent(&mut fx, &mut gate, &peer, &call);
+    let first = fail_state(&mut fx);
+    let run = &mut fx.output.input.run;
+    let error = run
+        .context
+        .freeze_halt_account(ExternalFacts {
+            outstanding_pairs: vec![], // Deliberately omit the actual opened call.
+            capture: None,
+            wait: run.context.halt_wait().cloned(),
+            input_id: run.context.input.snapshot().map(|input| input.input_id),
+        })
+        .unwrap_err();
+    run.context.unavailable_halt_report(&error).unwrap();
+    assert!(run.context.halt().unwrap().account().is_none());
+    assert!(
+        run.context
+            .halt_report()
+            .unwrap()
+            .fault_sequence()
+            .is_none()
+    );
+    assert!(run.context.halt_report().unwrap().event().is_none());
+    assert!(run.context.halt_report().unwrap().unavailable().is_some());
+    run.context.begin_halt_gate(&gate).unwrap();
+    assert_eq!(advance(&mut fx, &mut gate), Progress::InterruptSent);
+    assert_interrupt(&peer);
+    reply(&peer, &killed());
+    assert_eq!(advance(&mut fx, &mut gate), Progress::Terminal);
+    assert_eq!(fx.output.input.run.context.failure(), Some(&first));
+}
+
+#[test]
+fn halted_rejection_keeps_its_healthy_ticket_through_pressure_and_fault_reporting() {
+    halted_rejection(false);
+}
+
+#[test]
+fn halted_rejection_moves_its_waiting_original_without_minting_a_replacement() {
+    halted_rejection(true);
+}
+
+fn halted_rejection(waiting: bool) {
+    let mut fx = fixture(true);
+    let call = ready(&mut fx);
+    let (mut gate, peer) = gate();
+    sent(&mut fx, &mut gate, &peer, &call);
+    answer(&mut gate, &peer, 99);
+    assert_eq!(observe(&mut fx, &mut gate), ExecutionProgress::Rejected);
+    let raw = fx
+        .output
+        .input
+        .run
+        .context
+        .pairs
+        .pending_rejection()
+        .unwrap()
+        .raw_bytes()
+        .to_vec();
+    fx.output.input.fill_trace();
+    let run = &mut fx.output.input.run;
+    let now = run.clock.now().unwrap();
+    let leave = AbsoluteBound::after(now, 10).unwrap();
+    run.context
+        .arm(PumpDeadline::Leave, leave, &mut run.clock)
+        .unwrap();
+    run.context.pause_claim_queue_for_test = waiting;
+    assert_eq!(
+        run.context
+            .record_pair_rejection(&mut ports(&mut run.clock))
+            .unwrap_err(),
+        if waiting {
+            RunFailure::PairOwned
+        } else {
+            RunFailure::Wait {
+                key: PumpDeadline::Leave,
+                bound: leave,
+            }
+        }
+    );
+    let ticket = run.context.pair_rejected_claim.as_ref().unwrap().ticket;
+    run.context.complete_wait(PumpDeadline::Leave).unwrap();
+    let first = fail_state(&mut fx);
+    report(&mut fx);
+    let context = &mut fx.output.input.run.context;
+    let fault = context.halt_report().unwrap().fault_sequence().unwrap();
+    context.bind_rejected_author(fault);
+    assert!(
+        context
+            .pair_rejected_claim
+            .as_ref()
+            .unwrap()
+            .sequence
+            .is_none(),
+        "the reserved fault cannot acknowledge an ordinary rejected return"
+    );
+    assert_eq!(context.advance_halt_rejection().unwrap(), None);
+    let retained_ticket = context.pair_rejected_claim.as_ref().unwrap().ticket;
+    if waiting {
+        assert!(ticket.is_none());
+        assert!(retained_ticket.is_some());
+        assert!(context.waiting_content.is_none());
+    } else {
+        assert_eq!(retained_ticket, ticket);
+    }
+    assert_eq!(context.pairs.pending_rejection().unwrap().raw_bytes(), raw);
+    fx.output.input.drain_trace();
+    let run = &mut fx.output.input.run;
+    assert!(matches!(
+        run.context.advance_halt_trace(&mut run.clock).unwrap(),
+        super::super::super::HaltTraceProgress::TraceRecorded(_)
+    ));
+    let sequence = run
+        .context
+        .pair_rejected_claim
+        .as_ref()
+        .unwrap()
+        .sequence
+        .unwrap();
+    assert_ne!(sequence, fault);
+    assert_eq!(
+        run.context.advance_halt_rejection().unwrap(),
+        Some(sequence)
+    );
+    assert_eq!(run.context.advance_halt_rejection().unwrap(), None);
+    assert!(run.context.pairs.pending_rejection().is_none());
+    assert_eq!(run.context.failure(), Some(&first));
+    let records = fx.output.input.records(Kind::ToolReturnRejected);
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0]["payload"]["raw_envelope"]
+            .as_str()
+            .unwrap()
+            .as_bytes(),
+        raw
+    );
+}
+
+#[test]
 fn halt_gate_requires_failure_report_and_the_original_socket() {
     let mut fx = fixture(true);
     let call = ready(&mut fx);

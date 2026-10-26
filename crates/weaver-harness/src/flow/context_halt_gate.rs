@@ -111,14 +111,13 @@ impl RecordingContext {
         if report.aborted().is_some() {
             return Err(HaltGateRefusal::ReportAborted);
         }
-        if self
-            .flow
-            .halt()
-            .unwrap()
-            .account()
-            .unwrap()
-            .capture
-            .is_some()
+        if self.member_capture.is_some()
+            || self
+                .flow
+                .halt()
+                .unwrap()
+                .account()
+                .is_some_and(|account| account.capture.is_some())
         {
             return Err(HaltGateRefusal::CaptureOwned);
         }

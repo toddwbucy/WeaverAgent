@@ -901,17 +901,45 @@ impl RecordBarrier {
         raw_ns: u64,
         wall_ms: u64,
     ) -> Result<(), TerminalAuthorFailure> {
-        if !self.recorder.tap_stopped()
-            || self.recorder.is_closed()
-            || self.pending.is_some()
-            || self.pending_author.is_some()
-            || event.kind != Kind::Refusal
+        if event.kind != Kind::Refusal
             || !matches!(event.source, super::author::AuthoredSource::Runtime)
             || !matches!(event.payload, Some(Payload::Refusal(_)))
         {
             return Err(TerminalAuthorFailure {
                 event,
-                detail: "trace-only author requires a stopped tap and an empty refusal slot".into(),
+                detail: "trace-only refusal shape".into(),
+            });
+        }
+        self.queue_stopped_authored(event, author, raw_ns, wall_ms)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn queue_halt_rejected(
+        &mut self,
+        permit: super::context::halt_rejection::OwedRejectedReturn,
+        author: &ServingAuthor,
+        raw_ns: u64,
+        wall_ms: u64,
+    ) -> Result<(), TerminalAuthorFailure> {
+        self.queue_stopped_authored(permit.into_event(), author, raw_ns, wall_ms)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn queue_stopped_authored(
+        &mut self,
+        event: AuthoredEvent,
+        author: &ServingAuthor,
+        raw_ns: u64,
+        wall_ms: u64,
+    ) -> Result<(), TerminalAuthorFailure> {
+        if !self.recorder.tap_stopped()
+            || self.recorder.is_closed()
+            || self.pending.is_some()
+            || self.pending_author.is_some()
+        {
+            return Err(TerminalAuthorFailure {
+                event,
+                detail: "trace-only author requires a stopped tap and an empty slot".into(),
             });
         }
         let Some(ticket) = self.next_ticket else {

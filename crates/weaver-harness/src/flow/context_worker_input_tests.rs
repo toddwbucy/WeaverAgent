@@ -112,6 +112,19 @@ fn worker_input_gate_child() {
     if mode == "input-queued" {
         packet(3, &frame(&mode, 102));
     }
+    if mode.contains("election-wait-held") || mode.contains("election-wait-gate-failure") {
+        let end = Instant::now() + Duration::from_secs(5);
+        while !root.join("election-wake").exists() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(root.join("election-wake").exists());
+        if mode.contains("gate-failure") {
+            return;
+        }
+        let raw = serde_json::to_vec(&frame(&mode, 102)).unwrap();
+        std::fs::write(root.join("election-queued.json"), &raw).unwrap();
+        assert_eq!(send(3, &raw, MsgFlags::MSG_NOSIGNAL), Ok(raw.len()));
+    }
     if mode == "input-pressure"
         || mode == "input-stop-gate-pressure"
         || mode.contains("final-manual-gate-pressure")

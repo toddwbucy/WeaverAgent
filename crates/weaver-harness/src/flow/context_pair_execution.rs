@@ -5,9 +5,7 @@
 use super::pair_driver::PairTransaction;
 use super::pairs::GateObservation;
 use super::*;
-use crate::flow::author::AuthoredSource;
 use crate::flow::pump_transport::{OrganPort, TrackedStage};
-use weaver_trace::Subsystem;
 use weaver_types::state_flow::{CallId, NonDispatchCause, PairRequest, SourcePosition};
 use weaver_types::{ExchangeId, Payload as OrganPayload};
 
@@ -427,11 +425,20 @@ impl RecordingContext {
         }
         self.pair_rejected_return.check()?;
         let sequence = if self.pair_rejected_authoring {
-            self.resume_owned_author_and_wait(ports)
-                .map_err(|failure| {
-                    self.pair_rejected_return
-                        .retain_started(failure, &mut self.pair_rejected_authoring)
-                })?
+            let claim = self
+                .pair_rejected_claim
+                .as_ref()
+                .expect("owned rejection claim");
+            self.resume_claimed_author_and_wait(
+                ports,
+                Some(AuthorClaim::PairRejection(std::sync::Arc::clone(
+                    &claim.identity,
+                ))),
+            )
+            .map_err(|failure| {
+                self.pair_rejected_return
+                    .retain_started(failure, &mut self.pair_rejected_authoring)
+            })?
         } else {
             if self.filing.is_some()
                 || self.waiting_content.is_some()
@@ -462,24 +469,28 @@ impl RecordingContext {
                 }
             };
             self.pair_rejection_wait = Some((bound, inherited.is_none()));
-            let record = self.pairs.pending_rejection().unwrap().record().clone();
-            self.waiting_content = Some(WaitingAuthor::ordinary(AuthoredEvent {
-                kind: Kind::ToolReturnRejected,
-                subsystem: Subsystem::Gate,
-                turn: self.open_turn.clone(),
-                source: AuthoredSource::Tool,
-                causal_parent: record
-                    .call_id
-                    .as_ref()
-                    .map(|call| Sequence(call.sequence.0)),
-                payload: Some(Payload::RejectedReturn(Box::new(record))),
-            }));
+            let claim = super::halt_rejection::RejectedAuthor::new();
+            let identity = std::sync::Arc::clone(&claim.identity);
+            self.pair_rejected_claim = Some(claim);
+            self.waiting_content = Some(WaitingAuthor::claimed(
+                self.rejected_event(),
+                AuthorClaim::PairRejection(std::sync::Arc::clone(&identity)),
+            ));
             self.pair_rejected_authoring = true;
-            self.continue_waiting_content(ports).map_err(|failure| {
-                self.pair_rejected_return
-                    .retain_started(failure, &mut self.pair_rejected_authoring)
-            })?
+            self.continue_claimed_content(ports, Some(AuthorClaim::PairRejection(identity)))
+                .map_err(|failure| {
+                    self.pair_rejected_return
+                        .retain_started(failure, &mut self.pair_rejected_authoring)
+                })?
         };
+        if self
+            .pair_rejected_claim
+            .as_ref()
+            .and_then(|claim| claim.sequence)
+            != Some(sequence)
+        {
+            return Err(self.pair_fault(ports.io, "rejected reply lost its exact Recorded ticket"));
+        }
         let source = SourcePosition {
             block_id: weaver_types::state_flow::SourceBlockId {
                 run: self.flow.state().identity().1.to_owned(),
@@ -492,6 +503,7 @@ impl RecordingContext {
             self.pair_fault(ports.io, format!("recorded rejected reply: {error:?}"))
         })?;
         self.pair_rejected_authoring = false;
+        self.pair_rejected_claim = None;
         if let Some((_, created)) = self.pair_rejection_wait.take()
             && (created
                 || self
