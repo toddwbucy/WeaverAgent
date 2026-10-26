@@ -1,5 +1,5 @@
-//! Consuming Failed-only pre-input cleanup. The live context cannot escape this
-//! owner while teardown progresses, and every terminal result remains failed.
+//! Failed-run release and drain. Pre-input admission and the consuming serving
+//! handoff have distinct gates; neither returns a reusable context or healthy Left.
 
 use super::*;
 use crate::flow::author::AuthoredSource;
@@ -12,11 +12,13 @@ use crate::flow::pump_transport::{
 use nix::poll::PollFlags;
 use std::path::Path;
 use std::sync::Arc;
-use weaver_trace::{GrantSurface, MemberRelease, Release, ReleaseOutcome, Subsystem};
+use weaver_trace::{GrantSurface, MemberRelease, ReleaseOutcome, Subsystem};
 use weaver_types::{
     ExchangeId, LifecycleAnswer, LifecycleDirective, Opener, OrganEnvelope, Position,
 };
 
+#[path = "context_expired_residency.rs"]
+pub(in crate::flow::context) mod expired_residency;
 #[path = "failed_enter_process.rs"]
 mod process;
 pub(in crate::flow) use process::ChildState;
@@ -66,6 +68,9 @@ impl ResidencyRequest {
 }
 
 impl FailedEnterResources {
+    pub(in crate::flow::context) fn decode_present_for_serving(&self) -> Option<&DecodePort> {
+        self.decode_present()
+    }
     #[cfg(test)]
     pub(super) fn poll_startup_test_children(&mut self) -> bool {
         self.poll_children()
@@ -321,7 +326,7 @@ impl FailedEnterResources {
         self.spu.as_ref()?.residency.as_ref()
     }
 
-    fn original_ports(&self) -> bool {
+    pub(in crate::flow::context) fn original_ports(&self) -> bool {
         self.spu.as_ref().is_none_or(|spu| {
             spu.decode
                 .as_ref()
@@ -364,7 +369,7 @@ impl FailedEnterResources {
     pub(in crate::flow) fn spu_child(&self) -> Option<ChildState> {
         self.spu.as_ref().map(|spu| spu.child.state())
     }
-    fn child_failures(&self) -> [Option<String>; 2] {
+    pub(in crate::flow::context) fn child_failures(&self) -> [Option<String>; 2] {
         [
             self.spu.as_ref().map(|spu| &spu.child),
             self.classifier.as_ref(),
@@ -384,7 +389,7 @@ impl FailedEnterResources {
         })
     }
 
-    fn close_at_cap(&mut self) {
+    pub(in crate::flow::context) fn close_at_cap(&mut self) {
         if let Some(spu) = &mut self.spu {
             if let Some(port) = spu.decode.take() {
                 spu.retired_decode = Some(port.retire_failed());
@@ -399,7 +404,7 @@ impl FailedEnterResources {
         }
     }
 
-    fn poll_children(&mut self) -> bool {
+    pub(in crate::flow::context) fn poll_children(&mut self) -> bool {
         if let Some(spu) = &mut self.spu {
             spu.child.poll();
         }
@@ -451,8 +456,15 @@ enum Stage {
     Closed,
 }
 
-pub(in crate::flow) struct FailedEnterCleanup {
-    context: RecordingContext,
+pub(in crate::flow) type FailedEnterCleanup = FailedRunCleanup;
+
+pub(in crate::flow) struct FailedRunCleanup {
+    serving: bool,
+    serving_turn_accounts_retired: bool,
+    pub(in crate::flow::context) rejection_unavailable: bool,
+    pub(in crate::flow::context) stopped_turn_record:
+        Option<crate::flow::recording::StoppedStartupRecord>,
+    pub(in crate::flow::context) context: RecordingContext,
     resources: FailedEnterResources,
     stage: Stage,
     deadline: Option<u64>,
@@ -466,6 +478,7 @@ pub(in crate::flow) struct FailedEnterCleanup {
     release_reply: Option<ReceivedOrgan>,
     prior_residency: Option<ResidencyRequest>,
     prior_residency_reply: Option<ReceivedOrgan>,
+    expired_release: Option<Box<expired_residency::ExpiredResidencyRelease>>,
     release_failure: Option<String>,
     release_blocked: bool,
     refused_release: Option<LifecycleDirective>,
@@ -473,10 +486,17 @@ pub(in crate::flow) struct FailedEnterCleanup {
     unload_sequence: Option<Sequence>,
     unload_attempted: bool,
     unload_unavailable: Option<String>,
+    pub(in crate::flow::context) pending_session_close:
+        Option<crate::flow::recording::DeferredHaltClose>,
+    session_close: Option<AuthoredEvent>,
+    session_close_sequence: Option<Sequence>,
+    session_close_attempted: bool,
     abandoned: bool,
     trace_drained: bool,
     member_stood: bool,
     member_failed: bool,
+    rollback_cause: Option<weaver_types::Cause>,
+    rollback_read: Option<super::startup_composition::refusal::response::halt::FailedRollbackRead>,
 }
 
 impl RecordingContext {
@@ -551,7 +571,7 @@ impl RecordingContext {
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn into_failed_enter_cleanup(
         self,
-        mut resources: FailedEnterResources,
+        resources: FailedEnterResources,
     ) -> Result<FailedEnterCleanup, FailedEnterRejected> {
         let refusal = if self.phase != RecordingPhase::Failed
             || self.failure.is_none()
@@ -591,17 +611,98 @@ impl RecordingContext {
                 refusal,
             });
         }
-        let deadline = self.flow.halt().and_then(|halt| halt.deadline().ok());
-        let member_stood = self.flow.failed_cleanup_state_stood();
-        let member_failed = self.flow.failed_cleanup_state_failed();
+        Ok(FailedRunCleanup::new(self, resources, false))
+    }
+}
+
+impl FailedRunCleanup {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn rollback_test_read(
+        &self,
+    ) -> Option<&super::startup_composition::refusal::response::halt::FailedRollbackRead> {
+        self.rollback_read.as_ref()
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn rollback_test_measurement(&self) -> Option<Vec<u8>> {
+        let state = self.retired.as_ref()?.state.as_ref()?;
+        Some(serde_json::to_vec(state.held_measurement()?).unwrap())
+    }
+    /// Only the consuming public startup handoff calls this, after matching its
+    /// original context/ports and retaining every extracted boot proof. It does
+    /// not widen the primitive-only failed-enter admission gate.
+    pub(in crate::flow::context) fn after_startup(
+        context: RecordingContext,
+        resources: FailedEnterResources,
+    ) -> Self {
+        Self::new(context, resources, false)
+    }
+
+    /// The consuming public rollback has retained the actual directive, load
+    /// cause and original window. It has not recorded Unload on this route.
+    pub(in crate::flow::context) fn after_rollback(
+        context: RecordingContext,
+        resources: FailedEnterResources,
+        leave: Option<AbsoluteBound>,
+        cause: Option<weaver_types::Cause>,
+    ) -> Self {
+        let mut owner = Self::new(context, resources, false);
+        if let Some(leave) = leave {
+            owner.deadline = owner
+                .deadline
+                .map(|deadline| deadline.min(leave.deadline_ns()));
+            owner.rollback_cause = cause;
+            if owner.context.inspection.is_some() {
+                match super::startup_composition::refusal::response::halt::FailedRollbackRead::capture(&owner.context, leave) {
+                    Ok(account) => owner.rollback_read = Some(account),
+                    Err(error) => owner.secondary(format!("failed rollback Grants account: {error}")),
+                }
+            }
+        }
+        owner
+    }
+
+    /// The consuming expired rollback retains its original release owner. A
+    /// failure cannot restart Release after that owner has acquired it.
+    pub(in crate::flow::context) fn after_expired_rollback(
+        context: RecordingContext,
+        resources: FailedEnterResources,
+        leave: Option<AbsoluteBound>,
+        cause: Option<weaver_types::Cause>,
+        release: Option<expired_residency::ExpiredResidencyRelease>,
+        admit_reply: Option<ReceivedOrgan>,
+    ) -> Self {
+        let mut owner = Self::after_rollback(context, resources, leave, cause);
+        if let Some(release) = release {
+            assert!(owner.prior_residency.is_none() && admit_reply.is_none());
+            owner.release = release.outcome().unwrap_or(ReleaseOutcome::Unconfirmed);
+            owner.release_blocked = true;
+            owner.expired_release = Some(Box::new(release));
+        } else if let Some(reply) = admit_reply {
+            owner.retain_residency_completion(reply);
+        }
+        owner
+    }
+
+    fn new(context: RecordingContext, mut resources: FailedEnterResources, serving: bool) -> Self {
+        let deadline = context.flow.halt().and_then(|halt| halt.deadline().ok());
+        let member_stood = context.flow.failed_cleanup_state_stood();
+        let member_failed = context.flow.failed_cleanup_state_failed();
         let prior_residency = resources
             .spu
             .as_mut()
             .and_then(|spu| spu.residency_request.take());
-        Ok(FailedEnterCleanup {
-            context: self,
+        Self {
+            serving,
+            serving_turn_accounts_retired: false,
+            rejection_unavailable: false,
+            stopped_turn_record: None,
+            context,
             resources,
-            stage: Stage::Reporting,
+            stage: if serving {
+                Stage::Accounts
+            } else {
+                Stage::Reporting
+            },
             deadline,
             report_unavailable: None,
             account_failure: None,
@@ -613,6 +714,7 @@ impl RecordingContext {
             release_reply: None,
             prior_residency,
             prior_residency_reply: None,
+            expired_release: None,
             release_failure: None,
             release_blocked: false,
             refused_release: None,
@@ -620,11 +722,36 @@ impl RecordingContext {
             unload_sequence: None,
             unload_attempted: false,
             unload_unavailable: None,
+            pending_session_close: None,
+            session_close: serving.then_some(AuthoredEvent {
+                kind: Kind::SessionClosed,
+                subsystem: Subsystem::Harness,
+                turn: None,
+                source: AuthoredSource::Runtime,
+                causal_parent: None,
+                payload: None,
+            }),
+            session_close_sequence: None,
+            session_close_attempted: false,
             abandoned: false,
             trace_drained: false,
             member_stood,
             member_failed,
-        })
+            rollback_cause: None,
+            rollback_read: None,
+        }
+    }
+
+    /// Called only after the public serving handoff has matched the original
+    /// run and all its resource identities. This does not weaken pre-input entry.
+    pub(in crate::flow::context) fn after_serving(
+        context: RecordingContext,
+        resources: FailedEnterResources,
+        rejection_unavailable: bool,
+    ) -> Self {
+        let mut owner = Self::new(context, resources, true);
+        owner.rejection_unavailable = rejection_unavailable;
+        owner
     }
 }
 
@@ -687,7 +814,7 @@ pub(super) fn admit_reply_is_terminal(envelope: &OrganEnvelope) -> bool {
     )
 }
 
-impl FailedEnterCleanup {
+impl FailedRunCleanup {
     /// The composition owner has already consumed this exact packet. Retain it
     /// before cleanup runs; it cannot be read a second time from the port.
     pub(super) fn retain_residency_completion(&mut self, reply: ReceivedOrgan) {
@@ -714,6 +841,11 @@ impl FailedEnterCleanup {
     #[cfg(test)]
     pub(super) fn reap_composition_test_children(&mut self) {
         self.resources.reap_startup_test_children();
+    }
+
+    #[cfg(test)]
+    pub(super) fn startup_test_admit_reply(&self) -> Option<&ReceivedOrgan> {
+        self.prior_residency_reply.as_ref()
     }
 
     pub(in crate::flow) fn failure(&self) -> &RunFailure {
@@ -757,7 +889,10 @@ impl FailedEnterCleanup {
         &self.resources
     }
 
-    fn secondary(&mut self, detail: impl Into<String>) {
+    pub(in crate::flow::context) fn secondary(&mut self, detail: impl Into<String>) {
+        self.secondary_at(Some(self.context.last_ns), detail);
+    }
+    fn secondary_at(&mut self, observed: Option<u64>, detail: impl Into<String>) {
         let detail = detail.into();
         // Repeated account polling preserves the first observation of each
         // distinct error instead of growing the account once per wake.
@@ -784,32 +919,35 @@ impl FailedEnterCleanup {
             .append_secondary(SecondaryFailure {
                 reason: FlowHaltReason::ProtocolFailed,
                 point: HaltPoint::Teardown,
-                observed_ns: Some(self.context.last_ns.into()),
+                observed_ns: observed.map(Into::into),
                 detail,
             });
     }
 
-    fn clock(&mut self, io: &mut impl PumpIo) -> bool {
+    pub(in crate::flow::context) fn clock(&mut self, io: &mut impl PumpIo) -> bool {
         if let Some(leave) = self.context.deadlines.get(PumpDeadline::Leave) {
             self.deadline = self.deadline.map(|bound| bound.min(leave.deadline_ns()));
         }
-        match io.now() {
+        let reading = io.now();
+        let observed = reading.as_ref().ok().copied();
+        match reading {
             Ok(now) if now >= self.context.last_ns => {
                 self.context.last_ns = now;
                 if self.deadline.is_some_and(|deadline| now < deadline) {
                     return true;
                 }
-                self.secondary(
+                self.secondary_at(
+                    observed,
                     "failed Enter cleanup reached its original cap or has no clock anchor",
                 );
             }
-            Ok(_) => self.secondary("failed Enter cleanup clock reversed"),
-            Err(error) => self.secondary(format!("failed Enter cleanup clock: {error}")),
+            Ok(_) => self.secondary_at(observed, "failed cleanup clock reversed"),
+            Err(error) => self.secondary_at(None, format!("failed cleanup clock: {error}")),
         }
         false
     }
 
-    fn abort(&mut self) {
+    pub(in crate::flow::context) fn abort(&mut self) {
         // At expiry no account or writer may keep a descriptor or blocking wait.
         // Original unfinished owners remain in context, never relabelled settled.
         self.retire_flow();
@@ -825,7 +963,11 @@ impl FailedEnterCleanup {
 
     fn retire_flow(&mut self) {
         if self.retired.is_none() {
-            self.retired = self.context.flow.retire_failed_ports();
+            self.retired = if self.serving {
+                self.context.flow.retire_failed_serving_ports()
+            } else {
+                self.context.flow.retire_failed_ports()
+            };
         }
     }
 
@@ -879,7 +1021,9 @@ impl FailedEnterCleanup {
                     self.abort();
                     return FailedEnterProgress::Closed;
                 }
-                if !self.context.boot_open_account_settled() {
+                if !self.context.boot_open_account_settled()
+                    || (self.serving && self.context.place_owed())
+                {
                     FailedEnterProgress::Pending
                 } else {
                     if let Some(decode) = self
@@ -944,6 +1088,7 @@ impl FailedEnterCleanup {
                 if self.context.plan_summary.is_some() {
                     FailedEnterProgress::Pending
                 } else {
+                    self.close_serving_session();
                     if self.attempt_unload(io) {
                         self.stage = Stage::Drain;
                         FailedEnterProgress::Progress
@@ -971,6 +1116,7 @@ impl FailedEnterCleanup {
                     }
                 }
                 if self.trace_drained && children_done {
+                    self.context.barrier.abandon();
                     self.context.phase = RecordingPhase::Closed;
                     self.stage = Stage::Closed;
                     FailedEnterProgress::Closed
@@ -988,23 +1134,58 @@ impl FailedEnterCleanup {
         result
     }
 
-    fn advance_accounts(&mut self, io: &mut impl PumpIo) -> bool {
+    pub(in crate::flow::context) fn advance_accounts(&mut self, io: &mut impl PumpIo) -> bool {
+        self.advance_account_step(io).is_some()
+    }
+
+    /// Some(true) means an actual local account step advanced. None preserves
+    /// the existing failed-clock/cap exit; false never authorizes a close wait.
+    fn advance_account_step(&mut self, io: &mut impl PumpIo) -> Option<bool> {
+        if self.serving && self.serving_turn_accounts_retired {
+            return Some(self.advance_serving_rejection());
+        }
+        if self.serving && self.trace_accounts_unavailable() {
+            return Some(false);
+        }
+        if let Some(account) = &mut self.rollback_read
+            && !account.record_once(&mut self.context, io, self.deadline.unwrap())
+        {
+            return None;
+        }
+        let mut progress = false;
         let mut observed = AccountClock {
             io,
             last: self.context.last_ns,
             deadline: self.deadline,
             unavailable: false,
         };
-        if self.context.halt_report.is_some()
-            && matches!(
-                self.context.advance_halt_trace(&mut observed),
-                Ok(HaltTraceProgress::AbortRequired)
-            )
-        {
-            return false;
+        if self.context.halt_report.is_some() {
+            match self.context.advance_halt_trace(&mut observed) {
+                Ok(HaltTraceProgress::AbortRequired) => return None,
+                Ok(HaltTraceProgress::FaultRecorded(_) | HaltTraceProgress::TraceRecorded(_)) => {
+                    progress = true;
+                }
+                _ => {}
+            }
         }
         if observed.unavailable {
-            return false;
+            return None;
+        }
+        if self.serving
+            && !self.rejection_unavailable
+            && self.context.pairs.pending_rejection().is_some()
+        {
+            match self.context.advance_halt_rejection() {
+                Ok(Some(_)) => progress = true,
+                Ok(None) => {}
+                Err(error) => {
+                    self.rejection_unavailable = true;
+                    self.secondary(format!("failed serving rejected-return account: {error}"));
+                }
+            }
+        }
+        if observed.unavailable {
+            return None;
         }
         if self.context.boot_open.is_some()
             && !self.context.boot_open_account_settled()
@@ -1013,26 +1194,166 @@ impl FailedEnterCleanup {
                 .spu
                 .as_mut()
                 .and_then(|spu| spu.decode.as_mut())
-            && let Err(error) = self
+        {
+            match self
                 .context
                 .advance_boot_open_account(decode, &mut observed)
-        {
-            self.secondary(format!("failed Enter Open account: {error:?}"));
+            {
+                Ok(result) => progress |= result != BootOpenProgress::Pending,
+                Err(error) => self.secondary(format!("failed Enter Open account: {error:?}")),
+            }
         }
         if observed.unavailable {
-            return false;
+            return None;
+        }
+        if self.serving
+            && self.context.place_owed()
+            && let Some(decode) = self.resources.decode_mut()
+        {
+            let mut ports = PumpPorts {
+                lifecycle: Default::default(),
+                gate: None,
+                decode: Some(decode),
+                label: None,
+                io: &mut observed,
+            };
+            match self.context.advance_place_account(&mut ports) {
+                Ok(PlaceProgress::Progress) => progress = true,
+                Ok(PlaceProgress::Complete) => progress |= !self.context.place_owed(),
+                Ok(PlaceProgress::Pending) => {}
+                Err(error) => {
+                    self.secondary(format!("failed serving placement account: {error:?}"))
+                }
+            }
+        }
+        if observed.unavailable {
+            return None;
         }
         if self.context.plan_summary.is_some() {
             if let Err(error) = self.context.advance_plan_summary_account(&mut observed) {
                 self.secondary(format!("failed Enter summary account: {error:?}"));
             }
             match self.context.take_stopped_plan_summary() {
-                Ok(Some(account)) => self.summary_account = Some(account),
+                Ok(Some(account)) => {
+                    self.summary_account = Some(account);
+                    progress = true;
+                }
                 Ok(None) => {}
                 Err(error) => self.secondary(format!("failed Enter summary take: {error:?}")),
             }
         }
-        !observed.unavailable
+        (!observed.unavailable).then_some(progress)
+    }
+
+    fn trace_accounts_unavailable(&self) -> bool {
+        self.context.barrier.standing_failure().is_some()
+            || self
+                .context
+                .halt_report
+                .as_ref()
+                .is_some_and(|r| r.trace_unavailable())
+    }
+
+    /// Give ready accounts their own steps, but never wait on ordinary capacity
+    /// or an unavailable exchange ahead of mandatory Closing. The original
+    /// account and exact unrecorded owner remain evidence, without later retry.
+    pub(in crate::flow::context) fn settle_serving_turn_accounts(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Option<bool> {
+        let progress = self.advance_account_step(io)?;
+        if self.serving_turn_accounts_pending() {
+            if progress && !self.trace_accounts_unavailable() {
+                return Some(false);
+            }
+            let detail = "serving turn accounts incomplete before mandatory close";
+            self.stopped_turn_record = self.context.barrier.retain_halt_record();
+            if let Some(decode) = self.resources.decode_mut() {
+                self.context.abandon_place_account(decode, detail);
+            }
+            if self.context.plan_summary.is_some() {
+                self.context.abandon_plan_summary_account(detail);
+                match self.context.take_stopped_plan_summary() {
+                    Ok(Some(account)) => self.summary_account = Some(account),
+                    Ok(None) => {}
+                    Err(error) => self.secondary(format!("stopped summary retention: {error:?}")),
+                }
+            }
+            if self.context.pairs.pending_rejection().is_some() {
+                self.rejection_unavailable = true;
+                self.context.abandon_halt_rejection(detail);
+            }
+            self.secondary(detail);
+        }
+        self.serving_turn_accounts_retired = true;
+        Some(true)
+    }
+
+    /// A newly observed post-turn return is run-scoped. Ordinary pressure keeps
+    /// its exact owner eligible for later Lower and tail steps. Only an actual
+    /// unavailable driver, or the session-close boundary, retires this author.
+    pub(in crate::flow::context) fn advance_serving_rejection(&mut self) -> bool {
+        if self.rejection_unavailable || self.context.pairs.pending_rejection().is_none() {
+            return false;
+        }
+        let detail = if self.trace_accounts_unavailable() {
+            "failed serving rejection trace is unavailable".into()
+        } else {
+            match self.context.advance_halt_rejection() {
+                Ok(Some(_)) => return true,
+                Ok(None) => return false,
+                Err(detail) => detail,
+            }
+        };
+        self.rejection_unavailable = true;
+        self.context.abandon_halt_rejection(&detail);
+        self.secondary(detail);
+        false
+    }
+
+    fn serving_turn_accounts_pending(&self) -> bool {
+        self.context.place_owed()
+            || self.context.plan_summary.is_some()
+            || self.context.barrier.pending().is_some()
+            || self.context.pairs.pending_rejection().is_some()
+            || self.context.has_owed_measure_refusal()
+    }
+
+    fn close_serving_session(&mut self) {
+        if !self.serving || self.session_close_attempted {
+            return;
+        }
+        if !self.rejection_unavailable && self.context.pairs.pending_rejection().is_some() {
+            let detail = "failed serving rejection incomplete before session close";
+            self.rejection_unavailable = true;
+            self.context.abandon_halt_rejection(detail);
+            self.secondary(detail);
+        }
+        self.session_close_attempted = true;
+        // Lower retired the gate; accounts settled or remain incomplete evidence.
+        // From this point the only author is Unload, in this same stage.
+        let result = if self.pending_session_close.is_some() {
+            self.context
+                .resume_deferred_halt_close(&mut self.pending_session_close)
+                .map_err(|error| format!("pending session close: {error:?}"))
+        } else {
+            wall_ms().and_then(|wall| {
+                self.context
+                    .barrier
+                    .submit_terminal_authored_ref(
+                        self.session_close.as_ref().unwrap(),
+                        &self.context.author,
+                        self.context.last_ns,
+                        wall,
+                    )
+                    .map(Some)
+            })
+        };
+        match result {
+            Ok(Some(sequence)) => self.session_close_sequence = Some(sequence),
+            Ok(None) => self.secondary("failed serving session close remains unrecorded"),
+            Err(error) => self.secondary(error),
+        }
     }
 
     fn advance_release(&mut self, io: &mut impl PumpIo) -> FailedEnterProgress {
@@ -1094,7 +1415,8 @@ impl FailedEnterCleanup {
         match port.take_received() {
             Ok(Some(reply)) => {
                 let envelope = reply.envelope();
-                let prior_reply = self.prior_residency_reply.is_none()
+                let prior_reply = !self.serving
+                    && self.prior_residency_reply.is_none()
                     && self.prior_residency.as_ref().is_some_and(|prior| {
                         prior.send.sent()
                             && prior.send.belongs_to(port)
@@ -1198,18 +1520,21 @@ impl FailedEnterCleanup {
             .map(|sequence| sequence.0.into());
         let payload = serving::payloads::UnloadClose {
             grant_surface: self.member_stood.then_some(GrantSurface::Unreadable),
-            // This admitted domain has no accepted Leave/capture/turn cause.
-            cause: None,
-            forced: false,
+            // An accepted rollback keeps the load cause and forced fact. Other
+            // admitted failed routes have no accepted Leave/capture/turn cause.
+            cause: self
+                .rollback_cause
+                .map(|cause| weaver_trace::Cause { uid: cause.uid }),
+            forced: self.rollback_cause.is_some(),
             forced_by: None,
-            release: Some(Release {
-                spu: self.release,
+            release: serving::payloads::Release {
+                spu: self.resources.spu.is_some().then_some(self.release),
                 member: self.member_stood.then_some(if self.member_failed {
                     MemberRelease::Unconfirmed
                 } else {
                     MemberRelease::Closed
                 }),
-            }),
+            },
             end_reason: Some(serving::payloads::EndReason::ComponentFailure),
             state_flow_failure: Some(serving::payloads::StateFlowFailure {
                 fault_sequence,

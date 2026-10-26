@@ -44,6 +44,27 @@ pub struct FoundationManagement<'a> {
     detail: Option<String>,
 }
 
+/// A failed management exchange retains its exact request, answer and send;
+/// only its descriptors retire. It cannot produce a successful Leave.
+pub(super) struct FailedManagement {
+    _peer: crate::flow::pump::RetiredLifecyclePeer,
+    _message: Option<crate::flow::pump::RetiredLifecycleMessage>,
+    _answer: Option<ManagementAnswer>,
+    _stop: Option<StopWork>,
+    _peer_unavailable: bool,
+    _send: Option<OrganSend>,
+    _progress: FoundationManagementProgress,
+    _detail: Option<String>,
+}
+impl FailedManagement {
+    pub(super) fn world_was_sent(&self) -> bool {
+        self._stop
+            .as_ref()
+            .and_then(StopWork::gate_send)
+            .is_some_and(OrganSend::sent)
+    }
+}
+
 impl<'a> FoundationInput<'a> {
     pub fn management(mut self: Box<Self>) -> Result<Box<FoundationManagement<'a>>, Box<Self>> {
         if self.progress() != FoundationInputProgress::ManagementPending {
@@ -69,6 +90,32 @@ impl<'a> FoundationInput<'a> {
     }
 }
 impl<'a> FoundationManagement<'a> {
+    pub(super) fn into_failed_parts(self) -> (Box<FoundationInput<'a>>, FailedManagement) {
+        let Self {
+            input,
+            peer,
+            message,
+            answer,
+            stop,
+            peer_unavailable,
+            send,
+            progress,
+            detail,
+        } = self;
+        (
+            input,
+            FailedManagement {
+                _peer: peer.retire_failed(),
+                _message: message.map(LifecycleMessage::retire_failed),
+                _answer: answer,
+                _stop: stop,
+                _peer_unavailable: peer_unavailable,
+                _send: send,
+                _progress: progress,
+                _detail: detail,
+            },
+        )
+    }
     pub fn progress(&self) -> FoundationManagementProgress {
         self.progress
     }

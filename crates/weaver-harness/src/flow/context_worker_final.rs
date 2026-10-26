@@ -3,6 +3,26 @@ use super::super::close::WorldClose;
 use super::*;
 
 impl FoundationInput<'_> {
+    pub(in crate::flow::context::worker_startup::input) fn failed_world_was_sent(&self) -> bool {
+        let gate = &self.serving.owner.gate;
+        let Some(original) = &self.received else {
+            return false;
+        };
+        [
+            self.send.as_ref(),
+            self.engine
+                .as_ref()
+                .and_then(|work| work.answer.as_ref())
+                .and_then(WorldClose::send),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|send| {
+            send.sent()
+                && send.belongs_to(gate)
+                && send.matches_exchange(&original.envelope().exchange)
+        })
+    }
     pub(in crate::flow::context::worker_startup::input) fn final_send_clock_failed(&self) -> bool {
         self.engine
             .as_ref()

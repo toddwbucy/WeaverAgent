@@ -8,6 +8,14 @@ use weaver_types::{
     TokenRefusal,
 };
 
+impl<T, E> PacketPort<T, E> {
+    pub(in crate::flow) fn test_outgoing_packet(&self) -> Option<(&[u8], usize)> {
+        self.outgoing
+            .as_ref()
+            .map(|outgoing| (outgoing.body.as_slice(), outgoing.offset))
+    }
+}
+
 // A copied owner would permit a second read cursor on the same channel.
 const _: fn() = || {
     trait NoClone<Marker> {

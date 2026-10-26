@@ -87,7 +87,7 @@ impl Fixture {
             "run".into(),
             42,
             declaration,
-            remaining_enter_ns,
+            AbsoluteBound::after(100, remaining_enter_ns).unwrap(),
             &mut clock,
         )
         .unwrap();
@@ -396,7 +396,10 @@ fn unload_close() -> serving::payloads::UnloadClose {
         cause: None,
         forced: false,
         forced_by: None,
-        release: None,
+        release: serving::payloads::Release {
+            spu: None,
+            member: None,
+        },
         end_reason: None,
         state_flow_failure: None,
     }
@@ -466,6 +469,7 @@ fn lifecycle_deadlines_keep_their_owner_while_gate_expiry_latches_flow() {
     for key in [
         PumpDeadline::Enter,
         PumpDeadline::Leave,
+        PumpDeadline::Lower,
         PumpDeadline::Label,
         PumpDeadline::Gate,
     ] {

@@ -42,6 +42,7 @@ fn packet(fd: i32, frame: &OrganEnvelope) {
     assert_eq!(send(fd, &bytes, MsgFlags::MSG_NOSIGNAL), Ok(bytes.len()));
 }
 pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
+    let mut tool_child = None;
     let end = Instant::now() + Duration::from_secs(30);
     if mode.contains("stop-unsent") || mode.contains("halt-gate-unsent") {
         while !root.join("drain-external").exists() {
@@ -114,6 +115,75 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                 }
                 let frame: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
                 match &frame.payload {
+                    Payload::Directive(weaver_types::LifecycleDirective::Lower)
+                        if mode.contains("-exit") =>
+                    {
+                        assert_eq!(frame.position, Position::Open);
+                        assert_eq!(frame.exchange.opener, Opener::Harness);
+                        assert_eq!(
+                            frame.exchange.ordinal,
+                            if mode.contains("start-pending") || mode.contains("placement-pending")
+                            {
+                                2
+                            } else {
+                                3
+                            }
+                        );
+                        assert!(pending.is_none());
+                        assert!(!root.join("halt-lower.json").exists());
+                        std::fs::write(root.join("halt-lower.json"), &bytes[..n]).unwrap();
+                        if mode.contains("lower-silent") {
+                            continue;
+                        }
+                        let late_returns = if mode.contains("lower-backlog-wake") {
+                            2
+                        } else {
+                            usize::from(mode.contains("lower-late"))
+                        };
+                        for index in 0..late_returns {
+                            let rejected = OrganEnvelope {
+                                exchange: ExchangeId {
+                                    opener: Opener::Harness,
+                                    ordinal: 2,
+                                },
+                                position: Position::Close,
+                                payload: Payload::ToolAnswer(ToolOutcome::Result {
+                                    content: format!("late exact output {index}"),
+                                }),
+                            };
+                            let raw = format!(
+                                " \n{}\n ",
+                                serde_json::to_string_pretty(&rejected).unwrap()
+                            );
+                            let name = if index == 0 {
+                                "halt-lower-late.json"
+                            } else {
+                                "halt-lower-second.json"
+                            };
+                            std::fs::write(root.join(name), &raw).unwrap();
+                            assert_eq!(
+                                send(fd, raw.as_bytes(), MsgFlags::MSG_NOSIGNAL),
+                                Ok(raw.len())
+                            );
+                        }
+                        let mut exchange = frame.exchange.clone();
+                        if mode.contains("lower-wrong") {
+                            exchange.ordinal += 100;
+                        }
+                        packet(
+                            fd,
+                            &OrganEnvelope {
+                                exchange,
+                                position: Position::Close,
+                                payload: Payload::Answer(
+                                    weaver_types::LifecycleAnswer::GateStopped,
+                                ),
+                            },
+                        );
+                        if !mode.contains("lower-wrong") {
+                            return;
+                        }
+                    }
                     Payload::Tool(execution) => {
                         assert!(!mode.contains("no-grant"));
                         assert_eq!(frame.position, Position::Open);
@@ -147,6 +217,40 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                             payload: Payload::ToolAnswer(expected(mode, ordinal)),
                         };
                         if mode.contains("halt-gate") {
+                            if mode.contains("live-tools") {
+                                assert!(tool_child.is_none());
+                                use std::os::unix::process::CommandExt;
+                                let mut command = std::process::Command::new("/usr/bin/sleep");
+                                command.arg("60");
+                                // SAFETY: only async-signal-safe closes in this
+                                // fixture child; it must not inherit the gate
+                                // socket and conceal the gate parent's death.
+                                unsafe {
+                                    command.pre_exec(|| {
+                                        nix::unistd::close(3).map_err(std::io::Error::from)?;
+                                        nix::unistd::close(4).map_err(std::io::Error::from)?;
+                                        Ok(())
+                                    });
+                                }
+                                let child = command.spawn().unwrap();
+                                // SAFETY: this actual gate fixture was forked with
+                                // its parent's verified tools directory at fd 4.
+                                let tools = unsafe { std::os::fd::BorrowedFd::borrow_raw(4) };
+                                let procs = nix::fcntl::openat(
+                                    tools,
+                                    "cgroup.procs",
+                                    nix::fcntl::OFlag::O_WRONLY | nix::fcntl::OFlag::O_CLOEXEC,
+                                    nix::sys::stat::Mode::empty(),
+                                )
+                                .unwrap();
+                                let pid = child.id().to_string();
+                                assert_eq!(
+                                    nix::unistd::write(&procs, pid.as_bytes()).unwrap(),
+                                    pid.len()
+                                );
+                                std::fs::write(root.join("halt-tool-pid"), &pid).unwrap();
+                                tool_child = Some(child);
+                            }
                             pending = Some(OrganEnvelope {
                                 payload: Payload::ToolAnswer(ToolOutcome::Killed {
                                     by: KillCause::FlowFailure,
@@ -215,6 +319,26 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         let raw = serde_json::to_vec(&answer).unwrap();
                         std::fs::write(root.join("halt-terminal.json"), &raw).unwrap();
                         packet(fd, &answer);
+                        if mode.contains("world-silent") {
+                            packet(
+                                fd,
+                                &OrganEnvelope {
+                                    exchange: ExchangeId {
+                                        opener: Opener::Gate,
+                                        ordinal: 103,
+                                    },
+                                    position: Position::Open,
+                                    payload: Payload::Frame(weaver_types::TurnFrame::carry(
+                                        b"queued behind close",
+                                    )),
+                                },
+                            );
+                            // Keep the actual receive queue undrained until the
+                            // original halt cap closes/kills this fixture.
+                            loop {
+                                std::thread::sleep(Duration::from_millis(10));
+                            }
+                        }
                     }
                     Payload::ToolCancel => {
                         assert_eq!(frame.position, Position::Continue);
@@ -269,6 +393,7 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                             }
                         );
                         assert_eq!(value["turn"], "generation-turn");
+                        assert!(!root.join("closed.json").exists(), "duplicate world close");
                         std::fs::write(root.join("closed.json"), &bytes[..n]).unwrap();
                         if mode.contains("queued-input") {
                             queued::fresh_packet(mode, root, fd);

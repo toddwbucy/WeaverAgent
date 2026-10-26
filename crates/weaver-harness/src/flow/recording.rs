@@ -226,6 +226,21 @@ pub(super) struct TerminalAuthorFailure {
     pub detail: String,
 }
 
+/// The failed closer retains an already prepared closing record while earlier
+/// obligations use ordinary capacity. This is the same ticket and preparation,
+/// not a new author or an ordinary overflow slot.
+pub(super) struct DeferredHaltClose {
+    owner: Arc<()>,
+    pending: (Event, RecordPurpose),
+    author: AuthorTicket,
+}
+
+impl DeferredHaltClose {
+    pub(super) fn kind(&self) -> Kind {
+        self.author.event.kind
+    }
+}
+
 /// This object owns the only ordinary serving-recorder handle. The later
 /// recording context supplies author attribution, drains the inbox and owns
 /// the halt latch. This component never turns a failure into a success token.
@@ -312,6 +327,9 @@ impl RecordBarrier {
 
     pub(super) fn abandon(&mut self) {
         self.recorder.abandon();
+    }
+    pub(super) fn close_unadmitted(&mut self) -> Result<(), weaver_trace::Failure> {
+        self.recorder.close_unadmitted()
     }
 
     /// Prepare once and retain the complete original until actual admission.
@@ -841,7 +859,8 @@ impl RecordBarrier {
     pub(super) fn admitted_before_failure(&self) -> Option<Sequence> {
         self.admitted_before_failure
     }
-    /// Latest ordinary admission after tap stop, excluding terminal reserves.
+    /// Latest pending-author admission after tap stop, including an owed
+    /// terminal promoted to its halt reservation. Fresh terminal acts are separate.
     pub(super) fn last_trace_only_sequence(&self) -> Option<Sequence> {
         self.last_trace_only_sequence
     }
@@ -1055,7 +1074,7 @@ impl RecordBarrier {
 
     pub(super) fn retain_summary_rollback_record(
         &mut self,
-        permit: &super::context::plan_summary_driver::PlanReadRollbackPermit,
+        permit: &super::context::ReadRollbackPermit,
     ) -> Result<StoppedReadRecord, &'static str> {
         if !permit.matches_record(self) {
             return Err("summary rollback lost its exact record");
@@ -1064,6 +1083,99 @@ impl RecordBarrier {
             _pending: self.pending.take(),
             _author: self.pending_author.take(),
         })
+    }
+
+    pub(super) fn boot_filing_record_matches(
+        &self,
+        permit: &super::context::BootFilingRollbackPermit,
+        measurement: Option<&weaver_types::state_flow::StateStoreMeasurement>,
+        observation: Option<&FlowObservation>,
+    ) -> bool {
+        if !permit.matches_record(self) {
+            return false;
+        }
+        match (&self.pending, &self.pending_author) {
+            (None, None) => true,
+            (Some((event, purpose)), Some(author))
+                if event.envelope.turn.is_none() && author.event.turn.is_none() =>
+            {
+                matches_purpose(event, purpose)
+                    && match purpose {
+                        RecordPurpose::Content => {
+                            permit.source.is_none()
+                                && permit.matches_event(&author.event)
+                                && matches!(&event.payload, Some(Payload::PairEnded(ended))
+                            if ended.as_ref() == &super::mirror::pair_ended(&permit.expected))
+                        }
+                        RecordPurpose::State(actual) => measurement == Some(actual),
+                        RecordPurpose::Flow(actual) => observation == Some(actual),
+                        RecordPurpose::Terminal(source) => permit.source.as_ref() == Some(source),
+                        _ => false,
+                    }
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn retain_boot_filing_record(
+        &mut self,
+        permit: &super::context::BootFilingRollbackPermit,
+    ) -> Result<StoppedStartupRecord, &'static str> {
+        if !permit.matches_record(self) {
+            return Err("boot filing record belongs to another barrier");
+        }
+        Ok(StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        })
+    }
+
+    pub(super) fn pending_classifier_result_matches(
+        &self,
+        reply: &weaver_types::state_flow::Ste100Reply,
+    ) -> bool {
+        matches!(&self.pending, Some((event, RecordPurpose::Classifier(expected)))
+            if expected == reply && event.envelope.turn.is_none())
+            && self
+                .pending_author
+                .as_ref()
+                .is_some_and(|author| author.event.turn.is_none())
+    }
+
+    pub(super) fn retain_template_rollback_record(
+        &mut self,
+        permit: &super::context::TemplateRollbackPermit,
+    ) -> Result<StoppedStartupRecord, &'static str> {
+        if !permit.matches_record(self) {
+            return Err("template rollback lost its exact record");
+        }
+        Ok(StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        })
+    }
+
+    pub(super) fn retain_expired_startup_record(
+        &mut self,
+        permit: &super::context::worker_startup::expired::ExpiredStartupDisposal,
+    ) -> StoppedStartupRecord {
+        assert!(permit.matches_record(&self.author_identity()));
+        StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        }
+    }
+
+    /// Move the exact unadmitted boot record into rollback evidence.
+    pub(super) fn retain_boot_rollback_record(
+        &mut self,
+        permit: &super::context::boot_open_driver::BootReleasePermit,
+    ) -> StoppedStartupRecord {
+        assert!(permit.matches(self), "exact boot author custody");
+        StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        }
     }
 
     /// Release this owner's unadmitted ticket on bounded incomplete teardown.
@@ -1084,6 +1196,72 @@ impl RecordBarrier {
     /// An ordinary event already owed to the trace may land after the halt.
     /// It receives no completion proof, reservation or state copy.
     pub(super) fn resume_trace_only(&mut self) -> Result<Option<Sequence>, weaver_trace::Failure> {
+        self.resume_stopped_record(false)
+    }
+
+    /// The consuming halt closer may spend the matching unused terminal
+    /// reservation on an already pending terminal, retaining its exact ticket.
+    /// A refusal leaves the original pending event untouched.
+    pub(super) fn resume_halt_terminal(
+        &mut self,
+    ) -> Result<Option<Sequence>, weaver_trace::Failure> {
+        self.resume_stopped_record(true)
+    }
+
+    pub(super) fn defer_halt_close(&mut self) -> Option<DeferredHaltClose> {
+        if !self.recorder.tap_stopped()
+            || !self.pending_author.as_ref().is_some_and(|author| {
+                matches!(author.event.kind, Kind::TurnClosed | Kind::SessionClosed)
+            })
+            || self.pending.is_none()
+        {
+            return None;
+        }
+        // Keep the original preparation time. Trace sequence, not timestamp,
+        // orders this close after the earlier obligations settled by its owner.
+        Some(DeferredHaltClose {
+            owner: Arc::clone(&self.author_identity),
+            pending: self.pending.take().unwrap(),
+            author: self.pending_author.take().unwrap(),
+        })
+    }
+
+    /// Keep an unavailable ordinary original without granting a later retry.
+    /// The frozen first-failure account stays unchanged; this also retains an
+    /// exact original whose attempt began after that snapshot.
+    /// Reserved closing records must remain usable after this slot is retired.
+    pub(super) fn retain_halt_record(&mut self) -> Option<StoppedStartupRecord> {
+        if !self.recorder.tap_stopped() || (self.pending.is_none() && self.pending_author.is_none())
+        {
+            return None;
+        }
+        Some(StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        })
+    }
+
+    #[allow(clippy::result_large_err)] // Refusal returns the exact original ticket.
+    pub(super) fn restore_halt_close(
+        &mut self,
+        close: DeferredHaltClose,
+    ) -> Result<(), DeferredHaltClose> {
+        if !self.recorder.tap_stopped()
+            || !Arc::ptr_eq(&self.author_identity, &close.owner)
+            || self.pending.is_some()
+            || self.pending_author.is_some()
+        {
+            return Err(close);
+        }
+        self.pending = Some(close.pending);
+        self.pending_author = Some(close.author);
+        Ok(())
+    }
+
+    fn resume_stopped_record(
+        &mut self,
+        terminal: bool,
+    ) -> Result<Option<Sequence>, weaver_trace::Failure> {
         if !self.recorder.tap_stopped() {
             return Err(weaver_trace::Failure::RefusedOnSubmit {
                 reason: weaver_trace::SubmitRefusal::PayloadMalformed,
@@ -1097,7 +1275,25 @@ impl RecordBarrier {
                 reason: weaver_trace::SubmitRefusal::PayloadMalformed,
             });
         }
-        match self.recorder.submit(event.clone())? {
+        if terminal
+            && !matches!(
+                event.envelope.kind,
+                Kind::ToolCallCompleted
+                    | Kind::MessageToolResult
+                    | Kind::TurnClosed
+                    | Kind::SessionClosed
+            )
+        {
+            return Err(weaver_trace::Failure::RefusedOnSubmit {
+                reason: weaver_trace::SubmitRefusal::PayloadMalformed,
+            });
+        }
+        let attempt = if terminal {
+            SubmitAttempt::Recorded(self.recorder.submit_terminal(event.clone())?)
+        } else {
+            self.recorder.submit(event.clone())?
+        };
+        match attempt {
             SubmitAttempt::CapacityPending(_) => Ok(None),
             SubmitAttempt::Recorded(submission) => {
                 self.pending = None;
@@ -1196,6 +1392,28 @@ mod tests;
 pub(super) struct StoppedReadRecord {
     _pending: Option<(Event, RecordPurpose)>,
     _author: Option<AuthorTicket>,
+}
+#[cfg(test)]
+impl StoppedReadRecord {
+    pub(super) fn test_record(&self) -> Option<(&Event, Option<u64>)> {
+        Some((
+            &self._pending.as_ref()?.0,
+            self._author.as_ref().map(|author| author.ticket),
+        ))
+    }
+}
+
+/// The expired startup's whole unadmitted author moves into terminal custody.
+/// Neither a receipt nor permission to resubmit follows this retained original.
+pub(super) struct StoppedStartupRecord {
+    _pending: Option<(Event, RecordPurpose)>,
+    _author: Option<AuthorTicket>,
+}
+#[cfg(test)]
+impl StoppedStartupRecord {
+    pub(super) fn test_record(&self) -> Option<(&Event, u64)> {
+        Some((&self._pending.as_ref()?.0, self._author.as_ref()?.ticket))
+    }
 }
 
 impl RecordBarrier {

@@ -9,17 +9,21 @@ pub(in crate::flow::context) struct RejectedAuthor {
     pub(super) identity: Arc<()>,
     pub(super) ticket: Option<u64>,
     pub(super) sequence: Option<Sequence>,
+    pub(super) turn: Option<weaver_trace::TurnRef>,
     event: Option<AuthoredEvent>,
     unavailable: Option<String>,
+    stopped_record: Option<crate::flow::recording::StoppedStartupRecord>,
 }
 impl RejectedAuthor {
-    pub(in crate::flow::context) fn new() -> Self {
+    pub(in crate::flow::context) fn new(turn: Option<weaver_trace::TurnRef>) -> Self {
         Self {
             identity: Arc::new(()),
             ticket: None,
             sequence: None,
+            turn,
             event: None,
             unavailable: None,
+            stopped_record: None,
         }
     }
     pub(in crate::flow::context) fn claim(&mut self, identity: &Arc<()>, ticket: u64) -> bool {
@@ -43,6 +47,22 @@ impl OwedRejectedReturn {
 }
 
 impl RecordingContext {
+    /// Retire only this rejection's unrecorded ticket. Its raw packet, event
+    /// and any actual receipt stay owned; no later close may restart this act.
+    pub(super) fn abandon_halt_rejection(&mut self, detail: &str) {
+        let Some(owner) = &mut self.pair_rejected_claim else {
+            return;
+        };
+        if self.phase == RecordingPhase::Failed {
+            if owner.ticket.is_some()
+                && owner.ticket == self.barrier.pending_author().map(|held| held.ticket)
+            {
+                owner.stopped_record = self.barrier.retain_halt_record();
+            }
+            owner.unavailable.get_or_insert_with(|| detail.into());
+        }
+    }
+
     pub(in crate::flow::context) fn bind_rejected_author(&mut self, sequence: Sequence) {
         if let Some(owner) = &mut self.pair_rejected_claim
             && owner.ticket.is_some()
@@ -63,6 +83,9 @@ impl RecordingContext {
         AuthoredEvent {
             kind: Kind::ToolReturnRejected,
             subsystem: Subsystem::Gate,
+            // A return first observed after the turn closed is run-scoped
+            // teardown evidence. Its original CallId, exchange and causal
+            // parent still identify the closed execution; it opens no turn.
             turn: self.open_turn.clone(),
             source: AuthoredSource::Tool,
             causal_parent: record
@@ -87,7 +110,7 @@ impl RecordingContext {
             return Err("returned rejected-return attempt remains with its stopped author".into());
         }
         if self.pair_rejected_claim.is_none() {
-            let mut owner = RejectedAuthor::new();
+            let mut owner = RejectedAuthor::new(self.open_turn.clone());
             owner.event = Some(self.rejected_event());
             self.pair_rejected_claim = Some(owner);
         }
@@ -151,14 +174,20 @@ impl RecordingContext {
         };
         let source = SourcePosition {
             block_id: weaver_types::state_flow::SourceBlockId {
-                run: self.flow.state().identity().1.to_owned(),
+                run: self.flow.run().to_owned(),
                 sequence: sequence.0.into(),
                 block: 0.into(),
             },
-            turn: self.open_turn.as_ref().map(|turn| turn.0.clone()),
+            turn: self
+                .pair_rejected_claim
+                .as_ref()
+                .unwrap()
+                .turn
+                .as_ref()
+                .map(|turn| turn.0.clone()),
         };
         self.pairs
-            .ack_rejection_recorded(source)
+            .ack_halt_rejection_recorded(source)
             .map_err(|error| format!("recorded halt rejection: {error:?}"))?;
         self.pair_rejected_claim = None;
         self.pair_rejected_authoring = false;

@@ -30,6 +30,16 @@ use super::observation::{
 use super::recording::{RecordBarrier, RecordProgress, RecordProof, RecordPurpose};
 use super::report::{HaltLatch, SecondaryFailure};
 
+#[path = "coordinator_expired_templates.rs"]
+mod expired_templates;
+pub(super) use expired_templates::StoppedTemplateCheck;
+#[path = "coordinator_expired_admission.rs"]
+mod expired_admission;
+pub(super) use expired_admission::StoppedClassifierAdmission;
+#[path = "coordinator_expired_boot_filing.rs"]
+mod expired_boot_filing;
+use expired_boot_filing::StoppedBootFiling;
+
 #[path = "output.rs"]
 mod output;
 // The later repair owner names each block capability through this private port.
@@ -351,7 +361,7 @@ struct InputReuse {
     source_sequence: Option<u64>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum PendingRecord {
     Classifier,
     ClassifierRelease,
@@ -383,6 +393,7 @@ pub(super) enum CoordinatorPhase {
 
 /// One consumer reserves before authoring. Its source is bound only by the
 /// recorder's actual completion, before any classification can be reduced.
+#[derive(Debug)]
 struct ReceiptReservation {
     sequence: Option<u64>,
     expected: Vec<SourceBlockId>,
@@ -417,6 +428,7 @@ pub(super) struct FlowCoordinator<P> {
     state_retired: bool,
     unused_open: Option<UnusedOpen>,
     stopped_plan_read: Option<Box<StoppedPlanRead>>,
+    stopped_boot_filing: Option<Box<StoppedBootFiling>>,
     observations: Option<Observation>,
     observation_config: Option<(MeasuredInterval, u64)>,
     scheme: SchemeDeclaration,
@@ -486,6 +498,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             state_retired: false,
             unused_open: None,
             stopped_plan_read: None,
+            stopped_boot_filing: None,
             observations: Some(observations),
             observation_config: None,
             phase: CoordinatorPhase::Active,
@@ -633,6 +646,31 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         let detail = first.detail.clone();
         self.halt = Some(HaltLatch::new(first, leave_deadline));
         self.fail(cx, "halt", detail);
+        // A valid Open can be held across load/activation when failure arrives
+        // before its ordinary measurement is Recorded. FLOW-COUNTS starts at
+        // the actual confirmation, not at release of that measurement. Retain
+        // that original timestamp for the final sample without releasing the
+        // completion, authoring a measurement, or inventing a pre-open clock.
+        if self.observations.is_none()
+            && self.open_pending
+            && let Some(confirmed) = self.state.as_ref().and_then(|state| {
+                state.opened_identity()?;
+                state
+                    .held_measurement()
+                    .map(|measurement| measurement.harness_received_ns.0)
+            })
+            && let Some((interval, alarm)) = self.observation_config.take()
+        {
+            match Observation::new(self.run.clone(), confirmed, interval, alarm) {
+                Ok(owner) => self.observations = Some(owner),
+                Err(error) => {
+                    self.snapshot_failure = Some(FlowFailure {
+                        point: "observation",
+                        detail: error.to_string(),
+                    })
+                }
+            }
+        }
         if self.observations.is_none() {
             return;
         }
@@ -1368,6 +1406,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             state_retired: false,
             unused_open: None,
             stopped_plan_read: None,
+            stopped_boot_filing: None,
             observations: None,
             observation_config: Some((observation_interval, lag_alarm_turns)),
             scheme,
@@ -1476,6 +1515,10 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     }
 
     fn settled_except_author(&self, cx: &FlowRecording<'_>) -> bool {
+        self.settled_except_author_and_admission(cx) && self.admission_completion.is_none()
+    }
+
+    fn settled_except_author_and_admission(&self, cx: &FlowRecording<'_>) -> bool {
         self.receipt_reservation.is_none()
             && self.output_checks.is_none()
             && self.instruction_check.is_none()
@@ -1492,7 +1535,6 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             && self.reuse.is_none()
             && self.state_operation.is_none()
             && self.check_operation.is_none()
-            && self.admission_completion.is_none()
     }
 
     pub(super) fn unused_open(&self) -> Option<&UnusedOpen> {
@@ -1536,6 +1578,44 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         _io: &mut impl PumpIo,
     ) -> Result<Advance, FlowFailure> {
         self.require_enter_rollback(cx)?;
+        self.retire_unactivated_open(cx)
+    }
+
+    /// The consuming startup owner supplies actual expired Enter and accepted
+    /// rollback evidence. A loaded, unactivated bracket needs no refusal first.
+    pub(super) fn begin_expired_preflight_rollback(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        permit: &super::context::worker_startup::expired::preflight::ExpiredPreflightPermit,
+    ) -> Result<Advance, FlowFailure> {
+        self.observe_failures(cx)?;
+        if !permit.matches_record(&cx.barrier.author_identity())
+            || self.phase != CoordinatorPhase::Preflight
+            || !cx.barrier.is_loaded()
+            || cx.barrier.is_active()
+            || cx.barrier.is_refused()
+            || !self.open_pending
+            || self.observations.is_some()
+            || self.state_retired
+            || self.classifier_retired
+            || self.unused_open.is_some()
+            || self.classifier.is_some()
+            || self.starting_classifier.is_some()
+            || !self.clean_obligations(cx)
+        {
+            return Err(self.fail(
+                cx,
+                "barrier",
+                "expired preflight rollback lost its original bracket",
+            ));
+        }
+        self.retire_unactivated_open(cx)
+    }
+
+    fn retire_unactivated_open(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<Advance, FlowFailure> {
         let Some(owner) = &mut self.state else {
             return Err(self.fail(cx, "barrier", "enter rollback lost its state owner"));
         };
@@ -1605,7 +1685,19 @@ impl<P: Ste100Port> FlowCoordinator<P> {
     pub(super) fn begin_plan_read_rollback(
         &mut self,
         cx: &mut FlowRecording<'_>,
-        permit: &super::context::plan_summary_driver::PlanReadRollbackPermit,
+        permit: &super::context::ReadRollbackPermit,
+    ) -> Result<(), FlowFailure> {
+        self.park_boot_read_rollback(cx, permit)?;
+        self.close_parked_boot_read();
+        Ok(())
+    }
+
+    /// Remove only this read's slots from the pump while retaining its live
+    /// endpoint. The composed rollback closes it after actual classifier reap.
+    pub(super) fn park_boot_read_rollback(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        permit: &super::context::ReadRollbackPermit,
     ) -> Result<(), FlowFailure> {
         // Deliberately do not call require_active/live after expired Enter.
         // Every waived obligation below must belong to this exact read.
@@ -1629,9 +1721,11 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         });
         let pending_matches = match self.pending_record {
             None => !permit.measurement_pending(),
-            Some(PendingRecord::State | PendingRecord::StateRelease) => {
+            Some(PendingRecord::State) => expected.is_some() && permit.measurement_pending(),
+            Some(PendingRecord::StateRelease) => {
                 expected.is_some()
-                    && (permit.measurement_pending() || cx.barrier.pending().is_none())
+                    && cx.barrier.pending().is_none()
+                    && cx.barrier.pending_author().is_none()
             }
             _ => false,
         };
@@ -1679,12 +1773,8 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                 detail: detail.into(),
             })?;
         let state = self.state.take().expect("validated exact read channel");
-        // Remove the descriptor from the common pump before shutdown. Partial
-        // frames and received answers remain owned here through final close.
-        let close_error = state
-            .close_failed_read()
-            .err()
-            .map(|error| error.to_string());
+        // This is custody, not closure. Partial frames and received answers
+        // remain owned while the classifier is still alive.
         self.stopped_plan_read = Some(Box::new(StoppedPlanRead {
             _state: state,
             _operation: self.state_operation.take(),
@@ -1693,16 +1783,58 @@ impl<P: Ste100Port> FlowCoordinator<P> {
             _recorded_ns: self.state_recorded_ns.take(),
             _release_timing: self.state_release_timing.take(),
             _record: record,
-            close_error,
+            close_error: None,
         }));
-        self.state_retired = true;
         self.phase = CoordinatorPhase::Releasing;
         Ok(())
+    }
+
+    fn close_parked_boot_read(&mut self) -> weaver_trace::MemberRelease {
+        let read = self.stopped_plan_read.as_mut().expect("parked boot read");
+        read.close_error = read
+            ._state
+            .close_failed_read()
+            .err()
+            .map(|error| error.to_string());
+        self.state_retired = true;
+        if read.close_error.is_some() {
+            weaver_trace::MemberRelease::Unconfirmed
+        } else {
+            weaver_trace::MemberRelease::Closed
+        }
+    }
+
+    pub(super) fn retire_parked_boot_read(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<weaver_trace::MemberRelease, FlowFailure> {
+        self.observe_failures(cx)?;
+        if self.phase != CoordinatorPhase::Releasing
+            || self.state_retired
+            || self.state.is_some()
+            || self.stopped_plan_read.is_none()
+            || !self.classifier_retired
+            || self.starting_classifier.is_some()
+            || !self.clean_obligations(cx)
+        {
+            return Err(self.fail(
+                cx,
+                "barrier",
+                "parked read release requires retired classifier and settled evidence",
+            ));
+        }
+        Ok(self.close_parked_boot_read())
     }
     pub(super) fn stopped_plan_read_close_error(&self) -> Option<&str> {
         self.stopped_plan_read
             .as_ref()
             .and_then(|account| account.close_error.as_deref())
+    }
+    #[cfg(test)]
+    pub(super) fn test_parked_read_record(
+        &self,
+    ) -> Option<(&weaver_trace::serving::Event, Option<u64>)> {
+        self.stopped_plan_read.as_ref()?._record.test_record()
     }
 
     pub(super) fn require_releasing(
@@ -1777,7 +1909,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         if self.phase != CoordinatorPhase::Releasing
             || self.classifier_retired
             || self.starting_classifier.is_some()
-            || !self.clean_obligations(cx)
+            || !self.releasing_obligations(cx)
             || self
                 .classifier
                 .as_ref()
@@ -1808,7 +1940,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         if self.phase != CoordinatorPhase::Releasing
             || !self.state_retired
             || !self.classifier_retired
-            || !self.clean_obligations(cx)
+            || !self.releasing_obligations(cx)
         {
             return Err(self.fail(
                 cx,
@@ -2800,6 +2932,16 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         io: &mut impl PumpIo,
     ) -> Result<(), FlowFailure> {
         self.observe_failures(cx)?;
+        if self
+            .stopped_boot_filing
+            .as_ref()
+            .is_some_and(|held| held.parked)
+        {
+            if !self.retained_boot_filing(cx) {
+                return Err(self.fail(cx, "copy_intake", "stopped boot filing inventory changed"));
+            }
+            return Ok(());
+        }
         if self.phase != CoordinatorPhase::Active {
             if cx.inbox.queued().next().is_some() || cx.budget.waiting_copy().is_some() {
                 return Err(self.fail(cx, "copy_intake", "content reached a non-active flow"));
@@ -3865,7 +4007,10 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
     }
 
     pub(super) fn failed_cleanup_state_stood(&self) -> bool {
-        self.state.is_some() || self.state_retired || self.stopped_plan_read.is_some()
+        self.state.is_some()
+            || self.state_retired
+            || self.stopped_plan_read.is_some()
+            || self.stopped_boot_filing.is_some()
     }
     pub(super) fn failed_cleanup_state_failed(&self) -> bool {
         self.state
@@ -3874,6 +4019,10 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
             || self.stopped_plan_read.as_ref().is_some_and(|owner| {
                 owner._state.failure().is_some() || owner.close_error.is_some()
             })
+            || self
+                .stopped_boot_filing
+                .as_ref()
+                .is_some_and(|owner| owner.failed())
     }
 
     /// Prove that every retained control/measurement slot belongs to this
@@ -3972,9 +4121,11 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
     }
 
     pub(super) fn preinput_failed_owner(&self) -> bool {
-        self.phase == CoordinatorPhase::Failed
-            && self.halt.is_some()
-            && self.last_input_id == 0
+        self.phase == CoordinatorPhase::Failed && self.halt.is_some() && self.preinput_custody()
+    }
+
+    pub(super) fn preinput_custody(&self) -> bool {
+        self.last_input_id == 0
             && self.input_account.is_none()
             && self.reuse.is_none()
             && self.capture.is_none()
@@ -3990,6 +4141,46 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
         if !self.preinput_failed_owner() {
             return None;
         }
+        Some(self.retire_failed_ports_owned())
+    }
+
+    /// The consuming serving cleanup retains the entire frozen coordinator.
+    /// No live grant, filing or healthy release is produced by closing its FDs.
+    pub(super) fn retire_failed_serving_ports(&mut self) -> Option<FailedFlowResources> {
+        if self.phase != CoordinatorPhase::Failed || self.halt.is_none() || self.capture.is_some() {
+            return None;
+        }
+        Some(self.retire_failed_ports_owned())
+    }
+
+    /// Consuming rollback uses this only after its actual Leave expired or its
+    /// terminal Unload was Recorded. No halt, new completion or live grant is
+    /// synthesized; all framing/partial-request evidence stays owned.
+    pub(super) fn retire_abandoned_rollback_ports(&mut self) -> Option<FailedFlowResources> {
+        self.preinput_custody()
+            .then(|| self.retire_failed_ports_owned())
+    }
+
+    /// Unadmitted Enter disposal closes only actual owned endpoints. A Load
+    /// receipt forbids this road even before semantic activation has completed.
+    pub(super) fn retire_unadmitted_ports(
+        &mut self,
+        barrier: &super::recording::RecordBarrier,
+    ) -> Option<FailedFlowResources> {
+        (!barrier.is_loaded()
+            && matches!(
+                self.phase,
+                CoordinatorPhase::Preflight | CoordinatorPhase::Opening
+            )
+            && self.halt.is_none()
+            && self.preinput_custody()
+            && self.classifier.is_none()
+            && self.starting_classifier.is_none())
+        .then(|| self.retire_failed_ports_owned())
+    }
+
+    fn retire_failed_ports_owned(&mut self) -> FailedFlowResources {
+        self.retire_stopped_boot_filing_transport();
         let retired = FailedFlowResources {
             state: self.state.take().map(StateChannel::retire_failed),
             _stopped_plan_read: self
@@ -4007,7 +4198,7 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
         };
         self.state_retired = true;
         self.classifier_retired = true;
-        Some(retired)
+        retired
     }
 
     pub(super) fn begin_classifier_admission(

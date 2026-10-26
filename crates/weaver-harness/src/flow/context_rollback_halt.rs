@@ -1,5 +1,5 @@
 //! Accepted rollback failure -> bounded fault/owed measurement -> retired ports.
-//! The no-SPU terminal Unload representation is not elected by this handoff.
+//! This private handoff retains the account; its outer owner completes terminal cleanup.
 use super::*;
 use crate::flow::coordinator::FailedFlowResources;
 use crate::flow::halt_snapshot::ExternalFacts;
@@ -13,6 +13,7 @@ pub(in crate::flow) struct FailedRollbackRead {
     pub(in crate::flow) ticket: Option<u64>,
     pub(in crate::flow) trace_sequence: Option<Sequence>,
     pub(in crate::flow) unavailable: Option<String>,
+    attempted: bool,
 }
 
 /// Every original owner remains attached to the same borrowed run. Transport
@@ -24,6 +25,7 @@ pub(in crate::flow) struct RetiredFailedRollback<'a> {
     enter_send: Option<OrganSend>,
     enter_returned: Option<OrganEnvelope>,
     enter_stop: Option<ResponseStop>,
+    _original_enter: Option<crate::flow::pump::enter::DetachedEnter>,
     peer: RetiredLifecyclePeer,
     dials: listener::RetiredRollbackDials,
     directive: LifecycleMessage,
@@ -71,17 +73,10 @@ impl<'a> RollbackComposition<'a> {
         let Some(halt_deadline) = context.flow.halt().and_then(|halt| halt.deadline().ok()) else {
             return Err(self);
         };
-        let Ok((bound, request_id, ticket)) = context.stopped_rollback_grants(self.leave) else {
+        let Ok(mut read) = FailedRollbackRead::capture(context, self.leave) else {
             return Err(self);
         };
         let deadline = halt_deadline.min(self.leave.deadline_ns());
-        let mut read = FailedRollbackRead {
-            bound,
-            request_id,
-            ticket,
-            trace_sequence: None,
-            unavailable: Some("current Grants stopped before a live completion".into()),
-        };
         let mut expired = !before_cap(context, io, deadline);
         let mut report_unavailable = None;
         let mut account_failure = None;
@@ -120,44 +115,11 @@ impl<'a> RollbackComposition<'a> {
         if !expired {
             expired = !before_cap(context, io, deadline);
         }
-        if let Some(ticket) = ticket {
-            if !expired {
-                expired = !before_cap(context, io, deadline);
-            }
-            if expired || bound.expired(context.last_ns) {
-                read.unavailable = Some(
-                    "owed Grants measurement reached its original bound or clock failed".into(),
-                );
-            } else if !context
-                .halt_report
-                .as_ref()
-                .is_some_and(HaltReport::attempted)
-            {
-                read.unavailable =
-                    Some("first fault attempt unavailable; measurement retained".into());
-            } else if context.barrier.pending_author().map(|author| author.ticket) != Some(ticket) {
-                read.unavailable = Some("owed Grants measurement lost its exact ticket".into());
-            } else {
-                match context.resume_trace_only_and_bind() {
-                    Ok(Some(sequence))
-                        if context.barrier.recorded_author_ticket(sequence) == Some(ticket) =>
-                    {
-                        // Keep the actual sequence before any further clock read.
-                        read.trace_sequence = Some(sequence);
-                    }
-                    Ok(None) => {
-                        read.unavailable =
-                            Some("owed Grants measurement has no ordinary trace capacity".into())
-                    }
-                    other => {
-                        read.unavailable =
-                            Some(format!("owed Grants measurement unavailable: {other:?}"))
-                    }
-                }
-            }
-        }
         if !expired {
-            expired = !before_cap(context, io, deadline);
+            expired = !read.record_once(context, io, deadline);
+        } else if read.ticket.is_some() {
+            read.unavailable =
+                Some("owed Grants measurement reached its original bound or clock failed".into());
         }
         // Frozen request, partial bytes, held answer, pending author and original
         // inspection all survive. Retirement cannot mint InspectionEvidence.
@@ -190,6 +152,7 @@ impl<'a> RollbackComposition<'a> {
             send,
             returned,
             stop: enter_stop,
+            original,
             ..
         } = response;
         Ok(RetiredFailedRollback {
@@ -198,6 +161,7 @@ impl<'a> RollbackComposition<'a> {
             enter_send: send,
             enter_returned: returned,
             enter_stop,
+            _original_enter: original,
             peer: peer.retire_failed(),
             dials: dials.retire_failed(),
             directive,
@@ -211,6 +175,73 @@ impl<'a> RollbackComposition<'a> {
             account_failure,
             expired,
         })
+    }
+}
+
+impl FailedRollbackRead {
+    pub(in crate::flow::context) fn capture(
+        context: &RecordingContext,
+        leave: AbsoluteBound,
+    ) -> Result<Self, &'static str> {
+        let (bound, request_id, ticket) = context.stopped_rollback_grants(leave)?;
+        Ok(Self {
+            bound,
+            request_id,
+            ticket,
+            trace_sequence: None,
+            attempted: false,
+            unavailable: Some("current Grants stopped before a live completion".into()),
+        })
+    }
+    /// One nonblocking trace-only attempt. No new control, live completion or
+    /// ordinary-capacity wait may precede mandatory terminal work.
+    pub(in crate::flow::context) fn record_once(
+        &mut self,
+        context: &mut RecordingContext,
+        io: &mut impl PumpIo,
+        deadline: u64,
+    ) -> bool {
+        if self.attempted {
+            return true;
+        }
+        self.attempted = true;
+        if !before_cap(context, io, deadline) {
+            self.unavailable =
+                Some("owed Grants measurement reached its original bound or clock failed".into());
+            return false;
+        }
+        let Some(ticket) = self.ticket else {
+            return true;
+        };
+        if self.bound.expired(context.last_ns) {
+            self.unavailable =
+                Some("owed Grants measurement reached its original bound or clock failed".into());
+        } else if !context
+            .halt_report
+            .as_ref()
+            .is_some_and(HaltReport::attempted)
+        {
+            self.unavailable = Some("first fault attempt unavailable; measurement retained".into());
+        } else if context.barrier.pending_author().map(|author| author.ticket) != Some(ticket) {
+            self.unavailable = Some("owed Grants measurement lost its exact ticket".into());
+        } else {
+            match context.resume_trace_only_and_bind() {
+                Ok(Some(sequence))
+                    if context.barrier.recorded_author_ticket(sequence) == Some(ticket) =>
+                {
+                    self.trace_sequence = Some(sequence);
+                }
+                Ok(None) => {
+                    self.unavailable =
+                        Some("owed Grants measurement has no ordinary trace capacity".into())
+                }
+                other => {
+                    self.unavailable =
+                        Some(format!("owed Grants measurement unavailable: {other:?}"))
+                }
+            }
+        }
+        before_cap(context, io, deadline)
     }
 }
 

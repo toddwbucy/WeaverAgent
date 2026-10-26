@@ -517,3 +517,189 @@ fn replacement_enter_sender_bounds_whole_packet_before_transferring_descriptors(
         }
     }
 }
+
+#[test]
+fn original_enter_window_bounds_dial_send_pressure_and_already_readable_late_ready() {
+    use crate::serving_load::window::LoadWindow;
+    use std::os::fd::AsFd;
+    use std::os::unix::net::UnixStream;
+    let dir = scratch("enter-window");
+    let window = LoadWindow::begin(Duration::from_millis(20)).unwrap();
+    let before = Instant::now();
+    assert!(matches!(
+        dial_for_enter(
+            &dir.join("absent.sock"),
+            nix::unistd::getuid().as_raw(),
+            &dir.0,
+            &window
+        ),
+        Err(ChannelFault::Unanswered)
+    ));
+    assert!(before.elapsed() < Duration::from_millis(500));
+    let (end, far) = nix::sys::socket::socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+    let owner = Coordination::adopt(end);
+    let (sink, _sink_reader) = UnixStream::pair().unwrap();
+    let (state, _state_reader) = UnixStream::pair().unwrap();
+    let filler = vec![b'x'; 1024];
+    loop {
+        match nix::sys::socket::send(
+            owner.fd.as_raw_fd(),
+            &filler,
+            MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL,
+        ) {
+            Ok(_) => {}
+            Err(nix::errno::Errno::EAGAIN) => break,
+            result => panic!("pressure fixture: {result:?}"),
+        }
+    }
+    let window = LoadWindow::begin(Duration::from_millis(20)).unwrap();
+    let mut envelope: weaver_types::state_flow::enter::EnterEnvelope =
+        weaver_types::state_flow::enter::EnterEnvelope::decode(include_bytes!(
+            "../../../weaver-types/tests/fixtures/state-enter.json"
+        ))
+        .unwrap();
+    let weaver_types::state_flow::enter::EnterContent::Directive(
+        weaver_types::state_flow::enter::EnterDirective::Enter { payload },
+    ) = &mut envelope.payload;
+    let weaver_types::state_flow::enter::EnterBinding::Serving { enter_window, .. } =
+        &mut payload.binding
+    else {
+        panic!()
+    };
+    *enter_window = window.original();
+    assert_eq!(
+        owner.send_replacement_enter_within(&envelope, sink.as_fd(), state.as_fd(), &window),
+        Err(ChannelFault::Unanswered)
+    );
+    let mut bytes = vec![0; MAX_ENVELOPE_BYTES];
+    loop {
+        match nix::sys::socket::recv(far.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
+            Ok(n) => assert_eq!(&bytes[..n], filler, "no Enter transferred after expiry"),
+            Err(nix::errno::Errno::EAGAIN) => break,
+            result => panic!("drain: {result:?}"),
+        }
+    }
+    let ready = OrganEnvelope {
+        exchange: envelope.exchange,
+        position: Position::Close,
+        payload: Payload::Answer(weaver_types::LifecycleAnswer::Ready),
+    };
+    Coordination::adopt(far).send(&ready).unwrap();
+    assert_eq!(
+        owner.recv_enter_answer(&window),
+        Err(ChannelFault::Unanswered),
+        "readiness cannot admit late Ready"
+    );
+}
+
+#[test]
+fn original_enter_window_and_both_descriptors_cross_once_before_timely_ready() {
+    use crate::serving_load::window::LoadWindow;
+    use std::os::fd::{AsFd, FromRawFd};
+    use std::os::unix::net::UnixStream;
+    use weaver_types::state_flow::enter::{
+        EnterBinding, EnterContent, EnterDirective, EnterEnvelope,
+    };
+    let (end, far) = nix::sys::socket::socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+    let owner = Coordination::adopt(end);
+    let (sink, _reader) = UnixStream::pair().unwrap();
+    let (state, _member) = UnixStream::pair().unwrap();
+    let window = LoadWindow::begin(Duration::from_secs(2)).unwrap();
+    let mut envelope = EnterEnvelope::decode(include_bytes!(
+        "../../../weaver-types/tests/fixtures/state-enter.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        owner.send_replacement_enter_within(&envelope, sink.as_fd(), state.as_fd(), &window),
+        Err(ChannelFault::Undecodable),
+        "the producer cannot substitute a different wire window"
+    );
+    let EnterContent::Directive(EnterDirective::Enter { payload }) = &mut envelope.payload;
+    let EnterBinding::Serving { enter_window, .. } = &mut payload.binding else {
+        panic!()
+    };
+    *enter_window = window.original();
+    owner
+        .send_replacement_enter_within(&envelope, sink.as_fd(), state.as_fd(), &window)
+        .unwrap();
+    let mut buffer = vec![0; MAX_ENVELOPE_BYTES];
+    let mut slices = [std::io::IoSliceMut::new(&mut buffer)];
+    let mut controls = nix::cmsg_space!([i32; 2]);
+    let received = nix::sys::socket::recvmsg::<()>(
+        far.as_raw_fd(),
+        &mut slices,
+        Some(&mut controls),
+        MsgFlags::MSG_CMSG_CLOEXEC,
+    )
+    .unwrap();
+    let count = received.bytes;
+    let mut gifts = Vec::new();
+    for control in received.cmsgs().unwrap() {
+        if let nix::sys::socket::ControlMessageOwned::ScmRights(fds) = control {
+            for fd in fds {
+                // SAFETY: each returned SCM_RIGHTS descriptor has one owner here.
+                gifts.push(unsafe { OwnedFd::from_raw_fd(fd) });
+            }
+        }
+    }
+    assert_eq!(gifts.len(), 2);
+    assert_eq!(EnterEnvelope::decode(&buffer[..count]).unwrap(), envelope);
+    let mut byte = [0];
+    assert_eq!(
+        nix::sys::socket::recv(far.as_raw_fd(), &mut byte, MsgFlags::MSG_DONTWAIT),
+        Err(nix::errno::Errno::EAGAIN),
+        "no duplicated Enter"
+    );
+    let ready = OrganEnvelope {
+        exchange: envelope.exchange,
+        position: Position::Close,
+        payload: Payload::Answer(weaver_types::LifecycleAnswer::Ready),
+    };
+    Coordination::adopt(far).send(&ready).unwrap();
+    assert_eq!(owner.recv_enter_answer(&window).unwrap(), ready);
+}
+
+#[test]
+fn original_enter_window_rechecks_after_actual_receipt_and_delayed_decode() {
+    let (end, far) = nix::sys::socket::socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+    let owner = Coordination::adopt(end);
+    let ready = OrganEnvelope {
+        exchange: ExchangeId {
+            opener: Opener::Admin,
+            ordinal: 1,
+        },
+        position: Position::Close,
+        payload: Payload::Answer(weaver_types::LifecycleAnswer::Ready),
+    };
+    Coordination::adopt(far).send(&ready).unwrap();
+    let window = crate::serving_load::window::LoadWindow::begin(Duration::from_millis(20)).unwrap();
+    let decoded = std::cell::Cell::new(false);
+    let result = owner.recv_enter_answer_with(&window, |bytes| {
+        let answer = serde_json::from_slice(bytes).map_err(|_| ChannelFault::Undecodable)?;
+        decoded.set(true);
+        // The real packet was received in time. A paused decoder spends the same
+        // real clock budget; readiness must not authorize the later Ready.
+        std::thread::sleep(Duration::from_millis(30));
+        Ok(answer)
+    });
+    assert!(decoded.get());
+    assert_eq!(result, Err(ChannelFault::Unanswered));
+}

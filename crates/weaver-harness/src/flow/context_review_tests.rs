@@ -181,7 +181,10 @@ fn final_drain_rechecks_leave_deadline_and_resumes_the_same_closed_coordinator()
                 cause: None,
                 forced: false,
                 forced_by: None,
-                release: None,
+                release: serving::payloads::Release {
+                    spu: None,
+                    member: None
+                },
                 end_reason: None,
                 state_flow_failure: None,
             }))),

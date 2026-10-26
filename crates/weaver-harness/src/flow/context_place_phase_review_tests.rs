@@ -265,6 +265,14 @@ fn place_phase_review_completed_releasing_reload_keeps_bounded_account_ownership
         .begin_place_release(leave, &mut run.clock)
         .unwrap();
     assert_eq!(run.context.phase(), RecordingPhase::Releasing);
+    for _ in 0..4 {
+        assert_eq!(
+            fx.account_step().unwrap(),
+            PlaceProgress::Pending,
+            "an unanswered cut offers no account progress before mandatory Closing"
+        );
+        assert_eq!(fx.run().context.deadlines.get(PumpDeadline::Cut), Some(cut));
+    }
     let raw = fx.answer(&TokenAnswer::Flushed {
         resident_before: resident,
         resident_after: n,

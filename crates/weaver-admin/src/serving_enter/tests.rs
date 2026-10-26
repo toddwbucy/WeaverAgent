@@ -5,6 +5,10 @@ use std::fs;
 
 fn facts() -> RuntimeFacts {
     RuntimeFacts {
+        enter_window: weaver_types::state_flow::EnterWindow {
+            began_ns: 0.into(),
+            deadline_ns: 1_000_000_000_000_000_000.into(),
+        },
         run: RunId("composed-run".into()),
         reset: None,
         stack: BTreeMap::new(),

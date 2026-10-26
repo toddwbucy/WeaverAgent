@@ -68,6 +68,7 @@ pub(super) fn exercise(
     if mode.contains("pressure") {
         assert!(fill_trace(input.serving.owner.context, clock) > 0);
     }
+    super::super::halt::exit::tests::pending_close(input, clock, mode);
     if mode.contains("halt-gate-worker") {
         clock.advance_to(MonotonicIo.now().unwrap()).unwrap();
     }
@@ -264,7 +265,7 @@ pub(super) fn exercise(
     assert!(!root.join("external-3.json").exists());
     assert!(!root.join("closed.json").exists());
     member.assert_no_request();
-    if !mode.contains("trace-loss") {
+    if !(mode.contains("trace-loss") || mode.contains("-exit") && mode.contains("pressure-hold")) {
         let through = context.barrier.recorder().boundary().admitted.unwrap();
         if records
             .last()
@@ -297,6 +298,16 @@ pub(super) fn exercise(
     assert_eq!(owned.test_management().map(halt_facts), management);
     if let Some(peer) = &peer {
         assert!(nix::fcntl::fcntl(peer, nix::fcntl::FcntlArg::F_GETFD).is_ok());
+    }
+    if mode.contains("-exit") {
+        super::super::halt::exit::tests::stage_prior_world(
+            halt.0.as_mut().unwrap().test_input(),
+            clock,
+            mode,
+        );
+        let handoff = halt.0.take().unwrap().handoff().ok().unwrap();
+        super::super::halt::exit::tests::retain(handoff, records);
+        return;
     }
     match halt.0.take().unwrap().into_test_owner() {
         Ok(input) => guard.input = Some(input),

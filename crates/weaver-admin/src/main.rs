@@ -1141,6 +1141,30 @@ thread_local! {
 /// must hold the run lock in the agent's run directory. An account that does not resolve
 /// stands no worker, and the dial is refused as one nothing could answer.
 fn dial_worker(config: &ServiceConfig) -> Result<channel::Coordination, channel::ChannelFault> {
+    let worker_uid = worker_uid(config)?;
+    channel::dial(
+        &config.coordination_socket(),
+        worker_uid,
+        &config.run_directory(),
+    )
+}
+
+fn dial_worker_for_enter(
+    config: &ServiceConfig,
+    window: &serving_load::window::LoadWindow,
+) -> Result<channel::Coordination, channel::ChannelFault> {
+    window.check_channel()?;
+    let uid = worker_uid(config)?;
+    window.check_channel()?;
+    channel::dial_for_enter(
+        &config.coordination_socket(),
+        uid,
+        &config.run_directory(),
+        window,
+    )
+}
+
+fn worker_uid(config: &ServiceConfig) -> Result<u32, channel::ChannelFault> {
     let identity = inventory::identity_for(&AgentName(config.agent.clone()));
     let worker_uid = match nix::unistd::User::from_name(&identity).ok().flatten() {
         Some(worker) => worker.uid.as_raw(),
@@ -1159,11 +1183,7 @@ fn dial_worker(config: &ServiceConfig) -> Result<channel::Coordination, channel:
             return Err(channel::ChannelFault::NotDialable);
         }
     };
-    channel::dial(
-        &config.coordination_socket(),
-        worker_uid,
-        &config.run_directory(),
-    )
+    Ok(worker_uid)
 }
 
 /// **Observes the run through the harness's own word**, per Spec section 3

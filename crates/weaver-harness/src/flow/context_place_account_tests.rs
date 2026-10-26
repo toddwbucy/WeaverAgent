@@ -74,7 +74,11 @@ fn slow_generation_account(failed: bool) {
     }
     let mut cancel = None;
     for _ in 0..32 {
-        fx.account_step().unwrap();
+        assert_eq!(
+            fx.account_step().unwrap(),
+            PlaceProgress::Pending,
+            "an unanswered generation offers no account progress before mandatory Closing"
+        );
         if let Some(raw) = receive(fx.peer.as_fd()) {
             cancel = Some(serde_json::from_slice::<TokenDirective>(&raw).unwrap());
             break;
@@ -89,6 +93,11 @@ fn slow_generation_account(failed: bool) {
     );
     let terminal = generated(before.1, 3, 1, "Read result.", Finish::Stopped, before.2);
     let raw = fx.answer(&TokenAnswer::Generated(terminal));
+    assert_eq!(
+        fx.account_step().unwrap(),
+        PlaceProgress::Progress,
+        "a received terminal exposes owed records even while Cancel still waits for AtRest"
+    );
     for _ in 0..8 {
         fx.account_step().unwrap();
         assert!(

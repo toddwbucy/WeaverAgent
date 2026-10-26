@@ -15,6 +15,81 @@ pub mod session;
 pub type FailedOwner<'a> =
     Result<Box<FoundationInput<'a>>, Box<weaver_harness::FoundationManagement<'a>>>;
 
+/// Finish stopped rollback under its original accepted Leave/halt deadline.
+/// The returned Closed evidence grants only failed worker exit, never Left.
+#[allow(clippy::result_large_err)]
+pub fn failed_rollback_exit(
+    run: Box<FoundationRun>,
+    handoff: Box<weaver_harness::FoundationRollbackHandoff>,
+) -> Result<
+    Box<weaver_harness::FoundationRollbackExit>,
+    (
+        Box<FoundationRun>,
+        Box<weaver_harness::FoundationRollbackHandoff>,
+    ),
+> {
+    let mut owner = run.failed_rollback_exit(handoff)?;
+    loop {
+        match owner.advance() {
+            weaver_harness::FoundationRollbackExitProgress::Progress => {}
+            weaver_harness::FoundationRollbackExitProgress::Pending => {
+                owner.wait_for_progress();
+            }
+            weaver_harness::FoundationRollbackExitProgress::Closed => return Ok(owner),
+        }
+    }
+}
+
+/// Finish the original latched startup failure. A refused join retains both
+/// inputs; Closed grants only failed worker exit, never lifecycle Left.
+#[allow(clippy::result_large_err)]
+pub fn failed_startup_exit(
+    run: Box<FoundationRun>,
+    handoff: Box<weaver_harness::FoundationStartupHandoff>,
+) -> Result<
+    Box<weaver_harness::FoundationStartupExit>,
+    (
+        Box<FoundationRun>,
+        Box<weaver_harness::FoundationStartupHandoff>,
+    ),
+> {
+    let mut owner = run.failed_startup_exit(handoff)?;
+    loop {
+        match owner.advance() {
+            weaver_harness::FoundationStartupExitProgress::Progress => {}
+            weaver_harness::FoundationStartupExitProgress::Pending => {
+                owner.wait_for_progress();
+            }
+            weaver_harness::FoundationStartupExitProgress::Closed => return Ok(owner),
+        }
+    }
+}
+
+/// Continue the original failed run from its consumed serving seat. Only this
+/// loop waits; the harness transitions keep every actual resource and receipt.
+#[allow(clippy::result_large_err)]
+pub fn failed_exit(
+    run: Box<FoundationRun>,
+    handoff: Box<weaver_harness::FoundationFailedHandoff>,
+) -> Result<
+    Box<weaver_harness::FoundationFailedExit>,
+    (
+        Box<FoundationRun>,
+        Box<weaver_harness::FoundationFailedHandoff>,
+    ),
+> {
+    let mut owner = run.failed_exit(handoff)?;
+    loop {
+        match owner.advance() {
+            weaver_harness::FoundationExitProgress::Progress => {}
+            weaver_harness::FoundationExitProgress::Pending => {
+                owner.wait_for_progress();
+            }
+            weaver_harness::FoundationExitProgress::Closed => return Ok(owner),
+        }
+    }
+}
+
 /// Drive the retained failed owner only through report and gate interruption.
 /// The result still owes closing, actual release and final failed drain.
 pub fn halt(
@@ -193,4 +268,20 @@ pub unsafe fn enter(
     // A stopped stage returns the exact owner. It is not a retry, a successful
     // Enter or a completed failed-run cleanup.
     Ok(owner.finish())
+}
+
+/// Complete the explicit rollback of a recorded classifier refusal. Every
+/// stopped chain is returned whole for the failed-startup owner; it grants no
+/// successful Enter, retry, or Left. Awaiting root uses the same owned listener.
+pub fn rollback(
+    mut owner: Box<weaver_harness::FoundationRollback<'_>>,
+) -> Box<weaver_harness::FoundationRollback<'_>> {
+    use weaver_harness::FoundationRollbackProgress as Progress;
+    while matches!(
+        owner.progress(),
+        Progress::Pending | Progress::AwaitRollback
+    ) {
+        owner.advance();
+    }
+    owner
 }
