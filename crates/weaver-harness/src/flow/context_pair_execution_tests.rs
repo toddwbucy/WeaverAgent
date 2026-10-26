@@ -1061,6 +1061,15 @@ fn matching_final_answer_after_eof_keeps_successful_send_and_terminal_custody() 
 
 #[test]
 fn duplicate_after_batch_release_is_recorded_without_another_terminal_or_filing() {
+    duplicate_after_batch_release(RecordingPhase::Entered);
+}
+
+#[test]
+fn duplicate_return_recording_keeps_its_release_phase_admission() {
+    duplicate_after_batch_release(RecordingPhase::Releasing);
+}
+
+fn duplicate_after_batch_release(phase: RecordingPhase) {
     let mut fx = fixture(true);
     let call = ready(&mut fx);
     let (mut gate, peer) = gate();
@@ -1080,6 +1089,10 @@ fn duplicate_after_batch_release_is_recorded_without_another_terminal_or_filing(
         .unwrap()
         .unwrap();
     assert!(fx.output.input.run.context.pair_work.is_none());
+
+    // Isolate the author phase gate after the real completed-batch handoff.
+    // This is not a lifecycle/release-completion proof.
+    fx.output.input.run.context.phase = phase;
 
     answer(&mut gate, &peer, 71);
     assert_eq!(

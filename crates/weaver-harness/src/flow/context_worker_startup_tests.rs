@@ -376,6 +376,19 @@ pub(super) struct Member {
     pub(super) held_control: Option<s::StateFrame>,
 }
 impl Member {
+    pub(super) fn stop_responses(&self) {
+        self.peer.shutdown(std::net::Shutdown::Write).unwrap();
+    }
+
+    pub(super) fn assert_no_request(&mut self) {
+        let mut byte = [0];
+        assert!(
+            matches!(self.peer.read(&mut byte), Err(error)
+            if error.kind() == std::io::ErrorKind::WouldBlock),
+            "failed serving must issue no new member request"
+        );
+    }
+
     pub(super) fn step(&mut self, now: u64, mode: &str) {
         self.step_observed(mode, || now);
     }
@@ -2272,6 +2285,64 @@ scenario!(
 );
 
 scenario!(
+    worker_external_composition_halt_gate,
+    "input-generation-emission-external-halt-gate"
+);
+scenario!(
+    worker_external_composition_halt_gate_late,
+    "input-generation-emission-external-halt-gate-late"
+);
+scenario!(
+    worker_external_composition_halt_gate_pressure,
+    "input-generation-emission-external-halt-gate-pressure-late"
+);
+scenario!(
+    worker_external_composition_halt_gate_pressure_hold,
+    "input-generation-emission-external-halt-gate-pressure-hold-late"
+);
+scenario!(
+    worker_external_composition_halt_gate_trace_loss,
+    "input-generation-emission-external-halt-gate-trace-loss"
+);
+scenario!(
+    worker_external_composition_halt_gate_trace_loss_late,
+    "input-generation-emission-external-halt-gate-trace-loss-late"
+);
+scenario!(
+    worker_external_composition_halt_gate_deadline,
+    "input-generation-emission-external-halt-gate-deadline"
+);
+scenario!(
+    worker_external_composition_halt_gate_eof,
+    "input-generation-emission-external-halt-gate-eof"
+);
+scenario!(
+    worker_external_composition_halt_gate_control,
+    "input-generation-emission-external-halt-gate-control"
+);
+scenario!(
+    worker_external_composition_halt_gate_unsent,
+    "input-generation-emission-external-halt-gate-unsent"
+);
+scenario!(
+    worker_external_composition_halt_gate_worker,
+    "input-generation-emission-external-halt-gate-worker"
+);
+scenario!(
+    worker_external_composition_halt_gate_management,
+    "input-generation-emission-external-halt-gate-management"
+);
+
+scenario!(
     worker_stop_composition_inherited_deadline,
     "input-stop-inherited-deadline"
+);
+
+scenario!(
+    worker_external_composition_halt_gate_clock_error,
+    "input-generation-emission-external-halt-gate-clock-error"
+);
+scenario!(
+    worker_external_composition_halt_gate_clock_reverse,
+    "input-generation-emission-external-halt-gate-clock-reverse"
 );
