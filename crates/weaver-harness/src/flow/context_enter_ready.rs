@@ -32,6 +32,11 @@ pub(in crate::flow) struct EnterReady<'a> {
 }
 
 impl EnterReady<'_> {
+    pub(in crate::flow::context) fn expired_identity(
+        &self,
+    ) -> Option<crate::flow::context::worker_startup::expired::ExpiredEnterIdentity> {
+        self.raised.expired_identity()
+    }
     #[cfg(test)]
     pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
         self.raised.owner.boot.context
@@ -39,10 +44,7 @@ impl EnterReady<'_> {
     pub(in crate::flow::context) fn failed_identity(&self) -> Option<StartupIdentity> {
         self.raised.failed_identity()
     }
-    pub(in crate::flow::context) fn detach_failure(
-        self,
-        identity: StartupIdentity,
-    ) -> DetachedStartup {
+    pub(in crate::flow::context) fn detach_owned<I>(self, identity: I) -> DetachedStartup<I> {
         let Self {
             raised,
             answer,
@@ -52,7 +54,7 @@ impl EnterReady<'_> {
             returned,
             stop,
         } = self;
-        let mut parts = raised.detach_failure(identity);
+        let mut parts = raised.detach_owned(identity);
         let HeldStartup::Gate(gate) = *parts.held else {
             unreachable!("actual raised gate")
         };

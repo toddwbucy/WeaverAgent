@@ -30,8 +30,12 @@ pub(in crate::flow) struct RetiredEnter {
     _observed_ns: u64,
     _closed_unadmitted: Option<(bool, bool)>,
 }
-#[cfg(test)]
 impl RetiredEnter {
+    pub(in crate::flow) fn payload(&self) -> &weaver_types::state_flow::enter::EnterPayload {
+        self._envelope.enter()
+    }
+
+    #[cfg(test)]
     pub(in crate::flow) fn retained_wire(&self) -> &[u8] {
         &self._wire
     }

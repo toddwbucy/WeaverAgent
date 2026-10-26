@@ -133,6 +133,8 @@ fn worker_fixture_clock_waits_for_complete_request_receipt() {
         held_file: None,
         hold_control: None,
         held_control: None,
+        boot_pairs: vec![],
+        summary: None,
     };
     let samples = std::cell::Cell::new(0);
     let sample = || {
@@ -203,10 +205,41 @@ impl Files {
                 classify: Some(self.child(
                     "checker",
                     "WEAVER_STARTUP_COMPOSITION_CHILD",
-                    if mode.starts_with("input-") {
+                    if mode == "expired-startup-classifying-held" {
+                        "admission-silent-held"
+                    } else if mode == "expired-startup-admission-partial-complete" {
+                        "admission-partial"
+                    } else if mode == "expired-startup-admission-refused-complete" {
+                        "refuse"
+                    } else if mode.starts_with("expired-startup-classifying")
+                        || mode == "expired-startup-admission-unsent-complete"
+                    {
+                        "admission-silent"
+                    } else if mode.contains("-template-component-") {
+                        "template-component"
+                    } else if mode == "expired-startup-template-held" {
+                        "template-silent-held"
+                    } else if mode.contains("-template-record-")
+                        || mode.contains("-template-between-")
+                        || mode.contains("-template-completion-")
+                        || mode.contains("-template-recorded-")
+                        || mode.contains("-template-foreign-")
+                    {
+                        "ready"
+                    } else if mode.starts_with("expired-startup-template-") {
+                        "template-silent"
+                    } else if mode == "expired-startup-classifier-held"
+                        || mode == "expired-startup-summary-read-held"
+                        || mode == "expired-startup-repair-read-held"
+                        || mode == "expired-startup-repair-filing-pending-classifier-held"
+                        || mode == "expired-startup-summary-account-retained-classifier-held"
+                    {
+                        "rollback-held-exit"
+                    } else if mode.starts_with("input-") {
                         mode
                     } else if mode == "classifier-refusal"
                         || mode == "failed-startup-refusal"
+                        || mode == "expired-startup-refusal"
                         || mode.starts_with("rollback-")
                     {
                         "refuse"
@@ -222,6 +255,29 @@ impl Files {
                         mode
                     } else if mode.starts_with("failed-startup-") {
                         "failed-startup"
+                    } else if mode == "expired-startup-admit-sent-complete" {
+                        "expired-admit-held"
+                    } else if mode == "expired-startup-admit-pending-complete" {
+                        "expired-admit-unsent"
+                    } else if mode == "expired-startup-open-complete" {
+                        "expired-open-unanswered"
+                    } else if mode == "expired-startup-open-unsent-complete" {
+                        "expired-open-unsent"
+                    } else if mode == "expired-startup-open-release-wrong" {
+                        "expired-open-unanswered-wrong"
+                    } else if mode.contains("-release-") && mode.starts_with("expired-startup-") {
+                        match mode.rsplit('-').next().unwrap() {
+                            "wrong" => "expired-release-wrong",
+                            "arm" => "expired-release-arm",
+                            "position" => "expired-release-position",
+                            "early" => "expired-release-early",
+                            "silent" => "expired-release-silent",
+                            "held" => "expired-release-held",
+                            "recorded" => "cleanup-ready",
+                            _ => panic!("unknown expired Release fixture"),
+                        }
+                    } else if mode.starts_with("expired-startup-") {
+                        "cleanup-ready"
                     } else if mode == "spu-refusal" {
                         "refuse"
                     } else {
@@ -232,7 +288,10 @@ impl Files {
                 gate: self.child(
                     "gate",
                     "WEAVER_GATE_STARTUP_CHILD",
-                    if mode.starts_with("input-") || mode.starts_with("failed-startup-") {
+                    if mode.starts_with("input-")
+                        || mode.starts_with("failed-startup-")
+                        || mode.starts_with("expired-startup-raised")
+                    {
                         mode
                     } else if mode == "gate-refusal" {
                         "refuse"
@@ -354,7 +413,7 @@ impl Drop for RunGuard {
         }
     }
 }
-struct EnterGuard<'a>(Option<FoundationEnter<'a>>);
+pub(super) struct EnterGuard<'a>(pub(super) Option<FoundationEnter<'a>>);
 impl Drop for EnterGuard<'_> {
     fn drop(&mut self) {
         let child = match self.0.as_mut().and_then(|owner| owner.state.as_mut()) {
@@ -388,6 +447,8 @@ pub(super) struct Member {
     pub(super) held_file: Option<s::StateFrame>,
     pub(super) hold_control: Option<&'static str>,
     pub(super) held_control: Option<s::StateFrame>,
+    pub(super) boot_pairs: Vec<s::ReadPair>,
+    pub(super) summary: Option<s::QueryResult>,
 }
 impl Member {
     pub(super) fn assert_closed_without_request(&mut self) {
@@ -398,6 +459,17 @@ impl Member {
             "failed run must close the actual member without another request"
         );
     }
+    pub(super) fn send_held_filing_prefix(&mut self) -> Vec<u8> {
+        let raw = s::encode_state_line(
+            self.held_file.as_ref().unwrap(),
+            s::FrameDirection::Response,
+        )
+        .unwrap();
+        let prefix = raw[..raw.len() / 2].to_vec();
+        self.peer.write_all(&prefix).unwrap();
+        prefix
+    }
+
     pub(super) fn stop_responses(&self) {
         self.peer.shutdown(std::net::Shutdown::Write).unwrap();
     }
@@ -487,21 +559,39 @@ impl Member {
                 s::StateFrame::Control { frame, .. } => {
                     let frame = match frame {
                         s::StateControl::Grants {} => {
-                            if mode.starts_with("rollback-") && self.requests.len() == 2 {
-                                assert_eq!(self.requests, ["open", "grants"]);
+                            let rollback_read =
+                                mode.starts_with("rollback-") && self.requests.len() > 1;
+                            if rollback_read {
+                                assert_eq!(&self.requests[..2], ["open", "grants"]);
+                                assert_eq!(
+                                    self.requests
+                                        .iter()
+                                        .filter(|request| *request == "grants")
+                                        .count(),
+                                    1
+                                );
                             } else {
                                 assert_eq!(self.requests, ["open"]);
                             }
                             self.requests.push("grants".into());
-                            s::StateControlAnswer::Grants {
-                                surface: vec![
-                                    if mode == "rollback-varied" && self.requests.len() == 3 {
-                                        "owner:changed"
-                                    } else {
-                                        "owner:actual"
-                                    }
-                                    .into(),
-                                ],
+                            if mode == "rollback-grants-refused" && rollback_read {
+                                s::StateControlAnswer::ControlRefused {
+                                    code: s::ControlRefusalCode::Read(
+                                        s::ReadRefusalCode::AnswerTooLarge,
+                                    ),
+                                    detail: "exact rollback grants refusal".into(),
+                                }
+                            } else {
+                                s::StateControlAnswer::Grants {
+                                    surface: vec![
+                                        if mode == "rollback-varied" && rollback_read {
+                                            "owner:changed"
+                                        } else {
+                                            "owner:actual"
+                                        }
+                                        .into(),
+                                    ],
+                                }
                             }
                         }
                         s::StateControl::Read { selector } => {
@@ -512,11 +602,13 @@ impl Member {
                                 }
                                 s::ReadSelector::OpenPairs {} => {
                                     self.requests.push("pairs".into());
-                                    br#"{"open_pairs":{"pairs":[]}}"#.to_vec()
+                                    let pairs = self.boot_pairs.iter().filter(|pair| !self.filings.iter().any(|file| matches!(file, s::StateFrame::FilePair { filing, .. } if matches!(&filing.pair, s::PairRecord::Ended(ended) if ended.call_id == pair.call_id)))).cloned().collect();
+                                    serde_json::to_vec(&s::QueryResult::OpenPairs { pairs })
+                                        .unwrap()
                                 }
                                 s::ReadSelector::PlanCurrent {} => {
                                     self.requests.push("summary".into());
-                                    br#"{"plan_current":{"current":null,"next_plan_id":"40","next_step_id":"50"}}"#.to_vec()
+                                    self.summary.as_ref().map(|result| serde_json::to_vec(result).unwrap()).unwrap_or_else(|| br#"{"plan_current":{"current":null,"next_plan_id":"40","next_step_id":"50"}}"#.to_vec())
                                 }
                                 s::ReadSelector::Marks {} if mode.contains("generation") => {
                                     self.requests.push("marks".into());
@@ -554,6 +646,15 @@ impl Member {
                                         s::ReadRefusalCode::ResultTooLarge,
                                     ),
                                     detail: "whole history exceeds the fixture bound".into(),
+                                }
+                            } else if mode == "summary-refused"
+                                && matches!(selector, s::ReadSelector::PlanCurrent {})
+                            {
+                                s::StateControlAnswer::ControlRefused {
+                                    code: s::ControlRefusalCode::Read(
+                                        s::ReadRefusalCode::ResultTooLarge,
+                                    ),
+                                    detail: "original boot summary refusal".into(),
                                 }
                             } else if mode == "prompt-refusal"
                                 || (mode.ends_with("read-refusal")
@@ -610,6 +711,22 @@ impl Member {
             };
             let hold_control = match &request {
                 s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::OpenPairs {},
+                        },
+                    ..
+                } => {
+                    self.hold_control == Some("pairs")
+                        || (self.hold_control == Some("pairs-recheck")
+                            && self
+                                .requests
+                                .iter()
+                                .filter(|request| request.as_str() == "pairs")
+                                .count()
+                                == 2)
+                }
+                s::StateFrame::Control {
                     frame: s::StateControl::Grants {},
                     ..
                 } => self.hold_control == Some("grants"),
@@ -620,6 +737,20 @@ impl Member {
                         },
                     ..
                 } => self.hold_control == Some("read"),
+                s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::SystemPrompt {},
+                        },
+                    ..
+                } => self.hold_control == Some("prompt"),
+                s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::PlanCurrent {},
+                        },
+                    ..
+                } => self.hold_control == Some("summary"),
                 s::StateFrame::Control {
                     frame: s::StateControl::Release { .. },
                     ..
@@ -665,6 +796,12 @@ fn circuit(mode: &str) {
     }
     let peer = dial(&path);
     let (sink, mut reader) = UnixStream::pair().unwrap();
+    if mode == "expired-startup-activation-trace" {
+        // A large actual Load blocks its writer on this small real socket.
+        // Nothing consumes the reader until the rollback deadline is checked.
+        nix::sys::socket::setsockopt(&sink, nix::sys::socket::sockopt::SndBuf, &1024).unwrap();
+        program.composer.binary = "worker".repeat(65536);
+    }
     let (state, member) = UnixStream::pair().unwrap();
     let (mut bootstrap, mut scheme, _) = classifier_fixture();
     if mode.contains("emission") {
@@ -896,6 +1033,8 @@ fn circuit(mode: &str) {
         held_file: None,
         hold_control: None,
         held_control: None,
+        boot_pairs: vec![],
+        summary: None,
     };
     if mode == "worker" || mode.starts_with("input-worker") {
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1012,6 +1151,33 @@ fn circuit(mode: &str) {
                 mode,
             );
         }
+        return;
+    }
+    if mode.starts_with("expired-startup-") {
+        if mode == "expired-startup-refusal" {
+            super::expired::tests::refusal(guard.0.take().unwrap(), &mut member, &mut clock);
+            return;
+        }
+        let handoff = super::expired::tests::enter(
+            guard.0.take().unwrap(),
+            &mut member,
+            &mut reader,
+            &mut clock,
+            mode,
+            &files.0,
+        );
+        drop(guard);
+        super::expired::tests::finish(
+            run.take_boxed(),
+            handoff,
+            &peer,
+            &mut member,
+            &mut reader,
+            &mut clock,
+            &path,
+            &bytes,
+            mode,
+        );
         return;
     }
     let mut management = None;
@@ -2978,4 +3144,544 @@ scenario!(
 scenario!(
     worker_startup_composition_failed_rollback_recorded_cap,
     "rollback-failed-recorded-cap"
+);
+
+scenario!(
+    worker_startup_composition_expired_preopen,
+    "expired-startup-preopen"
+);
+scenario!(
+    worker_startup_composition_expired_opened,
+    "expired-startup-opened"
+);
+scenario!(
+    worker_startup_composition_expired_activation,
+    "expired-startup-activation"
+);
+scenario!(
+    worker_startup_composition_expired_loaded,
+    "expired-startup-loaded"
+);
+scenario!(
+    worker_startup_composition_expired_classifier,
+    "expired-startup-classifier"
+);
+scenario!(
+    worker_startup_composition_expired_classifying,
+    "expired-startup-classifying"
+);
+scenario!(
+    worker_startup_composition_expired_classifying_complete,
+    "expired-startup-classifying-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_complete,
+    "expired-startup-repair-read-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_recheck_complete,
+    "expired-startup-repair-recheck-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_before_fork_complete,
+    "expired-startup-admission-before-fork-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_unsent_complete,
+    "expired-startup-admission-unsent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_unsent_failure_complete,
+    "expired-startup-admission-unsent-failure-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_ready_complete,
+    "expired-startup-admission-ready-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_refused_complete,
+    "expired-startup-admission-refused-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_partial_complete,
+    "expired-startup-admission-partial-complete"
+);
+scenario!(
+    worker_startup_composition_expired_classifying_held,
+    "expired-startup-classifying-held"
+);
+scenario!(
+    worker_startup_composition_expired_classifying_cap,
+    "expired-startup-classifying-cap"
+);
+scenario!(
+    worker_startup_composition_expired_classifier_complete,
+    "expired-startup-classifier-complete"
+);
+scenario!(
+    worker_startup_composition_expired_classifier_varied,
+    "expired-startup-classifier-varied"
+);
+scenario!(
+    worker_startup_composition_expired_classifier_unreadable,
+    "expired-startup-classifier-unreadable"
+);
+scenario!(
+    worker_startup_composition_expired_classifier_held,
+    "expired-startup-classifier-held"
+);
+scenario!(
+    worker_startup_composition_expired_admit,
+    "expired-startup-admit"
+);
+scenario!(
+    worker_startup_composition_expired_admit_complete,
+    "expired-startup-admit-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admit_sent_complete,
+    "expired-startup-admit-sent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admit_pending_complete,
+    "expired-startup-admit-pending-complete"
+);
+scenario!(
+    worker_startup_composition_expired_boot_complete,
+    "expired-startup-boot-complete"
+);
+scenario!(
+    worker_startup_composition_expired_release_wrong,
+    "expired-startup-boot-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_release_arm,
+    "expired-startup-boot-release-arm"
+);
+scenario!(
+    worker_startup_composition_expired_release_position,
+    "expired-startup-boot-release-position"
+);
+scenario!(
+    worker_startup_composition_expired_release_early,
+    "expired-startup-boot-release-early"
+);
+scenario!(
+    worker_startup_composition_expired_release_silent,
+    "expired-startup-boot-release-silent"
+);
+scenario!(
+    worker_startup_composition_expired_release_held,
+    "expired-startup-boot-release-held"
+);
+scenario!(
+    worker_startup_composition_expired_release_recorded,
+    "expired-startup-boot-release-recorded"
+);
+scenario!(
+    worker_startup_composition_expired_repair_complete,
+    "expired-startup-repair-complete"
+);
+scenario!(
+    worker_startup_composition_expired_boot,
+    "expired-startup-boot"
+);
+scenario!(
+    worker_startup_composition_expired_open,
+    "expired-startup-open"
+);
+scenario!(
+    worker_startup_composition_expired_open_complete,
+    "expired-startup-open-complete"
+);
+scenario!(
+    worker_startup_composition_expired_open_unsent_complete,
+    "expired-startup-open-unsent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_open_record_complete,
+    "expired-startup-open-record-complete"
+);
+scenario!(
+    worker_startup_composition_expired_open_release_wrong,
+    "expired-startup-open-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_prompt_read,
+    "expired-startup-prompt-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template,
+    "expired-startup-template-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_unsent,
+    "expired-startup-template-unsent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_between,
+    "expired-startup-template-between-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_record,
+    "expired-startup-template-record-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_held,
+    "expired-startup-template-held"
+);
+scenario!(
+    worker_startup_composition_expired_template_release_wrong,
+    "expired-startup-template-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_template_cap,
+    "expired-startup-template-cap"
+);
+scenario!(
+    worker_startup_composition_expired_template_component,
+    "expired-startup-template-component-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_foreign,
+    "expired-startup-template-foreign-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_completion,
+    "expired-startup-template-completion-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_recorded,
+    "expired-startup-template-recorded-complete"
+);
+scenario!(
+    worker_startup_composition_expired_summary_read,
+    "expired-startup-summary-read-complete"
+);
+scenario!(
+    worker_startup_composition_expired_prompt_cursor,
+    "expired-startup-prompt-cursor-complete"
+);
+scenario!(
+    worker_startup_composition_expired_summary_cursor,
+    "expired-startup-summary-read-cursor-complete"
+);
+scenario!(
+    worker_startup_composition_expired_read_classifier_held,
+    "expired-startup-summary-read-held"
+);
+scenario!(
+    worker_startup_composition_expired_read_release_wrong,
+    "expired-startup-summary-read-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_prompt_measurement,
+    "expired-startup-prompt-measurement-complete"
+);
+scenario!(
+    worker_startup_composition_expired_summary_measurement,
+    "expired-startup-summary-read-measurement-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair,
+    "expired-startup-repair"
+);
+scenario!(
+    worker_startup_composition_expired_summary,
+    "expired-startup-summary"
+);
+scenario!(
+    worker_startup_composition_expired_installed,
+    "expired-startup-installed"
+);
+scenario!(
+    worker_startup_composition_expired_raised,
+    "expired-startup-raised"
+);
+scenario!(
+    worker_startup_composition_expired_installed_complete,
+    "expired-startup-installed-complete"
+);
+scenario!(
+    worker_startup_composition_expired_installed_unsent_complete,
+    "expired-startup-installed-unsent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_raised_complete,
+    "expired-startup-raised-complete"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_frames,
+    "expired-startup-raised-lower-frames"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_pressure,
+    "expired-startup-raised-lower-pressure"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_silent,
+    "expired-startup-raised-lower-silent"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_held,
+    "expired-startup-raised-lower-held"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_transport_loss,
+    "expired-startup-raised-lower-transport-loss"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_delayed,
+    "expired-startup-raised-lower-last-word-delayed"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_timeout,
+    "expired-startup-raised-lower-last-word-timeout"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_lower_cap,
+    "expired-startup-raised-lower-last-word-lower-cap"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_leave_cap,
+    "expired-startup-raised-lower-last-word-leave-cap"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_failure,
+    "expired-startup-raised-lower-last-word-failure"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_early,
+    "expired-startup-raised-lower-early"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_wrong,
+    "expired-startup-raised-lower-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_refused,
+    "expired-startup-raised-lower-refused"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_unreplied,
+    "expired-startup-raised-lower-unreplied"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_silent_admin,
+    "expired-startup-raised-lower-silent-admin"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_cap,
+    "expired-startup-raised-lower-cap"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_before_leave,
+    "expired-startup-raised-lower-failure-before"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_pending_frame,
+    "expired-startup-raised-lower-failure-lower-pressure"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_pending_ticket,
+    "expired-startup-raised-lower-failure-pending-ticket-lower-pressure"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_stopped_child,
+    "expired-startup-raised-lower-failure-lower-held"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_original_cap,
+    "expired-startup-raised-lower-failure-lower-cap"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_release,
+    "expired-startup-raised-lower-failure-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_recorded,
+    "expired-startup-raised-lower-failure-recorded"
+);
+scenario!(
+    worker_startup_composition_expired_foreign,
+    "expired-startup-foreign"
+);
+scenario!(
+    worker_startup_composition_expired_observe,
+    "expired-startup-observe"
+);
+scenario!(
+    worker_startup_composition_expired_silent_peer,
+    "expired-startup-silent"
+);
+scenario!(
+    worker_startup_composition_expired_refusal,
+    "expired-startup-refusal"
+);
+scenario!(
+    worker_startup_composition_expired_blocking_wait,
+    "expired-startup-wait"
+);
+scenario!(
+    worker_startup_composition_expired_activation_cap,
+    "expired-startup-activation-cap"
+);
+scenario!(
+    worker_startup_composition_expired_activation_trace,
+    "expired-startup-activation-trace"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_unstarted_complete,
+    "expired-startup-repair-unstarted-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_retained_complete,
+    "expired-startup-repair-retained-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_filed_complete,
+    "expired-startup-repair-filed-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_proposed_complete,
+    "expired-startup-repair-proposed-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_filing_unstarted_complete,
+    "expired-startup-repair-filing-unstarted-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_complete,
+    "expired-startup-repair-filing-pending-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_measurement_complete,
+    "expired-startup-repair-read-measurement-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_cursor_complete,
+    "expired-startup-repair-read-cursor-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_cap,
+    "expired-startup-repair-read-cap"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_held,
+    "expired-startup-repair-read-held"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_release_wrong,
+    "expired-startup-repair-read-release-wrong"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_queued_complete,
+    "expired-startup-repair-filing-queued-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_unsent_complete,
+    "expired-startup-repair-filing-unsent-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_settled_complete,
+    "expired-startup-repair-filing-settled-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_cap,
+    "expired-startup-repair-filing-pending-cap"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_classifier_held,
+    "expired-startup-repair-filing-pending-classifier-held"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_release_wrong,
+    "expired-startup-repair-filing-pending-release-wrong"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_author_complete,
+    "expired-startup-repair-filing-author-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_flow_complete,
+    "expired-startup-repair-filing-flow-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_measurement_complete,
+    "expired-startup-repair-filing-measurement-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_partial_complete,
+    "expired-startup-repair-filing-pending-partial-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_unstarted_complete,
+    "expired-startup-summary-account-unstarted-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_retained_complete,
+    "expired-startup-summary-account-retained-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_populated_complete,
+    "expired-startup-summary-account-populated-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_complete,
+    "expired-startup-summary-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_refused_complete,
+    "expired-startup-summary-account-refused-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_retained_cap,
+    "expired-startup-summary-account-retained-cap"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_retained_release_wrong,
+    "expired-startup-summary-account-retained-release-wrong"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_retained_classifier_held,
+    "expired-startup-summary-account-retained-classifier-held"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_boundary_recorded,
+    "expired-startup-summary-boundary-recorded-populated-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_boundary_read_complete,
+    "expired-startup-summary-boundary-read-complete-populated-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_boundary_read_settled,
+    "expired-startup-summary-boundary-read-settled-populated-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_boundary_refused,
+    "expired-startup-summary-boundary-refused-complete"
 );

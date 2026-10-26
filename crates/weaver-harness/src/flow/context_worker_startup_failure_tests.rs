@@ -48,7 +48,9 @@ impl Drop for PanicReader {
     }
 }
 
-fn context<'b>(enter: &'b mut FoundationEnter<'_>) -> &'b mut RecordingContext {
+pub(in crate::flow::context::worker_startup) fn context<'b>(
+    enter: &'b mut FoundationEnter<'_>,
+) -> &'b mut RecordingContext {
     match enter.state.as_mut().unwrap() {
         EnterState::Startup(owner) => owner.failure_test_context(),
         EnterState::Residency(owner) => owner.failure_test_context(),
@@ -58,7 +60,10 @@ fn context<'b>(enter: &'b mut FoundationEnter<'_>) -> &'b mut RecordingContext {
         _ => panic!("unexpected failure injection stage"),
     }
 }
-fn reached(enter: &FoundationEnter<'_>, mode: &str) -> bool {
+pub(in crate::flow::context::worker_startup) fn reached(
+    enter: &FoundationEnter<'_>,
+    mode: &str,
+) -> bool {
     use crate::flow::context::boot_composition::BootStage;
     use crate::flow::context::startup_composition::StartupStage;
     match (mode, enter.state.as_ref().unwrap()) {
@@ -77,13 +82,63 @@ fn reached(enter: &FoundationEnter<'_>, mode: &str) -> bool {
         ("failed-startup-classifier", EnterState::Residency(owner)) => {
             owner.stage() == ResidencyStage::Fork
         }
+        ("failed-startup-classifying", EnterState::Startup(owner)) => {
+            owner.failure_test_classifying()
+        }
+        ("failed-startup-before-classifier", EnterState::Startup(owner)) => {
+            owner.stage() == StartupStage::Classifier
+        }
         ("failed-startup-admit", EnterState::Residency(owner)) => {
             owner.stage() == ResidencyStage::Admit
         }
+        ("failed-startup-admit-sent", EnterState::Residency(owner)) => {
+            owner.stage() == ResidencyStage::Admit && owner.failure_test_admit_sent()
+        }
         ("failed-startup-boot", EnterState::Boot(owner)) => owner.stage() == BootStage::Templates,
+        ("failed-startup-template", EnterState::Boot(owner)) => {
+            owner.stage() == BootStage::Templates && owner.failure_test_template_sent()
+        }
+        ("failed-startup-template-unsent", EnterState::Boot(owner)) => {
+            owner.stage() == BootStage::Templates
+                && owner
+                    .failure_test_context_ref()
+                    .flow
+                    .standing_classifier()
+                    .is_some_and(|classifier| classifier.wants_write())
+        }
+        ("failed-startup-template-between", EnterState::Boot(owner)) => {
+            let context = owner.failure_test_context_ref();
+            owner.stage() == BootStage::Templates
+                && context.flow.pending_check().is_none()
+                && context.flow.operation_completion().is_none()
+                && context
+                    .template_transcript()
+                    .is_some_and(|t| t.accepted_count() == 1)
+        }
+        ("failed-startup-template-recorded", EnterState::Boot(owner)) => {
+            owner.stage() == BootStage::Templates
+                && owner
+                    .failure_test_context_ref()
+                    .flow
+                    .pending_classifier_recorded()
+                    .is_some()
+        }
+        ("failed-startup-template-record", EnterState::Boot(owner)) => {
+            owner.stage() == BootStage::Templates
+                && owner
+                    .failure_test_context_ref()
+                    .barrier
+                    .pending()
+                    .is_some_and(|event| event.envelope.kind == Kind::Ste100Result)
+        }
+        ("failed-startup-prompt", EnterState::Boot(owner)) => owner.stage() == BootStage::Prompt,
+        ("failed-startup-summary-read", EnterState::Boot(owner)) => {
+            owner.stage() == BootStage::Summary
+        }
         ("failed-startup-open", EnterState::Boot(owner)) => {
             owner.stage() == BootStage::Open && owner.failure_test_open_sent()
         }
+        ("failed-startup-open-unsent", EnterState::Boot(owner)) => owner.stage() == BootStage::Open,
         ("failed-startup-repair", EnterState::Boot(owner)) => owner.stage() == BootStage::Repair,
         ("failed-startup-summary", EnterState::Boot(owner)) => owner.stage() == BootStage::Install,
         ("failed-startup-installed", EnterState::Gate(owner)) => {
@@ -502,7 +557,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
         assert!(bytes.is_empty(), "no fabricated pre-load bracket");
     }
 }
-fn fill_trace(context: &mut RecordingContext, clock: &mut FakePumpIo) {
+pub(in crate::flow::context::worker_startup) fn fill_trace(
+    context: &mut RecordingContext,
+    clock: &mut FakePumpIo,
+) {
     use crate::flow::recording::{RecordProgress, RecordPurpose};
     let payload =
         serde_json::value::to_raw_value(&serde_json::json!({"fixture":"x".repeat(32_768)}))

@@ -393,6 +393,19 @@ impl Writer {
         state.abandoned = true;
         self.shared.work.notify_all();
     }
+
+    /// Stop an unused writer without waiting for its thread. Unlike abandon,
+    /// this also lets the empty writer exit and close the unadmitted sink.
+    pub fn close_unadmitted(&self) -> Result<(), Failure> {
+        let mut state = self.shared.lock();
+        if state.occupied != 0 || !state.queue.is_empty() || state.peak != 0 {
+            return Err(unusable(io::Error::other("trace writer was already used")));
+        }
+        state.abandoned = true;
+        state.closing = true;
+        self.shared.work.notify_all();
+        Ok(())
+    }
 }
 
 impl Drop for Writer {

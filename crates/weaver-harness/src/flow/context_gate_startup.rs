@@ -65,6 +65,11 @@ use crate::flow::context::worker_startup::failed::{
     DetachedStartup, HeldGate, HeldStartup, StartupGate, StartupIdentity,
 };
 impl GateStartup<'_> {
+    pub(in crate::flow::context) fn expired_identity(
+        &self,
+    ) -> Option<crate::flow::context::worker_startup::expired::ExpiredEnterIdentity> {
+        self.boot.expired_identity()
+    }
     #[cfg(test)]
     pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
         self.boot.context
@@ -72,10 +77,7 @@ impl GateStartup<'_> {
     pub(in crate::flow::context) fn failed_identity(&self) -> Option<StartupIdentity> {
         self.boot.failed_identity()
     }
-    pub(in crate::flow::context) fn detach_failure(
-        self,
-        identity: StartupIdentity,
-    ) -> DetachedStartup {
+    pub(in crate::flow::context) fn detach_owned<I>(self, identity: I) -> DetachedStartup<I> {
         let Self {
             boot,
             request,
@@ -96,7 +98,7 @@ impl GateStartup<'_> {
             listener: Some(listener),
             gate: Some(StartupGate { port, child, tools }),
             held: Box::new(HeldStartup::Gate(HeldGate {
-                boot: boot.detach_failure(),
+                boot: boot.detach_owned(),
                 request,
                 enter,
                 stage,
@@ -110,14 +112,16 @@ impl GateStartup<'_> {
     }
 }
 impl RaisedBoot<'_> {
+    pub(in crate::flow::context) fn expired_identity(
+        &self,
+    ) -> Option<crate::flow::context::worker_startup::expired::ExpiredEnterIdentity> {
+        self.owner.expired_identity()
+    }
     pub(in crate::flow::context) fn failed_identity(&self) -> Option<StartupIdentity> {
         self.owner.failed_identity()
     }
-    pub(in crate::flow::context) fn detach_failure(
-        self,
-        identity: StartupIdentity,
-    ) -> DetachedStartup {
-        self.owner.detach_failure(identity)
+    pub(in crate::flow::context) fn detach_owned<I>(self, identity: I) -> DetachedStartup<I> {
+        self.owner.detach_owned(identity)
     }
 }
 

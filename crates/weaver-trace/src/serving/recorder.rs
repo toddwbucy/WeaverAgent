@@ -114,6 +114,18 @@ pub struct PreflightTerminalFailure<State> {
 }
 
 impl PreflightRecorder<AwaitingLoad> {
+    /// Close the unused sink after unadmitted Enter expiry, with no trace
+    /// event or synchronous writer join. This recorder can admit no later Load.
+    ///
+    /// ```compile_fail,E0599
+    /// use weaver_trace::serving::{Loaded, PreflightRecorder};
+    /// fn close_loaded(mut recorder: PreflightRecorder<Loaded>) {
+    ///     recorder.close_unadmitted();
+    /// }
+    /// ```
+    pub fn close_unadmitted(&mut self) -> Result<(), Failure> {
+        self.core.writer.close_unadmitted()
+    }
     pub fn receive(sink: OwnedFd, run: RunRef, session: SessionRef) -> Result<Self, Failure> {
         Ok(Self {
             core: Box::new(Core::new(sink, run, session)?),
@@ -129,6 +141,15 @@ impl PreflightRecorder<AwaitingLoad> {
 }
 
 impl PreflightRecorder<Loaded> {
+    /// Explicit rollback may close a recorded Load before activation without
+    /// inventing a refusal or a component fault. This uses ordinary capacity.
+    pub fn rollback(
+        self,
+        event: Event,
+    ) -> Result<PreflightAttempt<Loaded, Closed>, PreflightFailure<Loaded>> {
+        self.transition(event, |event| event.envelope.kind == Kind::Unload)
+    }
+
     pub fn activate(self, partition: ValidatedPartition) -> Recorder {
         Recorder {
             core: self.core,

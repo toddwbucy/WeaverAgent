@@ -64,6 +64,45 @@ pub(super) struct RetiredSocketPort {
 }
 
 impl SocketPort {
+    #[cfg(test)]
+    pub(super) fn test_evidence(&self) -> String {
+        format!(
+            "{:?}",
+            (
+                &self.scheme,
+                &self.instruction,
+                self.phase,
+                &self.outstanding,
+                &self.failure,
+                self.channel.test_evidence()
+            )
+        )
+    }
+    #[cfg(test)]
+    pub(super) fn test_partial_bytes(&self) -> usize {
+        self.channel.test_partial_bytes()
+    }
+    /// Side-effect-free ownership check. It never polls or completes admission.
+    pub(super) fn matches_admission(
+        &self,
+        scheme: &SchemeDeclaration,
+        completion: Option<&AdmissionPoll>,
+    ) -> bool {
+        &self.scheme == scheme
+            && self.failure.is_none()
+            && self.outstanding.is_none()
+            && match (self.phase, completion) {
+                (Phase::Starting, None) => true,
+                (Phase::Idle, Some(AdmissionPoll::Ready(ready))) => {
+                    ready.validate_for(scheme, &self.instruction).is_ok()
+                }
+                (Phase::Refused, Some(AdmissionPoll::Refused(refused))) => {
+                    refused.validate().is_ok()
+                }
+                _ => false,
+            }
+    }
+
     pub(super) fn retire_failed(self) -> RetiredSocketPort {
         let Self {
             channel,
@@ -250,6 +289,23 @@ impl SocketPort {
             return Ok(Receive::Pending);
         }
         self.receive()
+    }
+}
+
+#[cfg(test)]
+impl RetiredSocketPort {
+    pub(super) fn test_evidence(&self) -> String {
+        format!(
+            "{:?}",
+            (
+                &self._scheme,
+                &self._instruction,
+                self._phase,
+                &self._outstanding,
+                &self._failure,
+                self._channel.test_evidence()
+            )
+        )
     }
 }
 
