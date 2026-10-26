@@ -1003,7 +1003,15 @@ pub(in crate::flow::context::worker_startup) fn finish(
         assert_eq!(unload["payload"]["cause"]["uid"], 74);
         assert_eq!(unload["payload"]["forced"], expected_forced(mode));
         if wind_conversion::is_mode(mode) {
-            wind_conversion::assert_tail(&mut owner, &rows, &joins, &member.filings, root, mode);
+            wind_conversion::assert_tail(
+                &mut owner,
+                &rows,
+                &joins,
+                &member.filings,
+                root,
+                mode,
+                wind_down.as_ref().unwrap(),
+            );
         } else if quiesce_conversion::is_mode(mode) {
             quiesce_conversion::assert_tail(&mut owner, &rows, &joins, &member.filings, root, mode);
         } else if conversion::is_mode(mode) {

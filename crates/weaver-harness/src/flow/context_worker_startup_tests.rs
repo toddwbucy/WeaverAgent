@@ -4546,6 +4546,23 @@ scenario!(
 );
 
 scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_held_start,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-held-start"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_held_start_resume,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-held-start-resume"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_held_close,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-held-close"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_held_close_resume,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-held-close-resume"
+);
+
+scenario!(
     worker_session_graceful_save_sqlite_wind_convert_start_author,
     "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-start-author"
 );
