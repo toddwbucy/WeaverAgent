@@ -7,7 +7,6 @@ use crate::flow::context::failed_enter_driver::{
 #[derive(Debug)]
 pub(in crate::flow) enum CleanupJoinRefusal {
     ForeignContext,
-    NoSpu,
     AcceptedLeave,
     Cleanup(FailedEnterRefusal),
 }
@@ -42,9 +41,6 @@ impl StoppedResidency {
     ) -> Result<ResidencyCleanup, CleanupJoinRejected> {
         let refusal = if !std::sync::Arc::ptr_eq(&self.origin, &context.read_origin) {
             Some(CleanupJoinRefusal::ForeignContext)
-        } else if resources.spu_child().is_none() {
-            // No-SPU terminal representation remains held for #285's merge.
-            Some(CleanupJoinRefusal::NoSpu)
         } else if context.deadlines.get(PumpDeadline::Leave).is_some() || context.place_leaving {
             Some(CleanupJoinRefusal::AcceptedLeave)
         } else {

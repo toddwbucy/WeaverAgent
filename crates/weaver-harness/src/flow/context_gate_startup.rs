@@ -61,6 +61,70 @@ pub(in crate::flow) struct RaisedBoot<'a> {
     owner: GateStartup<'a>,
 }
 
+use crate::flow::context::worker_startup::failed::{
+    DetachedStartup, HeldGate, HeldStartup, StartupGate, StartupIdentity,
+};
+impl GateStartup<'_> {
+    pub(in crate::flow::context) fn expired_identity(
+        &self,
+    ) -> Option<crate::flow::context::worker_startup::expired::ExpiredEnterIdentity> {
+        self.boot.expired_identity()
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.boot.context
+    }
+    pub(in crate::flow::context) fn failed_identity(&self) -> Option<StartupIdentity> {
+        self.boot.failed_identity()
+    }
+    pub(in crate::flow::context) fn detach_owned<I>(self, identity: I) -> DetachedStartup<I> {
+        let Self {
+            boot,
+            request,
+            listener,
+            enter,
+            stage,
+            tools,
+            child,
+            port,
+            raise,
+            send,
+            reply,
+            returned,
+            stop,
+        } = self;
+        DetachedStartup {
+            identity,
+            listener: Some(listener),
+            gate: Some(StartupGate { port, child, tools }),
+            held: Box::new(HeldStartup::Gate(HeldGate {
+                boot: boot.detach_owned(),
+                request,
+                enter,
+                stage,
+                raise,
+                send,
+                reply,
+                returned,
+                stop,
+            })),
+        }
+    }
+}
+impl RaisedBoot<'_> {
+    pub(in crate::flow::context) fn expired_identity(
+        &self,
+    ) -> Option<crate::flow::context::worker_startup::expired::ExpiredEnterIdentity> {
+        self.owner.expired_identity()
+    }
+    pub(in crate::flow::context) fn failed_identity(&self) -> Option<StartupIdentity> {
+        self.owner.failed_identity()
+    }
+    pub(in crate::flow::context) fn detach_owned<I>(self, identity: I) -> DetachedStartup<I> {
+        self.owner.detach_owned(identity)
+    }
+}
+
 impl<'a> ComposedBoot<'a> {
     pub(in crate::flow) fn into_gate(
         self,

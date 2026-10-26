@@ -526,7 +526,10 @@ fn save_phases_and_halt_extensions_preserve_their_distinct_evidence() {
         cause: None,
         forced: true,
         forced_by: None,
-        release: None,
+        release: Release {
+            spu: None,
+            member: None,
+        },
         end_reason: Some(EndReason::ComponentFailure),
         state_flow_failure: Some(StateFlowFailure {
             fault_sequence: None,
@@ -535,7 +538,7 @@ fn save_phases_and_halt_extensions_preserve_their_distinct_evidence() {
     };
     assert_eq!(
         json(&unload),
-        r#"{"forced":true,"end_reason":"component_failure","state_flow_failure":{"fault_sequence":null,"account":{"first":"same","secondary":[]}}}"#
+        r#"{"forced":true,"release":{},"end_reason":"component_failure","state_flow_failure":{"fault_sequence":null,"account":{"first":"same","secondary":[]}}}"#
     );
 }
 
@@ -782,7 +785,10 @@ pub(crate) fn payload_fixtures() -> Vec<(
                 cause: None,
                 forced: false,
                 forced_by: None,
-                release: None,
+                release: Release {
+                    spu: None,
+                    member: None,
+                },
                 end_reason: None,
                 state_flow_failure: None,
             })),
@@ -1171,4 +1177,53 @@ fn confirmed_and_published_saves_keep_hashes_position_and_both_absolute_windows(
         json(&published),
         r#"{"phase":"published","capture_id":"1","window":{"began_ns":"10","deadline_ns":"20"},"tail_window":{"began_ns":"5","deadline_ns":"25"},"cause":"graceful_unload","artifact_id":"artifact","dump_sha256":"dump","config_sha256":"config","location":"territory/artifact","position":null}"#
     );
+}
+
+#[test]
+fn replacement_release_omits_only_absent_organs_and_keeps_legacy_spu_required() {
+    use crate::{MemberRelease, ReleaseOutcome};
+    assert_eq!(
+        json(&Release {
+            spu: None,
+            member: None
+        }),
+        "{}"
+    );
+    assert_eq!(
+        json(&Release {
+            spu: None,
+            member: Some(MemberRelease::Closed)
+        }),
+        r#"{"member":"closed"}"#
+    );
+    for (outcome, spelling) in [
+        (ReleaseOutcome::Confirmed, "confirmed"),
+        (ReleaseOutcome::Unconfirmed, "unconfirmed"),
+    ] {
+        let release = Release {
+            spu: Some(outcome),
+            member: None,
+        };
+        assert_eq!(json(&release), format!(r#"{{"spu":"{spelling}"}}"#));
+        assert_eq!(
+            json(&crate::Release {
+                spu: outcome,
+                member: None
+            }),
+            json(&release)
+        );
+    }
+    let unload = UnloadClose {
+        grant_surface: None,
+        cause: None,
+        forced: true,
+        forced_by: None,
+        release: Release {
+            spu: None,
+            member: None,
+        },
+        end_reason: None,
+        state_flow_failure: None,
+    };
+    assert_eq!(json(&unload), r#"{"forced":true,"release":{}}"#);
 }

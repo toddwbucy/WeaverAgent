@@ -30,6 +30,37 @@ pub(in crate::flow) struct RetiredEnter {
     _observed_ns: u64,
     _closed_unadmitted: Option<(bool, bool)>,
 }
+impl RetiredEnter {
+    pub(in crate::flow) fn payload(&self) -> &weaver_types::state_flow::enter::EnterPayload {
+        self._envelope.enter()
+    }
+
+    #[cfg(test)]
+    pub(in crate::flow) fn retained_wire(&self) -> &[u8] {
+        &self._wire
+    }
+}
+
+/// The original received Enter after its authenticated peer moves into a
+/// response owner. This keeps its bytes and descriptor history, not a new port.
+pub(in crate::flow) struct DetachedEnter {
+    message: LifecycleMessage<EnterEnvelope>,
+    _wire: Vec<u8>,
+    _adopted_origin: Option<std::sync::Arc<()>>,
+    _received_ns: u64,
+    _observed_ns: u64,
+    _closed_unadmitted: Option<(bool, bool)>,
+}
+impl DetachedEnter {
+    #[cfg(test)]
+    pub(in crate::flow) fn retained_wire(&self) -> &[u8] {
+        &self._wire
+    }
+
+    pub(in crate::flow) fn payload(&self) -> &weaver_types::state_flow::enter::EnterPayload {
+        self.message.envelope.enter()
+    }
+}
 impl EnterReceiver {
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn from_peer(peer: LifecyclePeer) -> Result<Self, LifecyclePeer> {
@@ -112,6 +143,19 @@ pub(in crate::flow) enum EnterTimeError {
     Clock(String),
 }
 impl ReceivedEnter {
+    pub(in crate::flow) fn into_response_peer(self) -> (LifecyclePeer, DetachedEnter) {
+        (
+            self.peer,
+            DetachedEnter {
+                message: self.message,
+                _wire: self.wire,
+                _adopted_origin: self.adopted_origin,
+                _received_ns: self.received_ns,
+                _observed_ns: self.observed_ns.get(),
+                _closed_unadmitted: self.closed_unadmitted,
+            },
+        )
+    }
     pub(in crate::flow) fn check_window(&self, io: &mut impl PumpIo) -> Result<(), EnterTimeError> {
         let weaver_types::state_flow::enter::EnterBinding::Serving { enter_window, .. } =
             &self.envelope().enter().binding

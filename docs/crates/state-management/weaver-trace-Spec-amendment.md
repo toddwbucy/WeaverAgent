@@ -2,8 +2,8 @@
 
 **Status:** MERGED.
 
-**Version:** 0.27 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
-**Landing PR:** #312
+**Version:** 0.28 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
+**Landing branch:** code/state-expired-enter-rollback
 
 ## 0. What this document is
 
@@ -288,7 +288,11 @@ non-head submissions report Stopped and continue along the trace. They are shutd
 evidence, never a path for another model pass. Construct
 `PreflightRecorder::receive(sink: OwnedFd, run: RunRef, session: SessionRef)`. It
 creates the private Writer and admits only one load, followed by enter-refusal or fault
-and terminal unload until activated. It exposes no content submission method. After load
+and terminal unload until activated. The actual rollback of an expired Enter may
+instead close a recorded, unactivated load directly with terminal unload, under
+HARNESS-ENTER-WINDOW, without inventing an enter-refusal or fault. This healthy
+rollback uses ordinary writer capacity and retains its exact unload on pressure;
+it does not spend a halt reservation. It exposes no content submission method. After load
 is recorded and partition validation passes, `activate(self, partition:
 ValidatedPartition) -> Recorder` consumes this preflight value and installs the single
 Tee. It cannot be called twice or after a refused enter. The resulting Recorder has no

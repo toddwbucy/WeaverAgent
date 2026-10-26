@@ -474,3 +474,12 @@ pub(crate) mod input;
 #[cfg(test)]
 #[path = "context_worker_startup_tests.rs"]
 mod tests;
+
+#[path = "context_worker_rollback.rs"]
+pub(crate) mod rollback;
+
+#[path = "context_worker_startup_failure.rs"]
+pub(crate) mod failed;
+
+#[path = "context_worker_startup_expired.rs"]
+pub(crate) mod expired;
