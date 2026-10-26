@@ -99,6 +99,79 @@ struct Member {
     requests: Vec<s::StateControl>,
 }
 
+/// Interleave a caller with actual inspection requests and recorded replies.
+/// The callback cannot take the inspection's answer; its original owner does.
+pub(super) fn with_three_inspection_holds(
+    mut caller: impl FnMut(&mut RecordingContext, &mut crate::flow::clock::testing::FakePumpIo, bool),
+) {
+    let mut member = Member::new();
+    for _ in 0..3 {
+        member
+            .run
+            .context
+            .begin_inspection(InspectionKind::Shape, None, &mut member.run.clock)
+            .unwrap();
+        let request = member.sent();
+        let answer = member.answer(&request, s::StateControlAnswer::Shape(vec![]));
+        member.receive(&answer).unwrap();
+        caller(&mut member.run.context, &mut member.run.clock, false);
+        assert!(member.run.context.inspection.is_some());
+        let mut completed = false;
+        for _ in 0..128 {
+            let progress = member
+                .run
+                .context
+                .advance_inspection(&mut ports(&mut member.run.clock))
+                .unwrap();
+            if progress == InspectionProgress::Complete {
+                completed = true;
+                break;
+            }
+        }
+        assert!(
+            completed,
+            "original inspection owner must take its own answer"
+        );
+        assert_eq!(
+            member
+                .run
+                .context
+                .reduce_flow(&mut member.run.clock)
+                .unwrap(),
+            Advance::Idle
+        );
+        let before = member.run.clock.waits().len();
+        let wake = member.run.clock.now().unwrap() + 1;
+        member
+            .run
+            .clock
+            .schedule(
+                wake,
+                vec![ReadyFd {
+                    index: 0,
+                    events: PollFlags::POLLIN,
+                }],
+            )
+            .unwrap();
+        caller(&mut member.run.context, &mut member.run.clock, false);
+        assert!(
+            member.run.clock.waits()[before..].iter().any(|wait| {
+                wait.absolute_deadline
+                    .is_some_and(|end| end > wait.began_ns)
+            }),
+            "an idle inspection owner must wait before another author attempt"
+        );
+        let done = member
+            .run
+            .context
+            .take_inspection(&mut member.run.clock)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(done, InspectionCompletion::Shape { .. }));
+    }
+    caller(&mut member.run.context, &mut member.run.clock, true);
+}
+
 impl Member {
     fn new() -> Self {
         let mut run = Fixture::new(config());

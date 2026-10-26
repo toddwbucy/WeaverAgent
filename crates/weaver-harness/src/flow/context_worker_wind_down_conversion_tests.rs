@@ -275,7 +275,36 @@ impl PumpIo for LocalInspectionReady {
     }
 }
 
-fn retain_held_turn(input: &mut FoundationInput<'_>, resume: bool) -> (usize, String) {
+#[derive(Default)]
+struct IdleInspectionWait {
+    blocking_waits: usize,
+}
+impl PumpIo for IdleInspectionWait {
+    fn now(&mut self) -> std::io::Result<u64> {
+        MonotonicIo.now()
+    }
+    fn wait(
+        &mut self,
+        interests: &[WaitInterest<'_>],
+        deadline: Option<u64>,
+    ) -> std::io::Result<WaitOutcome> {
+        let now = self.now()?;
+        if deadline.is_none_or(|end| end > now) {
+            assert!(deadline.is_some(), "the held author keeps its bound");
+            self.blocking_waits += 1;
+            // A spurious wake gives the test's original inspection owner its
+            // next step. It creates no transport answer or trace receipt.
+            return Ok(WaitOutcome::Ready(vec![]));
+        }
+        MonotonicIo.wait(interests, deadline)
+    }
+}
+
+fn retain_held_turn(
+    input: &mut FoundationInput<'_>,
+    resume: bool,
+    refusal: bool,
+) -> (usize, String) {
     let mut original = None;
     let mut decision = None;
     for _ in 0..3 {
@@ -324,9 +353,12 @@ fn retain_held_turn(input: &mut FoundationInput<'_>, resume: bool) -> (usize, St
             .wind_down
             .as_ref()
             .unwrap();
-        let held = work
-            .test_unadmitted_author()
-            .expect("the exact caller regained its unadmitted event");
+        let held = if refusal {
+            work.test_unadmitted_refusal()
+        } else {
+            work.test_unadmitted_author()
+        }
+        .expect("the exact caller regained its unadmitted event");
         if let Some(original) = &original {
             assert_eq!(
                 &held, original,
@@ -363,18 +395,20 @@ fn retain_held_turn(input: &mut FoundationInput<'_>, resume: bool) -> (usize, St
             "{:?}",
             input.detail()
         );
-        assert!(
-            input
-                .serving
-                .graceful
-                .as_ref()
-                .unwrap()
-                .wind_down
-                .as_ref()
-                .unwrap()
-                .test_unadmitted_author()
-                .is_none()
-        );
+        let work = input
+            .serving
+            .graceful
+            .as_ref()
+            .unwrap()
+            .wind_down
+            .as_ref()
+            .unwrap();
+        if refusal {
+            assert!(work.test_unadmitted_refusal().is_none());
+            assert!(work.test_refusal_record().is_some());
+        } else {
+            assert!(work.test_unadmitted_author().is_none());
+        }
     }
     original.unwrap()
 }
@@ -429,14 +463,49 @@ fn finish_original_inspection(input: &mut FoundationInput<'_>) {
             io: &mut io,
         };
         let progress = context.advance_inspection(&mut ports).unwrap();
-        if let Some(completion) = context.take_inspection(ports.io).unwrap() {
-            assert!(matches!(completion, InspectionCompletion::Shape { .. }));
-            return;
+        if progress == InspectionProgress::Complete {
+            break;
         }
         if progress == InspectionProgress::Pending {
             context.pump_once(&mut ports).unwrap();
         }
     }
+    loop {
+        assert!(Instant::now() < end, "inspection flow did not become idle");
+        let context = &mut input.serving.owner.context;
+        match context.reduce_flow(&mut MonotonicIo).unwrap() {
+            crate::flow::coordinator::Advance::Idle => break,
+            crate::flow::coordinator::Advance::Progress => {}
+            crate::flow::coordinator::Advance::Pending => {
+                context
+                    .pump_once(&mut PumpPorts {
+                        lifecycle: LifecyclePorts::default(),
+                        gate: None,
+                        decode: None,
+                        label: None,
+                        io: &mut MonotonicIo,
+                    })
+                    .unwrap();
+            }
+        }
+    }
+    let mut io = IdleInspectionWait::default();
+    assert_eq!(
+        input.advance_with_io(&mut io),
+        FoundationInputProgress::WindDown
+    );
+    assert_eq!(
+        io.blocking_waits, 1,
+        "an idle inspection owner must wait before another author attempt"
+    );
+    let completion = input
+        .serving
+        .owner
+        .context
+        .take_inspection(&mut MonotonicIo)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(completion, InspectionCompletion::Shape { .. }));
 }
 
 pub(super) fn handoff(
@@ -595,7 +664,7 @@ pub(super) fn handoff(
                 "unstarted" | "start-author" | "held-start" | "held-start-resume" => {
                     phase == "Start"
                 }
-                "instruction" => phase == "Instruction",
+                "instruction" | "held-refusal" | "held-refusal-resume" => phase == "Instruction",
                 "placed" => phase == "Placed",
                 "generated" => phase == "Generated",
                 "repair" => input.serving.owner.context.repair.is_some(),
@@ -610,9 +679,18 @@ pub(super) fn handoff(
             if stop {
                 if matches!(
                     scenario,
-                    "held-start" | "held-start-resume" | "held-close" | "held-close-resume"
+                    "held-start"
+                        | "held-start-resume"
+                        | "held-close"
+                        | "held-close-resume"
+                        | "held-refusal"
+                        | "held-refusal-resume"
                 ) {
-                    held_author = Some(retain_held_turn(input, scenario.ends_with("-resume")));
+                    held_author = Some(retain_held_turn(
+                        input,
+                        scenario.ends_with("-resume"),
+                        scenario.starts_with("held-refusal"),
+                    ));
                     join = Some(joining(socket, 75, 100));
                 } else if scenario == "expiry-close-recorded" {
                     let mut io = CloseClock {
@@ -841,7 +919,13 @@ pub(super) fn assert_tail(
     }
     let instruction = !matches!(
         scenario,
-        "unstarted" | "start-author" | "instruction" | "held-start" | "held-start-resume"
+        "unstarted"
+            | "start-author"
+            | "instruction"
+            | "held-start"
+            | "held-start-resume"
+            | "held-refusal"
+            | "held-refusal-resume"
     );
     assert_eq!(filings.iter().filter(|frame| matches!(frame,s::StateFrame::File { filing,.. } if filing.text=="Read summary.")).count(),usize::from(instruction));
     let cancel = matches!(
@@ -859,6 +943,8 @@ pub(super) fn assert_tail(
             | "placed"
             | "held-start"
             | "held-start-resume"
+            | "held-refusal"
+            | "held-refusal-resume"
     ) {
         assert!(!root.join("wc-generation-0").exists());
     }
@@ -910,6 +996,28 @@ pub(super) fn assert_tail(
                 assert!(work.test_unadmitted_close().is_none());
             }
         }
+    }
+    if scenario.starts_with("held-refusal") {
+        let refusals: Vec<_> = rows
+            .iter()
+            .filter(|row| row["kind"] == "refusal" && row["turn"] == "wind-down-0")
+            .collect();
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(refusals[0]["payload"]["template_id"], "wind_down");
+        assert_eq!(refusals[0]["payload"]["case"], "invalid_template");
+        assert_eq!(
+            refusals[0]["payload"]["detail"],
+            "wind-down family is not in this run's certificate"
+        );
+        assert!(
+            sequence(started[0]) < sequence(refusals[0])
+                && sequence(refusals[0]) < sequence(closed[0])
+        );
+        assert_eq!(
+            work.test_refusal_record().map(|value| value.0),
+            Some(sequence(refusals[0]))
+        );
+        assert!(work.test_unadmitted_refusal().is_none());
     }
     assert!(inner.test_context().wind_down.is_none() && inner.test_context().open_turn.is_none());
     assert!(inner.test_context().input.snapshot().is_none());

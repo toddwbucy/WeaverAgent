@@ -472,7 +472,9 @@ impl FoundationInput<'_> {
             label: None,
             io,
         };
-        if work.pass.refusal_started && work.pass.refusal_record.is_none() {
+        if (work.pass.refusal_started || work.pass.refusal.is_some())
+            && work.pass.refusal_record.is_none()
+        {
             return record_refusal(work, context, &mut ports);
         }
         match work.stage {
@@ -813,18 +815,34 @@ fn record_refusal<I: PumpIo>(
     context: &mut RecordingContext,
     ports: &mut PumpPorts<'_, I>,
 ) -> Result<(), RunFailure> {
+    generation::decision(context, ports.io)?;
     work.pass.returned_refusal.check()?;
-    let recorded = if work.pass.refusal_started {
+    let result = if work.pass.refusal_started {
         context.resume_author_and_wait(ports)
     } else {
         work.pass.refusal_started = true;
         context.author_and_wait(ports, work.pass.refusal.take().unwrap())
-    }
-    .map_err(|failure| {
-        work.pass
-            .returned_refusal
-            .retain_started(failure, &mut work.pass.refusal_started)
-    })?;
+    };
+    let recorded = match result {
+        Ok(recorded) => recorded,
+        Err(mut failure) => {
+            if failure.reclaim_held(context) {
+                work.pass.refusal_started = false;
+                work.pass.refusal = failure.original.take();
+                // The refusal remains owed through force. Its caller keeps the
+                // unadmitted event while the earlier owner keeps its answer.
+                if context.reduce_flow(ports.io)? != crate::flow::coordinator::Advance::Progress {
+                    context.pump_once(ports)?;
+                }
+                return Ok(());
+            }
+            return Err(work
+                .pass
+                .returned_refusal
+                .retain_started(failure, &mut work.pass.refusal_started));
+        }
+    };
+    work.pass.refusal_started = false;
     work.pass.refusal_record = Some(recorded);
     work.outcome = refused();
     work.stage = WindStage::PassComplete;

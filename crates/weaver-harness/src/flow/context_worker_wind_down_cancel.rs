@@ -37,6 +37,22 @@ impl WindDown {
             )
         })
     }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn test_unadmitted_refusal(&self) -> Option<(usize, String)> {
+        self.pass.refusal.as_ref().map(|event| {
+            assert!(!self.pass.refusal_started);
+            let Some(serving::Payload::Refusal(raw) | serving::Payload::Fault(raw)) =
+                &event.payload
+            else {
+                panic!("wind-down refusal keeps its exact payload");
+            };
+            (raw.get().as_ptr() as usize, format!("{event:?}"))
+        })
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn test_refusal_record(&self) -> Option<Sequence> {
+        self.pass.refusal_record
+    }
     pub(in crate::flow::context::worker_startup) fn owns_context(
         &self,
         context: &RecordingContext,
@@ -298,8 +314,9 @@ impl WindDown {
                     // The hold granted no author ticket. Only this caller
                     // regains its event; the original owner still owes work.
                     // Reduce admitted local work before waiting for a new
-                    // descriptor wake. Its completion stays with its owner.
-                    if context.reduce_flow(ports.io)? == crate::flow::coordinator::Advance::Pending
+                    // descriptor wake. Idle also waits: an untaken completion
+                    // stays with its owner and grants no immediate retry work.
+                    if context.reduce_flow(ports.io)? != crate::flow::coordinator::Advance::Progress
                     {
                         context.pump_once(ports)?;
                     }

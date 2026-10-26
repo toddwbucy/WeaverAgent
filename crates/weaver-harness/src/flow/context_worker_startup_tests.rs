@@ -4563,6 +4563,15 @@ scenario!(
 );
 
 scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_held_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-held-refusal"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_held_refusal_resume,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-held-refusal-resume"
+);
+
+scenario!(
     worker_session_graceful_save_sqlite_wind_convert_start_author,
     "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-start-author"
 );
