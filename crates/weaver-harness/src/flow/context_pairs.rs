@@ -57,6 +57,16 @@ pub(super) struct PairLeg {
     recorded: Option<SourceBlockId>,
 }
 
+/// An unadmitted cleanup filing interrupted by an independent transport wait.
+/// Its original event and enclosing bounds stay with this same pair owner.
+struct DeferredPairFiling {
+    event: AuthoredEvent,
+    call: CallId,
+    phase: PairRecordPhase,
+    bound: AbsoluteBound,
+    leave: AbsoluteBound,
+}
+
 pub(super) struct PairTransaction {
     pub(super) inward: Option<super::inward_recall::InwardWork>,
     pub(super) bound: Option<AbsoluteBound>,
@@ -66,9 +76,19 @@ pub(super) struct PairTransaction {
     refused_filing: Option<FilingCompletion>,
     pub(super) send: Option<crate::flow::pump_transport::OrganSend>,
     pub(super) refused_send: Option<weaver_types::OrganEnvelope>,
+    deferred_filing: Option<DeferredPairFiling>,
 }
 
 impl PairTransaction {
+    pub(super) fn holds_filing_original(&self) -> bool {
+        self.deferred_filing.is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) fn deferred_filing_event(&self) -> Option<&AuthoredEvent> {
+        self.deferred_filing.as_ref().map(|filing| &filing.event)
+    }
+
     pub(super) fn new(bound: AbsoluteBound) -> Self {
         Self {
             inward: None,
@@ -78,6 +98,7 @@ impl PairTransaction {
             refused_filing: None,
             send: None,
             refused_send: None,
+            deferred_filing: None,
         }
     }
 }
@@ -394,6 +415,24 @@ impl RecordingContext {
         {
             return Ok(PairProgress::Pending);
         }
+        if let Some(filing) = self.pair_work.as_mut().unwrap().deferred_filing.take() {
+            if self.pair_work.as_ref().unwrap().bound != Some(filing.bound)
+                || self.deadlines.get(PumpDeadline::Leave) != Some(filing.leave)
+            {
+                return Err(AuthorFailure {
+                    reason: self
+                        .pair_fault(ports.io, "deferred pair filing lost its original bounds"),
+                    original: Some(filing.event),
+                });
+            }
+            return self.admit_pair_filing(
+                filing.event,
+                filing.call,
+                filing.phase,
+                Some((filing.bound, filing.leave)),
+                ports,
+            );
+        }
         self.collect_pair_statement(ports.io)?;
         if self.pair_work.as_ref().unwrap().leg.is_some() {
             let progress = self.advance_owned_filing(FilingOwner::Pair, ports)?;
@@ -483,21 +522,64 @@ impl RecordingContext {
             causal_parent: Some(Sequence(call.sequence.0)),
             payload: Some(payload),
         };
-        // A background measurement can still own the author between pair legs.
-        // Busy starts no record and preserves the unclaimed candidate.
+        self.admit_pair_filing(event, call, phase, None, ports)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn admit_pair_filing<I: PumpIo>(
+        &mut self,
+        event: AuthoredEvent,
+        call: CallId,
+        phase: PairRecordPhase,
+        retained: Option<(AbsoluteBound, AbsoluteBound)>,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<PairProgress, AuthorFailure> {
         if let Err(error) =
             self.begin_owned_filing(event, PumpDeadline::Decision, FilingOwner::Pair, ports.io)
         {
+            // Lower/AdminRead interrupt only transport cleanup. The original
+            // Leave and pair wait still own this exact event; no replacement
+            // candidate or new bound is authorized when those waits clear.
+            let cleanup_wait = match &error.failure {
+                Some(RunFailure::Wait {
+                    key: key @ (PumpDeadline::Lower | PumpDeadline::AdminRead),
+                    bound,
+                }) if self.deadlines.get(*key) == Some(*bound) => self
+                    .deadlines
+                    .get(PumpDeadline::Leave)
+                    .filter(|leave| !leave.expired(self.last_ns)),
+                _ => None,
+            };
+            if let Some(leave) = cleanup_wait {
+                let (bound, leave) =
+                    retained.unwrap_or((self.pair_work.as_ref().unwrap().bound.unwrap(), leave));
+                self.pair_work.as_mut().unwrap().deferred_filing = Some(DeferredPairFiling {
+                    event: error.event,
+                    call,
+                    phase,
+                    bound,
+                    leave,
+                });
+                return Err(error.failure.unwrap().into());
+            }
             if error.failure.is_none() && error.refusal == FilingBeginRefusal::Busy {
+                if let Some((bound, leave)) = retained {
+                    self.pair_work.as_mut().unwrap().deferred_filing = Some(DeferredPairFiling {
+                        event: error.event,
+                        call,
+                        phase,
+                        bound,
+                        leave,
+                    });
+                }
                 return Ok(if self.reduce_flow(ports.io)? == Advance::Progress {
                     PairProgress::Progress
                 } else {
                     PairProgress::Pending
                 });
             }
-            // A nonfatal Leave/Enter expiry can refuse another attempt later.
-            // Return each exact unadmitted event to its caller, without a slot
-            // that could overwrite an earlier original or panic on that retry.
+            // Leave/Enter expiry and fatal refusal preserve the established
+            // caller-return contract. Nothing can overwrite an earlier original.
             return Err(AuthorFailure {
                 reason: error.failure.unwrap_or_else(|| {
                     self.pair_fault(
@@ -508,8 +590,6 @@ impl RecordingContext {
                 original: Some(error.event),
             });
         }
-        // begin only reserves custody, it submits no author ticket. Claim now,
-        // before advance can record or any failure callback can observe progress.
         self.pairs
             .mark_authoring(&call, phase)
             .map_err(|error| self.pair_fault(ports.io, format!("pair author: {error:?}")))?;

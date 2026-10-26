@@ -1,4 +1,4 @@
-//! Read-only observations for actual expired-gate composition tests.
+//! Read-only observations for actual rollback-gate composition tests.
 use super::*;
 
 pub(in crate::flow::context) type DeathEvidence = (
@@ -8,7 +8,7 @@ pub(in crate::flow::context) type DeathEvidence = (
     bool,
 );
 
-impl ExpiredGateRollback {
+impl RollbackGate {
     pub(in crate::flow::context) fn test_death(&self) -> Option<DeathEvidence> {
         self.death.as_ref().map(|death| {
             (

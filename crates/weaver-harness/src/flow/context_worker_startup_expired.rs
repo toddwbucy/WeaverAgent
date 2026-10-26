@@ -13,7 +13,7 @@ mod active;
 #[path = "context_worker_startup_expired_failure.rs"]
 pub(super) mod failure;
 #[path = "context_worker_startup_expired_gate.rs"]
-mod gate;
+pub(in crate::flow) mod gate;
 #[path = "context_worker_startup_expired_preflight.rs"]
 pub(in crate::flow) mod preflight;
 
@@ -337,6 +337,20 @@ impl FoundationRun {
 }
 
 impl FoundationExpiredRollback {
+    fn gate_host(&mut self) -> gate::GateRollbackHost<'_> {
+        let original = match self.handoff.held.as_ref() {
+            HeldStartup::Gate(gate) | HeldStartup::Ready { gate, .. } => gate,
+            _ => unreachable!("actual startup gate account"),
+        };
+        gate::GateRollbackHost {
+            context: &mut self.run.context,
+            arms: self.handoff.gate.as_mut().expect("actual gate resources"),
+            original: gate::GateRollbackEvidence::from_held(original, self.handoff.identity.enter),
+            leave: self.leave.expect("actual accepted rollback Leave"),
+            peer: &mut self.dial.as_mut().expect("actual Leave peer").peer,
+        }
+    }
+
     pub fn progress(&self) -> FoundationExpiredRollbackProgress {
         if self.abandoned
             || self

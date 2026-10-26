@@ -23,6 +23,9 @@ pub(crate) mod halt;
 #[path = "context_worker_close.rs"]
 mod close;
 
+#[path = "context_worker_input_rollback.rs"]
+pub(in crate::flow::context::worker_startup) mod rollback;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoundationInputProgress {
     Pending,
@@ -204,6 +207,13 @@ impl<'a> FoundationInput<'a> {
         {
             return self.progress();
         }
+        let listener = self.serving.owner.listener.identity();
+        let previous_listener = self
+            .serving
+            .owner
+            .context
+            .management_listener
+            .replace(listener.clone());
         let result = self.observe(io).and_then(|()| {
             if self.progress() == FoundationInputProgress::ManagementPending {
                 Ok(())
@@ -219,7 +229,16 @@ impl<'a> FoundationInput<'a> {
                 Ok(())
             }
         });
+        self.serving.owner.context.management_listener = previous_listener;
         if let Err(mut failure) = result {
+            if matches!(failure, RunFailure::ManagementPending)
+                && listener.matches(&self.serving.owner.listener)
+                && self.serving.owner.listener.held().is_some()
+                && self.serving.owner.context.failure().is_none()
+                && self.failure.is_none()
+            {
+                return self.progress();
+            }
             if self.final_send_clock_failed() {
                 failure = self.serving.owner.context.fail(
                     io,

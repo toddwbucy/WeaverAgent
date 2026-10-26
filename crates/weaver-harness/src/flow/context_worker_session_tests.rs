@@ -62,6 +62,12 @@ fn frame(index: usize, malformed: bool) -> OrganEnvelope {
     }
 }
 pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
+    if ready_rollback::is_mode(mode) {
+        return ready_rollback::gate(mode, root, fd);
+    }
+    if serving_rollback::is_mode(mode) {
+        return serving_rollback::gate(mode, root, fd);
+    }
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
     packet!(fd, &frame(0, mode.ends_with("refused")));
     if mode.ends_with("queued") {
@@ -113,6 +119,7 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
 
 pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
     let root = std::path::PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
+    let correction = serving_rollback::is_correction(mode);
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
     let mut resident = 3;
     let mut measured = None;
@@ -121,6 +128,9 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
     loop {
         let n = recv(fd, &mut bytes, MsgFlags::empty()).unwrap_or(0);
         if n == 0 {
+            if serving_rollback::is_mode(mode) {
+                serving_rollback::release_peer();
+            }
             return;
         }
         let request: TokenDirective = serde_json::from_slice(&bytes[..n]).unwrap();
@@ -137,12 +147,35 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                     [Message {
                         role: Role::User,
                         content: vec![ContentBlock::Text {
-                            text: "Read caf\u{e9}.".into()
+                            text: if correction && generated > 0 {
+                                "Read correction."
+                            } else {
+                                "Read caf\u{e9}."
+                            }
+                            .into()
                         }]
                     }]
                 );
-                assert!(tool_schemas.is_empty());
+                if serving_rollback::is_mode(mode) && mode.contains("-external-") {
+                    assert_eq!(tool_schemas, vec![crate::tools::shell_schema().to_owned()]);
+                } else {
+                    assert!(tool_schemas.is_empty());
+                }
                 measured = Some(delta);
+                if correction && generated == 1 && mode.ends_with("-placement") {
+                    std::fs::write(
+                        root.join("serving-rollback-correction-measured.json"),
+                        &bytes[..n],
+                    )
+                    .unwrap();
+                    wait_file(&root, "serving-rollback-lower.json");
+                } else if serving_rollback::is_mode(mode)
+                    && !correction
+                    && mode.contains("-placement")
+                {
+                    std::fs::write(root.join("serving-rollback-measured"), &bytes[..n]).unwrap();
+                    wait_file(&root, "serving-rollback-accepted");
+                }
                 packet!(
                     fd,
                     &TokenAnswer::DeltaMeasured {
@@ -160,12 +193,27 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                 tool_schemas,
             } => {
                 assert_eq!(delta, measured.take().unwrap());
-                assert!(tool_schemas.is_empty());
+                if serving_rollback::is_mode(mode) && mode.contains("-external-") {
+                    assert_eq!(tool_schemas, vec![crate::tools::shell_schema().to_owned()]);
+                } else {
+                    assert!(tool_schemas.is_empty());
+                }
                 let index = generated
                     + usize::from(mode.ends_with("refused") || mode.ends_with("read-refusal"));
-                assert_eq!(turn.0, format!("session-{index}"));
+                assert_eq!(
+                    turn.0,
+                    format!("session-{}", if correction { 0 } else { index })
+                );
+                assert!(
+                    !correction || index <= 1,
+                    "rollback cannot retry a correction"
+                );
                 std::fs::write(
-                    root.join(format!("session-generation-{index}.json")),
+                    root.join(if correction && index == 1 {
+                        "serving-rollback-correction-generation.json".into()
+                    } else {
+                        format!("session-generation-{index}.json")
+                    }),
                     &bytes[..n],
                 )
                 .unwrap();
@@ -185,9 +233,22 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                     } else {
                         Finish::Completed
                     },
-                    content: vec![ContentBlock::Text {
-                        text: "Read file.".into(),
-                    }],
+                    content: if correction {
+                        vec![ContentBlock::Text {
+                            text: if index == 0 {
+                                "Read bad."
+                            } else {
+                                "Read fixed."
+                            }
+                            .into(),
+                        }]
+                    } else if serving_rollback::is_mode(mode) && mode.contains("-external-") {
+                        super::emission::tests::content(mode)
+                    } else {
+                        vec![ContentBlock::Text {
+                            text: "Read file.".into(),
+                        }]
+                    },
                     unrecovered: vec![],
                     request: serde_json::value::RawValue::from_string(format!(
                         "{{\"session_turn\":{index}}}"
@@ -201,7 +262,10 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                     capacity: 16384,
                 };
                 generated += 1;
-                if index == 0 && mode.ends_with("stop-active") {
+                if (index == 0
+                    && (mode.ends_with("stop-active") || serving_rollback::holds_generation(mode)))
+                    || (correction && index == 1 && mode.ends_with("-generation"))
+                {
                     pending = Some((turn, generation));
                 } else {
                     packet!(fd, &TokenAnswer::Generated(generation));
@@ -210,6 +274,13 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
             TokenDirective::Cancel { turn } => {
                 let (original, mut generation) = pending.take().expect("actual pending generation");
                 assert_eq!(turn, original);
+                if serving_rollback::is_mode(mode) {
+                    assert!(!root.join("serving-rollback-cancel.json").exists());
+                    std::fs::write(root.join("serving-rollback-cancel.json"), &bytes[..n]).unwrap();
+                }
+                if correction {
+                    wait_file(&root, "serving-rollback-lower.json");
+                }
                 generation.finish = Finish::Stopped;
                 packet!(fd, &TokenAnswer::Generated(generation));
                 packet!(fd, &TokenAnswer::AtRest);
@@ -312,6 +383,15 @@ fn management(socket: &Path, directive: LifecycleDirective) -> std::os::fd::Owne
     );
     peer
 }
+
+#[path = "context_worker_ready_rollback_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod ready_rollback;
+
+#[path = "context_worker_ready_rollback_edges_tests.rs"]
+mod ready_rollback_edges;
+
+#[path = "context_worker_serving_rollback_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod serving_rollback;
 
 pub(in crate::flow::context::worker_startup) fn exercise(
     serving: FoundationServing<'_>,

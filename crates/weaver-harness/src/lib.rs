@@ -129,6 +129,9 @@ pub use channel::{
 };
 pub use engine::{Ports, TurnError, TurnOutcome};
 pub use failure::{AdoptionFault, ChannelFault, Outcome, UnlicensedMessage};
+pub use flow::context::worker_startup::entered_rollback::{
+    FoundationEnteredRollback, FoundationEnteredRollbackHandoff, FoundationEnteredRollbackProgress,
+};
 pub use flow::context::worker_startup::failed::{
     FoundationStartupExit, FoundationStartupExitProgress, FoundationStartupHandoff,
 };

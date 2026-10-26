@@ -246,12 +246,18 @@ impl Files {
                     } else {
                         "ready"
                     },
-                    "flow::context::startup_composition::tests::startup_composition_child",
+                    if super::input::generation::session_tests::serving_rollback::is_mode(mode) {
+                        "flow::context::worker_startup::input::generation::session_tests::serving_rollback::classifier_child"
+                    } else {
+                        "flow::context::startup_composition::tests::startup_composition_child"
+                    },
                 )),
                 spu: self.child(
                     "spu",
                     "WEAVER_RESIDENCY_COMPOSITION_CHILD",
-                    if mode.contains("generation") {
+                    if mode.contains("-session-ready-rollback") {
+                        "cleanup-ready"
+                    } else if mode.contains("generation") {
                         mode
                     } else if mode.starts_with("failed-startup-") {
                         "failed-startup"
@@ -559,8 +565,9 @@ impl Member {
                 s::StateFrame::Control { frame, .. } => {
                     let frame = match frame {
                         s::StateControl::Grants {} => {
-                            let rollback_read =
-                                mode.starts_with("rollback-") && self.requests.len() > 1;
+                            let rollback_read = (mode.starts_with("rollback-")
+                                || super::input::generation::session_tests::serving_rollback::is_mode(mode))
+                                && self.requests.len() > 1;
                             if rollback_read {
                                 assert_eq!(&self.requests[..2], ["open", "grants"]);
                                 assert_eq!(
@@ -752,6 +759,13 @@ impl Member {
                     ..
                 } => self.hold_control == Some("summary"),
                 s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::Marks {},
+                        },
+                    ..
+                } => self.hold_control == Some("marks"),
+                s::StateFrame::Control {
                     frame: s::StateControl::Release { .. },
                     ..
                 } => self.hold_control == Some("release"),
@@ -776,6 +790,69 @@ impl Member {
                 .write_all(&s::encode_state_line(&response, s::FrameDirection::Response).unwrap())
                 .unwrap();
         }
+    }
+}
+
+struct ForeignRun {
+    run: Box<FoundationRun>,
+    peer: OwnedFd,
+    reader: UnixStream,
+    member: UnixStream,
+}
+
+fn foreign_run(original: &[u8], root: &std::path::Path) -> ForeignRun {
+    // A second actual root Enter owns independent SCM_RIGHTS descriptors.
+    // Its organs are not started; it must remain untouched by the foreign join.
+    let path = root.join("foreign-admin.sock");
+    let mut admission =
+        FoundationAdmission::listen(crate::bind_coordination(&path).unwrap()).unwrap();
+    let peer = dial(&path);
+    let (sink, reader) = UnixStream::pair().unwrap();
+    let (state, member) = UnixStream::pair().unwrap();
+    let mut envelope: weaver_types::state_flow::enter::EnterEnvelope =
+        serde_json::from_slice(original).unwrap();
+    let weaver_types::state_flow::enter::EnterContent::Directive(
+        weaver_types::state_flow::enter::EnterDirective::Enter { payload },
+    ) = &mut envelope.payload;
+    let weaver_types::state_flow::enter::EnterBinding::Serving { enter_window, .. } =
+        &mut payload.binding
+    else {
+        panic!()
+    };
+    let now = crate::flow::clock::monotonic_ns().unwrap();
+    *enter_window = weaver_types::state_flow::EnterWindow {
+        began_ns: now.into(),
+        deadline_ns: (now + 5_000_000_000).into(),
+    };
+    let bytes = envelope.encode().unwrap();
+    assert_eq!(
+        sendmsg::<()>(
+            peer.as_raw_fd(),
+            &[std::io::IoSlice::new(&bytes)],
+            &[ControlMessage::ScmRights(&[
+                sink.as_raw_fd(),
+                state.as_raw_fd()
+            ])],
+            MsgFlags::MSG_NOSIGNAL,
+            None
+        )
+        .unwrap(),
+        bytes.len()
+    );
+    drop((sink, state));
+    assert_eq!(admission.advance(), FoundationAdmissionProgress::Received);
+    assert_eq!(admission.received.as_ref().unwrap().wire(), bytes);
+    let run = Box::new(
+        admission
+            .adopt()
+            .ok()
+            .expect("actual foreign Enter adoption"),
+    );
+    ForeignRun {
+        run,
+        peer,
+        reader,
+        member,
     }
 }
 
@@ -1058,9 +1135,73 @@ fn circuit(mode: &str) {
                 panic!("worker refused: {:?}", guard.0.as_ref().unwrap().detail());
             }
         };
+        if mode.ends_with("-session-ready-rollback-late") {
+            // The worker's Ready is wholly sent and its seat is already
+            // granted. Root deliberately observes that actual datagram only
+            // after its original Enter window has ended.
+            while crate::flow::clock::monotonic_ns().unwrap() <= bound.deadline_ns() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-worker") {
             drop(peer);
+            if super::input::generation::session_tests::serving_rollback::is_mode(mode) {
+                let handoff = super::input::generation::session_tests::serving_rollback::handoff(
+                    serving,
+                    &path,
+                    &files.0,
+                    mode,
+                    &mut member,
+                    &mut reader,
+                );
+                let actual = run.take_boxed();
+                super::input::generation::session_tests::serving_rollback::finish(
+                    actual,
+                    handoff,
+                    &mut member,
+                    &mut reader,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
+            if super::input::generation::session_tests::ready_rollback::is_mode(mode) {
+                let Some(mut handoff) =
+                    super::input::generation::session_tests::ready_rollback::handoff(
+                        serving, &path, &files.0, mode,
+                    )
+                else {
+                    return;
+                };
+                if mode.ends_with("-foreign") {
+                    let mut foreign = foreign_run(&bytes, &files.0);
+                    let (retained, checked) =
+                        super::input::generation::session_tests::ready_rollback::reject_foreign(
+                            foreign.run,
+                            handoff,
+                        );
+                    foreign.run = retained;
+                    handoff = checked;
+                    assert!(packet(&foreign.peer).is_none());
+                    foreign.reader.set_nonblocking(true).unwrap();
+                    foreign.member.set_nonblocking(true).unwrap();
+                    for stream in [&mut foreign.reader, &mut foreign.member] {
+                        assert!(matches!(stream.read(&mut [0]), Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock));
+                    }
+                }
+                let actual = run.take_boxed();
+                super::input::generation::session_tests::ready_rollback::finish(
+                    actual,
+                    handoff,
+                    &mut member,
+                    &mut reader,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
             if mode.contains("generation") {
                 super::input::generation::tests::exercise(
                     serving,
@@ -1515,12 +1656,31 @@ fn scenario(name: &str, mode: &str) {
         return;
     }
     let layout = crate::tools_cgroup::tests::ScratchLayout::new(&format!("worker-{mode}"));
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
         .args(["--exact", name, "--ignored", "--nocapture"])
         .env("WEAVER_WORKER_STARTUP_CASE", mode)
-        .env("WEAVER_GATE_STARTUP_RUN", &layout.run)
-        .status()
-        .unwrap();
+        .env("WEAVER_GATE_STARTUP_RUN", &layout.run);
+    let status = if super::input::generation::session_tests::serving_rollback::is_mode(mode) {
+        // The public driver can block inside a real transport call. A parent
+        // watchdog still fails that fixture and reaps its owned process tree.
+        let mut child = command.spawn().unwrap();
+        let limit = Instant::now() + Duration::from_secs(35);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= limit {
+                let _ = child.kill();
+                let _ = child.wait();
+                drop(layout);
+                panic!("serving rollback circuit {mode} exceeded its outer watchdog");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    } else {
+        command.status().unwrap()
+    };
     assert!(status.success(), "worker circuit {mode} failed");
 }
 macro_rules! scenario {
@@ -2610,6 +2770,154 @@ scenario!(
 scenario!(
     worker_session_composition_leave,
     "input-worker-generation-emission-session-leave"
+);
+scenario!(
+    worker_session_composition_serving_rollback_idle,
+    "input-worker-generation-emission-session-serving-rollback-idle"
+);
+scenario!(
+    worker_session_composition_serving_rollback_accepted,
+    "input-worker-generation-emission-session-serving-rollback-accepted"
+);
+scenario!(
+    worker_session_composition_serving_rollback_checking,
+    "input-worker-generation-emission-session-serving-rollback-checking"
+);
+scenario!(
+    worker_session_composition_serving_rollback_source_elected,
+    "input-worker-generation-emission-session-serving-rollback-source-elected"
+);
+scenario!(
+    worker_session_composition_serving_rollback_source_pending,
+    "input-worker-generation-emission-session-serving-rollback-source-pending"
+);
+scenario!(
+    worker_session_composition_serving_rollback_source_file,
+    "input-worker-generation-emission-session-serving-rollback-source-file"
+);
+scenario!(
+    worker_session_composition_serving_rollback_task_read,
+    "input-worker-generation-emission-session-serving-rollback-task-read"
+);
+scenario!(
+    worker_session_composition_serving_rollback_mark_file,
+    "input-worker-generation-emission-session-serving-rollback-mark-file"
+);
+scenario!(
+    worker_session_composition_serving_rollback_placement,
+    "input-worker-generation-emission-session-serving-rollback-placement"
+);
+scenario!(
+    worker_session_composition_serving_rollback_placement_decision_bound,
+    "input-worker-generation-emission-session-serving-rollback-placement-decision-bound"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation,
+    "input-worker-generation-emission-session-serving-rollback-active-generation"
+);
+scenario!(
+    worker_session_composition_serving_rollback_correction_placement,
+    "input-worker-generation-emission-session-serving-rollback-correction-placement"
+);
+scenario!(
+    worker_session_composition_serving_rollback_correction_generation,
+    "input-worker-generation-emission-session-serving-rollback-correction-generation"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation_queued,
+    "input-worker-generation-emission-session-serving-rollback-active-generation-queued"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_unload,
+    "input-worker-generation-emission-session-serving-rollback-external-unload"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_crossed,
+    "input-worker-generation-emission-session-serving-rollback-external-crossed"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_silent,
+    "input-worker-generation-emission-session-serving-rollback-external-silent"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_unload_queued,
+    "input-worker-generation-emission-session-serving-rollback-external-unload-queued"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_interrupt_blocked,
+    "input-worker-generation-emission-session-serving-rollback-external-interrupt-blocked"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_rejection_pending,
+    "input-worker-generation-emission-session-serving-rollback-external-rejection-pending"
+);
+scenario!(
+    worker_session_composition_serving_rollback_final_close,
+    "input-worker-generation-emission-session-serving-rollback-final-close"
+);
+scenario!(
+    worker_session_composition_serving_rollback_world_blocked,
+    "input-worker-generation-emission-session-serving-rollback-world-blocked"
+);
+scenario!(
+    worker_session_composition_serving_rollback_placed_clock_failure,
+    "input-worker-generation-emission-session-serving-rollback-placed-clock-failure"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation_cap,
+    "input-worker-generation-emission-session-serving-rollback-active-generation-cap"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation_clock_failure,
+    "input-worker-generation-emission-session-serving-rollback-active-generation-clock-failure"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation_trace_failure,
+    "input-worker-generation-emission-session-serving-rollback-active-generation-trace-failure"
+);
+scenario!(
+    worker_session_composition_ready_rollback,
+    "input-worker-generation-emission-session-ready-rollback"
+);
+scenario!(
+    worker_session_composition_ready_rollback_late,
+    "input-worker-generation-emission-session-ready-rollback-late"
+);
+scenario!(
+    worker_session_composition_ready_rollback_queued,
+    "input-worker-generation-emission-session-ready-rollback-queued"
+);
+scenario!(
+    worker_session_composition_ready_rollback_held,
+    "input-worker-generation-emission-session-ready-rollback-held"
+);
+scenario!(
+    worker_session_composition_ready_rollback_foreign,
+    "input-worker-generation-emission-session-ready-rollback-foreign"
+);
+scenario!(
+    worker_session_composition_ready_rollback_nonrollback,
+    "input-worker-generation-emission-session-ready-rollback-nonrollback"
+);
+scenario!(
+    worker_session_composition_ready_rollback_edge_leave_cap,
+    "input-worker-generation-emission-session-ready-rollback-edge-leave-cap"
+);
+scenario!(
+    worker_session_composition_ready_rollback_edge_clock_failure,
+    "input-worker-generation-emission-session-ready-rollback-edge-clock-failure"
+);
+scenario!(
+    worker_session_composition_ready_rollback_edge_recorded_clock,
+    "input-worker-generation-emission-session-ready-rollback-edge-recorded-clock"
+);
+scenario!(
+    worker_session_composition_ready_rollback_edge_unload_cap,
+    "input-worker-generation-emission-session-ready-rollback-edge-unload-cap"
+);
+scenario!(
+    worker_session_composition_ready_rollback_edge_drained_clock,
+    "input-worker-generation-emission-session-ready-rollback-edge-drained-clock"
 );
 
 scenario!(
