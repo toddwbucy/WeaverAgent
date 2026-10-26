@@ -22,6 +22,7 @@ use weaver_types::{AgentName, Cause, Reset, RunId};
 
 /// Root/runtime facts do not replace any operational setting in the artifact.
 pub(crate) struct RuntimeFacts {
+    pub(crate) enter_window: weaver_types::state_flow::EnterWindow,
     pub(crate) run: RunId,
     pub(crate) reset: Option<Reset>,
     pub(crate) stack: BTreeMap<String, String>,
@@ -135,6 +136,7 @@ impl PreparedEnter {
                 run: facts.run,
                 spu_instruction,
                 binding: EnterBinding::Serving {
+                    enter_window: facts.enter_window,
                     gate_instruction: gate_instruction.clone(),
                     shell: shell.clone(),
                     state_management: state.clone(),
@@ -205,6 +207,16 @@ impl PreparedEnter {
     /// Uses the same retained envelope and passes the existing state endpoint.
     /// Oversize returns Truncated before sendmsg; load still owes its existing
     /// enter_frame_too_large diagnostic and start rollback at coupled cutover.
+    pub(crate) fn send_within(
+        &self,
+        peer: &Coordination,
+        sink: BorrowedFd<'_>,
+        state: BorrowedFd<'_>,
+        window: &crate::serving_load::window::LoadWindow,
+    ) -> Result<(), ChannelFault> {
+        peer.send_replacement_enter_within(&self.envelope, sink, state, window)
+    }
+    #[cfg(test)]
     pub(crate) fn send(
         &self,
         peer: &Coordination,

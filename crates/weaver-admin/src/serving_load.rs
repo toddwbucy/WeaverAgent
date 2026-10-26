@@ -5,9 +5,12 @@
 //! FOUNDATION-TRANSITION's qualified coupled cutover.
 
 mod member;
+pub(crate) mod window;
+use window::LoadWindow;
 
 use std::os::fd::{AsFd, AsRawFd};
 use std::process::Child;
+#[cfg(test)]
 use std::time::Instant;
 
 use weaver_types::state_flow::enter::LoadedStateFacts;
@@ -83,14 +86,20 @@ fn run_authorized(
     account: impl FnOnce(&str) -> Result<AgentAccount, LifecycleRefusal>,
 ) -> Result<Loaded, Failure> {
     crate::admissible(config, agent)?;
+    let window = LoadWindow::begin(config.load_bound)?;
     let directory = crate::prepare_run_directory(config, nix::unistd::geteuid().as_raw())?;
-    let _invocation = start::take_invocation_lock(&directory, crate::verb_table::HolderVerb::Load)?;
+    window.check()?;
+    let _invocation = start::take_invocation_lock_for_enter(&directory, &window)?;
+    window.check()?;
     let mut standing = Standing::default();
     let mut children = Vec::new();
     let result = start_load(
         config,
-        agent,
-        cause,
+        LoadRequest {
+            agent,
+            cause,
+            window: &window,
+        },
         &mut standing,
         &mut children,
         prepare,
@@ -119,10 +128,15 @@ fn run_authorized(
     }
 }
 
+struct LoadRequest<'a> {
+    agent: &'a AgentName,
+    cause: Cause,
+    window: &'a LoadWindow,
+}
+
 fn start_load(
     config: &ServiceConfig,
-    agent: &AgentName,
-    cause: Cause,
+    request: LoadRequest<'_>,
     standing: &mut Standing,
     children: &mut Vec<Child>,
     prepare: impl FnOnce(
@@ -134,7 +148,14 @@ fn start_load(
     ) -> Result<PreparedEnter, PreparationFailure>,
     account: impl FnOnce(&str) -> Result<AgentAccount, LifecycleRefusal>,
 ) -> Result<Loaded, Failure> {
+    let LoadRequest {
+        agent,
+        cause,
+        window,
+    } = request;
+    window.check()?;
     let prior_marker = crate::read_marker_or_refuse(config)?;
+    window.check()?;
     let Some(run_lock) = start::take_run_lock(&config.run_directory())? else {
         // A held earlier run is observed, never rolled back by this invocation.
         let seen = crate::observe(config)
@@ -151,8 +172,11 @@ fn start_load(
         .into());
     };
     standing.run_lock = Some(run_lock);
+    window.check()?;
     crate::require_unloaded(config)?;
+    window.check()?;
     let artifact = select(config, agent)?;
+    window.check()?;
     let run = channel::mint_run_reference(&agent.0).ok_or(LifecycleRefusal::BoundaryUnverified)?;
     // This is a new coordination connection and its first exchange. Reserve
     // the same ordinal before preparing the complete envelope, before any fork.
@@ -161,6 +185,7 @@ fn start_load(
         agent,
         artifact,
         RuntimeFacts {
+            enter_window: window.original(),
             run: run.clone(),
             reset: save_points::reset_from(prior_marker.as_ref()),
             stack: crate::stack_digests(config, true, None),
@@ -169,6 +194,7 @@ fn start_load(
         1,
     )
     .map_err(Failure::Preparation)?;
+    window.check()?;
     // Enforce the complete paired wire bound before any child can stand.
     prepared.envelope().encode().map_err(|error| {
         match error {
@@ -179,6 +205,7 @@ fn start_load(
         }
         Failure::from(LifecycleRefusal::DescriptorsUnusable)
     })?;
+    window.check()?;
     let inventory = prepared.inventory();
     let custody = crate::sink::FileCustody {
         owners: vec![0, nix::unistd::geteuid().as_raw()],
@@ -190,23 +217,30 @@ fn start_load(
         config.territory_fd()?,
     )?;
     standing.sink_opened = true;
+    window.check()?;
     let account = account(&inventory.identity)?;
+    window.check()?;
     start::prepare_runtime_directory(
         &config.coordination_root,
         &agent.0,
         account.uid,
         account.gid,
     )?;
+    window.check()?;
     let worker_log = start::open_log(&config.worker_log(), Some(config.file_owner()))
         .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+    window.check()?;
     let group = crate::make_agent_cgroup(config, agent, &run.0, &account)?;
     standing.cgroup_run = Some(run.0.clone());
+    window.check()?;
     if let Some(judged) = inventory.shell.as_ref() {
         crate::shell::build_commands(&config.run_directory(), judged)
             .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
     }
+    window.check()?;
     let run_lock = standing.run_lock.as_ref().expect("retained run lock");
     start::clear_trace_door(&config.run_directory())?;
+    window.check()?;
     let relay_write = if matches!(
         inventory.config.trace_sink,
         weaver_types::TraceSink::File { .. }
@@ -224,10 +258,12 @@ fn start_load(
     } else {
         None
     };
+    window.check()?;
     let (member, state_end) =
         member::spawn(config, &prepared, run_lock, group.constituents_procs())?;
     children.push(member);
     standing.forked = true;
+    window.check()?;
     let worker = start::spawn_worker(start::WorkerStart {
         binary: &config.worker,
         // The existing optional classifier executable slot carries the judged
@@ -252,41 +288,44 @@ fn start_load(
     .map_err(|_| LifecycleRefusal::BindFailed)?;
     children.push(worker);
     drop(relay_write);
-    let mut peer = match crate::dial_worker(config) {
+    window.check()?;
+    let mut peer = match crate::dial_worker_for_enter(config, window) {
         Ok(peer) => peer,
         Err(channel::ChannelFault::WrongPeer { .. }) => {
             return Err(LifecycleRefusal::BoundaryUnverified.into());
         }
+        Err(channel::ChannelFault::Unanswered) => return Err(LifecycleRefusal::NoResidency.into()),
         Err(_) => {
             return Err(crate::refusal_from_worker(children.last_mut().expect("worker")).into());
         }
     };
+    window.check()?;
     if peer.next_ordinal() != prepared.envelope().exchange.ordinal {
         return Err(LifecycleRefusal::Malformed.into());
     }
     standing.run_reference = Some(run.0.clone());
     prepared
-        .send(&peer, sink.as_fd(), state_end.as_fd())
-        .map_err(|_| LifecycleRefusal::DescriptorsUnusable)?;
+        .send_within(&peer, sink.as_fd(), state_end.as_fd(), window)
+        .map_err(|fault| {
+            if fault == channel::ChannelFault::Unanswered {
+                LifecycleRefusal::NoResidency
+            } else {
+                LifecycleRefusal::DescriptorsUnusable
+            }
+        })?;
     standing.entered = true;
-    // Keep the existing Enter answer-wait anchor. The earlier root-operation
-    // EnterWindow is the separate, unmerged #282 proposal. No stage here gets
-    // a second answer wait or resends the already transmitted descriptor gifts.
-    let deadline = Instant::now()
-        .checked_add(config.load_bound)
-        .ok_or(LifecycleRefusal::NoResidency)?;
+    window.check()?;
     let answer = peer
-        .recv_within(deadline.saturating_duration_since(Instant::now()))
+        .recv_enter_answer(window)
         .map_err(|_| LifecycleRefusal::NoResidency)?;
-    if Instant::now() >= deadline {
-        return Err(LifecycleRefusal::NoResidency.into());
-    }
+    window.check()?;
     if answer.exchange != prepared.envelope().exchange || answer.position != Position::Close {
         return Err(LifecycleRefusal::Malformed.into());
     }
     match answer.payload {
         weaver_types::Payload::Answer(LifecycleAnswer::Ready) => {
             crate::open_marker(&config.root, standing, &run.0)?;
+            window.check()?;
             Ok(Loaded {
                 state: prepared.loaded_state(),
             })

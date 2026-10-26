@@ -76,24 +76,80 @@ fn residency_composition_child() {
         match recv(lifecycle.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
             Ok(0) => return,
             Ok(n) => {
+                assert_ne!(
+                    mode, "expired-admit-unsent",
+                    "expired pending Admit granted another write"
+                );
                 let request: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
                 if matches!(
                     request.payload,
                     weaver_types::Payload::Directive(LifecycleDirective::Release)
                 ) {
-                    assert!(admitted);
+                    assert!(admitted || mode == "failed-startup" || mode == "cleanup-ready");
                     assert_eq!(
                         recv(decode.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
                         Ok(0)
                     );
-                    packet!(
-                        lifecycle.as_raw_fd(),
-                        &OrganEnvelope {
-                            exchange: request.exchange,
-                            position: Position::Close,
-                            payload: weaver_types::Payload::Answer(LifecycleAnswer::Released),
+                    let mut answer = OrganEnvelope {
+                        exchange: request.exchange,
+                        position: Position::Close,
+                        payload: if admitted {
+                            weaver_types::Payload::Answer(LifecycleAnswer::Released)
+                        } else {
+                            weaver_types::Payload::Refusal(
+                                weaver_types::LifecycleRefusal::NoResidency,
+                            )
+                        },
+                    };
+                    if mode == "expired-release-wrong" || mode == "expired-open-unanswered-wrong" {
+                        answer.exchange.ordinal += 1;
+                    } else if mode == "expired-release-position" {
+                        answer.position = Position::Open;
+                    } else if mode == "expired-release-arm" {
+                        answer.payload = weaver_types::Payload::Answer(LifecycleAnswer::Admitted);
+                    }
+                    let root =
+                        std::env::var_os("WEAVER_WORKER_INPUT_ROOT").map(std::path::PathBuf::from);
+                    if mode == "expired-release-silent" {
+                        std::fs::write(root.as_ref().unwrap().join("release-received"), b"seen")
+                            .unwrap();
+                        while Instant::now() < deadline {
+                            if recv(lifecycle.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT)
+                                == Ok(0)
+                            {
+                                return;
+                            }
+                            std::thread::sleep(Duration::from_millis(1));
                         }
-                    );
+                        panic!("silent Release child was not closed");
+                    }
+                    packet!(lifecycle.as_raw_fd(), &answer);
+                    if mode == "expired-release-held" {
+                        std::fs::write(root.as_ref().unwrap().join("release-replied"), b"sent")
+                            .unwrap();
+                        while !root.as_ref().unwrap().join("spu-exit").exists() {
+                            assert!(Instant::now() < deadline, "SPU reap fixture timed out");
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                    }
+                    if matches!(
+                        mode.as_str(),
+                        "expired-release-wrong"
+                            | "expired-open-unanswered-wrong"
+                            | "expired-release-position"
+                            | "expired-release-arm"
+                    ) {
+                        loop {
+                            assert!(Instant::now() < deadline, "failed Release was not closed");
+                            match recv(lifecycle.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
+                                Ok(0) => break,
+                                Err(Errno::EAGAIN) => std::thread::sleep(Duration::from_millis(1)),
+                                other => {
+                                    panic!("Release was retried after its bad reply: {other:?}")
+                                }
+                            }
+                        }
+                    }
                     return;
                 }
                 let weaver_types::Payload::Directive(LifecycleDirective::Admit { instruction }) =
@@ -140,7 +196,30 @@ fn residency_composition_child() {
                     response.payload = weaver_types::Payload::Answer(LifecycleAnswer::Released);
                 }
                 if mode != "early" {
+                    if mode == "expired-admit-held" {
+                        let root = std::path::PathBuf::from(
+                            std::env::var_os("WEAVER_WORKER_INPUT_ROOT").unwrap(),
+                        );
+                        while !root.join("allow-admit-reply").exists() {
+                            assert!(Instant::now() < deadline, "held Admit fixture timed out");
+                            assert_eq!(
+                                recv(decode.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
+                                Err(Errno::EAGAIN),
+                                "expired Admit granted Open"
+                            );
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                    }
                     packet!(lifecycle.as_raw_fd(), &response);
+                }
+                if mode == "expired-release-early" {
+                    response.exchange.ordinal += 1;
+                    response.payload = weaver_types::Payload::Answer(LifecycleAnswer::Released);
+                    packet!(lifecycle.as_raw_fd(), &response);
+                    let root = std::path::PathBuf::from(
+                        std::env::var_os("WEAVER_WORKER_INPUT_ROOT").unwrap(),
+                    );
+                    std::fs::write(root.join("release-early"), b"sent").unwrap();
                 }
                 admitted = mode != "refuse";
             }
@@ -148,9 +227,20 @@ fn residency_composition_child() {
             other => panic!("residency child receive {other:?}"),
         }
         match recv(decode.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
-            Ok(0) if mode == "cleanup-ready" => {}
+            Ok(0)
+                if mode == "cleanup-ready"
+                    || mode == "failed-startup"
+                    || mode == "expired-admit-held"
+                    || mode == "expired-admit-unsent"
+                    || mode.starts_with("expired-open-unanswered")
+                    || mode == "expired-open-unsent"
+                    || mode.starts_with("expired-release-") => {}
             Ok(0) => return,
             Ok(n) => {
+                assert_ne!(
+                    mode, "expired-open-unsent",
+                    "expired Open sent its first byte"
+                );
                 assert!(admitted);
                 assert!(!opened);
                 let request: TokenDirective = serde_json::from_slice(&bytes[..n]).unwrap();
@@ -162,6 +252,13 @@ fn residency_composition_child() {
                 };
                 assert_eq!(messages.len(), 1);
                 opened = true;
+                if mode.starts_with("expired-open-unanswered") {
+                    let root = std::path::PathBuf::from(
+                        std::env::var_os("WEAVER_WORKER_INPUT_ROOT").unwrap(),
+                    );
+                    std::fs::write(root.join("open-unanswered"), b"received").unwrap();
+                    continue;
+                }
                 let rendered = "<system>Read caf\u{e9}.</system>";
                 let answer = TokenAnswer::Opened(weaver_types::Opened { session, prefix_tokens: 3, capacity: 16384,
                     generation_limit: 16, terminal_tokens: 1,

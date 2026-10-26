@@ -582,7 +582,10 @@ fn new_payloads() -> Vec<(s::Kind, s::Payload)> {
                 cause: None,
                 forced: true,
                 forced_by: None,
-                release: None,
+                release: p::Release {
+                    spu: None,
+                    member: None,
+                },
                 end_reason: reason.then_some(p::EndReason::ComponentFailure),
                 state_flow_failure: failure.then(|| p::StateFlowFailure {
                     fault_sequence: Some(9.into()),

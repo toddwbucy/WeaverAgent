@@ -139,6 +139,34 @@ enum ReadPurpose {
     },
 }
 
+/// A rollback-only seal from this owner's immutable read and recorder slots.
+/// No caller can construct it or use it to resume a query or authorize success.
+pub(in crate::flow) struct ReadRollbackPermit {
+    expected: Option<(
+        weaver_types::state_flow::DecimalU64,
+        weaver_types::state_flow::StateControl,
+    )>,
+    ticket: Option<u64>,
+    record_kind: Option<Kind>,
+}
+impl ReadRollbackPermit {
+    pub(in crate::flow) fn matches_record(&self, barrier: &RecordBarrier) -> bool {
+        barrier.pending_author().map(|held| held.ticket) == self.ticket
+            && barrier.pending().map(|event| event.envelope.kind) == self.record_kind
+    }
+    pub(in crate::flow) fn expected(
+        &self,
+    ) -> Option<&(
+        weaver_types::state_flow::DecimalU64,
+        weaver_types::state_flow::StateControl,
+    )> {
+        self.expected.as_ref()
+    }
+    pub(in crate::flow) fn measurement_pending(&self) -> bool {
+        self.record_kind == Some(Kind::StateStoreMeasurement) && self.ticket.is_some()
+    }
+}
+
 impl ReadTransaction {
     pub(super) fn orphan_recorded(&self) -> Option<&RecordedRead> {
         self.orphan_recorded.as_ref()
@@ -181,6 +209,27 @@ impl ReadTransaction {
     pub(super) fn is_summary(&self) -> bool {
         matches!(self.purpose, ReadPurpose::PlanSummary)
     }
+    pub(super) fn is_boot_pairs(&self) -> bool {
+        matches!(self.purpose, ReadPurpose::BootPairs)
+    }
+    pub(super) fn boot_prompt_enter(&self) -> Option<AbsoluteBound> {
+        match self.purpose {
+            ReadPurpose::Boot { enter, .. } => Some(enter),
+            _ => None,
+        }
+    }
+    pub(super) fn stop_expired_boot_read(&mut self) {
+        if !self.complete {
+            self.cancelled = true;
+        }
+        self.pages.freeze();
+    }
+    pub(super) fn rollback_wait_matches(&self, context: &RecordingContext) -> bool {
+        match context.deadlines.get(PumpDeadline::StateControl) {
+            Some(bound) => bound == self.bound,
+            None => self.complete,
+        }
+    }
     pub(super) fn plan_refusal(&self) -> Option<&ReadFailure> {
         self.released
             .as_ref()
@@ -203,6 +252,41 @@ impl ReadTransaction {
 }
 
 impl RecordingContext {
+    pub(super) fn read_rollback_permit(&self) -> Result<ReadRollbackPermit, RunFailure> {
+        let read = self.read.as_ref();
+        let ticket = self.barrier.pending_author().map(|held| held.ticket);
+        let record_kind = self.barrier.pending().map(|event| event.envelope.kind);
+        match record_kind {
+            Some(Kind::Recall)
+                if read.is_some_and(|read| {
+                    read.plan_ticket().is_some() && read.plan_ticket() == ticket
+                }) => {}
+            Some(Kind::StateStoreMeasurement)
+                if ticket.is_some()
+                    && read.and_then(|read| read.plan_expected()).is_some_and(
+                        |(id, request)| {
+                            self.flow
+                                .standing_state()
+                                .and_then(|state| state.held_measurement())
+                                .is_some_and(|measurement| {
+                                    measurement.observation.request_id == *id
+                                        && measurement.observation.operation == request.operation()
+                                        && self
+                                            .barrier
+                                            .pending_state_measurement_matches(measurement)
+                                })
+                        },
+                    ) => {}
+            None if ticket.is_none() => {}
+            _ => return Err(RunFailure::ReadOwned),
+        }
+        Ok(ReadRollbackPermit {
+            expected: read.and_then(|read| read.plan_expected()).cloned(),
+            ticket,
+            record_kind,
+        })
+    }
+
     /// A busy caller retains its selector and receives no request identity or
     /// new wait. Fresh-history filing barriers remain an explicit caller duty.
     /// This external entry excludes an owned pair, including gaps between its

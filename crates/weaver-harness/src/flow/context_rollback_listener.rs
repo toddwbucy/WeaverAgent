@@ -3,9 +3,10 @@ use super::*;
 use crate::flow::pump::{LifecycleListener, PumpSource};
 use weaver_types::{LifecycleAnswer, LifecycleRefusal, Payload};
 
-pub(super) struct RollbackDials {
+pub(in crate::flow::context) struct RollbackDials {
     pub(super) listener: LifecycleListener,
     pub(super) active: Option<PendingDial>,
+    sealing: bool,
 }
 
 pub(super) struct PendingDial {
@@ -17,10 +18,11 @@ pub(super) struct PendingDial {
 }
 
 impl RollbackDials {
-    pub(super) fn new(listener: LifecycleListener) -> Self {
+    pub(in crate::flow::context) fn new(listener: LifecycleListener) -> Self {
         Self {
             listener,
             active: None,
+            sealing: false,
         }
     }
 
@@ -41,7 +43,7 @@ impl RollbackDials {
         }
     }
 
-    pub(super) fn prepare(
+    pub(in crate::flow::context) fn prepare(
         &mut self,
         context: &mut RecordingContext,
         leave: AbsoluteBound,
@@ -138,7 +140,7 @@ impl RollbackDials {
                 return Ok(());
             }
             let payload = match &message.envelope.payload {
-                Payload::Directive(LifecycleDirective::Observe) => {
+                Payload::Directive(LifecycleDirective::Observe) if !self.sealing => {
                     Payload::Answer(LifecycleAnswer::InTransition {
                         constituents: Vec::new(),
                     })
@@ -181,7 +183,63 @@ impl RollbackDials {
         Ok(())
     }
 
-    pub(super) fn ports<'a>(&'a mut self, peer: &'a mut LifecyclePeer) -> LifecyclePorts<'a> {
+    /// Seal before organ release. Unlink once, exhaust the actual backlog and
+    /// answer every secondary directive OutOfOrder within the existing Leave.
+    pub(in crate::flow::context) fn seal_step(
+        &mut self,
+        context: &mut RecordingContext,
+        leave: AbsoluteBound,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        if !self.sealing {
+            self.listener.unlink();
+            self.sealing = true;
+        }
+        let result = (|| {
+            context.live(io)?;
+            let attempted = self.active.is_none();
+            let accepted = if attempted {
+                self.listener
+                    .accept_observed(context.last_ns)
+                    .map_err(|failure| RunFailure::Transport {
+                        source: PumpSource::Listener,
+                        failure,
+                    })?
+            } else {
+                false
+            };
+            self.prepare(context, leave, io)?;
+            if attempted && self.active.is_none() && self.listener.held().is_none() && !accepted {
+                return Ok(true);
+            }
+            if self.active.is_none() {
+                return Ok(false);
+            }
+            context.pump_once(&mut PumpPorts {
+                lifecycle: LifecyclePorts {
+                    dial: self.active.as_mut().map(|dial| &mut dial.peer),
+                    ..Default::default()
+                },
+                gate: None,
+                decode: None,
+                label: None,
+                io,
+            })?;
+            Ok(false)
+        })();
+        match result {
+            Ok(done) => Ok(done),
+            Err(error) => {
+                self.recover(context, error, io)?;
+                Ok(false)
+            }
+        }
+    }
+
+    pub(in crate::flow::context) fn ports<'a>(
+        &'a mut self,
+        peer: &'a mut LifecyclePeer,
+    ) -> LifecyclePorts<'a> {
         LifecyclePorts {
             listener: Some(&mut self.listener),
             leave_peer: peer.failure().is_none().then_some(peer),
@@ -192,7 +250,7 @@ impl RollbackDials {
 
     /// Only a secondary peer or its exact silent-read expiry is recoverable.
     /// Listener/state/trace/clock failure and the original Leave expiry survive.
-    pub(super) fn recover(
+    pub(in crate::flow::context) fn recover(
         &mut self,
         context: &mut RecordingContext,
         error: RunFailure,
@@ -231,7 +289,7 @@ impl RollbackDials {
     }
 }
 
-pub(super) struct RetiredRollbackDials {
+pub(in crate::flow::context) struct RetiredRollbackDials {
     pub(super) listener: crate::flow::pump::RetiredLifecycleListener,
     pub(super) active: Option<RetiredRollbackDial>,
 }
@@ -243,7 +301,7 @@ pub(super) struct RetiredRollbackDial {
     pub(super) send: Option<OrganSend>,
 }
 impl RollbackDials {
-    pub(super) fn retire_failed(self) -> RetiredRollbackDials {
+    pub(in crate::flow::context) fn retire_failed(self) -> RetiredRollbackDials {
         RetiredRollbackDials {
             listener: self.listener.retire_failed(),
             active: self.active.map(|dial| RetiredRollbackDial {

@@ -100,6 +100,11 @@ impl ReleaseTicket {
 }
 
 impl RecordingContext {
+    pub(super) fn release_recorded_sequence(&self) -> Option<Sequence> {
+        self.release_author
+            .as_ref()
+            .and_then(|attempt| attempt.recorded)
+    }
     pub(super) fn submit_context_author<I: PumpIo>(
         &mut self,
         event: AuthoredEvent,

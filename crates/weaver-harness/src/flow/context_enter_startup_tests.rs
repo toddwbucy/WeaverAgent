@@ -52,7 +52,18 @@ pub(super) fn adopt(
     bootstrap: &s::Ste100Bootstrap,
     binary: &std::path::Path,
 ) -> (ReceivedEnter, OwnedFd) {
-    let envelope = envelope(&run.context.declaration, load, bootstrap, binary);
+    let mut envelope = envelope(&run.context.declaration, load, bootstrap, binary);
+    let bound = run.context.deadlines.get(PumpDeadline::Enter).unwrap();
+    let weaver_types::state_flow::enter::EnterContent::Directive(
+        weaver_types::state_flow::enter::EnterDirective::Enter { payload },
+    ) = &mut envelope.payload;
+    let EnterBinding::Serving { enter_window, .. } = &mut payload.binding else {
+        panic!()
+    };
+    *enter_window = s::EnterWindow {
+        began_ns: bound.began_ns().into(),
+        deadline_ns: bound.deadline_ns().into(),
+    };
     let bytes = envelope.encode().unwrap();
     let (admin, peer) = socketpair(
         AddressFamily::Unix,
@@ -78,18 +89,11 @@ pub(super) fn adopt(
     let mut receiver = EnterReceiver::from_peer(LifecyclePeer::from_owned(admin).unwrap())
         .ok()
         .unwrap();
-    receiver.advance().unwrap();
+    receiver.advance(&mut run.clock).unwrap();
     let original = receiver.into_received().ok().unwrap();
     assert_eq!(original.wire(), bytes);
-    let remaining = run
-        .context
-        .deadlines
-        .get(PumpDeadline::Enter)
-        .unwrap()
-        .deadline_ns()
-        - run.clock.now().unwrap();
     let (context, original) = original
-        .adopt(remaining, &mut run.clock)
+        .adopt(&mut run.clock)
         .map_err(|f| f.detail)
         .unwrap()
         .into_parts();

@@ -1,6 +1,7 @@
 //! Bounded Shape/Grants controls on the one state channel. These observations
 //! retain their exact Recorded completion and grant no content or permission.
 
+use super::worker_startup::expired::ExpiredStartupGrantsPermit;
 use super::*;
 use crate::flow::coordinator::{ControlOperation, OperationStart};
 use crate::flow::read::ReadFailure;
@@ -134,6 +135,25 @@ impl RecordingContext {
         turn: Option<TurnRef>,
         io: &mut impl PumpIo,
     ) -> Result<(), InspectionBeginError> {
+        self.begin_inspection_owned(kind, turn, None, io)
+    }
+
+    pub(in crate::flow::context) fn begin_expired_summary_grants(
+        &mut self,
+        account: &PlanSummaryAccount,
+        permit: &ExpiredStartupGrantsPermit,
+        io: &mut impl PumpIo,
+    ) -> Result<(), InspectionBeginError> {
+        self.begin_inspection_owned(InspectionKind::Grants, None, Some((account, permit)), io)
+    }
+
+    fn begin_inspection_owned(
+        &mut self,
+        kind: InspectionKind,
+        turn: Option<TurnRef>,
+        summary: Option<(&PlanSummaryAccount, &ExpiredStartupGrantsPermit)>,
+        io: &mut impl PumpIo,
+    ) -> Result<(), InspectionBeginError> {
         let error = |refusal, failure| InspectionBeginError {
             kind,
             turn: turn.clone(),
@@ -150,12 +170,18 @@ impl RecordingContext {
         {
             return Err(error(InspectionBeginRefusal::WrongPhase, None));
         }
-        if self.inspection.is_some()
+        let summary_cleanup = summary.is_some_and(|(account, permit)| {
+            kind == InspectionKind::Grants
+                && turn.is_none()
+                && account.permits_expired_grants(self, permit)
+        });
+        if (summary.is_some() && !summary_cleanup)
+            || self.inspection.is_some()
             || self.marks.is_some()
             || self.boot_pairs.is_some()
             || self.read.is_some()
             || self.boot_open_blocks_external()
-            || self.plan_summary_blocks_external()
+            || (self.plan_summary_blocks_external() && !summary_cleanup)
             || self.place_blocks_external()
             || self.measure.is_some()
             || self.member_capture.is_some()

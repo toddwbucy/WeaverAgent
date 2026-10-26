@@ -2882,7 +2882,10 @@ fn preactivation_refusal_rollback_preserves_unused_open_without_a_serving_proof(
             cause: Some(fixture::load_record().cause),
             forced: true,
             forced_by: None,
-            release: None,
+            release: trace::Release {
+                spu: None,
+                member: None,
+            },
             end_reason: None,
             state_flow_failure: None,
         };

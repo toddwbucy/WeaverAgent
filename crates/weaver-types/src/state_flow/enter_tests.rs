@@ -131,3 +131,28 @@ fn entire_encoded_envelope_is_bounded_including_escaping_and_siblings() {
     let escaped: EnterEnvelope = serde_json::from_value(value).unwrap();
     assert!(matches!(escaped.encode(), Err(CodecError::TooLarge)));
 }
+
+#[test]
+fn serving_requires_original_window_and_diagnostic_rejects_it() {
+    let mut value = serde_json::to_value(fixture()).unwrap();
+    let window = payload(&mut value)["binding"]
+        .as_object_mut()
+        .unwrap()
+        .remove("enter_window")
+        .unwrap();
+    assert!(EnterEnvelope::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    payload(&mut value)["binding"]["enter_window"] = serde_json::Value::Null;
+    assert!(EnterEnvelope::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    payload(&mut value)["binding"] = json!({"kind":"diagnostic", "state_election":crate::StateElection::default(), "enter_window": window});
+    assert!(EnterEnvelope::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    let mut envelope = fixture();
+    let EnterContent::Directive(EnterDirective::Enter { payload }) = &mut envelope.payload;
+    let EnterBinding::Serving { enter_window, .. } = &mut payload.binding else {
+        panic!()
+    };
+    enter_window.deadline_ns = enter_window.began_ns;
+    assert!(matches!(
+        envelope.encode(),
+        Err(CodecError::InvalidEnterWindow)
+    ));
+}

@@ -666,3 +666,77 @@ fn admin_startup_composition_failed_worker_exec_ends_the_member_without_enter() 
 fn admin_startup_composition_eof_rolls_back_without_loaded() {
     root_case("eof");
 }
+
+#[test]
+fn admin_original_enter_window_includes_preparation_and_preserves_actual_failure() {
+    for actual_failure in [false, true] {
+        let mut f = fixture();
+        setup(&f);
+        f.config.load_bound = Duration::from_millis(50);
+        let result = run_authorized(
+            &f.config,
+            &agent(&f),
+            Cause { uid: 0 },
+            |_, _, artifact, facts, ordinal| {
+                let original = facts.enter_window;
+                assert_eq!(original.deadline_ns.0 - original.began_ns.0, 50_000_000);
+                let prepared = prepare(&f, artifact, facts, ordinal)?;
+                std::thread::sleep(Duration::from_millis(70));
+                if actual_failure {
+                    return Err(PreparationFailure::from(
+                        LifecycleRefusal::ArtifactUnreadable,
+                    ));
+                }
+                Ok(prepared)
+            },
+            |_| panic!("no account, child, descriptor carry or Ready after preparation expiry"),
+        );
+        if actual_failure {
+            assert!(matches!(result, Err(Failure::Preparation(_))), "{result:?}");
+        } else {
+            assert!(
+                matches!(result, Err(Failure::Admission(ref r)) if **r == LifecycleRefusal::NoResidency),
+                "{result:?}"
+            );
+        }
+        assert!(!start::run_lock_held(&f.config.run_directory()).unwrap());
+        assert_eq!(save_points::load_marker(&f.config.root).unwrap(), None);
+    }
+}
+
+#[test]
+fn admin_original_enter_window_bounds_courtesy_lock_wait_before_inventory() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    let mut f = fixture();
+    setup(&f);
+    let directory =
+        crate::prepare_run_directory(&f.config, nix::unistd::geteuid().as_raw()).unwrap();
+    // The lock uses POSIX process ownership; only a separate process can hold it.
+    let mut reader = Command::new("/usr/bin/python3").args(["-c", "import sys,fcntl; f=open(sys.argv[1],'a+'); fcntl.lockf(f,fcntl.LOCK_SH); print('locked',flush=True); sys.stdin.read()"])
+        .arg(directory.join("admin.lock")).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    let mut line = String::new();
+    BufReader::new(reader.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert_eq!(line.trim(), "locked");
+    f.config.load_bound = Duration::from_millis(30);
+    let before = Instant::now();
+    let result = run_authorized(
+        &f.config,
+        &agent(&f),
+        Cause { uid: 0 },
+        |_, _, _, _, _| panic!("lock wait consumed the load window"),
+        |_| panic!("account"),
+    );
+    drop(reader.stdin.take());
+    assert!(reader.wait().unwrap().success());
+    assert!(
+        matches!(result, Err(Failure::Admission(ref r)) if **r == LifecycleRefusal::NoResidency),
+        "{result:?}"
+    );
+    assert!(
+        before.elapsed() < Duration::from_millis(500),
+        "courtesy wait extended Enter"
+    );
+}
