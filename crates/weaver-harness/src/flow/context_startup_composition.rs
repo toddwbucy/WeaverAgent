@@ -508,9 +508,42 @@ pub(super) mod tests;
 pub(in crate::flow) mod refusal;
 
 impl StartupComposition<'_> {
+    pub(in crate::flow::context) fn expired_identity(
+        &self,
+    ) -> Option<super::worker_startup::expired::ExpiredEnterIdentity> {
+        (self.stage == StartupStage::Stopped)
+            .then(|| {
+                super::worker_startup::expired::ExpiredEnterIdentity::from_resources(
+                    self.context,
+                    self.resources,
+                    self.original_enter.as_ref(),
+                )
+            })
+            .flatten()
+    }
     #[cfg(test)]
     pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
         self.context
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_classifying(&self) -> bool {
+        self.stage == StartupStage::Classifier && self.context.flow.starting_classifier().is_some()
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) unsafe fn failure_test_stage_classifier(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) {
+        assert_eq!(self.stage, StartupStage::Classifier);
+        assert!(!self.started);
+        // SAFETY: the fixture carries the same single serving-thread contract
+        // as advance and retains the actual resource owner until child reap.
+        unsafe {
+            self.resources
+                .spawn_classifier(self.context, &self.binary, self.bootstrap.clone(), io)
+        }
+        .unwrap();
+        self.started = true;
     }
     pub(in crate::flow::context) fn failed_identity(
         &self,
@@ -524,10 +557,10 @@ impl StartupComposition<'_> {
             })
             .flatten()
     }
-    pub(in crate::flow::context) fn detach_failure(
+    pub(in crate::flow::context) fn detach_owned<I>(
         self,
-        identity: super::worker_startup::failed::StartupIdentity,
-    ) -> super::worker_startup::failed::DetachedStartup {
+        identity: I,
+    ) -> super::worker_startup::failed::DetachedStartup<I> {
         use super::worker_startup::failed::{DetachedStartup, HeldStartup};
         let (_, _, account) = self.into_stopped().ok().expect("checked stopped startup");
         DetachedStartup {

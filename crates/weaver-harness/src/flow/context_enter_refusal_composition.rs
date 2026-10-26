@@ -33,6 +33,75 @@ pub(in crate::flow) struct RecordedStartupRefusal<'a> {
     owner: EnterRefusalComposition<'a>,
 }
 
+pub(in crate::flow::context) struct RetiredRefusal {
+    startup: StoppedStartupAccount,
+    original_enter: Option<crate::flow::pump::enter::RetiredEnter>,
+    bound: AbsoluteBound,
+    envelope: OrganEnvelope,
+    original: Option<AuthoredEvent>,
+}
+impl EnterRefusalComposition<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.startup.context
+    }
+
+    pub(in crate::flow::context) fn failure_view(
+        &self,
+    ) -> crate::flow::context::worker_startup::rollback::failed::RollbackView<'_> {
+        use crate::flow::context::worker_startup::rollback::failed::RollbackView;
+        RollbackView {
+            context: self.startup.context,
+            resources: self.startup.resources,
+            leave: None,
+            recorded: None,
+            cause: self
+                .startup
+                .original_enter
+                .as_ref()
+                .map(|original| original.envelope().enter().cause),
+        }
+    }
+    pub(in crate::flow::context) fn retire_failure(self) -> RetiredRefusal {
+        let Self {
+            startup,
+            bound,
+            envelope,
+            original,
+        } = self;
+        let (_, _, mut startup) = startup
+            .into_stopped()
+            .ok()
+            .expect("retained classifier refusal");
+        let original_enter = startup
+            .original_enter
+            .take()
+            .map(|original| original.retire_failed());
+        RetiredRefusal {
+            startup,
+            original_enter,
+            bound,
+            envelope,
+            original,
+        }
+    }
+}
+impl RecordedStartupRefusal<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.owner.failure_test_context()
+    }
+
+    pub(in crate::flow::context) fn failure_view(
+        &self,
+    ) -> crate::flow::context::worker_startup::rollback::failed::RollbackView<'_> {
+        self.owner.failure_view()
+    }
+    pub(in crate::flow::context) fn retire_failure(self) -> RetiredRefusal {
+        self.owner.retire_failure()
+    }
+}
+
 impl<'a> StartupComposition<'a> {
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn into_original_refusal(
@@ -305,3 +374,10 @@ pub(super) mod tests;
 
 #[path = "context_rollback_composition.rs"]
 pub(in crate::flow) mod response;
+
+#[cfg(test)]
+impl RetiredRefusal {
+    pub(in crate::flow::context) fn retained_enter_wire(&self) -> &[u8] {
+        self.original_enter.as_ref().unwrap().retained_wire()
+    }
+}

@@ -163,6 +163,17 @@ pub struct LastWord {
     cell: std::sync::Arc<(std::sync::Mutex<WordCell>, std::sync::Condvar)>,
 }
 
+/// The existing bound on settling the dying organ's final stderr line.
+pub(crate) const LAST_WORD_SETTLE_BOUND: std::time::Duration =
+    std::time::Duration::from_millis(200);
+
+/// One nonconsuming observation of the reader's retained typed line and EOF.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct LastWordSnapshot {
+    pub(crate) word: Option<serde_json::Value>,
+    pub(crate) eof: bool,
+}
+
 /// The retained line and whether the reader has seen end-of-stream. Until
 /// `eof`, the reader thread may still be carrying a line from the pipe to
 /// the cell; after it, the cell is final.
@@ -173,6 +184,24 @@ struct WordCell {
 }
 
 impl LastWord {
+    /// Snapshot the retained line without waiting on the reader or its mutex.
+    /// `None` means the cell is busy, not that EOF or an absent word was seen.
+    /// The raw line stays with this owner for subsequent snapshots and `take`.
+    pub(crate) fn snapshot(&self) -> Option<LastWordSnapshot> {
+        let cell = match self.cell.0.try_lock() {
+            Ok(cell) => cell,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        let word = cell.word.clone();
+        let eof = cell.eof;
+        drop(cell);
+        Some(LastWordSnapshot {
+            word: word.and_then(|line| serde_json::from_str(&line).ok()),
+            eof,
+        })
+    }
+
     /// The pipe and its reader, returning the child's write end raw for the
     /// fork to place. The parent must close its copy of the write end after
     /// the fork - the returned `OwnedFd` is exactly that copy - or the
@@ -296,8 +325,7 @@ impl LastWord {
     /// death hostage. A timeout reads whatever the cell holds, which is the
     /// tail race the Spec names: it costs the member, never the death.
     pub fn take(&self) -> Option<String> {
-        let bound = std::time::Duration::from_millis(200);
-        let deadline = std::time::Instant::now() + bound;
+        let deadline = std::time::Instant::now() + LAST_WORD_SETTLE_BOUND;
         let mut cell = self.cell.0.lock().unwrap_or_else(|p| p.into_inner());
         while !cell.eof {
             let now = std::time::Instant::now();

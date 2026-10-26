@@ -48,7 +48,126 @@ impl TemplateChecks {
     }
 }
 
+pub(in crate::flow) struct TemplateRollbackPermit {
+    operation: Option<crate::flow::coordinator::CheckOperation>,
+    request_id: Option<DecimalU64>,
+    ticket: Option<u64>,
+    kind: Option<Kind>,
+}
+impl TemplateRollbackPermit {
+    pub(in crate::flow) fn operation(&self) -> Option<&crate::flow::coordinator::CheckOperation> {
+        self.operation.as_ref()
+    }
+    pub(in crate::flow) fn request_id(&self) -> Option<DecimalU64> {
+        self.request_id
+    }
+    pub(in crate::flow) fn matches_record(&self, barrier: &RecordBarrier) -> bool {
+        barrier.pending_author().map(|author| author.ticket) == self.ticket
+            && barrier.pending().map(|event| event.envelope.kind) == self.kind
+    }
+}
+
+pub(super) struct StoppedTemplateAccount {
+    checks: TemplateChecks,
+    pub(super) check: crate::flow::coordinator::StoppedTemplateCheck,
+}
+impl StoppedTemplateAccount {
+    pub(super) fn retire_transport(&mut self) {
+        self.check.retire_transport();
+    }
+    pub(super) fn enter(&self) -> AbsoluteBound {
+        self.checks.enter
+    }
+    pub(super) fn transcript(&self) -> &TemplateCheckTranscript {
+        &self.checks.transcript
+    }
+}
+
 impl RecordingContext {
+    pub(super) fn can_detach_expired_templates(
+        &self,
+        permit: &super::worker_startup::expired::ExpiredStartupAccountPermit,
+    ) -> bool {
+        permit.allows(self)
+            && self.template_checks.as_ref().is_some_and(|checks| {
+                !checks.complete && Some(checks.enter) == self.deadlines.get(PumpDeadline::Enter)
+            })
+    }
+
+    pub(super) fn detach_expired_templates(
+        &mut self,
+        permit: &super::worker_startup::expired::ExpiredStartupAccountPermit,
+        io: &mut impl PumpIo,
+    ) -> Result<StoppedTemplateAccount, RunFailure> {
+        self.release_live(io)?;
+        if !self.can_detach_expired_templates(permit)
+            || self.template_blocked_author.is_some()
+            || self.template_setup_refusal.is_some()
+            || self.read.is_some()
+            || self.inspection.is_some()
+            || self.boot_pairs.is_some()
+            || self.repair.is_some()
+            || self.plan_summary.is_some()
+            || self.boot_open_blocks_external()
+            || self.measure_blocks_external()
+            || self.place_owed()
+            || self.filing.is_some()
+            || self.output.is_some()
+            || self.pair_work.is_some()
+            || self.marks.is_some()
+            || self.member_capture.is_some()
+            || self.freshness.is_some()
+            || self.open_turn.is_some()
+            || self.input.snapshot().is_some()
+            || self.input_turn.is_some()
+            || self.input_author.is_some()
+            || self.waiting_content.is_some()
+            || self.completed_author.is_some()
+        {
+            return Err(RunFailure::TemplateBlocked);
+        }
+        // A real received component failure is not healthy Enter expiry. Keep
+        // its reply/author in the existing failed context for bounded teardown.
+        if let Some(weaver_types::state_flow::Ste100Reply {
+            result: weaver_types::state_flow::Ste100Result::ComponentFailed { code, detail },
+            ..
+        }) = self
+            .flow
+            .standing_classifier()
+            .and_then(|classifier| classifier.held())
+        {
+            return Err(self.fail(
+                io,
+                FlowHaltReason::ClassifierFailed,
+                HaltPoint::Classifier,
+                format!("template classifier reported {code:?}: {detail}"),
+            ));
+        }
+        self.check_held_input()?;
+        let checks = self.template_checks.as_ref().unwrap();
+        let seal = TemplateRollbackPermit {
+            operation: checks.transcript.next_operation(),
+            request_id: checks.pending_request,
+            ticket: self.barrier.pending_author().map(|author| author.ticket),
+            kind: self.barrier.pending().map(|event| event.envelope.kind),
+        };
+        let check = self
+            .flow
+            .detach_expired_template_check(
+                &mut FlowRecording {
+                    barrier: &mut self.barrier,
+                    inbox: &mut self.inbox,
+                    budget: &mut self.budget,
+                    author: &self.author,
+                },
+                &seal,
+            )
+            .map_err(|failure| self.flow_failed(io, failure))?;
+        Ok(StoppedTemplateAccount {
+            checks: self.template_checks.take().unwrap(),
+            check,
+        })
+    }
     /// Return the refused caller event unchanged. It never owned a recorder
     /// ticket and this transfer cannot admit it or resume another author.
     pub(super) fn take_template_blocked_author(&mut self) -> Option<AuthoredEvent> {

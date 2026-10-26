@@ -6,6 +6,71 @@ use super::*;
 // in author_failure: second submissions must preserve, not replace, originals.
 
 #[test]
+fn lower_expiry_preserves_the_cleanup_refusal_ticket_and_original_leave_bound() {
+    let mut fx = releasing(false, true);
+    let leave = fx.context.deadlines.get(PumpDeadline::Leave).unwrap();
+    let lower = AbsoluteBound::after(fx.clock.now().unwrap(), 10).unwrap();
+    fx.context
+        .arm(PumpDeadline::Lower, lower, &mut fx.clock)
+        .unwrap();
+    let original = event(
+        Kind::Refusal,
+        Some(Payload::Refusal(
+            serde_json::value::to_raw_value(&weaver_types::RefusalRecord::Lifecycle {
+                asked: weaver_types::LifecycleAsk::Leave,
+                refusal: weaver_types::LifecycleRefusal::Unloading,
+            })
+            .unwrap(),
+        )),
+    );
+    let pointer = original_pointer(&original);
+    let failure = fx
+        .context
+        .author_and_wait(&mut ports(&mut fx.clock), original)
+        .unwrap_err();
+    assert_eq!(
+        failure.reason,
+        RunFailure::Wait {
+            key: PumpDeadline::Lower,
+            bound: lower,
+        }
+    );
+    assert!(failure.original.is_none());
+    let ticket = fx.context.pending_author().unwrap().ticket;
+    assert_eq!(
+        original_pointer(&fx.context.pending_author().unwrap().event),
+        pointer
+    );
+    assert_eq!(fx.context.phase(), RecordingPhase::Releasing);
+    assert!(fx.context.failure().is_none());
+    assert!(fx.context.halt().is_none());
+    assert!(fx.context.failed_wait.is_none());
+    assert_eq!(fx.context.deadlines.get(PumpDeadline::Lower), Some(lower));
+    assert_eq!(fx.context.deadlines.get(PumpDeadline::Leave), Some(leave));
+
+    // Retire only the lifecycle owner's Lower wait. The same trace ticket
+    // remains owed under the unchanged Leave interval.
+    assert_eq!(fx.context.complete_wait(PumpDeadline::Lower), Some(lower));
+    assert_eq!(fx.context.pending_author().unwrap().ticket, ticket);
+    drain(&mut fx);
+    fx.context
+        .resume_author_and_wait(&mut ports(&mut fx.clock))
+        .unwrap();
+    assert!(fx.context.pending_author().is_none());
+    assert!(fx.context.failure().is_none());
+    assert_eq!(fx.context.deadlines.get(PumpDeadline::Leave), Some(leave));
+    assert_eq!(
+        fx.context
+            .barrier
+            .recorder()
+            .structure()
+            .by_kind(Kind::Refusal)
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn author_failure_pending_owner_refusal_preserves_and_resumes_the_first_ticket() {
     let mut fx = releasing(true, true);
     let wait = AbsoluteBound::after(fx.clock.now().unwrap(), 10).unwrap();

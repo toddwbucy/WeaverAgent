@@ -469,6 +469,7 @@ fn lifecycle_deadlines_keep_their_owner_while_gate_expiry_latches_flow() {
     for key in [
         PumpDeadline::Enter,
         PumpDeadline::Leave,
+        PumpDeadline::Lower,
         PumpDeadline::Label,
         PumpDeadline::Gate,
     ] {

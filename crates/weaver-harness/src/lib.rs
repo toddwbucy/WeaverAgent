@@ -164,3 +164,7 @@ pub use weaver_trace::LoopIdentity;
 /// a directory behind (#690 item C2.9).
 #[cfg(test)]
 mod scratch;
+
+pub use flow::context::worker_startup::rollback::failed::{
+    FoundationRollbackExit, FoundationRollbackExitProgress, FoundationRollbackHandoff,
+};

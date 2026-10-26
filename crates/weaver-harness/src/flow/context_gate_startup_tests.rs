@@ -95,7 +95,8 @@ fn gate_startup_child() {
     let _bound = if matches!(
         mode.as_str(),
         "ready" | "shell" | "delay" | "finish-expiry" | "pressure"
-    ) {
+    ) || mode.starts_with("expired-startup-")
+    {
         Some(std::os::unix::net::UnixListener::bind(socket).unwrap())
     } else {
         None
@@ -103,7 +104,7 @@ fn gate_startup_child() {
     if mode == "delay" {
         std::thread::sleep(Duration::from_millis(30));
     }
-    if mode != "silent" && mode != "early" {
+    if mode != "silent" && mode != "early" && !mode.ends_with("-lower-unreplied") {
         let mut answer = OrganEnvelope {
             exchange: request.exchange.clone(),
             position: Position::Close,
@@ -133,7 +134,32 @@ fn gate_startup_child() {
             packet(3, &answer);
         }
     }
-    if mode.starts_with("failed-startup-") {
+    if mode.starts_with("failed-startup-") || mode.starts_with("expired-startup-") {
+        let root = socket.parent().unwrap();
+        if mode.ends_with("-lower-frames") || mode.ends_with("-lower-pressure") {
+            let count = if mode.ends_with("-lower-pressure") {
+                1
+            } else {
+                3
+            };
+            for ordinal in 101..101 + count {
+                packet(
+                    3,
+                    &OrganEnvelope {
+                        exchange: weaver_types::ExchangeId {
+                            opener: Opener::Gate,
+                            ordinal,
+                        },
+                        position: Position::Open,
+                        payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry_from(
+                            br#"{"text":"queued during expired Enter"}"#,
+                            42,
+                        )),
+                    },
+                );
+            }
+            std::fs::write(root.join("gate-frames-sent"), count.to_string()).unwrap();
+        }
         if mode.ends_with("-lower-early") {
             packet(
                 3,
@@ -146,6 +172,7 @@ fn gate_startup_child() {
                     payload: weaver_types::Payload::Answer(LifecycleAnswer::GateStopped),
                 },
             );
+            std::fs::write(root.join("gate-early-sent"), b"sent").unwrap();
         }
         let deadline = Instant::now() + Duration::from_secs(8);
         while Instant::now() < deadline {
@@ -157,8 +184,34 @@ fn gate_startup_child() {
                         lower.payload,
                         weaver_types::Payload::Directive(LifecycleDirective::Lower)
                     );
-                    if mode.ends_with("-lower-silent") {
+                    let marker = root.join("gate-lower-received");
+                    assert!(!marker.exists(), "a second Lower is not cleanup authority");
+                    std::fs::write(&marker, &bytes[..n]).unwrap();
+                    if mode.contains("-lower-last-word-") {
+                        last_word_fixture(port, root, &mode, deadline);
+                        return;
+                    }
+                    if mode.ends_with("-lower-transport-loss") {
+                        // Exit with the actual Lower unanswered. The owner
+                        // must observe EOF and reap this exact child.
+                        return;
+                    }
+                    if mode.ends_with("-lower-silent")
+                        || mode.ends_with("-lower-silent-admin")
+                        || mode.ends_with("-lower-cap")
+                        || mode.ends_with("-lower-pressure")
+                    {
                         continue;
+                    }
+                    if mode.ends_with("-lower-unreplied") {
+                        packet(
+                            3,
+                            &OrganEnvelope {
+                                exchange: request.exchange.clone(),
+                                position: Position::Close,
+                                payload: weaver_types::Payload::Answer(LifecycleAnswer::GateReady),
+                            },
+                        );
                     }
                     let mut exchange = lower.exchange;
                     if mode.ends_with("-lower-wrong") {
@@ -169,9 +222,33 @@ fn gate_startup_child() {
                         &OrganEnvelope {
                             exchange,
                             position: Position::Close,
-                            payload: weaver_types::Payload::Answer(LifecycleAnswer::GateStopped),
+                            payload: if mode.ends_with("-lower-refused") {
+                                weaver_types::Payload::Refusal(
+                                    weaver_types::LifecycleRefusal::OutOfOrder,
+                                )
+                            } else {
+                                weaver_types::Payload::Answer(LifecycleAnswer::GateStopped)
+                            },
                         },
                     );
+                    if mode.ends_with("-lower-held") {
+                        std::fs::write(root.join("gate-stopped-sent"), b"sent").unwrap();
+                        loop {
+                            match recv(port.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
+                                Ok(0) | Err(nix::errno::Errno::EAGAIN) => (),
+                                Ok(n) => panic!(
+                                    "unexpected second request after GateStopped: {:?}",
+                                    serde_json::from_slice::<OrganEnvelope>(&bytes[..n])
+                                ),
+                                other => panic!("held gate probe: {other:?}"),
+                            }
+                            if root.join("gate-exit").exists() {
+                                break;
+                            }
+                            assert!(Instant::now() < deadline, "held gate exit watchdog");
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                    }
                     return;
                 }
                 Err(nix::errno::Errno::EAGAIN) => std::thread::sleep(Duration::from_millis(1)),
@@ -182,6 +259,54 @@ fn gate_startup_child() {
     }
     // The test owner closes the gate port before reaping; no live deployment.
     while recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()).unwrap_or(0) > 0 {}
+}
+
+fn last_word_fixture(port: OwnedFd, root: &std::path::Path, mode: &str, deadline: Instant) {
+    let wait = |name: &str| {
+        while !root.join(name).exists() {
+            assert!(
+                Instant::now() < deadline,
+                "last-word child waiting for {name}"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+    let speak = || {
+        eprintln!(r#"{{"fixture":"earlier gate word"}}"#);
+        eprintln!("untyped gate stderr before final JSON");
+        eprintln!(r#"{{"fixture":"gate-last-word","answer":42}}"#);
+        eprintln!("untyped gate stderr after final JSON");
+        std::fs::write(root.join("gate-word-written"), b"written").unwrap();
+    };
+    let delayed = mode.ends_with("-delayed");
+    if !delayed {
+        speak();
+    }
+    wait("gate-word-close");
+    drop(port);
+    std::fs::write(root.join("gate-word-closed"), b"closed").unwrap();
+    if delayed {
+        wait("gate-word-write");
+        speak();
+    } else {
+        // Descriptor 3 is closed while this real child's descriptor 2 remains
+        // open. The snapshot must never block on this held stderr stream.
+        wait("gate-word-exit");
+        if mode.ends_with("-timeout") {
+            eprintln!(r#"{{"fixture":"word after frozen death"}}"#);
+        }
+    }
+}
+
+impl GateStartup<'_> {
+    pub(in crate::flow::context) fn expired_test_raise_sent_without_reply(&self) -> bool {
+        self.stage == GateStartupStage::Raise
+            && self
+                .send
+                .as_ref()
+                .is_some_and(|send| send.sent() && send.sent_at().is_some())
+            && self.reply.is_none()
+    }
 }
 
 pub(super) struct CircuitIo<'a>(pub(super) &'a mut FakePumpIo);

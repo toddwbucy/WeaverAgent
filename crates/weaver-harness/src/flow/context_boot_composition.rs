@@ -89,12 +89,66 @@ pub(in crate::flow) struct StoppedBoot<'a> {
 
 use super::worker_startup::failed::{DetachedStartup, HeldBoot, HeldStartup, StartupIdentity};
 impl BootComposition<'_> {
+    pub(in crate::flow::context) fn expired_identity(
+        &self,
+    ) -> Option<super::worker_startup::expired::ExpiredEnterIdentity> {
+        (self.stage == BootStage::Stopped)
+            .then(|| {
+                super::worker_startup::expired::ExpiredEnterIdentity::from_boot(
+                    self.context,
+                    self.decode,
+                    self.resident.as_ref(),
+                )
+            })
+            .flatten()
+    }
     #[cfg(test)]
     pub(in crate::flow::context) fn failure_test_open_sent(&self) -> bool {
         !self.decode.open_not_started() && !self.context.boot_open_account_settled()
     }
     #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_template_sent(&self) -> bool {
+        self.context.flow.pending_check().is_some()
+            && self
+                .context
+                .flow
+                .standing_classifier()
+                .is_some_and(|classifier| {
+                    classifier.outstanding().is_some() && !classifier.wants_write()
+                })
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_stage_open(&mut self, io: &mut impl PumpIo) {
+        assert_eq!(self.stage, BootStage::Open);
+        assert!(!self.started);
+        self.context.begin_boot_open(self.decode, io).unwrap();
+        self.started = true;
+        assert!(self.decode.open_not_started());
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_stage_repair(&mut self, io: &mut impl PumpIo) {
+        assert_eq!(self.stage, BootStage::Repair);
+        assert!(!self.started);
+        self.context
+            .begin_boot_pairs(self.prior.take().unwrap(), io)
+            .unwrap();
+        self.started = true;
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_stage_summary(&mut self, io: &mut impl PumpIo) {
+        assert_eq!(self.stage, BootStage::Summary);
+        assert!(!self.started);
+        self.context
+            .begin_boot_plan_summary(self.repaired.take().unwrap(), io)
+            .unwrap();
+        self.started = true;
+    }
+    #[cfg(test)]
     pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.context
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context_ref(&self) -> &RecordingContext {
         self.context
     }
     pub(in crate::flow::context) fn failed_identity(&self) -> Option<StartupIdentity> {
@@ -102,10 +156,7 @@ impl BootComposition<'_> {
             .then(|| StartupIdentity::from_boot(self.context, self.decode, self.resident.as_ref()))
             .flatten()
     }
-    pub(in crate::flow::context) fn detach_failure(
-        self,
-        identity: StartupIdentity,
-    ) -> DetachedStartup {
+    pub(in crate::flow::context) fn detach_owned<I>(self, identity: I) -> DetachedStartup<I> {
         let Self {
             resident,
             context: _,
@@ -138,10 +189,19 @@ impl BootComposition<'_> {
     }
 }
 impl ComposedBoot<'_> {
+    pub(in crate::flow::context) fn expired_identity(
+        &self,
+    ) -> Option<super::worker_startup::expired::ExpiredEnterIdentity> {
+        super::worker_startup::expired::ExpiredEnterIdentity::from_boot(
+            self.context,
+            self.decode,
+            self.resident.as_ref(),
+        )
+    }
     pub(in crate::flow::context) fn failed_identity(&self) -> Option<StartupIdentity> {
         StartupIdentity::from_boot(self.context, self.decode, self.resident.as_ref())
     }
-    pub(in crate::flow::context) fn detach_failure(self) -> HeldBoot {
+    pub(in crate::flow::context) fn detach_owned(self) -> HeldBoot {
         let Self {
             resident,
             context: _,

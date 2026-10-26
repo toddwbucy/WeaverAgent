@@ -2117,6 +2117,7 @@ impl RecordingContext {
             PumpDeadline::StateControl => (FlowHaltReason::ControlBound, BlockedStage::Control),
             PumpDeadline::Enter
             | PumpDeadline::Leave
+            | PumpDeadline::Lower
             | PumpDeadline::Label
             | PumpDeadline::AdminRead
             | PumpDeadline::CaptureResult
@@ -2445,6 +2446,10 @@ pub(in crate::flow) mod boot_composition;
 
 #[path = "context_templates.rs"]
 mod template_driver;
+pub(super) use template_driver::TemplateRollbackPermit;
+#[path = "context_expired_admission.rs"]
+mod expired_admission_driver;
+pub(super) use expired_admission_driver::ClassifierAdmissionRollbackPermit;
 #[allow(unused_imports)] // Dormant certification boundary, consumed by enter at cutover.
 pub(super) use template_driver::{TemplateBeginError, TemplateBeginRefusal, TemplateProgress};
 
@@ -2454,6 +2459,7 @@ mod template_tests;
 
 #[path = "context_receipts.rs"]
 mod receipt_driver;
+pub(super) use receipt_driver::BootFilingRollbackPermit;
 
 #[path = "context_sort.rs"]
 mod sort_driver;
@@ -2565,12 +2571,15 @@ pub(in crate::flow) use plan_summary_driver::{
     PlanSummaryBeginRefusal, PlanSummaryCompletion, PlanSummaryProgress,
 };
 
+#[path = "context_expired_read.rs"]
+pub(super) mod expired_read_driver;
 #[path = "context_read.rs"]
 mod read_driver;
 #[allow(unused_imports)] // Composed by dependent boot, recall and placement primitives.
 pub(super) use read_driver::{
     BootHead, BootReadBeginError, BootReadBeginRefusal, BootReadCompletion, CancelledRead,
-    ReadBeginError, ReadBeginRefusal, ReadCompletion, ReadProgress, RecordedRead,
+    ReadBeginError, ReadBeginRefusal, ReadCompletion, ReadProgress, ReadRollbackPermit,
+    RecordedRead,
 };
 
 #[path = "context_freshness.rs"]

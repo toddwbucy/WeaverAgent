@@ -28,6 +28,51 @@ pub(in crate::flow) struct RollbackTerminal<'a> {
     detail: Option<String>,
 }
 
+pub(in crate::flow::context) struct RetiredRollbackTerminal {
+    owner: RetiredPreparedRollback,
+    stage: TerminalStage,
+    unload: Option<AuthoredEvent>,
+    unload_started: bool,
+    returned: StoppedAuthor,
+    unload_sequence: Option<Sequence>,
+    answer: Option<OrganEnvelope>,
+    send: Option<OrganSend>,
+    detail: Option<String>,
+}
+impl RollbackTerminal<'_> {
+    pub(in crate::flow::context) fn failure_view(
+        &self,
+    ) -> crate::flow::context::worker_startup::rollback::failed::RollbackView<'_> {
+        let mut view = self.owner.failure_view();
+        view.recorded = self.unload_sequence;
+        view
+    }
+    pub(in crate::flow::context) fn retire_failure(self) -> RetiredRollbackTerminal {
+        let Self {
+            owner,
+            stage,
+            unload,
+            unload_started,
+            returned,
+            unload_sequence,
+            answer,
+            send,
+            detail,
+        } = self;
+        RetiredRollbackTerminal {
+            owner: owner.retire_failure(),
+            stage,
+            unload,
+            unload_started,
+            returned,
+            unload_sequence,
+            answer,
+            send,
+            detail,
+        }
+    }
+}
+
 impl<'a> PreparedRollback<'a> {
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn into_terminal(self) -> Result<RollbackTerminal<'a>, Self> {
@@ -355,5 +400,22 @@ impl RollbackTerminal<'_> {
     }
     pub(in crate::flow) fn test_peer(&self) -> &LifecyclePeer {
         &self.owner.owner.peer
+    }
+}
+
+#[cfg(test)]
+impl RetiredRollbackTerminal {
+    pub(in crate::flow::context) fn retained_comparison(
+        &self,
+    ) -> (
+        &InspectionCompletion,
+        &InspectionCompletion,
+        &OrganEnvelope,
+        GrantSurface,
+    ) {
+        self.owner.retained_comparison()
+    }
+    pub(in crate::flow::context) fn retained_enter_wire(&self) -> &[u8] {
+        self.owner.retained_enter_wire()
     }
 }
