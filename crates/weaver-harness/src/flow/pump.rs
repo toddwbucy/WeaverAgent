@@ -36,6 +36,8 @@ const CONTROL_BYTES: usize = 256;
 pub(super) enum PumpDeadline {
     Enter,
     Leave,
+    /// Lifecycle Lower and gate reap; expiry returns cleanup to its owner.
+    Lower,
     Gate,
     Cut,
     Decision,

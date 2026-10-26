@@ -313,6 +313,9 @@ impl RecordBarrier {
     pub(super) fn abandon(&mut self) {
         self.recorder.abandon();
     }
+    pub(super) fn close_unadmitted(&mut self) -> Result<(), weaver_trace::Failure> {
+        self.recorder.close_unadmitted()
+    }
 
     /// Prepare once and retain the complete original until actual admission.
     /// Busy returns the new original intact and never replaces the first ticket.
@@ -1056,7 +1059,7 @@ impl RecordBarrier {
 
     pub(super) fn retain_summary_rollback_record(
         &mut self,
-        permit: &super::context::plan_summary_driver::PlanReadRollbackPermit,
+        permit: &super::context::ReadRollbackPermit,
     ) -> Result<StoppedReadRecord, &'static str> {
         if !permit.matches_record(self) {
             return Err("summary rollback lost its exact record");
@@ -1065,6 +1068,99 @@ impl RecordBarrier {
             _pending: self.pending.take(),
             _author: self.pending_author.take(),
         })
+    }
+
+    pub(super) fn boot_filing_record_matches(
+        &self,
+        permit: &super::context::BootFilingRollbackPermit,
+        measurement: Option<&weaver_types::state_flow::StateStoreMeasurement>,
+        observation: Option<&FlowObservation>,
+    ) -> bool {
+        if !permit.matches_record(self) {
+            return false;
+        }
+        match (&self.pending, &self.pending_author) {
+            (None, None) => true,
+            (Some((event, purpose)), Some(author))
+                if event.envelope.turn.is_none() && author.event.turn.is_none() =>
+            {
+                matches_purpose(event, purpose)
+                    && match purpose {
+                        RecordPurpose::Content => {
+                            permit.source.is_none()
+                                && permit.matches_event(&author.event)
+                                && matches!(&event.payload, Some(Payload::PairEnded(ended))
+                            if ended.as_ref() == &super::mirror::pair_ended(&permit.expected))
+                        }
+                        RecordPurpose::State(actual) => measurement == Some(actual),
+                        RecordPurpose::Flow(actual) => observation == Some(actual),
+                        RecordPurpose::Terminal(source) => permit.source.as_ref() == Some(source),
+                        _ => false,
+                    }
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn retain_boot_filing_record(
+        &mut self,
+        permit: &super::context::BootFilingRollbackPermit,
+    ) -> Result<StoppedStartupRecord, &'static str> {
+        if !permit.matches_record(self) {
+            return Err("boot filing record belongs to another barrier");
+        }
+        Ok(StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        })
+    }
+
+    pub(super) fn pending_classifier_result_matches(
+        &self,
+        reply: &weaver_types::state_flow::Ste100Reply,
+    ) -> bool {
+        matches!(&self.pending, Some((event, RecordPurpose::Classifier(expected)))
+            if expected == reply && event.envelope.turn.is_none())
+            && self
+                .pending_author
+                .as_ref()
+                .is_some_and(|author| author.event.turn.is_none())
+    }
+
+    pub(super) fn retain_template_rollback_record(
+        &mut self,
+        permit: &super::context::TemplateRollbackPermit,
+    ) -> Result<StoppedStartupRecord, &'static str> {
+        if !permit.matches_record(self) {
+            return Err("template rollback lost its exact record");
+        }
+        Ok(StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        })
+    }
+
+    pub(super) fn retain_expired_startup_record(
+        &mut self,
+        permit: &super::context::worker_startup::expired::ExpiredStartupDisposal,
+    ) -> StoppedStartupRecord {
+        assert!(permit.matches_record(&self.author_identity()));
+        StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        }
+    }
+
+    /// Move the exact unadmitted boot record into rollback evidence.
+    pub(super) fn retain_boot_rollback_record(
+        &mut self,
+        permit: &super::context::boot_open_driver::BootReleasePermit,
+    ) -> StoppedStartupRecord {
+        assert!(permit.matches(self), "exact boot author custody");
+        StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        }
     }
 
     /// Release this owner's unadmitted ticket on bounded incomplete teardown.
@@ -1231,6 +1327,28 @@ mod tests;
 pub(super) struct StoppedReadRecord {
     _pending: Option<(Event, RecordPurpose)>,
     _author: Option<AuthorTicket>,
+}
+#[cfg(test)]
+impl StoppedReadRecord {
+    pub(super) fn test_record(&self) -> Option<(&Event, Option<u64>)> {
+        Some((
+            &self._pending.as_ref()?.0,
+            self._author.as_ref().map(|author| author.ticket),
+        ))
+    }
+}
+
+/// The expired startup's whole unadmitted author moves into terminal custody.
+/// Neither a receipt nor permission to resubmit follows this retained original.
+pub(super) struct StoppedStartupRecord {
+    _pending: Option<(Event, RecordPurpose)>,
+    _author: Option<AuthorTicket>,
+}
+#[cfg(test)]
+impl StoppedStartupRecord {
+    pub(super) fn test_record(&self) -> Option<(&Event, u64)> {
+        Some((&self._pending.as_ref()?.0, self._author.as_ref()?.ticket))
+    }
 }
 
 impl RecordBarrier {

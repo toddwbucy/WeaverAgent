@@ -129,6 +129,9 @@ pub use channel::{
 };
 pub use engine::{Ports, TurnError, TurnOutcome};
 pub use failure::{AdoptionFault, ChannelFault, Outcome, UnlicensedMessage};
+pub use flow::context::worker_startup::failed::{
+    FoundationStartupExit, FoundationStartupExitProgress, FoundationStartupHandoff,
+};
 pub use flow::context::worker_startup::input::generation::FoundationGeneration;
 pub use flow::context::worker_startup::input::generation::emission::{
     FoundationEmission, FoundationOutbound, FoundationRepairAdmission, FoundationRestatement,
@@ -161,3 +164,7 @@ pub use weaver_trace::LoopIdentity;
 /// a directory behind (#690 item C2.9).
 #[cfg(test)]
 mod scratch;
+
+pub use flow::context::worker_startup::rollback::failed::{
+    FoundationRollbackExit, FoundationRollbackExitProgress, FoundationRollbackHandoff,
+};

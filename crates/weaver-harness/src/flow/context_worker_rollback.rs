@@ -1,4 +1,6 @@
 //! Worker custody from the actual classifier refusal to explicit rollback.
+#[path = "context_worker_rollback_failure.rs"]
+pub(crate) mod failed;
 use super::*;
 use crate::flow::clock::AbsoluteBound;
 use crate::flow::context::startup_composition::refusal::response::terminal::{
@@ -125,6 +127,15 @@ impl FoundationRollback<'_> {
             FoundationRollbackProgress::Closed | FoundationRollbackProgress::Stopped
         ) {
             return self.progress();
+        }
+        if let Some(failure) = self
+            .state
+            .as_ref()
+            .and_then(RollbackState::failure_view)
+            .and_then(|view| view.context.failure())
+        {
+            self.detail = Some(format!("rollback component failure: {failure:?}"));
+            return FoundationRollbackProgress::Stopped;
         }
         let state = self.state.take().expect("one retained rollback stage");
         self.state = Some(match state {

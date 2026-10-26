@@ -784,6 +784,17 @@ impl Ledger {
 
     /// No completion crosses this port on failure or before every subscribed
     /// disposition was recorded. Taking it relinquishes the one subscription.
+    /// Retain actual completed evidence without releasing a consumer grant.
+    pub(super) fn retain_boot_filing_receipts(&mut self) -> Result<ReceiptSet, LedgerError> {
+        self.live()?;
+        if !self.receipts.as_ref().is_some_and(ReceiptSet::is_complete) {
+            return Err(LedgerError(
+                "boot rollback requires complete recorded receipts",
+            ));
+        }
+        Ok(self.receipts.take().expect("complete receipt set"))
+    }
+
     pub(super) fn take_receipts(&mut self) -> Result<Option<ReceiptSet>, LedgerError> {
         self.live()?;
         if self.receipts.as_ref().is_some_and(ReceiptSet::is_complete) {
@@ -878,6 +889,57 @@ impl Ledger {
 
     pub(super) fn freeze(&mut self) {
         self.frozen = true;
+    }
+
+    pub(super) fn boot_filing_matches(
+        &self,
+        source: Option<&SourceBlockId>,
+        expected: &PairEnded,
+    ) -> bool {
+        let matches_file = |file: &LedgerFile| {
+            source == Some(file.source())
+                && matches!(file, LedgerFile::Pair(file)
+                    if file.source.turn.is_none()
+                        && matches!(&file.pair, PairRecord::Ended(ended) if ended == expected))
+        };
+        self.entries.iter().all(|entry| matches_file(&entry.file))
+            && self.entries.len() <= 1
+            && self.receipts.as_ref().is_none_or(|receipts| {
+                receipts.sources().all(|held| Some(held) == source)
+                    && receipts.sources().count() == 1
+                    && receipts
+                        .recorded_dispositions()
+                        .all(|receipt| match receipt {
+                            SourceDisposition::Committed(receipt) => matches_file(receipt.file()),
+                            SourceDisposition::CorrectlyRejected(_) => false,
+                        })
+            })
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_boot_filing_evidence(&self, retained: Option<&ReceiptSet>) -> String {
+        format!(
+            "{:?}",
+            (
+                &self.run,
+                &self.session,
+                &self.scheme,
+                self.entries
+                    .iter()
+                    .map(|entry| (
+                        &entry.file,
+                        &entry.classification,
+                        &entry.exchange,
+                        entry.raw_bytes,
+                        entry.context_bytes,
+                        entry.intake_ns,
+                        &entry.receipt,
+                        &entry.rejection,
+                    ))
+                    .collect::<Vec<_>>(),
+                self.receipts.as_ref().or(retained),
+            )
+        )
     }
 
     fn live(&self) -> Result<(), LedgerError> {

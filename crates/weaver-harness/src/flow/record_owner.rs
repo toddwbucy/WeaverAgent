@@ -113,6 +113,23 @@ impl RunRecorder {
                     Err(failure.failure)
                 }
             },
+            Phase::Loaded(recorder) if unload => match recorder.rollback(event) {
+                Ok(PreflightAttempt::Recorded {
+                    recorder,
+                    submission,
+                }) => {
+                    self.phase = Some(Phase::Closed(recorder));
+                    Ok(SubmitAttempt::Recorded(submission))
+                }
+                Ok(PreflightAttempt::CapacityPending { recorder, event }) => {
+                    self.phase = Some(Phase::Loaded(recorder));
+                    Ok(SubmitAttempt::CapacityPending(event))
+                }
+                Err(failure) => {
+                    self.phase = Some(Phase::Loaded(failure.recorder));
+                    Err(failure.failure)
+                }
+            },
             Phase::Loaded(recorder) => match recorder.refuse(event) {
                 Ok(PreflightAttempt::Recorded {
                     recorder,
@@ -270,6 +287,14 @@ impl RunRecorder {
     }
     pub(super) fn abandon(&mut self) {
         dispatch!(self, abandon)
+    }
+    pub(super) fn close_unadmitted(&mut self) -> Result<(), Failure> {
+        let Some(Phase::AwaitingLoad(recorder)) = &mut self.phase else {
+            return Err(refused());
+        };
+        recorder.close_unadmitted()?;
+        self.stopped = true;
+        Ok(())
     }
 }
 
