@@ -33,6 +33,13 @@ pub(super) struct CorrectionWork {
     detail: Option<String>,
 }
 impl CorrectionWork {
+    pub(super) fn retire_failed_placement_grants(
+        &mut self,
+        context: &mut RecordingContext,
+    ) -> Result<(), RunFailure> {
+        retire_failed_placement_grant(&mut self.placement, context)
+    }
+
     pub(super) fn finish_refusal(
         &self,
         context: &mut RecordingContext,

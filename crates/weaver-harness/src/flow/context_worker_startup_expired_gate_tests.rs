@@ -219,6 +219,10 @@ pub(super) fn finish(
         pending_refusal = Some(serde_json::to_value(event).unwrap());
         assert!(owner.unload_sequence().is_none());
         assert!(packet(peer).is_none());
+        crate::flow::context::rollback_gate_author_tests::competing_author(
+            &mut owner.run.context,
+            clock,
+        );
 
         // Only now drain the real trace sink. The same refused Frame resumes
         // under the original Leave; Lower expiry grants no replacement ticket.

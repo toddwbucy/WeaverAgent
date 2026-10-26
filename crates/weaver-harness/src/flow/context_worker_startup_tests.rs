@@ -246,7 +246,11 @@ impl Files {
                     } else {
                         "ready"
                     },
-                    "flow::context::startup_composition::tests::startup_composition_child",
+                    if super::input::generation::session_tests::serving_rollback::is_mode(mode) {
+                        "flow::context::worker_startup::input::generation::session_tests::serving_rollback::classifier_child"
+                    } else {
+                        "flow::context::startup_composition::tests::startup_composition_child"
+                    },
                 )),
                 spu: self.child(
                     "spu",
@@ -561,8 +565,9 @@ impl Member {
                 s::StateFrame::Control { frame, .. } => {
                     let frame = match frame {
                         s::StateControl::Grants {} => {
-                            let rollback_read =
-                                mode.starts_with("rollback-") && self.requests.len() > 1;
+                            let rollback_read = (mode.starts_with("rollback-")
+                                || super::input::generation::session_tests::serving_rollback::is_mode(mode))
+                                && self.requests.len() > 1;
                             if rollback_read {
                                 assert_eq!(&self.requests[..2], ["open", "grants"]);
                                 assert_eq!(
@@ -753,6 +758,13 @@ impl Member {
                         },
                     ..
                 } => self.hold_control == Some("summary"),
+                s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::Marks {},
+                        },
+                    ..
+                } => self.hold_control == Some("marks"),
                 s::StateFrame::Control {
                     frame: s::StateControl::Release { .. },
                     ..
@@ -1134,14 +1146,30 @@ fn circuit(mode: &str) {
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-worker") {
             drop(peer);
+            if super::input::generation::session_tests::serving_rollback::is_mode(mode) {
+                let handoff = super::input::generation::session_tests::serving_rollback::handoff(
+                    serving,
+                    &path,
+                    &files.0,
+                    mode,
+                    &mut member,
+                    &mut reader,
+                );
+                let actual = run.take_boxed();
+                super::input::generation::session_tests::serving_rollback::finish(
+                    actual,
+                    handoff,
+                    &mut member,
+                    &mut reader,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
             if super::input::generation::session_tests::ready_rollback::is_mode(mode) {
                 let Some(mut handoff) =
                     super::input::generation::session_tests::ready_rollback::handoff(
-                        serving,
-                        &path,
-                        &files.0,
-                        mode,
-                        &mut member,
+                        serving, &path, &files.0, mode,
                     )
                 else {
                     return;
@@ -1628,12 +1656,31 @@ fn scenario(name: &str, mode: &str) {
         return;
     }
     let layout = crate::tools_cgroup::tests::ScratchLayout::new(&format!("worker-{mode}"));
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
         .args(["--exact", name, "--ignored", "--nocapture"])
         .env("WEAVER_WORKER_STARTUP_CASE", mode)
-        .env("WEAVER_GATE_STARTUP_RUN", &layout.run)
-        .status()
-        .unwrap();
+        .env("WEAVER_GATE_STARTUP_RUN", &layout.run);
+    let status = if super::input::generation::session_tests::serving_rollback::is_mode(mode) {
+        // The public driver can block inside a real transport call. A parent
+        // watchdog still fails that fixture and reaps its owned process tree.
+        let mut child = command.spawn().unwrap();
+        let limit = Instant::now() + Duration::from_secs(35);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= limit {
+                let _ = child.kill();
+                let _ = child.wait();
+                drop(layout);
+                panic!("serving rollback circuit {mode} exceeded its outer watchdog");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    } else {
+        command.status().unwrap()
+    };
     assert!(status.success(), "worker circuit {mode} failed");
 }
 macro_rules! scenario {
@@ -2725,6 +2772,110 @@ scenario!(
     "input-worker-generation-emission-session-leave"
 );
 scenario!(
+    worker_session_composition_serving_rollback_idle,
+    "input-worker-generation-emission-session-serving-rollback-idle"
+);
+scenario!(
+    worker_session_composition_serving_rollback_accepted,
+    "input-worker-generation-emission-session-serving-rollback-accepted"
+);
+scenario!(
+    worker_session_composition_serving_rollback_checking,
+    "input-worker-generation-emission-session-serving-rollback-checking"
+);
+scenario!(
+    worker_session_composition_serving_rollback_source_elected,
+    "input-worker-generation-emission-session-serving-rollback-source-elected"
+);
+scenario!(
+    worker_session_composition_serving_rollback_source_pending,
+    "input-worker-generation-emission-session-serving-rollback-source-pending"
+);
+scenario!(
+    worker_session_composition_serving_rollback_source_file,
+    "input-worker-generation-emission-session-serving-rollback-source-file"
+);
+scenario!(
+    worker_session_composition_serving_rollback_task_read,
+    "input-worker-generation-emission-session-serving-rollback-task-read"
+);
+scenario!(
+    worker_session_composition_serving_rollback_mark_file,
+    "input-worker-generation-emission-session-serving-rollback-mark-file"
+);
+scenario!(
+    worker_session_composition_serving_rollback_placement,
+    "input-worker-generation-emission-session-serving-rollback-placement"
+);
+scenario!(
+    worker_session_composition_serving_rollback_placement_decision_bound,
+    "input-worker-generation-emission-session-serving-rollback-placement-decision-bound"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation,
+    "input-worker-generation-emission-session-serving-rollback-active-generation"
+);
+scenario!(
+    worker_session_composition_serving_rollback_correction_placement,
+    "input-worker-generation-emission-session-serving-rollback-correction-placement"
+);
+scenario!(
+    worker_session_composition_serving_rollback_correction_generation,
+    "input-worker-generation-emission-session-serving-rollback-correction-generation"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation_queued,
+    "input-worker-generation-emission-session-serving-rollback-active-generation-queued"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_unload,
+    "input-worker-generation-emission-session-serving-rollback-external-unload"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_crossed,
+    "input-worker-generation-emission-session-serving-rollback-external-crossed"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_silent,
+    "input-worker-generation-emission-session-serving-rollback-external-silent"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_unload_queued,
+    "input-worker-generation-emission-session-serving-rollback-external-unload-queued"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_interrupt_blocked,
+    "input-worker-generation-emission-session-serving-rollback-external-interrupt-blocked"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_rejection_pending,
+    "input-worker-generation-emission-session-serving-rollback-external-rejection-pending"
+);
+scenario!(
+    worker_session_composition_serving_rollback_final_close,
+    "input-worker-generation-emission-session-serving-rollback-final-close"
+);
+scenario!(
+    worker_session_composition_serving_rollback_world_blocked,
+    "input-worker-generation-emission-session-serving-rollback-world-blocked"
+);
+scenario!(
+    worker_session_composition_serving_rollback_placed_clock_failure,
+    "input-worker-generation-emission-session-serving-rollback-placed-clock-failure"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation_cap,
+    "input-worker-generation-emission-session-serving-rollback-active-generation-cap"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation_clock_failure,
+    "input-worker-generation-emission-session-serving-rollback-active-generation-clock-failure"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation_trace_failure,
+    "input-worker-generation-emission-session-serving-rollback-active-generation-trace-failure"
+);
+scenario!(
     worker_session_composition_ready_rollback,
     "input-worker-generation-emission-session-ready-rollback"
 );
@@ -2747,10 +2898,6 @@ scenario!(
 scenario!(
     worker_session_composition_ready_rollback_nonrollback,
     "input-worker-generation-emission-session-ready-rollback-nonrollback"
-);
-scenario!(
-    worker_session_composition_ready_rollback_nonpristine,
-    "input-worker-generation-emission-session-ready-rollback-nonpristine"
 );
 scenario!(
     worker_session_composition_ready_rollback_edge_leave_cap,

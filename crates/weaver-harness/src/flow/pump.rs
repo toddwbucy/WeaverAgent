@@ -142,11 +142,22 @@ pub(super) struct LifecycleMessage<E = OrganEnvelope> {
 }
 
 pub(super) struct LifecycleListener {
+    identity: std::sync::Arc<()>,
     listener: CoordinationListener,
     held: Option<LifecyclePeer>,
     accepted_ns: Option<u64>,
     failure: Option<Failure>,
     interrupted: bool,
+}
+
+/// Move-stable identity of one actual credential-checking listener.
+#[derive(Clone)]
+pub(super) struct LifecycleListenerIdentity(std::sync::Arc<()>);
+
+impl LifecycleListenerIdentity {
+    pub(super) fn matches(&self, listener: &LifecycleListener) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &listener.identity)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +176,7 @@ impl LifecycleListener {
         )
         .map_err(io_failure)?;
         Ok(Self {
+            identity: std::sync::Arc::new(()),
             listener,
             held: None,
             accepted_ns: None,
@@ -175,6 +187,9 @@ impl LifecycleListener {
 
     pub(super) fn held(&self) -> Option<&LifecyclePeer> {
         self.held.as_ref()
+    }
+    pub(super) fn identity(&self) -> LifecycleListenerIdentity {
+        LifecycleListenerIdentity(std::sync::Arc::clone(&self.identity))
     }
     pub(super) fn take_connection(&mut self) -> Option<LifecyclePeer> {
         self.accepted_ns = None;

@@ -225,3 +225,187 @@ fn pair_filing_fatal_refusal_keeps_earlier_returned_original_and_first_cause() {
     assert_eq!(run.context.failure(), Some(&fatal.reason));
     assert!(fx.output.input.records(Kind::ToolCallCompleted).is_empty());
 }
+
+fn retry_cleanup_filing(key: PumpDeadline) {
+    let (mut fx, call, turn) = terminal_ready();
+    let run = &mut fx.output.input.run;
+    run.context
+        .bar_pending_pairs(s::NonDispatchCause::Unload, &mut run.clock)
+        .unwrap();
+    let decision = run.context.deadlines.get(PumpDeadline::Decision).unwrap();
+    let leave = AbsoluteBound::after(run.clock.now().unwrap(), 100_000_000).unwrap();
+    run.context
+        .arm(PumpDeadline::Leave, leave, &mut run.clock)
+        .unwrap();
+    let interrupted = AbsoluteBound::after(run.clock.now().unwrap(), 10).unwrap();
+    run.context.arm(key, interrupted, &mut run.clock).unwrap();
+    let mut clock = FilingBoundaryClock {
+        clock: &mut run.clock,
+        samples: 0,
+        deadline: interrupted.deadline_ns(),
+    };
+    let failure = run
+        .context
+        .advance_pairs(&mut ports(&mut clock))
+        .unwrap_err();
+    assert_eq!(
+        failure.reason,
+        RunFailure::Wait {
+            key,
+            bound: interrupted
+        }
+    );
+    assert!(
+        failure.original.is_none(),
+        "same pair owner retains cleanup admission"
+    );
+    let work = run.context.pair_work.as_ref().unwrap();
+    assert!(work.leg.is_none());
+    let event = work
+        .deferred_filing_event()
+        .expect("exact interrupted candidate");
+    assert_eq!(event.kind, Kind::ToolCallCompleted);
+    assert_eq!(event.turn.as_ref(), Some(&turn));
+    assert_eq!(event.causal_parent, Some(Sequence(call.sequence.0)));
+    let Some(Payload::PairEnded(ended)) = &event.payload else {
+        panic!("terminal original")
+    };
+    assert_eq!(
+        ended.reason,
+        Some(trace::PairFailure::NotDispatched {
+            cause: trace::NonDispatchCause::Unload
+        })
+    );
+    let pointer = std::ptr::from_ref(ended.as_ref());
+    let exact = format!("{event:?}");
+    assert!(run.context.pending_author().is_none());
+    assert!(run.context.waiting_content.is_none());
+    assert!(run.context.filing.is_none());
+    assert!(
+        !run.context.rollback_gate_author_available(),
+        "cleanup cannot steal the retained pair original"
+    );
+
+    // Merely calling again cannot clear the interrupted wait or rebuild input.
+    let repeated = run
+        .context
+        .advance_pairs(&mut ports(&mut run.clock))
+        .unwrap_err();
+    assert_eq!(repeated.reason, failure.reason);
+    assert!(repeated.original.is_none());
+    let kept = run
+        .context
+        .pair_work
+        .as_ref()
+        .unwrap()
+        .deferred_filing_event()
+        .unwrap();
+    let Some(Payload::PairEnded(ended)) = &kept.payload else {
+        unreachable!()
+    };
+    assert_eq!(std::ptr::from_ref(ended.as_ref()), pointer);
+    assert_eq!(format!("{kept:?}"), exact);
+
+    assert_eq!(run.context.complete_wait(key), Some(interrupted));
+    assert_eq!(
+        run.context
+            .advance_pairs(&mut ports(&mut run.clock))
+            .unwrap(),
+        PairProgress::Progress
+    );
+    assert!(
+        run.context
+            .pair_work
+            .as_ref()
+            .unwrap()
+            .deferred_filing_event()
+            .is_none()
+    );
+    let admitted = run
+        .context
+        .waiting_content
+        .as_ref()
+        .expect("same pre-ticket original");
+    let Some(Payload::PairEnded(ended)) = &admitted.payload else {
+        unreachable!()
+    };
+    assert_eq!(
+        std::ptr::from_ref(ended.as_ref()),
+        pointer,
+        "rebuilding or cloning the event loses custody"
+    );
+    assert_eq!(format!("{:?}", admitted.event), exact);
+    assert_eq!(
+        run.context.deadlines.get(PumpDeadline::Decision),
+        Some(decision)
+    );
+    assert_eq!(run.context.deadlines.get(PumpDeadline::Leave), Some(leave));
+    assert_eq!(run.context.filing.as_ref().unwrap().wait_bound(), decision);
+    assert!(run.context.pending_author().is_none());
+    assert!(fx.output.input.records(Kind::ToolCallCompleted).is_empty());
+
+    fx.complete();
+    let run = &mut fx.output.input.run;
+    let completed = run
+        .context
+        .completed_pair(&call, &mut run.clock)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        completed.ended().reason,
+        Some(s::PairFailure::NotDispatched {
+            cause: s::NonDispatchCause::Unload
+        })
+    );
+    assert_eq!(fx.output.input.records(Kind::ToolCallCompleted).len(), 1);
+    assert!(fx.output.input.run.context.failure().is_none());
+    assert_eq!(
+        fx.output
+            .input
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::Leave),
+        Some(leave)
+    );
+}
+
+#[test]
+fn pair_filing_lower_interruption_resumes_exact_original_under_original_leave() {
+    retry_cleanup_filing(PumpDeadline::Lower);
+}
+
+#[test]
+fn pair_filing_admin_read_interruption_resumes_exact_original_under_original_leave() {
+    retry_cleanup_filing(PumpDeadline::AdminRead);
+}
+
+#[test]
+fn pair_filing_admin_read_without_leave_returns_original_to_caller() {
+    let (mut fx, call, turn) = terminal_ready();
+    let run = &mut fx.output.input.run;
+    let admin = AbsoluteBound::after(run.clock.now().unwrap(), 10).unwrap();
+    run.context
+        .arm(PumpDeadline::AdminRead, admin, &mut run.clock)
+        .unwrap();
+    let failure = expire_filing(&mut fx, admin.deadline_ns());
+    assert_eq!(
+        failure.reason,
+        RunFailure::Wait {
+            key: PumpDeadline::AdminRead,
+            bound: admin
+        }
+    );
+    assert_original(&failure, &call, &turn, trace::NonDispatchCause::NoGate);
+    assert!(
+        fx.output
+            .input
+            .run
+            .context
+            .pair_work
+            .as_ref()
+            .unwrap()
+            .deferred_filing_event()
+            .is_none()
+    );
+}

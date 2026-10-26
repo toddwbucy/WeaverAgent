@@ -15,9 +15,7 @@ pub(in crate::flow::context::worker_startup) fn is_mode(mode: &str) -> bool {
 pub(super) fn gate(mode: &str, root: &Path, fd: i32) {
     // Ready was produced by the ordinary gate fixture. Only the queued case
     // offers content, after the actual root rollback has won management.
-    if mode.ends_with("-nonpristine") {
-        packet!(fd, &frame(0, false));
-    } else if mode.ends_with("-queued") {
+    if mode.ends_with("-queued") {
         wait_file(root, "ready-rollback-queue");
         for index in 0..2 {
             packet!(fd, &frame(index, false));
@@ -57,7 +55,6 @@ pub(in crate::flow::context::worker_startup) fn handoff(
     socket: &Path,
     root: &Path,
     mode: &str,
-    member: &mut Member,
 ) -> Option<Handoff> {
     let origin = Arc::clone(&serving.owner.context.read_origin);
     let enter = serving.owner.enter;
@@ -97,21 +94,6 @@ pub(in crate::flow::context::worker_startup) fn handoff(
         );
     }
     let mut guard = SessionGuard(Some(Session::begin(serving, &FAMILY, CutMethod::Flush)));
-    if mode.ends_with("-nonpristine") {
-        let done = AtomicBool::new(false);
-        std::thread::scope(|scope| {
-            let responder = scope.spawn(|| {
-                while !done.load(Ordering::SeqCst) {
-                    member.step_live("rollback-ready");
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-            });
-            let _stop = StopThreads(&done);
-            drive(guard.0.as_mut().unwrap(), Progress::Accepted);
-            done.store(true, Ordering::SeqCst);
-            responder.join().unwrap();
-        });
-    }
     let peer = management(
         socket,
         LifecycleDirective::Leave {
@@ -150,12 +132,7 @@ pub(in crate::flow::context::worker_startup) fn handoff(
             originals.take(management.input.serving.owner.context);
         }
     }
-    if mode.ends_with("-nonrollback") || mode.ends_with("-nonpristine") {
-        if mode.ends_with("-nonpristine") {
-            assert!(management.input.stage == super::super::Stage::Accepted);
-            assert!(management.input.token.is_some());
-            assert!(management.input.received.is_some());
-        }
+    if mode.ends_with("-nonrollback") {
         // Retrying the actual rejected owner must not consume a directive,
         // frame or acceptance token, or manufacture cleanup authority.
         for _ in 0..2 {

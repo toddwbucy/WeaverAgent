@@ -46,6 +46,7 @@ impl EnteredRollbackReleasePermit {
     }
 }
 
+use super::input::rollback::RollbackInputWork;
 use crate::flow::context::failed_enter_driver::expired_residency::RollbackResidencyRelease;
 use crate::flow::context::failed_enter_driver::{FailedEnterProgress, FailedRunCleanup};
 use crate::flow::context::startup_composition::refusal::response::listener::{
@@ -99,45 +100,20 @@ pub struct FoundationEnteredRollbackHandoff {
     pub(super) gate_exchanges: HashSet<u64>,
     pub(super) queued_inputs: VecDeque<ReceivedOrgan>,
     pub(super) gate_outgoing: u64,
+    pub(super) input: RollbackInputWork,
     pub(super) peer: Option<LifecyclePeer>,
     pub(super) message: LifecycleMessage,
     pub(super) peer_unavailable: bool,
     pub(super) detail: Option<String>,
 }
 
-pub(super) fn idle_context(context: &RecordingContext) -> bool {
+pub(super) fn rollback_context(context: &RecordingContext) -> bool {
     context.phase == RecordingPhase::Entered
         && context.flow.phase() == CoordinatorPhase::Active
         && context.barrier.is_active()
         && context.failure.is_none()
         && context.flow.halt().is_none()
-        && !context.ever_started_turn
-        && context.flow.preinput_custody()
-        && context.open_turn.is_none()
-        && context.input_turn.is_none()
-        && context.input.snapshot().is_none()
-        && context.input_author.is_none()
         && context.member_capture.is_none()
-        && context.freshness.is_none()
-        && context.read.is_none()
-        && context.inspection.is_none()
-        && context.plan_summary.is_none()
-        && context.measure.is_none()
-        && context.marks.is_none()
-        && context.boot_pairs.is_none()
-        && context.output.is_none()
-        && context.pair_work.is_none()
-        && context.filing.is_none()
-        && context.repair.is_none()
-        && !context.place_owed()
-        && !context.boot_open_blocks_external()
-        && !context.templates_block_content()
-        && context.flow.pending_check().is_none()
-        && context.flow.pending_control().is_none()
-        && context.flow.operation_completion().is_none()
-        && context.flow.state().outstanding().is_empty()
-        && context.barrier.pending().is_none()
-        && context.barrier.pending_author().is_none()
 }
 
 impl FoundationEnteredRollbackHandoff {
@@ -148,6 +124,8 @@ impl FoundationEnteredRollbackHandoff {
             reply: Some(&self.gate_reply),
             gate_enter: Some(self.enter),
             enter: self.enter,
+            current_outgoing: self.gate_outgoing,
+            control: self.input.cancel_control(),
         }
     }
     fn cause(&self) -> weaver_types::Cause {
@@ -163,7 +141,7 @@ impl FoundationEnteredRollbackHandoff {
         Arc::ptr_eq(&self.origin, &run.context.read_origin)
             && Arc::ptr_eq(&self.resident_origin, &self.origin)
             && self.resident_enter == self.enter
-            && idle_context(&run.context)
+            && rollback_context(&run.context)
             && run.context.retired_enter == Some(self.enter)
             && run.context.deadlines.get(PumpDeadline::Enter).is_none()
             && run.context.deadlines.get(PumpDeadline::Leave) == Some(self.leave)
@@ -181,8 +159,6 @@ impl FoundationEnteredRollbackHandoff {
             && run.listener.is_none()
             && self.listener.is_some()
             && self.peer.is_some()
-            && self.gate_exchanges.is_empty()
-            && self.queued_inputs.is_empty()
             && self.ready.as_ref().is_some_and(|ready| {
                 ready.sent()
                     && ready
@@ -241,6 +217,7 @@ pub struct FoundationEnteredRollback {
     terminal: Option<EnteredRollbackTerminal>,
     failed: Option<FailedRunCleanup>,
     reported: bool,
+    failed_grants_attempted: bool,
     gate_done: bool,
     sweep_reported: bool,
     abandoned: bool,
@@ -277,6 +254,7 @@ impl FoundationRun {
             terminal: None,
             failed: None,
             reported: false,
+            failed_grants_attempted: false,
             gate_done: false,
             sweep_reported: false,
             abandoned: false,
@@ -307,6 +285,10 @@ impl FoundationEnteredRollback {
             self.run.as_deref().expect("healthy retained run"),
             &self.handoff,
         )
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context::worker_startup) fn test_input(&self) -> &RollbackInputWork {
+        &self.handoff.input
     }
     #[cfg(test)]
     pub(in crate::flow::context::worker_startup) fn test_gate(&self) -> Option<&RollbackGate> {
@@ -405,11 +387,11 @@ impl FoundationEnteredRollback {
             barrier: run.context.barrier.author_identity(),
         };
         self.stopped_record = Some(run.context.barrier.retain_entered_rollback_record(&permit));
-        self.retired = run.context.flow.retire_abandoned_rollback_ports();
-        assert!(
-            self.retired.is_some(),
-            "original pre-input rollback custody"
-        );
+        self.retired = run
+            .context
+            .flow
+            .retire_abandoned_serving_rollback_ports(&permit, &run.context.barrier);
+        assert!(self.retired.is_some(), "original retained rollback custody");
         run.resources.close_at_cap();
         if let Some(gate) = &mut self.gate {
             gate.dispose(&mut self.handoff.arms);
@@ -493,26 +475,166 @@ impl FoundationEnteredRollback {
         let leave = handoff.leave;
         let dials = self.dials.as_mut().unwrap();
         if self.stage == CleanupStage::Gate {
-            let original = GateRollbackEvidence {
-                raise: &handoff.gate_raise,
-                send: Some(&handoff.gate_send),
-                reply: Some(&handoff.gate_reply),
-                gate_enter: Some(handoff.enter),
-                enter: handoff.enter,
-            };
-            let mut host = GateRollbackHost {
-                context: &mut run.context,
-                arms: &mut handoff.arms,
-                original,
-                leave,
-                peer: handoff.peer.as_mut().unwrap(),
-            };
             if self.gate.is_none() {
-                self.gate = Some(RollbackGate::new(&mut host, io)?);
+                // Only this checked consuming owner changes nested waits into
+                // a yield to its exact gate. Expired startup keeps its existing
+                // pump semantics and cannot acquire this serving authority.
+                if let Some(port) = &handoff.arms.port {
+                    run.context.rollback_gate_port = Some(port.port_identity());
+                }
+                let original = GateRollbackEvidence {
+                    raise: &handoff.gate_raise,
+                    send: Some(&handoff.gate_send),
+                    reply: Some(&handoff.gate_reply),
+                    gate_enter: Some(handoff.enter),
+                    enter: handoff.enter,
+                    current_outgoing: handoff.gate_outgoing,
+                    control: handoff.input.cancel_control(),
+                };
+                self.gate = Some(RollbackGate::new(
+                    &mut GateRollbackHost {
+                        context: &mut run.context,
+                        arms: &mut handoff.arms,
+                        original,
+                        leave,
+                        peer: handoff.peer.as_mut().unwrap(),
+                    },
+                    io,
+                )?);
             }
             let gate = self.gate.as_mut().unwrap();
-            if gate.step(&mut host, dials, io)? {
-                self.gate_done = true;
+            if let Some(received) = handoff.input.take_unoffered() {
+                handoff.queued_inputs.push_front(received);
+            }
+            if let Some(received) = handoff.queued_inputs.pop_front()
+                && let Err(received) = gate.retain_queued_input(received)
+            {
+                handoff.queued_inputs.push_front(received);
+            }
+            // Lower's original clock and actual child disposal outrank every
+            // account wait. No author runs in this transport-only reduction.
+            gate.transport_step(
+                &mut GateRollbackHost {
+                    context: &mut run.context,
+                    arms: &mut handoff.arms,
+                    original: GateRollbackEvidence {
+                        raise: &handoff.gate_raise,
+                        send: Some(&handoff.gate_send),
+                        reply: Some(&handoff.gate_reply),
+                        gate_enter: Some(handoff.enter),
+                        enter: handoff.enter,
+                        current_outgoing: handoff.gate_outgoing,
+                        control: handoff.input.cancel_control(),
+                    },
+                    leave,
+                    peer: handoff.peer.as_mut().unwrap(),
+                },
+                dials,
+                false,
+                io,
+            )?;
+            if let Some(port) = &mut handoff.arms.port {
+                handoff.input.route_reply(&mut run.context, port, io)?;
+            }
+            gate.settle_retired_execution(&mut run.context, io)?;
+            handoff.input.cancel(
+                &mut run.context,
+                run.resources.decode_mut(),
+                handoff.arms.port.as_mut(),
+                io,
+            )?;
+            let control_ready = if let Some(port) = &mut handoff.arms.port {
+                handoff.input.prepare_control(&mut run.context, port, io)?
+            } else {
+                true
+            };
+            gate.transport_step(
+                &mut GateRollbackHost {
+                    context: &mut run.context,
+                    arms: &mut handoff.arms,
+                    original: GateRollbackEvidence {
+                        raise: &handoff.gate_raise,
+                        send: Some(&handoff.gate_send),
+                        reply: Some(&handoff.gate_reply),
+                        gate_enter: Some(handoff.enter),
+                        enter: handoff.enter,
+                        current_outgoing: handoff.gate_outgoing,
+                        control: handoff.input.cancel_control(),
+                    },
+                    leave,
+                    peer: handoff.peer.as_mut().unwrap(),
+                },
+                dials,
+                control_ready,
+                io,
+            )?;
+            if let Some(port) = &mut handoff.arms.port {
+                handoff.input.route_reply(&mut run.context, port, io)?;
+            }
+            gate.settle_retired_execution(&mut run.context, io)?;
+            // Only the exact gate owner may resume its pending ticket. A
+            // waiting execution or read alone is not ownership of the author.
+            if !control_ready || gate.owns_author() || run.context.rollback_gate_author_available()
+            {
+                let done = gate.step(
+                    &mut GateRollbackHost {
+                        context: &mut run.context,
+                        arms: &mut handoff.arms,
+                        original: GateRollbackEvidence {
+                            raise: &handoff.gate_raise,
+                            send: Some(&handoff.gate_send),
+                            reply: Some(&handoff.gate_reply),
+                            gate_enter: Some(handoff.enter),
+                            enter: handoff.enter,
+                            current_outgoing: handoff.gate_outgoing,
+                            control: handoff.input.cancel_control(),
+                        },
+                        leave,
+                        peer: handoff.peer.as_mut().unwrap(),
+                    },
+                    dials,
+                    control_ready,
+                    io,
+                )?;
+                self.gate_done = done && handoff.queued_inputs.is_empty();
+                if !control_ready || gate.owns_author() {
+                    return Ok(());
+                }
+            }
+            let cause = match &handoff.message.envelope.payload {
+                weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Leave {
+                    cause,
+                    ..
+                }) => *cause,
+                _ => unreachable!("accepted actual rollback Leave"),
+            };
+            let settled = {
+                let (residency, decode) = run
+                    .resources
+                    .spu_ports_mut()
+                    .expect("original serving SPU ports");
+                let mut lifecycle = dials.ports(handoff.peer.as_mut().unwrap());
+                lifecycle.residency = Some(residency);
+                let mut ports = PumpPorts {
+                    lifecycle,
+                    gate: handoff
+                        .arms
+                        .port
+                        .as_mut()
+                        .filter(|port| port.held().is_none()),
+                    decode: Some(decode),
+                    label: None,
+                    io: &mut *io,
+                };
+                handoff.input.advance(
+                    &mut handoff.certificate,
+                    &mut run.context,
+                    &mut ports,
+                    gate.world_closed(),
+                    cause,
+                )?
+            };
+            if settled && self.gate_done && handoff.queued_inputs.is_empty() {
                 self.stage = CleanupStage::Grants;
             }
             return Ok(());
@@ -735,11 +857,11 @@ impl FoundationEnteredRollback {
         } else {
             None
         };
-        let tail = FailedRunCleanup::after_expired_rollback(
+        let tail = FailedRunCleanup::after_serving_rollback(
             context,
             resources,
-            Some(self.handoff.leave),
-            Some(cause),
+            self.handoff.leave,
+            cause,
             self.release.take(),
             admit_reply,
         );
@@ -761,6 +883,18 @@ impl FoundationEnteredRollback {
     fn advance_failed(&mut self, io: &mut impl PumpIo) -> FoundationEnteredRollbackProgress {
         let tail = self.failed.as_mut().unwrap();
         let gate = self.gate.as_mut().unwrap();
+        if self.reported && !self.failed_grants_attempted {
+            self.failed_grants_attempted = true;
+            if let Err(error) = self
+                .handoff
+                .input
+                .retire_failed_placement_grants(&mut tail.context)
+            {
+                tail.secondary(format!(
+                    "failed rollback retained placement grant: {error:?}"
+                ));
+            }
+        }
         let progress = if !self.reported {
             self.reported = true;
             tail.advance(io)
@@ -776,6 +910,8 @@ impl FoundationEnteredRollback {
                     reply: Some(&self.handoff.gate_reply),
                     gate_enter: Some(self.handoff.enter),
                     enter: self.handoff.enter,
+                    current_outgoing: self.handoff.gate_outgoing,
+                    control: self.handoff.input.cancel_control(),
                 };
                 match gate.failed_step(
                     original,
@@ -865,7 +1001,24 @@ impl FoundationEnteredRollback {
 
     fn handle_error(&mut self, error: RunFailure, io: &mut impl PumpIo) {
         match error {
+            RunFailure::RollbackGateHeld if self.stage == CleanupStage::Gate => {
+                self.progress = FoundationEnteredRollbackProgress::Progress;
+            }
             RunFailure::Busy(_) => self.progress = FoundationEnteredRollbackProgress::Pending,
+            RunFailure::Transport {
+                source: PumpSource::Gate,
+                ..
+            } if self.stage == CleanupStage::Gate
+                && self
+                    .run
+                    .as_ref()
+                    .is_some_and(|run| run.context.failure().is_none()) =>
+            {
+                // A nested input/engine wait only observes this transport.
+                // RollbackGate still owns the exact held GateStopped, EOF and
+                // raw framing; its next transport step judges that evidence.
+                self.progress = FoundationEnteredRollbackProgress::Progress;
+            }
             RunFailure::Wait {
                 key: PumpDeadline::Leave,
                 bound,

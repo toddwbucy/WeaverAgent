@@ -95,7 +95,12 @@ impl ExpiredActiveRollback {
                 .gate
                 .as_mut()
                 .unwrap()
-                .step(&mut owner.gate_host(), self.dials.as_mut().unwrap(), io)
+                .step(
+                    &mut owner.gate_host(),
+                    self.dials.as_mut().unwrap(),
+                    true,
+                    io,
+                )
                 .map_err(|error| format!("expired gate rollback: {error:?}"))?
             {
                 self.stage = Stage::Grants;

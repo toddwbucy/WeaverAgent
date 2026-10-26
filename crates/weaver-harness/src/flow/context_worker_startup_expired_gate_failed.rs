@@ -29,7 +29,7 @@ impl RollbackGate {
                 })
         });
         let lower = (allow_lower && bound.is_some() && raised)
-            .then(|| gate.raise.exchange.ordinal.checked_add(1))
+            .then(|| gate.current_outgoing.checked_add(1))
             .flatten()
             .map(|ordinal| OrganEnvelope {
                 exchange: ExchangeId {
@@ -40,6 +40,7 @@ impl RollbackGate {
                 payload: WirePayload::Directive(LifecycleDirective::Lower),
             });
         Self {
+            closed: None,
             // With no remaining cap, keep the original Enter interval as
             // evidence. Only nonblocking disposal can use that carrier.
             bound: bound.unwrap_or(gate.enter),
@@ -59,6 +60,8 @@ impl RollbackGate {
             refusal: None,
             last_recorded: None,
             complete: false,
+            failed_pair_unavailable: false,
+            failed_retired_answer: None,
         }
     }
 
@@ -100,6 +103,26 @@ impl RollbackGate {
         let reply = self.received.as_ref().expect("exact extracted gate packet");
         let frame = reply.envelope();
         let port = arms.port.as_ref().expect("live received gate port");
+        if matches!(frame.payload, WirePayload::ToolAnswer(_)) && tail.serving_rollback() {
+            if tail.context.pairs.pending_rejection().is_some() {
+                let _ = tail.context.advance_halt_rejection();
+                return;
+            }
+            let received = self.received.take().unwrap();
+            match tail.context.pairs.observe_gate(received) {
+                Ok(crate::flow::context::pairs::GateObservation::Rejected) => {
+                    let _ = tail.context.advance_halt_rejection();
+                }
+                Ok(_) => (),
+                Err((received, error)) => {
+                    self.received = Some(received);
+                    self.failed_pair_unavailable = true;
+                    tail.secondary(format!("failed rollback tool answer: {error:?}"));
+                    self.failed_end(arms, true, false);
+                }
+            }
+            return;
+        }
         let prior_raise = self.raise_reply.is_none()
             && gate.reply.is_none()
             && reply.belongs_to(port)
@@ -185,6 +208,12 @@ impl RollbackGate {
         {
             self.failed_end(arms, true, false);
         }
+        if !self.transport_done
+            && tail.serving_rollback()
+            && !self.failed_interrupt(gate, arms, tail, io)?
+        {
+            return Ok(false);
+        }
         if !self.transport_done {
             let port = arms.port.as_mut().expect("live failed Lower port");
             let receive_error = if self.received.is_none() && port.held().is_none() {
@@ -262,8 +291,19 @@ impl RollbackGate {
         if !self.transport_done {
             return Ok(false);
         }
+        if tail.serving_rollback() && !self.route_failed_retired_answer(tail) {
+            return Ok(false);
+        }
         match arms.child.as_mut().map(|child| child.poll()) {
             None | Some(ChildState::Reaped(_)) => {
+                if tail.serving_rollback()
+                    && let Some((call, _, true)) = tail.context.pairs.executing()
+                {
+                    let call = call.clone();
+                    if let Err(error) = tail.context.pairs.close_gate_fault(&call) {
+                        tail.secondary(format!("failed rollback gate terminal: {error:?}"));
+                    }
+                }
                 self.complete = true;
                 Ok(true)
             }
@@ -271,6 +311,102 @@ impl RollbackGate {
             Some(ChildState::NotWaitable) => {
                 tail.secondary("failed rollback gate lost its actual child reap");
                 Err("failed gate child custody unavailable")
+            }
+        }
+    }
+
+    fn failed_interrupt(
+        &mut self,
+        original: GateRollbackEvidence<'_>,
+        arms: &mut StartupGate,
+        tail: &mut FailedRunCleanup,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, &'static str> {
+        let Some((_, exchange, _)) = tail.context.pairs.halt_execution() else {
+            return Ok(true);
+        };
+        let port = arms.port.as_mut().expect("live failed rollback gate");
+        // A control that already crossed retains its original cause. The
+        // handoff owns its exact envelope and receipt through failed cleanup.
+        if original.control.is_some_and(|(envelope, send)| {
+            send.sent()
+                && send.sent_at().is_some_and(|at| at <= tail.context.last_ns)
+                && send.belongs_to(port)
+                && send.matches_exchange(exchange)
+                && envelope.exchange == *exchange
+                && envelope.position == Position::Continue
+                && matches!(
+                    envelope.payload,
+                    WirePayload::ToolCancel
+                        | WirePayload::ToolInterrupt {
+                            by: weaver_types::KillCause::Unload
+                        }
+                )
+        }) {
+            return Ok(true);
+        }
+        if tail.context.halt_gate.is_none()
+            && let Err(error) = tail.context.begin_halt_gate(port)
+        {
+            tail.secondary(format!("failed rollback interrupt admission: {error:?}"));
+            self.failed_end(arms, true, false);
+            return Ok(true);
+        }
+        match tail.context.advance_halt_gate(port, io) {
+            Ok(
+                HaltGateProgress::InterruptSent
+                | HaltGateProgress::Terminal
+                | HaltGateProgress::Withdrawn,
+            ) => Ok(true),
+            Ok(HaltGateProgress::Pending) => Ok(false),
+            Ok(HaltGateProgress::AbortRequired) => Err("failed rollback interrupt cap"),
+            other => {
+                tail.secondary(format!("failed rollback interrupt unavailable: {other:?}"));
+                self.failed_end(arms, true, false);
+                Ok(true)
+            }
+        }
+    }
+
+    fn route_failed_retired_answer(&mut self, tail: &mut FailedRunCleanup) -> bool {
+        // At most the one extracted slot and the retired port's one held slot
+        // can own a receive. Route each before assigning a no-result fault.
+        loop {
+            if tail.context.pairs.pending_rejection().is_some() {
+                let _ = tail.context.advance_halt_rejection();
+                if tail.context.pairs.pending_rejection().is_some() {
+                    return false;
+                }
+            }
+            let extracted = !self.failed_pair_unavailable
+                && self.received.as_ref().is_some_and(|received| {
+                    matches!(received.envelope().payload, WirePayload::ToolAnswer(_))
+                });
+            let received = if extracted {
+                self.received.take()
+            } else {
+                self.retired
+                    .as_mut()
+                    .and_then(|port| port.take_retired_tool_answer())
+            };
+            let Some(received) = received else {
+                return true;
+            };
+            match tail.context.pairs.observe_gate(received) {
+                Ok(_) => (),
+                Err((received, error)) => {
+                    if extracted {
+                        self.received = Some(received);
+                        self.failed_pair_unavailable = true;
+                    } else {
+                        assert!(
+                            self.failed_retired_answer.is_none(),
+                            "one original retired receive slot"
+                        );
+                        self.failed_retired_answer = Some(received);
+                    }
+                    tail.secondary(format!("failed rollback retained tool answer: {error:?}"));
+                }
             }
         }
     }

@@ -1,8 +1,8 @@
-//! The real pending root rollback consumes a pristine successful Ready seat.
+//! The real pending root rollback consumes the successful Ready seat and its actual serving account.
 use super::*;
 use crate::flow::clock::AbsoluteBound;
 use crate::flow::context::worker_startup::entered_rollback::{
-    FoundationEnteredRollbackHandoff, idle_context,
+    FoundationEnteredRollbackHandoff, rollback_context,
 };
 use crate::flow::context::worker_startup::failed::StartupGate;
 use crate::flow::pump::PumpDeadline;
@@ -28,18 +28,7 @@ impl FoundationManagement<'_> {
             || self.answer.is_some()
             || self.send.is_some()
             || self.stop.is_some()
-            || self.input.stage != Stage::Waiting
-            || self.input.received.is_some()
-            || self.input.token.is_some()
-            || self.input.turn.is_some()
-            || self.input.seated.is_some()
-            || self.input.close.is_some()
-            || self.input.send.is_some()
-            || self.input.report.is_some()
-            || self.input.report_started
-            || self.input.returned_report.failure.is_some()
-            || self.input.failure.is_some()
-            || self.input.engine.is_some()
+            || !self.input.rollback_admissible()
             || !self.peer.held().is_some_and(|message| {
                 message.envelope.exchange.opener == Opener::Admin
                     && message.envelope.position == Position::Open
@@ -62,7 +51,7 @@ impl FoundationManagement<'_> {
         }
         let owner = &seat.owner;
         let source = owner.resident.evidence.startup.original_enter.as_ref();
-        let valid = idle_context(owner.context)
+        let valid = rollback_context(owner.context)
             && owner.context.deadlines.get(PumpDeadline::Leave).is_none()
             && owner.context.retired_enter == Some(owner.enter)
             && owner.context.deadlines.get(PumpDeadline::Enter).is_none()
@@ -108,9 +97,7 @@ impl FoundationManagement<'_> {
                 owner.gate_reply.envelope().payload,
                 Payload::Answer(LifecycleAnswer::GateReady)
             )
-            && seat.gate_outgoing == owner.gate_raise.exchange.ordinal
-            && seat.gate_exchanges.is_empty()
-            && seat.queued_inputs.is_empty();
+            && seat.gate_outgoing >= owner.gate_raise.exchange.ordinal;
         if !valid {
             return Err(self);
         }
@@ -154,7 +141,7 @@ impl FoundationManagement<'_> {
             detail,
             ..
         } = *self;
-        let FoundationInput { serving, .. } = *input;
+        let (serving, input) = input.into_rollback_parts();
         let FoundationServing {
             owner,
             gate_exchanges,
@@ -215,6 +202,7 @@ impl FoundationManagement<'_> {
             gate_exchanges,
             queued_inputs,
             gate_outgoing,
+            input,
             peer: Some(peer),
             message: message.expect("consumed actual rollback"),
             peer_unavailable,

@@ -288,6 +288,12 @@ pub(super) fn finish(
         ));
     }
     let first = owner.run.context.failure.clone().unwrap();
+    if pending_ticket {
+        crate::flow::context::rollback_gate_author_tests::first_fatal(
+            &mut owner.run.context,
+            clock,
+        );
+    }
     let halt_cap = owner.run.context.flow.halt().unwrap().deadline().unwrap();
     let expected_cap = leave.map_or(halt_cap, |leave| halt_cap.min(leave.deadline_ns()));
     let mut exit = ExitGuard(
