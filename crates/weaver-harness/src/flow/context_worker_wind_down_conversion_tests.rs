@@ -275,31 +275,6 @@ impl PumpIo for LocalInspectionReady {
     }
 }
 
-#[derive(Default)]
-struct IdleInspectionWait {
-    blocking_waits: usize,
-}
-impl PumpIo for IdleInspectionWait {
-    fn now(&mut self) -> std::io::Result<u64> {
-        MonotonicIo.now()
-    }
-    fn wait(
-        &mut self,
-        interests: &[WaitInterest<'_>],
-        deadline: Option<u64>,
-    ) -> std::io::Result<WaitOutcome> {
-        let now = self.now()?;
-        if deadline.is_none_or(|end| end > now) {
-            assert!(deadline.is_some(), "the held author keeps its bound");
-            self.blocking_waits += 1;
-            // A spurious wake gives the test's original inspection owner its
-            // next step. It creates no transport answer or trace receipt.
-            return Ok(WaitOutcome::Ready(vec![]));
-        }
-        MonotonicIo.wait(interests, deadline)
-    }
-}
-
 fn retain_held_turn(
     input: &mut FoundationInput<'_>,
     resume: bool,
@@ -489,14 +464,27 @@ fn finish_original_inspection(input: &mut FoundationInput<'_>) {
             }
         }
     }
-    let mut io = IdleInspectionWait::default();
+    let decision = input
+        .serving
+        .owner
+        .context
+        .deadlines
+        .get(PumpDeadline::Decision)
+        .unwrap();
+    // The answer is already in its owner's slot. Supply no spurious wake:
+    // any blocking wait here would prevent that owner from taking it.
     assert_eq!(
-        input.advance_with_io(&mut io),
+        input.advance_with_io(&mut LocalInspectionReady),
         FoundationInputProgress::WindDown
     );
     assert_eq!(
-        io.blocking_waits, 1,
-        "an idle inspection owner must wait before another author attempt"
+        input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision),
+        Some(decision)
     );
     let completion = input
         .serving
@@ -506,6 +494,7 @@ fn finish_original_inspection(input: &mut FoundationInput<'_>) {
         .unwrap()
         .unwrap();
     assert!(matches!(completion, InspectionCompletion::Shape { .. }));
+    assert!(MonotonicIo.now().unwrap() < decision.deadline_ns());
 }
 
 pub(super) fn handoff(

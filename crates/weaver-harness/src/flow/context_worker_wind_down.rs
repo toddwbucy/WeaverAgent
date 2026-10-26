@@ -815,6 +815,8 @@ fn record_refusal<I: PumpIo>(
     context: &mut RecordingContext,
     ports: &mut PumpPorts<'_, I>,
 ) -> Result<(), RunFailure> {
+    // Instruction, Filing or force already armed Decision. Preserve the
+    // caller's original bound through this refusal's authoring attempts.
     generation::decision(context, ports.io)?;
     work.pass.returned_refusal.check()?;
     let result = if work.pass.refusal_started {
@@ -831,7 +833,8 @@ fn record_refusal<I: PumpIo>(
                 work.pass.refusal = failure.original.take();
                 // The refusal remains owed through force. Its caller keeps the
                 // unadmitted event while the earlier owner keeps its answer.
-                if context.reduce_flow(ports.io)? != crate::flow::coordinator::Advance::Progress {
+                // Idle yields to the earlier owner of a completed answer.
+                if context.reduce_flow(ports.io)? == crate::flow::coordinator::Advance::Pending {
                     context.pump_once(ports)?;
                 }
                 return Ok(());

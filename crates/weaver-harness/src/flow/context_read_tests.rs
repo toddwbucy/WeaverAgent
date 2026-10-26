@@ -141,26 +141,16 @@ pub(super) fn with_three_inspection_holds(
             Advance::Idle
         );
         let before = member.run.clock.waits().len();
-        let wake = member.run.clock.now().unwrap() + 1;
-        member
-            .run
-            .clock
-            .schedule(
-                wake,
-                vec![ReadyFd {
-                    index: 0,
-                    events: PollFlags::POLLIN,
-                }],
-            )
-            .unwrap();
+        let now = member.run.clock.now().unwrap();
+        // No readiness is scheduled. The completion is already local and its
+        // original owner can take it only after this caller returns.
         caller(&mut member.run.context, &mut member.run.clock, false);
-        assert!(
-            member.run.clock.waits()[before..].iter().any(|wait| {
-                wait.absolute_deadline
-                    .is_some_and(|end| end > wait.began_ns)
-            }),
-            "an idle inspection owner must wait before another author attempt"
+        assert_eq!(
+            member.run.clock.waits().len(),
+            before,
+            "a ready inspection completion must return to its owner without waiting"
         );
+        assert_eq!(member.run.clock.now().unwrap(), now);
         let done = member
             .run
             .context
@@ -168,6 +158,15 @@ pub(super) fn with_three_inspection_holds(
             .unwrap()
             .unwrap();
         assert!(matches!(done, InspectionCompletion::Shape { .. }));
+        assert!(
+            now < member
+                .run
+                .context
+                .deadlines
+                .get(PumpDeadline::Decision)
+                .unwrap()
+                .deadline_ns()
+        );
     }
     caller(&mut member.run.context, &mut member.run.clock, true);
 }

@@ -1,131 +1,131 @@
 # Refusal author custody through cancellation
 
-Date: 2026-10-26. Author working record for issue #146.
+Date: 2026-10-26. Author working record for issue #146 and PR #352.
+Branch: code/state-refusal-author-composition.
+Stack base: #351 at 45cf1dc3f0c6eeaf6b83b6e0914decfbfbaa0217.
+Review correction parent: 27fe560f71e0d7dcb9aab78ad0ffd781ab5ebc22.
 
-## Plan and authority
+Held wind-down and emission refusal authors retain their exact unadmitted event
+through repeated inspection holds, Stop and Unload. When the earlier inspection
+already holds a completed answer, the author returns to its caller so the
+inspection owner can take that answer. It does not sleep waiting for unrelated
+transport traffic. Only Pending from the common reducer calls the blocking pump.
 
-This act is stacked on #351 at
-`45cf1dc3f0c6eeaf6b83b6e0914decfbfbaa0217`, on
-`code/state-refusal-author-composition`. It completes held-original handling
-for wind-down and emission refusal authors and corrects the idle wait in
-the same class of wind-down start/close authors.
-
-Implements: harness state management amendment HARNESS-RECORD-LIFETIME,
-HARNESS-HELD-BOUNDARY and HARNESS-CLOCK; HARNESS-HALT and
-HARNESS-HALT-BOUND for retained originals and first-failure precedence;
+Implements: harness amendment HARNESS-RECORD-LIFETIME,
+HARNESS-HELD-BOUNDARY, HARNESS-CLOCK, HARNESS-HALT and HARNESS-HALT-BOUND;
 harness Spec section 6 wind-down and force joining a pending Leave.
 
 | Section | Author assessment at the exercised boundary |
 | --- | --- |
-| HARNESS-RECORD-LIFETIME | Conforms for the two refusal callers: the same raw event moves back to its caller after an inspection hold; an admitted author retains its existing resume path and actual receipt. |
-| HARNESS-HELD-BOUNDARY | Conforms for the exercised inspection holds: the inspection keeps its answer and only the exact failed author attempt reclaims its original. This does not settle permanent holds in #351 B1. |
-| HARNESS-CLOCK | Conforms for these callers: holds preserve the original Decision deadline; actual local reduction precedes a wait, and both Pending and Idle request a bounded wait. |
-| HARNESS-HALT / HALT-BOUND | Conforms for unchanged failure custody: fatal author errors retain StoppedAuthor handling; no held recovery clears the first failure or gives a new halt allowance. Full failed-exit ordering remains #339 F1. |
-| Harness Spec section 6 | Conforms for the exercised force conversion: an unadmitted refusal remains owed and is Recorded once before the wind-down turn closes, including force before or after its author completes. |
+| HARNESS-RECORD-LIFETIME | Conforms: only the matching caller regains its original event. An admitted author uses its existing ticket and actual receipt. |
+| HARNESS-HELD-BOUNDARY | Conforms for the exercised inspection holds. Permanent holds remain #351 B1 and #352 B1 at all three callers, including the two refusal sites. |
+| HARNESS-CLOCK | Conforms for these callers: retain the original Decision bound, reduce actual local work, wait on Pending, and return on Idle or Progress. Tests supply no wake for a ready inspection completion. |
+| HARNESS-HALT / HARNESS-HALT-BOUND | Conforms for unchanged first-fatal and returned-original handling. No reclamation clears a fatal cause or grants a new halt allowance. |
+| Harness Spec section 6 | Conforms at the exercised force boundary: one owed refusal precedes wind-down closure, including force before or after the author completes. |
 
-Foundation remains unselected. The production worker still passes
-`dev_loop::drive`; no serving cutover or production qualification is claimed.
+These are author assessments for regrade. Foundation remains unselected and the
+production worker still calls dev_loop::drive.
 
 ## Implementation and caller census
 
-The two refusal authors arm Decision only if absent, retain their exact
-event after `reclaim_held`, reset the unadmitted started flag and repeat
-ordinary admission on a later step. Wind-down recognizes its prepared
-refusal before continuing the phase. Stop and Unload keep an emission
-refusal in its existing accounting phase. A successful author saves the
-actual sequence and clears its started flag before continuation.
-
-| Production caller | Original and continuation |
+| Every production reclaim_held caller | Original and continuation |
 | --- | --- |
-| `context_worker_wind_down.rs::record_refusal` | Retains the original refusal through repeated inspection holds and force; no instruction, placement or generation is admitted by reclamation. |
-| `context_worker_emission.rs`, RefusalAuthor | Retains the same raw refusal through holds, Stop and Unload; its successful continuation remains Refused or CancelAccount. |
-| `context_worker_wind_down_cancel.rs::record_turn` | Existing start/close reclamation now waits on Idle as well as Pending. The other two callers use the same condition. These are all three production reclamation sites. |
+| context_worker_emission.rs, RefusalAuthor | Keeps the exact refusal through inspection holds, Stop and Unload. Recorded continues to Refused or CancelAccount. BeginOutbound already armed Decision on production paths. |
+| context_worker_wind_down.rs, record_refusal | Keeps the original refusal through holds and force. Its caller already armed Decision in Instruction, Filing or force. No instruction, placement or generation is admitted by reclaiming it. |
+| context_worker_wind_down_cancel.rs, record_turn | Keeps the exact unadmitted start/close. It uses the same Pending-only wait and returns on Idle so the earlier owner can consume its ready completion. |
 
-This addresses #351 B2, the idle part of B8, and the wind-down refusal
-site in B6. Other author migration and a shared all-author helper are not
-claimed. #351 B1 (permanent holds), B3 (unexposed displaced evidence), B4
-(changed force cause), B5 (slot representation and allocation comments)
-and B8's permanent-hold coverage remain carried before activation. For B7,
-the gate prerequisites below are explicit; the Planner-owned generic
-command list in CLAUDE.md is unchanged.
+Each caller resets the unadmitted started flag before retrying ordinary admission
+on a later step. The two decision calls preserve the bound already armed by their
+production caller; comments now state this dependency (#352 B2). A direct-stage
+unit test can arm an absent bound, which does not establish an extra production
+protection. Fatal reclamation failures still use retain_started.
+
+No wire, public type, deadline, dependency, overflow queue or dispatcher selection
+changes. Returning Idle does not create a progress owner for a permanent hold.
+#352 B3's repeated event construction after a retained stopped author remains a
+carry. #351 B1, B3-B5 and remaining author migration remain open before activation.
 
 ## Verification
 
-The final source passed 2,108 harness tests and doctests (702 ignored by that invocation), plus 235 delegated cases: graceful tail 51, wind-down 19, Quiesce 12, drain 10, external pairs 64, sessions 59, Stop 17 and forced joint 3. Strict harness clippy for all targets, formatting, diff and lock gates passed. All 728 source manifest entries were unchanged through the final gates.
+Pinned nightly-2026-02-13, --locked, private target
+/tmp/weaver-state-146-held-leave-target, CARGO_INCREMENTAL=0,
+CARGO_BUILD_JOBS=4. The ordinary harness gate used RUST_TEST_THREADS=4;
+delegated composition runs were serial. No source edit occurred during a gate.
 
-The ordinary emission case uses real inspection exchanges and recorder
-receipts, with a deterministic readiness clock. It retains exact raw bytes
-and allocation identity through three inspection owners, each tried before
-and after its completion is ready but untaken, then admits one refusal.
-It covers no cancellation, Stop and Unload. The existing fatal second-submit
-case remains in the harness suite.
+- Full cargo test -p weaver-harness --locked: 2,108 passed, including 38
+  doctests, with 702 ignored by that invocation. This sums top-level binary and
+  doctest results, without counting their nested child-mode summaries again.
+- Five complete repetitions each passed all 222 selected cases from
+  worker_session_, worker_graceful_, worker_emission_ and worker_generation_:
+  1,110 successful case executions on identical source. The case reported
+  intermittent in #352 F2 passed in every repetition.
+- The repetitions include the five privileged harness joint scenarios and
+  their actual admin participant. The logs retain the participant's own result.
+  They exercise normal SQLite capture, publication and Leave in isolated
+  real-root delegated scopes. Model/classifier peers remain declared doubles.
+- All seven held-author SQLite conversion cases also passed as a targeted
+  baseline after the runtime correction. They are included in the repeated
+  selection and are not counted again as distinct coverage.
+- Three compiled protective controls independently restored waiting on Idle
+  in each runtime caller. Every control failed its named test at the intended
+  assertion. Each original was restored and the library rebuilt before the
+  final gates. The 1,025-file source manifest remained unchanged through them.
+- Strict harness clippy for all targets, formatting, diff and lock gates passed.
 
-The six normal SQLite held-start, held-start-resume, held-close,
-held-close-resume, held-refusal and held-refusal-resume cases pass. The two
-refusal scenarios omit the wind_down family from the real fixture inventory,
-so the runtime produces InvalidTemplate. They exercise actual Lower,
-capture, release and Left after the original refusal is Recorded. The
-model and classifier peers remain declared doubles.
+The emission fixture uses actual inspection exchanges and recorder receipts. It
+retains exact raw bytes and allocation identity through three original owners,
+then records one refusal. It covers no cancellation, Stop and Unload. Once the
+inspection result is complete, it schedules no descriptor wake and verifies that
+the caller returns without advancing the fake clock or spending Decision.
 
-Before the runtime change, two compiled fixtures failed with InspectionOwned.
-Before the idle correction, both strengthened fixtures failed at the
-idle-owner assertion. Six semantic controls at the earlier source detected
-missing reclamation, skipped force accounting, renewed Decision bounds and
-missing local reduction. Three further controls at the final source reverted
-each caller's idle wait independently; all compiled and failed at the named
-assertion. Runtime bytes were restored and the library rebuilt after each
-group; the final 728-entry source manifest was then verified.
+The wind-down cases consume the normal member's actual inspection reply. A
+probe rejects a blocking wait while that completion is ready. It delegates only
+nonblocking polls to the real clock and invents no readiness. The original owner
+then takes its completion before Decision, with the original bound unchanged.
+Start, close and refusal cases preserve their original custody through subsequent
+force, Lower, capture, release and Left.
 
-One close fixture initially assumed the flow was already Idle after the
-inspection completed. It was still Progress. The final fixture reduces
-that actual remaining work before probing the idle owner. This setup
-failure is excluded from the semantic controls. The process idle probe
-records the requested blocking wait and returns a spurious wake carrying
-no transport result; it is not a CPU-usage measurement. The fixture elects
-the inspection interleavings, not the selected production worker.
+Before the runtime correction, the strengthened emission fixture reached
+DecisionBound with its inspection answer already complete. Both held-refusal
+cases and both held-close cases failed the no-blocking-wait assertion. The old
+fixtures had supplied a wake and tested only that a wait was requested. Those
+assertions have been replaced with the progress property required by the Spec.
 
-Runs used pinned `nightly-2026-02-13`, `--locked`, private target
-`/tmp/weaver-state-146-held-leave-target`, `CARGO_INCREMENTAL=0` and
-`CARGO_BUILD_JOBS=4`. The target already held the normal SQLite
-`debug/weaver-state` binary and the actual admin test binary
-`debug/deps/weaver_admin-5e029c23e2707887`. Those binaries are prerequisites
-for the harness state-flow and joint suites. The joint tests also set
-`WEAVER_LEAVE_ADMIN_TEST_BIN`; Stop sets `WEAVER_STOP_ADMIN_TEST_BIN`.
-Privileged process cases ran as real root in isolated
-`systemd-run --scope -p Delegate=yes` scopes. A user namespace alone
-does not run the actual admin joint participant.
-
-Cargo, tests and mutations ran serially. These are author checks, not a
-Planner or security grade. The required `code-review` and
-`verification-before-completion` skills are unavailable in this session;
-the evidence names the manual author review as such. No new workspace,
-admin, SPU or GPU gate is claimed.
+The normal SQLite member was already built in the private target. The existing
+actual admin test executable was supplied through WEAVER_LEAVE_ADMIN_TEST_BIN,
+WEAVER_STOP_ADMIN_TEST_BIN and WEAVER_OBSERVE_ADMIN_TEST_BIN. Their binary hashes
+are in prerequisites.json. The actual-admin tests ran with sudo systemd-run
+--scope -p Delegate=yes, not only a user namespace. No new admin or GPU crate
+gate is claimed. The eight separate admin-startup cases were not run.
 
 ## Evidence and remaining work
 
-The read-only deposit is
-`/bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/state-refusal-author-composition-20261026-4f8400ac/`.
-All 647 regular files were copied and independently reread with zero skips.
+Verified deposit:
+/bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/state-ready-owner-20261026-ad43ecee/.
 
-- Complete tested source archive SHA-256:
-  `4f8400ac9b1c6a654a7fefef4278aebb8ed4b04e927e65407c77c6a32025d01c`.
-- Source manifest SHA-256:
-  `61236c0cb7462d83829d54af46dfe4c1718730cfb033c8a6e1d90a4786b075ed`.
-- Deposit manifest SHA-256: `baeffcf2f690bc2be4c5aabb7a4a10b570584682b8044bcd8a927cdf9c5af5e4`.
+Source archive SHA256:
+`ad43ecee77fdbfe1c064e4b442074722440a702590c6ac3c7c5152d43da6b259`.
+Source manifest SHA256:
+`4c7e7a73eb3a5cff343716dafaa4d2a1b4b92fd0198e3e246f8c8d9a0a3445c7`.
 
-The source archive contains 1,025 files; this publication record was added
-afterward. The deposit retains baseline failures, source snapshots, controls,
-the fixture correction, final gates and manual author review.
+The archive includes 1,025 tracked files and excludes this working record, which
+was rewritten after the gates. The deposit contains the record separately,
+initial failing fixtures, compiled controls and their originals, all five
+repeated runs, exact case inventory, gate commands and manual author review.
 
-This moves #146 section E's lifecycle and author migration work. No whole
-epic item closes. #339 F1 is the next fix: settle owed turn accounts before
-their closures and preserve terminal ordering. #348/#349 retain their
-operator, Planner and merge gates. On-demand save, other review carries,
-production artifacts, measured limits, serving selection and coupled
-cutover remain required.
+This correction answers #352 F1 and F2 as author work pending Planner regrade.
+It also answers B2's comment request and explicitly carries B1 and B3. Named
+code-review and verification-before-completion skills remain unavailable; the
+manual reading is not their invocation or a Planner/security grade.
 
-The planned refusal migration exposed the same idle wait that Claude
-identified in #351. The final read covered all three callers, and the tests
-now distinguish locally reducible work from an untaken completed owner.
-Keep that distinction in later author migrations; do not infer a blocking
-wait from a test that makes every descriptor ready.
+#339's separate correction at 516079a0 has a new G1 blocker concerning mandatory
+terminal progress when accounts are unavailable. #350's fix findings and design
+questions also remain. #348/#349 retain their operator, review and merge gates.
+#146 stays open for those carries, on-demand save, complete lifecycle integration,
+qualified artifacts, measured limits, security and coupled cutover. This act
+performs no merge, deployment or CodeRabbit review request.
+
+The failure in the earlier tests was choosing the wait request as the property
+instead of progress by the completion's owner. Future held-author instruments
+must first establish that the result is complete, supply no unrelated wake, and
+prove that its original owner can consume it before the unchanged bound.

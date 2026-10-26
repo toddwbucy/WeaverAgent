@@ -535,6 +535,8 @@ impl EmissionWork {
                 }
             }
             EmissionStage::RefusalAuthor => {
+                // BeginOutbound already armed Decision on production paths.
+                // This preserves that caller's bound rather than renewing it.
                 decision(context, ports.io)?;
                 self.returned_refusal.check()?;
                 let result = if self.refusal_started {
@@ -549,8 +551,10 @@ impl EmissionWork {
                         if failure.reclaim_held(context) {
                             self.refusal_started = false;
                             self.refusal_author = failure.original.take();
+                            // Idle returns to the earlier owner so it can take
+                            // its completed answer without a descriptor wake.
                             if context.reduce_flow(ports.io)?
-                                != crate::flow::coordinator::Advance::Progress
+                                == crate::flow::coordinator::Advance::Pending
                             {
                                 context.pump_once(ports)?;
                             }
