@@ -1286,8 +1286,19 @@ impl FoundationEnteredRollback {
             label: None,
             io,
         });
-        if let Err(error) = result {
-            self.handle_error(error, io);
+        match result {
+            Err(RunFailure::Wait {
+                key: PumpDeadline::CaptureResult | PumpDeadline::CaptureWindow,
+                ..
+            }) if self.stage == CleanupStage::Capture => {
+                // The member owner must reduce a missing snapshot/finished
+                // result into its original abort and recorded refusal. Yield
+                // only pump expiry: an error returned by capture.advance still
+                // goes through handle_error, including post-Commit expiry.
+                self.progress = FoundationEnteredRollbackProgress::Progress;
+            }
+            Err(error) => self.handle_error(error, io),
+            Ok(_) => (),
         }
         self.progress
     }

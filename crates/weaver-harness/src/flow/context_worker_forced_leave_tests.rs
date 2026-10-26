@@ -20,6 +20,9 @@ pub(super) mod quiesce_conversion;
 #[path = "context_worker_wind_down_conversion_tests.rs"]
 pub(super) mod wind_conversion;
 
+#[path = "context_worker_capture_wait_tests.rs"]
+mod capture_wait;
+
 pub(in crate::flow::context::worker_startup) fn is_mode(mode: &str) -> bool {
     mode.contains("-session-forced-save") || mode.contains("-session-graceful-save")
 }
@@ -541,6 +544,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
     };
     let mut owner = ForcedGuard(owner);
+    let mut capture_wait = capture_wait::Probe::new(mode, member);
     let Some(peer) = peer else {
         finish_joint(owner, member, reader, root, mode, before, leave);
         return;
@@ -740,11 +744,13 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         if mode.ends_with("-wrong-published") {
                             value.dump_sha256 = s::Digest::new("8".repeat(64)).unwrap();
                         }
-                        reply(
-                            &peer,
-                            &message.exchange,
-                            CapturePayload::SavePointPublished(value),
-                        );
+                        if !mode.ends_with("-published-timeout") {
+                            reply(
+                                &peer,
+                                &message.exchange,
+                                CapturePayload::SavePointPublished(value),
+                            );
+                        }
                     }
                     CapturePayload::SavePointCaptureComplete(_) => {
                         if mode.contains("-save-sqlite") {
@@ -843,7 +849,11 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 break;
             }
             if progress == FoundationForcedLeaveProgress::Pending {
-                owner.0.wait_for_progress();
+                if let Some(probe) = &mut capture_wait {
+                    probe.wait(&mut owner.0);
+                } else {
+                    owner.0.wait_for_progress();
+                }
             }
         }
         done.store(true, Ordering::SeqCst);
@@ -874,6 +884,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
         .filter(|line| !line.is_empty())
         .map(|line| serde_json::from_slice(line).unwrap())
         .collect();
+    if let Some(probe) = &capture_wait {
+        probe.assert_finished(&mut owner.0, member, &packets, &rows, report.as_ref());
+        return;
+    }
     if mode.ends_with("-refused") {
         assert_eq!(
             owner.0.progress(),
