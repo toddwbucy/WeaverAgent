@@ -2845,6 +2845,10 @@ scenario!(
     "input-generation-external-halt-gate-exit-start-pending"
 );
 scenario!(
+    worker_external_composition_failed_exit_start_ready,
+    "input-generation-external-halt-gate-exit-start-pending-capacity-ready"
+);
+scenario!(
     worker_external_composition_failed_exit_start_pending_expiry,
     "input-generation-external-halt-gate-exit-start-pending-start-expiry"
 );
@@ -2860,6 +2864,22 @@ scenario!(
 scenario!(
     worker_external_composition_failed_exit_placement_pending,
     "input-generation-external-halt-gate-exit-placement-pending"
+);
+scenario!(
+    worker_external_composition_failed_exit_placement_ready,
+    "input-generation-external-halt-gate-exit-placement-pending-capacity-ready"
+);
+scenario!(
+    worker_external_composition_failed_exit_placement_trace_loss,
+    "input-generation-external-halt-gate-exit-placement-pending-trace-loss"
+);
+scenario!(
+    worker_external_composition_failed_exit_rejection_unavailable,
+    "input-generation-emission-external-halt-gate-exit-rejection-unavailable-pressure-hold-late"
+);
+scenario!(
+    worker_external_composition_failed_exit_rejection_unavailable_lower_late,
+    "input-generation-emission-external-halt-gate-exit-lower-late-rejection-unavailable-pressure-hold-late"
 );
 
 scenario!(

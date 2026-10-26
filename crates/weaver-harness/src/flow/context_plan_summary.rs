@@ -1101,7 +1101,7 @@ impl RecordingContext {
         }
         self.plan_cache.revoke();
     }
-    fn abandon_plan_summary_account(&mut self, detail: &str) {
+    pub(super) fn abandon_plan_summary_account(&mut self, detail: &str) {
         if self.plan_owns_pending_recall() {
             let ticket = self.read.as_ref().unwrap().plan_ticket().unwrap();
             let _ = self.barrier.abandon_boot_author(ticket);

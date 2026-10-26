@@ -1,136 +1,117 @@
-# Failed serving exit trace ordering
+# Failed serving exit ordering and terminal progress
 
 Date: 2026-10-26.
-Parent: #339 at e9b6280a03c9a909174b556515fcdbd35648b6a2, including the
-operator's #340-#345 folds.
+Parent: #339 at 516079a0e18a5dc6bddaa4e8acb9d53d650d38f9, including the
+operator's #340-#345 folds and the F1 ordering correction.
 Branch: code/state-failed-exit-composition.
-Tracker: #146, lifecycle composition and failed-run teardown; #339 Planner F1.
+Tracker: #146, lifecycle composition and failed-run teardown; #339 Planner G1.
 
-Failed serving exit settles owed turn accounts before closing their turn. It
-retains an already prepared closing event and its exact author ticket while
-earlier accounts use ordinary writer capacity. SessionClosed is attempted after
-gate retirement and remaining accounts, immediately before Unload. This answers
-the three sites of Planner F1 without permitting records after SessionClosed.
+Failed exit records ready turn accounts before TurnClosed. If an account cannot
+progress without ordinary capacity or an unavailable exchange, cleanup retains
+its exact original as incomplete evidence and proceeds with the stopped response
+and Lower. It never resumes that turn account after closing. SessionClosed still
+precedes only Unload. The first failure, frozen account and original halt cap stay
+unchanged; no new timeout, Spec field, wire shape or terminal reserve is added.
 
 Implements: harness amendment HARNESS-HALT, HARNESS-HALT-BOUND,
 HARNESS-HALT-ACCOUNT and stopped HARNESS-OPEN accounting; Spec 05 PAIR-MATCH,
 PAIR-END and PAIR-LEAVE; trace amendment TRACE-CAPACITY and
-TRACE-REJECTED-RETURN. The author assessment is conforms for the tested failed
-serving route. Planner regrading remains required, including the attribution
-interpretation below. No Spec or wire change is proposed by this correction.
+TRACE-REJECTED-RETURN. Author assessment: conforms on the tested failed serving
+route, pending Planner regrade. The Planner accepted F1's ready-account ordering
+and run-scoped late-return interpretation at the parent. G1 corrects the wait
+that could prevent mandatory Closing when one of those accounts cannot finish.
 
-## Ordering and custody
+## Boundaries and consumers
 
-| Boundary | Handling |
+| Site | Handling |
 | --- | --- |
-| Before TurnClosed | Drive existing stopped placement, generation, measurement/refusal and ordinary author accounts. Wait through the existing capacity/decode driver under the original halt cap. No placement grant, model request or successful continuation is produced. |
-| Pending TurnClosed | Move the exact prepared event and ticket into the failed closer, settle earlier accounts and ToolCallCompleted, then promote that original through its existing reservation. Preserve its original payload and cause. |
-| Pending SessionClosed | Keep the original in the shared failed tail until gate retirement and remaining accounts complete. Promote it immediately before Unload. |
-| Placement-owned close | Leave its ticket with the dedicated placement driver; the generic closer does not detach that claim. |
-| Late return first observed after TurnClosed | Author run-scoped rejected-return evidence before SessionClosed. Retain original CallId, exchange, causal parent and exact raw payload. Earlier pending rejection authors keep the turn chosen with their original event. |
-| After SessionClosed | Attempt Unload in the same terminal stage. Subsequent work observes children and drains; it authors no additional event. |
+| FoundationFailedExit::terminals | The sole consumer of settle_serving_turn_accounts. Real local account progress returns Progress without waiting. Unavailable or blocked work is retained before reserved closing attempts. |
+| FailedRunCleanup::advance_accounts | Pre-input callers keep their existing continuation and cap. Its internal progress result is used only by the serving closer. Once serving turn accounts are retired, generic ordinary account drivers cannot resume them. |
+| RecordBarrier::retain_halt_record | With a stopped tap, move the one exact prepared Event, purpose and AuthorTicket into retained evidence. Do not abandon the recorder or spend a terminal reserve. Preserve the frozen first snapshot even if this attempt began later. |
+| Placement, measurement and summary | Existing owners retain requests, raw replies, grants and incomplete dispositions. Revoke the outstanding placement identity. Retain the stopped summary read and account; install no journal or plan success. |
+| RejectedAuthor | Keep the original ledger packet, claim, any receipt and any unavailable prepared record. Consume the handoff's rejection-unavailable latch. No later close restarts that author. |
+| Lower | When an unavailable rejection already owns the ledger slot, retain a later actual ToolAnswer in the existing received owner after allocation preflight. Continue to the matching GateStopped; never fabricate a rejection receipt or replace the earlier packet. |
+| Newly observed post-turn return | Attempt the existing run-scoped rejection once while capacity permits; otherwise retain it incomplete and continue shutdown. Preserve CallId, exchange, causal parent and exact raw bytes. |
+| Stopped generation and cut | An unanswered exchange returns Pending. A received Generated terminal returns Progress even while Cancel still owes AtRest, allowing its ready records to be accounted. Original reservations and bounds remain owned. |
+| Deferred closes | Preserve the exact original event, payload, cause and ticket. Preserve its preparation timestamp; trace sequence orders it after earlier accounts. |
+| Session close and Unload | The obsolete serving account-wait predicate at Unload is removed. Accounts have settled or been retained incomplete. Only Unload follows SessionClosed; later steps observe children and drain without authoring. |
 
-The trace amendment's event table already makes the rejected-return turn
-optional. PAIR-MATCH requires the closed exchange/CallId mapping and exact raw
-evidence through Lower and reap. This implementation interprets a newly observed
-late return as run-scoped cleanup evidence while keeping those identities. It
-does not reopen the closed turn or create a post-session exception. The Planner
-must grade this reading; it is not a new operator ruling.
-
-HARNESS-HALT's turn-close, stopped world response and Lower order is retained.
-Boot-only HARNESS-OPEN accounting retains its existing pre-input path; this
-serving correction does not move it ahead of mandatory terminal work. The first
-failure and original teardown cap remain authoritative.
-
-## Changed surface and callers
-
-| Site | New surface and consumers |
-| --- | --- |
-| RecordBarrier::defer_halt_close / restore_halt_close | A private move-owned carrier holds one original prepared close. Restore requires the same recorder, stopped tap and an empty ordinary slot; refusal returns the complete original. Only the failed closer and its context resume helper consume it. |
-| RecordingContext::resume_deferred_halt_close | Restores and resumes the original reserved ticket, binds actual Recorded turn state, and retains an unrecorded original. Called by the turn closer and shared serving-session closer. |
-| advance_halt_trace | Reporting cannot opportunistically admit TurnClosed or SessionClosed, even when ordinary capacity returns. The consuming closer owns their order. Existing boot, placement, measurement and halt consumers retain their admission rules. |
-| FoundationFailedExit::terminals / wait_with_io | Drains stopped accounts before closure; its wait uses the shared tail's actual decode/capacity interests and original cap. |
-| FailedRunCleanup | Serving-only session-close state is consumed at Unload. Pre-input constructors create no SessionClosed. The same account predicate gates pre-turn closure and final session closure. |
-| advance_place_account | Updates the recorder's owed-placement flag after each actual stopped step. A final author could previously finish the owner while leaving the flag set, preventing Unload; the new real-placement test exposed this defect. |
-| RejectedAuthor | Both healthy pair recording and failed rejection recording retain the turn chosen with their original event. Neither recomputes attribution when acknowledging a delayed receipt. |
-| PairLedger::ack_halt_rejection_recorded | The failed rejection driver is its sole runtime caller. Only a frozen ledger accepts a run-scoped receipt. Healthy turn matching, run/block/sequence checks, uniqueness and original packet custody remain enforced. |
+The public wait method already returns immediately unless progress is Pending,
+and the worker uses that same condition. Local Terminals progress cannot enter
+its capacity-wait branch. A dead trace may still abort the later release/drain
+wait; the regression requires the stopped response and actual Lower first.
 
 ## Author evidence
 
-Pinned nightly-2026-02-13; private target
-`/tmp/weaver-state-146-held-leave-target`; CARGO_INCREMENTAL=0,
-CARGO_BUILD_JOBS=4, --locked on dependency-resolving Cargo commands. Lock ran
-before Cargo. The final strict harness clippy, formatting and diff checks passed.
+Pinned nightly-2026-02-13, private target
+/tmp/weaver-state-146-held-leave-target, CARGO_INCREMENTAL=0,
+CARGO_BUILD_JOBS=4, and --locked. Lock ran before Cargo. Cargo chains and Git
+mutations were serial; source stayed unchanged during each gate.
 
-- Full `cargo test -p weaver-harness --locked`: 2,061 passed, including 26
-  doctests; 567 ignored in that ordinary invocation. No #331 exclusion was used.
-- The separate delegated worker invocation exercised 503 of those ignores.
-  Its first run passed 502 and failed Observe setup because the required
-  admin-test executable variable was absent. That exact Observe case passed
-  with WEAVER_OBSERVE_ADMIN_TEST_BIN set. All 503 selected cases have passing
-  results; the other 64 ordinary ignores were not exercised by this gate.
-- Seven compiled protective controls failed their named assertions: omitted
-  pre-close account settlement, early SessionClosed, early TurnClosed,
-  closed-turn attribution for a late return, stale placement flag, foreign
-  recorder accepting a deferred ticket, and live ledger accepting a run-scoped
-  rejection receipt. Every source was restored and the library rebuilt.
-- Strict lint then requested `expect_err` instead of `err().expect()` in the
-  new ticket test. This test-only edit leaves all runtime bytes unchanged.
-  Clippy and formatting passed after it. The rebuilt exact test passed on the
-  host; its sandbox attempt was denied local socket creation before reaching
-  the behavior. The full suite and controls above precede only this assertion
-  spelling change and this record.
-- All 969 files in the final source manifest match the final worktree bytes.
-  This record was added after the source archive and is not in its test claim.
+- Full cargo test -p weaver-harness --locked: 2,061 passed, including 26
+  doctests, with 572 ignored by the ordinary invocation. Counts use the final
+  result per test binary plus both doctest groups, excluding nested child
+  summaries. The #331 case was included and passed.
+- All 508 inventoried worker cases passed in one serial delegated invocation,
+  including the five new cases. The other 64 ordinary ignores were not run by
+  this gate. Stop and Observe used the recorded actual admin test executable.
+- Strict harness clippy for all targets, formatting, diff and final lock checks
+  passed. All 969 source-manifest hashes matched after the controls and gates.
+- Eight separately compiled controls failed their intended assertions: waiting
+  before mandatory close, losing the exact retained original, skipping a ready
+  placement, blocking Lower behind a later packet, falsely reporting progress
+  for unanswered generation, falsely reporting Pending for a received terminal,
+  falsely reporting progress for an unanswered cut, and leaving the placement
+  Unload guard stale. Each original was restored and the library rebuilt.
 
-The process cases use actual worker, state, gate, decoder and classifier seams
-with scripted peers. The placement case waits for a real MeasureDelta reply,
-holds the resulting StatePlacement author behind writer pressure, and injects
-actual state EOF from the capacity wait. It asserts no turn-T event follows
-TurnClosed(T), nothing except Unload follows SessionClosed, and no decoder append
-or new dispatch occurs. Pending-close fixtures queue the original close through
-the real barrier; they assert its original reason and uid 42 survive. They do
-not claim every healthy workflow can create that interleaving.
+The dead-trace regression has an actual sent, unanswered MeasureDelta, actual
+state EOF, a real writer failure and the original cleanup cap. The fully answered
+placement already abandoned on sink failure at the parent; that passing baseline
+is retained separately. The unanswered version reproduces G1 before the fix.
 
-The first placement setup delivered EOF before the pending author existed. The
-next setup reached the author and exposed the stale placement flag. A test-helper
-visibility error and a duplicate trace drain in the ticket fixture were also
-corrected. These failures, the lint failure, missing Observe variable and sandbox
-refusal are preserved, and are not counted as protective-control detections.
+The unavailable-rejection regression injects an invalid private turn receipt and
+executes the real InvalidIdentity refusal. It declares that internal fault
+instrument rather than claiming an ordinary peer can create the private state.
+The second case adds an actual late ToolAnswer and checks its retained raw bytes
+and matching Lower. Ready TurnStarted/placement cases record before closing;
+blocked versions retain their exact tickets without waiting. An unrecorded
+TurnStarted creates no invented turn bracket. Ordered trace assertions forbid
+turn-T records after TurnClosed(T) and any non-Unload record after SessionClosed.
 
-The existing private-target SQLite member and admin test executable are recorded
-by hash in prerequisites.json. They were not rebuilt for a fresh admin or SPU
-qualification claim. The eight privileged admin-startup cases were not run.
+Logs preserve the first test-only type/visibility compile failures, the initial
+passing answered-placement probe, both failing G1 baselines, the release-wait
+fixture correction, the later-packet failure and the corrected Cargo filter
+syntax. None of these setup/rework failures counts as a protective mutation.
+
+Existing SQLite member and admin binaries are identified in prerequisites.json.
+They were not rebuilt for a fresh admin, SPU or deployment qualification claim.
+The eight privileged admin-startup cases and GPU qualification were not run.
 
 Evidence deposit:
-`/bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/state-failed-exit-ordering-20261026-b7f32ad8/`.
+/bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/state-terminal-progress-20261026-7bc699ae/.
+Source archive SHA256:
+7bc699aee3b1a1c524cb557398a4f51dc346770d8b8a6d5e74278ba7627e6cd8.
+Source manifest SHA256:
+3dc96adb4a1201968de940080055ef90bb14af27bc2d768ecd90196881599475.
+This working record is revised after the gates and is excluded from that source
+manifest. It is included separately in the evidence deposit.
 
-Final source archive SHA256:
-`b7f32ad847441fab50956e5db2062ad43f6377bc2801affd0e8491c2f3667a11`.
-Final source manifest SHA256:
-`b94f99748c7b9ee62f3f56e68ebfa61cedad046fe5aec80f6ed080c5c471155f`.
-The full-suite/control source archive before the assertion spelling change is
-preserved as pre-lint-source.tar.gz, SHA256:
-`15d5c929d5db9c068b0374e27495a479a366eac626e447d6aa8ddbea8b005b90`.
+## Review disposition and remaining work
 
-## Remaining work and after-action
+G1 has an author correction and executable evidence, not a Planner clearance.
+The new review's B2 timestamp explanation is added. B3's old Unload predicate is
+removed; its old mutation is not claimed to have begun detecting a regression.
+The speculative refused-restore L1 is not collectively closed by these results.
+Existing #339 and folded batch/file findings and operator elections remain
+carried, including gate reaping, Lower's sub-bound, management world-send identity
+and remaining failed-owner integration. The #346/#347 integration still needs
+review when those descendants join this changed parent.
 
-This is an author correction, not a Planner, third-party, security or production
-grade. The named code-review and verification-before-completion skills remain
-unavailable; the evidence contains a manual author reading and executable checks.
-#339 stays draft pending regrade. Its F2 and B1-B7 are not collectively closed:
-gate reaping, Lower's sub-bound, management world-send identity, rejection
-unavailability, shared-tail design and abandon-at-cap coverage retain their
-recorded dispositions. All folded #340-#345 batch/file and Spec questions carry.
-
-The plan was to reproduce all three closing-order sites and settle their original
-owners before closing. The real placement fixture additionally exposed the stale
-recorder flag, so the correction includes that synchronization. Future fixtures
-should assert the actual pending author before injecting failure, supply every
-required peer executable, and retain the complete ordered trace rather than
-checking event counts alone.
+The required named review skills remain unavailable. Manual author readings and
+executable checks are recorded without claiming those skill invocations, a
+Planner grade, security disposition or production qualification.
 
 Foundation remains unselected and production still calls dev_loop::drive.
-#146 remains open for integration, remaining review carries, authority proposals,
-qualified artifacts, measured limits, security and the operator's coupled cutover.
+#339 remains draft. #146 remains open for integration, review carries, authority
+proposals, qualified artifacts, measured limits, security and operator cutover.
 No CodeRabbit review, merge or deployment is part of this act.

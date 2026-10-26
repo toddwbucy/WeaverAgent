@@ -170,29 +170,38 @@ pub(in crate::flow::context::worker_startup) fn placement_pending(
         .unwrap();
     let rows = trace_through(reader, vec![], through, end).unwrap();
     super::super::super::management::stop::tests::fill_trace(input.serving.owner.context, clock);
-    std::fs::write(root.join("release-measure"), []).unwrap();
+    if !mode.contains("trace-loss") {
+        std::fs::write(root.join("release-measure"), []).unwrap();
+    }
     // Wait for the actual decoder answer before injecting EOF at the author's
     // capacity wait, so the stopped record belongs to measured placement.
     let mut ready = [nix::poll::PollFd::new(
         input.serving.owner.decode.fd(),
         nix::poll::PollFlags::POLLIN,
     )];
-    assert_eq!(nix::poll::poll(&mut ready, 1000u16).unwrap(), 1);
+    if !mode.contains("trace-loss") {
+        assert_eq!(nix::poll::poll(&mut ready, 1000u16).unwrap(), 1);
+    }
     let mut fail = StateEofOnWait {
         clock,
         member,
         fired: false,
-        preceding_waits: 1,
+        preceding_waits: usize::from(!mode.contains("trace-loss")),
     };
     while input.advance_with_io(&mut fail) != FoundationInputProgress::Stopped {
         assert!(Instant::now() < end, "placement author watchdog");
     }
     assert!(fail.fired);
     let context = &input.serving.owner.context;
-    assert_eq!(
-        context.pending_author().unwrap().event.kind,
-        serving::Kind::StatePlacement
-    );
+    if !mode.contains("trace-loss") {
+        assert_eq!(
+            context.pending_author().unwrap().event.kind,
+            serving::Kind::StatePlacement
+        );
+    } else {
+        assert!(context.pending_author().is_none());
+        assert!(context.measure.is_some());
+    }
     assert!(context.place_owed());
     assert!(context.open_turn.is_some());
     assert!(!root.join("appended.json").exists());
@@ -312,8 +321,52 @@ pub(in crate::flow::context::worker_startup) fn finish(
     root: &Path,
     mode: &str,
 ) {
-    let (handoff, mut rows) =
+    let (mut handoff, mut rows) =
         HANDOFF.with(|slot| slot.borrow_mut().take().expect("actual halt handoff"));
+    let pending_ticket = run.context.pending_author().map(|author| author.ticket);
+    if mode.contains("capacity-ready") {
+        let through = run.context.barrier.recorder().boundary().admitted.unwrap();
+        rows.extend(
+            trace_through(
+                reader,
+                vec![],
+                through,
+                Instant::now() + Duration::from_secs(5),
+            )
+            .unwrap(),
+        );
+    }
+    if mode.contains("placement-pending-trace-loss") {
+        reader.shutdown(std::net::Shutdown::Both).unwrap();
+        let end = Instant::now() + Duration::from_secs(5);
+        while run.context.barrier.standing_failure().is_none() {
+            assert!(Instant::now() < end, "actual trace sink failure watchdog");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(run.context.place_owed());
+    }
+    if mode.contains("rejection-unavailable") {
+        let end = Instant::now() + Duration::from_secs(5);
+        let through = run.context.barrier.recorder().boundary().admitted.unwrap();
+        rows.extend(trace_through(reader, vec![], through, end).unwrap());
+        // Exercise the actual rejected-receipt refusal with an invalid owner
+        // identity. The trace retains its original event; no receipt is made.
+        run.context.pair_rejected_claim.as_mut().unwrap().turn =
+            Some(weaver_trace::TurnRef("foreign-rejection-turn".into()));
+        loop {
+            match run.context.advance_halt_rejection() {
+                Err(detail) => {
+                    assert!(detail.contains("InvalidIdentity"), "{detail}");
+                    handoff._rejection_unavailable = true;
+                    break;
+                }
+                Ok(None) => {}
+                Ok(Some(_)) => panic!("invalid rejection receipt was accepted"),
+            }
+            assert!(Instant::now() < end, "rejection refusal watchdog");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
     let first = run.context.failure().unwrap().clone();
     let deadline = run.context.halt().unwrap().deadline().unwrap();
     let original = handoff
@@ -352,6 +405,18 @@ pub(in crate::flow::context::worker_startup) fn finish(
         run.failed_exit(handoff).ok().expect("same original run")
     }));
     let owner = guard.0.as_mut().unwrap();
+    if mode.contains("placement-pending-trace-loss") || mode.contains("rejection-unavailable") {
+        for _ in 0..32 {
+            owner.advance_with_io(clock);
+            if owner.stage != ExitStage::Terminals {
+                break;
+            }
+        }
+        assert!(
+            owner.stage == ExitStage::World,
+            "unavailable account must yield to the stopped response without waiting"
+        );
+    }
     if mode.contains("live-tools") {
         assert!(root.join("halt-tool-pid").exists());
         assert_eq!(
@@ -396,44 +461,65 @@ pub(in crate::flow::context::worker_startup) fn finish(
     }
     let end = Instant::now() + Duration::from_secs(8);
     let mut triggered = false;
-    let mut trace_released = !mode.contains("pressure-hold");
-    if mode.contains("start-pending") {
-        assert_eq!(
-            owner.advance_with_io(clock),
-            FoundationExitProgress::Pending
-        );
-        assert!(owner.stage == ExitStage::Terminals);
-        assert!(!owner.terminal_attempted);
-        assert!(owner.tail.context.open_turn.is_none());
-        assert!(!root.join("closed.json").exists());
-        if mode.contains("start-expiry") {
-            clock.advance_to(deadline - 1).unwrap();
-            owner.wait_with_io(clock);
-            assert_eq!(owner.progress(), FoundationExitProgress::Closed);
-            assert_eq!(
-                owner.tail.context.pending_author().unwrap().event.kind,
-                serving::Kind::TurnStarted
-            );
-            assert!(owner.tail.context.open_turn.is_none());
-            triggered = true;
-        }
-    }
-    if mode.contains("placement-pending") {
-        assert_eq!(
-            owner.advance_with_io(clock),
-            FoundationExitProgress::Pending
-        );
-        assert!(owner.stage == ExitStage::Terminals);
-        assert!(!owner.terminal_attempted);
+    let mut trace_released =
+        !mode.contains("pressure-hold") || mode.contains("rejection-unavailable");
+    if mode.contains("start-expiry") {
+        clock.advance_to(deadline).unwrap();
+        assert_eq!(owner.advance_with_io(clock), FoundationExitProgress::Closed);
         assert_eq!(
             owner.tail.context.pending_author().unwrap().event.kind,
-            serving::Kind::StatePlacement
+            serving::Kind::TurnStarted
         );
-        assert!(owner.tail.context.open_turn.is_some());
+        assert!(owner.tail.context.open_turn.is_none());
         assert!(!root.join("closed.json").exists());
+        triggered = true;
+    }
+    if (mode.contains("placement-pending") || mode.contains("start-pending"))
+        && !mode.contains("capacity-ready")
+        && !mode.contains("trace-loss")
+        && !mode.contains("start-expiry")
+    {
+        let waits = clock.waits().len();
+        for _ in 0..32 {
+            owner.advance_with_io(clock);
+            if owner.stage != ExitStage::Terminals {
+                break;
+            }
+        }
+        assert!(
+            owner.stage == ExitStage::World,
+            "ordinary capacity cannot delay Closing"
+        );
+        assert_eq!(clock.waits().len(), waits);
+        let retained = owner
+            .tail
+            .stopped_turn_record
+            .as_ref()
+            .unwrap()
+            .test_record()
+            .unwrap();
+        assert_eq!(Some(retained.1), pending_ticket);
+        assert_eq!(
+            retained.0.envelope.kind,
+            if mode.contains("start-pending") {
+                serving::Kind::TurnStarted
+            } else {
+                serving::Kind::StatePlacement
+            }
+        );
     }
     while owner.progress() != FoundationExitProgress::Closed && Instant::now() < end {
         owner.advance_with_io(clock);
+        if mode.contains("placement-pending-trace-loss")
+            && owner.stage == ExitStage::Release
+            && owner.progress() == FoundationExitProgress::Pending
+        {
+            // The sink's standing failure may abort the later release wait,
+            // but only after the stopped response and actual Lower completed.
+            assert!(owner.world_sent && owner.lower_confirmed);
+            owner.wait_with_io(clock);
+            assert_eq!(owner.progress(), FoundationExitProgress::Closed);
+        }
         if mode.contains("world-silent")
             && owner.stage == ExitStage::World
             && owner.world_send.is_some()
@@ -473,12 +559,13 @@ pub(in crate::flow::context::worker_startup) fn finish(
             );
             triggered = true;
         }
-        if !trace_released && owner.stage == ExitStage::Terminals {
+        if !trace_released && owner.stage == ExitStage::World {
             assert!(
                 owner.tail.context.pairs.pending_rejection().is_some(),
                 "raw return must remain owed while trace capacity is held"
             );
-            assert!(!owner.terminal_attempted);
+            assert!(owner.terminal_attempted);
+            assert!(owner.tail.rejection_unavailable);
             assert!(std::fs::read_link(format!("/proc/self/fd/{state_fd}")).is_ok());
             assert!(!root.join("closed.json").exists());
             trace_released = true;
@@ -513,6 +600,15 @@ pub(in crate::flow::context::worker_startup) fn finish(
         owner.tail.release_outcome(),
         owner.tail.context.halt().unwrap().secondary()
     );
+    if mode.contains("placement-pending-trace-loss") || mode.contains("rejection-unavailable") {
+        assert!(
+            owner.world_sent,
+            "unavailable accounting lost stopped response"
+        );
+        assert!(owner.lower_confirmed, "unavailable accounting lost Lower");
+        assert!(root.join("closed.json").exists());
+        assert!(root.join("halt-lower.json").exists());
+    }
     assert!(matches!(
         owner.channel_fault(),
         Some(crate::ChannelFault::Closed)
@@ -594,16 +690,19 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
         assert_eq!(by_kind("fault").len(), 1);
         let closes = by_kind("turn.closed");
-        assert_eq!(closes.len(), 1);
-        assert_eq!(closes[0]["turn"], "generation-turn");
-        assert_eq!(
-            closes[0]["payload"]["reason"],
-            if mode.contains("pending-turn") {
-                "directive"
-            } else {
-                "fault"
-            }
-        );
+        let unrecorded_turn = mode.contains("start-pending") && !mode.contains("capacity-ready");
+        assert_eq!(closes.len(), usize::from(!unrecorded_turn));
+        if !unrecorded_turn {
+            assert_eq!(closes[0]["turn"], "generation-turn");
+            assert_eq!(
+                closes[0]["payload"]["reason"],
+                if mode.contains("pending-turn") {
+                    "directive"
+                } else {
+                    "fault"
+                }
+            );
+        }
         if mode.contains("pending-turn") {
             assert_eq!(closes[0]["payload"]["cause"]["uid"], 42);
         }
@@ -612,18 +711,24 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 .into_iter()
                 .filter(|row| row["turn"] == "generation-turn")
                 .collect();
-            assert_eq!(placements.len(), 1);
+            assert_eq!(
+                placements.len(),
+                usize::from(mode.contains("capacity-ready"))
+            );
             assert!(!owner.tail.context.place_owed());
             assert!(!root.join("appended.json").exists());
         }
         assert_eq!(by_kind("session.closed").len(), 1);
         if mode.contains("start-pending") {
             let starts = by_kind("turn.started");
-            assert_eq!(starts.len(), 1);
-            let sequence =
-                |row: &serde_json::Value| row["sequence"].as_str().unwrap().parse::<u64>().unwrap();
-            assert!(sequence(starts[0]) < sequence(closes[0]));
-            assert!(sequence(closes[0]) < sequence(by_kind("session.closed")[0]));
+            assert_eq!(starts.len(), usize::from(!unrecorded_turn));
+            if !unrecorded_turn {
+                let sequence = |row: &serde_json::Value| {
+                    row["sequence"].as_str().unwrap().parse::<u64>().unwrap()
+                };
+                assert!(sequence(starts[0]) < sequence(closes[0]));
+                assert!(sequence(closes[0]) < sequence(by_kind("session.closed")[0]));
+            }
         }
         assert_eq!(by_kind("unload").len(), 1);
         let unload = by_kind("unload")[0];
@@ -686,7 +791,17 @@ pub(in crate::flow::context::worker_startup) fn finish(
         if mode.contains("live-tools") {
             assert!(owner.contained);
         }
-        if mode.contains("lower-late") {
+        if mode.contains("lower-late") && mode.contains("rejection-unavailable") {
+            let raw = std::fs::read(root.join("halt-lower-late.json")).unwrap();
+            assert!(
+                owner
+                    .handoff
+                    .received
+                    .iter()
+                    .any(|packet| packet.raw_bytes() == raw)
+            );
+        }
+        if mode.contains("lower-late") && !mode.contains("rejection-unavailable") {
             let rejects = by_kind("tool.return_rejected");
             assert_eq!(rejects.len(), 3);
             let last = rejects.last().unwrap();
@@ -705,13 +820,21 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
         if mode.contains("pressure-hold") {
             let rejects = by_kind("tool.return_rejected");
-            assert_eq!(rejects.len(), 1);
-            assert_eq!(rejects[0]["turn"], "generation-turn");
             assert_eq!(
-                rejects[0]["payload"]["raw_envelope"]
-                    .as_str()
+                rejects.len(),
+                usize::from(mode.contains("rejection-unavailable"))
+            );
+            if let Some(record) = rejects.first() {
+                assert_eq!(record["turn"], "generation-turn");
+            }
+            assert_eq!(
+                owner
+                    .tail
+                    .context
+                    .pairs
+                    .pending_rejection()
                     .unwrap()
-                    .as_bytes(),
+                    .raw_bytes(),
                 std::fs::read(root.join("halt-rejected-0.json")).unwrap()
             );
         }

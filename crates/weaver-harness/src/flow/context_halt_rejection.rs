@@ -12,6 +12,7 @@ pub(in crate::flow::context) struct RejectedAuthor {
     pub(super) turn: Option<weaver_trace::TurnRef>,
     event: Option<AuthoredEvent>,
     unavailable: Option<String>,
+    stopped_record: Option<crate::flow::recording::StoppedStartupRecord>,
 }
 impl RejectedAuthor {
     pub(in crate::flow::context) fn new(turn: Option<weaver_trace::TurnRef>) -> Self {
@@ -22,6 +23,7 @@ impl RejectedAuthor {
             turn,
             event: None,
             unavailable: None,
+            stopped_record: None,
         }
     }
     pub(in crate::flow::context) fn claim(&mut self, identity: &Arc<()>, ticket: u64) -> bool {
@@ -45,6 +47,22 @@ impl OwedRejectedReturn {
 }
 
 impl RecordingContext {
+    /// Retire only this rejection's unrecorded ticket. Its raw packet, event
+    /// and any actual receipt stay owned; no later close may restart this act.
+    pub(super) fn abandon_halt_rejection(&mut self, detail: &str) {
+        let Some(owner) = &mut self.pair_rejected_claim else {
+            return;
+        };
+        if self.phase == RecordingPhase::Failed {
+            if owner.ticket.is_some()
+                && owner.ticket == self.barrier.pending_author().map(|held| held.ticket)
+            {
+                owner.stopped_record = self.barrier.retain_halt_record();
+            }
+            owner.unavailable.get_or_insert_with(|| detail.into());
+        }
+    }
+
     pub(in crate::flow::context) fn bind_rejected_author(&mut self, sequence: Sequence) {
         if let Some(owner) = &mut self.pair_rejected_claim
             && owner.ticket.is_some()

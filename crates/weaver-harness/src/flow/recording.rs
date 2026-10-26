@@ -1217,10 +1217,27 @@ impl RecordBarrier {
         {
             return None;
         }
+        // Keep the original preparation time. Trace sequence, not timestamp,
+        // orders this close after the earlier obligations settled by its owner.
         Some(DeferredHaltClose {
             owner: Arc::clone(&self.author_identity),
             pending: self.pending.take().unwrap(),
             author: self.pending_author.take().unwrap(),
+        })
+    }
+
+    /// Keep an unavailable ordinary original without granting a later retry.
+    /// The frozen first-failure account stays unchanged; this also retains an
+    /// exact original whose attempt began after that snapshot.
+    /// Reserved closing records must remain usable after this slot is retired.
+    pub(super) fn retain_halt_record(&mut self) -> Option<StoppedStartupRecord> {
+        if !self.recorder.tap_stopped() || (self.pending.is_none() && self.pending_author.is_none())
+        {
+            return None;
+        }
+        Some(StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
         })
     }
 

@@ -282,7 +282,11 @@ impl FoundationRun {
             ExitStage::Terminals
         };
         Ok(Box::new(FoundationFailedExit {
-            tail: FailedRunCleanup::after_serving(context, resources),
+            tail: FailedRunCleanup::after_serving(
+                context,
+                resources,
+                handoff._rejection_unavailable,
+            ),
             handoff,
             stage,
             progress: FoundationExitProgress::Progress,
@@ -475,17 +479,16 @@ impl FoundationFailedExit {
                     .secondary(format!("failed serving pending terminal: {error:?}")),
             }
         }
-        if !self.tail.advance_accounts(io) {
-            self.abort();
-            return FoundationExitProgress::Closed;
+        match self.tail.settle_serving_turn_accounts(io) {
+            Some(true) => {}
+            Some(false) => return FoundationExitProgress::Progress,
+            None => {
+                self.abort();
+                return FoundationExitProgress::Closed;
+            }
         }
         if !self.clock(io) {
             return FoundationExitProgress::Closed;
-        }
-        // Every pre-existing ordinary author keeps its ordinary capacity and
-        // earlier bound. The stopped account drivers grant no continuation.
-        if self.tail.serving_accounts_pending() {
-            return FoundationExitProgress::Pending;
         }
         let context = &mut self.tail.context;
         self.terminal_attempted = true;
@@ -639,9 +642,7 @@ impl FoundationFailedExit {
 
     fn lower(&mut self, io: &mut impl PumpIo) -> FoundationExitProgress {
         if self.tail.context.pairs.pending_rejection().is_some() {
-            if let Err(error) = self.tail.context.advance_halt_rejection() {
-                self.tail.secondary(error);
-            }
+            self.tail.advance_serving_rejection();
             if !self.clock(io) {
                 return FoundationExitProgress::Closed;
             }
@@ -678,6 +679,7 @@ impl FoundationFailedExit {
             .held()
             .is_some_and(|frame| matches!(frame.payload, Payload::ToolAnswer(_)))
             && self.tail.context.pairs.pending_rejection().is_some()
+            && !self.tail.rejection_unavailable
         {
             return FoundationExitProgress::Pending;
         }
@@ -691,11 +693,18 @@ impl FoundationFailedExit {
             Ok(Some(reply)) => {
                 let frame = reply.envelope();
                 if matches!(frame.payload, Payload::ToolAnswer(_)) {
+                    if self.tail.rejection_unavailable
+                        && self.tail.context.pairs.pending_rejection().is_some()
+                    {
+                        self.handoff.received.push(reply);
+                        self.tail.secondary(
+                            "failed serving Lower retained a later return behind an unavailable rejection",
+                        );
+                        return FoundationExitProgress::Progress;
+                    }
                     match self.tail.context.pairs.observe_gate(reply) {
                         Ok(crate::flow::context::pairs::GateObservation::Rejected) => {
-                            if let Err(error) = self.tail.context.advance_halt_rejection() {
-                                self.tail.secondary(error);
-                            }
+                            self.tail.advance_serving_rejection();
                         }
                         Ok(_) => self
                             .tail
@@ -809,6 +818,7 @@ impl FoundationFailedExit {
         let mut interests = vec![];
         if self.stage == ExitStage::Lower
             && self.tail.context.pairs.pending_rejection().is_some()
+            && !self.tail.rejection_unavailable
             && !self.handoff._capacity_unavailable
         {
             if let Err(error) = self.tail.context.barrier.drain_capacity_wake() {
