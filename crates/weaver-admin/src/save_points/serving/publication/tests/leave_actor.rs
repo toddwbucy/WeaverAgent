@@ -620,7 +620,9 @@ fn forced_leave_admin_requires_commit_complete_and_exact_left() {
 
 #[test]
 fn forced_leave_admin_peer_loss_stops_each_publication_step_and_keeps_guard() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(
+        forced_leave_admin_peer_loss_stops_each_publication_step_and_keeps_guard
+    ) {
         return;
     }
     for steps in 0..=3 {

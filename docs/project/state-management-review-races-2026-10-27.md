@@ -12,25 +12,28 @@ remain outstanding under #146.
 
 ## Authority and scope
 
-Implements: weaver-admin Spec section 3, run-lock ownership and release;
-Spec 02 DECISION-BARRIER; harness amendment HARNESS-CLOCK and section 4 halt
+Implements: weaver-admin Spec section 3, run-lock ownership and release,
+Spec 02 DECISION-BARRIER, harness amendment HARNESS-CLOCK and section 4 halt
 and lifecycle. Author assessment: conforms for the tested lock, interrupt and
 original-deadline properties. No public behavior, Spec, limit or wire changes.
 
 The admin reproduction observes an actual CLOEXEC run-lock descriptor in an
 unrelated fork's descriptor table. A pipe holds that child before exec. Closing
 the parent's copy leaves the OFD lock held and prevents socket EOF. Exec closes
-the inherited descriptors: the lock becomes free and the socket reports EOF,
-while the executed child is still alive. A second deliberately retained lock
-still reads held. This reproduces the proposed kernel mechanism with a controlled
-schedule; it does not identify the child from the Planner's earlier failed run.
+the inherited descriptors. The executed child acknowledges from user code, then
+stays alive on a second pipe. At that acknowledgment the lock must be free and
+the socket must report EOF. A second deliberately retained lock still reads held.
+This reproduces the proposed kernel mechanism with a controlled schedule. It does
+not identify the child from the Planner's earlier failed run.
 
 Twenty-one ordinary admin cases now re-exec their exact test before opening
-their locks or sockets. The helper propagates failure and requires one executed
-case. Its child has no other parallel fixture that can inherit those descriptors.
+their locks or sockets. Each caller supplies its module and function name, checked
+as a function by the compiler. The helper propagates failure and requires one
+executed case. An unnamed-thread regression exercises the same explicit selector.
+Its child has no other parallel fixture that can inherit those descriptors.
 The immediate release, reacquisition, EOF, refusal and publication assertions
 remain. Other tests may still run in parallel. Existing ignored privileged
-fixtures already require isolated processes; this act does not widen their claim.
+fixtures already require isolated processes. This act does not widen their claim.
 
 The first broad run exposed the same inheritance surface in a publication
 peer-loss fixture: closing its socket answered Pending instead of Stopped.
@@ -41,8 +44,10 @@ The halt fixture checks actual interrupt submission before waiting for the fake
 gate's atomically published evidence. The evidence must name the original
 execution and FlowFailure. The trace-loss-late child deliberately withholds its
 marker until the observer waits, pinning the formerly unlucky schedule. This
-observation uses a separate watchdog after the original halt deadline has been
-checked; it cannot advance or renew that deadline.
+observation has a separate fixture watchdog. It cannot advance or renew the halt
+deadline. All four consumers use interrupt_sent before observing the evidence.
+The child also stops waiting if its observer socket closes, including with an
+unread packet still queued.
 
 For ordinary placement rollback, the independent member responder sends actual
 root Leave when the decoder retains the measurement request. The worker may
@@ -56,46 +61,75 @@ using a process-local counter. Parallel cases cannot bind the same admin socket
 or overwrite one another's child launcher. The original scenario semantics stay
 in their existing instruments.
 
+## Review dispositions
+
+| Planner row | Disposition |
+| --- | --- |
+| F1 | Canonicalize the expected run-lock path. The inheritance case passes under a symlinked TMPDIR. |
+| F2 | Pass the exact case from every caller. No selector depends on a thread name. The unnamed-thread case fails if that dependency returns. |
+| F3 | The deadline and clock-failure halt cases now use the same bounded observation as the two already corrected consumers. |
+| F4 | Isolated lock scans require the exact holder set, sorting the two expected PIDs. |
+| F5 | Scope independent measurement Leave to serving rollback modes, assert the marker and share one send branch with the held-member case. |
+| F6 | Reuse start::tests::scratch for the inheritance reproduction. |
+| F7 | Require successful child exit and the one-passed-case text without an anchored summary prefix. |
+| F8 | The interrupt observer wait ends on socket hangup or error. A SOCK_SEQPACKET case closes the peer with queued data and requires that outcome. |
+| T3 | Issue #369 retains the separate residency-teardown Unconfirmed/Confirmed flake, its measurements and its acceptance work. It is not fixed here. |
+
 ## Evidence and limits
 
-Three full parallel admin package runs passed 553 cases each, with 70 declared
-ignores. Three runs each passed all 40 selected worker and 46 gate identities.
-Both formerly flaky worker cases also passed twenty additional runs.
+Three full parallel admin package runs on the corrected source passed 555 cases
+apiece, with 70 declared ignores. Three runs passed all 40 affected worker process
+identities. The inheritance reproduction also passed with a symlinked TMPDIR.
+Both crates passed all-target clippy with warnings denied. Formatting, lock and
+diff checks passed.
 
-The broad harness library run passed 2,084 cases, with 797 declared ignores,
-and failed the previously known pending-trace-author pump test with EAGAIN.
-That case passed alone. This is not a claim of a clean broad harness invocation.
+The ordinary harness invocation passed 2,164 top-level cases, with 797 declared
+ignores and the known #331 pending-trace-author pump flake explicitly filtered.
+The #369 teardown case ran and passed in this invocation. That single pass does
+not close its intermittent failure report.
 
-Three independent compiled controls failed: retaining the parent lock defeated
-the release assertion; restoring the immediate marker check failed against the
-deliberately delayed child; withholding the independent Leave caused the original
-five-second Decision to expire before handoff. The last failure uses a custom
-assertion message; the first log classifier expected the word "assertion" and
-was corrected by checking the exact DecisionBound failure. Source restoration
-was verified before the final build.
+Three review controls compiled and failed as intended: remove path
+canonicalization under symlinked TMPDIR, restore a thread-derived selector in
+an unnamed thread, and ignore observer socket departure. The last control reaches
+the ten-second fixture watchdog with unread data still queued. Logs retain every
+control and the restored source manifest.
 
-Both changed crates passed all-target clippy at -D warnings. Formatting, lock
-and diff checks passed. Cargo used the pinned toolchain, --locked, a private
-target and serial invocations. After all controls, the rebuilt source passed the
-full admin package again (553 cases), all 86 affected worker/gate identities,
-admin clippy, formatting, lock and diff checks. The final source manifest matches
-the restored tested files.
-Source snapshots, full logs, failed attempts and protective-control evidence are
-retained in the operator's approved evidence deposit.
+After restoration and rebuilding, all 555 admin cases, all 40 affected worker
+cases and the observer-departure regression passed again. Formatting, lock and
+diff checks passed. All 800 source and configuration hashes match the broad run.
 
-This is author evidence. The named review skills are unavailable in this session;
-the self-check is manual. Planner review remains required. Synthetic fixtures do
-not qualify the language artifacts, production dispatcher or coupled cutover.
+The first review-gate attempt passed two full admin runs and failed the third in
+the new inheritance reproduction. A CLOEXEC pipe's EOF and the new /proc exe
+image were visible before another inherited descriptor had finished closing.
+The reproduction now requires an acknowledgment from the executed test helper.
+Its pre-exec hold still proves inheritance. Its post-exec assertions still
+require immediate lock reacquisition and socket EOF. The failed attempt and its
+source snapshot are preserved.
 
-These fixes remove specific sources of flaky failures. The review records do
-not measure their share of all reruns, and deliberate perturbations and code
-changes still require verification. A previously known pump test remains a
-separate reliability limitation; the broad-run failure is retained in the logs.
+At ac95d489, three original compiled controls detected a retained parent lock,
+an immediate marker assertion and a withheld independent Leave. That revision
+also passed three 553-case admin runs, three runs of all 40 worker and 46 gate
+identities, and twenty additional runs of each originally flaky worker case.
+Its broad harness run failed the known pump case with EAGAIN, which passed alone.
+Those results remain evidence for that source, not additional repeats of this
+review correction.
+
+Cargo used the pinned toolchain, --locked, a private target and serial
+invocations. The author self-check read every isolation caller and all four halt
+marker consumers. The named review skills are unavailable here, so that check is
+manual. Planner re-review remains required after this push. Source snapshots,
+full logs, failed attempts and protective controls are retained for the operator.
+
+These fixes remove specific sources of flaky failures. The records do not measure
+their share of all reruns. Code changes and deliberate perturbations still require
+verification. #331 and #369 remain separate reliability limitations. Synthetic
+fixtures do not qualify language artifacts, the production dispatcher or cutover.
 
 ## Carries
 
 The preceding PRs #363 and #364 received Planner grades of zero fix with
-batch work retained. #364 Q1 still owes one budget through the repair-refused
-and repair-exhausted roads. #365 holds the Stop-after-completed-refusal election.
+batch work retained. Draft #368 carries #364 Q1 through the repair-refused and
+repair-exhausted roads, with its own tests and review carries. #365 holds the
+Stop-after-completed-refusal and barrier-membership elections.
 #363 Y1/Y7 hold the organ-loss/refusal trace-order question. The capture-refusal,
 lifecycle, failed-report and qualification work in #146 remains open.

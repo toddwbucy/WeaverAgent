@@ -1379,7 +1379,7 @@ fn the_name_check_is_one_answer_for_every_verb() {
 /// the second case fails; read a held lock as `Idle` and it fails too.
 #[test]
 fn show_reads_the_lock_and_names_the_constituents() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(show_reads_the_lock_and_names_the_constituents) {
         return;
     }
     use std::os::unix::process::CommandExt;
@@ -2977,7 +2977,9 @@ fn report() -> weaver_types::SavePointReport {
 /// assertion fails.
 #[test]
 fn an_unload_without_its_save_point_stops_and_a_forced_one_completes() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(
+        an_unload_without_its_save_point_stops_and_a_forced_one_completes
+    ) {
         return;
     }
     let (config, _scratch) = scratch_config("unload-stops");
@@ -4174,7 +4176,7 @@ const TEST_UNLOAD_BOUNDS: UnloadBounds = UnloadBounds {
 /// refuses `Malformed` with the holder standing.
 #[test]
 fn unload_leaves_waits_and_escalates() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(unload_leaves_waits_and_escalates) {
         return;
     }
     for (tag, observed) in [
@@ -4385,7 +4387,7 @@ fn a_silent_run_is_bounded_and_never_reaped() {
 /// unentered run and refuse on its answer, and the holder survives.
 #[test]
 fn unload_ends_a_run_that_never_entered() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(unload_ends_a_run_that_never_entered) {
         return;
     }
     let (config, _scratch) = scratch_config("unload-unentered");

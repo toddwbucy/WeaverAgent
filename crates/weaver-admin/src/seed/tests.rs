@@ -21,7 +21,9 @@ fn coordination(fixture: &preparation::tests::Fixture) -> std::path::PathBuf {
 
 #[test]
 fn seed_reads_the_unloaded_ladder_before_inventory_and_preserves_unverified_evidence() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(
+        seed_reads_the_unloaded_ladder_before_inventory_and_preserves_unverified_evidence
+    ) {
         return;
     }
     let fixture = preparation::tests::fixture();

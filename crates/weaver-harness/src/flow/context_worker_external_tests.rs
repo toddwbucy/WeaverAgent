@@ -44,6 +44,52 @@ fn packet(fd: i32, frame: &OrganEnvelope) {
     let bytes = serde_json::to_vec(frame).unwrap();
     assert_eq!(send(fd, &bytes, MsgFlags::MSG_NOSIGNAL), Ok(bytes.len()));
 }
+
+fn wait_for_interrupt_observer(fd: i32, observed: impl Fn() -> bool) -> bool {
+    use nix::poll::{PollFd, PollFlags, poll};
+    // SAFETY: the gate caller owns this socket throughout the fixture wait.
+    let peer = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+    let end = Instant::now() + Duration::from_secs(10);
+    while !observed() {
+        assert!(Instant::now() < end, "interrupt observer watchdog");
+        let mut interests = [PollFd::new(peer, PollFlags::POLLHUP | PollFlags::POLLERR)];
+        match poll(&mut interests, 10u16) {
+            Ok(_) => {}
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(error) => panic!("interrupt observer socket: {error}"),
+        }
+        if interests[0]
+            .revents()
+            .unwrap()
+            .intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+#[test]
+fn interrupt_observer_wait_ends_on_peer_close_with_queued_bytes() {
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+    let (socket, peer) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+    assert!(wait_for_interrupt_observer(socket.as_raw_fd(), || true));
+    send(
+        peer.as_raw_fd(),
+        b"queued before the observer failed",
+        MsgFlags::MSG_NOSIGNAL,
+    )
+    .unwrap();
+    drop(peer);
+    assert!(!wait_for_interrupt_observer(socket.as_raw_fd(), || false));
+}
+
 pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
     let mut tool_child = None;
     let end = Instant::now() + Duration::from_secs(30);
@@ -367,14 +413,14 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         assert_eq!(frame.position, Position::Continue);
                         assert_eq!(frame.exchange, pending.as_ref().unwrap().exchange);
                         assert!(!root.join("halt-interrupt.json").exists());
-                        if mode.contains("trace-loss-late") {
-                            // Force the observer to reach the old racy assertion
-                            // before this child publishes its evidence.
-                            let end = Instant::now() + Duration::from_secs(10);
-                            while !root.join("halt-observe-interrupt").exists() {
-                                assert!(Instant::now() < end, "interrupt observer watchdog");
-                                std::thread::sleep(Duration::from_millis(1));
-                            }
+                        // Publish only after the observer reaches the old racy
+                        // assertion, unless that observer has already departed.
+                        if mode.contains("trace-loss-late")
+                            && !wait_for_interrupt_observer(fd, || {
+                                root.join("halt-observe-interrupt").exists()
+                            })
+                        {
+                            return;
                         }
                         std::fs::write(root.join("halt-interrupt.json.part"), &bytes[..n]).unwrap();
                         std::fs::rename(

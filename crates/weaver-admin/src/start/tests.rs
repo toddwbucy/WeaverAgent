@@ -1,6 +1,6 @@
 use super::*;
 
-fn scratch(tag: &str) -> crate::scratch::Scratch {
+pub(crate) fn scratch(tag: &str) -> crate::scratch::Scratch {
     let path =
         std::env::temp_dir().join(format!("weaver-admin-start-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
@@ -42,7 +42,9 @@ fn holding_child(lock: &RunLock) -> std::process::Child {
 /// lock reads free the moment the invocation's copy closes.
 #[test]
 fn the_run_lock_outlives_its_taker_and_the_escalation_ends_its_holder() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(
+        the_run_lock_outlives_its_taker_and_the_escalation_ends_its_holder
+    ) {
         return;
     }
     let dir = scratch("run-lock");
@@ -61,12 +63,12 @@ fn the_run_lock_outlives_its_taker_and_the_escalation_ends_its_holder() {
     );
     // The expected constituent is found at the run lock's descriptor.
     let found = holders(dir.0.as_path());
-    assert!(
-        found.contains(&Holder {
+    assert_eq!(
+        found,
+        vec![Holder {
             pid: child.id() as i32,
             fd: RUN_LOCK_FD
-        }),
-        "{found:?}"
+        }]
     );
     escalate_within(
         dir.0.as_path(),
@@ -87,7 +89,7 @@ fn the_run_lock_outlives_its_taker_and_the_escalation_ends_its_holder() {
 /// holder survives, refusing `WorkerWouldNotExit`.
 #[test]
 fn the_escalation_kills_a_holder_that_ignores_term() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(the_escalation_kills_a_holder_that_ignores_term) {
         return;
     }
     use std::os::unix::process::CommandExt;
@@ -127,7 +129,7 @@ fn the_escalation_kills_a_holder_that_ignores_term() {
 /// `WorkerWouldNotExit`.
 #[test]
 fn the_escalation_ends_every_holder() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(the_escalation_ends_every_holder) {
         return;
     }
     let dir = scratch("every-holder");
@@ -136,9 +138,11 @@ fn the_escalation_ends_every_holder() {
     let mut second = holding_child(&lock);
     drop(lock);
     // Both stand-ins are found at the inherited run-lock descriptor.
-    let found: Vec<i32> = holders(dir.0.as_path()).iter().map(|h| h.pid).collect();
-    assert!(found.contains(&(first.id() as i32)), "{found:?}");
-    assert!(found.contains(&(second.id() as i32)), "{found:?}");
+    let mut found: Vec<i32> = holders(dir.0.as_path()).iter().map(|h| h.pid).collect();
+    found.sort_unstable();
+    let mut expected = vec![first.id() as i32, second.id() as i32];
+    expected.sort_unstable();
+    assert_eq!(found, expected);
     escalate_within(
         dir.0.as_path(),
         Duration::from_secs(5),
@@ -157,7 +161,7 @@ fn the_escalation_ends_every_holder() {
 /// the stale holder is pinned.
 #[test]
 fn a_holder_no_longer_holding_the_file_is_never_pinned() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(a_holder_no_longer_holding_the_file_is_never_pinned) {
         return;
     }
     let dir = scratch("pin");
@@ -191,7 +195,7 @@ fn a_holder_no_longer_holding_the_file_is_never_pinned() {
 /// named at its standard input.
 #[test]
 fn a_process_with_the_lock_file_merely_open_is_no_holder() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(a_process_with_the_lock_file_merely_open_is_no_holder) {
         return;
     }
     let dir = scratch("merely-open");
