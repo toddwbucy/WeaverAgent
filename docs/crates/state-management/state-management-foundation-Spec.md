@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #348
+**Landing PR:** #349
 
-**Version:** 0.22 **Date filed:** 2026-10-20 **Document ID:**
+**Version:** 0.23 **Date filed:** 2026-10-20 **Document ID:**
 `state-management-foundation-Spec` **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -447,11 +447,14 @@ rewrite follows from this distinction. [FLOW-3, PERSIST-3, PERSIST-4, STORE-5, C
 | After Beginning and before Commit, leave | Local preparation error | Send one Aborted with the same capture ID, retain its bytes through partial carry, remove unlisted root part, AwaitCaptureRefused under unchanged windows |
 | AwaitCaptureRefused | Image or ImageFinished crossed the Aborted | Validate identity and phase, discard as a save result, no ImageChecked or Prepared, remain AwaitCaptureRefused |
 | AwaitCaptureRefused | Commit crossed the Aborted | Failed-run recovery, retain uncertain publication evidence, no successful Left |
+| AwaitCaptureRefused | Worker Aborted after a latched failure | Cancel unconfirmed publication and follow failed-run recovery, never read it as an echo or cleanup acknowledgement |
+| AwaitCaptureRefused | Capture, shared-tail or outer leave deadline expires | Unanswered, preserve Open marker, Done, accept no late CaptureRefused or Left as success |
 | After Beginning and before Commit, leave | Matching CaptureRefused | Cancel unconfirmed publication, retain missed leg, disarm capture window only, AwaitRefusedLeave |
 | After Beginning and before Commit, leave | Worker Aborted after a latched failure | Cancel unconfirmed publication and follow failed-run recovery, no successful Left |
 | AwaitRefusedLeave | Matching Left with forced true, no_state false and no save report | Complete normal forced-leave duties, Done, no save published |
 | AwaitRefusedLeave | SavePointNotTaken with the same missed leg | Report the graceful leave refusal, Done, merged retry remains available |
 | AwaitRefusedLeave | Save report, CaptureComplete or renewed publication | Protocol failure, no publication or successful command result |
+| AwaitRefusedLeave | Shared-tail or outer leave deadline expires | Unanswered, preserve Open marker, Done, accept no late Left as success. The capture wait was already disarmed by CaptureRefused |
 | Any before Commit | Worker EOF, invalid message or deadline expiry | Do not publish, preserve Open marker, failed-run recovery, Done |
 | After Commit | Worker fails or no final outcome | Mark the pending capture broken, publish nothing further, retain artifacts, never invent Left |
 | Any | Wrong run, capture ID, direction, phase or hash | Protocol failure, cancel unconfirmed publication, preserve evidence |
@@ -766,10 +769,26 @@ transit follows queued expiry, not a renewed timer. Reason: one absolute window 
 transport delay without electing another clock or resetting a bound at a later phase.
 [PERSIST-1, PERSIST-4, CLASS-8, COST-4]
 
+**PERSIST-FORCE-ADMISSION.** Before a sole force-unload has sent Leave, capture
+admission can fail because no trustworthy loaded facts or declaration copy is
+available. The admin amendment's ADMIN-FORCE-ADMISSION owns the direct, bounded
+escalation in that case. No capture actor starts, no member request is sent, and no
+healthy capture, Commit, Left or publication is inferred. The root-held containment
+identity bounds the run admin may end. A known worker failure keeps FLOW-5's failed
+outcome and prior marker instead of becoming an operator-force conclusion.
+[PERSIST-3, PERSIST-4, FLOW-3, FLOW-5]
+
+This election permits loss of unsaved state and unwritten trace to preserve the
+operator's ability to end the run when a save cannot be admitted. Existing completed
+artifacts remain eligible by their existing checks. Incomplete publications remain
+guarded for manual repair. The exception supplies no bypass for graceful unload,
+on-demand save or an already admitted capture. [PERSIST-3, PERSIST-4, FLOW-5]
+
 **PERSIST-LEAVE-TIME.** Leave and JoinLeave keep their existing drain, wind-down, force
-and escalation rules in admin Spec 3.0. No save window runs during S4 or S5. If either
-declared lifecycle bound is absent, the graceful phase remains unbounded. After the
-lower, at entry to the save stage, the harness samples began_ns and computes the capture
+and escalation rules in admin Spec 3.0, with ADMIN-FORCE-ADMISSION's pre-capture
+exception. No save window runs during S4 or S5. If either declared lifecycle bound is
+absent, the graceful phase remains unbounded. After the lower, at entry to the save
+stage, the harness samples began_ns and computes the capture
 deadline from save_wait, capped by its existing shared leave deadline. That shared
 window still starts at the recorded interrupt/lower anchor, under harness Spec 6, and
 uses LEAVE_BOUND_MS. A rollback or flow halt starts no capture. Reason: a save's budget
