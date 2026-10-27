@@ -1553,6 +1553,9 @@ pub enum LifecycleAsk {
     Observe,
     Admit,
     Release,
+    /// A world request refused before a turn under INPUT-NO-RESIDENCY.
+    /// This names trace evidence and is not a lifecycle directive.
+    WorldRequest,
 }
 
 /// The decode seam's refusal, per `weaver-types-Spec` section 4.4: the four

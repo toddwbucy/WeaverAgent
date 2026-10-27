@@ -123,6 +123,9 @@ impl ObservedOrgans {
     pub(super) fn any(&self) -> bool {
         self.gate.is_some() || self.spu.is_some()
     }
+    pub(super) fn no_residency(&self) -> bool {
+        self.spu.is_some()
+    }
     pub(super) fn gate_matches(&self, port: &OrganPort) -> bool {
         self.gate.as_ref().is_some_and(|end| end.port.matches(port))
     }

@@ -2054,6 +2054,10 @@ scenario!(
     "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-spu"
 );
 scenario!(
+    worker_session_demand_save_sqlite_world_request_pressure_spu,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-world-pressure-spu"
+);
+scenario!(
     worker_session_demand_save_sqlite_organ_loss_expiry_gate,
     "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-expiry-gate"
 );
@@ -2159,6 +2163,14 @@ scenario!(worker_input_composition_role, "input-role");
 scenario!(worker_input_composition_no_dialer, "input-no-dialer");
 scenario!(worker_input_composition_language_refusal, "input-language");
 scenario!(worker_input_composition_send_pressure, "input-pressure");
+scenario!(
+    worker_input_composition_send_deadline,
+    "input-pressure-deadline"
+);
+scenario!(
+    worker_input_composition_send_clock,
+    "input-pressure-send-clock"
+);
 scenario!(worker_input_composition_queued_frame, "input-queued");
 scenario!(worker_input_composition_wrong_position, "input-position");
 scenario!(worker_input_composition_wrong_opener, "input-opener");

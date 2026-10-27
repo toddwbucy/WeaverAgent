@@ -14,6 +14,8 @@ use super::*;
 
 #[path = "context_classifier_release_tests.rs"]
 mod classifier_release;
+#[path = "context_input_no_residency_tests.rs"]
+mod no_residency;
 #[path = "context_observation_tests.rs"]
 mod observation_ticks;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};

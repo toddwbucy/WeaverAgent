@@ -727,7 +727,13 @@ impl<'a> FoundationInput<'a> {
                         }
                     }
                 }
-                if self.send.as_ref().is_some_and(|send| send.sent()) {
+                if self.send.as_ref().is_some_and(|send| {
+                    send.sent()
+                        && send.sent_at().is_some()
+                        && send.belongs_to(ports.gate.as_deref().unwrap())
+                        && send
+                            .matches_exchange(&self.received.as_ref().unwrap().envelope().exchange)
+                }) {
                     owner.context.input_response_sent(ports.io)?;
                     owner.context.finish_input(ports.io)?;
                     self.stage = Stage::Refused;

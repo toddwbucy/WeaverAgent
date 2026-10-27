@@ -8,8 +8,8 @@ use crate::flow::coordinator::{CheckOperation, OperationStart};
 use crate::flow::input::{AcceptedInput, ConsumedInput, InputState};
 use weaver_trace::{Subsystem, TurnRef};
 use weaver_traits::Message;
+use weaver_types::TurnFrame;
 use weaver_types::state_flow::{DecimalU64, SourceBlockId};
-use weaver_types::{RefusalRecord, TurnFrame};
 
 #[derive(Debug)]
 pub(in crate::flow) struct InputBeginError {
@@ -219,15 +219,20 @@ impl RecordingContext {
         if self.settle_recorded_input(ports.io)? {
             return Ok(InputProgress::Progress);
         }
+        if self.serving_organs.no_residency() {
+            self.input.refuse_no_residency();
+        }
         if let Some(refusal) = self.input.refusal() {
-            let payload = serde_json::value::to_raw_value(&RefusalRecord::Input(refusal))
+            let causal_parent = matches!(refusal, crate::flow::input::Refusal::NoResidency)
+                .then(|| Sequence(self.input.snapshot().unwrap().offered_sequence.unwrap().0));
+            let payload = serde_json::value::to_raw_value(&refusal.record())
                 .map_err(|error| self.input_fault(ports.io, error.to_string()))?;
             let event = AuthoredEvent {
                 kind: Kind::Refusal,
                 subsystem: Subsystem::Harness,
                 turn: None,
                 source: AuthoredSource::Runtime,
-                causal_parent: None,
+                causal_parent,
                 payload: Some(Payload::Refusal(payload)),
             };
             self.input_author = Some(InputAuthor {
@@ -376,12 +381,37 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         let result = match stage {
-            InputAuthorStage::Offered => self.input.offered_recorded(sequence),
+            InputAuthorStage::Offered => self
+                .input
+                .offered_recorded(sequence, self.serving_organs.no_residency()),
             InputAuthorStage::Refusal => self.input.refusal_recorded(sequence),
         };
         result.map_err(|error| self.input_fault(io, error.to_string()))?;
         self.input_author = None;
-        self.finish_input_wait(io, None)
+        self.finish_input_wait(io, None)?;
+        if matches!(stage, InputAuthorStage::Refusal)
+            && self
+                .input
+                .snapshot()
+                .is_some_and(|input| input.state == InputState::Refused)
+            && self.deadlines.get(PumpDeadline::Decision).is_none()
+        {
+            // The required world close now blocks reuse of the serving seat.
+            // Its one send interval also covers the intervening input-wait
+            // measurement records; trace pressure cannot leave that gap idle.
+            let elapsed = self
+                .load_duty
+                .as_ref()
+                .unwrap()
+                .instruction
+                .decision_wait
+                .elapsed_ns
+                .0;
+            let bound = AbsoluteBound::after(self.last_ns, elapsed)
+                .map_err(|error| self.input_fault(io, error.to_string()))?;
+            self.arm(PumpDeadline::Decision, bound, io)?;
+        }
+        Ok(())
     }
 
     fn finish_input_wait(
@@ -516,9 +546,17 @@ impl RecordingContext {
         {
             return Err(self.input_fault(io, "input records or source handoff are still pending"));
         }
+        let closing_input = self
+            .input
+            .snapshot()
+            .is_some_and(|input| input.state != InputState::Consumed);
         self.input
             .finish()
-            .map_err(|error| self.input_fault(io, error.to_string()))
+            .map_err(|error| self.input_fault(io, error.to_string()))?;
+        if closing_input {
+            self.complete_wait(PumpDeadline::Decision);
+        }
+        Ok(())
     }
 
     pub(in crate::flow) fn consume_input<I: PumpIo>(

@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use weaver_types::{ExchangeId, LifecycleAnswer, LifecycleDirective, TurnFrame};
 
 use super::super::tests::worker;
+#[path = "context_worker_input_close_tests.rs"]
+mod close_tests;
 
 fn packet(fd: i32, value: &OrganEnvelope) {
     let bytes = serde_json::to_vec(value).unwrap();
@@ -26,9 +28,12 @@ fn frame(mode: &str, ordinal: u64) -> OrganEnvelope {
         mode
     };
     let bytes = match mode {
-        "input-malformed" | "input-pressure" | "input-duplicate" | "input-worker" => {
-            b"not JSON".as_slice()
-        }
+        "input-malformed"
+        | "input-pressure"
+        | "input-pressure-deadline"
+        | "input-pressure-send-clock"
+        | "input-duplicate"
+        | "input-worker" => b"not JSON".as_slice(),
         "input-role" => br#"{"text":"Read file.","role":"system"}"#,
         _ => br#"{"text":"Read caf\u00e9."}"#,
     };
@@ -195,7 +200,7 @@ fn worker_input_gate_child() {
         std::fs::write(root.join("election-queued.json"), &raw).unwrap();
         assert_eq!(send(3, &raw, MsgFlags::MSG_NOSIGNAL), Ok(raw.len()));
     }
-    if mode == "input-pressure"
+    if mode.starts_with("input-pressure")
         || mode == "input-stop-gate-pressure"
         || mode.contains("final-manual-gate-pressure")
         || mode.contains("final-manual-stop-after")
@@ -514,7 +519,7 @@ pub(in super::super) fn exercise(
         return;
     }
     let mut pressure = false;
-    if mode == "input-pressure" {
+    if mode.starts_with("input-pressure") {
         let fd = guard.input().serving.owner.gate.fd().as_raw_fd();
         let mut count = 0;
         loop {
@@ -535,7 +540,7 @@ pub(in super::super) fn exercise(
     for _ in 0..5000 {
         let owner = guard.input();
         let progress = owner.advance_with_io(&mut CircuitIo(clock));
-        if mode == "input-pressure" && owner.send.as_ref().is_some_and(|s| !s.sent()) {
+        if mode.starts_with("input-pressure") && owner.send.as_ref().is_some_and(|s| !s.sent()) {
             assert_eq!(progress, FoundationInputProgress::Pending);
             assert!(
                 !owner
@@ -557,6 +562,19 @@ pub(in super::super) fn exercise(
                     .is_none()
             );
             pressure = true;
+            if mode != "input-pressure" {
+                close_tests::failed_send(owner, clock, root, mode);
+                return;
+            }
+            assert!(
+                owner
+                    .serving
+                    .owner
+                    .context
+                    .deadlines
+                    .get(super::super::super::PumpDeadline::Decision)
+                    .is_some()
+            );
             std::fs::write(root.join("drain"), b"yes").unwrap();
         }
         if mode == "input-silent"
