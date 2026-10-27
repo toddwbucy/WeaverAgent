@@ -565,8 +565,9 @@ qualification. [CLASS-2, CLASS-7, CLASS-8, PERSIST-6]
 
 **TYPES-WORLD-REQUEST.** Add the unit variant LifecycleAsk::WorldRequest, encoded as
 {"ask":"world_request"} under LifecycleAsk's existing internal tag. It identifies a
-world request refused before a turn because the serving SPU has died. Author it only
-as RefusalRecord::Lifecycle {asked:WorldRequest, refusal:NoResidency}. No new
+world request refused before a turn when weaver-admin-Spec section 3.0's current
+position requires NoResidency. Author it only as RefusalRecord::Lifecycle
+{asked:WorldRequest, refusal:NoResidency}. No new
 LifecycleDirective, LifecycleRefusal, trace event kind or world message is added.
 The ask identifies what was refused; Enter, Admit and Release must not stand in for a
 world request. The record's causal_parent identifies the original input.offered, so

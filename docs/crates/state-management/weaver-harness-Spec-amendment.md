@@ -499,8 +499,10 @@ exactly once, reusing bindings only for identical text and scheme. Its causal_pa
 input.offered's sequence, so the recorded input_id joins the accepted result to its
 source block without changing Message. [GATE-1, CLASS-4, FLOW-3]
 
-When the serving SPU has died before a request reaches parsing and check submission,
-follow Spec 02 INPUT-NO-RESIDENCY after recording its input.offered. Use the typed
+When admin Spec section 3.0's current-position table requires NoResidency for the
+request, follow Spec 02 INPUT-NO-RESIDENCY after recording its input.offered and
+before parsing or check submission. The table's S4/S5 Unloading rows keep their
+precedence over the fact that an SPU is dead. Use the typed
 WorldRequest/NoResidency lifecycle refusal and its causal parent, retaining the exact
 request and close through backpressure. This road creates no classifier exchange or
 AcceptedInput. All already-admitted work retains its existing accounting and failure
@@ -511,7 +513,7 @@ rules. [GATE-1, FLOW-2, FLOW-3, CLASS-8]
 | Idle | Serialized check intake receives next queued frame | Offered, assign input_id and start gate deadline |
 | Offered | input.offered recorded, shape and dialer accepted | Checking, submit exact Text at block zero |
 | Offered | Bad input shape | Refused, record refusal/Input(invalid_input_shape) |
-| Offered | Retained SPU death before parsing or check submission | Refused under INPUT-NO-RESIDENCY, record refusal/Lifecycle(WorldRequest, NoResidency) |
+| Offered | Admin section 3.0's current-position table requires NoResidency before parsing or check submission | Refused under INPUT-NO-RESIDENCY, record refusal/Lifecycle(WorldRequest, NoResidency) |
 | Offered, Checking or Accepted | Quiesce or operator leave | Cancel this input operation, revoke any token, send unnamed stopped close, account for any outstanding check through its result or bounded teardown |
 | Offered or Checking | Component failure or deadline | Halt, no input reaches model |
 | Checking | Accepted reply recorded | Accepted, disarm gate_wait and mint the single-use token, no turn yet |
@@ -1134,7 +1136,7 @@ the one-exchange assumption. Neither number is elected here. [CLASS-6, FALS-5, C
 | HARNESS-RECALL-REFUSAL | Actual recorder pressure and lifecycle waits, mixed original/correction identities and cap fixtures | Admit a second event, lose an owed receipt, return before Recorded, dispatch a refused ID or charge several attempts for one correction |
 | TEMPLATE-CHECK | Inventory and substitution certificate fixtures | Serve with missing certificate or unlisted template |
 | HARNESS-INPUT | Existing {text,role} accepted/refused frames and later-turn assembly | Place one rejected block or open a refused turn |
-| INPUT-NO-RESIDENCY | Actual SPU exit, two later world exchanges, held trace capacity and graceful Leave | Accept or classify a later request, send before its refusal records, lose its input.offered link, duplicate organ death, or invent a Released confirmation |
+| INPUT-NO-RESIDENCY | Actual SPU exit, two later world exchanges, held trace capacity and graceful Leave | Accept or classify a later request, send before its refusal records, lose its input.offered link, duplicate organ death, invent a Released confirmation, or replace an S4/S5 Unloading refusal with NoResidency |
 | HARNESS-LEDGER | Every table row, real commit with lost receipt | Accept send success or resend uncertain commit |
 | HARNESS-PUMP | Busy decoder, label wait, asks, writer pressure, nearest deadline | Restore a blocking recv or starve one source |
 | HARNESS-CLOCK | Fake clock/wait pair plus real poll watchdog | Reset anchor on progress or omit a nearer deadline |
