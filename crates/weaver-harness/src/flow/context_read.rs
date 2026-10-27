@@ -1015,7 +1015,10 @@ impl RecordingContext {
         }
         read.recorded = Some(sequence);
         read.author_ticket = None;
-        self.last_author_sequence = Some(sequence);
+        #[cfg(test)]
+        {
+            self.last_author_sequence = Some(sequence);
+        }
         if read.is_summary() {
             let Some(Ok(completed)) = read.released.take() else {
                 return Err("summary recall lost its released result");

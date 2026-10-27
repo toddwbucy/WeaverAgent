@@ -42,6 +42,14 @@ pub(crate) fn render(declaration: &ServingDeclaration) -> Result<String, RenderE
     Ok(writer.0)
 }
 
+#[cfg(test)]
+pub(crate) fn render_fixture(agent: &AgentConfig, state: &StateManagementConfig) -> String {
+    let mut writer = Writer(String::new());
+    writer.agent(agent).unwrap();
+    writer.state_management(state).unwrap();
+    writer.0
+}
+
 struct Writer(String);
 
 impl Writer {

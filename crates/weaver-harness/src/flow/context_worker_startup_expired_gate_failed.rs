@@ -47,6 +47,7 @@ impl RollbackGate {
             lower,
             send: None,
             raise_reply: None,
+            quiesce_reply: None,
             lower_reply: None,
             pending: None,
             received: None,
@@ -103,6 +104,10 @@ impl RollbackGate {
         let reply = self.received.as_ref().expect("exact extracted gate packet");
         let frame = reply.envelope();
         let port = arms.port.as_ref().expect("live received gate port");
+        if self.quiesce_reply.is_none() && preceding_quiesce_reply(gate, port, reply) {
+            self.quiesce_reply = self.received.take();
+            return;
+        }
         if matches!(frame.payload, WirePayload::ToolAnswer(_)) && tail.serving_rollback() {
             if tail.context.pairs.pending_rejection().is_some() {
                 let _ = tail.context.advance_halt_rejection();

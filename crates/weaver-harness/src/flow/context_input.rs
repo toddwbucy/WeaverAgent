@@ -484,6 +484,21 @@ impl RecordingContext {
         self.finish_input_wait(io, None)
     }
 
+    pub(in crate::flow::context) fn input_closed_by_gate_loss(
+        &mut self,
+        gate: &crate::flow::pump_transport::OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        self.live(io)?;
+        if !self.serving_organs.gate_delivery_lost(gate) {
+            return Err(self.input_fault(io, "input gate loss lacks its original observed port"));
+        }
+        self.input
+            .response_lost()
+            .map_err(|error| self.input_fault(io, error.to_string()))?;
+        self.finish_input_wait(io, None)
+    }
+
     /// Releasing a refused/cancelled transaction never releases an unfinished
     /// check. The original exchange stays owned until its recorded disposition.
     pub(in crate::flow) fn finish_input(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {

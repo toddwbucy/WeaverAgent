@@ -17,9 +17,9 @@ pub struct StateStartConfig {
     pub dump_sha256: Digest,
 }
 
+super::codec::closed_object! {
 /// Verified start identity. The member checks image facts, admin checks configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StartIdentity {
     pub seed_id: String,
     pub artifact_id: String,
@@ -29,6 +29,7 @@ pub struct StartIdentity {
     pub parent_artifact_id: Option<String>,
     #[serde(deserialize_with = "super::required_option")]
     pub position: Option<SourcePosition>,
+}
 }
 
 /// The exact nine PROMPT-3 duties, not additional prompt requirements.
@@ -226,14 +227,15 @@ pub enum CaptureRefusalCode {
     InvalidCaptureState,
 }
 
+super::codec::closed_object! {
 /// Published serving capture and the confirmation event, never an inferred save.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SavePointReport {
     pub start: StartIdentity,
     pub capture_id: DecimalU64,
     pub event_run: crate::RunId,
     pub event_sequence: DecimalU64,
+}
 }
 
 /// The phase retained in uncertain or broken publication evidence.
@@ -263,14 +265,15 @@ pub enum RetainedArtifactKind {
     Guard,
 }
 
+super::codec::closed_object! {
 /// An admin-derived relative location with null digest when unknown.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RetainedArtifact {
     pub location: String,
     pub kind: RetainedArtifactKind,
     #[serde(deserialize_with = "super::required_option")]
     pub sha256: Option<Digest>,
+}
 }
 
 /// How the published starting state was authorized.
@@ -422,7 +425,7 @@ impl<'de> Deserialize<'de> for SaveWindow {
         let Fields {
             began_ns,
             deadline_ns,
-        } = Fields::deserialize(deserializer)?;
+        } = super::codec::deserialize_object::<_, Fields>(deserializer)?;
         let window = Self {
             began_ns,
             deadline_ns,
@@ -702,6 +705,7 @@ mod tests {
             r#"{"began_ns":"11","deadline_ns":"10"}"#,
             r#"{"began_ns":10,"deadline_ns":"11"}"#,
             r#"{"began_ns":"10","deadline_ns":"11","duration":"1"}"#,
+            r#"["10","11"]"#,
         ] {
             assert!(serde_json::from_str::<SaveWindow>(json).is_err(), "{json}");
         }

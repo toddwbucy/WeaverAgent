@@ -151,8 +151,19 @@ impl RecordingContext {
                 bound: window,
             });
         }
+        // The lifecycle parent starts this window before Requested/Beginning.
+        // Carrying Beginning spends that same budget; barrier admission cannot
+        // arm a replacement or renew a conflicting earlier window.
+        if self
+            .deadlines
+            .get(PumpDeadline::CaptureWindow)
+            .is_some_and(|prior| prior != window)
+        {
+            return Err(self.capture_fault(io, "capture barrier changed its original window"));
+        }
         let frontier = self
-            .last_author_sequence
+            .barrier
+            .latest_recorded()
             .ok_or_else(|| self.capture_fault(io, "capture has no recorded frontier"))?
             .0;
         self.flow
@@ -190,7 +201,9 @@ impl RecordingContext {
             timeout: None,
             abort_pending: false,
         });
-        self.arm_capture_wait(PumpDeadline::CaptureWindow, window, io)?;
+        if self.deadlines.get(PumpDeadline::CaptureWindow).is_none() {
+            self.arm_capture_wait(PumpDeadline::CaptureWindow, window, io)?;
+        }
         let cut = AbsoluteBound::after(self.last_ns, self.declaration.cut_wait.elapsed_ns.0)
             .map_err(|error| self.capture_fault(io, error.to_string()))?;
         self.arm_capture_wait(PumpDeadline::Cut, cut, io)
@@ -212,6 +225,20 @@ impl RecordingContext {
                 .then_some(owner.refusal.as_ref())
                 .flatten()
         })
+    }
+
+    /// Move the exact refusal only after its cleanup result has been consumed.
+    /// This adds no clock boundary between consuming that result and retaining
+    /// the refused original in the lifecycle parent.
+    pub(super) fn take_recorded_capture_refusal(
+        &mut self,
+        id: DecimalU64,
+    ) -> Option<CaptureAnswer> {
+        let owner = self.member_capture.as_mut()?;
+        if owner.id != id || owner.phase != Phase::Complete || owner.answer.is_some() {
+            return None;
+        }
+        owner.refusal.take()
     }
 
     pub(super) fn advance_member_capture(
@@ -328,6 +355,27 @@ impl RecordingContext {
         self.begin_capture_wait(Phase::Acknowledge, SMALL_CONTROL_NS, io)
     }
 
+    pub(super) fn confirmable_member_capture(
+        &mut self,
+        id: DecimalU64,
+        frontier: u64,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        self.require_member_capture(id, Phase::Finished, io)?;
+        self.flow
+            .capture_confirmation_ready(
+                &mut FlowRecording {
+                    barrier: &mut self.barrier,
+                    inbox: &mut self.inbox,
+                    budget: &mut self.budget,
+                    author: &self.author,
+                },
+                id,
+                frontier,
+            )
+            .map_err(|error| self.flow_failed(io, error))
+    }
+
     pub(super) fn release_member_capture(
         &mut self,
         id: DecimalU64,
@@ -351,6 +399,32 @@ impl RecordingContext {
             return Err(self.capture_fault(io, "capture release has an unsettled predecessor"));
         }
         self.begin_capture_wait(Phase::Releasing, SMALL_CONTROL_NS, io)
+    }
+
+    /// The lifecycle owner has retained a pre-Commit window expiry. Preserve
+    /// the original capture and drain it under the existing Abort allowance;
+    /// even a held Finished image must not remain in the member after refusal.
+    pub(super) fn expire_member_capture(
+        &mut self,
+        id: DecimalU64,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        self.allow_capture_cleanup(io)?;
+        let Some(owner) = self.member_capture.as_ref().filter(|owner| owner.id == id) else {
+            return Err(self.capture_fault(io, "expiry names another capture"));
+        };
+        if !owner.window.expired(self.last_ns)
+            || self.deadlines.get(PumpDeadline::CaptureWindow) != Some(owner.window)
+        {
+            return Err(self.capture_fault(io, "expiry lost its original capture window"));
+        }
+        if owner.phase == Phase::Barrier {
+            // No request was issued. The ordinary cancellation releases the
+            // barrier only after its refused record has actually been retained.
+            self.deadlines.disarm(PumpDeadline::CaptureWindow);
+            return Ok(());
+        }
+        self.enqueue_capture_abort(io)
     }
 
     /// Parent cancellation is allowed only before Commit. This member owner

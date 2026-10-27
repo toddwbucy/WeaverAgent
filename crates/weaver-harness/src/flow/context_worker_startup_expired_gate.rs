@@ -178,6 +178,34 @@ impl<'a> GateRollbackEvidence<'a> {
     }
 }
 
+fn preceding_quiesce_reply(
+    original: GateRollbackEvidence<'_>,
+    port: &crate::flow::pump_transport::OrganPort,
+    received: &ReceivedOrgan,
+) -> bool {
+    let Some((request, send)) = original.control else {
+        return false;
+    };
+    let reply = received.envelope();
+    request.position == Position::Open
+        && request.exchange.opener == Opener::Harness
+        && matches!(
+            request.payload,
+            WirePayload::Directive(LifecycleDirective::Quiesce)
+        )
+        && reply.position == Position::Close
+        && reply.exchange == request.exchange
+        && matches!(
+            reply.payload,
+            WirePayload::Answer(LifecycleAnswer::GateQuiesced)
+        )
+        && received.belongs_to(port)
+        && send.belongs_to(port)
+        && send.matches_exchange(&request.exchange)
+        && send.sent()
+        && send.sent_at().is_some()
+}
+
 /// An accepted rollback Leave borrows the actual resources and retained Raise.
 /// Successful Ready and expired Enter project their own retained accounts.
 pub(in crate::flow::context::worker_startup) struct GateRollbackHost<'a> {
@@ -194,6 +222,7 @@ pub(in crate::flow::context::worker_startup) struct RollbackGate {
     lower: Option<OrganEnvelope>,
     send: Option<OrganSend>,
     raise_reply: Option<ReceivedOrgan>,
+    quiesce_reply: Option<ReceivedOrgan>,
     lower_reply: Option<ReceivedOrgan>,
     pending: Option<GateRecord>,
     // At most one further frame can be held by the pump during authoring.
@@ -220,9 +249,13 @@ pub(in crate::flow) struct RollbackGateClosed {
     leave: AbsoluteBound,
     disposed: bool,
     execution_reaped: bool,
+    containment: Option<Containment>,
 }
 
 impl RollbackGateClosed {
+    pub(in crate::flow::context) fn containment(&self) -> Option<Containment> {
+        self.disposed.then_some(self.containment).flatten()
+    }
     pub(in crate::flow::context) fn allows(&self, context: &RecordingContext) -> bool {
         self.disposed
             && Arc::ptr_eq(&self.origin, &context.read_origin)
@@ -520,11 +553,13 @@ impl RollbackGate {
                 leave,
                 disposed: false,
                 execution_reaped: false,
+                containment: None,
             }),
             bound,
             lower,
             send: None,
             raise_reply: None,
+            quiesce_reply: None,
             lower_reply: None,
             pending: None,
             received: None,
@@ -619,6 +654,18 @@ impl RollbackGate {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         assert!(self.death.is_none(), "one observed original gate death");
+        if host
+            .arms
+            .port
+            .as_ref()
+            .is_some_and(|port| host.context.serving_organs.gate_matches(port))
+        {
+            // The serving owner retains this exact observation and its author.
+            // Lower still closes and reaps the original child under its cap,
+            // but cannot create a second death or a new last-word allowance.
+            self.end_transport(host.arms, false, false);
+            return Ok(());
+        }
         self.death = Some(GateDeath {
             observed_ns: None,
             deadline_ns: None,
@@ -716,6 +763,7 @@ impl RollbackGate {
         }
         if let Some(proof) = &mut self.closed {
             proof.disposed = true;
+            proof.containment = self.containment;
         }
     }
 
@@ -727,6 +775,18 @@ impl RollbackGate {
     }
 
     fn receive(&mut self, host: &mut GateRollbackHost<'_>, received: ReceivedOrgan, timely: bool) {
+        if self.quiesce_reply.is_none()
+            && host
+                .arms
+                .port
+                .as_ref()
+                .is_some_and(|port| preceding_quiesce_reply(host.original, port, &received))
+        {
+            // This is retained evidence of the preceding control. It grants
+            // neither GateStopped nor a completed graceful phase.
+            self.quiesce_reply = Some(received);
+            return;
+        }
         let frame = received.envelope();
         if frame.exchange.opener == Opener::Gate
             && frame.position == Position::Open

@@ -70,6 +70,14 @@ pub(in crate::flow) fn expand_begin_task(
     expand(certificate, identity, "mark.begin_task", "state.mark", None)
 }
 
+/// The lifecycle consumer chooses this fixed family, with no source-text slot.
+pub(in crate::flow) fn expand_wind_down(
+    certificate: &TemplateCertificate,
+    identity: ExpansionIdentity<'_>,
+) -> Result<TemplateExpansion, ExpansionRefusal> {
+    expand(certificate, identity, "wind_down", "loop.instruction", None)
+}
+
 /// Closed outbound criterion; no runtime string can become a substitution.
 pub(in crate::flow) fn expand_outbound(
     certificate: &TemplateCertificate,

@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #268
+**Landing PR:** #349
 
-**Version:** 0.17 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
+**Version:** 0.21 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -241,15 +241,99 @@ run, StartIdentity and state-management declaration. Open and verify that named 
 and require its B to equal LoadFacts.declaration. Use its parsed copy and save_wait, not
 a fresh territory draft or restore-artifact selection. The lifecycle exchange retains
 this run identity throughout. A changed run, missing facts or B mismatch refuses before
-requesting capture. The source artifact becomes the new artifact's parent. A later save
-in the same run still binds the same loaded settings. [PERSIST-2, PERSIST-3, FLOW-3, R2]
+requesting capture. A sole force that cannot establish these prerequisites follows
+ADMIN-FORCE-ADMISSION below. The source artifact becomes the new artifact's parent. A
+later save in the same run still binds the same loaded settings. [PERSIST-2, PERSIST-3,
+FLOW-3, R2]
+
+**ADMIN-FORCE-ADMISSION.** At the foundation cutover, a sole force-unload keeps its
+authority to end the run when it cannot admit a capture. This replaces Spec 3.0's
+requirement to direct Leave first only in the pre-capture cases below. It does not
+relax ADMIN-SAVE's loaded-copy check. It sends neither Leave nor a save continuation
+without that check, and it starts no capture or publisher. [PERSIST-4, FLOW-5]
+
+The external [admin-operator contract section 4.1][force-contract] requires
+force-unload to end the run alone or joining unload. Its sole-force row also keeps
+the force outcome when the save point cannot be taken. This amendment changes the
+internal admission and escalation sequence, with no new command or public success
+shape. The containment refusals remain mandatory. [FLOW-5, PERSIST-4, I3]
+
+[force-contract]: ../contracts/weaver-admin-operator-contract.md
+
+After root authorization, judged configuration-root admission and the exclusive
+invocation lock, a free run lock follows ADMIN-RECOVERY. Otherwise pin the agent's
+trusted containment record, including its run and cgroup identity. An absent or
+unjudged record refuses BoundaryUnverified. The root configuration remains required
+even when the territory does not judge. Read nothing from an unjudged territory and
+write no diagnostic there. Its account goes to standard error. [PERSIST-3, FLOW-5]
+
+The dial and Observe retain their existing one-second and five-second bounds. A
+valid observation without LoadFacts, including InTransition, cannot admit capture.
+An unanswered observation is not proof of worker failure. A correlated Observe
+refusal uses the standing-refusal cases of Spec 3.0: OutOfOrder, SavePointNotTaken,
+ActivityNotAtRest and Unauthorized select the direct escalation below. Any other
+correlated refusal retains failed-run cleanup and its original refusal. An EOF,
+malformed reply or wrong exchange from the authenticated worker also retains that
+failed outcome. A listener that fails peer authentication supplies no worker
+evidence. Signals target only the verified run-lock holders and containment, never
+that socket peer. [PERSIST-3, FLOW-5, admin Spec 3.0]
+
+The escalation uses the existing TERM, KILL and containment bounds, once each. It
+does not wait through an unused Leave or save window. Keep the invocation lock until
+the result. Revalidate the pinned containment identity before signaling. A changed
+run or failed ownership judgment refuses with the existing AgentRunning or
+BoundaryUnverified outcome, ending nothing of that run. Root-held containment
+identity, not an unverified LoadFacts run or a room filename, identifies what may
+be ended. [FLOW-3, FLOW-5, admin Spec 6.1]
+
+| Order | Pre-capture evidence | Action and marker |
+| --- | --- | --- |
+| 1 | Root authorization, configuration-root, invocation-lock or clock admission fails | Return its existing refusal. Perform no force admission or new marker write. |
+| 2 | Run lock is free | ADMIN-RECOVERY handles leftovers under its own containment checks and preserves the prior marker. Territory judgment cannot turn this into a new operator force. |
+| 3 | Run lock is held but its containment cannot be pinned, ownership does not judge, or a pinned run changes | Return the existing BoundaryUnverified or AgentRunning refusal. Signal nothing of a changed or unjudged run, write no marker. |
+| 4 | A valid authenticated observation names a run different from pinned containment | Refuse AgentRunning. Do not signal either run or change its marker. |
+| 5 | Known worker/component failure, a refusal outside the four standing cases, EOF, or malformed or wrong-exchange authenticated observation | ADMIN-FLOW-END ends only the verified failed run, without successful Left, and preserves its prior marker. Retain the failure outcome. |
+| 6 | Positive NoListener, with no earlier matching row | ADMIN-RECOVERY handles leftovers and preserves the prior marker. No new operator force is inferred. |
+| 7 | Valid observation without LoadFacts, unanswered Observe, one of the four standing refusals, wrong peer, unjudged territory, or failed loaded-copy verification | Direct escalation without capture. After verified run end, request Forced only for an Open marker on the pinned run. |
+| 8 | Authenticated matching run, judged territory and verified loaded copy | Use the ordinary forced Leave/capture protocol with its existing windows. |
+
+Apply the rows in order and select the first that matches the evidence obtained at
+that phase. Steps 1 through 3 precede Observe or loaded-copy verification. A socket
+that fails authentication contributes no worker failure or run identity, only the
+wrong-peer condition. Thus a free run lock plus unjudged territory selects row 2,
+and a wrong peer plus failed loaded-copy verification selects row 7. A trusted
+failure or run mismatch cannot be replaced by a later admission problem.
+[FLOW-3, FLOW-5]
+
+The selected path still owes every containment check. Revalidate the pinned identity
+after Observe and before the first signal, and before any later signal required by
+the existing end protocol. A changed identity then selects row 3 instead of the
+earlier end decision. A failed end or removal returns its existing refusal with no
+marker write or successful Unloaded. Selection never waives these later checks.
+[FLOW-3, FLOW-5, admin Spec 6.1]
+
+The containment end precedes the marker write and the unloaded-state check. A marker
+for another run, an already closed marker, or an absent marker is unchanged. Failure
+to read or write the marker remains the existing refusal. The public Unloaded result
+certifies only that the run and its containment ended. It certifies no save and no
+Left. Preserve the admission reason in the command's diagnostic account. Do not scan
+the room, change an index, remove a publication guard, or recover an image. Unsaved
+state and unwritten trace may be lost. The next load follows the resulting marker
+and indexed-artifact rules. [PERSIST-3, PERSIST-4, FLOW-5]
+
+This exception applies before the sole invocation sends Leave. An admitted capture,
+failed capture, held Commit or final Left keeps its existing protocol and failure
+rules. A force beside an unload still joins it without a second publisher. Other
+holders still refuse InvocationInFlight. Graceful unload and on-demand save do not
+gain this fallback. [PERSIST-4, FLOW-5, admin Spec 3.0]
 
 **ADMIN-SAVE-TIME.** In main.rs::save_point, after Observe and loaded-copy verification,
 sample raw CLOCK_MONOTONIC immediately before send and include SaveWindow from
 TYPES-SAVE-TIME. For unload retain main.rs::leave_window and admin Spec 3.0's existing
-observation, drain, wind-down, force and escalation rules. No save_wait timer covers S4
-or S5. Await SavePointBeginning before accepting an image and validate its windows under
-foundation PERSIST-BEGIN. [PERSIST-1, PERSIST-4, CLASS-8, admin Spec 3.0]
+observation, drain, wind-down, force and escalation rules, with ADMIN-FORCE-ADMISSION's
+pre-capture exception. No save_wait timer covers S4 or S5. Await SavePointBeginning
+before accepting an image and validate its windows under foundation PERSIST-BEGIN.
+[PERSIST-1, PERSIST-4, CLASS-8, admin Spec 3.0]
 
 Once Beginning announces the bounded save stage, watch the earlier capture, shared-tail
 and existing outer leave deadlines. No frame restarts them. On leave,
@@ -260,12 +344,48 @@ worker's typed refusal says so. No answer is Unanswered, never an inferred phase
 successful outcome. R20-6 governs missing-result retry, and R20-7 forbids completing
 publication after worker failure. [FLOW-5, PERSIST-4]
 
+The exact final Left.forced settles the completed save's cause under foundation
+PERSIST-LEAVE-CAUSE. Admin retains the pending guard while finalizing a converted
+Leave's own last index entry to forced_unload. It does not reuse the initiating
+command's graceful flag for the completed save. A joiner verifies that same settled
+cause after the original publisher finishes; it neither finalizes nor repairs a
+publication. Existing run-end and marker duties keep their order. [PERSIST-2,
+PERSIST-3, FLOW-5, operator 2026-10-27]
+
+For pre-Commit leave refusal, follow foundation PERSIST-LEAVE-REFUSAL. A local
+preparation refusal sends SavePointAborted and retains the exchange until the worker's
+matching SavePointCaptureRefused. That frame acknowledges a refused capture only after
+member cleanup and trace accounting. Cancel unconfirmed publication, remove unlisted
+root parts and, on a timely acknowledgement, disarm only the capture wait. Then await
+Left with forced true, no_state false and no save report, or SavePointNotTaken with the
+same missed leg for a leave that stayed graceful. Neither continuation is a final
+command result. Preserve the outer and shared leave windows and all normal conclusion
+duties. Capture expiry still gives the existing unanswered-command outcome, never a
+new wait for a late success. A worker Aborted after a latched failure instead follows
+failed-run recovery and proves no cleanup. [PERSIST-4, FLOW-5, admin Spec 3.0]
+
+Send at most one admin Aborted for this capture and preserve it through partial carry.
+While awaiting CaptureRefused, validate any crossed Image or ImageFinished but discard
+it as a save result. Send no ImageChecked or Prepared after cancellation. A crossed
+worker refusal keeps its own first retained missed leg, so admin must not require
+Published merely because admin also sent Aborted. A crossed Commit follows failed-run
+recovery, never a healthy refusal. Foundation's admin rows govern these cases.
+[PERSIST-4, SEAM-2]
+
+If cleanup finishes after admin's capture deadline, the result remains Unanswered with
+the Open marker. No late CaptureRefused or Left changes it. The worker may finish a
+forced unwind, but without a later normal admin conclusion the next load observes
+NoCleanUnload. A still-graceful worker with no admin remains at S9. [PERSIST-4, FLOW-5]
+
 These clauses amend admin Spec 3.0 and section 3's leave/save wait routines. The
 protocol fixture checks both graceful bound omissions, finite and forced windows, stale
 Beginning, reordered Image and early or duplicate CaptureComplete. It must fail when a
 later frame resets an earlier deadline or when a save bound forces an otherwise
-unbounded S4/S5. This is a protocol pass, not a wall-time guarantee for an
-uninterruptible filesystem call. [PERSIST-4, COST-4, FLOW-5]
+unbounded S4/S5. It also exercises every PERSIST-LEAVE-REFUSAL admin row, including
+Aborted crossed by an image or worker refusal, expired capture before CaptureRefused,
+and a save report or CaptureComplete after that acknowledgement. This is a protocol
+pass, not a wall-time guarantee for an uninterruptible filesystem call.
+[PERSIST-4, COST-4, FLOW-5]
 
 Do not publish before the matching SavePointCommit. A prepared artifact is not loadable.
 Before Commit, a worker failure cancels publication. After Commit, failure before the
@@ -276,8 +396,9 @@ remove the guard or resume publication in recovery. No halt requests a new image
 
 Replace S3 save-point ActivityNotAtRest with accepted/pending to the next turn boundary.
 Explicit refusal and missing image/finished timeout retain the merged retry path under
-R20-6, including S6/S9. For a timeout, SavePointNotTaken is sent only after the
-harness's correlated abort receives aborted under PERSIST-CLEANUP. Admin never treats a
+R20-6, including S6/S9. For a timeout, the final refusal disposition is permitted
+only after the harness's correlated abort receives aborted under PERSIST-CLEANUP.
+Leave follows PERSIST-LEAVE-REFUSAL. Admin never treats a
 late image/finished result as success or initiates another ask on the member channel. A
 cleanup failure is FlowFailed and ends the run, not a retryable save refusal. Silence at
 admin's unchanged outer deadline remains Unanswered, never inferred cleanup success.
@@ -379,6 +500,7 @@ serving contract remains applicable.
 | ADMIN-SAVE | Three-party protocol, timeout cleanup then retry, cleanup failure, and fsync/rename failure hooks | Index before Commit, overwrite a good artifact, infer cleanup from silence or retry after FlowFailed |
 | ADMIN-FLOW-END | Every replaced lifecycle cell and tool fault cause | Serve on dead member, return Left, or let worker write marker |
 | ADMIN-RECOVERY | Crash before/after Commit, rename and index append, next-load tuple | Promote unconfirmed room data, skip malformed latest or associate load.reset with another selected start |
+| ADMIN-FORCE-ADMISSION | Real locks, paired evidence for every precedence row, authenticated and wrong peers, InTransition without facts, silent/refused Observe, bad loaded copy, unjudged territory, EOF and containment changed after Observe but before signaling | Request capture without verified facts, skip pinned-containment revalidation between Observe and the first signal, signal a socket peer, mark Forced before run end, relabel worker failure, touch retained publication files or end another run |
 | ADMIN-RETIRE | Deployment plan tests and old-format corpus | Accept --system, empty load, none or old one-file save |
 | Custody | Existing manifest and descriptor tests | Link state implementation or add caller-chosen root path |
 

@@ -242,6 +242,12 @@ impl FailedEnterResources {
         Some((spu.residency.as_mut()?, spu.decode.as_mut()?))
     }
 
+    pub(super) fn refresh_spu_observation(&self, context: &mut RecordingContext) {
+        if let Some(spu) = &self.spu {
+            context.serving_organs.refresh_spu(&spu.child);
+        }
+    }
+
     pub(in crate::flow) fn decode_mut(&mut self) -> Option<&mut DecodePort> {
         self.spu.as_mut()?.decode.as_mut()
     }
@@ -470,6 +476,7 @@ pub(in crate::flow) struct FailedRunCleanup {
     deadline: Option<u64>,
     report_unavailable: Option<String>,
     account_failure: Option<HaltAccountFailure>,
+    capture: Option<Box<super::leave_capture::FailedCapture>>,
     retired: Option<FailedFlowResources>,
     summary_account: Option<PlanSummaryAccount>,
     placement_accounts: Vec<PlaceAccount>,
@@ -625,6 +632,27 @@ impl RecordingContext {
 }
 
 impl FailedRunCleanup {
+    /// Only the failed capture parent can supply this retired lifecycle owner.
+    /// Install it before Reporting, preserving the existing first failure and
+    /// min(Leave, halt) cap. An existing frozen account can never be rewritten.
+    pub(in crate::flow::context) fn retain_failed_capture(
+        &mut self,
+        capture: Box<super::leave_capture::FailedCapture>,
+    ) -> Result<(), Box<super::leave_capture::FailedCapture>> {
+        if self.stage != Stage::Reporting
+            || self.capture.is_some()
+            || self
+                .context
+                .flow
+                .halt()
+                .is_none_or(|halt| halt.account().is_some())
+            || !capture.matches(&self.context)
+        {
+            return Err(capture);
+        }
+        self.capture = Some(capture);
+        Ok(())
+    }
     #[cfg(test)]
     pub(in crate::flow::context) fn rollback_test_read(
         &self,
@@ -743,6 +771,7 @@ impl FailedRunCleanup {
             deadline,
             report_unavailable: None,
             account_failure: None,
+            capture: None,
             retired: None,
             summary_account: None,
             placement_accounts: Vec::new(),
@@ -790,6 +819,19 @@ impl FailedRunCleanup {
     ) -> Self {
         let mut owner = Self::new(context, resources, true);
         owner.rejection_unavailable = rejection_unavailable;
+        owner
+    }
+
+    /// The consuming serving handoff has checked the run, frozen account and
+    /// exact retired capture peer before releasing any of its original loans.
+    pub(in crate::flow::context) fn after_serving_with_capture(
+        context: RecordingContext,
+        resources: FailedEnterResources,
+        rejection_unavailable: bool,
+        capture: Option<Box<super::leave_capture::FailedCapture>>,
+    ) -> Self {
+        let mut owner = Self::after_serving(context, resources, rejection_unavailable);
+        owner.capture = capture;
         owner
     }
 }
@@ -986,7 +1028,27 @@ impl FailedRunCleanup {
         false
     }
 
+    fn freeze_account(&mut self) {
+        if self.context.flow.halt().unwrap().account().is_none() && self.account_failure.is_none() {
+            let facts = ExternalFacts {
+                outstanding_pairs: self.context.outstanding_pairs(),
+                capture: self.capture.as_ref().map(|capture| capture.facts().clone()),
+                wait: self.context.halt_wait().cloned(),
+                input_id: self.context.input.snapshot().map(|input| input.input_id),
+            };
+            if let Err(error) = self.context.freeze_halt_account(facts) {
+                self.report_unavailable = Some(format!("failed Enter frozen account: {error:?}"));
+                self.account_failure = Some(error);
+            }
+        }
+    }
+
     pub(in crate::flow::context) fn abort(&mut self) {
+        // Preserve the stopped owners even when expiry precedes Reporting.
+        // Freezing an account performs no transport or trace write.
+        self.freeze_account();
+        self.context
+            .abandon_halt_organ_observations("observation incomplete at cleanup abort");
         // At expiry no account or writer may keep a descriptor or blocking wait.
         // Original unfinished owners remain in context, never relabelled settled.
         self.retire_flow();
@@ -1002,7 +1064,13 @@ impl FailedRunCleanup {
 
     fn retire_flow(&mut self) {
         if self.retired.is_none() {
-            self.retired = if self.serving {
+            self.retired = if let Some(capture) = &self.capture {
+                capture.disposal(&self.context).and_then(|permit| {
+                    self.context
+                        .flow
+                        .retire_failed_capture_ports(&permit, &self.context.barrier)
+                })
+            } else if self.serving {
                 self.context.flow.retire_failed_serving_ports()
             } else {
                 self.context.flow.retire_failed_ports()
@@ -1022,19 +1090,7 @@ impl FailedRunCleanup {
         }
         let result = match self.stage {
             Stage::Reporting => {
-                if self.context.flow.halt().unwrap().account().is_none() {
-                    let facts = ExternalFacts {
-                        outstanding_pairs: self.context.outstanding_pairs(),
-                        capture: None,
-                        wait: self.context.halt_wait().cloned(),
-                        input_id: self.context.input.snapshot().map(|input| input.input_id),
-                    };
-                    if let Err(error) = self.context.freeze_halt_account(facts) {
-                        self.report_unavailable =
-                            Some(format!("failed Enter frozen account: {error:?}"));
-                        self.account_failure = Some(error);
-                    }
-                }
+                self.freeze_account();
                 if self.context.flow.halt().unwrap().account().is_some() {
                     if self.context.halt_report.is_none()
                         && let Err(error) = self.context.begin_halt_report()
@@ -1187,8 +1243,20 @@ impl FailedRunCleanup {
     /// Some(true) means an actual local account step advanced. None preserves
     /// the existing failed-clock/cap exit; false never authorizes a close wait.
     fn advance_account_step(&mut self, io: &mut impl PumpIo) -> Option<bool> {
+        if let Some(spu) = &self.resources.spu {
+            self.context.serving_organs.refresh_spu(&spu.child);
+        }
         if self.serving && self.serving_turn_accounts_retired {
-            return Some(self.advance_serving_rejection());
+            let observation = if self.context.has_owed_organ_observation() {
+                match self.context.advance_halt_organ_trace(io) {
+                    HaltTraceProgress::AbortRequired => return None,
+                    HaltTraceProgress::TraceRecorded(_) => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            return Some(self.advance_serving_rejection() || observation);
         }
         // Ordinary failed exit retires unavailable turn accounts before Closing.
         // Rollback still owns its decoder and must settle that original account.
@@ -1323,7 +1391,9 @@ impl FailedRunCleanup {
                 return Some(false);
             }
             let detail = "serving turn accounts incomplete before mandatory close";
-            self.stopped_turn_record = self.context.barrier.retain_halt_record();
+            if !self.context.owns_halt_organ_record() {
+                self.stopped_turn_record = self.context.barrier.retain_halt_record();
+            }
             if let Some(decode) = self.resources.decode_mut() {
                 self.context.abandon_place_account(decode, detail);
             }
@@ -1370,7 +1440,7 @@ impl FailedRunCleanup {
     fn serving_turn_accounts_pending(&self) -> bool {
         self.context.place_owed()
             || self.context.plan_summary.is_some()
-            || self.context.barrier.pending().is_some()
+            || (self.context.barrier.pending().is_some() && !self.context.owns_halt_organ_record())
             || self.context.pairs.pending_rejection().is_some()
             || self.context.has_owed_measure_refusal()
     }
@@ -1380,6 +1450,8 @@ impl FailedRunCleanup {
         if !self.serving || self.serving_rollback() || self.session_close_attempted {
             return;
         }
+        self.context
+            .abandon_halt_organ_observations("observation incomplete before session close");
         if !self.rejection_unavailable && self.context.pairs.pending_rejection().is_some() {
             let detail = "failed serving rejection incomplete before session close";
             self.rejection_unavailable = true;
@@ -1438,6 +1510,11 @@ impl FailedRunCleanup {
             )
         });
         if existing_terminal {
+            if session_owned {
+                self.context.abandon_halt_organ_observations(
+                    "observation incomplete before rollback session close",
+                );
+            }
             match self.context.resume_halt_terminal_and_bind() {
                 Ok(Some(sequence)) => self
                     .rollback_scope
@@ -1470,6 +1547,9 @@ impl FailedRunCleanup {
         {
             return false;
         }
+        self.context.abandon_halt_organ_observations(
+            "observation incomplete before rollback session close",
+        );
         let scope = self.rollback_scope.as_mut().unwrap();
         scope.attempted = true;
         if let Some(event) = self.context.failed_gate_terminal_event() {

@@ -1,7 +1,12 @@
 //! Management owns the accepted root connection and suspends, never replaces,
 //! its input owner. Observe reads retained facts; Stop owns its recorded close.
 use super::*;
-use crate::flow::pump::{LifecycleMessage, LifecyclePeer};
+use crate::flow::clock::AbsoluteBound;
+use crate::flow::pump::PumpDeadline;
+use crate::flow::pump::{LifecycleMessage, LifecyclePeer, ReceivedCapture, RetiredReceivedCapture};
+use weaver_types::state_flow::capture::{
+    CaptureDirective, CaptureEnvelope, CapturePayload, CaptureRefusal,
+};
 use weaver_types::state_flow::enter::{ObservationAnswer, ObservationContent, ObservationEnvelope};
 use weaver_types::{AgentState, LifecycleAnswer, LifecycleDirective};
 #[path = "context_worker_stop.rs"]
@@ -11,9 +16,16 @@ use stop::StopWork;
 #[path = "context_worker_entered_rollback_handoff.rs"]
 mod rollback_handoff;
 
+#[path = "context_worker_graceful_handoff.rs"]
+mod graceful_handoff;
+
+#[path = "context_worker_save_handoff.rs"]
+mod save_handoff;
+
 enum ManagementAnswer {
     Observation(ObservationEnvelope),
     Lifecycle(OrganEnvelope),
+    Capture(CaptureEnvelope),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,12 +51,16 @@ pub struct FoundationManagement<'a> {
     pub(super) input: Box<FoundationInput<'a>>,
     peer: LifecyclePeer,
     message: Option<LifecycleMessage>,
+    save_message: Option<ReceivedCapture>,
     answer: Option<ManagementAnswer>,
     stop: Option<StopWork>,
     peer_unavailable: bool,
     send: Option<OrganSend>,
     progress: FoundationManagementProgress,
     detail: Option<String>,
+    heard_ns: Option<u64>,
+    read: Option<AbsoluteBound>,
+    read_armed: bool,
 }
 
 /// A failed management exchange retains its exact request, answer and send;
@@ -52,12 +68,16 @@ pub struct FoundationManagement<'a> {
 pub(super) struct FailedManagement {
     _peer: crate::flow::pump::RetiredLifecyclePeer,
     _message: Option<crate::flow::pump::RetiredLifecycleMessage>,
+    _save_message: Option<RetiredReceivedCapture>,
     _answer: Option<ManagementAnswer>,
     _stop: Option<StopWork>,
     _peer_unavailable: bool,
     _send: Option<OrganSend>,
     _progress: FoundationManagementProgress,
     _detail: Option<String>,
+    _heard_ns: Option<u64>,
+    _read: Option<AbsoluteBound>,
+    _read_armed: bool,
 }
 impl FailedManagement {
     pub(super) fn world_was_sent(&self) -> bool {
@@ -73,22 +93,41 @@ impl<'a> FoundationInput<'a> {
         if self.progress() != FoundationInputProgress::ManagementPending {
             return Err(self);
         }
-        let peer = self
+        let read = if self.has_graceful_leave() || self.serving.save.is_some() {
+            let Some(accepted) = self.serving.owner.listener.accepted_ns() else {
+                return Err(self);
+            };
+            let Ok(bound) =
+                AbsoluteBound::after(accepted, crate::state::ANSWER_BOUND_MS * 1_000_000)
+            else {
+                return Err(self);
+            };
+            Some(bound)
+        } else {
+            None
+        };
+        let mut peer = self
             .serving
             .owner
             .listener
             .take_connection()
             .expect("actual accepted root connection");
+        peer.enable_serving_openers()
+            .expect("pristine accepted serving connection");
         Ok(Box::new(FoundationManagement {
             input: self,
             peer,
             message: None,
+            save_message: None,
             answer: None,
             stop: None,
             peer_unavailable: false,
             send: None,
             progress: FoundationManagementProgress::Pending,
             detail: None,
+            heard_ns: None,
+            read,
+            read_armed: false,
         }))
     }
 }
@@ -98,24 +137,32 @@ impl<'a> FoundationManagement<'a> {
             input,
             peer,
             message,
+            save_message,
             answer,
             stop,
             peer_unavailable,
             send,
             progress,
             detail,
+            heard_ns,
+            read,
+            read_armed,
         } = self;
         (
             input,
             FailedManagement {
                 _peer: peer.retire_failed(),
                 _message: message.map(LifecycleMessage::retire_failed),
+                _save_message: save_message.map(ReceivedCapture::retire_failed),
                 _answer: answer,
                 _stop: stop,
                 _peer_unavailable: peer_unavailable,
                 _send: send,
                 _progress: progress,
                 _detail: detail,
+                _heard_ns: heard_ns,
+                _read: read,
+                _read_armed: read_armed,
             },
         )
     }
@@ -151,6 +198,49 @@ impl<'a> FoundationManagement<'a> {
                     format!("management send clock observation failed: {failure:?}"),
                 );
             }
+            if matches!(&failure, RunFailure::Wait { key: PumpDeadline::AdminRead, bound }
+                if self.read_armed && self.read == Some(*bound))
+            {
+                self.input
+                    .serving
+                    .owner
+                    .context
+                    .complete_wait(PumpDeadline::AdminRead);
+                self.read_armed = false;
+                self.progress = FoundationManagementProgress::Dropped;
+                self.detail = Some("secondary Leave dial supplied no timely directive".into());
+                return self.progress;
+            }
+            match self.input.retain_organ_end(&failure, io) {
+                Ok(true) => return self.progress,
+                Ok(false) => (),
+                Err(error) => failure = error,
+            }
+            if self.input.retain_save_interrupt(&failure)
+                || self.input.retain_graceful_expiry(&failure)
+                || self.input.retain_quiesce_gate_end(&failure)
+            {
+                // Conversion does not supply a directive. Keep this owner's
+                // original read/answer work runnable until its actual outcome.
+                return self.progress;
+            }
+            if self.input.serving.save.is_some()
+                && self.input.serving.owner.context.failure().is_none()
+                && matches!(
+                    failure,
+                    RunFailure::Wait {
+                        key: PumpDeadline::CaptureResult | PumpDeadline::CaptureWindow,
+                        ..
+                    }
+                )
+            {
+                // The retained save owns timeout reduction and any correlated
+                // cleanup. An unrelated secondary dial cannot strand it here.
+                self.progress = FoundationManagementProgress::Dropped;
+                self.detail =
+                    Some("secondary management yielded to the original save deadline".into());
+                return self.progress;
+            }
             self.detail = Some(format!("{failure:?}"));
             if matches!(
                 failure,
@@ -179,9 +269,45 @@ impl<'a> FoundationManagement<'a> {
         self.progress
     }
     fn step(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        self.input.prepare_save_window_expiry(io)?;
+        if let Some(bound) = self.read
+            && !self.read_armed
+            && self.message.is_none()
+            && self.save_message.is_none()
+            && self.progress == FoundationManagementProgress::Pending
+        {
+            self.input
+                .serving
+                .owner
+                .context
+                .arm(PumpDeadline::AdminRead, bound, io)?;
+            self.read_armed = true;
+        }
+        match self
+            .input
+            .advance_organ_faults((!self.peer_unavailable).then_some(&mut self.peer), io)
+        {
+            Ok(true) => (),
+            Ok(false) => return Ok(()),
+            Err(failure) => {
+                // A root departure must not strand its already accepted Stop.
+                // The observation and the original directive keep their owners.
+                self.keep_dial_failure::<()>(Err(failure))?;
+                return Ok(());
+            }
+        }
         self.input.serving.owner.context.live(io)?;
         let done = self.stop.as_ref().is_none_or(|stop| stop.gate_done);
-        if done && let Some(message) = &self.message {
+        let exchange = self
+            .message
+            .as_ref()
+            .map(|message| &message.envelope.exchange)
+            .or_else(|| {
+                self.save_message
+                    .as_ref()
+                    .map(|message| &message.message.envelope.exchange)
+            });
+        if done && let Some(exchange) = exchange {
             if self.peer_unavailable {
                 self.progress = FoundationManagementProgress::Dropped;
                 return Ok(());
@@ -189,27 +315,117 @@ impl<'a> FoundationManagement<'a> {
             if let Some(send) = &self.send
                 && send.sent()
                 && self.peer.owns_send(send)
-                && send.matches_exchange(&message.envelope.exchange)
+                && send.matches_exchange(exchange)
             {
                 self.progress = FoundationManagementProgress::Answered;
                 return Ok(());
             }
         }
+        let retained_gate_end = self.input.retained_quiesce_gate_end();
         let owner = &mut self.input.serving.owner;
         let pumped = owner.context.observe_ready(&mut PumpPorts {
             lifecycle: LifecyclePorts {
                 listener: Some(&mut owner.listener),
                 dial: (!self.peer_unavailable).then_some(&mut self.peer),
                 residency: Some(owner.resident.residency),
+                leave_peer: self
+                    .input
+                    .serving
+                    .save
+                    .as_mut()
+                    .and_then(|save| save.port()),
                 ..Default::default()
             },
-            gate: Some(&mut owner.gate),
+            gate: (!retained_gate_end).then_some(&mut owner.gate),
             decode: Some(owner.decode),
             label: None,
             io,
         });
         self.keep_dial_failure(pumped)?;
-        if self.message.is_none() {
+        if self.heard_ns.is_none()
+            && (self.peer.capture_held().is_some() || self.peer.held().is_some())
+        {
+            // The opener is already retained by the sole recvmsg owner. Its
+            // receive reading must follow that read, not the pump's earlier
+            // liveness sample: admin may have sent between those two actions.
+            let context = &mut self.input.serving.owner.context;
+            let now = io.now().map_err(|error| {
+                context.fail(
+                    io,
+                    FlowHaltReason::TraceFailed,
+                    HaltPoint::Author,
+                    format!("management receive clock: {error}"),
+                )
+            })?;
+            if now < context.last_ns {
+                return Err(context.fail(
+                    io,
+                    FlowHaltReason::TraceFailed,
+                    HaltPoint::Author,
+                    "management receive clock reversed",
+                ));
+            }
+            context.last_ns = now;
+            self.heard_ns = Some(now);
+        }
+        if self.message.is_none()
+            && self.save_message.is_none()
+            && let Some(message) = self.peer.capture_held()
+        {
+            if message.envelope.exchange.opener != Opener::Admin
+                || message.envelope.position != Position::Open
+                || !matches!(
+                    message.envelope.payload,
+                    CapturePayload::Directive(CaptureDirective::SavePoint { .. })
+                )
+                || message.sink.is_some()
+                || message.state.is_some()
+            {
+                self.detail = Some("invalid serving save opener or descriptors".into());
+                self.progress = FoundationManagementProgress::Dropped;
+                return Ok(());
+            }
+            if self.read_armed {
+                self.input
+                    .serving
+                    .owner
+                    .context
+                    .complete_wait(PumpDeadline::AdminRead);
+                self.read_armed = false;
+            }
+            if !self.input.has_graceful_leave() && self.input.serving.save.is_none() {
+                self.progress = FoundationManagementProgress::DirectivePending;
+                return Ok(());
+            }
+            self.save_message =
+                self.peer
+                    .take_capture()
+                    .map_err(|failure| RunFailure::Transport {
+                        source: PumpSource::AdminDial,
+                        failure,
+                    })?;
+            self.peer
+                .enable_capture()
+                .map_err(|failure| RunFailure::Transport {
+                    source: PumpSource::AdminDial,
+                    failure,
+                })?;
+            self.answer = Some(ManagementAnswer::Capture(CaptureEnvelope {
+                exchange: self
+                    .save_message
+                    .as_ref()
+                    .unwrap()
+                    .message
+                    .envelope
+                    .exchange
+                    .clone(),
+                position: Position::Close,
+                payload: CapturePayload::Refusal(CaptureRefusal::Lifecycle(
+                    weaver_types::LifecycleRefusal::OutOfOrder,
+                )),
+            }));
+        }
+        if self.message.is_none() && self.save_message.is_none() {
             let Some(message) = self.peer.held() else {
                 if self.peer_unavailable {
                     self.progress = FoundationManagementProgress::Dropped;
@@ -230,23 +446,46 @@ impl<'a> FoundationManagement<'a> {
                 self.progress = FoundationManagementProgress::Dropped;
                 return Ok(());
             }
-            if !matches!(
-                envelope.payload,
-                Payload::Directive(LifecycleDirective::Observe | LifecycleDirective::Stop { .. })
-            ) {
+            let leaving = self.input.has_graceful_leave() || self.input.serving.save.is_some();
+            let delegate = if leaving {
+                self.input.has_graceful_leave()
+                    && matches!(
+                        envelope.payload,
+                        Payload::Directive(LifecycleDirective::JoinLeave { .. })
+                    )
+            } else {
+                !matches!(
+                    envelope.payload,
+                    Payload::Directive(
+                        LifecycleDirective::Observe | LifecycleDirective::Stop { .. }
+                    )
+                )
+            };
+            if delegate {
+                if self.read_armed {
+                    self.input
+                        .serving
+                        .owner
+                        .context
+                        .complete_wait(PumpDeadline::AdminRead);
+                    self.read_armed = false;
+                }
                 self.progress = FoundationManagementProgress::DirectivePending;
                 return Ok(());
             }
             // An earlier measured refusal owns its close. Settle that exact
             // transaction before deciding whether this Stop has a turn left;
             // two owners must never author competing turn.closed events.
-            if matches!(
-                envelope.payload,
-                Payload::Directive(LifecycleDirective::Stop { .. })
-            ) && !self.input.settle_refusal_before_stop(
-                (!self.peer_unavailable).then_some(&mut self.peer),
-                io,
-            )? {
+            if !leaving
+                && matches!(
+                    envelope.payload,
+                    Payload::Directive(LifecycleDirective::Stop { .. })
+                )
+                && !self.input.settle_refusal_before_stop(
+                    (!self.peer_unavailable).then_some(&mut self.peer),
+                    io,
+                )?
+            {
                 return Ok(());
             }
             self.message =
@@ -257,6 +496,14 @@ impl<'a> FoundationManagement<'a> {
                         failure,
                     })?;
             let message = self.message.as_ref().unwrap();
+            if self.read_armed {
+                self.input
+                    .serving
+                    .owner
+                    .context
+                    .complete_wait(PumpDeadline::AdminRead);
+                self.read_armed = false;
+            }
             let owner = &mut self.input.serving.owner;
             match &message.envelope.payload {
                 Payload::Directive(LifecycleDirective::Observe) => {
@@ -271,15 +518,28 @@ impl<'a> FoundationManagement<'a> {
                     self.answer = Some(ManagementAnswer::Observation(ObservationEnvelope {
                         exchange: message.envelope.exchange.clone(),
                         position: Position::Close,
-                        payload: ObservationContent::Answer(ObservationAnswer::State {
-                            state: if owner.context.open_turn.is_some() {
-                                AgentState::Active
-                            } else {
-                                AgentState::Idle
-                            },
-                            load: Some(load.clone()),
-                            constituents: Vec::new(),
+                        payload: ObservationContent::Answer(if leaving {
+                            ObservationAnswer::InTransition {
+                                constituents: Vec::new(),
+                            }
+                        } else {
+                            ObservationAnswer::State {
+                                state: if owner.context.open_turn.is_some() {
+                                    AgentState::Active
+                                } else {
+                                    AgentState::Idle
+                                },
+                                load: Some(load.clone()),
+                                constituents: Vec::new(),
+                            }
                         }),
+                    }));
+                }
+                Payload::Directive(_) if leaving => {
+                    self.answer = Some(ManagementAnswer::Lifecycle(OrganEnvelope {
+                        exchange: message.envelope.exchange.clone(),
+                        position: Position::Close,
+                        payload: Payload::Refusal(weaver_types::LifecycleRefusal::OutOfOrder),
                     }));
                 }
                 Payload::Directive(LifecycleDirective::Stop { cause }) => {
@@ -341,6 +601,16 @@ impl<'a> FoundationManagement<'a> {
                         Err(error.failure)
                     }
                 },
+                ManagementAnswer::Capture(answer) => match self.peer.stage_capture(answer) {
+                    Ok(TrackedStage::Queued(send)) => Ok(TrackedStage::Queued(send)),
+                    Ok(TrackedStage::Busy(answer)) => {
+                        Ok(TrackedStage::Busy(ManagementAnswer::Capture(answer)))
+                    }
+                    Err(error) => {
+                        self.answer = Some(ManagementAnswer::Capture(error.input));
+                        Err(error.failure)
+                    }
+                },
             };
             match staged {
                 Ok(TrackedStage::Queued(send)) => self.send = Some(send),
@@ -379,11 +649,19 @@ impl<'a> FoundationManagement<'a> {
     }
     /// Return the exact suspended input after an actual answer or a dropped
     /// connection. Pending directives and stopped owners remain wholly owned.
-    pub fn finish(self: Box<Self>) -> Result<Box<FoundationInput<'a>>, Box<Self>> {
+    pub fn finish(mut self: Box<Self>) -> Result<Box<FoundationInput<'a>>, Box<Self>> {
         if matches!(
             self.progress,
             FoundationManagementProgress::Answered | FoundationManagementProgress::Dropped
         ) {
+            if self.read_armed {
+                self.input
+                    .serving
+                    .owner
+                    .context
+                    .complete_wait(PumpDeadline::AdminRead);
+                self.read_armed = false;
+            }
             Ok(self.input)
         } else {
             Err(self)

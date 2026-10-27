@@ -235,7 +235,7 @@ fn statement(value: &shared::StatementRef) -> trace::StatementRef {
     }
 }
 
-fn source_position(value: &shared::SourcePosition) -> trace::SourcePosition {
+pub(super) fn source_position(value: &shared::SourcePosition) -> trace::SourcePosition {
     let shared::SourcePosition { block_id, turn } = value;
     trace::SourcePosition {
         block_id: source(block_id),

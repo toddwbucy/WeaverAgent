@@ -295,6 +295,9 @@ impl RecordBarrier {
     pub(super) fn is_loaded(&self) -> bool {
         self.recorder.is_loaded()
     }
+    pub(super) fn latest_recorded(&self) -> Option<Sequence> {
+        self.recorder.latest_recorded()
+    }
     pub(super) fn run(&self) -> &str {
         &self.run
     }
@@ -936,6 +939,17 @@ impl RecordBarrier {
     pub(super) fn queue_halt_rejected(
         &mut self,
         permit: super::context::halt_rejection::OwedRejectedReturn,
+        author: &ServingAuthor,
+        raw_ns: u64,
+        wall_ms: u64,
+    ) -> Result<(), TerminalAuthorFailure> {
+        self.queue_stopped_authored(permit.into_event(), author, raw_ns, wall_ms)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn queue_halt_organ_observation(
+        &mut self,
+        permit: super::context::serving_organ_loss::OwedOrganObservation,
         author: &ServingAuthor,
         raw_ns: u64,
         wall_ms: u64,

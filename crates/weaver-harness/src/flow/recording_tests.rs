@@ -223,6 +223,47 @@ fn recorded(progress: RecordProgress) -> (Sequence, Option<RecordProof>) {
 }
 
 #[test]
+fn complete_watermark_covers_each_record_purpose_and_unselected_authors() {
+    let (recorder, _reader) = recorder();
+    let mut barrier = RecordBarrier::new(recorder, "run".into());
+    let mut inbox = FlowInbox::new();
+    let mut budget = budget(2);
+    assert_eq!(barrier.latest_recorded(), Some(Sequence(0)));
+    let reply = reply();
+    let mirror = open_measurement_mirror();
+    let state = serde_json::from_value(serde_json::to_value(&mirror).unwrap()).unwrap();
+    let flow_event = terminal(&source(1));
+    let Some(Payload::FlowObservation(flow)) = &flow_event.payload else {
+        unreachable!()
+    };
+    let flow = (**flow).clone();
+    for (index, (event, purpose)) in [
+        (
+            message("Read the retained content."),
+            RecordPurpose::Content,
+        ),
+        (measurement("untapped"), RecordPurpose::Observation),
+        (classifier_event(&reply), RecordPurpose::Classifier(reply)),
+        (
+            event(
+                Kind::StateStoreMeasurement,
+                Payload::StateStoreMeasurement(Box::new(mirror)),
+            ),
+            RecordPurpose::State(state),
+        ),
+        (flow_event.clone(), RecordPurpose::Terminal(source(1))),
+        (flow_event, RecordPurpose::Flow(flow)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (actual, _) = recorded(barrier.submit(event, purpose, &mut inbox, &mut budget));
+        assert_eq!(actual, Sequence(index as u64 + 1));
+        assert_eq!(barrier.latest_recorded(), Some(actual));
+    }
+}
+
+#[test]
 fn real_tap_queues_exact_copy_and_only_recorded_terminal_releases_it() {
     let (recorder, _reader) = recorder();
     let mut barrier = RecordBarrier::new(recorder, "run".into());

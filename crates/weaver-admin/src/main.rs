@@ -51,7 +51,11 @@ mod random;
 mod save_points;
 #[allow(dead_code)]
 mod serving_enter;
-// Dormant root startup composition; selected only with the qualified worker.
+// Dormant root lifecycle composition; selected only with the qualified worker.
+#[allow(dead_code)]
+mod serving_capture_window;
+#[allow(dead_code)]
+mod serving_leave;
 #[allow(dead_code)]
 mod serving_load;
 #[allow(dead_code)]

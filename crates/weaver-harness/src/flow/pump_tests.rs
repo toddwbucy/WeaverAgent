@@ -33,6 +33,190 @@ const _: fn() = || {
     let _ = <LifecycleMessage as NoClone<_>>::check;
 };
 
+fn capture_message(id: u64) -> weaver_types::state_flow::capture::CaptureEnvelope {
+    use weaver_types::state_flow::capture::*;
+    CaptureEnvelope {
+        exchange: ExchangeId {
+            opener: Opener::Admin,
+            ordinal: 19,
+        },
+        position: Position::Continue,
+        payload: CapturePayload::SavePointImageChecked(CaptureImageChecked {
+            capture_id: id.into(),
+            dump_sha256: weaver_types::state_flow::Digest::new("a".repeat(64)).unwrap(),
+        }),
+    }
+}
+
+#[test]
+fn capture_transport_preserves_one_receive_slot_raw_bytes_and_handles_through_eof() {
+    use weaver_types::state_flow::capture::CaptureSender;
+    let (end, peer) = pair();
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    send_envelope(&peer, 1);
+    owner.try_receive().unwrap();
+    assert!(owner.enable_capture().is_err());
+    assert_eq!(owner.held().unwrap().envelope.exchange.ordinal, 1);
+    owner.take_completion().unwrap().unwrap();
+    owner.enable_capture().unwrap();
+    let wire = capture_message(7).encode(CaptureSender::Admin).unwrap();
+    let (handle, mut watcher) = UnixStream::pair().unwrap();
+    watcher.set_nonblocking(true).unwrap();
+    send_handles(&peer, &wire, &[handle.as_raw_fd()]);
+    drop(handle);
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    assert!(owner.held().is_none());
+    assert!(!owner.interest().contains(PollFlags::POLLIN));
+    assert!(owner.interest().contains(terminal_flags()));
+    send_bytes(
+        &peer,
+        &capture_message(8).encode(CaptureSender::Admin).unwrap(),
+    );
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Pending);
+    assert!(owner.take_completion().unwrap().is_none());
+    let held = owner.take_capture().unwrap().unwrap();
+    assert_eq!(held.message.envelope, capture_message(7));
+    assert_eq!(held.wire, wire);
+    assert!(held.message.sink.is_some());
+    assert!(
+        matches!(watcher.read(&mut [0]), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
+    );
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    drop(peer);
+    assert!(owner.try_receive().is_err());
+    let retired = owner.retire_failed();
+    assert_eq!(retired.capture_held.unwrap().envelope, capture_message(8));
+    assert_eq!(
+        retired.wire.unwrap(),
+        capture_message(8).encode(CaptureSender::Admin).unwrap()
+    );
+    assert!(retired.failure.is_some());
+    drop(held);
+    assert_eq!(watcher.read(&mut [0]).unwrap(), 0);
+}
+
+#[test]
+fn capture_transport_keeps_decoder_failure_and_closes_unusable_ancillary_handles() {
+    for bytes in [
+        b"not-json".to_vec(),
+        serde_json::to_vec(&envelope(99)).unwrap(),
+    ] {
+        let (end, peer) = pair();
+        let mut owner = LifecyclePeer::from_owned(end).unwrap();
+        owner.enable_capture().unwrap();
+        let (handle, mut watcher) = UnixStream::pair().unwrap();
+        send_handles(&peer, &bytes, &[handle.as_raw_fd()]);
+        drop(handle);
+        assert!(owner.try_receive().is_err());
+        let retired = owner.retire_failed();
+        assert_eq!(retired.wire.unwrap(), bytes);
+        assert!(retired.capture_held.is_none());
+        assert!(retired.failure.is_some());
+        assert_eq!(watcher.read(&mut [0]).unwrap(), 0);
+    }
+}
+
+#[test]
+fn capture_transport_tracks_actual_whole_send_and_returns_the_busy_original() {
+    use super::super::pump_transport::TrackedStage;
+    use weaver_types::state_flow::capture::*;
+    let (end, peer) = pair();
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    let mut value = capture_message(7);
+    value.payload = CapturePayload::SavePointBeginning(CaptureBeginning {
+        capture_id: 7.into(),
+        window: weaver_types::state_flow::SaveWindow {
+            began_ns: 100.into(),
+            deadline_ns: 200.into(),
+        },
+        tail_window: Some(weaver_types::state_flow::SaveWindow {
+            began_ns: 90.into(),
+            deadline_ns: 210.into(),
+        }),
+    });
+    owner.enable_capture().unwrap();
+    let expected = value.encode(CaptureSender::Harness).unwrap();
+    let TrackedStage::Queued(ticket) = owner.stage_capture(value.clone()).unwrap() else {
+        panic!("free sender")
+    };
+    assert!(owner.owns_send(&ticket));
+    assert!(ticket.matches_exchange(&value.exchange));
+    assert!(!ticket.sent());
+    assert_eq!(ticket.sent_at(), None);
+    let TrackedStage::Busy(original) = owner.stage_capture(value.clone()).unwrap() else {
+        panic!("occupied sender")
+    };
+    assert_eq!(original, value);
+    let mut clock = FakePumpIo::new(110);
+    assert_ne!(
+        owner.try_send_observed(&mut clock).unwrap(),
+        SendProgress::Pending
+    );
+    assert!(ticket.sent());
+    assert_eq!(ticket.sent_at(), Some(110));
+    let mut bytes = vec![0; MAX_ENVELOPE_BYTES];
+    let count =
+        nix::sys::socket::recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT).unwrap();
+    assert_eq!(&bytes[..count], expected);
+    let _retired = owner.retire_failed();
+    assert!(ticket.sent());
+}
+
+#[test]
+fn capture_transport_socket_pressure_never_grants_a_whole_send_receipt() {
+    use super::super::pump_transport::TrackedStage;
+    use weaver_types::state_flow::capture::*;
+    let (end, peer) = pair();
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    owner.enable_capture().unwrap();
+    loop {
+        match send(
+            owner.fd().as_raw_fd(),
+            b"pressure",
+            MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL,
+        ) {
+            Ok(_) => (),
+            Err(Errno::EAGAIN) => break,
+            Err(error) => panic!("{error}"),
+        }
+    }
+    let mut value = capture_message(7);
+    value.payload = CapturePayload::SavePointCaptureComplete(CaptureIdentity {
+        capture_id: 7.into(),
+    });
+    let expected = value.encode(CaptureSender::Harness).unwrap();
+    let TrackedStage::Queued(ticket) = owner.stage_capture(value).unwrap() else {
+        panic!("empty sender")
+    };
+    let mut clock = FakePumpIo::new(110);
+    for _ in 0..3 {
+        assert_eq!(
+            owner.try_send_observed(&mut clock).unwrap(),
+            SendProgress::Pending
+        );
+        assert!(!ticket.sent());
+        assert_eq!(ticket.sent_at(), None);
+    }
+    assert!(owner.interest().contains(PollFlags::POLLOUT));
+    let mut bytes = vec![0; MAX_ENVELOPE_BYTES];
+    loop {
+        match nix::sys::socket::recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
+            Ok(count) => assert_eq!(&bytes[..count], b"pressure"),
+            Err(Errno::EAGAIN) => break,
+            Err(error) => panic!("{error}"),
+        }
+    }
+    clock.advance_to(150).unwrap();
+    assert_ne!(
+        owner.try_send_observed(&mut clock).unwrap(),
+        SendProgress::Pending
+    );
+    assert_eq!(ticket.sent_at(), Some(150));
+    let count =
+        nix::sys::socket::recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT).unwrap();
+    assert_eq!(&bytes[..count], expected);
+}
+
 fn pair() -> (OwnedFd, OwnedFd) {
     socketpair(
         AddressFamily::Unix,
@@ -107,6 +291,84 @@ struct Fixture {
     budget: RetentionBudget,
     author: ServingAuthor,
     reader: Option<UnixStream>,
+}
+
+#[test]
+fn an_observation_wake_keeps_real_interests_and_terminal_deadline_precedence() {
+    for terminal in [None, Some(104), Some(105), Some(106)] {
+        let mut fixture = Fixture::new(false);
+        let (end, _peer) = pair();
+        let mut admin = LifecyclePeer::from_owned(end).unwrap();
+        let fd = admin.fd().as_raw_fd();
+        let mut io = FakePumpIo::new(100);
+        let mut pump = CommonPump::new(ClockOrigin::at(100));
+        let mut deadlines = DeadlineRegistry::new();
+        if let Some(end) = terminal {
+            deadlines
+                .arm(
+                    PumpDeadline::Leave,
+                    AbsoluteBound::from_absolute(100, end).unwrap(),
+                )
+                .unwrap();
+        }
+        let mut ports = PumpPorts {
+            lifecycle: LifecyclePorts::default(),
+            gate: None,
+            decode: None,
+            label: None,
+            io: &mut io,
+        };
+        ports.lifecycle.peer = Some(&mut admin);
+        assert!(matches!(
+            pump.step_with_observation(
+                &mut ports,
+                None,
+                &mut fixture.cx(),
+                &deadlines,
+                false,
+                Some(105)
+            )
+            .unwrap(),
+            PumpStep::Idle
+        ));
+        assert!(ports.io.waits().is_empty(), "advance must not sleep");
+        let result = pump
+            .step_with_observation(
+                &mut ports,
+                None,
+                &mut fixture.cx(),
+                &deadlines,
+                true,
+                Some(105),
+            )
+            .unwrap();
+        if terminal.is_some_and(|end| end <= 105) {
+            assert!(matches!(
+                result,
+                PumpStep::Deadline {
+                    key: PumpDeadline::Leave,
+                    ..
+                }
+            ));
+        } else {
+            assert!(matches!(result, PumpStep::Observation));
+        }
+        let wait = ports.io.waits().last().unwrap();
+        assert_eq!(
+            wait.absolute_deadline,
+            Some(terminal.unwrap_or(105).min(105))
+        );
+        assert!(
+            wait.descriptors
+                .iter()
+                .any(|(actual, flags)| *actual == fd && flags.contains(PollFlags::POLLIN))
+        );
+        assert_eq!(
+            deadlines.nearest(),
+            terminal,
+            "the wake cannot arm or renew a protocol bound"
+        );
+    }
 }
 impl Fixture {
     fn new(pressure: bool) -> Self {
@@ -1220,4 +1482,99 @@ fn final_trace_unit_cannot_return_progress_after_the_absolute_bound() {
         weaver_trace::serving::CapacityWake::Empty,
         "the final unit must have consumed the real wake before reporting expiry"
     );
+}
+
+fn demand_opener() -> weaver_types::state_flow::capture::CaptureEnvelope {
+    use weaver_types::state_flow::capture::*;
+    CaptureEnvelope {
+        exchange: ExchangeId {
+            opener: Opener::Admin,
+            ordinal: 19,
+        },
+        position: Position::Open,
+        payload: CapturePayload::Directive(CaptureDirective::SavePoint {
+            cause: weaver_types::Cause { uid: 74 },
+            window: weaver_types::state_flow::SaveWindow {
+                began_ns: 100.into(),
+                deadline_ns: 200.into(),
+            },
+        }),
+    }
+}
+
+#[test]
+fn serving_opener_keeps_the_original_save_bytes_and_the_single_receive_slot() {
+    use weaver_types::state_flow::capture::*;
+    let (end, peer) = pair();
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    owner.enable_serving_openers().unwrap();
+    assert!(owner.enable_serving_openers().is_err());
+    let request = demand_opener();
+    let bytes = serde_json::to_vec_pretty(&request).unwrap();
+    send_bytes(&peer, &bytes);
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    assert!(owner.held().is_none());
+    assert!(owner.capture_identity().is_none());
+    assert!(owner.enable_capture().is_err());
+    send_bytes(
+        &peer,
+        &capture_message(7).encode(CaptureSender::Admin).unwrap(),
+    );
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Pending);
+    let retained = owner.take_capture().unwrap().unwrap();
+    assert_eq!(retained.message.envelope, request);
+    assert_eq!(retained.wire, bytes);
+    owner.enable_capture().unwrap();
+    assert!(owner.capture_identity().is_some());
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    assert_eq!(
+        owner.take_capture().unwrap().unwrap().message.envelope,
+        capture_message(7)
+    );
+}
+
+#[test]
+fn serving_opener_keeps_ordinary_directives_and_refuses_legacy_save_downgrade() {
+    for save in [false, true] {
+        let (end, peer) = pair();
+        let mut owner = LifecyclePeer::from_owned(end).unwrap();
+        owner.enable_serving_openers().unwrap();
+        let message = weaver_types::OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Admin,
+                ordinal: 19,
+            },
+            position: Position::Open,
+            payload: weaver_types::Payload::Directive(if save {
+                weaver_types::LifecycleDirective::SavePoint {
+                    cause: weaver_types::Cause { uid: 74 },
+                }
+            } else {
+                weaver_types::LifecycleDirective::Observe
+            }),
+        };
+        let wire = serde_json::to_vec(&message).unwrap();
+        send_bytes(&peer, &wire);
+        if save {
+            assert!(owner.try_receive().is_err());
+            let failed = owner.retire_failed();
+            assert_eq!(failed.wire.as_ref(), Some(&wire));
+            assert!(failed.held.is_none() && failed.capture_held.is_none());
+        } else {
+            assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+            assert_eq!(owner.held().unwrap().envelope, message);
+            assert!(owner.capture_held().is_none());
+        }
+    }
+}
+
+#[test]
+fn serving_opener_selection_never_reinterprets_an_already_received_legacy_packet() {
+    let (end, peer) = pair();
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    send_envelope(&peer, 1);
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    assert!(owner.enable_serving_openers().is_err());
+    assert_eq!(owner.held().unwrap().envelope.exchange.ordinal, 1);
+    assert!(owner.capture_held().is_none());
 }

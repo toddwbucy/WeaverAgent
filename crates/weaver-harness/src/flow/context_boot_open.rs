@@ -845,7 +845,10 @@ impl RecordingContext {
                 owner.stage = Stage::Complete;
             }
         }
-        self.last_author_sequence = Some(sequence);
+        #[cfg(test)]
+        {
+            self.last_author_sequence = Some(sequence);
+        }
     }
 
     fn finish_boot_reservation(

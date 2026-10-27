@@ -11,6 +11,7 @@ impl RecordingContext {
             && self.failure.is_none()
             && self.flow.halt().is_none()
             && self.rollback_gate_author.is_none()
+            && self.serving_observation_author.is_none()
             && !self.caller_author_held()
             && self.refused_author.is_none()
             && self.waiting_content.is_none()
@@ -51,24 +52,28 @@ impl RecordingContext {
             return Err(AuthorFailure {
                 reason: RunFailure::Closed,
                 original: Some(event),
+                held: None,
             });
         }
         if !self.rollback_gate_author_available() {
             return Err(AuthorFailure {
                 reason: RunFailure::Busy(HeldInput::Caller),
                 original: Some(event),
+                held: None,
             });
         }
         if let Err(reason) = self.live(ports.io) {
             return Err(AuthorFailure {
                 reason,
                 original: Some(event),
+                held: None,
             });
         }
         if !owner.allows(self) {
             return Err(AuthorFailure {
                 reason: RunFailure::Closed,
                 original: Some(event),
+                held: None,
             });
         }
         self.rollback_gate_author = Some(Arc::clone(owner));

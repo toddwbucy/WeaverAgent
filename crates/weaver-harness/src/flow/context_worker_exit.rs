@@ -29,6 +29,9 @@ pub struct FoundationFailedHandoff {
     world_already_sent: bool,
     input: FailedInput,
     management: Option<super::super::management::FailedManagement>,
+    _graceful: Option<super::super::graceful::FailedGraceful>,
+    capture: Option<Box<crate::flow::context::leave_capture::FailedCapture>>,
+    _save_request: Option<super::super::save::FailedSaveRequest>,
     gate: Option<OrganPort>,
     gate_child: OwnedChild,
     tools: Option<ToolsCgroup>,
@@ -63,9 +66,7 @@ struct FailedInput {
     _seated: Option<SeatedInput>,
     _close: Option<OrganEnvelope>,
     _send: Option<OrganSend>,
-    _report: Option<(ReceivedOrgan, Subsystem)>,
-    _report_started: bool,
-    _returned_report: StoppedAuthor,
+    _report: Option<report::Report>,
     _failure: Option<RunFailure>,
     _engine: Option<Box<generation::EngineWork>>,
 }
@@ -75,6 +76,14 @@ impl FoundationHalt<'_> {
     /// terminal, needs actual containment, or exhausted its original cap.
     pub fn handoff(self: Box<Self>) -> Result<Box<FoundationFailedHandoff>, Box<Self>> {
         if !self.terminal() {
+            return Err(self);
+        }
+        let input = self.owner.input();
+        if input.serving.save.as_ref().is_some_and(|save| {
+            !save
+                .capture
+                .failed_handoff_ready(input.serving.owner.context, &save.peer)
+        }) {
             return Err(self);
         }
         let Self {
@@ -109,8 +118,6 @@ impl FoundationHalt<'_> {
             close,
             send,
             report,
-            report_started,
-            returned_report,
             failure,
             engine,
         } = *input;
@@ -119,6 +126,8 @@ impl FoundationHalt<'_> {
             gate_exchanges,
             queued_inputs,
             gate_outgoing,
+            graceful,
+            save,
         } = serving;
         let crate::flow::context::boot_composition::gate_startup::ready::EnteredServing {
             context,
@@ -146,6 +155,13 @@ impl FoundationHalt<'_> {
             .original_enter
             .take()
             .map(|peer| peer.retire_failed());
+        let (capture, save_request) = match save {
+            Some(save) => {
+                let (capture, request) = save.into_failed(context);
+                (Some(capture), Some(request))
+            }
+            None => (None, None),
+        };
         Ok(Box::new(FoundationFailedHandoff {
             origin,
             decode,
@@ -153,6 +169,9 @@ impl FoundationHalt<'_> {
             deadline,
             progress,
             world_already_sent,
+            _graceful: graceful.map(|leave| leave.retire_failed()),
+            capture,
+            _save_request: save_request,
             input: FailedInput {
                 received: original,
                 turn,
@@ -162,8 +181,6 @@ impl FoundationHalt<'_> {
                 _close: close,
                 _send: send,
                 _report: report,
-                _report_started: report_started,
-                _returned_report: returned_report,
                 _failure: failure,
                 _engine: engine,
             },
@@ -246,13 +263,34 @@ impl FoundationRun {
     #[allow(clippy::result_large_err)]
     pub fn failed_exit(
         self: Box<Self>,
-        handoff: Box<FoundationFailedHandoff>,
+        mut handoff: Box<FoundationFailedHandoff>,
     ) -> Result<Box<FoundationFailedExit>, (Box<Self>, Box<FoundationFailedHandoff>)> {
         let valid = Arc::ptr_eq(&self.context.read_origin, &handoff.origin)
             && self.context.phase == RecordingPhase::Failed
             && self.context.failure.is_some()
             && self.context.flow.halt().is_some()
-            && self.context.member_capture.is_none()
+            && match handoff.capture.as_ref() {
+                Some(capture) => {
+                    capture.matches(&self.context)
+                        && self
+                            .context
+                            .flow
+                            .halt()
+                            .unwrap()
+                            .account()
+                            .is_none_or(|account| account.capture.as_ref() == Some(capture.facts()))
+                }
+                None => {
+                    self.context.member_capture.is_none()
+                        && self
+                            .context
+                            .flow
+                            .halt()
+                            .unwrap()
+                            .account()
+                            .is_none_or(|account| account.capture.is_none())
+                }
+            }
             && self.resources.matches(&self.context)
             && self.resources.original_ports()
             && self
@@ -282,10 +320,11 @@ impl FoundationRun {
             ExitStage::Terminals
         };
         Ok(Box::new(FoundationFailedExit {
-            tail: FailedRunCleanup::after_serving(
+            tail: FailedRunCleanup::after_serving_with_capture(
                 context,
                 resources,
                 handoff._rejection_unavailable,
+                handoff.capture.take(),
             ),
             handoff,
             stage,
@@ -375,6 +414,10 @@ impl FoundationFailedExit {
         if self.stage == ExitStage::Closed {
             return FoundationExitProgress::Closed;
         }
+        self.tail
+            .context
+            .serving_organs
+            .refresh_gate(&self.handoff.gate_child);
         if !self.clock(io) {
             return self.progress;
         }
@@ -641,18 +684,26 @@ impl FoundationFailedExit {
     }
 
     fn lower(&mut self, io: &mut impl PumpIo) -> FoundationExitProgress {
-        if self.tail.context.pairs.pending_rejection().is_some() {
+        if self.tail.context.has_owed_organ_observation()
+            || (self.tail.context.pairs.pending_rejection().is_some()
+                && !self.tail.rejection_unavailable)
+        {
             // Drain before attempting admission. Capacity freed after that
             // attempt must leave its notification readable for the wait.
-            if !self.tail.rejection_unavailable
-                && !self.handoff._capacity_unavailable
+            if !self.handoff._capacity_unavailable
                 && let Err(error) = self.tail.context.barrier.drain_capacity_wake()
             {
                 self.handoff._capacity_unavailable = true;
                 self.tail
                     .secondary(format!("failed serving Lower capacity wake: {error:?}"));
             }
-            self.tail.advance_serving_rejection();
+            // Turn accounts already retired before Closing. This advances
+            // only their run-scoped successors, preserving each exact owner,
+            // and never waits ahead of the mandatory Lower send.
+            if !self.tail.advance_accounts(io) {
+                self.abort();
+                return FoundationExitProgress::Closed;
+            }
             if !self.clock(io) {
                 return FoundationExitProgress::Closed;
             }
@@ -818,17 +869,23 @@ impl FoundationFailedExit {
         }
         let now = self.tail.context.last_ns;
         let deadline = self.handoff.deadline.unwrap();
-        let wake = if self.stage == ExitStage::Containment {
+        let mut wake = if self.stage == ExitStage::Containment {
             now.saturating_add(10_000_000)
                 .min(deadline)
                 .min(self.containment_deadline.unwrap())
         } else {
             deadline
         };
+        if self.stage == ExitStage::Lower
+            && let Some(settle) = self.tail.context.halt_organ_settle_wake()
+        {
+            wake = wake.min(settle);
+        }
         let mut interests = vec![];
         if self.stage == ExitStage::Lower
-            && self.tail.context.pairs.pending_rejection().is_some()
-            && !self.tail.rejection_unavailable
+            && (self.tail.context.has_owed_organ_observation()
+                || (self.tail.context.pairs.pending_rejection().is_some()
+                    && !self.tail.rejection_unavailable))
             && !self.handoff._capacity_unavailable
         {
             interests.push(WaitInterest {
@@ -864,3 +921,7 @@ impl FoundationFailedExit {
 #[cfg(test)]
 #[path = "context_worker_exit_tests.rs"]
 pub(in crate::flow::context) mod tests;
+
+#[cfg(test)]
+#[path = "context_worker_exit_organ_tests.rs"]
+pub(in crate::flow::context) mod organ_tests;

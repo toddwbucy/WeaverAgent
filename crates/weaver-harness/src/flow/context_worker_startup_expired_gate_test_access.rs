@@ -9,6 +9,10 @@ pub(in crate::flow::context) type DeathEvidence = (
 );
 
 impl RollbackGate {
+    pub(in crate::flow::context) fn test_quiesce_reply(&self) -> Option<&ReceivedOrgan> {
+        self.quiesce_reply.as_ref()
+    }
+
     pub(in crate::flow::context) fn test_death(&self) -> Option<DeathEvidence> {
         self.death.as_ref().map(|death| {
             (

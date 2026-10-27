@@ -423,6 +423,7 @@ impl RecordingContext {
                     reason: self
                         .pair_fault(ports.io, "deferred pair filing lost its original bounds"),
                     original: Some(filing.event),
+                    held: None,
                 });
             }
             return self.admit_pair_filing(
@@ -588,6 +589,7 @@ impl RecordingContext {
                     )
                 }),
                 original: Some(error.event),
+                held: None,
             });
         }
         self.pairs

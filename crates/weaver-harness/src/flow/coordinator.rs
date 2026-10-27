@@ -2132,6 +2132,35 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         Ok(OperationStart::Started { request_id })
     }
 
+    /// Prepared and Commit retain the original frontier even though the
+    /// snapshot and confirmation observations advance the live watermark.
+    pub(super) fn capture_confirmation_ready(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+        id: DecimalU64,
+        frontier: u64,
+    ) -> Result<bool, FlowFailure> {
+        self.require_active(cx)?;
+        self.require_capture(cx, id)?;
+        let snapshot = self.capture.as_ref().expect("checked capture").snapshot;
+        if snapshot.phase != CapturePhase::Finished || snapshot.frontier != frontier {
+            return Err(self.fail(
+                cx,
+                "barrier",
+                "confirmation changed capture phase or frontier",
+            ));
+        }
+        self.check_capture_frontier(cx, frontier)?;
+        Ok(self.capture_leg_ready(cx, CapturePhase::Finished)
+            && self.settled_obligations(cx)
+            && cx.barrier.pending_author().is_none()
+            && self
+                .classifier
+                .as_ref()
+                .is_none_or(|port| port.state() == ClassifierState::Idle)
+            && self.starting_classifier.is_none())
+    }
+
     pub(super) fn acknowledge_capture(
         &mut self,
         cx: &mut FlowRecording<'_>,
@@ -4151,6 +4180,23 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
             return None;
         }
         Some(self.retire_failed_ports_owned())
+    }
+
+    /// The consuming failed-capture owner retains this exact capture, including
+    /// when account allocation failed. Keep its ledger while retiring actual FDs.
+    pub(super) fn retire_failed_capture_ports(
+        &mut self,
+        permit: &super::context::FailedCaptureDisposal,
+        barrier: &super::recording::RecordBarrier,
+    ) -> Option<FailedFlowResources> {
+        (self.phase == CoordinatorPhase::Failed
+            && self.halt.is_some()
+            && permit.allows(
+                barrier,
+                self.halt.as_ref().and_then(|halt| halt.account()),
+                self.capture_snapshot(),
+            ))
+        .then(|| self.retire_failed_ports_owned())
     }
 
     /// Consuming rollback uses this only after its actual Leave expired or its

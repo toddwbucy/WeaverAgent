@@ -17,14 +17,12 @@ pub(in crate::flow::context::worker_startup) struct RollbackInputWork {
     _seated: Option<SeatedInput>,
     close: Option<OrganEnvelope>,
     send: Option<OrganSend>,
-    report: Option<(ReceivedOrgan, Subsystem)>,
-    report_started: bool,
-    returned_report: StoppedAuthor,
+    report: Option<report::Report>,
     _failure: Option<RunFailure>,
     engine: Option<Box<generation::EngineWork>>,
     world: Option<close::WorldClose>,
     _displaced_world: Option<close::WorldClose>,
-    _recorded_report: Option<(ReceivedOrgan, Subsystem)>,
+    _recorded_report: Option<report::Report>,
     _placement_close: Option<TurnFrame>,
     complete: bool,
 }
@@ -47,8 +45,6 @@ impl<'a> FoundationInput<'a> {
             close,
             send,
             report,
-            report_started,
-            returned_report,
             failure,
             engine,
         } = *self;
@@ -63,8 +59,6 @@ impl<'a> FoundationInput<'a> {
                 close,
                 send,
                 report,
-                report_started,
-                returned_report,
                 _failure: failure,
                 engine,
                 world: None,
@@ -78,6 +72,12 @@ impl<'a> FoundationInput<'a> {
 }
 
 impl RollbackInputWork {
+    pub(in crate::flow::context::worker_startup) fn original_input(
+        &self,
+    ) -> Option<&ReceivedOrgan> {
+        self.received.as_ref()
+    }
+
     pub(in crate::flow::context::worker_startup) fn retire_failed_placement_grants(
         &mut self,
         context: &mut RecordingContext,
@@ -268,39 +268,10 @@ impl RollbackInputWork {
         if self.complete {
             return Ok(true);
         }
-        if self.report.is_some() {
-            self.returned_report.check()?;
-            if self.report_started {
-                context.resume_author_and_wait(ports).map_err(|failure| {
-                    self.returned_report
-                        .retain_started(failure, &mut self.report_started)
-                })?;
-            } else {
-                let (received, subsystem) = self.report.as_ref().unwrap();
-                let Payload::Fault(report) = &received.envelope().payload else {
-                    unreachable!()
-                };
-                let payload = serde_json::value::to_raw_value(report).expect("received fault");
-                self.report_started = true;
-                context
-                    .author_and_wait(
-                        ports,
-                        AuthoredEvent {
-                            kind: serving::Kind::Fault,
-                            subsystem: *subsystem,
-                            turn: None,
-                            source: AuthoredSource::Runtime,
-                            causal_parent: None,
-                            payload: Some(serving::Payload::Fault(payload)),
-                        },
-                    )
-                    .map_err(|failure| {
-                        self.returned_report
-                            .retain_started(failure, &mut self.report_started)
-                    })?;
-            }
+        if let Some(report) = &mut self.report
+            && report.advance(context, ports)?
+        {
             self._recorded_report = self.report.take();
-            self.report_started = false;
             return Ok(false);
         }
         if let Some(world) = &mut self.world {
@@ -385,6 +356,9 @@ impl RollbackInputWork {
                 }
                 _ => return Ok(false),
             }
+        }
+        if self.report.is_some() {
+            return Ok(false);
         }
         let Some(proof) = lowered else {
             return Ok(false);

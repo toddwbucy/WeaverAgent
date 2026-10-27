@@ -15,6 +15,9 @@ enum AfterPairs {
 pub enum Progress {
     Pending,
     DirectivePending,
+    LeavePending,
+    Quiesced,
+    WindDownComplete,
     Completed,
     Refused,
     /// A loop election could not advance its retained owner. Management remains
@@ -37,6 +40,7 @@ pub struct Workflow<'a> {
     after_pairs: Option<AfterPairs>,
     bar_round: bool,
     detail: Option<String>,
+    wind_down: Option<Box<super::wind_down::Policy>>,
 }
 
 impl<'a> Workflow<'a> {
@@ -61,6 +65,7 @@ impl<'a> Workflow<'a> {
             after_pairs: None,
             bar_round: false,
             detail: None,
+            wind_down: None,
         })
     }
 
@@ -77,41 +82,148 @@ impl<'a> Workflow<'a> {
             FoundationInputProgress::Refused => Progress::Refused,
             FoundationInputProgress::Aborted => Progress::Aborted,
             FoundationInputProgress::Stopped => Progress::Stopped,
+            FoundationInputProgress::LeavePending => Progress::LeavePending,
+            FoundationInputProgress::Quiesced => Progress::Quiesced,
+            FoundationInputProgress::WindDown
+                if self.input.as_ref().unwrap().wind_down_progress()
+                    == Some(weaver_harness::FoundationWindDownProgress::Complete) =>
+            {
+                Progress::WindDownComplete
+            }
+            FoundationInputProgress::WindDown
+                if self
+                    .wind_down
+                    .as_ref()
+                    .is_some_and(|policy| policy.detail().is_some()) =>
+            {
+                Progress::ElectionRefused
+            }
             _ if self.detail.is_some() => Progress::ElectionRefused,
             _ => Progress::Pending,
         }
     }
     pub fn detail(&self) -> Option<String> {
-        self.detail.clone().or_else(|| {
-            self.input
-                .as_ref()
-                .and_then(|input| {
-                    input.detail().or_else(|| {
-                        matches!(
-                            input.progress(),
-                            FoundationInputProgress::OperationRefused
-                                | FoundationInputProgress::Refused
-                                | FoundationInputProgress::Stopped
-                        )
-                        .then(|| input.operation_detail().map(str::to_owned))
-                        .flatten()
+        self.wind_down
+            .as_ref()
+            .and_then(|policy| policy.detail().map(str::to_owned))
+            .or_else(|| self.detail.clone())
+            .or_else(|| {
+                self.input
+                    .as_ref()
+                    .and_then(|input| {
+                        input.detail().or_else(|| {
+                            matches!(
+                                input.progress(),
+                                FoundationInputProgress::OperationRefused
+                                    | FoundationInputProgress::Refused
+                                    | FoundationInputProgress::Stopped
+                            )
+                            .then(|| input.operation_detail().map(str::to_owned))
+                            .flatten()
+                        })
                     })
-                })
-                .or_else(|| {
-                    self.management
-                        .as_ref()
-                        .and_then(|owner| owner.detail().map(str::to_owned))
-                })
-        })
+                    .or_else(|| {
+                        self.management
+                            .as_ref()
+                            .and_then(|owner| owner.detail().map(str::to_owned))
+                    })
+            })
     }
     pub fn rounds(&self) -> usize {
         self.rounds
     }
 
+    pub fn queue_save(&mut self) -> bool {
+        if !self
+            .management
+            .as_ref()
+            .is_some_and(|owner| owner.progress() == FoundationManagementProgress::DirectivePending)
+        {
+            return false;
+        }
+        let owner = self.management.take().unwrap();
+        match owner.queue_save() {
+            Ok(input) => {
+                self.input = Some(input);
+                true
+            }
+            Err(owner) => {
+                self.management = Some(owner);
+                false
+            }
+        }
+    }
+
+    /// Keep the running loop and its decisions while the original graceful
+    /// Leave moves out of management's single verb slot. Other directives do
+    /// not acquire this authority or lose their retained owner.
+    pub fn defer_graceful_leave(&mut self) -> bool {
+        self.route_graceful_leave(false)
+    }
+
+    pub fn join_graceful_leave(&mut self) -> bool {
+        self.route_graceful_leave(true)
+    }
+
+    fn route_graceful_leave(&mut self, joining: bool) -> bool {
+        if !self
+            .management
+            .as_ref()
+            .is_some_and(|owner| owner.progress() == FoundationManagementProgress::DirectivePending)
+        {
+            return false;
+        }
+        let owner = self.management.take().unwrap();
+        match if joining {
+            owner.join_graceful_leave()
+        } else {
+            owner.defer_graceful_leave()
+        } {
+            Ok(input) => {
+                self.input = Some(input);
+                true
+            }
+            Err(owner) => {
+                self.management = Some(owner);
+                false
+            }
+        }
+    }
+
+    pub fn begin_graceful_quiesce(&mut self) -> bool {
+        self.management.is_none()
+            && self
+                .input
+                .as_mut()
+                .is_some_and(|input| input.begin_graceful_quiesce())
+    }
+
+    pub fn begin_graceful_wind_down(
+        &mut self,
+        turn: TurnKey,
+        passes: usize,
+    ) -> Result<(), TurnKey> {
+        let Some(policy) = super::wind_down::Policy::new(passes, self.family) else {
+            return Err(turn);
+        };
+        if self.management.is_some() {
+            return Err(turn);
+        }
+        self.input
+            .as_mut()
+            .unwrap()
+            .begin_graceful_wind_down(turn, self.method)?;
+        self.wind_down = Some(Box::new(policy));
+        Ok(())
+    }
+
     pub fn advance(&mut self) -> Progress {
         if !matches!(
             self.progress(),
-            Progress::Pending | Progress::ElectionRefused
+            Progress::Pending
+                | Progress::ElectionRefused
+                | Progress::LeavePending
+                | Progress::Quiesced
         ) {
             return self.progress();
         }
@@ -125,6 +237,13 @@ impl<'a> Workflow<'a> {
             return self.progress();
         }
         let input = self.input.as_mut().unwrap();
+        if input.progress() == FoundationInputProgress::WindDown {
+            self.wind_down
+                .as_mut()
+                .expect("worker wind-down election")
+                .advance(input);
+            return self.progress();
+        }
         if self.detail.is_some() && input.progress() != FoundationInputProgress::ManagementPending {
             // Wait on the actual transports while the loop cannot make another
             // election. A wake grants no new operation or replacement deadline.
@@ -132,10 +251,13 @@ impl<'a> Workflow<'a> {
             return self.progress();
         }
         let result: Result<(), String> = match input.progress() {
-            FoundationInputProgress::Pending => {
+            FoundationInputProgress::Pending
+            | FoundationInputProgress::LeavePending
+            | FoundationInputProgress::Quiesced => {
                 input.advance();
                 Ok(())
             }
+            FoundationInputProgress::WindDown => unreachable!("wind-down has its own policy"),
             FoundationInputProgress::ManagementPending => {
                 match self.input.take().unwrap().management() {
                     Ok(owner) => self.management = Some(owner),

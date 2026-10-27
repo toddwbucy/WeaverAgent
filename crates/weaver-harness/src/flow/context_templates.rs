@@ -171,6 +171,7 @@ impl RecordingContext {
     /// Return the refused caller event unchanged. It never owned a recorder
     /// ticket and this transfer cannot admit it or resume another author.
     pub(super) fn take_template_blocked_author(&mut self) -> Option<AuthoredEvent> {
+        self.template_blocked_identity = None;
         self.template_blocked_author.take()
     }
 

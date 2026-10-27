@@ -229,6 +229,9 @@ fn residency_composition_child() {
         match recv(decode.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
             Ok(0)
                 if mode == "cleanup-ready"
+                    || mode.contains("-session-graceful-save")
+                    || (mode.contains("-session-demand-save-sqlite-organ-loss-")
+                        && mode.ends_with("-gate"))
                     || mode == "failed-startup"
                     || mode == "expired-admit-held"
                     || mode == "expired-admit-unsent"
@@ -270,6 +273,12 @@ fn residency_composition_child() {
                         &mode,
                         decode.as_raw_fd(),
                     );
+                    if mode.contains("-session-graceful-save")
+                        || (mode.contains("-session-demand-save-sqlite-organ-loss-")
+                            && mode.ends_with("-gate"))
+                    {
+                        continue;
+                    }
                     if mode.contains("-exit") {
                         super::super::worker_startup::input::halt::exit::tests::release_peer(
                             &mode,
