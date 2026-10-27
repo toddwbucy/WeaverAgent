@@ -4,7 +4,7 @@
 
 **Landing PR:** #348
 
-**Version:** 0.11 **Date filed:** 2026-10-20
+**Version:** 0.12 **Date filed:** 2026-10-20
 
 ## 0. Scope and parties
 
@@ -151,6 +151,15 @@ a forced leave completes without a save and a leave still graceful remains avail
 for retry. Neither permits a save report for the refused capture. Failed cleanup or
 failed flow follows failed-run recovery. Foundation
 PERSIST-LEAVE-REFUSAL owns the actor order and windows. [PERSIST-4, FLOW-4, FLOW-5]
+
+Admin's local preparation refusal carries one correlated Aborted and waits for actual
+cleanup acknowledgement. The harness retains the first refusal attribution, settles
+owed authoring/filing and any member holding, then records the refusal before its
+CaptureRefused. A crossed admin cancellation cannot reset that work or produce another
+acknowledgement. A capture deadline that expires at admin still gives Unanswered and
+an Open marker, even if the worker later completes forced teardown. A still-graceful
+orphan remains in S9. No party fabricates delivery or successful conclusion.
+[PERSIST-4, FLOW-4, FLOW-5]
 
 ## 3. Harness-state - adoption, reads and image custody
 

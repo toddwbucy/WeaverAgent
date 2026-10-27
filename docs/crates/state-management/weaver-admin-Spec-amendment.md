@@ -4,7 +4,7 @@
 
 **Landing PR:** #348
 
-**Version:** 0.18 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
+**Version:** 0.19 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -272,12 +272,28 @@ duties. Capture expiry still gives the existing unanswered-command outcome, neve
 new wait for a late success. A worker Aborted after a latched failure instead follows
 failed-run recovery and proves no cleanup. [PERSIST-4, FLOW-5, admin Spec 3.0]
 
+Send at most one admin Aborted for this capture and preserve it through partial carry.
+While awaiting CaptureRefused, validate any crossed Image or ImageFinished but discard
+it as a save result. Send no ImageChecked or Prepared after cancellation. A crossed
+worker refusal keeps its own first retained missed leg, so admin must not require
+Published merely because admin also sent Aborted. A crossed Commit follows failed-run
+recovery, never a healthy refusal. Foundation's admin rows govern these cases.
+[PERSIST-4, SEAM-2]
+
+If cleanup finishes after admin's capture deadline, the result remains Unanswered with
+the Open marker. No late CaptureRefused or Left changes it. The worker may finish a
+forced unwind, but without a later normal admin conclusion the next load observes
+NoCleanUnload. A still-graceful worker with no admin remains at S9. [PERSIST-4, FLOW-5]
+
 These clauses amend admin Spec 3.0 and section 3's leave/save wait routines. The
 protocol fixture checks both graceful bound omissions, finite and forced windows, stale
 Beginning, reordered Image and early or duplicate CaptureComplete. It must fail when a
 later frame resets an earlier deadline or when a save bound forces an otherwise
-unbounded S4/S5. This is a protocol pass, not a wall-time guarantee for an
-uninterruptible filesystem call. [PERSIST-4, COST-4, FLOW-5]
+unbounded S4/S5. It also exercises every PERSIST-LEAVE-REFUSAL admin row, including
+Aborted crossed by an image or worker refusal, expired capture before CaptureRefused,
+and a save report or CaptureComplete after that acknowledgement. This is a protocol
+pass, not a wall-time guarantee for an uninterruptible filesystem call.
+[PERSIST-4, COST-4, FLOW-5]
 
 Do not publish before the matching SavePointCommit. A prepared artifact is not loadable.
 Before Commit, a worker failure cancels publication. After Commit, failure before the
