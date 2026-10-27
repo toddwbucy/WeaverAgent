@@ -25,7 +25,10 @@ fn generation(mode: &str, pass: u64, stopped: bool) -> TokenAnswer {
         } else {
             Finish::Completed
         },
-        content: if pass == 0 || mode.contains("-final-return-round-limit") {
+        content: if pass == 0
+            || mode.contains("-final-return-round-limit")
+            || (mode.ends_with("gate-death-repeat") && pass == 1)
+        {
             super::emission::tests::content(mode)
         } else {
             vec![ContentBlock::Text {
@@ -97,6 +100,12 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                         )
                         .unwrap();
                         measured = Some((delta.clone(), tool_schemas.clone()));
+                        if mode.contains("placement-pending") {
+                            while !root.join("release-measure").exists() {
+                                assert!(Instant::now() < end);
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                        }
                         answer(
                             fd,
                             TokenAnswer::DeltaMeasured {

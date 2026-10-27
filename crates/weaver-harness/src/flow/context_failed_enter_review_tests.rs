@@ -542,15 +542,16 @@ fn failed_enter_review_reversed_clock_closes_without_terminal_or_losing_first_ca
     assert!(done.unload_sequence().is_none());
     assert_eq!(done.context().last_ns, last);
     assert_eq!(done.cleanup.deadline(), deadline);
-    assert!(
-        done.context()
-            .flow
-            .halt()
-            .unwrap()
-            .secondary()
-            .iter()
-            .any(|s| s.detail == "failed Enter cleanup clock reversed")
-    );
+    let clock = done
+        .context()
+        .flow
+        .halt()
+        .unwrap()
+        .secondary()
+        .iter()
+        .find(|s| s.detail == "failed cleanup clock reversed")
+        .expect("actual reversed-clock evidence");
+    assert_eq!(clock.observed_ns, Some((last - 1).into()));
     assert!(records(&mut fx).iter().all(|row| row["kind"] != "unload"));
 }
 

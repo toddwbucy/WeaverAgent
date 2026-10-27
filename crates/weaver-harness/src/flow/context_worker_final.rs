@@ -3,12 +3,35 @@ use super::super::close::WorldClose;
 use super::*;
 
 impl FoundationInput<'_> {
+    pub(in crate::flow::context::worker_startup::input) fn failed_world_was_sent(&self) -> bool {
+        let gate = &self.serving.owner.gate;
+        let Some(original) = &self.received else {
+            return false;
+        };
+        [
+            self.send.as_ref(),
+            self.quiesce_input_send(),
+            self.engine
+                .as_ref()
+                .and_then(|work| work.answer.as_ref())
+                .and_then(WorldClose::send),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|send| {
+            send.sent()
+                && send.belongs_to(gate)
+                && send.matches_exchange(&original.envelope().exchange)
+        })
+    }
     pub(in crate::flow::context::worker_startup::input) fn final_send_clock_failed(&self) -> bool {
-        self.engine
-            .as_ref()
-            .and_then(|work| work.answer.as_ref())
-            .and_then(WorldClose::send)
-            .is_some_and(|send| send.sent() && send.sent_at().is_none())
+        self.quiesce_send_clock_failed()
+            || self
+                .engine
+                .as_ref()
+                .and_then(|work| work.answer.as_ref())
+                .and_then(WorldClose::send)
+                .is_some_and(|send| send.sent() && send.sent_at().is_none())
     }
     #[cfg(test)]
     pub(super) fn final_send_probe_for_test(&self) -> Box<dyn Fn() -> bool> {
@@ -45,14 +68,31 @@ impl FoundationInput<'_> {
         work.stage = EngineStage::Answer;
         Ok(())
     }
-    /// Elect the existing refused close after a task/read or decoder refusal
-    /// has returned its complete account. No raw text or caller receipt grants
-    /// this transition. Correction placement retains its dedicated accounting.
+    /// Elect the existing refused close after an operation returns its account.
+    /// Emission refusals first settle all owed terminals. No raw text or caller
+    /// receipt grants this transition.
     pub fn close_operation_refusal(&mut self) -> Result<(), FoundationInputProgress> {
         if self.progress() != FoundationInputProgress::OperationRefused {
             return Err(self.progress());
         }
         if self.close_correction_refusal().is_ok() {
+            return Ok(());
+        }
+        let work = self.engine.as_mut().unwrap();
+        if work.stage == EngineStage::Emission
+            && work
+                .emission
+                .as_mut()
+                .is_some_and(|work| work.close_refusal())
+        {
+            return Ok(());
+        }
+        let work = self.engine.as_ref().unwrap();
+        if work.stage == EngineStage::Refused && work.admission.is_some() {
+            let close = WorldClose::refused_admission(self).ok_or(self.progress())?;
+            let work = self.engine.as_mut().unwrap();
+            work.answer = Some(close);
+            work.stage = EngineStage::Answer;
             return Ok(());
         }
         let work = self.engine.as_ref().unwrap();
@@ -72,7 +112,7 @@ impl FoundationInput<'_> {
                 _ => None,
             })
             .unwrap_or_else(|| "operation refused".into());
-        let close = WorldClose::refused(self, detail.clone()).ok_or(self.progress())?;
+        let close = WorldClose::refused(self).ok_or(self.progress())?;
         let work = self.engine.as_mut().unwrap();
         work.detail = Some(detail);
         work.answer = Some(close);

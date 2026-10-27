@@ -29,20 +29,44 @@ impl RecordingContext {
         {
             return Err(RunFailure::RepairOwned);
         }
+        Ok(self.take_refused_restatement_account())
+    }
+
+    /// A completed, recorded decoder refusal withdraws only its exact issued
+    /// attempt. Its retained generation account stays with the caller; there
+    /// is no complete correction to charge or release as successful output.
+    pub(in crate::flow) fn finish_refused_restatement_generation(
+        &mut self,
+        request: &RestatementRequest,
+        account: &PlaceAccount,
+        io: &mut impl PumpIo,
+    ) -> Result<RepairAccount, RunFailure> {
+        self.live(io)?;
+        if !self.restatement_live(request)
+            || self.place.is_some()
+            || self.generation.is_some()
+            || !account.refused_restatement_generation(self, &request.recorded().block_id)
+        {
+            return Err(RunFailure::RepairOwned);
+        }
+        Ok(self.take_refused_restatement_account())
+    }
+
+    fn take_refused_restatement_account(&mut self) -> RepairAccount {
         let work = self.repair.as_mut().unwrap();
         work.ledger.cancel();
         let (account, pending) = work
             .ledger
             .take_cancelled()
-            .expect("issued ungenerated attempt has no outstanding correction loan")
+            .expect("refused attempt has no outstanding correction loan")
             .into_parts();
         assert!(
             pending.is_none(),
-            "issued ungenerated attempt has no pending correction"
+            "refused attempt has no pending correction"
         );
         self.finish_repair_wait();
         self.retire_repair_owner();
-        Ok(account)
+        account
     }
     pub(in crate::flow) fn repair_request_scheme(&self) -> Option<&RequestScheme> {
         self.repair.as_ref().map(|work| &work.scheme)

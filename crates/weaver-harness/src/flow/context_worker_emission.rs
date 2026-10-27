@@ -26,7 +26,7 @@ use execution::WorkerPairs;
 /// A compiled worker choice of restatement family. The actual entered run's
 /// certificate, not this name, proves that the family can be used.
 pub struct FoundationRestatement {
-    template: RestatementTemplate,
+    pub(in crate::flow::context::worker_startup::input) template: RestatementTemplate,
 }
 impl FoundationRestatement {
     pub const fn new(template_id: &'static str) -> Self {
@@ -48,7 +48,7 @@ enum EmissionStage {
     Repair,
     Restatement,
     Correction,
-    PlacementRefusal,
+    CorrectionRefusal,
     RefusalClose,
     Effective,
     BeginOutbound,
@@ -62,15 +62,20 @@ enum EmissionStage {
     Cancelled,
 }
 
-pub(super) struct EmissionWork {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RefusalElection {
+    Placement,
+    Operation,
+}
+
+pub(in crate::flow::context::worker_startup::input) struct EmissionWork {
     template: Option<&'static RestatementTemplate>,
     stage: EmissionStage,
-    cancelled: bool,
+    cancelled: Option<NonDispatchCause>,
     original: Option<OriginalRequests>,
     restatement: Option<RestatementRequest>,
     corrections: Vec<CorrectionWork>,
-    closing_correction: bool,
-    correction_close: Option<weaver_types::TurnFrame>,
+    closing_refusal: Option<RefusalElection>,
     effective: Option<EffectiveEmission>,
     refused: Option<RepairRefused>,
     exhausted: Option<RepairExhausted>,
@@ -94,6 +99,41 @@ pub(super) struct EmissionWork {
 }
 
 impl EmissionWork {
+    pub(super) fn lost_gate_pairs_need_step(&self, context: &RecordingContext) -> bool {
+        self.execution
+            .as_ref()
+            .is_some_and(|work| work.lost_gate_needs_step(context))
+    }
+    pub(in crate::flow::context::worker_startup::input) fn retire_failed_placement_grants(
+        &mut self,
+        context: &mut RecordingContext,
+    ) -> Result<(), RunFailure> {
+        if context.phase != crate::flow::context::RecordingPhase::Failed
+            || context.failure().is_none()
+        {
+            return Err(RunFailure::PlaceOwned);
+        }
+        if let Some(correction) = self.corrections.last_mut() {
+            correction.retire_failed_placement_grants(context)?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::flow::context::worker_startup::input) fn finish_wind_down(
+        &mut self,
+    ) -> Option<bool> {
+        if self.stage != EmissionStage::Effective {
+            return None;
+        }
+        let calls = !self.effective.as_ref()?.requests().is_empty()
+            || self.effective.as_ref()?.attempted_call();
+        // S5 admits no tool execution. Retain the complete repair account and
+        // close every associated request through the existing unload terminal.
+        self.cancelled = Some(NonDispatchCause::Unload);
+        self.stage = EmissionStage::CancelAccount;
+        Some(calls)
+    }
+
     pub(super) fn selected_answer(&self) -> Option<(String, weaver_types::Finish)> {
         let effective = self.execution.as_ref()?.completed_effective()?;
         // A decoder's own stop token/capacity finish is a checked model answer.
@@ -101,16 +141,17 @@ impl EmissionWork {
         let (_, acts) = self.selected.as_ref()?;
         Some((effective.answer_text(acts).ok()?, *effective.finish()))
     }
-    fn new(template: Option<&'static RestatementTemplate>) -> Self {
+    pub(in crate::flow::context::worker_startup::input) fn new(
+        template: Option<&'static RestatementTemplate>,
+    ) -> Self {
         Self {
             template,
             stage: EmissionStage::Begin,
-            cancelled: false,
+            cancelled: None,
             original: None,
             restatement: None,
             corrections: vec![],
-            closing_correction: false,
-            correction_close: None,
+            closing_refusal: None,
             effective: None,
             refused: None,
             exhausted: None,
@@ -133,12 +174,16 @@ impl EmissionWork {
             unexpected_refusal: None,
         }
     }
-    pub(super) fn stopped() -> Self {
+    pub(in crate::flow::context::worker_startup::input) fn cancelled(
+        cause: NonDispatchCause,
+    ) -> Self {
         let mut work = Self::new(None);
-        work.cancelled = true;
+        work.cancelled = Some(cause);
         work
     }
-    pub(super) fn progress(&self) -> FoundationInputProgress {
+    pub(in crate::flow::context::worker_startup::input) fn progress(
+        &self,
+    ) -> FoundationInputProgress {
         match self.stage {
             EmissionStage::Restatement => FoundationInputProgress::Restatement,
             EmissionStage::Correction => self.corrections.last().unwrap().progress(),
@@ -151,31 +196,89 @@ impl EmissionWork {
             _ => FoundationInputProgress::Pending,
         }
     }
-    pub(super) fn settled(&self) -> bool {
+    pub(in crate::flow::context::worker_startup::input) fn settled(&self) -> bool {
         self.stage == EmissionStage::Cancelled
+    }
+    pub(super) fn graceful_pairs_need_step(&self, context: &RecordingContext) -> bool {
+        self.stage == EmissionStage::Execution
+            && self
+                .execution
+                .as_ref()
+                .is_some_and(|pairs| pairs.graceful_needs_step(context))
+    }
+
+    pub(super) fn drain_pairs_for_leave(
+        &mut self,
+        context: &mut RecordingContext,
+        gate: &mut OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        if self.stage != EmissionStage::Execution {
+            return Ok(false);
+        }
+        let pairs = self.execution.as_mut().expect("execution owns its pairs");
+        pairs.drain_for_leave(context, gate, io)?;
+        Ok(pairs.ended_by_unload(context))
     }
     pub(super) fn detail(&self) -> Option<&str> {
         self.detail.as_deref()
     }
     pub(super) fn closing_correction(&self) -> bool {
-        self.closing_correction
+        self.closing_refusal == Some(RefusalElection::Placement)
     }
-    pub(super) fn correction_close(&self) -> Option<&weaver_types::TurnFrame> {
-        self.correction_close.as_ref()
+    pub(in crate::flow::context::worker_startup::input) fn ready_to_close_refusal(&self) -> bool {
+        self.stage == EmissionStage::RefusalClose
+    }
+    pub(in crate::flow::context::worker_startup::input) fn close_refusal(&mut self) -> bool {
+        if self.stage != EmissionStage::Refused
+            || self.cancelled.is_some()
+            || self.closing_refusal.is_some()
+            || !(self.refused.is_some()
+                || self.exhausted.is_some()
+                || self.outbound.is_some()
+                || matches!(self.result, Some(OutboundCompletion::Refused { .. })))
+        {
+            return false;
+        }
+        self.closing_refusal = Some(RefusalElection::Operation);
+        self.stage = EmissionStage::CancelAccount;
+        true
     }
 
-    pub(super) fn cancel(
+    fn finish_accounting(&mut self, context: &mut RecordingContext) {
+        self.stage = if self.closing_refusal.is_some() && self.cancelled.is_none() {
+            // The same operation still owes its trace close and world
+            // delivery. WorldClose inherits this bound.
+            EmissionStage::RefusalClose
+        } else {
+            context.complete_wait(PumpDeadline::Decision);
+            EmissionStage::Cancelled
+        };
+    }
+
+    pub(in crate::flow::context::worker_startup::input) fn cancel(
         &mut self,
+        cause: NonDispatchCause,
         context: &mut RecordingContext,
         decode: Option<&mut crate::flow::pump_transport::DecodePort>,
         gate: Option<&mut crate::flow::pump_transport::OrganPort>,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
-        self.cancelled = true;
+        retain_cancellation(&mut self.cancelled, cause);
+        let cause = self.cancelled.unwrap();
+        if self.stage == EmissionStage::RefusalClose {
+            // A later Stop can replace an ordinary refusal before its close
+            // author starts. Its completed account cannot be filed again.
+            self.finish_accounting(context);
+            return Ok(());
+        }
         if self.stage == EmissionStage::Execution {
-            self.execution.as_mut().unwrap().cancel(context, gate, io)?;
+            self.execution
+                .as_mut()
+                .unwrap()
+                .cancel(cause, context, gate, io)?;
         } else if context.repair.is_some() {
-            context.cancel_repair(NonDispatchCause::Stop, io)?;
+            context.cancel_repair(cause, io)?;
             if self.stage == EmissionStage::Correction {
                 self.corrections
                     .last_mut()
@@ -198,7 +301,37 @@ impl EmissionWork {
         Ok(())
     }
 
-    pub(super) fn advance<I: PumpIo>(
+    pub(super) fn cancel_control(
+        &self,
+    ) -> Option<(&OrganEnvelope, &crate::flow::pump_transport::OrganSend)> {
+        self.execution.as_ref()?.cancel_control()
+    }
+
+    pub(super) fn advance_cancel_control(
+        &mut self,
+        context: &mut RecordingContext,
+        gate: &mut crate::flow::pump_transport::OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        match self.execution.as_mut() {
+            Some(work) => work.advance_cancel_control(context, gate, io),
+            None => Ok(true),
+        }
+    }
+
+    pub(super) fn route_cancel_reply(
+        &mut self,
+        context: &mut RecordingContext,
+        gate: &mut crate::flow::pump_transport::OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        match self.execution.as_mut() {
+            Some(work) => work.route_cancel_reply(context, gate, io),
+            None => Ok(false),
+        }
+    }
+
+    pub(in crate::flow::context::worker_startup::input) fn advance<I: PumpIo>(
         &mut self,
         generation: &mut Option<GenerationCompletion>,
         certificate: &mut Option<TemplateCertificate>,
@@ -209,64 +342,22 @@ impl EmissionWork {
             EmissionStage::Execution => {
                 let work = self.execution.as_mut().unwrap();
                 work.advance(&self.selected.as_ref().unwrap().1, context, ports)?;
-                if self.cancelled && work.progress() == FoundationInputProgress::PairsComplete {
+                if self.cancelled.is_some()
+                    && work.progress() == FoundationInputProgress::PairsComplete
+                {
                     self.stage = EmissionStage::Cancelled;
                 }
             }
-            EmissionStage::PlacementRefusal => {
+            EmissionStage::CorrectionRefusal => {
                 let correction = self.corrections.last().unwrap();
                 self.account = Some(correction.finish_refusal(context, ports.io)?);
                 *certificate = context.take_repair_certificate(ports.io)?;
                 self.stage = EmissionStage::CancelAccount;
             }
-            EmissionStage::RefusalClose => {
-                self.returned_refusal.check()?;
-                if self.refusal_author.is_none() && !self.refusal_started {
-                    self.refusal_author = Some(AuthoredEvent {
-                        kind: serving::Kind::TurnClosed,
-                        subsystem: Subsystem::Harness,
-                        turn: context.open_turn.clone(),
-                        source: AuthoredSource::Runtime,
-                        causal_parent: None,
-                        payload: Some(serving::Payload::TurnClosed(
-                            weaver_trace::TurnClose::Stopped {
-                                reason: weaver_trace::StopReason::Refused,
-                                cause: None,
-                            },
-                        )),
-                    });
-                }
-                let turn = self.account.as_ref().unwrap().turn().clone();
-                let sequence = if self.refusal_started {
-                    context
-                        .resume_author_and_wait(ports)
-                        .map_err(|failure| self.returned_refusal.retain(failure))?
-                } else {
-                    self.refusal_started = true;
-                    context
-                        .author_and_wait(ports, self.refusal_author.take().unwrap())
-                        .map_err(|failure| {
-                            self.returned_refusal
-                                .retain_started(failure, &mut self.refusal_started)
-                        })?
-                };
-                self.refusal_record = Some(sequence);
-                let frame = crate::lifecycle::render_close(
-                    "stopped",
-                    "reason",
-                    self.detail.as_deref().expect("placement refusal retained"),
-                    Some((
-                        &weaver_types::TurnKey(turn.0),
-                        &weaver_types::RunId(context.barrier.run().to_owned()),
-                    )),
-                );
-                self.correction_close = Some(weaver_types::TurnFrame::carry(frame.as_bytes()));
-                self.stage = EmissionStage::Refused;
-            }
             EmissionStage::Correction => {
                 let correction = self.corrections.last_mut().unwrap();
                 if correction.advance(context, ports)? {
-                    self.stage = if correction.refused() && !self.cancelled {
+                    self.stage = if correction.refused() && self.cancelled.is_none() {
                         self.detail = correction.detail().map(str::to_owned);
                         EmissionStage::Refused
                     } else {
@@ -301,13 +392,18 @@ impl EmissionWork {
                 let certified = certificate.take().unwrap();
                 let begin = match self.template {
                     Some(template) => context.begin_repair(original, certified, template, ports.io),
-                    None => context.begin_stopped_emission(original, certified, ports.io),
+                    None => context.begin_cancelled_emission(
+                        original,
+                        certified,
+                        self.cancelled.expect("cancelled emission"),
+                        ports.io,
+                    ),
                 };
                 match begin {
                     Ok(()) => {
                         self.stage = EmissionStage::Repair;
-                        if self.cancelled {
-                            context.cancel_repair(NonDispatchCause::Stop, ports.io)?;
+                        if let Some(cause) = self.cancelled {
+                            context.cancel_repair(cause, ports.io)?;
                         }
                     }
                     Err(error) => {
@@ -444,30 +540,47 @@ impl EmissionWork {
                 }
             }
             EmissionStage::RefusalAuthor => {
+                // BeginOutbound already armed Decision on production paths.
+                // This preserves that caller's bound rather than renewing it.
+                decision(context, ports.io)?;
                 self.returned_refusal.check()?;
-                let sequence = if self.refusal_started {
-                    context.resume_author_and_wait(ports).map_err(|failure| {
-                        self.returned_refusal
-                            .retain_started(failure, &mut self.refusal_started)
-                    })?
+                let result = if self.refusal_started {
+                    context.resume_author_and_wait(ports)
                 } else {
                     self.refusal_started = true;
-                    context
-                        .author_and_wait(ports, self.refusal_author.take().unwrap())
-                        .map_err(|failure| {
-                            self.returned_refusal
-                                .retain_started(failure, &mut self.refusal_started)
-                        })?
+                    context.author_and_wait(ports, self.refusal_author.take().unwrap())
                 };
+                let sequence = match result {
+                    Ok(sequence) => sequence,
+                    Err(mut failure) => {
+                        if failure.reclaim_held(context) {
+                            self.refusal_started = false;
+                            self.refusal_author = failure.original.take();
+                            // Idle returns to the earlier owner so it can take
+                            // its completed answer without a descriptor wake.
+                            if context.reduce_flow(ports.io)?
+                                == crate::flow::coordinator::Advance::Pending
+                            {
+                                context.pump_once(ports)?;
+                            }
+                            return Ok(());
+                        }
+                        return Err(self
+                            .returned_refusal
+                            .retain_started(failure, &mut self.refusal_started));
+                    }
+                };
+                self.refusal_started = false;
                 self.refusal_record = Some(sequence);
                 context.complete_wait(PumpDeadline::Decision);
-                self.stage = if self.cancelled {
+                self.stage = if self.cancelled.is_some() {
                     EmissionStage::CancelAccount
                 } else {
                     EmissionStage::Refused
                 };
             }
             EmissionStage::CancelAccount => {
+                decision(context, ports.io)?;
                 if let Some(effective) = self.effective.take() {
                     self.account = Some(effective.into_account());
                 }
@@ -504,18 +617,19 @@ impl EmissionWork {
                 }
                 if let Some(exhausted) = self.exhausted.take() {
                     self.account = Some(exhausted.into_account());
-                    self.stage = EmissionStage::Cancelled; // Exhaustion already settled every pair.
+                    // Exhaustion already settled every pair; do not submit
+                    // its completed account for another terminal filing.
+                    self.finish_accounting(context);
                     return Ok(());
                 }
-                decision(context, ports.io)?;
                 let account = self
                     .account
                     .take()
                     .expect("completed emission retains its account");
-                let cause = if self.closing_correction && !self.cancelled {
+                let cause = if self.closing_refusal.is_some() && self.cancelled.is_none() {
                     NonDispatchCause::PassPurpose
                 } else {
-                    NonDispatchCause::Stop
+                    self.cancelled.unwrap_or(NonDispatchCause::Stop)
                 };
                 match context.begin_repair_not_dispatched(account, cause, ports.io) {
                     Ok(()) => self.stage = EmissionStage::Pairs,
@@ -542,12 +656,7 @@ impl EmissionWork {
                     .map_err(|failure| self.returned_pair_filing.retain(failure))?;
                 if let Some(account) = context.take_repair_accounting(ports.io)? {
                     self.account = Some(account);
-                    context.complete_wait(PumpDeadline::Decision);
-                    self.stage = if self.closing_correction && !self.cancelled {
-                        EmissionStage::RefusalClose
-                    } else {
-                        EmissionStage::Cancelled
-                    };
+                    self.finish_accounting(context);
                 } else if progress == crate::flow::context::PairProgress::Pending {
                     context.pump_once(ports)?;
                 }

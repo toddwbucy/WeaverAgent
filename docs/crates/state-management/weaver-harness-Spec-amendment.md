@@ -4,7 +4,7 @@
 
 **Landing PR:** #348
 
-**Version:** 0.37 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.38 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 

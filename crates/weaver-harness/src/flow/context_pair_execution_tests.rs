@@ -1061,6 +1061,15 @@ fn matching_final_answer_after_eof_keeps_successful_send_and_terminal_custody() 
 
 #[test]
 fn duplicate_after_batch_release_is_recorded_without_another_terminal_or_filing() {
+    duplicate_after_batch_release(RecordingPhase::Entered);
+}
+
+#[test]
+fn duplicate_return_recording_keeps_its_release_phase_admission() {
+    duplicate_after_batch_release(RecordingPhase::Releasing);
+}
+
+fn duplicate_after_batch_release(phase: RecordingPhase) {
     let mut fx = fixture(true);
     let call = ready(&mut fx);
     let (mut gate, peer) = gate();
@@ -1080,6 +1089,10 @@ fn duplicate_after_batch_release_is_recorded_without_another_terminal_or_filing(
         .unwrap()
         .unwrap();
     assert!(fx.output.input.run.context.pair_work.is_none());
+
+    // Isolate the author phase gate after the real completed-batch handoff.
+    // This is not a lifecycle/release-completion proof.
+    fx.output.input.run.context.phase = phase;
 
     answer(&mut gate, &peer, 71);
     assert_eq!(
@@ -1535,6 +1548,52 @@ fn rejected_reply_retains_its_exact_author_across_trace_pressure_and_leave_wait(
         .context
         .complete_wait(PumpDeadline::Leave)
         .unwrap();
+    // Close the original gate while the rejected packet, its actual Decision
+    // wait and its author remain retained under trace pressure.
+    drop(peer);
+    assert_eq!(
+        gate.try_receive().unwrap_err().fault,
+        crate::ChannelFault::Closed
+    );
+    let claim = std::sync::Arc::clone(
+        &fx.output
+            .input
+            .run
+            .context
+            .pair_rejected_claim
+            .as_ref()
+            .unwrap()
+            .identity,
+    );
+    assert!(
+        !crate::flow::context::serving_organ_loss::tests::settle_contained_gate(
+            &mut fx.output.input.run.context,
+            &mut gate,
+            &mut fx.output.input.run.clock,
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        fx.output
+            .input
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision),
+        Some(original_bound)
+    );
+    assert!(std::sync::Arc::ptr_eq(
+        &claim,
+        &fx.output
+            .input
+            .run
+            .context
+            .pair_rejected_claim
+            .as_ref()
+            .unwrap()
+            .identity,
+    ));
+    assert!(fx.output.input.run.context.failure().is_none());
     fx.output.input.drain_trace();
     fx.output
         .input

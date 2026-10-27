@@ -339,9 +339,10 @@ pub(super) fn append_line(
     sync_directory(directory)
 }
 
-/// Replace an existing guard only after its full replacement is durable. Failure
-/// before rename preserves the old guard. Failure after rename retains the new
-/// guard and returns an error, never leaving a gap with neither file present.
+/// Replace an exact existing record only after its full replacement is durable.
+/// Used for guards and finalizing the guarded index tail's Leave cause. Failure
+/// before rename preserves the old file; after rename it retains the new file
+/// and returns an error, never leaving a gap with neither file present.
 pub(super) fn replace_file(
     directory: BorrowedFd<'_>,
     name: &str,

@@ -13,11 +13,21 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use weaver_types::{Cause, ExchangeId};
 
+#[path = "context_worker_secondary_leave_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod secondary;
+
 pub(in crate::flow::context::worker_startup) struct Guard<'a> {
     pub(in crate::flow::context::worker_startup) input: Option<Box<FoundationInput<'a>>>,
     pub(in crate::flow::context::worker_startup) management: Option<Box<FoundationManagement<'a>>>,
 }
 impl Guard<'_> {
+    pub(in crate::flow::context::worker_startup) fn owned_input(&self) -> &FoundationInput<'_> {
+        self.input
+            .as_deref()
+            .or_else(|| self.management.as_deref().map(|m| &*m.input))
+            .expect("fixture retains its input owner")
+    }
+
     pub(in crate::flow::context::worker_startup) fn recorded_sequence(
         &self,
     ) -> weaver_trace::Sequence {
@@ -40,6 +50,45 @@ impl Drop for Guard<'_> {
             .or_else(|| self.management.as_deref_mut().map(|m| &mut *m.input));
         if let Some(input) = input {
             reap(&mut input.serving.owner.gate_child);
+        }
+    }
+}
+
+pub(in crate::flow::context::worker_startup) fn closed_save_projection(
+    owner: Box<FoundationManagement<'_>>,
+) -> Box<FoundationInput<'_>> {
+    let mut guard = Guard {
+        input: None,
+        management: Some(owner),
+    };
+    let owner = guard.management.as_mut().unwrap();
+    assert_eq!(
+        owner.peer.try_receive().unwrap_err().fault,
+        crate::ChannelFault::Closed
+    );
+    let original = owner.peer.capture_held().unwrap().envelope.clone();
+    guard.management = Some(
+        guard
+            .management
+            .take()
+            .unwrap()
+            .queue_save()
+            .err()
+            .expect("closed peer cannot change projection"),
+    );
+    let owner = guard.management.as_mut().unwrap();
+    assert_eq!(owner.progress(), FoundationManagementProgress::Dropped);
+    assert_eq!(
+        owner.save_message.as_ref().unwrap().message.envelope,
+        original
+    );
+    assert!(owner.peer.capture_held().is_none());
+    assert_eq!(owner.advance(), FoundationManagementProgress::Dropped);
+    match guard.management.take().unwrap().finish() {
+        Ok(input) => input,
+        Err(owner) => {
+            guard.management = Some(owner);
+            panic!("dropped save peer must return the input owner");
         }
     }
 }
@@ -254,7 +303,36 @@ pub(in super::super::super) fn exercise(
             payload: Payload::Directive(directive),
         };
         if !mode.ends_with("expiry") && !mode.ends_with("eof") {
-            let bytes = if mode.ends_with("bad") {
+            let bytes = if mode.ends_with("save") {
+                let began = clock.now().unwrap();
+                let wait = guard
+                    .input
+                    .as_ref()
+                    .unwrap()
+                    .serving
+                    .owner
+                    .context
+                    .load_duty
+                    .as_ref()
+                    .unwrap()
+                    .persistence
+                    .save_wait
+                    .elapsed_ns
+                    .0;
+                CaptureEnvelope {
+                    exchange: request.exchange.clone(),
+                    position: request.position,
+                    payload: CapturePayload::Directive(CaptureDirective::SavePoint {
+                        cause: Cause { uid: 73 },
+                        window: weaver_types::state_flow::SaveWindow {
+                            began_ns: began.into(),
+                            deadline_ns: began.checked_add(wait).unwrap().into(),
+                        },
+                    }),
+                }
+                .encode(weaver_types::state_flow::capture::CaptureSender::Admin)
+                .unwrap()
+            } else if mode.ends_with("bad") {
                 b"{".to_vec()
             } else {
                 serde_json::to_vec(&request).unwrap()
@@ -397,8 +475,13 @@ pub(in super::super::super) fn exercise(
         }
         if ["leave", "save"].iter().any(|s| mode.ends_with(s)) {
             assert_eq!(m.progress(), FoundationManagementProgress::DirectivePending);
-            assert_eq!(m.peer.held().unwrap().envelope.exchange.ordinal, 73);
-            assert!(m.message.is_none() && m.send.is_none());
+            let exchange = if mode.ends_with("save") {
+                &m.peer.capture_held().unwrap().envelope.exchange
+            } else {
+                &m.peer.held().unwrap().envelope.exchange
+            };
+            assert_eq!(exchange.ordinal, 73);
+            assert!(m.message.is_none() && m.save_message.is_none() && m.send.is_none());
             assert!(read_packet(peer.as_ref().unwrap()).is_none());
             return;
         }
@@ -566,4 +649,78 @@ pub(in super::super::super) fn exercise(
             1
         );
     }
+}
+
+pub(in crate::flow::context::worker_startup) fn halt_facts(
+    owner: &FoundationManagement<'_>,
+) -> (usize, i32, OrganEnvelope, bool) {
+    (
+        owner as *const _ as usize,
+        owner.peer.fd().as_raw_fd(),
+        owner.message.as_ref().unwrap().envelope.clone(),
+        owner.send.as_ref().unwrap().sent(),
+    )
+}
+
+pub(in crate::flow::context::worker_startup) fn hold_for_halt(
+    guard: &mut Guard<'_>,
+    member: &mut Member,
+    clock: &mut FakePumpIo,
+    socket: &Path,
+    mode: &str,
+) -> OwnedFd {
+    let peer = dial(socket);
+    let frame = OrganEnvelope {
+        exchange: ExchangeId {
+            opener: Opener::Admin,
+            ordinal: 301,
+        },
+        position: Position::Open,
+        payload: Payload::Directive(LifecycleDirective::Observe),
+    };
+    let bytes = serde_json::to_vec(&frame).unwrap();
+    assert_eq!(
+        send(peer.as_raw_fd(), &bytes, MsgFlags::MSG_NOSIGNAL).unwrap(),
+        bytes.len()
+    );
+    for _ in 0..1000 {
+        if guard
+            .input
+            .as_mut()
+            .unwrap()
+            .advance_with_io(&mut CircuitIo(clock))
+            == FoundationInputProgress::ManagementPending
+        {
+            break;
+        }
+        member.step(clock.now().unwrap(), mode);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    guard.management = Some(guard.input.take().unwrap().management().ok().unwrap());
+    let owner = guard.management.as_mut().unwrap();
+    loop {
+        match send(
+            owner.peer.fd().as_raw_fd(),
+            &[b'x'; 4096],
+            MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL,
+        ) {
+            Ok(4096) => {}
+            Err(nix::errno::Errno::EAGAIN) => break,
+            other => panic!("fill retained Observe: {other:?}"),
+        }
+    }
+    for _ in 0..1000 {
+        assert_eq!(
+            owner.advance_with_io(&mut CircuitIo(clock)),
+            FoundationManagementProgress::Pending
+        );
+        if owner.send.is_some() {
+            break;
+        }
+        member.step(clock.now().unwrap(), mode);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(owner.message.as_ref().unwrap().envelope, frame);
+    assert!(!owner.send.as_ref().unwrap().sent());
+    peer
 }

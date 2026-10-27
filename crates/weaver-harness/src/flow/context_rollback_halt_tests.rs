@@ -308,7 +308,7 @@ pub(in crate::flow::context::startup_composition::refusal::response) fn drive(
         !rows
             .iter()
             .any(|row| row.line.contains("\"kind\":\"unload\"")),
-        "no-SPU Unload rule is not merged"
+        "private retirement retains the account; outer cleanup owns Unload"
     );
     if matches!(mode, "response-halt-cap" | "response-halt-clock") {
         assert!(retired.expired());
@@ -368,15 +368,26 @@ pub(in crate::flow::context::startup_composition::refusal::response) fn drive(
         assert_eq!(held.envelope.exchange.ordinal, 199);
     }
     let mut byte = [0];
-    assert_eq!(
-        nix::sys::socket::recv(
+    // Another test's concurrent fork can retain this socket until its exec.
+    // Any answer still fails immediately; a persistent owner must also fail.
+    let eof_by = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let received = nix::sys::socket::recv(
             far.as_fd().as_raw_fd(),
             &mut byte,
-            nix::sys::socket::MsgFlags::MSG_DONTWAIT
-        ),
-        Ok(0),
-        "accepted Leave connection still open or answered"
-    );
+            nix::sys::socket::MsgFlags::MSG_DONTWAIT,
+        );
+        if received == Err(nix::errno::Errno::EAGAIN) && std::time::Instant::now() < eof_by {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            continue;
+        }
+        assert_eq!(
+            received,
+            Ok(0),
+            "accepted Leave connection still open or answered"
+        );
+        break;
+    }
     assert!(
         retired
             .refusal

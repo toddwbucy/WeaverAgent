@@ -487,6 +487,19 @@ impl PairLedger {
         })
     }
 
+    /// Read-only continuation for the exact worker execution after lifecycle
+    /// settled its outcome or withdrew its original unsent exchange.
+    pub(super) fn execution_settled(&self, call: &CallId, exchange: &ExchangeId) -> bool {
+        self.entry(call).is_ok_and(|entry| {
+            entry.ending.is_some()
+                && (entry.execution.as_ref() == Some(exchange)
+                    || self
+                        .cancelled_exchanges
+                        .iter()
+                        .any(|(held, owner)| held == exchange && owner == call))
+        })
+    }
+
     /// Frozen inspection keeps an already received terminal attached to its
     /// execution. It grants no new dispatch or ordinary terminal filing.
     pub(super) fn halt_execution(&self) -> Option<(&CallId, &ExchangeId, bool)> {
@@ -530,6 +543,39 @@ impl PairLedger {
         }
         let entry = self.entry(call).ok()?;
         Some((entry.ending.as_ref()?, entry.received.as_ref()?.raw_bytes()))
+    }
+
+    /// A frozen, actually received gate terminal can use the halt's reserved
+    /// record. A healthy author already owns its original attempt if started.
+    pub(super) fn unclaimed_halt_terminal(&self) -> Option<(&PairEnded, &weaver_trace::TurnRef)> {
+        if !self.frozen {
+            return None;
+        }
+        let batch = self.active.as_ref()?;
+        let entry = batch.entries.iter().find(|entry| {
+            entry.received.is_some()
+                && entry.gate_terminal
+                && !entry.terminal_authoring
+                && entry.terminal_source.is_none()
+                && entry.completed.is_none()
+        })?;
+        Some((
+            entry.ending.as_ref()?,
+            &batch.proof.original().generation().original().turn,
+        ))
+    }
+
+    pub(super) fn active_turn(&self) -> Option<&weaver_trace::TurnRef> {
+        Some(
+            &self
+                .active
+                .as_ref()?
+                .proof
+                .original()
+                .generation()
+                .original()
+                .turn,
+        )
     }
 
     /// No terminal can be attributed to the gate without the owned packet.
@@ -678,6 +724,27 @@ impl PairLedger {
         &mut self,
         source: SourcePosition,
     ) -> Result<ReceivedOrgan, PairError> {
+        self.ack_rejection_recorded_inner(source, false)
+    }
+
+    /// Failed cleanup can observe a new late return after the turn's close.
+    /// Only a frozen ledger admits that run-scoped receipt; healthy pair
+    /// authoring still requires the exact active turn.
+    pub(super) fn ack_halt_rejection_recorded(
+        &mut self,
+        source: SourcePosition,
+    ) -> Result<ReceivedOrgan, PairError> {
+        if !self.frozen {
+            return Err(PairError::WrongPhase);
+        }
+        self.ack_rejection_recorded_inner(source, true)
+    }
+
+    fn ack_rejection_recorded_inner(
+        &mut self,
+        source: SourcePosition,
+        halted: bool,
+    ) -> Result<ReceivedOrgan, PairError> {
         let pending = self.rejected.as_ref().ok_or(PairError::WrongPhase)?;
         if source.block_id.run != self.run
             || source.block_id.block.0 != 0
@@ -689,19 +756,10 @@ impl PairLedger {
                 .call_id
                 .as_ref()
                 .is_some_and(|call| source.block_id.sequence.0 <= call.sequence.0)
-            || self.active.as_ref().is_some_and(|batch| {
-                source.turn.as_deref()
-                    != Some(
-                        batch
-                            .proof
-                            .original()
-                            .generation()
-                            .original()
-                            .turn
-                            .0
-                            .as_str(),
-                    )
-            })
+            || (!(halted && source.turn.is_none())
+                && self
+                    .active_turn()
+                    .is_some_and(|turn| source.turn.as_deref() != Some(turn.0.as_str())))
         {
             return Err(PairError::InvalidIdentity);
         }
@@ -1251,6 +1309,12 @@ impl PairLedger {
         }
         self.entry_mut(call).unwrap().opening = Some(receipt);
         Ok(())
+    }
+
+    pub(super) fn barred_for(&self, cause: NonDispatchCause) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|batch| batch.cause == Some(cause))
     }
 
     /// Operator leave dominates stop. An accepted stop dominates ordinary

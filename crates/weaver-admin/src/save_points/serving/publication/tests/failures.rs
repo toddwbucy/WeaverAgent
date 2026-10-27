@@ -158,7 +158,10 @@ fn wrong_final_report_or_outcome_keeps_indexed_capture_guarded() {
             _ => (),
         }
         let outcome = if case == 8 {
-            FinalOutcome::Left(&final_report)
+            FinalOutcome::Left {
+                report: &final_report,
+                forced: true,
+            }
         } else {
             FinalOutcome::SavePointTaken(&final_report)
         };

@@ -3,17 +3,36 @@
 //! message, caller receipt or raw decoder answer can substitute for these owners.
 use super::*;
 use crate::flow::clock::AbsoluteBound;
+use crate::flow::context::marks_driver::BeginTaskRefusal;
 use crate::flow::context::{
     GenerationCompletion, PlacementCompletion, RecordingContext, TaskCompletion,
 };
 use crate::flow::material::HeldMaterial;
 use crate::flow::place::{PlaceError, PlaceRequest};
 use crate::flow::pump::{LifecyclePeer, PumpDeadline};
-use weaver_types::state_flow::{CutMethod, PlacementContext};
+use crate::flow::pump_transport::{DecodePort, OrganPort, OrganSend};
+use crate::flow::templates::TemplateCertificate;
+use weaver_types::state_flow::{CutMethod, NonDispatchCause, PlacementContext};
 
 #[cfg(test)]
 #[path = "context_worker_generation_tests.rs"]
 pub(in crate::flow::context) mod tests;
+
+#[cfg(test)]
+#[path = "context_worker_admission_tests.rs"]
+pub(in crate::flow::context) mod admission_tests;
+
+#[cfg(test)]
+#[path = "context_worker_queued_input_tests.rs"]
+pub(in crate::flow::context) mod queued_input_tests;
+
+#[cfg(test)]
+#[path = "context_worker_election_wait_tests.rs"]
+pub(in crate::flow::context) mod election_wait_tests;
+
+#[cfg(test)]
+#[path = "context_worker_halt_tests.rs"]
+pub(in crate::flow::context) mod halt_tests;
 
 #[cfg(test)]
 #[path = "context_worker_return_tests.rs"]
@@ -32,6 +51,10 @@ pub(in crate::flow::context) mod final_tests;
 #[cfg(test)]
 #[path = "context_worker_session_tests.rs"]
 pub(in crate::flow::context) mod session_tests;
+
+#[cfg(test)]
+#[path = "context_worker_graceful_leave_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod graceful_tests;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EngineStage {
@@ -53,6 +76,8 @@ enum EngineStage {
 
 pub(super) struct EngineWork {
     stage: EngineStage,
+    cancelled: Option<NonDispatchCause>,
+    admission: Option<BeginTaskRefusal>,
     task: Option<TaskCompletion>,
     material: Option<HeldMaterial>,
     selection: Option<(String, CutMethod)>,
@@ -73,6 +98,212 @@ struct RetainedRound {
     _emission: Option<Box<emission::EmissionWork>>,
 }
 impl EngineWork {
+    pub(super) fn lost_gate_pairs_need_step(&self, context: &RecordingContext) -> bool {
+        self.emission
+            .as_ref()
+            .is_some_and(|emission| emission.lost_gate_pairs_need_step(context))
+    }
+    pub(super) fn graceful_pairs_need_step(&self, context: &RecordingContext) -> bool {
+        self.stage == EngineStage::Emission
+            && self
+                .emission
+                .as_ref()
+                .is_some_and(|work| work.graceful_pairs_need_step(context))
+    }
+    /// The failed handoff keeps the actual grant and its revoked account in
+    /// the same slot. This is custody retirement, not engine continuation.
+    pub(super) fn retire_failed_placement_grants(
+        &mut self,
+        context: &mut RecordingContext,
+    ) -> Result<(), RunFailure> {
+        retire_failed_placement_grant(&mut self.placement, context)?;
+        if let Some(emission) = &mut self.emission {
+            emission.retire_failed_placement_grants(context)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn take_close(&mut self) -> Option<super::close::WorldClose> {
+        self.answer.take()
+    }
+
+    pub(super) fn settled(&self) -> bool {
+        self.stage == EngineStage::Cancelled
+            || (self.stage == EngineStage::Emission && self.emission.as_ref().unwrap().settled())
+    }
+
+    pub(super) fn cancel_control(&self) -> Option<(&OrganEnvelope, &OrganSend)> {
+        self.emission.as_ref()?.cancel_control()
+    }
+
+    pub(super) fn advance_cancel_control(
+        &mut self,
+        context: &mut RecordingContext,
+        gate: &mut OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        match self.emission.as_mut() {
+            Some(work) => work.advance_cancel_control(context, gate, io),
+            None => Ok(true),
+        }
+    }
+
+    pub(super) fn route_cancel_reply(
+        &mut self,
+        context: &mut RecordingContext,
+        gate: &mut OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        match self.emission.as_mut() {
+            Some(work) => work.route_cancel_reply(context, gate, io),
+            None => Ok(false),
+        }
+    }
+
+    /// Retain the cancellation election without starting new model work. The
+    /// caller supplies the actual remaining ports, including a retired gate.
+    pub(super) fn cancel_for(
+        &mut self,
+        cause: NonDispatchCause,
+        context: &mut RecordingContext,
+        decode: Option<&mut DecodePort>,
+        gate: Option<&mut OrganPort>,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        retain_cancellation(&mut self.cancelled, cause);
+        let cause = self.cancelled.unwrap();
+        if self.stage == EngineStage::Generated {
+            self.emission = Some(Box::new(emission::EmissionWork::cancelled(cause)));
+            self.stage = EngineStage::Emission;
+        }
+        if self.stage == EngineStage::Emission {
+            return self
+                .emission
+                .as_mut()
+                .unwrap()
+                .cancel(cause, context, decode, gate, io);
+        }
+        context.cancel_task();
+        context.revoke_place();
+        if context.measure.is_some() {
+            context.cancel_measurement(io)?;
+        }
+        if matches!(self.placement, Some(PlacementCompletion::Granted(_))) {
+            let Some(PlacementCompletion::Granted(grant)) = self.placement.take() else {
+                unreachable!()
+            };
+            match context.cancel_placement_grant(grant) {
+                Ok(account) => self.placement = Some(PlacementCompletion::Cancelled(account)),
+                Err(error) => {
+                    self.placement = Some(PlacementCompletion::Granted(error.input));
+                    return Err(error.failure.unwrap_or(RunFailure::PlaceOwned));
+                }
+            }
+        }
+        if context.generation.is_some() {
+            context.cancel_generation(decode.ok_or(RunFailure::PlaceOwned)?, io)?;
+        }
+        if !matches!(
+            self.stage,
+            EngineStage::Task | EngineStage::Place | EngineStage::Generation
+        ) {
+            context.complete_wait(PumpDeadline::Decision);
+            self.stage = EngineStage::Cancelled;
+        }
+        Ok(())
+    }
+
+    /// Settle only the original task, placement, decoder and filing owners.
+    /// Both Stop and rollback use this core; neither path requires a live gate
+    /// after its actual disposition, nor elects a new generation or dispatch.
+    pub(super) fn advance_cancelled<I: PumpIo>(
+        &mut self,
+        certificate: &mut Option<TemplateCertificate>,
+        context: &mut RecordingContext,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<bool, RunFailure> {
+        context.live(ports.io)?;
+        let cause = self.cancelled.ok_or(RunFailure::PlaceOwned)?;
+        self.cancel_for(
+            cause,
+            context,
+            ports.decode.as_deref_mut(),
+            ports.gate.as_deref_mut(),
+            ports.io,
+        )?;
+        match self.stage {
+            EngineStage::Task => {
+                context.advance_task(ports)?;
+                if let Some(done) = context.take_task(ports.io)? {
+                    if let TaskCompletion::Refused { refusal, .. } = &done {
+                        self.detail = Some(format!("begin_task: {refusal:?}"));
+                    }
+                    self.task = Some(done);
+                    self.stage = EngineStage::Cancelled;
+                    context.complete_wait(PumpDeadline::Decision);
+                } else {
+                    context.pump_once(ports)?;
+                }
+            }
+            EngineStage::Place => {
+                context.advance_place(ports)?;
+                if let Some(done) = context.take_placement(ports.io)? {
+                    self.stage = match &done {
+                        PlacementCompletion::Granted(_) => EngineStage::Placed,
+                        PlacementCompletion::Refused(refused) => {
+                            self.detail = Some(refused.detail.clone());
+                            EngineStage::Closing
+                        }
+                        PlacementCompletion::Cancelled(_) => EngineStage::Cancelled,
+                    };
+                    self.placement = Some(done);
+                }
+            }
+            EngineStage::Generation => {
+                let progress = context.advance_generation(ports)?;
+                if let Some(done) = context.take_placed_generation(ports.io)? {
+                    let proof = match &done {
+                        GenerationCompletion::Generated(proof) => Some(proof.as_ref()),
+                        GenerationCompletion::Cancelled(account)
+                        | GenerationCompletion::Refused(account) => account.confirmed_generation(),
+                    };
+                    let acknowledgement = if let Some(proof) = proof {
+                        self.return_calls
+                            .iter()
+                            .try_for_each(|call| context.acknowledge_delivery(call, proof))
+                    } else {
+                        Ok(())
+                    };
+                    self.stage = match &done {
+                        GenerationCompletion::Generated(_) => EngineStage::Generated,
+                        GenerationCompletion::Refused(_) => EngineStage::Refused,
+                        GenerationCompletion::Cancelled(_) => EngineStage::Cancelled,
+                    };
+                    self.generation = Some(done);
+                    acknowledgement.map_err(|error| {
+                        fault(
+                            context,
+                            ports.io,
+                            format!("worker result delivery: {error:?}"),
+                        )
+                    })?;
+                } else if progress == crate::flow::context::PlaceProgress::Pending {
+                    context.pump_once(ports)?;
+                }
+            }
+            EngineStage::Emission => {
+                self.emission.as_mut().unwrap().advance(
+                    &mut self.generation,
+                    certificate,
+                    context,
+                    ports,
+                )?;
+            }
+            _ => {}
+        }
+        Ok(self.settled())
+    }
+
     pub(super) fn progress(&self) -> FoundationInputProgress {
         match self.stage {
             EngineStage::TaskReady => FoundationInputProgress::Task,
@@ -98,6 +329,8 @@ impl<'a> FoundationInput<'a> {
         self.stage = Stage::Engine;
         self.engine = Some(Box::new(EngineWork {
             stage: EngineStage::StartTask,
+            cancelled: None,
+            admission: None,
             task: None,
             material: None,
             selection: None,
@@ -259,14 +492,64 @@ impl<'a> FoundationInput<'a> {
         peer: Option<&mut LifecyclePeer>,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
+        if self.has_graceful_leave()
+            && self
+                .engine
+                .as_ref()
+                .is_some_and(|work| work.cancelled.is_none() && work.stage == EngineStage::Emission)
+        {
+            self.serving.retain_queued_input(io)?;
+            let owner = &mut self.serving.owner;
+            let ended = self
+                .engine
+                .as_mut()
+                .unwrap()
+                .emission
+                .as_mut()
+                .unwrap()
+                .drain_pairs_for_leave(owner.context, &mut owner.gate, io)?;
+            if ended {
+                let cause = self.serving.graceful.as_ref().unwrap().cause;
+                let close = super::close::WorldClose::unloading(self, cause).ok_or_else(|| {
+                    fault(
+                        self.serving.owner.context,
+                        io,
+                        "graceful drain lost its actual turn".into(),
+                    )
+                })?;
+                let work = self.engine.as_mut().unwrap();
+                work.answer = Some(close);
+                work.stage = EngineStage::Answer;
+            }
+        }
+        if self.engine.as_ref().is_some_and(|work| {
+            work.stage == EngineStage::Emission
+                && work
+                    .emission
+                    .as_ref()
+                    .is_some_and(|emission| emission.ready_to_close_refusal())
+        }) {
+            let close = super::close::WorldClose::refused(self).ok_or_else(|| {
+                fault(
+                    self.serving.owner.context,
+                    io,
+                    "emission refusal lost its turn or original gate request".into(),
+                )
+            })?;
+            let work = self.engine.as_mut().unwrap();
+            work.answer = Some(close);
+            work.stage = EngineStage::Answer;
+        }
+        self.serving.owner.context.live(io)?;
+        self.serving.retain_queued_input(io)?;
         let owner = &mut self.serving.owner;
         let work = self.engine.as_mut().unwrap();
         let context = &mut owner.context;
-        context.live(io)?;
         let mut ports = PumpPorts {
             lifecycle: LifecyclePorts {
                 listener: Some(&mut owner.listener),
                 dial: peer,
+                leave_peer: self.serving.save.as_mut().and_then(|save| save.port()),
                 residency: Some(owner.resident.residency),
                 ..Default::default()
             },
@@ -275,6 +558,10 @@ impl<'a> FoundationInput<'a> {
             label: None,
             io,
         };
+        if work.cancelled.is_some() {
+            work.advance_cancelled(&mut owner.certificate, context, &mut ports)?;
+            return Ok(());
+        }
         match work.stage {
             EngineStage::Answer => {
                 if work.answer.as_mut().unwrap().advance(context, &mut ports)? {
@@ -297,9 +584,13 @@ impl<'a> FoundationInput<'a> {
                     if let Some(failure) = error.failure {
                         return Err(failure);
                     }
-                    work.detail = Some(format!("begin_task: {:?}", error.refusal));
-                    context.complete_wait(PumpDeadline::Decision);
-                    work.stage = EngineStage::Refused;
+                    if error.refusal == BeginTaskRefusal::Busy {
+                        context.pump_once(&mut ports)?;
+                    } else {
+                        work.detail = Some(format!("begin_task: {:?}", error.refusal));
+                        work.admission = Some(error.refusal);
+                        work.stage = EngineStage::Refused;
+                    }
                 } else {
                     work.stage = EngineStage::Task;
                 }
@@ -471,25 +762,28 @@ impl<'a> FoundationInput<'a> {
                     context,
                     &mut ports,
                 )?;
-                if work.emission.as_ref().unwrap().correction_close().is_some() {
-                    work.stage = EngineStage::Closing;
-                }
             }
             EngineStage::Closing => {
                 if self.close.is_none() && self.send.is_none() {
-                    let frame = context
-                        .place_close()
-                        .or_else(|| {
-                            work.emission
-                                .as_ref()
-                                .and_then(|work| work.correction_close())
-                        })
-                        .ok_or(RunFailure::PlaceOwned)?;
+                    let frame = context.place_close().ok_or(RunFailure::PlaceOwned)?;
                     self.close = Some(OrganEnvelope {
                         exchange: self.received.as_ref().unwrap().envelope().exchange.clone(),
                         position: Position::Close,
                         payload: Payload::Frame(frame.clone()),
                     });
+                }
+                let gate = ports.gate.as_deref_mut().unwrap();
+                if context.serving_organs.gate_delivery_lost(gate) {
+                    if super::close::retain_lost_world(
+                        gate,
+                        &self.received.as_ref().unwrap().envelope().exchange,
+                        &mut self.close,
+                        self.send.as_ref(),
+                    )? {
+                        context.place_response_lost(gate, ports.io)?;
+                        self.stage = Stage::Refused;
+                    }
+                    return Ok(());
                 }
                 if let Some(close) = self.close.take() {
                     match ports.gate.as_deref_mut().unwrap().stage_tracked(close) {
@@ -531,53 +825,55 @@ impl<'a> FoundationInput<'a> {
             return Ok(());
         };
         let owner = &mut self.serving.owner;
-        if work.stage == EngineStage::Generated {
-            work.emission = Some(Box::new(emission::EmissionWork::stopped()));
-            work.stage = EngineStage::Emission;
-        }
-        if work.stage == EngineStage::Emission {
-            return work.emission.as_mut().unwrap().cancel(
-                owner.context,
-                Some(owner.decode),
-                Some(&mut owner.gate),
-                io,
-            );
-        }
-        owner.context.cancel_task();
-        owner.context.revoke_place();
-        if owner.context.measure.is_some() {
-            owner.context.cancel_measurement(io)?;
-        }
-        if let Some(PlacementCompletion::Granted(_)) = work.placement {
-            let Some(PlacementCompletion::Granted(grant)) = work.placement.take() else {
-                unreachable!()
-            };
-            match owner.context.cancel_placement_grant(grant) {
-                Ok(account) => work.placement = Some(PlacementCompletion::Cancelled(account)),
-                Err(error) => {
-                    work.placement = Some(PlacementCompletion::Granted(error.input));
-                    return Err(error.failure.unwrap_or(RunFailure::PlaceOwned));
-                }
-            }
-        }
-        if owner.context.generation.is_some() {
-            owner.context.cancel_generation(owner.decode, io)?;
-        }
-        if !matches!(
-            work.stage,
-            EngineStage::Task | EngineStage::Place | EngineStage::Generation
-        ) {
-            owner.context.complete_wait(PumpDeadline::Decision);
-            work.stage = EngineStage::Cancelled;
-        }
-        Ok(())
+        work.cancel_for(
+            NonDispatchCause::Stop,
+            owner.context,
+            Some(owner.decode),
+            Some(&mut owner.gate),
+            io,
+        )
     }
 
     pub(super) fn engine_settled(&self) -> bool {
-        self.engine.as_ref().is_none_or(|w| {
-            w.stage == EngineStage::Cancelled
-                || (w.stage == EngineStage::Emission && w.emission.as_ref().unwrap().settled())
-        })
+        self.engine.as_ref().is_none_or(|work| work.settled())
+    }
+}
+
+/// Revocation consumes only the exact grant already issued by this context.
+/// Failure never licenses ordinary work or replaces the first failure reason.
+pub(super) fn retire_failed_placement_grant(
+    placement: &mut Option<PlacementCompletion>,
+    context: &mut RecordingContext,
+) -> Result<(), RunFailure> {
+    if context.phase != crate::flow::context::RecordingPhase::Failed || context.failure().is_none()
+    {
+        return Err(RunFailure::PlaceOwned);
+    }
+    if !matches!(placement, Some(PlacementCompletion::Granted(_))) {
+        return Ok(());
+    }
+    let Some(PlacementCompletion::Granted(grant)) = placement.take() else {
+        unreachable!("checked original grant")
+    };
+    match context.cancel_placement_grant(grant) {
+        Ok(account) => {
+            *placement = Some(PlacementCompletion::Cancelled(account));
+            Ok(())
+        }
+        Err(error) => {
+            *placement = Some(PlacementCompletion::Granted(error.input));
+            Err(error.failure.unwrap_or(RunFailure::PlaceOwned))
+        }
+    }
+}
+
+fn retain_cancellation(slot: &mut Option<NonDispatchCause>, cause: NonDispatchCause) {
+    debug_assert!(matches!(
+        cause,
+        NonDispatchCause::Stop | NonDispatchCause::Unload
+    ));
+    if slot.is_none() || cause == NonDispatchCause::Unload {
+        *slot = Some(cause);
     }
 }
 

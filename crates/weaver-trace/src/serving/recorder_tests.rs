@@ -111,6 +111,82 @@ fn loaded() -> (PreflightRecorder<Loaded>, UnixStream) {
         _ => panic!("empty queue refused load"),
     }
 }
+
+#[test]
+fn unadmitted_close_releases_sink_before_drop_and_forbids_a_later_load() {
+    let (sink, mut reader) = bounded_pair();
+    let mut recorder = PreflightRecorder::receive(
+        sink.into(),
+        RunRef("run".into()),
+        SessionRef("session".into()),
+    )
+    .unwrap();
+    recorder.close_unadmitted().unwrap();
+    recorder.close_unadmitted().unwrap();
+    let mut bytes = vec![];
+    reader.read_to_end(&mut bytes).unwrap();
+    assert!(bytes.is_empty());
+    assert_eq!(recorder.boundary().admitted, None);
+    assert_eq!(recorder.pressure().queued, 0);
+    let failure = match recorder.record_load(load()) {
+        Err(failure) => failure,
+        Ok(_) => panic!("closed unadmitted sink cannot acquire a Load bracket"),
+    };
+    assert_eq!(failure.recorder.boundary().admitted, None);
+}
+
+#[test]
+fn loaded_rollback_records_only_unload_without_a_refusal_or_activation() {
+    let (recorder, reader) = loaded();
+    let failure = match recorder.rollback(fault()) {
+        Err(failure) => failure,
+        Ok(_) => panic!("healthy rollback cannot author a substitute fault"),
+    };
+    assert_eq!(failure.recorder.boundary().admitted, Some(Sequence(0)));
+    let mut recorder = failure.recorder;
+    assert_eq!(
+        recorder
+            .drain_by(Instant::now() + Duration::from_secs(3))
+            .unwrap(),
+        Drained::Emptied
+    );
+    let reservations: Vec<_> = (0..super::super::writer::ORDINARY_CAPACITY)
+        .map(|_| recorder.core.writer.reserve(None).unwrap().unwrap())
+        .collect();
+    let unload = fixture(Kind::Unload);
+    let expected = serde_json::to_vec(&unload).unwrap();
+    let (recorder, unload) = match recorder.rollback(unload) {
+        Ok(PreflightAttempt::CapacityPending { recorder, event }) => (recorder, event),
+        _ => panic!("healthy rollback must not spend a terminal reservation"),
+    };
+    assert_eq!(serde_json::to_vec(&unload).unwrap(), expected);
+    assert_eq!(recorder.boundary().admitted, Some(Sequence(0)));
+    drop(reservations);
+    let (mut recorder, submission) = match recorder.rollback(unload) {
+        Ok(PreflightAttempt::Recorded {
+            recorder,
+            submission,
+        }) => (recorder, submission),
+        _ => panic!("rollback after Load requires no refusal"),
+    };
+    assert_eq!(submission.sequence, Sequence(1));
+    assert_eq!(submission.tap, TapOutcome::Stopped);
+    assert_eq!(
+        recorder
+            .drain_by(Instant::now() + Duration::from_secs(3))
+            .unwrap(),
+        Drained::Emptied
+    );
+    drop(recorder);
+    let records: Vec<serde_json::Value> = bytes(reader)
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["kind"], "load");
+    assert_eq!(records[1]["kind"], "unload");
+}
+
 fn recorder() -> (Recorder, UnixStream) {
     let (preflight, reader) = loaded();
     (

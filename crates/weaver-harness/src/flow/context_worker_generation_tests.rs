@@ -43,6 +43,18 @@ fn generated(mode: &str, finish: Finish) -> TokenAnswer {
     })
 }
 pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
+    if mode.contains("-lower-organ-") {
+        let root = std::path::PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
+        let end = Instant::now() + Duration::from_secs(10);
+        while !root.join("lower-observe-spu").exists() {
+            assert!(Instant::now() < end, "idle SPU EOF fixture watchdog");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        eprintln!("{{\"fixture\":\"idle SPU lost decode before failed Lower\"}}");
+        nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
+        // The actual child keeps stderr and residency open until Release.
+        return;
+    }
     if mode.contains("-session-") {
         return super::session_tests::spu(mode, fd);
     }
@@ -403,6 +415,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if mode.contains("task-admission-") {
+        return super::admission_tests::exercise(serving, member, reader, clock, root, mode);
+    }
     if mode.contains("-session-") {
         return super::session_tests::exercise(serving, member, reader, clock, socket, root, mode);
     }
@@ -503,6 +518,13 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         assert!(input.generate().is_err());
         assert!(!root.join("measured.json").exists());
         assert!(input.serving.owner.context.failure().is_none());
+        input.close_operation_refusal().unwrap();
+        until(input, member, clock, mode, FoundationInputProgress::Refused);
+        assert_eq!(
+            input.task_read_refusal(),
+            Some((s::ReadRefusalCode::InvalidSelector, "worker prompt refusal"))
+        );
+        super::emission::correction::tests::assert_public_refusal(input, root);
         return;
     }
     assert!(
@@ -534,6 +556,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             },
         )
         .unwrap();
+    if mode.contains("placement-pending") {
+        return super::super::halt::exit::tests::placement_pending(
+            guard, member, reader, clock, root, mode,
+        );
+    }
     if mode.ends_with("observe-measure") {
         for _ in 0..2000 {
             step(input, member, clock, mode);
@@ -646,6 +673,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             }
         }
     }
+    if mode.ends_with("election-wait-filing") {
+        member.hold_kind = Some("message.assistant");
+    }
     input.generate().unwrap();
     if mode.contains("slow-decode") {
         slow_generation(input, member, clock, root, mode, "appended.json");
@@ -684,6 +714,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         !root.join("closed.json").exists(),
         "generation is no final-answer election"
     );
+    if mode.contains("election-wait") {
+        return super::election_wait_tests::exercise(
+            guard, member, reader, clock, socket, root, mode,
+        );
+    }
     let work = input.engine.as_mut().unwrap();
     let Some(GenerationCompletion::Generated(proof)) = &mut work.generation else {
         panic!("actual proof")

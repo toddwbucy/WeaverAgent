@@ -1,0 +1,273 @@
+{
+  "binding": {
+    "enter_window": {
+      "began_ns": "0",
+      "deadline_ns": "1000000000000000000"
+    },
+    "gate_instruction": {
+      "access-rule": {
+        "allowed-gids": [
+          222
+        ],
+        "allowed-uids": [
+          111
+        ],
+        "denied-uids": [
+          333
+        ]
+      }
+    },
+    "kind": "serving",
+    "start": {
+      "artifact_id": "seed-artifact",
+      "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dump_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "parent_artifact_id": null,
+      "position": null,
+      "seed_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "state_management": {
+      "flow": {
+        "backlog": {
+          "lag_alarm_turns": "2",
+          "max_pending_blocks": "100",
+          "max_pending_bytes": "1000000",
+          "measurement_ref": "fixture"
+        },
+        "cut_wait": {
+          "elapsed_ns": "1000000",
+          "measurement_ref": "fixture"
+        },
+        "gate_wait": {
+          "elapsed_ns": "5000000000",
+          "measurement_ref": "fixture"
+        },
+        "observation_interval": {
+          "elapsed_ns": "100000000",
+          "measurement_ref": "fixture"
+        },
+        "partition": [
+          {
+            "blocks": [
+              "content.text[*]"
+            ],
+            "channels": [
+              "input"
+            ],
+            "id": "user",
+            "kind": "message.user",
+            "origins": [
+              "operator",
+              "external"
+            ]
+          },
+          {
+            "blocks": [
+              "content.text[*]"
+            ],
+            "channels": [
+              "output"
+            ],
+            "id": "assistant",
+            "kind": "message.assistant",
+            "origins": [
+              "model"
+            ]
+          },
+          {
+            "blocks": [
+              "message.content.text[*]"
+            ],
+            "channels": [
+              "internal"
+            ],
+            "id": "loop",
+            "kind": "loop.instruction",
+            "origins": [
+              "loop"
+            ]
+          },
+          {
+            "blocks": [
+              "pair"
+            ],
+            "channels": [
+              "tool"
+            ],
+            "id": "pair-start",
+            "kind": "tool.call.started",
+            "origins": [
+              "model",
+              "loop"
+            ]
+          },
+          {
+            "blocks": [
+              "pair"
+            ],
+            "channels": [
+              "tool"
+            ],
+            "id": "pair-end",
+            "kind": "tool.call.completed",
+            "origins": [
+              "tool",
+              "loop"
+            ]
+          },
+          {
+            "blocks": [
+              "message.content.text[0]"
+            ],
+            "channels": [
+              "internal"
+            ],
+            "context": "context",
+            "id": "mark",
+            "kind": "state.mark",
+            "origins": [
+              "loop"
+            ]
+          },
+          {
+            "blocks": [
+              "message.content.text[*]"
+            ],
+            "channels": [
+              "input"
+            ],
+            "context": "context",
+            "id": "plan-input",
+            "kind": "plan.event",
+            "origins": [
+              "operator"
+            ]
+          },
+          {
+            "blocks": [
+              "message.content.text[0]"
+            ],
+            "channels": [
+              "internal"
+            ],
+            "context": "context",
+            "id": "plan-effect",
+            "kind": "plan.event",
+            "origins": [
+              "loop"
+            ]
+          },
+          {
+            "blocks": [
+              "message.content.text[*]"
+            ],
+            "channels": [
+              "internal"
+            ],
+            "context": "context",
+            "id": "outcome",
+            "kind": "step.outcome",
+            "origins": [
+              "loop"
+            ]
+          },
+          {
+            "blocks": [
+              "message.content.text[*]"
+            ],
+            "channels": [
+              "internal"
+            ],
+            "id": "outbound",
+            "kind": "sort.decision",
+            "origins": [
+              "loop"
+            ]
+          }
+        ],
+        "scheme": {
+          "artifact_sha256": "b70ba039aa110e95b5d0cf061519e0f30ec86163298e92c3e79e27192f476309",
+          "scheme_id": "ste100:b70ba039aa110e95b5d0cf061519e0f30ec86163298e92c3e79e27192f476309",
+          "verbs": [
+            "read",
+            "recall"
+          ]
+        },
+        "version": 1
+      },
+      "persistence": {
+        "save_wait": {
+          "elapsed_ns": "10000000000",
+          "measurement_ref": "fixture"
+        },
+        "snapshot_wait": {
+          "elapsed_ns": "2000000000",
+          "measurement_ref": "fixture"
+        }
+      },
+      "placement": {
+        "c_head": 2048,
+        "c_tail": 6144,
+        "measurement_ref": "fixture"
+      },
+      "reads": {
+        "max_result_bytes": "100000",
+        "measurement_ref": "fixture"
+      },
+      "start": {
+        "dump_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "ste100": {
+        "decision_wait": {
+          "elapsed_ns": "5000000000",
+          "measurement_ref": "fixture"
+        },
+        "instances": 1,
+        "max_wire_bytes": "262144",
+        "measurement_ref": "synthetic transport, not qualification",
+        "model_artifact_sha256": "645374bb204122c979c48ad25923b66565ab2ef568cf304e752b4871472396f1",
+        "model_binding": {
+          "artifact": "/synthetic/context-manifest.json",
+          "devices": [
+            0
+          ]
+        },
+        "repair_cap": {
+          "attempts": 2,
+          "measurement_ref": "fixture"
+        }
+      },
+      "tools": {}
+    },
+    "ste100_scheme": "{\"conditions\":{\"bytes_base64\":\"Y29uZGl0aW9ucw==\",\"format\":\"test-conditions/1\",\"sha256\":\"562a77a7ae22fe1bb05561df5f820282d4e199b7d5469ee234068f35aefedae1\"},\"format\":\"ste100-scheme/1\",\"grammar\":{\"bytes_base64\":\"Z3JhbW1hcg==\",\"format\":\"test-grammar/1\",\"sha256\":\"e05eb8a4a255743e051d77d5e43b75e5e38073b27539b0184fbce352405a3ee1\"},\"qualification\":{\"checker_abi\":\"test/1\",\"corpus_sha256\":\"a7df0d5876fb35cd08ea55adba13aebf9583713fd3a548e1536164878287efb4\",\"report_sha256\":\"a7affbfd966fc489cb357f5b9fec8641c8d9fc6d738729d4f190ef54fa63823c\"},\"recall_keys\":[\"recall\"],\"reference\":{\"dictionary_sha256\":\"177ca70f42def1238e36da329473263ed3feadd14094c079a2230be0193436f5\",\"document_sha256\":\"52367a6622b19f08825e915fad80c542ad4f4c34dbcebad9f5007994b3e39208\",\"edition\":\"synthetic-process-test\",\"rule_ids\":[\"test-rule\"]},\"technical_names\":[{\"authority\":{\"disposition\":\"technical_use\",\"rule_id\":\"test-rule\"},\"text\":\"identity\"}],\"verbs\":[{\"authority\":{\"disposition\":\"approved_word\",\"rule_id\":\"test-rule\"},\"forms\":[\"Read\"],\"key\":\"read\",\"sense\":\"test\"},{\"authority\":{\"disposition\":\"approved_word\",\"rule_id\":\"test-rule\"},\"forms\":[\"Recall\"],\"key\":\"recall\",\"sense\":\"test\"}]}"
+  },
+  "boundary": "synthetic-external-state-circuit",
+  "cause": {
+    "uid": 73
+  },
+  "declaration": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "operator": 42,
+  "run": "run",
+  "session": "session",
+  "spu_instruction": {
+    "decoder": {
+      "column-permission": false,
+      "model-binding": {
+        "artifact": "fixture-spu",
+        "devices": [
+          0
+        ]
+      },
+      "refeed-permission": false,
+      "residual-readout-election": false,
+      "surprisal-election": false,
+      "tunable-values": {}
+    }
+  },
+  "stack": {
+    "checker": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "state_store": {
+    "engine": "sqlite"
+  }
+}

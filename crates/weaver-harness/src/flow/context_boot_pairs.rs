@@ -2,6 +2,10 @@
 //! Completion certifies this repair and its empty recheck, never lifecycle Enter
 //! or user-gate readiness.
 
+#[path = "context_boot_pairs_expired.rs"]
+mod expired;
+pub(super) use expired::StoppedBootPairsAccount;
+
 use super::*;
 use crate::flow::author::AuthoredSource;
 use crate::flow::ledger::{LedgerFile, SourceDisposition, TerminalOutcome};

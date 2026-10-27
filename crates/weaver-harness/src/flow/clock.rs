@@ -334,6 +334,10 @@ impl<K: Copy + Eq> DeadlineRegistry<K> {
         Some(self.armed.remove(index).1)
     }
 
+    pub(super) fn entries(&self) -> impl Iterator<Item = (K, AbsoluteBound)> + '_ {
+        self.armed.iter().copied()
+    }
+
     pub(super) fn nearest(&self) -> Option<u64> {
         self.armed.iter().map(|(_, bound)| bound.deadline_ns).min()
     }

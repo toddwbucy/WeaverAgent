@@ -136,6 +136,32 @@ enum AccountWork {
     Notice(Box<PlaceNotice>),
 }
 impl PlaceAccount {
+    pub(in crate::flow::context) fn refused_restatement_generation(
+        &self,
+        context: &RecordingContext,
+        source: &SourceBlockId,
+    ) -> bool {
+        self.phase == RecordingPhase::Entered
+            && matches!(&self.work, AccountWork::Generation(work)
+            if work.done && !work.cancelled && work.incomplete.is_none()
+                && work.confirmed.is_none() && work.reservation.is_none()
+                && !work.recorded_authors.is_empty()
+                && matches!(work.terminal.as_ref().map(ReceivedDecode::reply),
+                    Some(DecodeReply::Refusal(_)))
+                && work.grant.as_ref().is_some_and(|grant| {
+                    Arc::ptr_eq(&grant.origin, &context.read_origin)
+                        && context.open_turn.as_ref() == Some(&grant.turn)
+                        && grant.units.len() == 1
+                        && grant.units.iter().all(|unit| {
+                            unit.filed_source().is_some_and(|source_file| {
+                                matches!(source_file.file(), crate::flow::ledger::LedgerFile::Statement(file)
+                                    if &file.block_id == source
+                                        && file.source.kind == "loop.instruction"
+                                        && file.source.origin == "loop")
+                            })
+                        })
+                }))
+    }
     pub(in crate::flow::context) fn refused_restatement(
         &self,
         context: &RecordingContext,
@@ -809,7 +835,8 @@ impl RecordingContext {
         } else if request.context.label.is_empty()
             || request.tool_schemas != self.place_engine.as_ref().unwrap().schemas
             || !(self.place_instruction_valid(&request.context)
-                || self.restatement_instruction_valid(&request))
+                || self.restatement_instruction_valid(&request)
+                || self.wind_down_instruction_valid(&request))
         {
             Some(PlaceError::InvalidContext)
         } else if self.caller_author_held() {
@@ -942,7 +969,7 @@ impl RecordingContext {
             close_pending: false,
             // Repair retains original requests that still owe terminal facts.
             // Its caller judges the refusal before any turn/world close.
-            close_on_refusal: self.repair.is_none(),
+            close_on_refusal: self.repair.is_none() && self.wind_down.is_none(),
             account_deadline: None,
             selected_count,
             return_author: None,
@@ -1223,12 +1250,43 @@ impl RecordingContext {
         }
         Ok(())
     }
+    pub(in crate::flow::context) fn place_response_lost(
+        &mut self,
+        gate: &crate::flow::pump_transport::OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        self.live(io)?;
+        if !self.serving_organs.gate_delivery_lost(gate)
+            || !self.place_response_ready()
+            || self.place_close.take().is_none()
+        {
+            return Err(RunFailure::PlaceOwned);
+        }
+        Ok(())
+    }
     fn place_instruction_valid(&self, context: &PlacementContext) -> bool {
         let Some(source) = &context.instruction else {
             return true;
         };
         self.place_instructions.iter().any(|proof|proof.belongs_to(self)&&proof.receipts().dispositions().any(|d|match d {
             crate::flow::ledger::SourceDisposition::Committed(c)=>matches!(c.file(),crate::flow::ledger::LedgerFile::Statement(file) if &file.block_id==source && file.source.kind=="loop.instruction" && file.source.origin=="loop"),_=>false}))
+    }
+    fn wind_down_instruction_valid(&self, request: &PlaceRequest) -> bool {
+        let Some((turn, Some(source))) = &self.wind_down else {
+            return false;
+        };
+        self.open_turn.as_ref() == Some(turn)
+            && request.context.instruction.as_ref() == Some(source)
+            && request.prefix.cut.is_none()
+            && request.selection.len() == 1
+            && request.selection.iter().all(|unit| {
+                unit.belongs_to(self)
+                    && unit.filed_source().is_some_and(|file| {
+                        matches!(file.file(), crate::flow::ledger::LedgerFile::Statement(file)
+                        if &file.block_id == source && file.source.kind == "loop.instruction"
+                            && file.source.origin == "loop")
+                    })
+            })
     }
     pub(in crate::flow) fn retain_place_instruction(
         &mut self,

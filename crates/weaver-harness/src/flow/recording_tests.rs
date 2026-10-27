@@ -16,6 +16,26 @@ use weaver_types::state_flow::{
 
 use crate::flow::recording_fixture as fixture;
 
+impl RecordBarrier {
+    /// Fill the actual stopped writer without admitting a new harness owner.
+    /// The caller supplies run-scoped fixture evidence; the live author API
+    /// correctly refuses new ordinary work after retention has frozen.
+    pub(in crate::flow) fn fill_stopped_writer_for_test(&mut self, event: Event) {
+        assert!(self.recorder.tap_stopped());
+        assert!(self.pending.is_none() && self.pending_author.is_none());
+        for _ in 0..ORDINARY_CAPACITY + 64 {
+            if self.recorder().boundary().queued == ORDINARY_CAPACITY {
+                return;
+            }
+            assert!(matches!(
+                self.recorder.submit(event.clone()).unwrap(),
+                SubmitAttempt::Recorded(_)
+            ));
+        }
+        panic!("stopped ordinary writer did not fill");
+    }
+}
+
 fn event(kind: Kind, payload: Payload) -> Event {
     let (channel, origin) = match kind {
         Kind::MessageUser => (Channel::Input, Origin::Operator),
@@ -199,6 +219,47 @@ fn recorded(progress: RecordProgress) -> (Sequence, Option<RecordProof>) {
     match progress {
         RecordProgress::Recorded { sequence, proof } => (sequence, proof),
         other => panic!("expected real Recorded admission, got {other:?}"),
+    }
+}
+
+#[test]
+fn complete_watermark_covers_each_record_purpose_and_unselected_authors() {
+    let (recorder, _reader) = recorder();
+    let mut barrier = RecordBarrier::new(recorder, "run".into());
+    let mut inbox = FlowInbox::new();
+    let mut budget = budget(2);
+    assert_eq!(barrier.latest_recorded(), Some(Sequence(0)));
+    let reply = reply();
+    let mirror = open_measurement_mirror();
+    let state = serde_json::from_value(serde_json::to_value(&mirror).unwrap()).unwrap();
+    let flow_event = terminal(&source(1));
+    let Some(Payload::FlowObservation(flow)) = &flow_event.payload else {
+        unreachable!()
+    };
+    let flow = (**flow).clone();
+    for (index, (event, purpose)) in [
+        (
+            message("Read the retained content."),
+            RecordPurpose::Content,
+        ),
+        (measurement("untapped"), RecordPurpose::Observation),
+        (classifier_event(&reply), RecordPurpose::Classifier(reply)),
+        (
+            event(
+                Kind::StateStoreMeasurement,
+                Payload::StateStoreMeasurement(Box::new(mirror)),
+            ),
+            RecordPurpose::State(state),
+        ),
+        (flow_event.clone(), RecordPurpose::Terminal(source(1))),
+        (flow_event, RecordPurpose::Flow(flow)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (actual, _) = recorded(barrier.submit(event, purpose, &mut inbox, &mut budget));
+        assert_eq!(actual, Sequence(index as u64 + 1));
+        assert_eq!(barrier.latest_recorded(), Some(actual));
     }
 }
 

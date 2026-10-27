@@ -2,6 +2,7 @@
 use super::super::tests::{FAMILY, selection, sequence, stop};
 use super::*;
 use crate::flow::clock::testing::FakePumpIo;
+use crate::flow::context::worker_startup::input::generation::queued_input_tests as queued;
 use crate::flow::context::worker_startup::input::generation::tests::{step, until};
 use crate::flow::context::worker_startup::input::management::tests::{Guard, trace};
 use crate::flow::context::worker_startup::tests::{Member, trace_through, worker};
@@ -11,6 +12,9 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use weaver_types::{ExchangeId, KillCause, ToolOutcome, state_flow as s};
+
+#[path = "context_worker_gate_loss_tests.rs"]
+mod gate_loss;
 
 fn expected(mode: &str, ordinal: u64) -> ToolOutcome {
     if mode.contains("refused") {
@@ -41,8 +45,16 @@ fn packet(fd: i32, frame: &OrganEnvelope) {
     assert_eq!(send(fd, &bytes, MsgFlags::MSG_NOSIGNAL), Ok(bytes.len()));
 }
 pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
+    let mut tool_child = None;
     let end = Instant::now() + Duration::from_secs(30);
-    if mode.contains("stop-unsent") {
+    if mode.contains("gate-death-unsent") {
+        while !root.join("gate-loss-close").exists() {
+            assert!(Instant::now() < end);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        return;
+    }
+    if mode.contains("stop-unsent") || mode.contains("halt-gate-unsent") {
         while !root.join("drain-external").exists() {
             assert!(Instant::now() < end);
             std::thread::sleep(Duration::from_millis(1));
@@ -54,6 +66,57 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
     let mut previous = None;
     let mut cancels = 0;
     while Instant::now() < end {
+        if mode.contains("halt-gate")
+            && pending.is_some()
+            && root.join("halt-failed").exists()
+            && !root.join("halt-queued.json").exists()
+        {
+            if mode.contains("halt-gate-eof") {
+                return;
+            }
+            let frame = OrganEnvelope {
+                exchange: ExchangeId {
+                    opener: Opener::Gate,
+                    ordinal: 102,
+                },
+                position: Position::Open,
+                payload: if mode.contains("halt-gate-control") {
+                    Payload::Answer(weaver_types::LifecycleAnswer::GateStopped)
+                } else {
+                    Payload::Frame(weaver_types::TurnFrame::carry(b"Read the next task."))
+                },
+            };
+            let raw = serde_json::to_vec(&frame).unwrap();
+            std::fs::write(root.join("halt-queued.json"), &raw).unwrap();
+            packet(fd, &frame);
+            if mode.contains("-late") {
+                let count = if mode.contains("pressure-hold") { 1 } else { 2 };
+                for index in 0..count {
+                    let rejected = OrganEnvelope {
+                        exchange: ExchangeId {
+                            opener: Opener::Harness,
+                            ordinal: 999 + index,
+                        },
+                        position: Position::Close,
+                        payload: Payload::ToolAnswer(ToolOutcome::Result {
+                            content: "foreign \"result\" \\\n caf\u{e9}".into(),
+                        }),
+                    };
+                    let raw = format!(
+                        " \t\r\n{}\n\t ",
+                        serde_json::to_string_pretty(&rejected)
+                            .unwrap()
+                            .replace('\n', "\r\n")
+                            .replace("foreign", r"\u0066oreign")
+                    );
+                    std::fs::write(root.join(format!("halt-rejected-{index}.json")), &raw).unwrap();
+                    assert_eq!(
+                        send(fd, raw.as_bytes(), MsgFlags::MSG_NOSIGNAL),
+                        Ok(raw.len())
+                    );
+                }
+            }
+        }
         match recv(fd, &mut bytes, MsgFlags::MSG_DONTWAIT) {
             Ok(0) => return,
             Ok(n) => {
@@ -62,6 +125,104 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                 }
                 let frame: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
                 match &frame.payload {
+                    Payload::Directive(weaver_types::LifecycleDirective::Lower)
+                        if mode.contains("-exit") =>
+                    {
+                        assert_eq!(frame.position, Position::Open);
+                        assert_eq!(frame.exchange.opener, Opener::Harness);
+                        assert_eq!(
+                            frame.exchange.ordinal,
+                            if mode.contains("start-pending")
+                                || mode.contains("placement-pending")
+                                || mode.contains("-lower-organ-")
+                            {
+                                2
+                            } else {
+                                3
+                            }
+                        );
+                        assert!(pending.is_none());
+                        assert!(!root.join("halt-lower.json").exists());
+                        std::fs::write(root.join("halt-lower.json"), &bytes[..n]).unwrap();
+                        if mode.contains("-lower-organ-") {
+                            if mode.ends_with("-return") {
+                                let rejected = OrganEnvelope {
+                                    exchange: ExchangeId {
+                                        opener: Opener::Harness,
+                                        ordinal: 999,
+                                    },
+                                    position: Position::Close,
+                                    payload: Payload::ToolAnswer(ToolOutcome::Result {
+                                        content: "late unclaimed result".into(),
+                                    }),
+                                };
+                                let raw = format!(
+                                    " \n{}\n ",
+                                    serde_json::to_string_pretty(&rejected).unwrap()
+                                );
+                                std::fs::write(root.join("lower-organ-return.json"), &raw).unwrap();
+                                assert_eq!(
+                                    send(fd, raw.as_bytes(), MsgFlags::MSG_NOSIGNAL),
+                                    Ok(raw.len())
+                                );
+                            }
+                            while !root.join("lower-organ-recorded").exists() {
+                                assert!(Instant::now() < end, "Lower observation fixture watchdog");
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                        }
+                        if mode.contains("lower-silent") {
+                            continue;
+                        }
+                        let late_returns = if mode.contains("lower-backlog-wake") {
+                            2
+                        } else {
+                            usize::from(mode.contains("lower-late"))
+                        };
+                        for index in 0..late_returns {
+                            let rejected = OrganEnvelope {
+                                exchange: ExchangeId {
+                                    opener: Opener::Harness,
+                                    ordinal: 2,
+                                },
+                                position: Position::Close,
+                                payload: Payload::ToolAnswer(ToolOutcome::Result {
+                                    content: format!("late exact output {index}"),
+                                }),
+                            };
+                            let raw = format!(
+                                " \n{}\n ",
+                                serde_json::to_string_pretty(&rejected).unwrap()
+                            );
+                            let name = if index == 0 {
+                                "halt-lower-late.json"
+                            } else {
+                                "halt-lower-second.json"
+                            };
+                            std::fs::write(root.join(name), &raw).unwrap();
+                            assert_eq!(
+                                send(fd, raw.as_bytes(), MsgFlags::MSG_NOSIGNAL),
+                                Ok(raw.len())
+                            );
+                        }
+                        let mut exchange = frame.exchange.clone();
+                        if mode.contains("lower-wrong") {
+                            exchange.ordinal += 100;
+                        }
+                        packet(
+                            fd,
+                            &OrganEnvelope {
+                                exchange,
+                                position: Position::Close,
+                                payload: Payload::Answer(
+                                    weaver_types::LifecycleAnswer::GateStopped,
+                                ),
+                            },
+                        );
+                        if !mode.contains("lower-wrong") {
+                            return;
+                        }
+                    }
                     Payload::Tool(execution) => {
                         assert!(!mode.contains("no-grant"));
                         assert_eq!(frame.position, Position::Open);
@@ -87,6 +248,7 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         std::fs::write(root.join(format!("external-{ordinal}.json")), &bytes[..n])
                             .unwrap();
                         if mode.contains("gate-death") {
+                            gate_loss::end(mode, root, fd, &frame, end);
                             return;
                         }
                         let answer = OrganEnvelope {
@@ -94,7 +256,67 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                             position: Position::Close,
                             payload: Payload::ToolAnswer(expected(mode, ordinal)),
                         };
-                        if mode.contains("stop-running") {
+                        if mode.contains("halt-gate") {
+                            if mode.contains("live-tools") {
+                                assert!(tool_child.is_none());
+                                use std::os::unix::process::CommandExt;
+                                let mut command = std::process::Command::new("/usr/bin/sleep");
+                                command.arg("60");
+                                // SAFETY: only async-signal-safe closes in this
+                                // fixture child; it must not inherit the gate
+                                // socket and conceal the gate parent's death.
+                                unsafe {
+                                    command.pre_exec(|| {
+                                        nix::unistd::close(3).map_err(std::io::Error::from)?;
+                                        nix::unistd::close(4).map_err(std::io::Error::from)?;
+                                        Ok(())
+                                    });
+                                }
+                                let child = command.spawn().unwrap();
+                                // SAFETY: this actual gate fixture was forked with
+                                // its parent's verified tools directory at fd 4.
+                                let tools = unsafe { std::os::fd::BorrowedFd::borrow_raw(4) };
+                                let procs = nix::fcntl::openat(
+                                    tools,
+                                    "cgroup.procs",
+                                    nix::fcntl::OFlag::O_WRONLY | nix::fcntl::OFlag::O_CLOEXEC,
+                                    nix::sys::stat::Mode::empty(),
+                                )
+                                .unwrap();
+                                let pid = child.id().to_string();
+                                assert_eq!(
+                                    nix::unistd::write(&procs, pid.as_bytes()).unwrap(),
+                                    pid.len()
+                                );
+                                std::fs::write(root.join("halt-tool-pid"), &pid).unwrap();
+                                tool_child = Some(child);
+                            }
+                            pending = Some(OrganEnvelope {
+                                payload: Payload::ToolAnswer(ToolOutcome::Killed {
+                                    by: KillCause::FlowFailure,
+                                    partial: Some("fixture interrupted output".into()),
+                                }),
+                                ..answer
+                            });
+                            continue;
+                        }
+                        if mode.contains("queued-input") && !mode.contains("late") && ordinal == 2 {
+                            queued::queue_packets(mode, root, fd);
+                        }
+                        if mode.contains("graceful-running")
+                            || mode.contains("graceful-held")
+                            || mode.contains("graceful-expiry")
+                        {
+                            pending = Some(OrganEnvelope {
+                                payload: Payload::ToolAnswer(ToolOutcome::Killed {
+                                    by: KillCause::Unload,
+                                    partial: Some("retained partial".into()),
+                                }),
+                                ..answer
+                            });
+                            continue;
+                        }
+                        if mode.contains("stop-running") || mode.contains("queued-input-leave") {
                             pending = Some(answer);
                             continue;
                         }
@@ -133,24 +355,70 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                                 Ok(raw.len())
                             );
                         }
-                        if mode.contains("queued-input") {
+                        packet(fd, &answer);
+                        if mode.contains("graceful") {
+                            std::fs::write(root.join("graceful-result-sent"), b"sent").unwrap();
+                        }
+                        previous = Some(answer);
+                    }
+                    Payload::ToolInterrupt {
+                        by: KillCause::FlowFailure,
+                    } if mode.contains("halt-gate") => {
+                        assert_eq!(frame.position, Position::Continue);
+                        assert_eq!(frame.exchange, pending.as_ref().unwrap().exchange);
+                        assert!(!root.join("halt-interrupt.json").exists());
+                        std::fs::write(root.join("halt-interrupt.json"), &bytes[..n]).unwrap();
+                        if mode.contains("halt-gate-deadline") || mode.contains("halt-gate-clock") {
+                            continue;
+                        }
+                        let answer = pending.take().unwrap();
+                        let raw = serde_json::to_vec(&answer).unwrap();
+                        std::fs::write(root.join("halt-terminal.json"), &raw).unwrap();
+                        packet(fd, &answer);
+                        if mode.contains("world-silent") {
                             packet(
                                 fd,
                                 &OrganEnvelope {
                                     exchange: ExchangeId {
                                         opener: Opener::Gate,
-                                        ordinal: 102,
+                                        ordinal: 103,
                                     },
                                     position: Position::Open,
-                                    payload: Payload::Frame(weaver_types::TurnFrame::carry_from(
-                                        br#"{"text":"Read next."}"#,
-                                        42,
+                                    payload: Payload::Frame(weaver_types::TurnFrame::carry(
+                                        b"queued behind close",
                                     )),
                                 },
                             );
+                            // Keep the actual receive queue undrained until the
+                            // original halt cap closes/kills this fixture.
+                            loop {
+                                std::thread::sleep(Duration::from_millis(10));
+                            }
                         }
-                        packet(fd, &answer);
-                        previous = Some(answer);
+                    }
+                    Payload::ToolInterrupt {
+                        by: KillCause::Unload,
+                    } if mode.contains("graceful") => {
+                        assert_eq!(frame.position, Position::Continue);
+                        assert_eq!(
+                            frame.exchange,
+                            ExchangeId {
+                                opener: Opener::Harness,
+                                ordinal: 2
+                            }
+                        );
+                        assert!(!root.join("graceful-interrupt.json").exists());
+                        std::fs::write(root.join("graceful-interrupt.json"), &bytes[..n]).unwrap();
+                        if !mode.contains("graceful-expiry") {
+                            if let Some(answer) = pending.take() {
+                                packet(fd, &answer);
+                            } else {
+                                assert!(
+                                    mode.contains("graceful-crossed")
+                                        || mode.contains("graceful-result")
+                                );
+                            }
+                        }
                     }
                     Payload::ToolCancel => {
                         assert_eq!(frame.position, Position::Continue);
@@ -164,12 +432,28 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         cancels += 1;
                         assert_eq!(cancels, 1, "one cancel on the original execution");
                         std::fs::write(root.join("cancel.json"), &bytes[..n]).unwrap();
+                        if mode.contains("queued-input") && mode.contains("late") {
+                            queued::queue_packets(mode, root, fd);
+                        }
                         if let Some(answer) = pending.take() {
                             packet(fd, &answer);
                         }
                     }
                     Payload::Frame(close) => {
                         assert_eq!(frame.position, Position::Close);
+                        if mode.contains("queued-input") && frame.exchange.ordinal >= 102 {
+                            let value: serde_json::Value =
+                                serde_json::from_slice(&close.octets().unwrap()).unwrap();
+                            assert_eq!(frame.exchange.opener, Opener::Gate);
+                            assert_eq!(value["kind"], "refused");
+                            assert!(value.get("turn").is_none() && value.get("run").is_none());
+                            std::fs::write(
+                                root.join(format!("queued-close-{}.json", frame.exchange.ordinal)),
+                                &bytes[..n],
+                            )
+                            .unwrap();
+                            continue;
+                        }
                         assert_eq!(
                             frame.exchange,
                             ExchangeId {
@@ -182,14 +466,22 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                             serde_json::from_slice(&close.octets().unwrap()).unwrap();
                         assert_eq!(
                             value["kind"],
-                            if mode.contains("-final-") {
+                            if mode.contains("-final-") || mode.contains("graceful-result") {
                                 "answered"
                             } else {
                                 "stopped"
                             }
                         );
-                        assert_eq!(value["turn"], "generation-turn");
+                        if mode.contains("-lower-organ-") {
+                            assert!(value.get("turn").is_none() && value.get("run").is_none());
+                        } else {
+                            assert_eq!(value["turn"], "generation-turn");
+                        }
+                        assert!(!root.join("closed.json").exists(), "duplicate world close");
                         std::fs::write(root.join("closed.json"), &bytes[..n]).unwrap();
+                        if mode.contains("queued-input") {
+                            queued::fresh_packet(mode, root, fd);
+                        }
                     }
                     other => panic!("unexpected gate request: {other:?}"),
                 }
@@ -212,6 +504,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if mode.contains("graceful") {
+        return crate::flow::context::worker_startup::input::generation::graceful_tests::exercise(
+            guard, member, reader, clock, socket, root, mode,
+        );
+    }
     let input = guard.input.as_mut().unwrap();
     input.repair(&FAMILY).unwrap();
     until(
@@ -266,7 +563,10 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         assert_eq!(input.execute(foreign.clone()), Err(foreign));
         assert!(input.recall(request.call_id.clone()).is_err());
         assert_eq!(input.ready_pair(), Some(request));
-        if mode.contains("stop-unsent") {
+        if mode.contains("stop-unsent")
+            || mode.contains("halt-gate-unsent")
+            || mode.contains("gate-death-unsent")
+        {
             loop {
                 match send(
                     input.serving.owner.gate.fd().as_raw_fd(),
@@ -298,55 +598,36 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         }
         input.execute(request.call_id.clone()).unwrap();
         assert!(input.execute(request.call_id.clone()).is_err());
-        if mode.contains("queued-input") {
-            for _ in 0..1000 {
-                assert_eq!(
-                    step(input, member, clock, mode),
-                    FoundationInputProgress::Pending
-                );
-                if input.serving.owner.gate.held().is_some() {
-                    break;
-                }
-            }
-            assert_eq!(
-                input.serving.owner.gate.held().unwrap().exchange,
-                ExchangeId {
-                    opener: Opener::Gate,
-                    ordinal: 102
-                }
+        if mode.contains("halt-gate") {
+            return crate::flow::context::worker_startup::input::generation::halt_tests::exercise(
+                guard, member, reader, clock, socket, root, mode,
             );
-            for _ in 0..16 {
-                assert_eq!(
-                    step(input, member, clock, mode),
-                    FoundationInputProgress::Pending
-                );
-                assert!(input.pair_outcome(&request.call_id).is_none());
+        }
+        if index == 0 && mode.contains("queued-input") {
+            if mode.contains("duplicate-") || mode.contains("not-open") {
+                queued::invalid(input, member, clock, root, mode);
+                return;
             }
-            assert!(
-                input
-                    .serving
-                    .owner
-                    .context
-                    .deadlines
-                    .get(PumpDeadline::Decision)
-                    .is_none()
-            );
-            assert!(!root.join("external-3.json").exists());
-            return; // Reproduces the held-input routing carry, not a completed turn.
+            if mode.contains("queued-input-leave") {
+                return queued::leave(guard, member, clock, socket, root, mode);
+            }
+            if mode.contains("stop-running") && !mode.contains("late") {
+                queued::wait_queued(input, member, clock, mode);
+            }
         }
         if mode.contains("gate-death") {
-            for _ in 0..1000 {
-                if step(input, member, clock, mode) == FoundationInputProgress::Stopped {
-                    break;
-                }
+            if mode.contains("gate-death-stop") {
+                return gate_loss::stop::exercise(
+                    guard,
+                    member,
+                    reader,
+                    clock,
+                    (socket, root),
+                    mode,
+                    requests,
+                );
             }
-            assert_eq!(input.progress(), FoundationInputProgress::Stopped);
-            assert!(input.serving.owner.context.failure().is_some());
-            assert!(input.pair_outcome(&request.call_id).is_none());
-            assert!(input.serving.owner.context.pairs.executing().is_some());
-            assert!(!root.join("external-3.json").exists());
-            assert!(!root.join("closed.json").exists());
-            return;
+            return gate_loss::exercise(guard, member, reader, clock, root, mode, requests);
         }
         if ((mode.contains("wrong-return") || mode.contains("multiline")) && ordinal == 2)
             || (mode.contains("duplicate") && ordinal == 3)
@@ -512,6 +793,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 .filter(|r| r["kind"] == "tool.call.completed")
                 .all(|r| sequence(r) < sequence(close))
         );
+        if mode.contains("queued-input") {
+            queued::handoff(&mut guard, member, reader, clock, root, mode);
+        }
         return;
     }
     until(

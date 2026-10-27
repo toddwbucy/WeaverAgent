@@ -41,6 +41,9 @@ pub struct FoundationAdmission {
     receiver: Option<EnterReceiver>,
     received: Option<ReceivedEnter>,
     detail: Option<String>,
+    malformed_answer: Option<weaver_types::OrganEnvelope>,
+    malformed_send: Option<crate::flow::pump_transport::OrganSend>,
+    malformed_pending: bool,
 }
 impl FoundationAdmission {
     pub fn listen(listener: CoordinationListener) -> Result<Self, String> {
@@ -49,12 +52,22 @@ impl FoundationAdmission {
             receiver: None,
             received: None,
             detail: None,
+            malformed_answer: None,
+            malformed_send: None,
+            malformed_pending: false,
         })
     }
 
     /// One nonblocking accept/receive step. No child or recording context exists
     /// yet. No additional connection is consumed while this Enter is retained.
     pub fn advance(&mut self) -> FoundationAdmissionProgress {
+        self.advance_with_io(&mut MonotonicIo)
+    }
+
+    fn advance_with_io(&mut self, io: &mut impl PumpIo) -> FoundationAdmissionProgress {
+        if self.malformed_pending {
+            return self.advance_malformed(io);
+        }
         if self.detail.is_some() {
             return FoundationAdmissionProgress::Stopped;
         }
@@ -75,14 +88,37 @@ impl FoundationAdmission {
             }
         }
         let receiver = self.receiver.as_mut().unwrap();
-        if let Err(error) = receiver.advance() {
+        if let Err(error) = receiver.advance(io) {
             self.detail = Some(format!("Enter receive: {error:?}"));
             return FoundationAdmissionProgress::Stopped;
         }
         match self.receiver.take().unwrap().into_received() {
             Ok(original) => {
+                let timing = original.check_window(io);
                 self.received = Some(original);
-                FoundationAdmissionProgress::Received
+                match timing {
+                    Ok(()) => FoundationAdmissionProgress::Received,
+                    Err(crate::flow::pump::enter::EnterTimeError::Future) => {
+                        let original = self.received.as_mut().unwrap();
+                        original.close_unadmitted();
+                        self.malformed_answer = Some(weaver_types::OrganEnvelope {
+                            exchange: original.envelope().exchange.clone(),
+                            position: weaver_types::Position::Close,
+                            payload: weaver_types::Payload::Refusal(
+                                weaver_types::LifecycleRefusal::Malformed,
+                            ),
+                        });
+                        self.detail =
+                            Some("Malformed Enter: window starts after packet receipt".into());
+                        self.malformed_pending = true;
+                        self.advance_malformed(io)
+                    }
+                    Err(error) => {
+                        self.received.as_mut().unwrap().close_unadmitted();
+                        self.detail = Some(format!("Enter window: {error:?}"));
+                        FoundationAdmissionProgress::Stopped
+                    }
+                }
             }
             Err(receiver) => {
                 self.receiver = Some(receiver);
@@ -91,29 +127,49 @@ impl FoundationAdmission {
         }
     }
 
+    fn advance_malformed(&mut self, io: &mut impl PumpIo) -> FoundationAdmissionProgress {
+        use crate::flow::pump_transport::TrackedStage;
+        let original = self.received.as_mut().expect("retained malformed Enter");
+        let result = (|| {
+            if let Some(answer) = self.malformed_answer.take() {
+                match original.peer_mut().stage_tracked(answer) {
+                    Ok(TrackedStage::Queued(send)) => self.malformed_send = Some(send),
+                    Ok(TrackedStage::Busy(answer)) => self.malformed_answer = Some(answer),
+                    Err(error) => {
+                        self.malformed_answer = Some(error.input);
+                        return Err(error.failure);
+                    }
+                }
+            }
+            original.peer_mut().try_send_observed(io)?;
+            Ok(())
+        })();
+        if result.is_err() || self.malformed_send.as_ref().is_some_and(|send| send.sent()) {
+            self.malformed_pending = false;
+            FoundationAdmissionProgress::Stopped
+        } else {
+            FoundationAdmissionProgress::Pending
+        }
+    }
+
     pub fn detail(&self) -> Option<&str> {
         self.detail.as_deref()
     }
 
-    /// `remaining_enter_ns` is the true remaining original Enter allowance.
-    /// This adapter does not invent an earlier anchor or implement the held
-    /// EnterWindow proposal. A caller must supply that fact before activation.
+    /// Adopt only the exact original Enter window retained with the received
+    /// packet. No caller can replace it with a fresh remaining allowance.
     #[allow(clippy::result_large_err)]
-    pub fn adopt(self, remaining_enter_ns: u64) -> Result<FoundationRun, Self> {
-        self.adopt_with_io(remaining_enter_ns, &mut MonotonicIo)
+    pub fn adopt(self) -> Result<FoundationRun, Self> {
+        self.adopt_with_io(&mut MonotonicIo)
     }
 
     #[allow(clippy::result_large_err)]
-    fn adopt_with_io(
-        mut self,
-        remaining_enter_ns: u64,
-        io: &mut impl PumpIo,
-    ) -> Result<FoundationRun, Self> {
+    fn adopt_with_io(mut self, io: &mut impl PumpIo) -> Result<FoundationRun, Self> {
         if self.detail.is_some() || self.received.is_none() {
             return Err(self);
         }
         let original = self.received.take().unwrap();
-        match original.adopt(remaining_enter_ns, io) {
+        match original.adopt(io) {
             Ok(adopted) => {
                 let (mut context, original) = adopted.into_parts();
                 let resources = context
@@ -384,6 +440,9 @@ impl<'a> FoundationEnter<'a> {
             gate_outgoing: owner.gate_raise.exchange.ordinal,
             owner,
             gate_exchanges: Default::default(),
+            queued_inputs: Default::default(),
+            graceful: None,
+            save: None,
         })
     }
 }
@@ -407,7 +466,10 @@ fn ports(listener: &mut Option<Box<LifecycleListener>>) -> LifecyclePorts<'_> {
 pub struct FoundationServing<'a> {
     owner: Box<EnteredServing<'a>>,
     gate_exchanges: std::collections::HashSet<u64>,
+    queued_inputs: std::collections::VecDeque<crate::flow::pump_transport::ReceivedOrgan>,
     gate_outgoing: u64,
+    graceful: Option<Box<input::graceful::PendingGraceful>>,
+    save: Option<Box<input::save::PendingSave>>,
 }
 
 #[path = "context_worker_input.rs"]
@@ -416,3 +478,15 @@ pub(crate) mod input;
 #[cfg(test)]
 #[path = "context_worker_startup_tests.rs"]
 mod tests;
+
+#[path = "context_worker_rollback.rs"]
+pub(crate) mod rollback;
+
+#[path = "context_worker_startup_failure.rs"]
+pub(crate) mod failed;
+
+#[path = "context_worker_startup_expired.rs"]
+pub(crate) mod expired;
+
+#[path = "context_worker_entered_rollback.rs"]
+pub(crate) mod entered_rollback;

@@ -31,6 +31,11 @@ use nix::sys::socket::{
 };
 use weaver_types::{MAX_ENVELOPE_BYTES, OrganEnvelope};
 
+#[allow(dead_code)]
+#[path = "channel_capture.rs"]
+mod capture;
+pub(crate) use capture::ReceivedCapture;
+
 /// A fault below the exchange layer on the coordination channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChannelFault {
@@ -120,6 +125,36 @@ pub fn dial(
                     return Err(fault);
                 }
                 std::thread::sleep(DIAL_INTERVAL.min(remaining));
+            }
+        }
+    }
+}
+
+pub(crate) fn dial_for_enter(
+    socket_path: &Path,
+    worker_uid: u32,
+    run_directory: &Path,
+    window: &crate::serving_load::window::LoadWindow,
+) -> Result<Coordination, ChannelFault> {
+    let ceiling = Instant::now() + DIAL_CEILING;
+    loop {
+        window.check_channel()?;
+        let result = dial_once(socket_path, worker_uid, run_directory);
+        match result {
+            Ok(peer) => {
+                window.check_channel()?;
+                return Ok(peer);
+            }
+            Err(fault @ (ChannelFault::Undecodable | ChannelFault::WrongPeer { .. })) => {
+                return Err(fault);
+            }
+            Err(fault) => {
+                let remaining = window.remaining_channel()?;
+                let dial_remaining = ceiling.saturating_duration_since(Instant::now());
+                if dial_remaining.is_zero() {
+                    return Err(fault);
+                }
+                std::thread::sleep(DIAL_INTERVAL.min(remaining).min(dial_remaining));
             }
         }
     }
@@ -257,6 +292,32 @@ fn clear_nonblocking(fd: &OwnedFd) -> Result<(), ChannelFault> {
 }
 
 impl Coordination {
+    /// Observe and Leave use separate exchanges/connections. The invocation
+    /// keeps the first socket until this check: kernel pidfds, not a reused
+    /// numeric PID, pin the worker whose loaded facts authorized the directive.
+    pub(crate) fn require_same_worker(&self, observed: &Self) -> Result<(), ChannelFault> {
+        use nix::sys::socket::{getsockopt, sockopt};
+        let peer = getsockopt(&self.fd, sockopt::PeerCredentials)
+            .map_err(|_| ChannelFault::Undecodable)?;
+        let prior = getsockopt(&observed.fd, sockopt::PeerCredentials)
+            .map_err(|_| ChannelFault::Undecodable)?;
+        let current_pidfd =
+            getsockopt(&self.fd, sockopt::PeerPidfd).map_err(|_| ChannelFault::Undecodable)?;
+        let observed_pidfd =
+            getsockopt(&observed.fd, sockopt::PeerPidfd).map_err(|_| ChannelFault::Undecodable)?;
+        if peer.pid() != prior.pid()
+            || peer.uid() != prior.uid()
+            || pidfd_pid(&current_pidfd) != Some(peer.pid())
+            || pidfd_pid(&observed_pidfd) != Some(prior.pid())
+        {
+            return Err(ChannelFault::WrongPeer {
+                uid: peer.uid(),
+                pid: peer.pid(),
+            });
+        }
+        Ok(())
+    }
+
     /// The next exchange identity: ordinals assigned serially by this crate,
     /// per `weaver-organ-channel` section 1.
     pub fn next_ordinal(&mut self) -> u64 {
@@ -322,6 +383,7 @@ impl Coordination {
     }
 
     /// Dormant paired TYPES-ENTER sender. No active command selects this codec.
+    #[cfg(test)]
     pub(crate) fn send_replacement_enter(
         &self,
         envelope: &weaver_types::state_flow::enter::EnterEnvelope,
@@ -339,6 +401,122 @@ impl Coordination {
             _ => ChannelFault::Undecodable,
         })?;
         self.send_descriptor_bytes(&body, sink, state_end)
+    }
+
+    /// The replacement Enter retains one original raw deadline through encode,
+    /// socket pressure and carry. SCM_RIGHTS is retried only after EAGAIN/EINTR,
+    /// never after the kernel accepted the complete seqpacket.
+    pub(crate) fn send_replacement_enter_within(
+        &self,
+        envelope: &weaver_types::state_flow::enter::EnterEnvelope,
+        sink: BorrowedFd<'_>,
+        state: BorrowedFd<'_>,
+        window: &crate::serving_load::window::LoadWindow,
+    ) -> Result<(), ChannelFault> {
+        use weaver_types::state_flow::enter::{CodecError, EnterBinding};
+        let EnterBinding::Serving { enter_window, .. } = &envelope.enter().binding else {
+            return Err(ChannelFault::Undecodable);
+        };
+        if *enter_window != window.original() {
+            return Err(ChannelFault::Undecodable);
+        }
+        window.check_channel()?;
+        let body = envelope.encode().map_err(|error| match error {
+            CodecError::TooLarge => ChannelFault::Truncated {
+                bound: MAX_ENVELOPE_BYTES,
+            },
+            _ => ChannelFault::Undecodable,
+        })?;
+        window.check_channel()?;
+        let fds = [sink.as_raw_fd(), state.as_raw_fd()];
+        loop {
+            window.check_channel()?;
+            match sendmsg::<()>(
+                self.fd.as_raw_fd(),
+                &[std::io::IoSlice::new(&body)],
+                &[ControlMessage::ScmRights(&fds)],
+                MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL,
+                None,
+            ) {
+                Ok(sent) if sent == body.len() => return Ok(()),
+                Ok(_) => return Err(ChannelFault::Closed),
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(nix::errno::Errno::EAGAIN) => self.wait_enter(nix::libc::POLLOUT, window)?,
+                Err(_) => return Err(ChannelFault::Closed),
+            }
+        }
+    }
+
+    pub(crate) fn recv_enter_answer(
+        &self,
+        window: &crate::serving_load::window::LoadWindow,
+    ) -> Result<OrganEnvelope, ChannelFault> {
+        self.recv_enter_answer_with(window, |bytes| {
+            serde_json::from_slice(bytes).map_err(|_| ChannelFault::Undecodable)
+        })
+    }
+    fn recv_enter_answer_with(
+        &self,
+        window: &crate::serving_load::window::LoadWindow,
+        decode: impl FnOnce(&[u8]) -> Result<OrganEnvelope, ChannelFault>,
+    ) -> Result<OrganEnvelope, ChannelFault> {
+        loop {
+            self.wait_enter(nix::libc::POLLIN, window)?;
+            let mut bytes = vec![0; MAX_ENVELOPE_BYTES];
+            let mut slices = [std::io::IoSliceMut::new(&mut bytes)];
+            let message = match nix::sys::socket::recvmsg::<()>(
+                self.fd.as_raw_fd(),
+                &mut slices,
+                None,
+                MsgFlags::MSG_DONTWAIT,
+            ) {
+                Ok(message) => message,
+                Err(nix::errno::Errno::EINTR | nix::errno::Errno::EAGAIN) => continue,
+                Err(_) => return Err(ChannelFault::Closed),
+            };
+            if message
+                .flags
+                .intersects(MsgFlags::MSG_TRUNC | MsgFlags::MSG_CTRUNC)
+            {
+                return Err(ChannelFault::Truncated {
+                    bound: MAX_ENVELOPE_BYTES,
+                });
+            }
+            if message.bytes == 0 {
+                return Err(ChannelFault::Closed);
+            }
+            let count = message.bytes;
+            let answer = decode(&bytes[..count])?;
+            window.check_channel()?;
+            return Ok(answer);
+        }
+    }
+
+    fn wait_enter(
+        &self,
+        events: i16,
+        window: &crate::serving_load::window::LoadWindow,
+    ) -> Result<(), ChannelFault> {
+        loop {
+            let remaining = window.remaining_channel()?;
+            let millis = remaining.as_nanos().div_ceil(1_000_000).min(poll_cap_ms()) as i32;
+            let mut fd = nix::libc::pollfd {
+                fd: self.fd.as_raw_fd(),
+                events,
+                revents: 0,
+            };
+            // SAFETY: one valid pollfd; the original owner holds the descriptor.
+            let result = unsafe { nix::libc::poll(&mut fd, 1, millis) };
+            if result < 0
+                && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
+            {
+                return Err(ChannelFault::Closed);
+            }
+            window.check_channel()?;
+            if result > 0 {
+                return Ok(());
+            }
+        }
     }
 
     fn send_descriptor_bytes(

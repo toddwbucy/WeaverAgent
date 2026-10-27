@@ -125,6 +125,161 @@ fn halt_report_fault_keeps_the_actual_recorded_open_turn() {
 }
 
 #[test]
+fn halt_close_promotes_the_exact_pending_terminal_without_ordinary_capacity() {
+    for (reserved, deferred) in [(true, false), (false, false), (true, true)] {
+        let mut member = Member::new();
+        let mut started = super::super::tests::event(Kind::TurnStarted, None);
+        started.turn = Some(TurnRef("pending-halt-close".into()));
+        member.run.author(started).unwrap();
+        member.fill_trace();
+        let context = &mut member.run.context;
+        let event = AuthoredEvent {
+            kind: Kind::TurnClosed,
+            subsystem: Subsystem::Harness,
+            turn: Some(TurnRef("pending-halt-close".into())),
+            source: crate::flow::author::AuthoredSource::Runtime,
+            causal_parent: None,
+            payload: Some(Payload::TurnClosed(weaver_trace::TurnClose::Stopped {
+                reason: weaver_trace::StopReason::Directive,
+                cause: Some(weaver_trace::Cause { uid: 42 }),
+            })),
+        };
+        context.author_turn = Some((event.kind, event.turn.clone()));
+        assert!(matches!(
+            context.barrier.submit_authored_with_clock(
+                event,
+                RecordPurpose::Observation,
+                &context.author,
+                1,
+                &mut context.inbox,
+                &mut context.budget,
+                &mut || member.run.clock.now()
+            ),
+            RecordProgress::Pending
+        ));
+        let ticket = context.pending_author().unwrap().ticket;
+        let first = bound_failure(&mut member);
+        begin_report(&mut member);
+        assert!(matches!(
+            advance(&mut member),
+            HaltTraceProgress::FaultRecorded(_)
+        ));
+        assert!(member.run.context.open_turn.is_some());
+        let sequence = if deferred {
+            super::recall_tests::drain_admitted(&mut member);
+            assert_eq!(
+                advance(&mut member),
+                HaltTraceProgress::Pending,
+                "reporting must not admit a close even after capacity returns"
+            );
+            let close = member.run.context.barrier.defer_halt_close().unwrap();
+            assert!(member.run.context.pending_author().is_none());
+            assert!(member.run.context.open_turn.is_some());
+            let mut foreign = Member::new();
+            bound_failure(&mut foreign);
+            let close = foreign
+                .run
+                .context
+                .barrier
+                .restore_halt_close(close)
+                .expect_err("foreign recorder returns the exact original");
+            let mut close = Some(close);
+            let sequence = member
+                .run
+                .context
+                .resume_deferred_halt_close(&mut close)
+                .unwrap()
+                .unwrap();
+            assert!(close.is_none());
+            sequence
+        } else if reserved {
+            member
+                .run
+                .context
+                .resume_halt_terminal_and_bind()
+                .unwrap()
+                .expect("reserved close despite ordinary pressure")
+        } else {
+            assert!(
+                member
+                    .run
+                    .context
+                    .resume_trace_only_and_bind()
+                    .unwrap()
+                    .is_none()
+            );
+            super::recall_tests::drain_admitted(&mut member);
+            member
+                .run
+                .context
+                .resume_trace_only_and_bind()
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(
+            member.run.context.barrier.recorded_author_ticket(sequence),
+            Some(ticket)
+        );
+        assert!(member.run.context.open_turn.is_none());
+        assert!(member.run.context.author_turn.is_none());
+        assert!(member.run.context.pending_author().is_none());
+        assert!(
+            member
+                .run
+                .context
+                .resume_halt_terminal_and_bind()
+                .unwrap()
+                .is_none()
+        );
+        if reserved && !deferred {
+            super::recall_tests::drain_admitted(&mut member);
+        } else {
+            member.run._reader.set_nonblocking(false).unwrap();
+            member
+                .run
+                ._reader
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let mut line = String::new();
+            std::io::BufRead::read_line(
+                &mut std::io::BufReader::new(&mut member.run._reader),
+                &mut line,
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&line).unwrap()["sequence"],
+                sequence.0.to_string()
+            );
+        }
+        let rows = member.records(Kind::TurnClosed);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["sequence"], sequence.0.to_string());
+        assert_eq!(rows[0]["payload"]["reason"], "directive");
+        assert_eq!(rows[0]["payload"]["cause"]["uid"], 42);
+        assert_eq!(member.run.context.failure(), Some(&first));
+        member.no_request();
+    }
+}
+
+#[test]
+fn halt_close_never_spends_a_terminal_reserve_on_an_ordinary_pending_record() {
+    let mut member = Member::new();
+    let (ticket, event) = pending(&mut member);
+    bound_failure(&mut member);
+    begin_report(&mut member);
+    assert!(matches!(
+        advance(&mut member),
+        HaltTraceProgress::FaultRecorded(_)
+    ));
+    assert!(member.run.context.resume_halt_terminal_and_bind().is_err());
+    assert_eq!(member.run.context.pending_author().unwrap().ticket, ticket);
+    assert_eq!(
+        format!("{:?}", member.run.context.pending_author().unwrap().event),
+        event
+    );
+}
+
+#[test]
 fn halt_report_real_state_failures_record_exact_account_and_never_resume_or_requery() {
     for malformed in [false, true] {
         let mut member = Member::new();

@@ -32,13 +32,13 @@ pub(super) struct WorkerPairs {
     effective: Option<EffectiveEmission>,
     calls: Vec<CallId>,
     external: Vec<ExternalWork>,
-    cancelled: bool,
+    cancelled: Option<NonDispatchCause>,
     barred: Option<NonDispatchCause>,
     returned_filing: crate::flow::context::StoppedAuthor,
 }
 impl WorkerPairs {
     pub(super) fn completed_effective(&self) -> Option<&EffectiveEmission> {
-        (matches!(self.stage, Stage::Complete) && !self.cancelled)
+        (matches!(self.stage, Stage::Complete) && self.cancelled.is_none())
             .then_some(self.effective.as_ref())
             .flatten()
     }
@@ -52,7 +52,7 @@ impl WorkerPairs {
                 .collect(),
             effective: Some(effective),
             external: Vec::new(),
-            cancelled: false,
+            cancelled: None,
             barred,
             returned_filing: crate::flow::context::StoppedAuthor::default(),
         }
@@ -64,22 +64,52 @@ impl WorkerPairs {
             _ => FoundationInputProgress::Pending,
         }
     }
-    pub(super) fn cancel(
+    pub(super) fn graceful_needs_step(&self, context: &RecordingContext) -> bool {
+        matches!(self.stage, Stage::Ready | Stage::Recall(_))
+            || (matches!(self.stage, Stage::Complete) && self.ended_by_unload(context))
+    }
+
+    pub(super) fn lost_gate_needs_step(&self, context: &RecordingContext) -> bool {
+        matches!(self.stage, Stage::Ready) && context.pairs.barred_for(NonDispatchCause::NoGate)
+    }
+
+    pub(super) fn ended_by_unload(&self, context: &RecordingContext) -> bool {
+        matches!(self.stage, Stage::Complete)
+            && self.calls.iter().any(|call| {
+                context
+                    .pairs
+                    .completed(call)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|pair| {
+                        matches!(
+                            pair.ended().reason,
+                            Some(weaver_types::state_flow::PairFailure::Unload {})
+                                | Some(weaver_types::state_flow::PairFailure::NotDispatched {
+                                    cause: NonDispatchCause::Unload,
+                                })
+                        )
+                    })
+            })
+    }
+
+    /// A graceful drain bars future dispatch but preserves a completed return
+    /// for the running turn. It must not cancel the engine's next model pass.
+    pub(super) fn drain_for_leave(
         &mut self,
         context: &mut RecordingContext,
-        gate: Option<&mut OrganPort>,
+        gate: &mut OrganPort,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
-        self.cancelled = true;
+        if self.cancelled.is_some() || matches!(self.stage, Stage::Complete) {
+            return Ok(());
+        }
+        self.barred = Some(NonDispatchCause::Unload);
         if context.pair_work.is_some() {
             if context.pairs.executing().is_some() {
-                context.bar_executing_pairs(
-                    NonDispatchCause::Stop,
-                    gate.ok_or(RunFailure::PairOwned)?,
-                    io,
-                )?;
+                context.bar_executing_pairs(NonDispatchCause::Unload, gate, io)?;
             } else {
-                context.bar_pending_pairs(NonDispatchCause::Stop, io)?;
+                context.bar_pending_pairs(NonDispatchCause::Unload, io)?;
             }
         }
         if matches!(self.stage, Stage::Ready | Stage::Recall(_)) {
@@ -87,6 +117,72 @@ impl WorkerPairs {
         }
         Ok(())
     }
+    pub(super) fn cancel(
+        &mut self,
+        cause: NonDispatchCause,
+        context: &mut RecordingContext,
+        gate: Option<&mut OrganPort>,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        let previous = self.cancelled;
+        retain_cancellation(&mut self.cancelled, cause);
+        let cause = self.cancelled.unwrap();
+        if context.pair_work.is_some() {
+            if context.pairs.executing().is_some() {
+                if let Some(gate) = gate {
+                    context.bar_executing_pairs(cause, gate, io)?;
+                } else if previous != Some(cause) && !context.pairs.barred_for(cause) {
+                    // The first election must reconcile the actual send on
+                    // its port. Once barred, retained gate replies can settle
+                    // after that port retires without renewing the election.
+                    return Err(RunFailure::PairOwned);
+                }
+            } else {
+                context.bar_pending_pairs(cause, io)?;
+            }
+        }
+        if matches!(self.stage, Stage::Ready | Stage::Recall(_)) {
+            self.stage = Stage::Opening;
+        }
+        Ok(())
+    }
+    pub(super) fn cancel_control(
+        &self,
+    ) -> Option<(&OrganEnvelope, &crate::flow::pump_transport::OrganSend)> {
+        self.external.last()?.cancel_control()
+    }
+
+    pub(super) fn advance_cancel_control(
+        &mut self,
+        context: &mut RecordingContext,
+        gate: &mut OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        if !matches!(self.stage, Stage::External) {
+            return Ok(true);
+        }
+        let cause = self.cancelled.ok_or(RunFailure::PairOwned)?;
+        self.external
+            .last_mut()
+            .unwrap()
+            .advance_cancel_control(cause, context, gate, io)
+    }
+
+    pub(super) fn route_cancel_reply(
+        &mut self,
+        context: &mut RecordingContext,
+        gate: &mut OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        if !matches!(self.stage, Stage::External) {
+            return Ok(false);
+        }
+        self.external
+            .last_mut()
+            .unwrap()
+            .route_cancel_reply(context, gate, io)
+    }
+
     pub(super) fn advance<I: PumpIo>(
         &mut self,
         acts: &[SortAct],
@@ -98,15 +194,8 @@ impl WorkerPairs {
                 decision(context, ports.io)?;
                 match context.begin_pair_execution(self.effective.take().unwrap(), ports.io) {
                     Ok(()) => {
-                        if self.cancelled || self.barred.is_some() {
-                            context.bar_pending_pairs(
-                                if self.cancelled {
-                                    NonDispatchCause::Stop
-                                } else {
-                                    self.barred.unwrap()
-                                },
-                                ports.io,
-                            )?;
+                        if let Some(cause) = self.cancelled.or(self.barred) {
+                            context.bar_pending_pairs(cause, ports.io)?;
                         }
                         self.stage = Stage::Opening;
                     }
@@ -143,17 +232,15 @@ impl WorkerPairs {
                         }
                         SortAct::Answer { .. } => false,
                     });
-                    if selected && !self.cancelled {
+                    if selected && self.cancelled.is_none() && self.barred.is_none() {
                         self.stage = Stage::Ready;
                     } else {
                         let call = ready.call_id.clone();
                         context.refuse_pair_dispatch(
                             &call,
-                            if self.cancelled {
-                                NonDispatchCause::Stop
-                            } else {
-                                NonDispatchCause::PlanBreak
-                            },
+                            self.cancelled
+                                .or(self.barred)
+                                .unwrap_or(NonDispatchCause::PlanBreak),
                             ports.io,
                         )?;
                     }
@@ -185,15 +272,17 @@ impl WorkerPairs {
                 }
             }
             Stage::External => {
-                if self
-                    .external
-                    .last_mut()
-                    .unwrap()
-                    .advance(self.cancelled, context, ports)?
-                {
+                if self.external.last_mut().unwrap().advance(
+                    self.cancelled.or(self
+                        .barred
+                        .filter(|cause| *cause == NonDispatchCause::Unload)),
+                    context,
+                    ports,
+                )? {
                     self.stage = Stage::Opening;
                 }
             }
+            Stage::Ready if self.lost_gate_needs_step(context) => self.stage = Stage::Opening,
             Stage::Ready | Stage::Complete => {}
         }
         Ok(())
@@ -228,7 +317,23 @@ impl FoundationInput<'_> {
         let (input, record) = sorted.into_parts();
         emission.selected = Some((input.source, input.acts));
         emission.sort_record = Some(record);
-        emission.execution = Some(WorkerPairs::new(input.effective, barred));
+        emission.execution = Some(WorkerPairs::new(
+            input.effective,
+            if self.serving.graceful.is_some() {
+                Some(NonDispatchCause::Unload)
+            } else if barred.is_none()
+                && self
+                    .serving
+                    .owner
+                    .context
+                    .serving_organs
+                    .gate_matches(&self.serving.owner.gate)
+            {
+                Some(NonDispatchCause::NoGate)
+            } else {
+                barred
+            },
+        ));
         emission.stage = EmissionStage::Execution;
         Ok(())
     }

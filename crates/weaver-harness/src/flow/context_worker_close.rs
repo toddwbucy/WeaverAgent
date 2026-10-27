@@ -1,5 +1,5 @@
-//! One retained turn close drives authoring and exact world delivery for answers,
-//! settled operation refusals and operator Stop. The caller chooses the outcome.
+//! One retained close drives exact world delivery for answers, operation refusals
+//! and operator Stop. Only an actual open turn authors a turn close.
 use super::*;
 use crate::flow::clock::AbsoluteBound;
 use crate::flow::context::RecordingContext;
@@ -8,9 +8,8 @@ use weaver_trace::{Sequence, StopReason, TurnClose};
 use weaver_types::{Cause, ExchangeId, Finish, TurnFrame};
 
 pub(super) struct WorldClose {
-    turn: TurnRef,
+    target: CloseTarget,
     exchange: ExchangeId,
-    outcome: TurnClose,
     text: String,
     length: bool,
     completed: Stage,
@@ -20,6 +19,47 @@ pub(super) struct WorldClose {
     recorded: Option<Sequence>,
     close: Option<OrganEnvelope>,
     send: Option<OrganSend>,
+}
+
+enum CloseTarget {
+    Turn { turn: TurnRef, outcome: TurnClose },
+    Input(AcceptedInput),
+}
+
+/// Keep the original response after the observed gate closes. A whole send
+/// remains a whole send; only the exact pending ticket permits withdrawal.
+pub(super) fn retain_lost_world(
+    gate: &mut crate::flow::pump_transport::OrganPort,
+    exchange: &ExchangeId,
+    close: &mut Option<OrganEnvelope>,
+    send: Option<&OrganSend>,
+) -> Result<bool, RunFailure> {
+    let Some(send) = send else {
+        return Ok(close
+            .as_ref()
+            .is_some_and(|frame| &frame.exchange == exchange));
+    };
+    if !send.belongs_to(gate) || !send.matches_exchange(exchange) {
+        return Err(RunFailure::PlaceOwned);
+    }
+    if send.sent() {
+        return send.sent_at().map(|_| true).ok_or(RunFailure::Closed);
+    }
+    if !send.withdrawn() {
+        let original =
+            gate.withdraw_closed_pending(send)
+                .map_err(|failure| RunFailure::Transport {
+                    source: PumpSource::Gate,
+                    failure,
+                })?;
+        if let Some(original) = original {
+            *close = Some(original);
+        }
+    }
+    Ok(send.withdrawn()
+        && close
+            .as_ref()
+            .is_some_and(|frame| &frame.exchange == exchange))
 }
 
 impl WorldClose {
@@ -37,25 +77,41 @@ impl WorldClose {
         {
             return None;
         }
-        Some(Self {
-            turn,
-            exchange: request.envelope().exchange.clone(),
-            outcome,
-            text,
-            length,
-            completed,
-            bound: input
+        Some(Self::new(
+            CloseTarget::Turn { turn, outcome },
+            request.envelope().exchange.clone(),
+            input
                 .serving
                 .owner
                 .context
                 .deadlines
                 .get(PumpDeadline::Decision),
+            text,
+            length,
+            completed,
+        ))
+    }
+    fn new(
+        target: CloseTarget,
+        exchange: ExchangeId,
+        bound: Option<AbsoluteBound>,
+        text: String,
+        length: bool,
+        completed: Stage,
+    ) -> Self {
+        Self {
+            target,
+            exchange,
+            text,
+            length,
+            completed,
+            bound,
             author_started: false,
             returned_author: StoppedAuthor::default(),
             recorded: None,
             close: None,
             send: None,
-        })
+        }
     }
     pub(super) fn answered(
         input: &FoundationInput<'_>,
@@ -70,17 +126,52 @@ impl WorldClose {
             Stage::Completed,
         )
     }
-    pub(super) fn refused(input: &FoundationInput<'_>, detail: String) -> Option<Self> {
+    pub(super) fn refused(input: &FoundationInput<'_>) -> Option<Self> {
         Self::begin(
             input,
             TurnClose::Stopped {
                 reason: StopReason::Refused,
                 cause: None,
             },
-            detail,
+            "the operation was refused".into(),
             false,
             Stage::Refused,
         )
+    }
+    pub(super) fn unloading(input: &FoundationInput<'_>, cause: Cause) -> Option<Self> {
+        Self::begin(
+            input,
+            TurnClose::Stopped {
+                reason: StopReason::Unload,
+                cause: Some(weaver_trace::Cause { uid: cause.uid }),
+            },
+            "the agent is unloading".into(),
+            false,
+            Stage::Aborted,
+        )
+    }
+    pub(super) fn refused_admission(input: &mut FoundationInput<'_>) -> Option<Self> {
+        let context = &input.serving.owner.context;
+        let request = input.received.as_ref()?;
+        if context.open_turn.is_some() || !request.belongs_to(&input.serving.owner.gate) {
+            return None;
+        }
+        context
+            .input
+            .validate_accepted(
+                input.token.as_ref()?,
+                context.flow.run(),
+                &context.declaration.scheme.scheme_id,
+            )
+            .ok()?;
+        Some(Self::new(
+            CloseTarget::Input(input.token.take()?),
+            request.envelope().exchange.clone(),
+            context.deadlines.get(PumpDeadline::Decision),
+            "the operation was refused".into(),
+            false,
+            Stage::Refused,
+        ))
     }
     pub(super) fn stopped(
         input: &mut FoundationInput<'_>,
@@ -110,13 +201,19 @@ impl WorldClose {
         })
     }
     pub(super) fn started(&self) -> bool {
-        self.author_started || self.recorded.is_some()
+        self.author_started
+            || self.recorded.is_some()
+            || self.close.is_some()
+            || self.send.is_some()
     }
     pub(super) fn recorded(&self) -> Option<Sequence> {
         self.recorded
     }
-    pub(super) fn turn(&self) -> &TurnRef {
-        &self.turn
+    pub(super) fn turn(&self) -> Option<&TurnRef> {
+        match &self.target {
+            CloseTarget::Turn { turn, .. } => Some(turn),
+            CloseTarget::Input(_) => None,
+        }
     }
     pub(super) fn send(&self) -> Option<&OrganSend> {
         self.send.as_ref()
@@ -124,6 +221,180 @@ impl WorldClose {
     pub(super) fn completed(&self) -> Stage {
         self.completed
     }
+    pub(super) fn rollback(turn: TurnRef, exchange: ExchangeId, cause: Cause) -> Self {
+        Self::new(
+            CloseTarget::Turn {
+                turn,
+                outcome: TurnClose::Stopped {
+                    reason: StopReason::Unload,
+                    cause: Some(weaver_trace::Cause { uid: cause.uid }),
+                },
+            },
+            exchange,
+            None,
+            "The agent is leaving.".into(),
+            false,
+            Stage::Aborted,
+        )
+    }
+
+    /// Lower owns world disposal. Keep an existing whole send or the exact
+    /// withdrawn datagram, but never send another world frame after Lower.
+    pub(super) fn prepare_rollback_transport(
+        &mut self,
+        gate: &mut crate::flow::pump_transport::OrganPort,
+    ) -> Result<bool, RunFailure> {
+        let Some(send) = &self.send else {
+            return Ok(true);
+        };
+        if !send.belongs_to(gate) || !send.matches_exchange(&self.exchange) {
+            return Err(RunFailure::PlaceOwned);
+        }
+        if send.sent() {
+            return if send.sent_at().is_some() {
+                Ok(true)
+            } else {
+                Err(RunFailure::Closed)
+            };
+        }
+        if send.withdrawn() {
+            return Ok(true);
+        }
+        let returned =
+            gate.withdraw_pending(&self.exchange)
+                .map_err(|failure| RunFailure::Transport {
+                    source: PumpSource::Gate,
+                    failure,
+                })?;
+        if let Some(returned) = returned {
+            self.close = Some(returned);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    pub(super) fn advance_after_lower<I: PumpIo>(
+        &mut self,
+        context: &mut RecordingContext,
+        ports: &mut PumpPorts<'_, I>,
+        proof: &crate::flow::context::worker_startup::expired::gate::RollbackGateClosed,
+    ) -> Result<bool, RunFailure> {
+        if !proof.allows(context) {
+            return Err(RunFailure::PlaceOwned);
+        }
+        self.prepare_rollback_record(context, ports)?;
+        if matches!(self.target, CloseTarget::Input(_)) && context.input.snapshot().is_some() {
+            context.input_closed_by_lower(proof, ports.io)?;
+            context.finish_input(ports.io)?;
+        }
+        context.complete_wait(PumpDeadline::Decision);
+        Ok(true)
+    }
+
+    /// An already-started close keeps its one original record even while Lower
+    /// is still reading queued frames. This continuation carries no world data.
+    pub(super) fn prepare_rollback_record<I: PumpIo>(
+        &mut self,
+        context: &mut RecordingContext,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<(), RunFailure> {
+        // A close already begun before Leave keeps its existing absolute wait.
+        if self.recorded.is_none()
+            && context.deadlines.get(PumpDeadline::Decision).is_none()
+            && let Some(bound) = self.bound
+        {
+            context.arm(PumpDeadline::Decision, bound, ports.io)?;
+        }
+        self.prepare(context, ports, true)?;
+        Ok(())
+    }
+
+    fn prepare<I: PumpIo>(
+        &mut self,
+        context: &mut RecordingContext,
+        ports: &mut PumpPorts<'_, I>,
+        lowered: bool,
+    ) -> Result<bool, RunFailure> {
+        let preparing = self.close.is_none() && self.send.is_none();
+        if preparing {
+            match &self.target {
+                CloseTarget::Turn { turn, outcome } => {
+                    self.returned_author.check()?;
+                    let sequence = if self.author_started {
+                        context.resume_author_and_wait(ports).map_err(|failure| {
+                            self.returned_author
+                                .retain_started(failure, &mut self.author_started)
+                        })?
+                    } else {
+                        self.author_started = true;
+                        context
+                            .author_and_wait(
+                                ports,
+                                AuthoredEvent {
+                                    kind: serving::Kind::TurnClosed,
+                                    subsystem: Subsystem::Harness,
+                                    turn: Some(turn.clone()),
+                                    source: AuthoredSource::Runtime,
+                                    causal_parent: None,
+                                    payload: Some(serving::Payload::TurnClosed(outcome.clone())),
+                                },
+                            )
+                            .map_err(|failure| {
+                                self.returned_author
+                                    .retain_started(failure, &mut self.author_started)
+                            })?
+                    };
+                    self.recorded = Some(sequence);
+                }
+                CloseTarget::Input(token) => {
+                    // The rejected admission never consumed this input or opened a
+                    // turn. Revoke the exact accepted capability, then retain its
+                    // owner until the original gate exchange has fully closed.
+                    if !lowered {
+                        context
+                            .input
+                            .validate_accepted(
+                                token,
+                                context.flow.run(),
+                                &context.declaration.scheme.scheme_id,
+                            )
+                            .map_err(|error| {
+                                context.fail(
+                                    ports.io,
+                                    FlowHaltReason::ProtocolFailed,
+                                    HaltPoint::Barrier,
+                                    format!("refused admission input: {error}"),
+                                )
+                            })?;
+                    }
+                    if !context
+                        .input
+                        .snapshot()
+                        .is_some_and(|input| input.cancelled)
+                    {
+                        context.cancel_input(ports.io)?;
+                    }
+                }
+            }
+            let answered = self.completed == Stage::Completed;
+            let run = weaver_types::RunId(context.flow.run().to_owned());
+            let turn = self.turn().map(|turn| TurnKey(turn.0.clone()));
+            let frame = crate::lifecycle::render_close_with_finish(
+                if answered { "answered" } else { "stopped" },
+                if answered { "text" } else { "reason" },
+                &self.text,
+                turn.as_ref().map(|turn| (turn, &run)),
+                self.length,
+            );
+            self.close = Some(OrganEnvelope {
+                exchange: self.exchange.clone(),
+                position: Position::Close,
+                payload: Payload::Frame(TurnFrame::carry(frame.as_bytes())),
+            });
+        }
+        Ok(preparing)
+    }
+
     pub(super) fn advance<I: PumpIo>(
         &mut self,
         context: &mut RecordingContext,
@@ -137,50 +408,19 @@ impl WorldClose {
                 self.bound = context.deadlines.get(PumpDeadline::Decision);
             }
         }
-        let newly_recorded = self.recorded.is_none();
-        if newly_recorded {
-            self.returned_author.check()?;
-            let sequence = if self.author_started {
-                context.resume_author_and_wait(ports).map_err(|failure| {
-                    self.returned_author
-                        .retain_started(failure, &mut self.author_started)
-                })?
-            } else {
-                self.author_started = true;
-                context
-                    .author_and_wait(
-                        ports,
-                        AuthoredEvent {
-                            kind: serving::Kind::TurnClosed,
-                            subsystem: Subsystem::Harness,
-                            turn: Some(self.turn.clone()),
-                            source: AuthoredSource::Runtime,
-                            causal_parent: None,
-                            payload: Some(serving::Payload::TurnClosed(self.outcome.clone())),
-                        },
-                    )
-                    .map_err(|failure| {
-                        self.returned_author
-                            .retain_started(failure, &mut self.author_started)
-                    })?
-            };
-            self.recorded = Some(sequence);
-            let answered = self.completed == Stage::Completed;
-            let frame = crate::lifecycle::render_close_with_finish(
-                if answered { "answered" } else { "stopped" },
-                if answered { "text" } else { "reason" },
-                &self.text,
-                Some((
-                    &TurnKey(self.turn.0.clone()),
-                    &weaver_types::RunId(context.flow.run().to_owned()),
-                )),
-                self.length,
-            );
-            self.close = Some(OrganEnvelope {
-                exchange: self.exchange.clone(),
-                position: Position::Close,
-                payload: Payload::Frame(TurnFrame::carry(frame.as_bytes())),
-            });
+        let preparing = self.prepare(context, ports, false)?;
+        let gate = ports.gate.as_deref_mut().ok_or(RunFailure::PlaceOwned)?;
+        if context.serving_organs.gate_delivery_lost(gate) {
+            context.live(ports.io)?;
+            if !retain_lost_world(gate, &self.exchange, &mut self.close, self.send.as_ref())? {
+                return Ok(false);
+            }
+            if matches!(self.target, CloseTarget::Input(_)) {
+                context.input_closed_by_gate_loss(gate, ports.io)?;
+                context.finish_input(ports.io)?;
+            }
+            context.complete_wait(PumpDeadline::Decision);
+            return Ok(true);
         }
         if let Some(close) = self.close.take() {
             match ports.gate.as_deref_mut().unwrap().stage_tracked(close) {
@@ -201,12 +441,16 @@ impl WorldClose {
                 && send.belongs_to(ports.gate.as_deref().unwrap())
                 && send.matches_exchange(&self.exchange)
         }) {
+            if matches!(self.target, CloseTarget::Input(_)) {
+                context.input_response_sent(ports.io)?;
+                context.finish_input(ports.io)?;
+            }
             context.complete_wait(PumpDeadline::Decision);
             return Ok(true);
         }
-        if newly_recorded {
-            // Let management queue the Stop answer after Recorded, before any
-            // blocking wait on the world gate. The retained send stays owed.
+        if preparing {
+            // Let management queue its answer after close preparation, before
+            // any blocking gate wait. A turn close has reached Recorded here.
             return Ok(false);
         }
         context.pump_once(ports)?;

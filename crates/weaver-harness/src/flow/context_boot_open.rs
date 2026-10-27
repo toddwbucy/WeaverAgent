@@ -214,6 +214,34 @@ pub(super) struct BootOpenTransaction {
     incomplete: Option<String>,
     unavailable: Option<String>,
 }
+
+/// Move-owned evidence after the original Open bound. The original event and
+/// ticket stay here even when no ordinary writer capacity was available.
+pub(in crate::flow::context) struct StoppedBootOpenAccount {
+    owner: BootOpenTransaction,
+    _record: Option<super::super::recording::StoppedStartupRecord>,
+}
+impl StoppedBootOpenAccount {
+    pub(in crate::flow::context) fn incomplete(&self) -> bool {
+        self.owner.incomplete.is_some()
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn request(&self) -> &TokenDirective {
+        &self.owner.request
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn test_record(&self) -> Option<(&serving::Event, u64)> {
+        self._record.as_ref()?.test_record()
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn test_raw(&self) -> Option<&[u8]> {
+        self.owner.received.as_ref().map(ReceivedDecode::raw_bytes)
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn test_bound(&self) -> u64 {
+        self.owner.account_deadline
+    }
+}
 impl BootOpenTransaction {
     #[cfg(test)]
     pub(super) fn release_disposition_for_test(&self) -> (bool, u64, bool, bool) {
@@ -817,7 +845,10 @@ impl RecordingContext {
                 owner.stage = Stage::Complete;
             }
         }
-        self.last_author_sequence = Some(sequence);
+        #[cfg(test)]
+        {
+            self.last_author_sequence = Some(sequence);
+        }
     }
 
     fn finish_boot_reservation(
@@ -1018,22 +1049,8 @@ impl RecordingContext {
         owner.checked = None;
         owner.journal = None;
         if owner.stage == Stage::Exchange {
-            if decode.open_not_started() {
-                let reservation = owner.reservation.take().unwrap();
-                match decode.withdraw_unsent(reservation) {
-                    Ok(()) => {
-                        owner.stage = Stage::Settled;
-                        owner.owed = false;
-                        self.barrier.set_boot_open_owed(false);
-                        return Ok(());
-                    }
-                    Err(error) => {
-                        owner.reservation = Some(error.reservation);
-                        // Inbound protocol debris cannot license a first Open byte
-                        // after cancellation. The caller retires this account incomplete.
-                        return Err(RunFailure::BootOpenOwned);
-                    }
-                }
+            if self.withdraw_unsent_boot_open(decode)? {
+                return Ok(());
             }
             self.pump.stopped_decode_step(decode).map_err(|error| {
                 self.boot_open_fault(io, format!("stopped boot exchange: {error:?}"))
@@ -1058,6 +1075,30 @@ impl RecordingContext {
             self.boot_open.as_mut().unwrap().stage = Stage::Settled;
         }
         Ok(())
+    }
+
+    /// Withdrawal changes only the held request, never the wire. It remains
+    /// available after expiry because it cannot grant the first Open byte.
+    fn withdraw_unsent_boot_open(&mut self, decode: &mut DecodePort) -> Result<bool, RunFailure> {
+        let owner = self.boot_open.as_mut().unwrap();
+        if owner.stage != Stage::Exchange || !decode.open_not_started() {
+            return Ok(false);
+        }
+        let reservation = owner.reservation.take().unwrap();
+        match decode.withdraw_unsent(reservation) {
+            Ok(()) => {
+                owner.stage = Stage::Settled;
+                owner.owed = false;
+                self.barrier.set_boot_open_owed(false);
+                Ok(true)
+            }
+            Err(error) => {
+                owner.reservation = Some(error.reservation);
+                // Inbound debris preserves an incomplete account, never a first
+                // write after cancellation or a fabricated successful withdrawal.
+                Err(RunFailure::BootOpenOwned)
+            }
+        }
     }
 
     fn boot_account_clock(&mut self, io: &mut impl PumpIo) -> bool {
@@ -1106,6 +1147,77 @@ impl RecordingContext {
                 observed_ns: Some(self.last_ns.into()),
             });
         }
+    }
+
+    pub(super) fn dispose_expired_startup_open(
+        &mut self,
+        permit: &super::worker_startup::expired::ExpiredStartupDisposal,
+        decode: &mut DecodePort,
+    ) {
+        assert!(permit.allows(self), "exact expired startup disposal");
+        assert!(
+            self.check_boot_open_port(decode).is_ok(),
+            "original decode port"
+        );
+        if !self.boot_open_account_settled() {
+            self.freeze_boot_account_bound();
+            self.abandon_boot_open(decode, "original Enter and accepted rollback Leave expired");
+        }
+    }
+
+    pub(super) fn can_detach_expired_boot_open(
+        &self,
+        permit: &super::worker_startup::expired::ExpiredStartupAccountPermit,
+        decode: &DecodePort,
+    ) -> bool {
+        permit.allows(self)
+            && self.check_boot_open_port(decode).is_ok()
+            && self.boot_open.as_ref().is_some_and(|owner| {
+                !owner.grant_taken
+                    && owner.enter == self.deadlines.get(PumpDeadline::Enter).unwrap()
+                    && owner.account_deadline <= self.last_ns
+                    && Arc::ptr_eq(&owner.origin, &self.read_origin)
+            })
+            && ((self.barrier.pending().is_none() && self.barrier.pending_author().is_none())
+                || self.boot_owns_pending_author())
+    }
+
+    pub(super) fn detach_expired_boot_open(
+        &mut self,
+        permit: &super::worker_startup::expired::ExpiredStartupAccountPermit,
+        decode: &mut DecodePort,
+    ) -> Result<StoppedBootOpenAccount, RunFailure> {
+        if !self.can_detach_expired_boot_open(permit, decode) {
+            return Err(RunFailure::BootOpenOwned);
+        }
+        self.cancel_boot_open()?;
+        self.freeze_boot_account_bound();
+        // Preserve the exact submitted event before removing its pending slot.
+        // abandon_boot_open then revokes only the original expired reservation.
+        let record = if self.boot_owns_pending_author() {
+            let permit = BootReleasePermit {
+                ticket: self
+                    .boot_open
+                    .as_ref()
+                    .unwrap()
+                    .author
+                    .as_ref()
+                    .unwrap()
+                    .ticket,
+            };
+            Some(self.barrier.retain_boot_rollback_record(&permit))
+        } else {
+            None
+        };
+        if !self.boot_open_account_settled()
+            && !matches!(self.withdraw_unsent_boot_open(decode), Ok(true))
+        {
+            self.abandon_boot_open(decode, "original Enter expired before rollback accounting");
+        }
+        Ok(StoppedBootOpenAccount {
+            owner: self.boot_open.take().unwrap(),
+            _record: record,
+        })
     }
     fn retain_boot_wire(&mut self, decode: &mut DecodePort) {
         let Some(owner) = &mut self.boot_open else {

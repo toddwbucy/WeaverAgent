@@ -1,5 +1,6 @@
-//! One worker owner crosses all actual sockets and forks. Member/classifier/model
-//! replies are declared doubles, not production language or model qualification.
+//! One worker owner crosses all actual sockets and forks. Named SQLite cases
+//! use the normal member. Other member and all classifier/model replies are
+//! declared doubles, not production language or model qualification.
 use super::*;
 use crate::flow::clock::{PumpIo, testing::FakePumpIo};
 use crate::flow::context::failed_enter_driver::{ChildState, OwnedChild};
@@ -20,6 +21,11 @@ use weaver_types::state_flow as s;
 
 #[path = "../bin/worker/dev_loop/foundation.rs"]
 pub(super) mod worker;
+
+#[path = "context_worker_leave_joint_tests.rs"]
+mod leave_joint;
+#[path = "../../tests/state_flow/member.rs"]
+pub(super) mod normal_member;
 
 /// Recorded does not imply the sink reader has received the writer's bytes.
 /// Keep partial lines and wait through the actual Recorded sequence under a
@@ -123,6 +129,8 @@ fn worker_fixture_clock_waits_for_complete_request_receipt() {
     member.set_nonblocking(true).unwrap();
     let mut member = Member {
         peer: member,
+        normal: None,
+        fixture_root: None,
         bytes: vec![],
         seed: "seed".into(),
         ordinal: 0,
@@ -133,6 +141,8 @@ fn worker_fixture_clock_waits_for_complete_request_receipt() {
         held_file: None,
         hold_control: None,
         held_control: None,
+        boot_pairs: vec![],
+        summary: None,
     };
     let samples = std::cell::Cell::new(0);
     let sample = || {
@@ -171,13 +181,25 @@ fn worker_fixture_clock_waits_for_complete_request_receipt() {
     assert_eq!(observation.began_ns.0, 30);
 }
 
-struct Files(PathBuf);
+struct Files(PathBuf, bool);
 impl Files {
     fn new() -> Self {
-        let path =
-            std::env::temp_dir().join(format!("weaver-worker-startup-{}", std::process::id()));
-        std::fs::create_dir(&path).unwrap();
-        Self(path)
+        if let Some(root) = std::env::var_os("WEAVER_LEAVE_JOINT_ROOT") {
+            return Self(root.into(), false);
+        }
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        loop {
+            let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "weaver-worker-startup-{}-{serial}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self(path, true),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("worker fixture directory: {error}"),
+            }
+        }
     }
     fn child(&self, name: &str, variable: &str, mode: &str, test: &str) -> PathBuf {
         let path = self.0.join(name);
@@ -203,20 +225,85 @@ impl Files {
                 classify: Some(self.child(
                     "checker",
                     "WEAVER_STARTUP_COMPOSITION_CHILD",
-                    if mode.starts_with("input-") {
+                    if mode == "expired-startup-classifying-held" {
+                        "admission-silent-held"
+                    } else if mode == "expired-startup-admission-partial-complete" {
+                        "admission-partial"
+                    } else if mode == "expired-startup-admission-refused-complete" {
+                        "refuse"
+                    } else if mode.starts_with("expired-startup-classifying")
+                        || mode == "expired-startup-admission-unsent-complete"
+                    {
+                        "admission-silent"
+                    } else if mode.contains("-template-component-") {
+                        "template-component"
+                    } else if mode == "expired-startup-template-held" {
+                        "template-silent-held"
+                    } else if mode.contains("-template-record-")
+                        || mode.contains("-template-between-")
+                        || mode.contains("-template-completion-")
+                        || mode.contains("-template-recorded-")
+                        || mode.contains("-template-foreign-")
+                    {
+                        "ready"
+                    } else if mode.starts_with("expired-startup-template-") {
+                        "template-silent"
+                    } else if mode == "expired-startup-classifier-held"
+                        || mode == "expired-startup-summary-read-held"
+                        || mode == "expired-startup-repair-read-held"
+                        || mode == "expired-startup-repair-filing-pending-classifier-held"
+                        || mode == "expired-startup-summary-account-retained-classifier-held"
+                    {
+                        "rollback-held-exit"
+                    } else if mode.starts_with("input-") {
                         mode
-                    } else if mode == "classifier-refusal" {
+                    } else if mode == "classifier-refusal"
+                        || mode == "failed-startup-refusal"
+                        || mode == "expired-startup-refusal"
+                        || mode.starts_with("rollback-")
+                    {
                         "refuse"
                     } else {
                         "ready"
                     },
-                    "flow::context::startup_composition::tests::startup_composition_child",
+                    if super::input::generation::session_tests::serving_rollback::is_mode(mode) {
+                        "flow::context::worker_startup::input::generation::session_tests::serving_rollback::classifier_child"
+                    } else {
+                        "flow::context::startup_composition::tests::startup_composition_child"
+                    },
                 )),
                 spu: self.child(
                     "spu",
                     "WEAVER_RESIDENCY_COMPOSITION_CHILD",
-                    if mode.contains("generation") {
+                    if mode.contains("-session-ready-rollback") || mode.contains("-session-forced-save") {
+                        "cleanup-ready"
+                    } else if mode.contains("generation") {
                         mode
+                    } else if mode.starts_with("failed-startup-") {
+                        "failed-startup"
+                    } else if mode == "expired-startup-admit-sent-complete" {
+                        "expired-admit-held"
+                    } else if mode == "expired-startup-admit-pending-complete" {
+                        "expired-admit-unsent"
+                    } else if mode == "expired-startup-open-complete" {
+                        "expired-open-unanswered"
+                    } else if mode == "expired-startup-open-unsent-complete" {
+                        "expired-open-unsent"
+                    } else if mode == "expired-startup-open-release-wrong" {
+                        "expired-open-unanswered-wrong"
+                    } else if mode.contains("-release-") && mode.starts_with("expired-startup-") {
+                        match mode.rsplit('-').next().unwrap() {
+                            "wrong" => "expired-release-wrong",
+                            "arm" => "expired-release-arm",
+                            "position" => "expired-release-position",
+                            "early" => "expired-release-early",
+                            "silent" => "expired-release-silent",
+                            "held" => "expired-release-held",
+                            "recorded" => "cleanup-ready",
+                            _ => panic!("unknown expired Release fixture"),
+                        }
+                    } else if mode.starts_with("expired-startup-") {
+                        "cleanup-ready"
                     } else if mode == "spu-refusal" {
                         "refuse"
                     } else {
@@ -227,7 +314,10 @@ impl Files {
                 gate: self.child(
                     "gate",
                     "WEAVER_GATE_STARTUP_CHILD",
-                    if mode.starts_with("input-") {
+                    if mode.starts_with("input-")
+                        || mode.starts_with("failed-startup-")
+                        || mode.starts_with("expired-startup-raised")
+                    {
                         mode
                     } else if mode == "gate-refusal" {
                         "refuse"
@@ -257,10 +347,12 @@ impl Files {
 }
 impl Drop for Files {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        if self.1 {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 }
-fn dial(path: &std::path::Path) -> OwnedFd {
+pub(super) fn dial(path: &std::path::Path) -> OwnedFd {
     let fd = socket(
         AddressFamily::Unix,
         SockType::SeqPacket,
@@ -271,7 +363,7 @@ fn dial(path: &std::path::Path) -> OwnedFd {
     connect(fd.as_raw_fd(), &UnixAddr::new(path).unwrap()).unwrap();
     fd
 }
-fn packet(peer: &OwnedFd) -> Option<weaver_types::OrganEnvelope> {
+pub(super) fn packet(peer: &OwnedFd) -> Option<weaver_types::OrganEnvelope> {
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
     match recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
         Ok(n) if n > 0 => Some(serde_json::from_slice(&bytes[..n]).unwrap()),
@@ -334,13 +426,22 @@ pub(super) fn reap(child: &mut OwnedChild) {
     }
     assert_ne!(child.state(), ChildState::Running);
 }
-struct RunGuard(FoundationRun);
-impl Drop for RunGuard {
-    fn drop(&mut self) {
-        self.0.resources.reap_startup_test_children();
+struct RunGuard(Option<FoundationRun>);
+impl RunGuard {
+    // Keep the large move out of the circuit's debug stack frame. Every branch
+    // consumes the same actual owner; no evidence is reconstructed.
+    fn take_boxed(&mut self) -> Box<FoundationRun> {
+        Box::new(self.0.take().unwrap())
     }
 }
-struct EnterGuard<'a>(Option<FoundationEnter<'a>>);
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        if let Some(run) = &mut self.0 {
+            run.resources.reap_startup_test_children();
+        }
+    }
+}
+pub(super) struct EnterGuard<'a>(pub(super) Option<FoundationEnter<'a>>);
 impl Drop for EnterGuard<'_> {
     fn drop(&mut self) {
         let child = match self.0.as_mut().and_then(|owner| owner.state.as_mut()) {
@@ -364,6 +465,8 @@ impl Drop for ServingGuard<'_> {
 
 pub(super) struct Member {
     peer: UnixStream,
+    normal: Option<normal_member::NormalMember>,
+    fixture_root: Option<PathBuf>,
     bytes: Vec<u8>,
     seed: String,
     ordinal: u64,
@@ -374,8 +477,75 @@ pub(super) struct Member {
     pub(super) held_file: Option<s::StateFrame>,
     pub(super) hold_control: Option<&'static str>,
     pub(super) held_control: Option<s::StateFrame>,
+    pub(super) boot_pairs: Vec<s::ReadPair>,
+    pub(super) summary: Option<s::QueryResult>,
 }
 impl Member {
+    pub(super) fn hold_next_normal_filing(&mut self) {
+        self.normal
+            .as_mut()
+            .unwrap()
+            .treat_first_filing(normal_member::ReceiptTreatment::Hold);
+    }
+
+    pub(super) fn normal_filing_held(&self) -> bool {
+        self.normal
+            .as_ref()
+            .is_some_and(normal_member::NormalMember::filing_held)
+    }
+
+    pub(super) fn release_normal_filing(&mut self) {
+        self.normal.as_mut().unwrap().release_held_filing();
+    }
+
+    pub(super) fn write_normal_evidence(&self) {
+        self.normal.as_ref().unwrap().write_evidence(&self.filings);
+    }
+
+    pub(super) fn finish_normal(&mut self) {
+        if let Some(normal) = &mut self.normal {
+            normal.finish(&mut self.peer, &mut self.requests, &mut self.filings);
+        }
+    }
+
+    pub(super) fn assert_normal_capture(&self, report: &s::SavePointReport) {
+        if let Some(normal) = &self.normal {
+            normal.assert_capture(report, &self.filings);
+        }
+    }
+
+    pub(super) fn assert_closed_without_request(&mut self) {
+        let mut byte = [0];
+        assert_eq!(
+            self.peer.read(&mut byte).unwrap(),
+            0,
+            "failed run must close the actual member without another request"
+        );
+    }
+    pub(super) fn send_held_filing_prefix(&mut self) -> Vec<u8> {
+        let raw = s::encode_state_line(
+            self.held_file.as_ref().unwrap(),
+            s::FrameDirection::Response,
+        )
+        .unwrap();
+        let prefix = raw[..raw.len() / 2].to_vec();
+        self.peer.write_all(&prefix).unwrap();
+        prefix
+    }
+
+    pub(super) fn stop_responses(&self) {
+        self.peer.shutdown(std::net::Shutdown::Write).unwrap();
+    }
+
+    pub(super) fn assert_no_request(&mut self) {
+        let mut byte = [0];
+        assert!(
+            matches!(self.peer.read(&mut byte), Err(error)
+            if error.kind() == std::io::ErrorKind::WouldBlock),
+            "failed serving must issue no new member request"
+        );
+    }
+
     pub(super) fn step(&mut self, now: u64, mode: &str) {
         self.step_observed(mode, || now);
     }
@@ -387,6 +557,10 @@ impl Member {
     }
 
     fn step_observed(&mut self, mode: &str, mut now: impl FnMut() -> u64) {
+        if let Some(normal) = &mut self.normal {
+            normal.step(&mut self.peer, &mut self.requests, &mut self.filings);
+            return;
+        }
         if self.hold_control.is_none()
             && let Some(response) = self.held_control.take()
         {
@@ -452,10 +626,112 @@ impl Member {
                 s::StateFrame::Control { frame, .. } => {
                     let frame = match frame {
                         s::StateControl::Grants {} => {
-                            assert_eq!(self.requests, ["open"]);
+                            let rollback_read = (mode.starts_with("rollback-")
+                                || super::input::generation::session_tests::forced_leave::is_mode(mode)
+                                || super::input::generation::session_tests::serving_rollback::is_mode(mode))
+                                && self.requests.len() > 1;
+                            if rollback_read {
+                                assert_eq!(&self.requests[..2], ["open", "grants"]);
+                                assert_eq!(
+                                    self.requests
+                                        .iter()
+                                        .filter(|request| *request == "grants")
+                                        .count(),
+                                    1
+                                );
+                            } else {
+                                assert_eq!(self.requests, ["open"]);
+                            }
                             self.requests.push("grants".into());
-                            s::StateControlAnswer::Grants {
-                                surface: vec!["owner:actual".into()],
+                            if mode == "rollback-grants-refused" && rollback_read {
+                                s::StateControlAnswer::ControlRefused {
+                                    code: s::ControlRefusalCode::Read(
+                                        s::ReadRefusalCode::AnswerTooLarge,
+                                    ),
+                                    detail: "exact rollback grants refusal".into(),
+                                }
+                            } else {
+                                s::StateControlAnswer::Grants {
+                                    surface: vec![
+                                        if mode == "rollback-varied" && rollback_read {
+                                            "owner:changed"
+                                        } else {
+                                            "owner:actual"
+                                        }
+                                        .into(),
+                                    ],
+                                }
+                            }
+                        }
+                        s::StateControl::Snapshot { capture_id }
+                            if super::input::generation::session_tests::forced_leave::is_mode(
+                                mode,
+                            ) =>
+                        {
+                            let root = self.fixture_root.as_ref().expect("snapshot fixture root");
+                            assert!(
+                                root.join("ready-rollback-lower.json").exists(),
+                                "snapshot precedes actual Lower"
+                            );
+                            self.requests.push("snapshot".into());
+                            if mode.ends_with("-refused") {
+                                s::StateControlAnswer::ControlRefused {
+                                    code: s::ControlRefusalCode::Capture(
+                                        s::CaptureRefusalCode::SnapshotFailed,
+                                    ),
+                                    detail: "original explicit snapshot refusal".into(),
+                                }
+                            } else {
+                                s::StateControlAnswer::Snapshot {
+                                    capture_id: *capture_id,
+                                    room_name: format!("capture-{}.sqlite.part", capture_id.0),
+                                    size_bytes: 10.into(),
+                                    position: None,
+                                }
+                            }
+                        }
+                        s::StateControl::Acknowledge { capture_id, .. }
+                            if super::input::generation::session_tests::forced_leave::is_mode(
+                                mode,
+                            ) =>
+                        {
+                            self.requests.push("acknowledge".into());
+                            s::StateControlAnswer::Finished {
+                                capture_id: *capture_id,
+                                room_name: format!("capture-{}.sqlite", capture_id.0),
+                            }
+                        }
+                        s::StateControl::ReleaseCapture { capture_id }
+                            if super::input::generation::session_tests::forced_leave::is_mode(
+                                mode,
+                            ) =>
+                        {
+                            self.requests.push("release_capture".into());
+                            s::StateControlAnswer::CaptureReleased {
+                                capture_id: *capture_id,
+                            }
+                        }
+                        s::StateControl::Abort { capture_id }
+                            if super::input::generation::session_tests::forced_leave::is_mode(
+                                mode,
+                            ) =>
+                        {
+                            self.requests.push("abort".into());
+                            if matches!(self.hold_control, Some("snapshot" | "finished")) {
+                                // The original result crosses its bound and
+                                // arrives before the correlated abort answer.
+                                let late = self.held_control.take().unwrap();
+                                assert_eq!(late.common(), request.common());
+                                self.peer
+                                    .write_all(
+                                        &s::encode_state_line(&late, s::FrameDirection::Response)
+                                            .unwrap(),
+                                    )
+                                    .unwrap();
+                                self.hold_control = None;
+                            }
+                            s::StateControlAnswer::Aborted {
+                                capture_id: *capture_id,
                             }
                         }
                         s::StateControl::Read { selector } => {
@@ -466,11 +742,13 @@ impl Member {
                                 }
                                 s::ReadSelector::OpenPairs {} => {
                                     self.requests.push("pairs".into());
-                                    br#"{"open_pairs":{"pairs":[]}}"#.to_vec()
+                                    let pairs = self.boot_pairs.iter().filter(|pair| !self.filings.iter().any(|file| matches!(file, s::StateFrame::FilePair { filing, .. } if matches!(&filing.pair, s::PairRecord::Ended(ended) if ended.call_id == pair.call_id)))).cloned().collect();
+                                    serde_json::to_vec(&s::QueryResult::OpenPairs { pairs })
+                                        .unwrap()
                                 }
                                 s::ReadSelector::PlanCurrent {} => {
                                     self.requests.push("summary".into());
-                                    br#"{"plan_current":{"current":null,"next_plan_id":"40","next_step_id":"50"}}"#.to_vec()
+                                    self.summary.as_ref().map(|result| serde_json::to_vec(result).unwrap()).unwrap_or_else(|| br#"{"plan_current":{"current":null,"next_plan_id":"40","next_step_id":"50"}}"#.to_vec())
                                 }
                                 s::ReadSelector::Marks {} if mode.contains("generation") => {
                                     self.requests.push("marks".into());
@@ -508,6 +786,15 @@ impl Member {
                                         s::ReadRefusalCode::ResultTooLarge,
                                     ),
                                     detail: "whole history exceeds the fixture bound".into(),
+                                }
+                            } else if mode == "summary-refused"
+                                && matches!(selector, s::ReadSelector::PlanCurrent {})
+                            {
+                                s::StateControlAnswer::ControlRefused {
+                                    code: s::ControlRefusalCode::Read(
+                                        s::ReadRefusalCode::ResultTooLarge,
+                                    ),
+                                    detail: "original boot summary refusal".into(),
                                 }
                             } else if mode == "prompt-refusal"
                                 || (mode.ends_with("read-refusal")
@@ -564,12 +851,61 @@ impl Member {
             };
             let hold_control = match &request {
                 s::StateFrame::Control {
+                    frame: s::StateControl::Snapshot { .. },
+                    ..
+                } => self.hold_control == Some("snapshot"),
+                s::StateFrame::Control {
+                    frame: s::StateControl::Acknowledge { .. },
+                    ..
+                } => self.hold_control == Some("finished"),
+                s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::OpenPairs {},
+                        },
+                    ..
+                } => {
+                    self.hold_control == Some("pairs")
+                        || (self.hold_control == Some("pairs-recheck")
+                            && self
+                                .requests
+                                .iter()
+                                .filter(|request| request.as_str() == "pairs")
+                                .count()
+                                == 2)
+                }
+                s::StateFrame::Control {
+                    frame: s::StateControl::Grants {},
+                    ..
+                } => self.hold_control == Some("grants"),
+                s::StateFrame::Control {
                     frame:
                         s::StateControl::Read {
                             selector: s::ReadSelector::History { .. },
                         },
                     ..
                 } => self.hold_control == Some("read"),
+                s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::SystemPrompt {},
+                        },
+                    ..
+                } => self.hold_control == Some("prompt"),
+                s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::PlanCurrent {},
+                        },
+                    ..
+                } => self.hold_control == Some("summary"),
+                s::StateFrame::Control {
+                    frame:
+                        s::StateControl::Read {
+                            selector: s::ReadSelector::Marks {},
+                        },
+                    ..
+                } => self.hold_control == Some("marks"),
                 s::StateFrame::Control {
                     frame: s::StateControl::Release { .. },
                     ..
@@ -598,6 +934,69 @@ impl Member {
     }
 }
 
+struct ForeignRun {
+    run: Box<FoundationRun>,
+    peer: OwnedFd,
+    reader: UnixStream,
+    member: UnixStream,
+}
+
+fn foreign_run(original: &[u8], root: &std::path::Path) -> ForeignRun {
+    // A second actual root Enter owns independent SCM_RIGHTS descriptors.
+    // Its organs are not started; it must remain untouched by the foreign join.
+    let path = root.join("foreign-admin.sock");
+    let mut admission =
+        FoundationAdmission::listen(crate::bind_coordination(&path).unwrap()).unwrap();
+    let peer = dial(&path);
+    let (sink, reader) = UnixStream::pair().unwrap();
+    let (state, member) = UnixStream::pair().unwrap();
+    let mut envelope: weaver_types::state_flow::enter::EnterEnvelope =
+        serde_json::from_slice(original).unwrap();
+    let weaver_types::state_flow::enter::EnterContent::Directive(
+        weaver_types::state_flow::enter::EnterDirective::Enter { payload },
+    ) = &mut envelope.payload;
+    let weaver_types::state_flow::enter::EnterBinding::Serving { enter_window, .. } =
+        &mut payload.binding
+    else {
+        panic!()
+    };
+    let now = crate::flow::clock::monotonic_ns().unwrap();
+    *enter_window = weaver_types::state_flow::EnterWindow {
+        began_ns: now.into(),
+        deadline_ns: (now + 5_000_000_000).into(),
+    };
+    let bytes = envelope.encode().unwrap();
+    assert_eq!(
+        sendmsg::<()>(
+            peer.as_raw_fd(),
+            &[std::io::IoSlice::new(&bytes)],
+            &[ControlMessage::ScmRights(&[
+                sink.as_raw_fd(),
+                state.as_raw_fd()
+            ])],
+            MsgFlags::MSG_NOSIGNAL,
+            None
+        )
+        .unwrap(),
+        bytes.len()
+    );
+    drop((sink, state));
+    assert_eq!(admission.advance(), FoundationAdmissionProgress::Received);
+    assert_eq!(admission.received.as_ref().unwrap().wire(), bytes);
+    let run = Box::new(
+        admission
+            .adopt()
+            .ok()
+            .expect("actual foreign Enter adoption"),
+    );
+    ForeignRun {
+        run,
+        peer,
+        reader,
+        member,
+    }
+}
+
 fn circuit(mode: &str) {
     assert_eq!(
         nix::unistd::getuid().as_raw(),
@@ -606,7 +1005,10 @@ fn circuit(mode: &str) {
     );
     let files = Files::new();
     let mut program = files.program(mode);
-    let path = files.0.join("admin.sock");
+    let mut joint = leave_joint::is_mode(mode).then(|| leave_joint::Worker::begin(&files.0));
+    let path = joint
+        .as_ref()
+        .map_or_else(|| files.0.join("admin.sock"), |joint| joint.socket.clone());
     let mut admission =
         FoundationAdmission::listen(crate::bind_coordination(&path).unwrap()).unwrap();
     assert_eq!(admission.advance(), FoundationAdmissionProgress::Pending);
@@ -615,6 +1017,12 @@ fn circuit(mode: &str) {
     }
     let peer = dial(&path);
     let (sink, mut reader) = UnixStream::pair().unwrap();
+    if mode == "expired-startup-activation-trace" {
+        // A large actual Load blocks its writer on this small real socket.
+        // Nothing consumes the reader until the rollback deadline is checked.
+        nix::sys::socket::setsockopt(&sink, nix::sys::socket::sockopt::SndBuf, &1024).unwrap();
+        program.composer.binary = "worker".repeat(65536);
+    }
     let (state, member) = UnixStream::pair().unwrap();
     let (mut bootstrap, mut scheme, _) = classifier_fixture();
     if mode.contains("emission") {
@@ -639,6 +1047,14 @@ fn circuit(mode: &str) {
         config.gate_wait.elapsed_ns = 5_000_000_000.into();
         config.observation_interval.elapsed_ns = 100_000_000.into();
     }
+    if super::input::generation::session_tests::forced_leave::is_mode(mode)
+        || super::input::generation::session_tests::demand_save::is_mode(mode)
+    {
+        // Capture must file the wind-down's actual content through the normal
+        // member. The fake-clock fixture's 1 ms cut allowance is not this
+        // real-process circuit's declared test budget.
+        config.cut_wait.elapsed_ns = 5_000_000_000.into();
+    }
     let fixture = Fixture::new(config.clone());
     let event = fixture.load_event();
     let Some(weaver_trace::serving::Payload::Elections(mut load)) = event.payload else {
@@ -646,6 +1062,31 @@ fn circuit(mode: &str) {
     };
     load.ste100_scheme = bootstrap.scheme_text.clone();
     load.state_flow.gate_wait.elapsed_ns = config.gate_wait.elapsed_ns.0.into();
+    load.state_flow.cut_wait.elapsed_ns = config.cut_wait.elapsed_ns.0.into();
+    if super::input::generation::session_tests::forced_leave::is_mode(mode)
+        || super::input::generation::session_tests::demand_save::is_mode(mode)
+    {
+        load.state_flow.persistence.save_wait.elapsed_ns = 10_000_000_000.into();
+        load.state_flow.persistence.snapshot_wait.elapsed_ns = 2_000_000_000.into();
+        if mode.ends_with("-window-timeout")
+            || mode.ends_with("-published-timeout")
+            || mode.ends_with("-window-timeout-retry")
+        {
+            load.state_flow.persistence.save_wait.elapsed_ns = 1_000_000_000.into();
+        }
+        if mode.contains("-organ-loss-expiry-") {
+            // The actual writer queue takes several seconds to fill in this
+            // debug fixture. Leave time to retain the fault at trace admission
+            // before the declared window expires; never replace its deadline.
+            load.state_flow.persistence.save_wait.elapsed_ns = 6_000_000_000.into();
+        }
+        if super::input::generation::session_tests::demand_save::is_mode(mode)
+            && mode.ends_with("-expires")
+        {
+            load.state_flow.persistence.save_wait.elapsed_ns = 250_000_000.into();
+            load.state_flow.persistence.snapshot_wait.elapsed_ns = 50_000_000.into();
+        }
+    }
     if mode.starts_with("input-worker") {
         load.state_flow.ste100.decision_wait.elapsed_ns = 5_000_000_000.into();
         bootstrap.instruction.decision_wait.elapsed_ns = 5_000_000_000.into();
@@ -656,6 +1097,27 @@ fn circuit(mode: &str) {
             measurement_ref: "synthetic-worker-external".into(),
         });
     }
+    let normal_image = joint
+        .as_ref()
+        .map(|_| normal_member::NormalMember::seed_image(&files.0, &bootstrap.scheme_text));
+    if let Some(image) = &normal_image {
+        load.state_start.dump_sha256 = normal_member::digest(image).as_str().into();
+    }
+    let mut normal = (mode.contains("-save-sqlite") && joint.is_none()).then(|| {
+        let mut normal = normal_member::NormalMember::seeded(
+            &files.0,
+            &bootstrap.scheme_text,
+            mode.ends_with("-held-filing"),
+        );
+        if mode.ends_with("-snapshot-timeout-retry") || mode.ends_with("-bad-aborted") {
+            normal.delay_first_capture_result(normal_member::CaptureDelay::Snapshot);
+        } else if mode.ends_with("-finished-timeout-retry") {
+            normal.delay_first_capture_result(normal_member::CaptureDelay::Finished);
+        }
+        normal.corrupt_abort = mode.ends_with("-bad-aborted");
+        load.state_start.dump_sha256 = normal_member::digest(&normal.image).as_str().into();
+        normal
+    });
     let envelope = super::super::startup_composition::tests::entered_tests::envelope(
         &config,
         &load,
@@ -671,6 +1133,83 @@ fn circuit(mode: &str) {
     } else {
         envelope
     };
+    let mut envelope = envelope;
+    if mode.contains("graceful") {
+        let weaver_types::state_flow::enter::EnterContent::Directive(
+            weaver_types::state_flow::enter::EnterDirective::Enter { payload },
+        ) = &mut envelope.payload;
+        payload.drain_bound = (mode.contains("graceful-expiry")
+            || mode.contains("-graceful-save-sqlite-drain-expiry")
+            || mode.contains("-graceful-save-sqlite-quiesce-expiry")
+            || (mode.contains("-quiesce-secondary-") && mode.ends_with("-expiry"))
+            || mode.ends_with("quiesce-expiry")
+            || mode.ends_with("quiesce-bounded"))
+        .then_some(1);
+        payload.wind_down_bound = (mode.contains("-wind-down-") && !mode.ends_with("unbounded"))
+            .then_some(
+                if mode.ends_with("expiry") || mode.ends_with("join-delayed") {
+                    1
+                } else if mode.ends_with("-wind-down-author-wait") {
+                    // Filling the real trace queue consumes this allowance too.
+                    // Leave time for Observe and the retained author to finish.
+                    15
+                } else {
+                    5
+                },
+            );
+        if mode.contains("-wind-convert-expiry") {
+            payload.wind_down_bound = Some(1);
+        }
+    }
+    if let Some(joint) = &mut joint {
+        let weaver_types::state_flow::enter::EnterContent::Directive(
+            weaver_types::state_flow::enter::EnterDirective::Enter { payload },
+        ) = &mut envelope.payload;
+        let image = normal_image.unwrap();
+        joint.prepare(payload, &image);
+        normal = Some(normal_member::NormalMember::from_image(
+            &files.0,
+            image,
+            mode.ends_with("-held-filing"),
+            Some((joint.lock.as_ref().unwrap(), &joint.room)),
+        ));
+    }
+    if mode.ends_with("-bad-release") {
+        normal.as_mut().unwrap().corrupt_release = true;
+    }
+    let now = if mode == "worker"
+        || mode.starts_with("input-worker")
+        || mode == "failed-startup-worker"
+        || mode == "rollback-failed-worker"
+    {
+        crate::flow::clock::monotonic_ns().unwrap()
+    } else {
+        100
+    };
+    let weaver_types::state_flow::enter::EnterContent::Directive(
+        weaver_types::state_flow::enter::EnterDirective::Enter { payload },
+    ) = &mut envelope.payload;
+    let weaver_types::state_flow::enter::EnterBinding::Serving { enter_window, .. } =
+        &mut payload.binding
+    else {
+        panic!()
+    };
+    *enter_window = weaver_types::state_flow::EnterWindow {
+        began_ns: now.into(),
+        deadline_ns: (now
+            + if mode == "worker" || mode.starts_with("input-worker") {
+                5_000_000_000
+            } else {
+                1_000_000_000
+            })
+        .into(),
+    };
+    if mode == "window-future" {
+        enter_window.began_ns = 101.into();
+    } else if mode == "window-expired" {
+        enter_window.began_ns = 1.into();
+        enter_window.deadline_ns = 100.into();
+    }
     let bytes = envelope.encode().unwrap();
     let wire = if mode == "malformed" {
         b"{bad".to_vec()
@@ -694,24 +1233,60 @@ fn circuit(mode: &str) {
         wire.len()
     );
     drop((sink, state));
-    let received = admission.advance();
+    let mut clock = FakePumpIo::new(
+        if mode == "failed-startup-worker" || mode == "rollback-failed-worker" {
+            now
+        } else {
+            100
+        },
+    );
+    let received = if mode == "worker" || mode.starts_with("input-worker") {
+        admission.advance()
+    } else {
+        admission.advance_with_io(&mut clock)
+    };
+    if mode == "window-future" || mode == "window-expired" {
+        assert_eq!(received, FoundationAdmissionProgress::Stopped);
+        assert_eq!(admission.received.as_ref().unwrap().wire(), bytes);
+        let response = packet(&peer);
+        if mode == "window-future" {
+            let response = response.expect("before-load Malformed on actual valid exchange");
+            assert_eq!(response.exchange, envelope.exchange);
+            assert_eq!(response.position, weaver_types::Position::Close);
+            assert!(matches!(
+                response.payload,
+                weaver_types::Payload::Refusal(weaver_types::LifecycleRefusal::Malformed)
+            ));
+        } else {
+            assert!(response.is_none(), "expiry produces no substitute answer");
+        }
+        reader.set_nonblocking(true).unwrap();
+        member.set_nonblocking(true).unwrap();
+        assert_eq!(reader.read(&mut [0]).unwrap(), 0, "no load/refusal trace");
+        assert_eq!(
+            (&member).read(&mut [0]).unwrap(),
+            0,
+            "actual unadmitted descriptors closed, no state Open"
+        );
+        assert!(admission.adopt_with_io(&mut clock).is_err());
+        return;
+    }
     if mode == "malformed" {
         assert_eq!(received, FoundationAdmissionProgress::Stopped);
         let detail = admission.detail().unwrap().to_owned();
         assert_eq!(admission.advance(), FoundationAdmissionProgress::Stopped);
         assert_eq!(admission.detail(), Some(detail.as_str()));
-        assert!(admission.adopt(1_000_000_000).is_err());
+        assert!(admission.adopt().is_err());
         assert!(packet(&peer).is_none());
         return;
     }
     assert_eq!(received, FoundationAdmissionProgress::Received);
     assert_eq!(admission.received.as_ref().unwrap().wire(), bytes);
     assert_eq!(admission.advance(), FoundationAdmissionProgress::Received);
-    let mut clock = FakePumpIo::new(100);
     let adopted = if mode == "worker" || mode.starts_with("input-worker") {
-        admission.adopt(5_000_000_000)
+        admission.adopt()
     } else {
-        admission.adopt_with_io(1_000_000_000, &mut clock)
+        admission.adopt_with_io(&mut clock)
     };
     if mode == "missing-state" {
         let admission = adopted.err().expect("missing handle refused");
@@ -725,20 +1300,32 @@ fn circuit(mode: &str) {
         assert!(packet(&peer).is_none());
         return;
     }
-    let mut run = RunGuard(adopted.map_err(|a| a.detail).ok().unwrap());
+    let mut run = RunGuard(Some(adopted.map_err(|a| a.detail).ok().unwrap()));
     if matches!(mode, "missing-checker" | "bad-checker-path") {
         program.organs.classify = if mode == "missing-checker" {
             None
         } else {
             Some(PathBuf::from("/synthetic/not-in-enter-stack"))
         };
-        assert!(run.0.begin(program).is_err());
-        assert_eq!(run.0.original.as_ref().unwrap().wire(), bytes);
-        assert!(run.0.resources.classifier_child().is_none());
+        assert!(run.0.as_mut().unwrap().begin(program).is_err());
+        assert_eq!(
+            run.0.as_mut().unwrap().original.as_ref().unwrap().wire(),
+            bytes
+        );
+        assert!(
+            run.0
+                .as_mut()
+                .unwrap()
+                .resources
+                .classifier_child()
+                .is_none()
+        );
         program = files.program("ready");
     }
     let bound = run
         .0
+        .as_mut()
+        .unwrap()
         .context
         .deadlines
         .get(super::super::PumpDeadline::Enter)
@@ -754,6 +1341,8 @@ fn circuit(mode: &str) {
     member.set_nonblocking(true).unwrap();
     let mut member = Member {
         peer: member,
+        normal,
+        fixture_root: Some(files.0.clone()),
         bytes: vec![],
         seed: load.state_start.seed_id.clone(),
         ordinal: 0,
@@ -764,6 +1353,8 @@ fn circuit(mode: &str) {
         held_file: None,
         hold_control: None,
         held_control: None,
+        boot_pairs: vec![],
+        summary: None,
     };
     if mode == "worker" || mode.starts_with("input-worker") {
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -777,7 +1368,7 @@ fn circuit(mode: &str) {
             member
         });
         // SAFETY: the fixture keeps this serving thread alive through actual reap.
-        let result = unsafe { worker::enter(&mut run.0, program) }.unwrap();
+        let result = unsafe { worker::enter(run.0.as_mut().unwrap(), program) }.unwrap();
         done.store(true, std::sync::atomic::Ordering::SeqCst);
         member = responder.join().unwrap();
         let mut serving = match result {
@@ -787,9 +1378,122 @@ fn circuit(mode: &str) {
                 panic!("worker refused: {:?}", guard.0.as_ref().unwrap().detail());
             }
         };
+        if mode.ends_with("-session-ready-rollback-late") {
+            // The worker's Ready is wholly sent and its seat is already
+            // granted. Root deliberately observes that actual datagram only
+            // after its original Enter window has ended.
+            while crate::flow::clock::monotonic_ns().unwrap() <= bound.deadline_ns() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-worker") {
             drop(peer);
+            if mode.ends_with("-demand-receive-clock") {
+                super::input::generation::session_tests::demand_save::receive_clock::exercise(
+                    serving,
+                    &path,
+                    mode.contains("-closed-"),
+                );
+                return;
+            }
+            if super::input::generation::session_tests::demand_save::organ_loss::is_mode(mode) {
+                let handoff =
+                    super::input::generation::session_tests::demand_save::organ_loss::handoff(
+                        serving,
+                        &mut member,
+                        &mut reader,
+                        &path,
+                        &files.0,
+                        mode,
+                    );
+                let actual = run.take_boxed();
+                super::input::generation::session_tests::demand_save::organ_loss::finish(
+                    actual,
+                    handoff,
+                    &mut member,
+                    &mut reader,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
+            if super::input::generation::session_tests::forced_leave::is_mode(mode) {
+                let handoff = super::input::generation::session_tests::forced_leave::handoff(
+                    serving,
+                    &path,
+                    &files.0,
+                    mode,
+                    &mut member,
+                    &mut reader,
+                );
+                let actual = run.take_boxed();
+                super::input::generation::session_tests::forced_leave::finish(
+                    actual,
+                    handoff,
+                    &mut member,
+                    &mut reader,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
+            if super::input::generation::session_tests::serving_rollback::is_mode(mode) {
+                let handoff = super::input::generation::session_tests::serving_rollback::handoff(
+                    serving,
+                    &path,
+                    &files.0,
+                    mode,
+                    &mut member,
+                    &mut reader,
+                );
+                let actual = run.take_boxed();
+                super::input::generation::session_tests::serving_rollback::finish(
+                    actual,
+                    handoff,
+                    &mut member,
+                    &mut reader,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
+            if super::input::generation::session_tests::ready_rollback::is_mode(mode) {
+                let Some(mut handoff) =
+                    super::input::generation::session_tests::ready_rollback::handoff(
+                        serving, &path, &files.0, mode,
+                    )
+                else {
+                    return;
+                };
+                if mode.ends_with("-foreign") {
+                    let mut foreign = foreign_run(&bytes, &files.0);
+                    let (retained, checked) =
+                        super::input::generation::session_tests::ready_rollback::reject_foreign(
+                            foreign.run,
+                            handoff,
+                        );
+                    foreign.run = retained;
+                    handoff = checked;
+                    assert!(packet(&foreign.peer).is_none());
+                    foreign.reader.set_nonblocking(true).unwrap();
+                    foreign.member.set_nonblocking(true).unwrap();
+                    for stream in [&mut foreign.reader, &mut foreign.member] {
+                        assert!(matches!(stream.read(&mut [0]), Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock));
+                    }
+                }
+                let actual = run.take_boxed();
+                super::input::generation::session_tests::ready_rollback::finish(
+                    actual,
+                    handoff,
+                    &mut member,
+                    &mut reader,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
             if mode.contains("generation") {
                 super::input::generation::tests::exercise(
                     serving,
@@ -800,6 +1504,26 @@ fn circuit(mode: &str) {
                     &files.0,
                     mode,
                 );
+                if super::input::generation::session_tests::demand_save::failed::is_mode(mode) {
+                    let actual = run.take_boxed();
+                    super::input::generation::session_tests::demand_save::failed::finish(
+                        actual,
+                        &mut member,
+                        &mut reader,
+                        &files.0,
+                        mode,
+                    );
+                } else if mode.contains("-exit") {
+                    let actual = run.take_boxed();
+                    super::input::halt::exit::tests::finish(
+                        actual,
+                        &mut member,
+                        &mut reader,
+                        &mut clock,
+                        &files.0,
+                        mode,
+                    );
+                }
                 return;
             }
             if mode.contains("stop-") {
@@ -840,13 +1564,64 @@ fn circuit(mode: &str) {
         }
         return;
     }
-    let mut guard = EnterGuard(Some(run.0.begin(program).unwrap()));
+    let mut guard = EnterGuard(Some(run.0.as_mut().unwrap().begin(program).unwrap()));
     let mut owner = guard.0.take().unwrap();
     owner = owner
         .finish()
         .err()
         .expect("unfinished Enter cannot grant a seat");
     guard.0 = Some(owner);
+    if mode.starts_with("failed-startup-") {
+        let handoff = super::failed::tests::enter(
+            guard.0.take().unwrap(),
+            &mut member,
+            &mut reader,
+            &mut clock,
+            mode,
+        );
+        drop(guard);
+        if let Some(handoff) = handoff {
+            super::failed::tests::finish(
+                run.take_boxed(),
+                handoff,
+                &peer,
+                &mut member,
+                &mut reader,
+                &mut clock,
+                &path,
+                &bytes,
+                mode,
+            );
+        }
+        return;
+    }
+    if mode.starts_with("expired-startup-") {
+        if mode == "expired-startup-refusal" {
+            super::expired::tests::refusal(guard.0.take().unwrap(), &mut member, &mut clock);
+            return;
+        }
+        let handoff = super::expired::tests::enter(
+            guard.0.take().unwrap(),
+            &mut member,
+            &mut reader,
+            &mut clock,
+            mode,
+            &files.0,
+        );
+        drop(guard);
+        super::expired::tests::finish(
+            run.take_boxed(),
+            handoff,
+            &peer,
+            &mut member,
+            &mut reader,
+            &mut clock,
+            &path,
+            &bytes,
+            mode,
+        );
+        return;
+    }
     let mut management = None;
     if mode == "expiry" {
         clock.advance_to(bound.deadline_ns()).unwrap();
@@ -888,6 +1663,50 @@ fn circuit(mode: &str) {
         member.step(clock.now().unwrap(), mode);
         std::thread::sleep(Duration::from_millis(1));
     }
+    if mode.starts_with("rollback-failed-") {
+        let case = super::rollback::failed::tests::enter(
+            guard.0.take().unwrap(),
+            &peer,
+            &mut member,
+            &mut reader,
+            &mut clock,
+            &path,
+            mode,
+        );
+        drop(guard);
+        if let Some(case) = case {
+            super::rollback::failed::tests::finish(
+                run.take_boxed(),
+                case,
+                &peer,
+                &mut member,
+                &mut reader,
+                &mut clock,
+                &path,
+                &bytes,
+                envelope.enter().cause,
+                mode,
+            );
+        }
+        return;
+    }
+    if mode.starts_with("rollback-") {
+        assert_eq!(
+            guard.0.as_ref().unwrap().progress(),
+            FoundationEnterProgress::Stopped
+        );
+        super::rollback::tests::exercise(
+            guard.0.take().unwrap(),
+            &peer,
+            &mut member,
+            &mut reader,
+            &mut clock,
+            &path,
+            &envelope,
+            mode,
+        );
+        return;
+    }
     let owner = guard.0.as_mut().unwrap();
     let successful = matches!(
         mode,
@@ -902,9 +1721,49 @@ fn circuit(mode: &str) {
             owner.detail()
         );
         let mut serving = guard.0.take().unwrap().finish().ok().unwrap();
+        drop(guard);
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-") {
             drop(peer); // Normal admin departure does not revoke serving.
+            if mode.contains("-lower-organ-") {
+                let (handoff, rows, observed_at) = super::input::halt::exit::organ_tests::start(
+                    serving,
+                    &mut member,
+                    &mut reader,
+                    &mut clock,
+                    &files.0,
+                );
+                super::input::halt::exit::organ_tests::finish(
+                    run.take_boxed(),
+                    handoff,
+                    rows,
+                    observed_at,
+                    &mut member,
+                    &mut reader,
+                    &mut clock,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
+            if mode.contains("start-pending") {
+                super::input::halt::exit::tests::start_pending(
+                    serving,
+                    &mut member,
+                    &mut reader,
+                    &mut clock,
+                );
+                let actual = run.take_boxed();
+                super::input::halt::exit::tests::finish(
+                    actual,
+                    &mut member,
+                    &mut reader,
+                    &mut clock,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
             if mode.contains("generation") {
                 super::input::generation::tests::exercise(
                     serving,
@@ -915,6 +1774,26 @@ fn circuit(mode: &str) {
                     &files.0,
                     mode,
                 );
+                if super::input::generation::session_tests::demand_save::failed::is_mode(mode) {
+                    let actual = run.take_boxed();
+                    super::input::generation::session_tests::demand_save::failed::finish(
+                        actual,
+                        &mut member,
+                        &mut reader,
+                        &files.0,
+                        mode,
+                    );
+                } else if mode.contains("-exit") {
+                    let actual = run.take_boxed();
+                    super::input::halt::exit::tests::finish(
+                        actual,
+                        &mut member,
+                        &mut reader,
+                        &mut clock,
+                        &files.0,
+                        mode,
+                    );
+                }
                 return;
             }
             if mode.contains("stop-") {
@@ -1107,13 +1986,41 @@ fn scenario(name: &str, mode: &str) {
         circuit(mode);
         return;
     }
+    if leave_joint::is_mode(mode) {
+        leave_joint::scenario(name, mode);
+        return;
+    }
     let layout = crate::tools_cgroup::tests::ScratchLayout::new(&format!("worker-{mode}"));
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
         .args(["--exact", name, "--ignored", "--nocapture"])
         .env("WEAVER_WORKER_STARTUP_CASE", mode)
-        .env("WEAVER_GATE_STARTUP_RUN", &layout.run)
-        .status()
-        .unwrap();
+        .env("WEAVER_GATE_STARTUP_RUN", &layout.run);
+    let status = if super::input::generation::session_tests::serving_rollback::is_mode(mode)
+        || super::input::generation::session_tests::forced_leave::is_mode(mode)
+        || super::input::generation::session_tests::demand_save::is_mode(mode)
+        || mode.contains("-graceful-quiesce-")
+        || mode.contains("-graceful-wind-down-")
+    {
+        // The public driver can block inside a real transport call. A parent
+        // watchdog still fails that fixture and reaps its owned process tree.
+        let mut child = command.spawn().unwrap();
+        let limit = Instant::now() + Duration::from_secs(35);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= limit {
+                let _ = child.kill();
+                let _ = child.wait();
+                drop(layout);
+                panic!("serving rollback circuit {mode} exceeded its outer watchdog");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    } else {
+        command.status().unwrap()
+    };
     assert!(status.success(), "worker circuit {mode} failed");
 }
 macro_rules! scenario {
@@ -1130,6 +2037,86 @@ macro_rules! scenario {
     };
 }
 scenario!(worker_startup_composition_ready, "ready");
+scenario!(
+    worker_session_demand_save_receive_clock,
+    "input-worker-generation-emission-session-demand-receive-clock"
+);
+scenario!(
+    worker_session_demand_save_closed_before_projection,
+    "input-worker-generation-emission-session-closed-demand-receive-clock"
+);
+scenario!(
+    worker_session_demand_save_sqlite_organ_loss_gate,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-gate"
+);
+scenario!(
+    worker_session_demand_save_sqlite_organ_loss_spu,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-spu"
+);
+scenario!(
+    worker_session_demand_save_sqlite_organ_loss_expiry_gate,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-expiry-gate"
+);
+scenario!(
+    worker_session_demand_save_sqlite_idle,
+    "input-worker-generation-emission-session-demand-save-sqlite-idle"
+);
+scenario!(
+    worker_session_demand_save_sqlite_queued,
+    "input-worker-generation-emission-session-demand-save-sqlite-queued"
+);
+scenario!(
+    worker_session_demand_save_sqlite_expired,
+    "input-worker-generation-emission-session-demand-save-sqlite-expired"
+);
+scenario!(
+    worker_session_demand_save_sqlite_expires_during_generation,
+    "input-worker-generation-emission-session-demand-save-sqlite-expires"
+);
+scenario!(
+    worker_session_demand_save_sqlite_held_filing,
+    "input-worker-generation-emission-session-demand-save-sqlite-held-filing"
+);
+scenario!(
+    worker_session_demand_save_sqlite_joint,
+    "input-worker-generation-emission-session-demand-save-sqlite-joint"
+);
+scenario!(
+    worker_session_demand_save_sqlite_bad_published,
+    "input-worker-generation-emission-session-demand-save-sqlite-bad-published"
+);
+scenario!(
+    worker_session_demand_save_sqlite_bad_aborted,
+    "input-worker-generation-emission-session-demand-save-sqlite-bad-aborted"
+);
+scenario!(
+    worker_session_demand_save_sqlite_secondary_management,
+    "input-worker-generation-emission-session-demand-save-sqlite-secondary"
+);
+scenario!(
+    worker_session_demand_save_sqlite_snapshot_timeout_retry,
+    "input-worker-generation-emission-session-demand-save-sqlite-snapshot-timeout-retry"
+);
+scenario!(
+    worker_session_demand_save_sqlite_finished_timeout_retry,
+    "input-worker-generation-emission-session-demand-save-sqlite-finished-timeout-retry"
+);
+scenario!(
+    worker_session_demand_save_sqlite_image_window_timeout_retry,
+    "input-worker-generation-emission-session-demand-save-sqlite-image-window-timeout-retry"
+);
+scenario!(
+    worker_session_demand_save_sqlite_prepare_window_timeout_retry,
+    "input-worker-generation-emission-session-demand-save-sqlite-prepare-window-timeout-retry"
+);
+scenario!(
+    worker_session_forced_leave_joint_sqlite_idle,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint"
+);
+scenario!(
+    worker_session_forced_leave_joint_sqlite_held_filing,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-held-filing"
+);
 scenario!(worker_startup_composition_actual_dev_loop, "worker");
 scenario!(worker_startup_composition_open_refusal, "open-refusal");
 scenario!(
@@ -1183,6 +2170,22 @@ scenario!(worker_input_composition_expiry, "input-silent");
 scenario!(worker_input_composition_checker_eof, "input-check-eof");
 scenario!(worker_input_composition_management, "input-management");
 scenario!(worker_input_composition_fault_before_input, "input-fault");
+scenario!(
+    worker_input_composition_observation_waits,
+    "input-organ-wait"
+);
+scenario!(
+    worker_correction_composition_cancel_before_refusal_close,
+    "input-generation-emission-correction-fit-refusal-cancel-before-close"
+);
+scenario!(
+    worker_input_composition_report_held_at_rest,
+    "input-report-held"
+);
+scenario!(
+    worker_input_composition_two_reports_held_while_waiting,
+    "input-report-queued"
+);
 scenario!(worker_input_composition_actual_dev_loop, "input-worker");
 
 scenario!(
@@ -1637,6 +2640,16 @@ scenario!(
 );
 
 scenario!(
+    worker_correction_composition_held_decode_deadline,
+    "input-generation-emission-correction-held-decode-deadline"
+);
+
+scenario!(
+    worker_correction_composition_held_decode_inherited,
+    "input-generation-emission-correction-held-decode-inherited"
+);
+
+scenario!(
     worker_correction_composition_fit_refusal_close_stop,
     "input-generation-emission-correction-fit-refusal-close-stop"
 );
@@ -1644,6 +2657,27 @@ scenario!(
 scenario!(
     worker_correction_composition_actual_worker_fit_refusal,
     "input-worker-generation-emission-correction-actual-worker-fit-refusal"
+);
+
+scenario!(
+    worker_correction_composition_refusal_trace_pressure,
+    "input-generation-emission-correction-fit-refusal-boundary-trace-pressure"
+);
+scenario!(
+    worker_correction_composition_refusal_trace_deadline,
+    "input-generation-emission-correction-fit-refusal-boundary-trace-deadline"
+);
+scenario!(
+    worker_correction_composition_refusal_gate_pressure,
+    "input-generation-emission-correction-fit-refusal-boundary-gate-pressure"
+);
+scenario!(
+    worker_correction_composition_refusal_gate_deadline,
+    "input-generation-emission-correction-fit-refusal-boundary-gate-deadline"
+);
+scenario!(
+    worker_correction_composition_refusal_ready_stop,
+    "input-generation-emission-correction-fit-refusal-boundary-refusal-close-ready-stop"
 );
 
 scenario!(
@@ -1922,6 +2956,66 @@ scenario!(
 );
 
 scenario!(
+    worker_external_composition_gate_death_mixed,
+    "input-generation-emission-pairs-external-gate-death-mixed"
+);
+scenario!(
+    worker_external_composition_gate_death_crossed,
+    "input-generation-emission-pairs-external-gate-death-crossed"
+);
+scenario!(
+    worker_external_composition_gate_death_unsent,
+    "input-generation-emission-pairs-external-gate-death-unsent"
+);
+
+scenario!(
+    worker_external_composition_gate_death_repeat,
+    "input-generation-emission-pairs-external-gate-death-repeat"
+);
+scenario!(
+    worker_external_composition_gate_death_pressure,
+    "input-generation-emission-pairs-external-gate-death-pressure"
+);
+scenario!(
+    worker_external_composition_gate_death_fit_refusal,
+    "input-generation-emission-pairs-external-gate-death-fit-refusal"
+);
+
+scenario!(
+    worker_external_composition_gate_death_stop,
+    "input-generation-emission-pairs-external-gate-death-stop"
+);
+scenario!(
+    worker_external_composition_gate_death_stop_crossed,
+    "input-generation-emission-pairs-external-gate-death-stop-crossed"
+);
+scenario!(
+    worker_external_composition_gate_death_stop_peer_eof,
+    "input-generation-emission-pairs-external-gate-death-stop-peer-eof"
+);
+
+scenario!(
+    worker_external_composition_gate_death_report,
+    "input-generation-emission-pairs-external-gate-death-report"
+);
+scenario!(
+    worker_external_composition_gate_death_report_pressure,
+    "input-generation-emission-pairs-external-gate-death-report-pressure"
+);
+scenario!(
+    worker_external_composition_gate_death_stop_report,
+    "input-generation-emission-pairs-external-gate-death-stop-report"
+);
+scenario!(
+    worker_external_composition_gate_death_stop_report_unread,
+    "input-generation-emission-pairs-external-gate-death-stop-report-unread"
+);
+scenario!(
+    worker_external_composition_gate_death_stop_report_crossed_unread,
+    "input-generation-emission-pairs-external-gate-death-stop-report-crossed-unread"
+);
+
+scenario!(
     worker_external_composition_multiline,
     "input-generation-emission-pairs-external-multiline"
 );
@@ -1932,8 +3026,112 @@ scenario!(
 );
 
 scenario!(
+    worker_external_composition_queued_input_stop_running,
+    "input-generation-emission-pairs-external-queued-input-stop-running"
+);
+scenario!(
+    worker_external_composition_queued_input_stop_running_late,
+    "input-generation-emission-pairs-external-queued-input-stop-running-late"
+);
+scenario!(
+    worker_external_composition_queued_input_leave,
+    "input-generation-emission-pairs-external-queued-input-leave"
+);
+scenario!(
+    worker_external_composition_queued_input_duplicate_current,
+    "input-generation-emission-pairs-external-queued-input-duplicate-current"
+);
+scenario!(
+    worker_external_composition_queued_input_duplicate_queued,
+    "input-generation-emission-pairs-external-queued-input-duplicate-queued"
+);
+scenario!(
+    worker_external_composition_queued_input_not_open,
+    "input-generation-emission-pairs-external-queued-input-not-open"
+);
+scenario!(
+    worker_final_composition_queued_input,
+    "input-worker-generation-emission-final-return-external-queued-input"
+);
+scenario!(
+    worker_final_composition_queued_input_capacity,
+    "input-worker-generation-emission-final-return-external-queued-input-capacity"
+);
+scenario!(
+    worker_final_composition_queued_input_held_terminal,
+    "input-worker-generation-emission-final-return-external-queued-input-held-terminal"
+);
+
+scenario!(
     worker_final_composition_text,
     "input-worker-generation-emission-final-text"
+);
+
+scenario!(
+    worker_emission_composition_operation_refusal_stop,
+    "input-generation-emission-sort-refusal-operation-close-stop"
+);
+
+scenario!(
+    worker_final_composition_task_admission_refusal,
+    "input-worker-generation-emission-final-operation-refusal-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_busy,
+    "input-generation-task-admission-busy"
+);
+scenario!(
+    worker_generation_composition_task_admission_busy_deadline,
+    "input-generation-task-admission-busy-deadline"
+);
+scenario!(
+    worker_generation_composition_task_admission_refusal_proof,
+    "input-generation-emission-task-admission-operation-refusal-proof-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_revoked_election,
+    "input-generation-emission-task-admission-operation-refusal-revoked-election-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_revoked_use,
+    "input-generation-emission-task-admission-operation-refusal-revoked-use-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_refusal_gate_pressure,
+    "input-generation-emission-task-admission-operation-refusal-gate-pressure-no-task"
+);
+scenario!(
+    worker_generation_composition_task_admission_refusal_gate_deadline,
+    "input-generation-emission-task-admission-operation-refusal-gate-deadline-no-task"
+);
+
+scenario!(
+    worker_final_composition_operation_repair_refusal,
+    "input-worker-generation-emission-final-operation-refusal-repair-refusal"
+);
+scenario!(
+    worker_final_composition_operation_outbound_refusal,
+    "input-worker-generation-emission-final-operation-refusal-sort-refusal"
+);
+scenario!(
+    worker_final_composition_operation_outbound_template_refusal,
+    "input-worker-generation-emission-final-operation-refusal-no-sort"
+);
+scenario!(
+    worker_final_composition_operation_outbound_refusal_held,
+    "input-worker-generation-emission-final-operation-refusal-sort-refusal-held-terminal"
+);
+scenario!(
+    worker_final_composition_operation_repair_exhausted,
+    "input-worker-generation-emission-final-correction-operation-refusal-cap"
+);
+scenario!(
+    worker_final_composition_operation_decode_refusal,
+    "input-worker-generation-emission-final-correction-operation-refusal-decode-refusal"
+);
+scenario!(
+    worker_correction_composition_decode_refusal_proof,
+    "input-generation-emission-correction-decode-refusal-proof"
 );
 
 scenario!(
@@ -2069,6 +3267,162 @@ scenario!(
     worker_session_composition_leave,
     "input-worker-generation-emission-session-leave"
 );
+scenario!(
+    worker_session_composition_serving_rollback_idle,
+    "input-worker-generation-emission-session-serving-rollback-idle"
+);
+scenario!(
+    worker_session_composition_serving_rollback_accepted,
+    "input-worker-generation-emission-session-serving-rollback-accepted"
+);
+scenario!(
+    worker_session_composition_serving_rollback_checking,
+    "input-worker-generation-emission-session-serving-rollback-checking"
+);
+scenario!(
+    worker_session_composition_serving_rollback_source_elected,
+    "input-worker-generation-emission-session-serving-rollback-source-elected"
+);
+scenario!(
+    worker_session_composition_serving_rollback_source_pending,
+    "input-worker-generation-emission-session-serving-rollback-source-pending"
+);
+scenario!(
+    worker_session_composition_serving_rollback_source_file,
+    "input-worker-generation-emission-session-serving-rollback-source-file"
+);
+scenario!(
+    worker_session_composition_serving_rollback_task_read,
+    "input-worker-generation-emission-session-serving-rollback-task-read"
+);
+scenario!(
+    worker_session_composition_serving_rollback_mark_file,
+    "input-worker-generation-emission-session-serving-rollback-mark-file"
+);
+scenario!(
+    worker_session_composition_serving_rollback_placement,
+    "input-worker-generation-emission-session-serving-rollback-placement"
+);
+scenario!(
+    worker_session_composition_serving_rollback_placement_decision_bound,
+    "input-worker-generation-emission-session-serving-rollback-placement-decision-bound"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation,
+    "input-worker-generation-emission-session-serving-rollback-active-generation"
+);
+scenario!(
+    worker_session_composition_serving_rollback_correction_placement,
+    "input-worker-generation-emission-session-serving-rollback-correction-placement"
+);
+scenario!(
+    worker_session_composition_serving_rollback_correction_generation,
+    "input-worker-generation-emission-session-serving-rollback-correction-generation"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation_queued,
+    "input-worker-generation-emission-session-serving-rollback-active-generation-queued"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_unload,
+    "input-worker-generation-emission-session-serving-rollback-external-unload"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_crossed,
+    "input-worker-generation-emission-session-serving-rollback-external-crossed"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_silent,
+    "input-worker-generation-emission-session-serving-rollback-external-silent"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_unload_queued,
+    "input-worker-generation-emission-session-serving-rollback-external-unload-queued"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_interrupt_blocked,
+    "input-worker-generation-emission-session-serving-rollback-external-interrupt-blocked"
+);
+scenario!(
+    worker_session_composition_serving_rollback_external_rejection_pending,
+    "input-worker-generation-emission-session-serving-rollback-external-rejection-pending"
+);
+scenario!(
+    worker_session_composition_serving_rollback_final_close,
+    "input-worker-generation-emission-session-serving-rollback-final-close"
+);
+scenario!(
+    worker_session_composition_serving_rollback_world_blocked,
+    "input-worker-generation-emission-session-serving-rollback-world-blocked"
+);
+scenario!(
+    worker_session_composition_serving_rollback_placed_clock_failure,
+    "input-worker-generation-emission-session-serving-rollback-placed-clock-failure"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation_cap,
+    "input-worker-generation-emission-session-serving-rollback-active-generation-cap"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation_clock_failure,
+    "input-worker-generation-emission-session-serving-rollback-active-generation-clock-failure"
+);
+scenario!(
+    worker_session_composition_serving_rollback_active_generation_trace_failure,
+    "input-worker-generation-emission-session-serving-rollback-active-generation-trace-failure"
+);
+scenario!(
+    worker_session_composition_ready_rollback,
+    "input-worker-generation-emission-session-ready-rollback"
+);
+scenario!(
+    worker_session_composition_ready_rollback_organ_settling,
+    "input-worker-generation-emission-session-ready-rollback-organ-settling"
+);
+scenario!(
+    worker_session_composition_ready_rollback_organ_settling_unlatched,
+    "input-worker-generation-emission-session-ready-rollback-organ-settling-unlatched"
+);
+scenario!(
+    worker_session_composition_ready_rollback_late,
+    "input-worker-generation-emission-session-ready-rollback-late"
+);
+scenario!(
+    worker_session_composition_ready_rollback_queued,
+    "input-worker-generation-emission-session-ready-rollback-queued"
+);
+scenario!(
+    worker_session_composition_ready_rollback_held,
+    "input-worker-generation-emission-session-ready-rollback-held"
+);
+scenario!(
+    worker_session_composition_ready_rollback_foreign,
+    "input-worker-generation-emission-session-ready-rollback-foreign"
+);
+scenario!(
+    worker_session_composition_ready_rollback_nonrollback,
+    "input-worker-generation-emission-session-ready-rollback-nonrollback"
+);
+scenario!(
+    worker_session_composition_ready_rollback_edge_leave_cap,
+    "input-worker-generation-emission-session-ready-rollback-edge-leave-cap"
+);
+scenario!(
+    worker_session_composition_ready_rollback_edge_clock_failure,
+    "input-worker-generation-emission-session-ready-rollback-edge-clock-failure"
+);
+scenario!(
+    worker_session_composition_ready_rollback_edge_recorded_clock,
+    "input-worker-generation-emission-session-ready-rollback-edge-recorded-clock"
+);
+scenario!(
+    worker_session_composition_ready_rollback_edge_unload_cap,
+    "input-worker-generation-emission-session-ready-rollback-edge-unload-cap"
+);
+scenario!(
+    worker_session_composition_ready_rollback_edge_drained_clock,
+    "input-worker-generation-emission-session-ready-rollback-edge-drained-clock"
+);
 
 scenario!(
     worker_session_composition_duplicate,
@@ -2112,6 +3466,1661 @@ scenario!(
 );
 
 scenario!(
+    worker_generation_composition_election_wait,
+    "input-generation-election-wait"
+);
+scenario!(
+    worker_generation_composition_election_wait_bound,
+    "input-generation-election-wait-bound"
+);
+scenario!(
+    worker_generation_composition_election_wait_held,
+    "input-generation-election-wait-held"
+);
+scenario!(
+    worker_generation_composition_election_wait_filing,
+    "input-generation-election-wait-filing"
+);
+scenario!(
+    worker_generation_composition_election_wait_first_failure,
+    "input-generation-election-wait-first-failure"
+);
+scenario!(
+    worker_generation_composition_election_wait_gate_failure,
+    "input-generation-election-wait-gate-failure"
+);
+
+scenario!(
+    worker_external_composition_halt_gate,
+    "input-generation-emission-external-halt-gate"
+);
+scenario!(
+    worker_external_composition_halt_gate_late,
+    "input-generation-emission-external-halt-gate-late"
+);
+scenario!(
+    worker_external_composition_halt_gate_pressure,
+    "input-generation-emission-external-halt-gate-pressure-late"
+);
+scenario!(
+    worker_external_composition_halt_gate_pressure_hold,
+    "input-generation-emission-external-halt-gate-pressure-hold-late"
+);
+scenario!(
+    worker_external_composition_halt_gate_trace_loss,
+    "input-generation-emission-external-halt-gate-trace-loss"
+);
+scenario!(
+    worker_external_composition_halt_gate_trace_loss_late,
+    "input-generation-emission-external-halt-gate-trace-loss-late"
+);
+scenario!(
+    worker_external_composition_halt_gate_deadline,
+    "input-generation-emission-external-halt-gate-deadline"
+);
+scenario!(
+    worker_external_composition_halt_gate_eof,
+    "input-generation-emission-external-halt-gate-eof"
+);
+scenario!(
+    worker_external_composition_halt_gate_control,
+    "input-generation-emission-external-halt-gate-control"
+);
+scenario!(
+    worker_external_composition_halt_gate_unsent,
+    "input-generation-emission-external-halt-gate-unsent"
+);
+scenario!(
+    worker_external_composition_halt_gate_worker,
+    "input-generation-emission-external-halt-gate-worker"
+);
+scenario!(
+    worker_external_composition_halt_gate_management,
+    "input-generation-emission-external-halt-gate-management"
+);
+
+scenario!(
     worker_stop_composition_inherited_deadline,
     "input-stop-inherited-deadline"
+);
+
+scenario!(
+    worker_external_composition_halt_gate_clock_error,
+    "input-generation-emission-external-halt-gate-clock-error"
+);
+scenario!(
+    worker_external_composition_halt_gate_clock_reverse,
+    "input-generation-emission-external-halt-gate-clock-reverse"
+);
+
+scenario!(
+    worker_external_composition_failed_exit,
+    "input-generation-emission-external-halt-gate-exit"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_eof,
+    "input-generation-emission-external-halt-gate-eof-exit"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_control,
+    "input-generation-emission-external-halt-gate-control-exit"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_deadline,
+    "input-generation-emission-external-halt-gate-deadline-exit"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_late,
+    "input-generation-emission-external-halt-gate-exit-late"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_pressure_hold_late,
+    "input-generation-emission-external-halt-gate-exit-pressure-hold-late"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_trace_loss,
+    "input-generation-emission-external-halt-gate-exit-trace-loss"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_management,
+    "input-generation-emission-external-halt-gate-exit-management"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_lower_silent,
+    "input-generation-emission-external-halt-gate-exit-lower-silent"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_lower_wrong,
+    "input-generation-emission-external-halt-gate-exit-lower-wrong"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_release_silent,
+    "input-generation-emission-external-halt-gate-exit-release-silent"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_release_wrong,
+    "input-generation-emission-external-halt-gate-exit-release-wrong"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_clock_error,
+    "input-generation-emission-external-halt-gate-exit-clock-error"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_clock_reverse,
+    "input-generation-emission-external-halt-gate-exit-clock-reverse"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_worker,
+    "input-generation-emission-external-halt-gate-worker-exit"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_pending_world,
+    "input-generation-emission-external-halt-gate-exit-pending-world"
+);
+scenario!(
+    worker_external_composition_failed_exit_sent_world,
+    "input-generation-emission-external-halt-gate-exit-sent-world"
+);
+scenario!(
+    worker_external_composition_failed_exit_world_silent,
+    "input-generation-emission-external-halt-gate-exit-world-silent"
+);
+scenario!(
+    worker_external_composition_failed_exit_live_tools,
+    "input-generation-emission-external-halt-gate-eof-exit-live-tools"
+);
+scenario!(
+    worker_external_composition_failed_exit_live_tools_after_lower,
+    "input-generation-emission-external-halt-gate-exit-live-tools"
+);
+scenario!(
+    worker_external_composition_failed_exit_lower_late,
+    "input-generation-emission-external-halt-gate-exit-lower-late"
+);
+scenario!(
+    worker_external_composition_failed_exit_lower_pressure,
+    "input-generation-emission-external-halt-gate-exit-lower-late-lower-backlog"
+);
+scenario!(
+    worker_external_composition_failed_exit_lower_pressure_unload,
+    "input-generation-emission-external-halt-gate-exit-lower-late-lower-backlog-terminal"
+);
+scenario!(
+    worker_external_composition_failed_exit_lower_pressure_wake,
+    "input-generation-emission-external-halt-gate-exit-lower-late-lower-backlog-wake"
+);
+scenario!(
+    worker_external_composition_failed_exit_start_pending,
+    "input-generation-external-halt-gate-exit-start-pending"
+);
+scenario!(
+    worker_external_composition_failed_exit_lower_organ_wake,
+    "input-generation-external-halt-gate-exit-lower-organ-wake"
+);
+scenario!(
+    worker_external_composition_failed_exit_lower_organ_return,
+    "input-generation-external-halt-gate-exit-lower-organ-return"
+);
+scenario!(
+    worker_external_composition_failed_exit_lower_organ_cap,
+    "input-generation-external-halt-gate-exit-lower-organ-cap"
+);
+scenario!(
+    worker_external_composition_failed_exit_start_ready,
+    "input-generation-external-halt-gate-exit-start-pending-capacity-ready"
+);
+scenario!(
+    worker_external_composition_failed_exit_start_pending_expiry,
+    "input-generation-external-halt-gate-exit-start-pending-start-expiry"
+);
+
+scenario!(
+    worker_external_composition_failed_exit_pending_turn,
+    "input-generation-emission-external-halt-gate-exit-pressure-pending-turn"
+);
+scenario!(
+    worker_external_composition_failed_exit_pending_session,
+    "input-generation-emission-external-halt-gate-exit-pressure-pending-session"
+);
+scenario!(
+    worker_external_composition_failed_exit_placement_pending,
+    "input-generation-external-halt-gate-exit-placement-pending"
+);
+scenario!(
+    worker_external_composition_failed_exit_placement_ready,
+    "input-generation-external-halt-gate-exit-placement-pending-capacity-ready"
+);
+scenario!(
+    worker_external_composition_failed_exit_placement_trace_loss,
+    "input-generation-external-halt-gate-exit-placement-pending-trace-loss"
+);
+scenario!(
+    worker_external_composition_failed_exit_rejection_unavailable,
+    "input-generation-emission-external-halt-gate-exit-rejection-unavailable-pressure-hold-late"
+);
+scenario!(
+    worker_external_composition_failed_exit_rejection_unavailable_lower_late,
+    "input-generation-emission-external-halt-gate-exit-lower-late-rejection-unavailable-pressure-hold-late"
+);
+
+scenario!(
+    worker_startup_composition_original_window_future_refused,
+    "window-future"
+);
+scenario!(
+    worker_startup_composition_original_window_expiry_unadmitted,
+    "window-expired"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_left,
+    "rollback-left"
+);
+scenario!(
+    worker_startup_composition_refusal_rollback_late,
+    "rollback-late"
+);
+scenario!(
+    worker_startup_composition_refusal_rollback_expired,
+    "rollback-expired"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_varied,
+    "rollback-varied"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_secondary,
+    "rollback-secondary"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_enter_lost,
+    "rollback-enter-lost"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_leave_lost,
+    "rollback-leave-lost"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_observer,
+    "rollback-observer"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_send_pressure,
+    "rollback-send-pressure"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_await_eof,
+    "rollback-await-eof"
+);
+scenario!(
+    worker_startup_composition_refusal_rollback_worker,
+    "rollback-worker"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_seal_silent,
+    "rollback-seal-silent"
+);
+scenario!(
+    worker_startup_composition_refusal_rollback_seal_backlog,
+    "rollback-seal-backlog"
+);
+scenario!(
+    worker_startup_composition_refusal_rollback_left_expired,
+    "rollback-left-expired"
+);
+
+scenario!(
+    worker_startup_composition_refusal_rollback_drain_expired,
+    "rollback-drain-expired"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_preopen,
+    "failed-startup-preopen"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_loaded,
+    "failed-startup-loaded"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_classifier,
+    "failed-startup-classifier"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_admit,
+    "failed-startup-admit"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_boot,
+    "failed-startup-boot"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_open,
+    "failed-startup-open"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_repair,
+    "failed-startup-repair"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_summary,
+    "failed-startup-summary"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_installed,
+    "failed-startup-installed"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_raised,
+    "failed-startup-raised"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_worker,
+    "failed-startup-worker"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_cap,
+    "failed-startup-cap"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_wait,
+    "failed-startup-wait"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_trace,
+    "failed-startup-trace"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_foreign,
+    "failed-startup-foreign"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_expiry,
+    "failed-startup-expiry"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_refusal,
+    "failed-startup-refusal"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_opened,
+    "failed-startup-opened"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_activation,
+    "failed-startup-activation"
+);
+
+scenario!(
+    worker_startup_composition_failed_exit_lower_wrong,
+    "failed-startup-lower-wrong"
+);
+scenario!(
+    worker_startup_composition_failed_exit_lower_early,
+    "failed-startup-lower-early"
+);
+scenario!(
+    worker_startup_composition_failed_exit_lower_silent,
+    "failed-startup-lower-silent"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_record,
+    "rollback-failed-record"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_recorded,
+    "rollback-failed-recorded"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_response,
+    "rollback-failed-response"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_await,
+    "rollback-failed-await"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_transition,
+    "rollback-failed-transition"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_grants,
+    "rollback-failed-grants"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_prepared,
+    "rollback-failed-prepared"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_seal,
+    "rollback-failed-seal"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_state,
+    "rollback-failed-state"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_unload,
+    "rollback-failed-unload"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_observer,
+    "rollback-failed-observer"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_drain_cap,
+    "rollback-failed-drain-cap"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_left_peer,
+    "rollback-failed-left-peer"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_leave_cap,
+    "rollback-failed-leave-cap"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_trace,
+    "rollback-failed-trace"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_foreign,
+    "rollback-failed-foreign"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_worker,
+    "rollback-failed-worker"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_wait,
+    "rollback-failed-wait"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_healthy,
+    "rollback-failed-healthy"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_grant_pressure,
+    "rollback-failed-grant-pressure"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_grant_recorded,
+    "rollback-failed-grant-recorded"
+);
+
+scenario!(
+    worker_startup_composition_failed_rollback_recorded_cap,
+    "rollback-failed-recorded-cap"
+);
+
+scenario!(
+    worker_startup_composition_expired_preopen,
+    "expired-startup-preopen"
+);
+scenario!(
+    worker_startup_composition_expired_opened,
+    "expired-startup-opened"
+);
+scenario!(
+    worker_startup_composition_expired_activation,
+    "expired-startup-activation"
+);
+scenario!(
+    worker_startup_composition_expired_loaded,
+    "expired-startup-loaded"
+);
+scenario!(
+    worker_startup_composition_expired_classifier,
+    "expired-startup-classifier"
+);
+scenario!(
+    worker_startup_composition_expired_classifying,
+    "expired-startup-classifying"
+);
+scenario!(
+    worker_startup_composition_expired_classifying_complete,
+    "expired-startup-classifying-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_complete,
+    "expired-startup-repair-read-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_recheck_complete,
+    "expired-startup-repair-recheck-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_before_fork_complete,
+    "expired-startup-admission-before-fork-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_unsent_complete,
+    "expired-startup-admission-unsent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_unsent_failure_complete,
+    "expired-startup-admission-unsent-failure-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_ready_complete,
+    "expired-startup-admission-ready-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_refused_complete,
+    "expired-startup-admission-refused-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admission_partial_complete,
+    "expired-startup-admission-partial-complete"
+);
+scenario!(
+    worker_startup_composition_expired_classifying_held,
+    "expired-startup-classifying-held"
+);
+scenario!(
+    worker_startup_composition_expired_classifying_cap,
+    "expired-startup-classifying-cap"
+);
+scenario!(
+    worker_startup_composition_expired_classifier_complete,
+    "expired-startup-classifier-complete"
+);
+scenario!(
+    worker_startup_composition_expired_classifier_varied,
+    "expired-startup-classifier-varied"
+);
+scenario!(
+    worker_startup_composition_expired_classifier_unreadable,
+    "expired-startup-classifier-unreadable"
+);
+scenario!(
+    worker_startup_composition_expired_classifier_held,
+    "expired-startup-classifier-held"
+);
+scenario!(
+    worker_startup_composition_expired_admit,
+    "expired-startup-admit"
+);
+scenario!(
+    worker_startup_composition_expired_admit_complete,
+    "expired-startup-admit-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admit_sent_complete,
+    "expired-startup-admit-sent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_admit_pending_complete,
+    "expired-startup-admit-pending-complete"
+);
+scenario!(
+    worker_startup_composition_expired_boot_complete,
+    "expired-startup-boot-complete"
+);
+scenario!(
+    worker_startup_composition_expired_release_wrong,
+    "expired-startup-boot-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_release_arm,
+    "expired-startup-boot-release-arm"
+);
+scenario!(
+    worker_startup_composition_expired_release_position,
+    "expired-startup-boot-release-position"
+);
+scenario!(
+    worker_startup_composition_expired_release_early,
+    "expired-startup-boot-release-early"
+);
+scenario!(
+    worker_startup_composition_expired_release_silent,
+    "expired-startup-boot-release-silent"
+);
+scenario!(
+    worker_startup_composition_expired_release_held,
+    "expired-startup-boot-release-held"
+);
+scenario!(
+    worker_startup_composition_expired_release_recorded,
+    "expired-startup-boot-release-recorded"
+);
+scenario!(
+    worker_startup_composition_expired_repair_complete,
+    "expired-startup-repair-complete"
+);
+scenario!(
+    worker_startup_composition_expired_boot,
+    "expired-startup-boot"
+);
+scenario!(
+    worker_startup_composition_expired_open,
+    "expired-startup-open"
+);
+scenario!(
+    worker_startup_composition_expired_open_complete,
+    "expired-startup-open-complete"
+);
+scenario!(
+    worker_startup_composition_expired_open_unsent_complete,
+    "expired-startup-open-unsent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_open_record_complete,
+    "expired-startup-open-record-complete"
+);
+scenario!(
+    worker_startup_composition_expired_open_release_wrong,
+    "expired-startup-open-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_prompt_read,
+    "expired-startup-prompt-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template,
+    "expired-startup-template-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_unsent,
+    "expired-startup-template-unsent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_between,
+    "expired-startup-template-between-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_record,
+    "expired-startup-template-record-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_held,
+    "expired-startup-template-held"
+);
+scenario!(
+    worker_startup_composition_expired_template_release_wrong,
+    "expired-startup-template-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_template_cap,
+    "expired-startup-template-cap"
+);
+scenario!(
+    worker_startup_composition_expired_template_component,
+    "expired-startup-template-component-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_foreign,
+    "expired-startup-template-foreign-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_completion,
+    "expired-startup-template-completion-complete"
+);
+scenario!(
+    worker_startup_composition_expired_template_recorded,
+    "expired-startup-template-recorded-complete"
+);
+scenario!(
+    worker_startup_composition_expired_summary_read,
+    "expired-startup-summary-read-complete"
+);
+scenario!(
+    worker_startup_composition_expired_prompt_cursor,
+    "expired-startup-prompt-cursor-complete"
+);
+scenario!(
+    worker_startup_composition_expired_summary_cursor,
+    "expired-startup-summary-read-cursor-complete"
+);
+scenario!(
+    worker_startup_composition_expired_read_classifier_held,
+    "expired-startup-summary-read-held"
+);
+scenario!(
+    worker_startup_composition_expired_read_release_wrong,
+    "expired-startup-summary-read-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_prompt_measurement,
+    "expired-startup-prompt-measurement-complete"
+);
+scenario!(
+    worker_startup_composition_expired_summary_measurement,
+    "expired-startup-summary-read-measurement-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair,
+    "expired-startup-repair"
+);
+scenario!(
+    worker_startup_composition_expired_summary,
+    "expired-startup-summary"
+);
+scenario!(
+    worker_startup_composition_expired_installed,
+    "expired-startup-installed"
+);
+scenario!(
+    worker_startup_composition_expired_raised,
+    "expired-startup-raised"
+);
+scenario!(
+    worker_startup_composition_expired_installed_complete,
+    "expired-startup-installed-complete"
+);
+scenario!(
+    worker_startup_composition_expired_installed_unsent_complete,
+    "expired-startup-installed-unsent-complete"
+);
+scenario!(
+    worker_startup_composition_expired_raised_complete,
+    "expired-startup-raised-complete"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_frames,
+    "expired-startup-raised-lower-frames"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_pressure,
+    "expired-startup-raised-lower-pressure"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_silent,
+    "expired-startup-raised-lower-silent"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_held,
+    "expired-startup-raised-lower-held"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_transport_loss,
+    "expired-startup-raised-lower-transport-loss"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_delayed,
+    "expired-startup-raised-lower-last-word-delayed"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_timeout,
+    "expired-startup-raised-lower-last-word-timeout"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_lower_cap,
+    "expired-startup-raised-lower-last-word-lower-cap"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_leave_cap,
+    "expired-startup-raised-lower-last-word-leave-cap"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_last_word_failure,
+    "expired-startup-raised-lower-last-word-failure"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_early,
+    "expired-startup-raised-lower-early"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_wrong,
+    "expired-startup-raised-lower-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_refused,
+    "expired-startup-raised-lower-refused"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_unreplied,
+    "expired-startup-raised-lower-unreplied"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_silent_admin,
+    "expired-startup-raised-lower-silent-admin"
+);
+scenario!(
+    worker_startup_composition_expired_raised_lower_cap,
+    "expired-startup-raised-lower-cap"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_before_leave,
+    "expired-startup-raised-lower-failure-before"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_pending_frame,
+    "expired-startup-raised-lower-failure-lower-pressure"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_pending_ticket,
+    "expired-startup-raised-lower-failure-pending-ticket-lower-pressure"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_stopped_child,
+    "expired-startup-raised-lower-failure-lower-held"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_original_cap,
+    "expired-startup-raised-lower-failure-lower-cap"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_release,
+    "expired-startup-raised-lower-failure-release-wrong"
+);
+scenario!(
+    worker_startup_composition_expired_gate_failure_recorded,
+    "expired-startup-raised-lower-failure-recorded"
+);
+scenario!(
+    worker_startup_composition_expired_foreign,
+    "expired-startup-foreign"
+);
+scenario!(
+    worker_startup_composition_expired_observe,
+    "expired-startup-observe"
+);
+scenario!(
+    worker_startup_composition_expired_silent_peer,
+    "expired-startup-silent"
+);
+scenario!(
+    worker_startup_composition_expired_refusal,
+    "expired-startup-refusal"
+);
+scenario!(
+    worker_startup_composition_expired_blocking_wait,
+    "expired-startup-wait"
+);
+scenario!(
+    worker_startup_composition_expired_activation_cap,
+    "expired-startup-activation-cap"
+);
+scenario!(
+    worker_startup_composition_expired_activation_trace,
+    "expired-startup-activation-trace"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_unstarted_complete,
+    "expired-startup-repair-unstarted-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_retained_complete,
+    "expired-startup-repair-retained-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_filed_complete,
+    "expired-startup-repair-filed-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_proposed_complete,
+    "expired-startup-repair-proposed-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_filing_unstarted_complete,
+    "expired-startup-repair-filing-unstarted-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_complete,
+    "expired-startup-repair-filing-pending-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_measurement_complete,
+    "expired-startup-repair-read-measurement-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_cursor_complete,
+    "expired-startup-repair-read-cursor-complete"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_cap,
+    "expired-startup-repair-read-cap"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_held,
+    "expired-startup-repair-read-held"
+);
+scenario!(
+    worker_startup_composition_expired_repair_read_release_wrong,
+    "expired-startup-repair-read-release-wrong"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_queued_complete,
+    "expired-startup-repair-filing-queued-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_unsent_complete,
+    "expired-startup-repair-filing-unsent-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_settled_complete,
+    "expired-startup-repair-filing-settled-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_cap,
+    "expired-startup-repair-filing-pending-cap"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_classifier_held,
+    "expired-startup-repair-filing-pending-classifier-held"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_release_wrong,
+    "expired-startup-repair-filing-pending-release-wrong"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_author_complete,
+    "expired-startup-repair-filing-author-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_flow_complete,
+    "expired-startup-repair-filing-flow-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_measurement_complete,
+    "expired-startup-repair-filing-measurement-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_repair_filing_pending_partial_complete,
+    "expired-startup-repair-filing-pending-partial-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_unstarted_complete,
+    "expired-startup-summary-account-unstarted-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_retained_complete,
+    "expired-startup-summary-account-retained-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_populated_complete,
+    "expired-startup-summary-account-populated-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_complete,
+    "expired-startup-summary-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_refused_complete,
+    "expired-startup-summary-account-refused-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_retained_cap,
+    "expired-startup-summary-account-retained-cap"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_retained_release_wrong,
+    "expired-startup-summary-account-retained-release-wrong"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_account_retained_classifier_held,
+    "expired-startup-summary-account-retained-classifier-held"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_boundary_recorded,
+    "expired-startup-summary-boundary-recorded-populated-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_boundary_read_complete,
+    "expired-startup-summary-boundary-read-complete-populated-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_boundary_read_settled,
+    "expired-startup-summary-boundary-read-settled-populated-complete"
+);
+
+scenario!(
+    worker_startup_composition_expired_summary_boundary_refused,
+    "expired-startup-summary-boundary-refused-complete"
+);
+
+scenario!(
+    worker_session_composition_forced_save,
+    "input-worker-generation-emission-session-forced-save"
+);
+scenario!(
+    worker_session_composition_forced_save_refused,
+    "input-worker-generation-emission-session-forced-save-refused"
+);
+scenario!(
+    worker_session_composition_forced_save_snapshot_timeout,
+    "input-worker-generation-emission-session-forced-save-snapshot-timeout"
+);
+scenario!(
+    worker_session_composition_graceful_save_snapshot_timeout,
+    "input-worker-generation-emission-session-graceful-save-snapshot-timeout"
+);
+scenario!(
+    worker_session_composition_forced_save_finished_timeout,
+    "input-worker-generation-emission-session-forced-save-finished-timeout"
+);
+scenario!(
+    worker_session_composition_forced_save_window_timeout,
+    "input-worker-generation-emission-session-forced-save-window-timeout"
+);
+scenario!(
+    worker_session_composition_forced_save_published_timeout,
+    "input-worker-generation-emission-session-forced-save-published-timeout"
+);
+scenario!(
+    worker_session_composition_forced_save_wrong_published,
+    "input-worker-generation-emission-session-forced-save-wrong-published"
+);
+scenario!(
+    worker_session_composition_forced_save_secondary,
+    "input-worker-generation-emission-session-forced-save-secondary"
+);
+scenario!(
+    worker_session_composition_forced_save_sqlite,
+    "input-worker-generation-emission-session-forced-save-sqlite"
+);
+scenario!(
+    worker_session_composition_forced_save_sqlite_held_filing,
+    "input-worker-generation-emission-session-forced-save-sqlite-held-filing"
+);
+
+scenario!(
+    worker_session_forced_leave_joint_sqlite_bad_release,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-bad-release"
+);
+
+scenario!(
+    worker_graceful_drain_running,
+    "input-worker-generation-emission-pairs-external-graceful-running"
+);
+scenario!(
+    worker_graceful_drain_crossed,
+    "input-worker-generation-emission-pairs-external-graceful-crossed"
+);
+scenario!(
+    worker_graceful_drain_new_call,
+    "input-worker-generation-emission-pairs-external-graceful-new"
+);
+scenario!(
+    worker_graceful_drain_completed_result,
+    "input-worker-generation-emission-pairs-external-graceful-result"
+);
+scenario!(
+    worker_graceful_drain_held_filing,
+    "input-worker-generation-emission-pairs-external-graceful-held"
+);
+scenario!(
+    worker_graceful_drain_expiry,
+    "input-worker-generation-emission-pairs-external-graceful-expiry"
+);
+scenario!(
+    worker_graceful_drain_expiry_during_handoff,
+    "input-worker-generation-emission-pairs-external-graceful-expiry-delayed"
+);
+
+scenario!(
+    worker_graceful_drain_session_idle,
+    "input-worker-generation-emission-session-graceful-idle"
+);
+scenario!(
+    worker_graceful_drain_session_active,
+    "input-worker-generation-emission-session-graceful-active"
+);
+
+scenario!(
+    worker_graceful_drain_join_before_expiry_delayed,
+    "input-worker-generation-emission-pairs-external-graceful-expiry-early-join"
+);
+
+scenario!(
+    worker_graceful_quiesce_accepted,
+    "input-worker-generation-emission-session-graceful-quiesce-accepted"
+);
+
+scenario!(
+    worker_graceful_quiesce_checking,
+    "input-worker-generation-emission-session-graceful-quiesce-checking"
+);
+
+scenario!(
+    worker_graceful_quiesce_queued,
+    "input-worker-generation-emission-session-graceful-quiesce-queued"
+);
+
+scenario!(
+    worker_graceful_quiesce_active,
+    "input-worker-generation-emission-session-graceful-quiesce-active"
+);
+
+scenario!(
+    worker_graceful_quiesce_expiry,
+    "input-worker-generation-emission-session-graceful-quiesce-expiry"
+);
+
+scenario!(
+    worker_graceful_quiesce_join,
+    "input-worker-generation-emission-session-graceful-quiesce-join"
+);
+
+scenario!(
+    worker_graceful_quiesce_wrong,
+    "input-worker-generation-emission-session-graceful-quiesce-wrong"
+);
+
+scenario!(
+    worker_graceful_quiesce_duplicate,
+    "input-worker-generation-emission-session-graceful-quiesce-duplicate"
+);
+
+scenario!(
+    worker_graceful_quiesce_empty,
+    "input-worker-generation-emission-session-graceful-quiesce-empty"
+);
+
+scenario!(
+    worker_graceful_quiesce_dead,
+    "input-worker-generation-emission-session-graceful-quiesce-dead"
+);
+
+scenario!(
+    worker_graceful_quiesce_bounded,
+    "input-worker-generation-emission-session-graceful-quiesce-bounded"
+);
+
+scenario!(
+    worker_graceful_quiesce_listener,
+    "input-worker-generation-emission-session-graceful-quiesce-listener"
+);
+
+scenario!(
+    worker_graceful_wind_down_clean,
+    "input-worker-generation-emission-session-graceful-wind-down-clean"
+);
+
+scenario!(
+    worker_graceful_wind_down_unbounded,
+    "input-worker-generation-emission-session-graceful-wind-down-unbounded"
+);
+
+scenario!(
+    worker_graceful_wind_down_multiple,
+    "input-worker-generation-emission-session-graceful-wind-down-multiple"
+);
+
+scenario!(
+    worker_graceful_wind_down_correction,
+    "input-worker-generation-emission-session-graceful-wind-down-correction"
+);
+
+scenario!(
+    worker_graceful_wind_down_exhausted,
+    "input-worker-generation-emission-session-graceful-wind-down-exhausted"
+);
+
+scenario!(
+    worker_graceful_wind_down_calls,
+    "input-worker-generation-emission-session-graceful-wind-down-calls"
+);
+
+scenario!(
+    worker_graceful_wind_down_template_absent,
+    "input-worker-generation-emission-session-graceful-wind-down-template-absent"
+);
+
+scenario!(
+    worker_graceful_wind_down_template_refused,
+    "input-worker-generation-emission-session-graceful-wind-down-template-refused"
+);
+
+scenario!(
+    worker_graceful_wind_down_placement_refused,
+    "input-worker-generation-emission-session-graceful-wind-down-placement-refused"
+);
+
+scenario!(
+    worker_graceful_wind_down_decode_refused,
+    "input-worker-generation-emission-session-graceful-wind-down-decode-refused"
+);
+
+scenario!(
+    worker_graceful_wind_down_correction_refused,
+    "input-worker-generation-emission-session-graceful-wind-down-correction-refused"
+);
+
+scenario!(
+    worker_graceful_wind_down_held_filing,
+    "input-worker-generation-emission-session-graceful-wind-down-held-filing"
+);
+
+scenario!(
+    worker_graceful_wind_down_expiry,
+    "input-worker-generation-emission-session-graceful-wind-down-expiry"
+);
+
+scenario!(
+    worker_graceful_wind_down_join,
+    "input-worker-generation-emission-session-graceful-wind-down-join"
+);
+
+scenario!(
+    worker_graceful_wind_down_component,
+    "input-worker-generation-emission-session-graceful-wind-down-component"
+);
+
+scenario!(
+    worker_graceful_wind_down_active,
+    "input-worker-generation-emission-session-graceful-wind-down-active"
+);
+
+scenario!(
+    worker_graceful_wind_down_join_delayed,
+    "input-worker-generation-emission-session-graceful-wind-down-join-delayed"
+);
+
+scenario!(
+    worker_graceful_wind_down_gate_dead,
+    "input-worker-generation-emission-session-graceful-wind-down-gate-dead"
+);
+
+scenario!(
+    worker_graceful_wind_down_author_wait,
+    "input-worker-generation-emission-session-graceful-wind-down-author-wait"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite,
+    "input-worker-generation-emission-session-graceful-save-sqlite"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_join_before,
+    "input-worker-generation-emission-session-graceful-save-sqlite-join-before"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_join_published,
+    "input-worker-generation-emission-session-graceful-save-sqlite-join-published"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_join_sealed,
+    "input-worker-generation-emission-session-graceful-save-sqlite-join-sealed"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_joint,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_join_handoff,
+    "input-worker-generation-emission-session-graceful-save-sqlite-join-handoff"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_wrong_published,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wrong-published"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_joint_bad_release,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-bad-release"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_peer_after_capture,
+    "input-worker-generation-emission-session-graceful-save-sqlite-peer-after-capture"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_tail_expired,
+    "input-worker-generation-emission-session-graceful-save-sqlite-tail-expired"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_drain_join_idle,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-join-idle"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_drain_join_accepted,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-join-accepted"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_drain_join_held_filing,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-join-held-filing"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_drain_expiry_held_filing,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-expiry-held-filing"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_drain_expiry_join_held_filing,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-expiry-join-held-filing"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_drain_join_generation,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-join-generation"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_drain_expiry_generation,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-expiry-generation"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_quiesce_prelower,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-prelower"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_quiesce_afterlower,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-afterlower"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_quiesce_expiry,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-expiry"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_quiesce_pending_record,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-pending-record"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_quiesce_pending_author,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-pending-author"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_quiesce_accepted,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-accepted"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_quiesce_delivered,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-delivered"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_quiesce_wrong_ack,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-wrong-ack"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_quiesce_duplicate_ack,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-duplicate-ack"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_quiesce_queued_control,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-queued-control"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_quiesce_queued_close,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-queued-close"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_unstarted,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-unstarted"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_held_start,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-held-start"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_held_start_resume,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-held-start-resume"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_held_close,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-held-close"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_held_close_resume,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-held-close-resume"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_held_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-held-refusal"
+);
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_held_refusal_resume,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-held-refusal-resume"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_start_author,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-start-author"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_instruction,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-instruction"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_held_filing,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-held-filing"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_measure,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-measure"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_placed,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-placed"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_generation,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-generation"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_generated,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-generated"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_repair,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-repair"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_restatement,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-restatement"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_correction_place,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-correction-place"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_correction_generation,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-correction-generation"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_pair_filing,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-pair-filing"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_closing,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-closing"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_close_author,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-close-author"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_expiry_generation,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-expiry-generation"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_prior_generation,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-prior-generation"
+);
+
+scenario!(
+    worker_session_graceful_save_sqlite_wind_convert_expiry_close_recorded,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-expiry-close-recorded"
+);
+
+scenario!(
+    worker_session_graceful_secondary_drain_observe,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-expiry-secondary-observe-held-filing"
+);
+
+scenario!(
+    worker_session_graceful_secondary_drain_joiner,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-expiry-secondary-joiner-held-filing"
+);
+
+scenario!(
+    worker_session_graceful_secondary_drain_silent,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-expiry-secondary-silent-held-filing"
+);
+
+scenario!(
+    worker_session_graceful_secondary_drain_refused,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-expiry-secondary-outoforder-held-filing"
+);
+
+scenario!(
+    worker_session_graceful_secondary_wind_observe,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-expiry-secondary-observe"
+);
+
+scenario!(
+    worker_session_graceful_secondary_wind_joiner,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-expiry-secondary-joiner"
+);
+
+scenario!(
+    worker_session_graceful_secondary_wind_silent,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-expiry-secondary-silent"
+);
+
+scenario!(
+    worker_session_graceful_secondary_wind_refused,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-expiry-secondary-outoforder"
+);
+
+scenario!(
+    worker_session_graceful_secondary_quiesce_observe,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-observe-expiry"
+);
+
+scenario!(
+    worker_session_graceful_secondary_quiesce_joiner,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-joiner-expiry"
+);
+
+scenario!(
+    worker_session_graceful_secondary_quiesce_silent,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-silent-expiry"
+);
+
+scenario!(
+    worker_session_graceful_secondary_quiesce_refused,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-outoforder-expiry"
+);
+
+scenario!(
+    worker_session_graceful_secondary_gate_observe,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-observe-gate-end"
+);
+
+scenario!(
+    worker_session_graceful_secondary_gate_joiner,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-joiner-gate-end"
+);
+
+scenario!(
+    worker_session_graceful_secondary_gate_silent,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-silent-gate-end"
+);
+
+scenario!(
+    worker_session_graceful_secondary_gate_refused,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-outoforder-gate-end"
+);
+
+scenario!(
+    worker_session_demand_save_sqlite_organ_loss_spu_release,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-spu-release"
+);
+
+scenario!(
+    worker_session_demand_save_sqlite_organ_loss_spu_queued_report,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-report-queued-spu-release"
 );

@@ -4,7 +4,7 @@
 use super::*;
 use crate::flow::pump::{LifecycleListener, LifecycleMessage, LifecyclePeer};
 #[path = "context_rollback_listener.rs"]
-mod listener;
+pub(in crate::flow::context) mod listener;
 use crate::flow::pump_transport::{OrganSend, TrackedStage};
 use listener::RollbackDials;
 use weaver_trace::GrantSurface;
@@ -31,6 +31,55 @@ pub(in crate::flow) struct EnterRefusalResponse<'a> {
     send: Option<OrganSend>,
     returned: Option<OrganEnvelope>,
     stop: Option<ResponseStop>,
+    original: Option<crate::flow::pump::enter::DetachedEnter>,
+}
+
+pub(in crate::flow::context) struct RetiredRefusalResponse {
+    refusal: RetiredRefusal,
+    peer: crate::flow::pump::RetiredLifecyclePeer,
+    stage: ResponseStage,
+    send: Option<OrganSend>,
+    returned: Option<OrganEnvelope>,
+    stop: Option<ResponseStop>,
+    original: Option<crate::flow::pump::enter::DetachedEnter>,
+}
+impl EnterRefusalResponse<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.refusal.failure_test_context()
+    }
+
+    pub(in crate::flow::context) fn failure_view(
+        &self,
+    ) -> crate::flow::context::worker_startup::rollback::failed::RollbackView<'_> {
+        let mut view = self.refusal.failure_view();
+        view.cause = self
+            .original
+            .as_ref()
+            .map(|original| original.payload().cause)
+            .or(view.cause);
+        view
+    }
+    pub(in crate::flow::context) fn retire_failure(self) -> RetiredRefusalResponse {
+        let Self {
+            refusal,
+            peer,
+            stage,
+            send,
+            returned,
+            stop,
+            original,
+        } = self;
+        RetiredRefusalResponse {
+            refusal: refusal.retire_failure(),
+            peer: peer.retire_failed(),
+            stage,
+            send,
+            returned,
+            stop,
+            original,
+        }
+    }
 }
 
 impl<'a> RecordedStartupRefusal<'a> {
@@ -44,11 +93,118 @@ impl<'a> RecordedStartupRefusal<'a> {
             send: None,
             returned: None,
             stop: None,
+            original: None,
         }
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn into_original_response(
+        mut self,
+    ) -> Result<EnterRefusalResponse<'a>, Self> {
+        let Some(original) = self.owner.startup.original_enter.take() else {
+            return Err(self);
+        };
+        let (peer, original) = original.into_response_peer();
+        let mut response = self.into_response(peer);
+        response.original = Some(original);
+        Ok(response)
     }
 }
 
 impl EnterRefusalResponse<'_> {
+    /// Await only root's explicit rollback. An expired original Enter is not a
+    /// new failure or time allowance; every other live/clock failure survives.
+    pub(in crate::flow) fn observe_await(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<u64, RunFailure> {
+        let context = &mut self.refusal.owner.startup.context;
+        match context.live(io) {
+            Ok(()) => {}
+            Err(RunFailure::Wait {
+                key: PumpDeadline::Enter,
+                bound,
+            }) if bound == self.refusal.owner.bound => {}
+            Err(error) => return Err(error),
+        }
+        Ok(context.last_ns)
+    }
+    /// Transport observation while awaiting root is not boot work. Keep the
+    /// original Enter registered and retained, but do not use its expiry to
+    /// suppress state/trace failure observation or the actual rollback accept.
+    pub(in crate::flow) fn pump_await(
+        &mut self,
+        ports: &mut PumpPorts<'_, impl PumpIo>,
+        read: Option<AbsoluteBound>,
+    ) -> Result<(), RunFailure> {
+        self.observe_await(ports.io)?;
+        let context = &mut self.refusal.owner.startup.context;
+        if context.phase != RecordingPhase::Entered
+            || context.deadlines.get(PumpDeadline::Enter) != Some(self.refusal.owner.bound)
+            || context.deadlines.get(PumpDeadline::Leave).is_some()
+        {
+            return Err(RunFailure::EnterRefusalOwned);
+        }
+        let mut waits = crate::flow::clock::DeadlineRegistry::new();
+        for (key, bound) in context.deadlines.entries() {
+            if key != PumpDeadline::Enter {
+                waits
+                    .arm(key, bound)
+                    .map_err(|_| RunFailure::EnterRefusalOwned)?;
+            }
+        }
+        if let Some(read) = read {
+            waits
+                .arm(PumpDeadline::AdminRead, read)
+                .map_err(|_| RunFailure::EnterRefusalOwned)?;
+        }
+        let result = context.pump.step(
+            ports,
+            Some(&mut context.flow),
+            &mut FlowRecording {
+                barrier: &mut context.barrier,
+                inbox: &mut context.inbox,
+                budget: &mut context.budget,
+                author: &context.author,
+            },
+            &waits,
+        );
+        match result {
+            Ok(crate::flow::pump::PumpStep::Deadline { key, bound }) => {
+                return Err(RunFailure::Wait { key, bound });
+            }
+            Ok(_) => {}
+            Err(crate::flow::pump::PumpFailure::Transport { source, failure }) => {
+                return Err(RunFailure::Transport { source, failure });
+            }
+            Err(error) => {
+                if let Some(failure) = context.flow.failure().cloned() {
+                    return Err(context.flow_failed(ports.io, failure));
+                }
+                if context.barrier.failure().is_some()
+                    || context.barrier.standing_failure().is_some()
+                {
+                    return Err(context.record_failed(ports.io));
+                }
+                return Err(context.fail(
+                    ports.io,
+                    FlowHaltReason::TraceFailed,
+                    HaltPoint::Author,
+                    format!("rollback wait: {error:?}"),
+                ));
+            }
+        }
+        self.observe_await(ports.io).map(|_| ())
+    }
+    pub(in crate::flow) fn recorded_sequence(&self) -> Sequence {
+        self.refusal.sequence()
+    }
+    pub(in crate::flow) fn original_bound(&self) -> AbsoluteBound {
+        self.refusal.owner.bound
+    }
+    pub(in crate::flow) fn context(&self) -> &RecordingContext {
+        self.refusal.owner.startup.context
+    }
     pub(in crate::flow) fn stage(&self) -> ResponseStage {
         self.stage
     }
@@ -196,6 +352,56 @@ pub(in crate::flow) struct RollbackComposition<'a> {
     inspecting: bool,
     current: Option<InspectionCompletion>,
     stop: Option<RollbackStop>,
+}
+
+pub(in crate::flow::context) struct RetiredRollback {
+    response: RetiredRefusalResponse,
+    peer: crate::flow::pump::RetiredLifecyclePeer,
+    dials: listener::RetiredRollbackDials,
+    directive: crate::flow::pump::RetiredLifecycleMessage,
+    leave: AbsoluteBound,
+    stage: RollbackStage,
+    inspecting: bool,
+    current: Option<InspectionCompletion>,
+    stop: Option<RollbackStop>,
+}
+impl RollbackComposition<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.response.failure_test_context()
+    }
+
+    pub(in crate::flow::context) fn failure_view(
+        &self,
+    ) -> crate::flow::context::worker_startup::rollback::failed::RollbackView<'_> {
+        let mut view = self.response.failure_view();
+        view.leave = Some(self.leave);
+        view
+    }
+    pub(in crate::flow::context) fn retire_failure(self) -> RetiredRollback {
+        let Self {
+            response,
+            peer,
+            dials,
+            directive,
+            leave,
+            stage,
+            inspecting,
+            current,
+            stop,
+        } = self;
+        RetiredRollback {
+            response: response.retire_failure(),
+            peer: peer.retire_failed(),
+            dials: dials.retire_failed(),
+            directive: directive.retire_failed(),
+            leave,
+            stage,
+            inspecting,
+            current,
+            stop,
+        }
+    }
 }
 
 impl<'a> EnterRefusalResponse<'a> {
@@ -499,6 +705,33 @@ pub(in crate::flow) struct PreparedRollback<'a> {
     grant_surface: GrantSurface,
 }
 
+pub(in crate::flow::context) struct RetiredPreparedRollback {
+    owner: RetiredRollback,
+    grant_surface: GrantSurface,
+}
+impl PreparedRollback<'_> {
+    #[cfg(test)]
+    pub(in crate::flow::context) fn failure_test_context(&mut self) -> &mut RecordingContext {
+        self.owner.failure_test_context()
+    }
+
+    pub(in crate::flow::context) fn failure_view(
+        &self,
+    ) -> crate::flow::context::worker_startup::rollback::failed::RollbackView<'_> {
+        self.owner.failure_view()
+    }
+    pub(in crate::flow::context) fn retire_failure(self) -> RetiredPreparedRollback {
+        let Self {
+            owner,
+            grant_surface,
+        } = self;
+        RetiredPreparedRollback {
+            owner: owner.retire_failure(),
+            grant_surface,
+        }
+    }
+}
+
 impl PreparedRollback<'_> {
     pub(in crate::flow) fn grant_surface(&self) -> GrantSurface {
         self.grant_surface
@@ -528,3 +761,48 @@ pub(super) mod tests;
 
 #[path = "context_rollback_halt.rs"]
 pub(in crate::flow) mod halt;
+
+#[path = "context_rollback_terminal.rs"]
+pub(in crate::flow) mod terminal;
+
+#[cfg(test)]
+impl RetiredRefusalResponse {
+    pub(in crate::flow::context) fn retained_enter_wire(&self) -> &[u8] {
+        self.original.as_ref().unwrap().retained_wire()
+    }
+}
+
+#[cfg(test)]
+impl RetiredRollback {
+    pub(in crate::flow::context) fn retained_enter_wire(&self) -> &[u8] {
+        self.response.retained_enter_wire()
+    }
+}
+
+#[cfg(test)]
+impl RetiredPreparedRollback {
+    pub(in crate::flow::context) fn retained_comparison(
+        &self,
+    ) -> (
+        &InspectionCompletion,
+        &InspectionCompletion,
+        &OrganEnvelope,
+        GrantSurface,
+    ) {
+        (
+            self.owner
+                .response
+                .refusal
+                .startup
+                .initial_grants
+                .as_ref()
+                .unwrap(),
+            self.owner.current.as_ref().unwrap(),
+            &self.owner.directive.envelope,
+            self.grant_surface,
+        )
+    }
+    pub(in crate::flow::context) fn retained_enter_wire(&self) -> &[u8] {
+        self.owner.retained_enter_wire()
+    }
+}

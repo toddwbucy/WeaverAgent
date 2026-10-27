@@ -383,20 +383,30 @@ impl RecordingContext {
         template: &'static RestatementTemplate,
         io: &mut impl PumpIo,
     ) -> Result<(), RepairBeginError> {
-        self.begin_repair_owner(original, certificate, Some(template), false, io)
+        self.begin_repair_owner(original, certificate, Some(template), None, io)
     }
 
     /// Stop may arrive before the loop chooses a restatement family. A complete
     /// checked emission still owes refusal and pair accounting. This owner starts
     /// cancelled and has no instruction family or successful emission path.
     #[allow(clippy::result_large_err)]
-    pub(in crate::flow) fn begin_stopped_emission(
+    pub(in crate::flow) fn begin_cancelled_emission(
         &mut self,
         original: OriginalRequests,
         certificate: TemplateCertificate,
+        cause: NonDispatchCause,
         io: &mut impl PumpIo,
     ) -> Result<(), RepairBeginError> {
-        self.begin_repair_owner(original, certificate, None, true, io)
+        if !matches!(cause, NonDispatchCause::Stop | NonDispatchCause::Unload) {
+            return Err(RepairBeginError {
+                original,
+                certificate,
+                refusal: RepairBeginRefusal::WrongPhase,
+                failure: None,
+                instruction_refusal: None,
+            });
+        }
+        self.begin_repair_owner(original, certificate, None, Some(cause), io)
     }
 
     #[allow(clippy::result_large_err)]
@@ -405,9 +415,10 @@ impl RecordingContext {
         original: OriginalRequests,
         certificate: TemplateCertificate,
         template: Option<&'static RestatementTemplate>,
-        stopped: bool,
+        cancel: Option<NonDispatchCause>,
         io: &mut impl PumpIo,
     ) -> Result<(), RepairBeginError> {
+        let stopped = cancel.is_some();
         if let Err(failure) = self.live(io) {
             return Err(RepairBeginError {
                 original,
@@ -567,7 +578,7 @@ impl RecordingContext {
             rejection: None,
             refusal_record: None,
             refusal_source: None,
-            cancel: stopped.then_some(NonDispatchCause::Stop),
+            cancel,
             cancelled: None,
             incomplete_output: None,
         });
@@ -1691,15 +1702,16 @@ impl RecordingContext {
         }
         let result = self.advance_pairs(ports);
         self.repair.as_mut().unwrap().internal = false;
-        if result.map_err(|failure| {
+        match result.map_err(|failure| {
             self.repair
                 .as_mut()
                 .unwrap()
                 .returned_pair_filing
                 .retain(failure)
-        })? != PairProgress::Complete
-        {
-            return Ok(RepairProgress::Pending);
+        })? {
+            PairProgress::Complete => {}
+            PairProgress::Progress => return Ok(RepairProgress::Progress),
+            PairProgress::Pending => return Ok(RepairProgress::Pending),
         }
         self.repair.as_mut().unwrap().internal = true;
         let correction = if matches!(

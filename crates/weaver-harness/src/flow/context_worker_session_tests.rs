@@ -1,5 +1,6 @@
 //! Multiple real worker turns and management exchanges share one entered
-//! context. The member/model peers are scripted and do not qualify deployment.
+//! context. Model peers are scripted; forced-save SQLite cases use the normal
+//! member. The synthetic language fixtures do not qualify deployment.
 use super::emission::tests::FAMILY;
 use super::*;
 use crate::flow::clock::testing::FakePumpIo;
@@ -25,6 +26,15 @@ macro_rules! packet {
         assert_eq!(send($fd, &bytes, MsgFlags::MSG_NOSIGNAL), Ok(bytes.len()));
     }};
 }
+#[path = "context_worker_graceful_quiesce_tests.rs"]
+pub(in crate::flow::context) mod quiesce;
+
+#[path = "context_worker_wind_down_tests.rs"]
+pub(in crate::flow::context) mod wind_down;
+
+#[path = "context_worker_demand_save_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod demand_save;
+
 fn wait_file(root: &Path, name: &str) {
     let end = Instant::now() + Duration::from_secs(25);
     while !root.join(name).exists() {
@@ -33,7 +43,7 @@ fn wait_file(root: &Path, name: &str) {
     }
 }
 fn turns(mode: &str) -> usize {
-    if mode.ends_with("election") {
+    if mode.ends_with("election") || demand_save::failed::is_mode(mode) {
         1
     } else if mode.ends_with("three") {
         3
@@ -62,6 +72,29 @@ fn frame(index: usize, malformed: bool) -> OrganEnvelope {
     }
 }
 pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
+    if mode.ends_with("-demand-receive-clock") {
+        let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
+        assert_eq!(recv(fd, &mut bytes, MsgFlags::empty()).unwrap_or(0), 0);
+        return;
+    }
+    if demand_save::organ_loss::is_mode(mode) {
+        return demand_save::organ_loss::gate(mode, root, fd);
+    }
+    if wind_down::is_mode(mode) {
+        return wind_down::gate(mode, root, fd);
+    }
+    if quiesce::is_mode(mode) {
+        return quiesce::gate(mode, root, fd);
+    }
+    if forced_leave::is_mode(mode) {
+        return ready_rollback::gate(mode, root, fd);
+    }
+    if ready_rollback::is_mode(mode) {
+        return ready_rollback::gate(mode, root, fd);
+    }
+    if serving_rollback::is_mode(mode) {
+        return serving_rollback::gate(mode, root, fd);
+    }
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
     packet!(fd, &frame(0, mode.ends_with("refused")));
     if mode.ends_with("queued") {
@@ -108,11 +141,39 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
         .unwrap();
     }
     // The same gate remains alive until the test's retained owner reaps it.
-    let _ = recv(fd, &mut bytes, MsgFlags::empty());
+    let n = recv(fd, &mut bytes, MsgFlags::empty()).unwrap_or(0);
+    if demand_save::failed::is_mode(mode) {
+        let lower: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
+        assert_eq!(lower.payload, Payload::Directive(LifecycleDirective::Lower));
+        std::fs::write(root.join("demand-failed-lower.json"), &bytes[..n]).unwrap();
+        packet!(
+            fd,
+            &OrganEnvelope {
+                exchange: lower.exchange,
+                position: Position::Close,
+                payload: Payload::Answer(LifecycleAnswer::GateStopped)
+            }
+        );
+    }
 }
 
 pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
+    if demand_save::organ_loss::is_mode(mode) {
+        return demand_save::organ_loss::spu(mode, fd);
+    }
+    if forced_leave::wind_conversion::is_mode(mode) {
+        return forced_leave::wind_conversion::spu(mode, fd);
+    }
+    let converted_generation =
+        mode.contains("-session-graceful-save-sqlite-drain-") && mode.ends_with("-generation");
+    if mode.contains("-session-graceful-save") && !converted_generation {
+        return wind_down::spu(mode, fd);
+    }
+    if wind_down::is_mode(mode) {
+        return wind_down::spu(mode, fd);
+    }
     let root = std::path::PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
+    let correction = serving_rollback::is_correction(mode);
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
     let mut resident = 3;
     let mut measured = None;
@@ -121,6 +182,9 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
     loop {
         let n = recv(fd, &mut bytes, MsgFlags::empty()).unwrap_or(0);
         if n == 0 {
+            if serving_rollback::is_mode(mode) {
+                serving_rollback::release_peer();
+            }
             return;
         }
         let request: TokenDirective = serde_json::from_slice(&bytes[..n]).unwrap();
@@ -137,12 +201,35 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                     [Message {
                         role: Role::User,
                         content: vec![ContentBlock::Text {
-                            text: "Read caf\u{e9}.".into()
+                            text: if correction && generated > 0 {
+                                "Read correction."
+                            } else {
+                                "Read caf\u{e9}."
+                            }
+                            .into()
                         }]
                     }]
                 );
-                assert!(tool_schemas.is_empty());
+                if serving_rollback::is_mode(mode) && mode.contains("-external-") {
+                    assert_eq!(tool_schemas, vec![crate::tools::shell_schema().to_owned()]);
+                } else {
+                    assert!(tool_schemas.is_empty());
+                }
                 measured = Some(delta);
+                if correction && generated == 1 && mode.ends_with("-placement") {
+                    std::fs::write(
+                        root.join("serving-rollback-correction-measured.json"),
+                        &bytes[..n],
+                    )
+                    .unwrap();
+                    wait_file(&root, "serving-rollback-lower.json");
+                } else if serving_rollback::is_mode(mode)
+                    && !correction
+                    && mode.contains("-placement")
+                {
+                    std::fs::write(root.join("serving-rollback-measured"), &bytes[..n]).unwrap();
+                    wait_file(&root, "serving-rollback-accepted");
+                }
                 packet!(
                     fd,
                     &TokenAnswer::DeltaMeasured {
@@ -160,15 +247,43 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                 tool_schemas,
             } => {
                 assert_eq!(delta, measured.take().unwrap());
-                assert!(tool_schemas.is_empty());
+                if serving_rollback::is_mode(mode) && mode.contains("-external-") {
+                    assert_eq!(tool_schemas, vec![crate::tools::shell_schema().to_owned()]);
+                } else {
+                    assert!(tool_schemas.is_empty());
+                }
                 let index = generated
                     + usize::from(mode.ends_with("refused") || mode.ends_with("read-refusal"));
-                assert_eq!(turn.0, format!("session-{index}"));
+                assert_eq!(
+                    turn.0,
+                    format!("session-{}", if correction { 0 } else { index })
+                );
+                assert!(
+                    !correction || index <= 1,
+                    "rollback cannot retry a correction"
+                );
                 std::fs::write(
-                    root.join(format!("session-generation-{index}.json")),
+                    root.join(if correction && index == 1 {
+                        "serving-rollback-correction-generation.json".into()
+                    } else {
+                        format!("session-generation-{index}.json")
+                    }),
                     &bytes[..n],
                 )
                 .unwrap();
+                if index == 0
+                    && demand_save::is_mode(mode)
+                    && !mode.ends_with("-idle")
+                    && !mode.ends_with("-held-filing")
+                {
+                    wait_file(&root, "demand-resume-generation");
+                }
+                if mode.ends_with("graceful-active")
+                    || mode.ends_with("quiesce-active")
+                    || mode.ends_with("quiesce-queued")
+                {
+                    wait_file(&root, "graceful-resume-generation");
+                }
                 if mode.ends_with("decoder-failure") {
                     return;
                 }
@@ -185,9 +300,22 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                     } else {
                         Finish::Completed
                     },
-                    content: vec![ContentBlock::Text {
-                        text: "Read file.".into(),
-                    }],
+                    content: if correction {
+                        vec![ContentBlock::Text {
+                            text: if index == 0 {
+                                "Read bad."
+                            } else {
+                                "Read fixed."
+                            }
+                            .into(),
+                        }]
+                    } else if serving_rollback::is_mode(mode) && mode.contains("-external-") {
+                        super::emission::tests::content(mode)
+                    } else {
+                        vec![ContentBlock::Text {
+                            text: "Read file.".into(),
+                        }]
+                    },
                     unrecovered: vec![],
                     request: serde_json::value::RawValue::from_string(format!(
                         "{{\"session_turn\":{index}}}"
@@ -201,7 +329,12 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                     capacity: 16384,
                 };
                 generated += 1;
-                if index == 0 && mode.ends_with("stop-active") {
+                if (index == 0
+                    && (mode.ends_with("stop-active")
+                        || serving_rollback::holds_generation(mode)
+                        || converted_generation))
+                    || (correction && index == 1 && mode.ends_with("-generation"))
+                {
                     pending = Some((turn, generation));
                 } else {
                     packet!(fd, &TokenAnswer::Generated(generation));
@@ -210,9 +343,24 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
             TokenDirective::Cancel { turn } => {
                 let (original, mut generation) = pending.take().expect("actual pending generation");
                 assert_eq!(turn, original);
+                if serving_rollback::is_mode(mode) {
+                    assert!(!root.join("serving-rollback-cancel.json").exists());
+                    std::fs::write(root.join("serving-rollback-cancel.json"), &bytes[..n]).unwrap();
+                }
+                if correction {
+                    wait_file(&root, "serving-rollback-lower.json");
+                }
+                if converted_generation {
+                    assert!(!root.join("graceful-drain-cancel.json").exists());
+                    std::fs::write(root.join("graceful-drain-cancel.json"), &bytes[..n]).unwrap();
+                    wait_file(&root, "ready-rollback-lower.json");
+                }
                 generation.finish = Finish::Stopped;
                 packet!(fd, &TokenAnswer::Generated(generation));
                 packet!(fd, &TokenAnswer::AtRest);
+                if converted_generation {
+                    return;
+                }
             }
             other => panic!("unexpected session decode: {other:?}"),
         }
@@ -313,6 +461,18 @@ fn management(socket: &Path, directive: LifecycleDirective) -> std::os::fd::Owne
     peer
 }
 
+#[path = "context_worker_ready_rollback_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod ready_rollback;
+
+#[path = "context_worker_ready_rollback_edges_tests.rs"]
+mod ready_rollback_edges;
+
+#[path = "context_worker_forced_leave_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod forced_leave;
+
+#[path = "context_worker_serving_rollback_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod serving_rollback;
+
 pub(in crate::flow::context::worker_startup) fn exercise(
     serving: FoundationServing<'_>,
     member: &mut Member,
@@ -322,6 +482,18 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if demand_save::is_mode(mode) {
+        return demand_save::exercise(serving, member, reader, socket, root, mode);
+    }
+    if wind_down::is_mode(mode) {
+        return wind_down::exercise(serving, member, reader, socket, root, mode);
+    }
+    if quiesce::is_mode(mode) {
+        return quiesce::exercise(serving, member, reader, socket, root, mode);
+    }
+    if mode.contains("-session-graceful-") {
+        return graceful_session(serving, member, reader, socket, root, mode);
+    }
     let context_identity = std::ptr::from_ref(&*serving.owner.context);
     static MISSING: weaver_harness::FoundationRestatement =
         weaver_harness::FoundationRestatement::new("fixture.missing");
@@ -537,7 +709,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                     session.detail().as_deref(),
                     Some("repair election: UncertifiedFamily")
                 );
-                let peer = management(socket, LifecycleDirective::Observe);
+                let peer = super::election_wait_tests::wake_session(
+                    session,
+                    socket,
+                    LifecycleDirective::Observe,
+                );
                 let end = Instant::now() + Duration::from_secs(3);
                 let raw = loop {
                     session.advance();
@@ -561,7 +737,8 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                         }
                     )
                 ));
-                let stop = management(
+                let stop = super::election_wait_tests::wake_session(
+                    session,
                     socket,
                     LifecycleDirective::Stop {
                         cause: weaver_types::Cause { uid: 73 },
@@ -754,5 +931,205 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 > super::emission::tests::sequence(closes[0]),
             "queued input intake waits for the old world close"
         );
+    }
+}
+
+fn graceful_session(
+    serving: FoundationServing<'_>,
+    member: &mut Member,
+    reader: &mut UnixStream,
+    socket: &Path,
+    root: &Path,
+    mode: &str,
+) {
+    let active = mode.ends_with("active");
+    let mut guard = SessionGuard(Some(Session::begin(serving, &FAMILY, CutMethod::Flush)));
+    let done = AtomicBool::new(false);
+    reader.set_nonblocking(true).unwrap();
+    let (primary, bytes) = std::thread::scope(|scope| {
+        let responder = scope.spawn(|| {
+            let mut primary = None;
+            let end = Instant::now() + Duration::from_secs(20);
+            while !done.load(Ordering::SeqCst) && Instant::now() < end {
+                member.step_live(mode);
+                if primary.is_none()
+                    && root
+                        .join(if active {
+                            "session-generation-0.json"
+                        } else {
+                            "graceful-request"
+                        })
+                        .exists()
+                {
+                    primary = Some(management(
+                        socket,
+                        LifecycleDirective::Leave {
+                            cause: weaver_types::Cause { uid: 74 },
+                            forced: false,
+                            rollback: false,
+                        },
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            primary.expect("actual root Leave")
+        });
+        let recorder = scope.spawn(|| {
+            let mut bytes = vec![];
+            while !done.load(Ordering::SeqCst) {
+                let _ = reader.read_to_end(&mut bytes);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let _ = reader.read_to_end(&mut bytes);
+            bytes
+        });
+        let _stop = StopThreads(&done);
+        let session = guard.0.as_mut().unwrap();
+        drive(session, Progress::Accepted);
+        if active {
+            session.start_turn(TurnKey("session-0".into())).unwrap();
+        } else {
+            std::fs::write(root.join("graceful-request"), b"go").unwrap();
+        }
+        drive(session, Progress::DirectivePending);
+        assert!(!session.join_graceful_leave(), "a Leave is not a JoinLeave");
+        assert!(session.defer_graceful_leave());
+        assert!(session.start_turn(TurnKey("forbidden".into())).is_err());
+        assert!(session.next_input().is_err());
+        if active {
+            std::fs::write(root.join("graceful-resume-generation"), b"go").unwrap();
+            drive(session, Progress::LeavePending);
+            wait_file(root, "session-close-0.json");
+        } else {
+            assert_eq!(session.progress(), Progress::LeavePending);
+            assert!(!root.join("session-generation-0.json").exists());
+        }
+        // At the next-phase boundary the same listener still services Observe.
+        let observed = management(socket, LifecycleDirective::Observe);
+        let end = Instant::now() + Duration::from_secs(5);
+        let bytes = loop {
+            session.advance();
+            if let Some(bytes) = read_packet(&observed) {
+                break bytes;
+            }
+            assert!(Instant::now() < end, "pending Leave starved Observe");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let answer: weaver_types::state_flow::enter::ObservationEnvelope =
+            serde_json::from_slice(&bytes).unwrap();
+        assert!(matches!(
+            answer.payload,
+            weaver_types::state_flow::enter::ObservationContent::Answer(
+                weaver_types::state_flow::enter::ObservationAnswer::InTransition { .. }
+            )
+        ));
+        while session.progress() != Progress::LeavePending {
+            session.advance();
+        }
+        // A silent secondary dial receives its original two-second allowance,
+        // then drops without displacing or answering the graceful holder.
+        let silent = dial(socket);
+        let began = Instant::now();
+        let mut accepted = false;
+        loop {
+            let p = session.advance();
+            accepted |= p == Progress::Pending;
+            if accepted && p == Progress::LeavePending {
+                break;
+            }
+            assert!(
+                began.elapsed() < Duration::from_secs(4),
+                "silent Leave dial stalled the holder"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(began.elapsed() >= Duration::from_millis(1900));
+        assert!(read_packet(&silent).is_none());
+        let mut joins = vec![];
+        for uid in [81, 82] {
+            joins.push(management(
+                socket,
+                LifecycleDirective::JoinLeave {
+                    cause: weaver_types::Cause { uid },
+                },
+            ));
+            let end = Instant::now() + Duration::from_secs(5);
+            while session.progress() != Progress::DirectivePending {
+                session.advance();
+                assert!(Instant::now() < end);
+            }
+            assert!(
+                !session.defer_graceful_leave(),
+                "a join is not a new graceful request"
+            );
+            assert!(session.join_graceful_leave());
+            assert_eq!(session.progress(), Progress::LeavePending);
+        }
+        assert!(joins.iter().all(|peer| read_packet(peer).is_none()));
+        done.store(true, Ordering::SeqCst);
+        (responder.join().unwrap(), recorder.join().unwrap())
+    });
+    assert!(read_packet(&primary).is_none());
+    let input = guard
+        .0
+        .take()
+        .unwrap()
+        .into_owner()
+        .ok()
+        .expect("retained input");
+    let retained = Guard {
+        input: Some(input),
+        management: None,
+    };
+    let input = retained.owned_input();
+    let leave = input.serving.graceful.as_ref().unwrap();
+    assert_eq!(leave.cause.uid, 74);
+    assert!(leave.forced);
+    assert_eq!(leave.forced_by.map(|cause| cause.uid), Some(81));
+    assert_eq!(leave.joins.len(), 2);
+    assert!(
+        input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(crate::flow::pump::PumpDeadline::Leave)
+            .is_none()
+    );
+    assert!(
+        input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(crate::flow::pump::PumpDeadline::AdminRead)
+            .is_none()
+    );
+    assert!(input.serving.owner.context.failure().is_none());
+    let rows = trace_through(
+        reader,
+        bytes,
+        retained.recorded_sequence(),
+        Instant::now() + Duration::from_secs(5),
+    )
+    .unwrap();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["kind"] == "turn.started")
+            .count(),
+        usize::from(active)
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["kind"] == "turn.closed")
+            .count(),
+        usize::from(active)
+    );
+    if active {
+        let close = rows
+            .iter()
+            .find(|row| row["kind"] == "turn.closed")
+            .unwrap();
+        assert_eq!(close["payload"]["close"], "clean");
     }
 }

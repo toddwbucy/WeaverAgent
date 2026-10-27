@@ -32,24 +32,32 @@ pub(in crate::flow::context) fn drive(
     let first = context.failure().cloned();
     if mode == "cleanup-before-fork" {
         assert!(resources.spu_child().is_none());
-        let rejected = match account.into_cleanup(context, resources) {
-            Err(rejected) => rejected,
-            Ok(_) => panic!("no-SPU terminal domain was activated before #285"),
+        let first = first.expect("actual failure before fork");
+        let owner = match account.into_cleanup(context, resources) {
+            Ok(owner) => owner,
+            Err(error) => panic!("no-SPU failed cleanup: {:?}", error.refusal),
         };
-        let guard = RejectedGuard(Some(rejected));
-        let rejected = guard.0.as_ref().unwrap();
-        assert!(matches!(rejected.refusal, CleanupJoinRefusal::NoSpu));
-        assert_eq!(rejected.context.failure(), first.as_ref());
-        assert_eq!(
-            rejected
-                .context
-                .barrier
-                .recorder()
-                .structure()
-                .by_kind(Kind::Unload)
-                .count(),
-            0
+        let mut guard = CleanupGuard(Some(owner));
+        crate::flow::context::failed_enter_driver::tests::drive(
+            &mut guard.0.as_mut().unwrap().cleanup,
+            &mut fx.clock,
         );
+        let finished = guard
+            .0
+            .take()
+            .unwrap()
+            .finish()
+            .ok()
+            .expect("bounded no-SPU cleanup completed");
+        assert_eq!(finished.cleanup.failure(), &first);
+        assert!(finished.cleanup.unload_sequence().is_some());
+        assert!(finished.cleanup.release_send().is_none());
+        assert!(finished.cleanup.resources().spu_child().is_none());
+        let rows = records(fx);
+        let unload = rows.iter().find(|row| row["kind"] == "unload").unwrap();
+        assert!(unload["payload"]["release"].is_object());
+        assert!(unload["payload"]["release"].get("spu").is_none());
+        assert_eq!(unload["payload"]["end_reason"], "component_failure");
         return;
     }
     let raw = account.reply.as_ref().unwrap().raw_bytes().to_vec();
@@ -255,7 +263,7 @@ scenario!(
 );
 
 scenario!(
-    residency_teardown_composition_keeps_no_spu_domain_held_and_returns_actual_inputs,
+    residency_teardown_composition_closes_failed_before_fork_without_spu_release,
     "cleanup-before-fork"
 );
 scenario!(

@@ -4,10 +4,12 @@
 //! FOUNDATION-TRANSITION keeps the existing wire and deployment grammar in force
 //! until the complete replacement passes its cutover review.
 
+pub mod capture;
 pub(crate) mod codec;
 mod content;
 mod declaration;
 pub mod enter;
+mod enter_window;
 mod frame;
 mod lifecycle_refusal;
 mod marks;
@@ -24,6 +26,7 @@ mod ste100;
 pub use codec::*;
 pub use content::*;
 pub use declaration::*;
+pub use enter_window::EnterWindow;
 pub use frame::*;
 pub use lifecycle_refusal::*;
 pub use marks::*;

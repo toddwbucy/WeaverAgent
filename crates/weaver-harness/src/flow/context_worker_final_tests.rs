@@ -46,13 +46,29 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     .ok()
     .unwrap();
     let done = AtomicBool::new(false);
+    let held_seen = AtomicBool::new(false);
+    if mode.ends_with("held-terminal") {
+        member.hold_kind = Some("tool.call.completed");
+    }
     let mut peer = None;
     reader.set_nonblocking(true).unwrap();
     let bytes = std::thread::scope(|scope| {
         let responder = scope.spawn(|| {
             let end = Instant::now() + Duration::from_secs(45);
+            let mut held_steps = 0;
             while !done.load(Ordering::SeqCst) && Instant::now() < end {
                 member.step_live(mode);
+                if mode.ends_with("held-terminal") && member.held_file.is_some() {
+                    assert!(
+                        !root.join("closed.json").exists(),
+                        "no close before the terminal receipt"
+                    );
+                    held_seen.store(true, Ordering::SeqCst);
+                    held_steps += 1;
+                    if held_steps == 20 {
+                        member.hold_kind = None;
+                    }
+                }
                 std::thread::sleep(Duration::from_millis(1));
             }
         });
@@ -189,6 +205,89 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             })
         ));
     }
+    if mode.contains("no-task") {
+        assert_eq!(progress, worker::turn::Progress::Refused, "{detail:?}");
+        super::admission_tests::assert_refused(input, root, &rows);
+        super::admission_tests::next_input(&mut guard, member, clock, mode);
+        return;
+    }
+    if mode.contains("operation-refusal") {
+        if progress != worker::turn::Progress::Refused {
+            eprintln!(
+                "{}",
+                super::emission::correction::tests::refusal_state(input)
+            );
+        }
+        assert_eq!(
+            progress,
+            worker::turn::Progress::Refused,
+            "{detail:?}; {:?}",
+            input.detail()
+        );
+        assert!(input.serving.owner.context.failure().is_none());
+        assert!(input.serving.owner.context.open_turn.is_none());
+        assert!(
+            input
+                .serving
+                .owner
+                .context
+                .deadlines
+                .get(PumpDeadline::Decision)
+                .is_none()
+        );
+        assert!(input.serving.owner.certificate.is_some());
+        super::emission::correction::tests::assert_public_refusal(input, root);
+        let closes: Vec<_> = rows.iter().filter(|r| r["kind"] == "turn.closed").collect();
+        assert_eq!(closes.len(), 1);
+        assert_eq!(closes[0]["payload"]["reason"], "refused");
+        let terminals: Vec<_> = rows
+            .iter()
+            .filter(|r| r["kind"] == "tool.call.completed")
+            .collect();
+        assert_eq!(
+            terminals.len(),
+            if mode.contains("sort-refusal") || mode.contains("no-sort") {
+                2
+            } else {
+                1
+            }
+        );
+        if mode.contains("no-sort") {
+            assert!(rows.iter().any(|r| r["kind"] == "refusal"));
+            assert!(!rows.iter().any(|r| r["kind"] == "sort.decision"));
+        }
+        for terminal in terminals {
+            assert!(sequence(terminal) < sequence(closes[0]));
+            assert_eq!(
+                terminal["payload"]["reason"]["not_dispatched"]["cause"],
+                if mode.ends_with("cap") {
+                    "repair_exhausted"
+                } else {
+                    "pass_purpose"
+                }
+            );
+        }
+        assert!(!rows.iter().any(|r| r["kind"] == "message.tool_result"));
+        super::emission::correction::tests::assert_refusal_account(input, mode, &rows);
+        assert_eq!(
+            held_seen.load(Ordering::SeqCst),
+            mode.ends_with("held-terminal")
+        );
+        let FoundationInputResult::Refused(serving) =
+            guard.input.take().unwrap().finish().ok().unwrap()
+        else {
+            panic!("refused serving handoff")
+        };
+        guard.input = Some(serving.input());
+        let next = guard.input.as_mut().unwrap();
+        until(next, member, clock, mode, FoundationInputProgress::Accepted);
+        assert_eq!(
+            next.received.as_ref().unwrap().envelope().exchange.ordinal,
+            102
+        );
+        assert!(next.serving.owner.context.failure().is_none());
+        return;
+    }
     assert_eq!(
         progress,
         worker::turn::Progress::Completed,
@@ -304,6 +403,10 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     );
     // Only the original begin_task mark exists; a turn close adds no task end.
     assert_eq!(rows.iter().filter(|r| r["kind"] == "state.mark").count(), 1);
+    if mode.contains("queued-input") {
+        super::queued_input_tests::handoff(&mut guard, member, reader, clock, root, mode);
+        return;
+    }
     let FoundationInputResult::Completed(serving) =
         guard.input.take().unwrap().finish().ok().unwrap()
     else {

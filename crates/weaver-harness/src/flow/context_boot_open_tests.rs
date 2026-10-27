@@ -1109,6 +1109,18 @@ fn boot_open_recorded_sequence_is_saved_before_post_record_clock_failure() {
     assert_eq!(fx.records(Kind::StatePlacement).len(), 1);
     assert!(fx.boot.member.run.context.pending_author().is_none());
     assert!(fx.boot.member.run.context.boot_journal.is_none());
+    let recorded = fx
+        .boot
+        .member
+        .run
+        .context
+        .barrier
+        .latest_recorded()
+        .unwrap();
+    assert_eq!(
+        fx.records(Kind::StatePlacement)[0]["sequence"],
+        recorded.0.to_string()
+    );
     // The generic halt road sees no unadmitted placement to repeat.
     let run = &mut fx.boot.member.run;
     run.context
@@ -1247,7 +1259,10 @@ fn unload() -> AuthoredEvent {
             cause: None,
             forced: true,
             forced_by: None,
-            release: None,
+            release: serving::payloads::Release {
+                spu: None,
+                member: None,
+            },
             end_reason: None,
             state_flow_failure: None,
         }))),

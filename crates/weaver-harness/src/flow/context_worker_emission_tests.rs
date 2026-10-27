@@ -59,7 +59,14 @@ fn author_failure_worker_emission_keeps_exact_refusal_after_cancel() {
     assert!(!work.refusal_started);
     assert!(work.refusal_record.is_none());
     assert!(work.refusal_author.is_none());
-    work.cancel(&mut fx.context, None, None, ports.io).unwrap();
+    work.cancel(
+        weaver_types::state_flow::NonDispatchCause::Stop,
+        &mut fx.context,
+        None,
+        None,
+        ports.io,
+    )
+    .unwrap();
     assert!(work.stage == EmissionStage::RefusalAuthor);
     assert_eq!(
         work.advance(&mut None, &mut None, &mut fx.context, &mut ports),
@@ -85,9 +92,105 @@ fn author_failure_worker_emission_keeps_exact_refusal_after_cancel() {
     held.assert_held(&fx.context);
 }
 
+#[test]
+fn emission_refusal_keeps_original_through_inspection_holds_and_cancel() {
+    use crate::flow::context::read_tests::with_three_inspection_holds;
+    use crate::flow::context::tests::event;
+    const RAW: &str = r#"{ "fixture" : "the exact outbound refusal" }"#;
+    for cancellation in [
+        None,
+        Some(NonDispatchCause::Stop),
+        Some(NonDispatchCause::Unload),
+    ] {
+        let raw = serde_json::value::RawValue::from_string(RAW.into()).unwrap();
+        let original = raw.get().as_ptr();
+        let mut work = EmissionWork::new(None);
+        work.refusal_author = Some(event(
+            serving::Kind::Refusal,
+            Some(serving::Payload::Refusal(raw)),
+        ));
+        work.stage = EmissionStage::RefusalAuthor;
+        let expected = format!("{:?}", work.refusal_author.as_ref().unwrap());
+        let mut decision_bound = None;
+        let mut attempts = 0;
+        with_three_inspection_holds(|context, clock, admitted| {
+            let mut ports = PumpPorts {
+                lifecycle: LifecyclePorts::default(),
+                gate: None,
+                decode: None,
+                label: None,
+                io: clock,
+            };
+            work.advance(&mut None, &mut None, context, &mut ports)
+                .unwrap();
+            if admitted {
+                assert!(work.refusal_record.is_some());
+                assert!(work.refusal_author.is_none());
+                assert!(!work.refusal_started);
+                assert!(context.deadlines.get(PumpDeadline::Decision).is_none());
+                assert!(
+                    work.stage
+                        == if cancellation.is_some() {
+                            EmissionStage::CancelAccount
+                        } else {
+                            EmissionStage::Refused
+                        }
+                );
+                let rows = context
+                    .barrier
+                    .recorder()
+                    .structure()
+                    .by_kind(serving::Kind::Refusal)
+                    .collect::<Vec<_>>();
+                assert_eq!(rows.len(), 1);
+                assert!(rows[0].line.contains(RAW));
+            } else {
+                attempts += 1;
+                assert!(work.stage == EmissionStage::RefusalAuthor);
+                assert!(!work.refusal_started && work.refusal_record.is_none());
+                let kept = work
+                    .refusal_author
+                    .as_ref()
+                    .expect("original refusal returned to its caller");
+                assert_eq!(format!("{kept:?}"), expected);
+                let Some(serving::Payload::Refusal(raw)) = &kept.payload else {
+                    panic!("same refusal payload")
+                };
+                assert_eq!(raw.get().as_ptr(), original);
+                assert!(context.failure().is_none() && !context.caller_author_held());
+                let current = context.deadlines.get(PumpDeadline::Decision);
+                assert!(current.is_some());
+                if decision_bound.is_some() {
+                    assert_eq!(current, decision_bound);
+                } else {
+                    decision_bound = current;
+                }
+                assert_eq!(
+                    context
+                        .barrier
+                        .recorder()
+                        .structure()
+                        .by_kind(serving::Kind::Refusal)
+                        .count(),
+                    0
+                );
+                if attempts == 2
+                    && let Some(cause) = cancellation
+                {
+                    work.cancel(cause, context, None, None, ports.io).unwrap();
+                    assert!(work.stage == EmissionStage::RefusalAuthor);
+                }
+            }
+        });
+        assert_eq!(attempts, 6);
+    }
+}
+
 pub(in crate::flow::context) fn templates(mode: &str) -> &'static [s::TemplateSpec] {
     static ALL: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     static NO_SORT: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
+    static WIND_DOWN: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
+    static NO_TASK: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     let all = ALL.get_or_init(|| {
         let mut all = super::super::tests::templates().to_vec();
         all.push(s::TemplateSpec {
@@ -109,7 +212,27 @@ pub(in crate::flow::context) fn templates(mode: &str) -> &'static [s::TemplateSp
         });
         all
     });
-    if mode.contains("no-sort") {
+    if (mode.contains("-wind-down-") || mode.contains("-graceful-save"))
+        && !mode.ends_with("template-absent")
+        && !mode.contains("-wind-convert-held-refusal")
+    {
+        WIND_DOWN.get_or_init(|| {
+            let mut templates = all.clone();
+            templates.push(s::TemplateSpec {
+                template_id: "wind_down".into(),
+                kind: "loop.instruction".into(),
+                parts: vec![s::TemplatePart::Literal("Read summary.".into())],
+            });
+            templates
+        })
+    } else if mode.contains("no-task") {
+        NO_TASK.get_or_init(|| {
+            all.iter()
+                .filter(|t| t.template_id != "mark.begin_task")
+                .cloned()
+                .collect()
+        })
+    } else if mode.contains("no-sort") {
         NO_SORT.get_or_init(|| {
             all.iter()
                 .filter(|t| t.template_id != "sort.outbound")
@@ -148,7 +271,10 @@ fn text(words: &str) -> ContentBlock {
     ContentBlock::Text { text: words.into() }
 }
 pub(in crate::flow::context) fn content(mode: &str) -> Vec<ContentBlock> {
-    if mode.contains("-final-") && !mode.contains("-external-") {
+    if mode.contains("-final-")
+        && !mode.contains("-external-")
+        && !mode.contains("operation-refusal")
+    {
         if mode.contains("-round-") {
             return vec![text("Recall archive."), text("Recall ledger.")];
         }
@@ -175,6 +301,9 @@ pub(in crate::flow::context) fn content(mode: &str) -> Vec<ContentBlock> {
                 arguments: "opaque first command".into(),
             }),
         ];
+        if mode.contains("graceful-result") {
+            return blocks;
+        }
         if mode.contains("mixed") {
             blocks.push(text("Recall archive."));
         }
@@ -271,6 +400,7 @@ pub(in crate::flow::context) fn reply(request: &s::Ste100Request, mode: &str) ->
         return result;
     }
     let rejected = request.text == "Read bad."
+        || (mode.ends_with("wind-down-template-refused") && request.text == "Read summary.")
         || (mode.contains("sort-refusal") && request.text == "Read identity.")
         || (mode.contains("repair-refusal") && request.text == "Read correction.");
     let result = if rejected {
@@ -786,6 +916,37 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         }
         if let Some(bound) = completed_bound {
             observe_completed_after_bound(&mut guard, clock, socket, bound);
+        }
+        if mode.ends_with("operation-close-stop") {
+            let input = guard.input.as_mut().unwrap();
+            input.close_operation_refusal().unwrap();
+            for _ in 0..2000 {
+                if input
+                    .engine
+                    .as_ref()
+                    .unwrap()
+                    .emission
+                    .as_ref()
+                    .unwrap()
+                    .ready_to_close_refusal()
+                {
+                    break;
+                }
+                assert_eq!(
+                    step(input, member, clock, mode),
+                    FoundationInputProgress::Pending
+                );
+            }
+            assert!(
+                input
+                    .engine
+                    .as_ref()
+                    .unwrap()
+                    .emission
+                    .as_ref()
+                    .unwrap()
+                    .ready_to_close_refusal()
+            );
         }
         stop(&mut guard, member, clock, mode, socket, root);
         assert_terminals(reader, 2);

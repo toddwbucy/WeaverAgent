@@ -2,8 +2,8 @@
 
 **Status:** MERGED.
 
-**Version:** 0.27 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
-**Landing PR:** #312
+**Version:** 0.29 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
+**Landing branch:** code/state-expired-enter-rollback
 
 ## 0. What this document is
 
@@ -288,7 +288,11 @@ non-head submissions report Stopped and continue along the trace. They are shutd
 evidence, never a path for another model pass. Construct
 `PreflightRecorder::receive(sink: OwnedFd, run: RunRef, session: SessionRef)`. It
 creates the private Writer and admits only one load, followed by enter-refusal or fault
-and terminal unload until activated. It exposes no content submission method. After load
+and terminal unload until activated. The actual rollback of an expired Enter may
+instead close a recorded, unactivated load directly with terminal unload, under
+HARNESS-ENTER-WINDOW, without inventing an enter-refusal or fault. This healthy
+rollback uses ordinary writer capacity and retains its exact unload on pressure;
+it does not spend a halt reservation. It exposes no content submission method. After load
 is recorded and partition validation passes, `activate(self, partition:
 ValidatedPartition) -> Recorder` consumes this preflight value and installs the single
 Tee. It cannot be called twice or after a refused enter. The resulting Recorder has no
@@ -630,6 +634,15 @@ cause values. A seed or rebind has no live save_point event and is accounted for
 first load's StateStartRecord, which also carries the verified position. TRACE-LOAD's
 FlowDeclarationRecord additionally carries persistence.save_wait under persistence, with
 the same MeasuredWait spelling. [PERSIST-2, PERSIST-5, FLOW-3]
+
+For a Leave, each save_point event uses the termination mode when the harness
+first submits that event: graceful_unload until conversion, then forced_unload.
+A pending author retains its original event through backpressure. A later S6
+conversion does not rewrite an earlier trace event, even a published event. The
+terminal unload.forced records the settled mode, and the completed index cause
+follows that mode under foundation PERSIST-LEAVE-CAUSE. The original caller cause
+and forced_by are separate lifecycle facts. Demand events remain requested.
+[PERSIST-2, FLOW-5, operator 2026-10-27]
 
 window and tail_window are explicit trace-owned mirrors of TYPES-SAVE-TIME's SaveWindow,
 with decimal raw CLOCK_MONOTONIC timestamps. tail_window is null on demand. Each phase

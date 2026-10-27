@@ -120,6 +120,10 @@ fn released_read_retains_exact_provenance_and_original_bound_until_recorded() {
     };
     let records = member.records(Kind::Recall);
     assert_eq!(records[0]["sequence"], read.recall_sequence().0.to_string());
+    assert_eq!(
+        member.run.context.barrier.latest_recorded(),
+        Some(read.recall_sequence())
+    );
     assert_eq!(read.raw_bytes(), EMPTY);
     assert_eq!(read.snapshot_id(), 7.into());
     assert_eq!(

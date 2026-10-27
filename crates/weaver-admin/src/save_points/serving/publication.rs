@@ -7,8 +7,9 @@
 //! caller-chosen path, new clock, or success inferred from file presence lives here.
 //!
 //! A failed broken-guard replacement can retain its .<id>.pending.broken
-//! temporary file. Failure evidence probes both that file and .<id>.pending
-//! and reports each confirmed retained guard without granting retry or load.
+//! temporary file. A converted Leave can also retain .<id>.pending.cause.part
+//! from finalizing its pending index entry. Failure evidence reports those files
+//! and .<id>.pending without granting retry or load.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -96,7 +97,10 @@ pub(crate) struct ServingImage<'a> {
 /// CaptureComplete has no variant here. It only changes the caller's deadline set.
 pub(crate) enum FinalOutcome<'a> {
     SavePointTaken(&'a SavePointReport),
-    Left(&'a SavePointReport),
+    Left {
+        report: &'a SavePointReport,
+        forced: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -454,7 +458,7 @@ impl<'repo> Publication<'repo> {
         outcome: FinalOutcome<'_>,
         checkpoint: &mut impl FnMut(PersistencePhase) -> Result<(), String>,
     ) -> Result<StartIdentity, Failure> {
-        let report = match outcome {
+        let (report, final_cause) = match outcome {
             FinalOutcome::SavePointTaken(report)
                 if matches!(
                     self.origin,
@@ -464,9 +468,9 @@ impl<'repo> Publication<'repo> {
                     }
                 ) =>
             {
-                report
+                (report, PersistenceCause::Requested)
             }
-            FinalOutcome::Left(report)
+            FinalOutcome::Left { report, forced }
                 if matches!(
                     self.origin,
                     Origin::Serving {
@@ -475,7 +479,22 @@ impl<'repo> Publication<'repo> {
                     }
                 ) =>
             {
-                report
+                let cause = if forced {
+                    PersistenceCause::ForcedUnload
+                } else {
+                    PersistenceCause::GracefulUnload
+                };
+                if matches!(
+                    self.origin,
+                    Origin::Serving {
+                        cause: PersistenceCause::ForcedUnload,
+                        ..
+                    }
+                ) && !forced
+                {
+                    return Err(self.fail("forced Leave answered as graceful"));
+                }
+                (report, cause)
             }
             _ => return Err(self.fail("wrong final outcome for the save cause")),
         };
@@ -486,6 +505,7 @@ impl<'repo> Publication<'repo> {
             return Err(self.fail("final outcome disagrees with the indexed capture"));
         }
         self.perform(PersistencePhase::Reporting, checkpoint, |this| {
+            this.finalize_cause(final_cause)?;
             let name = this.guard_name.as_ref().unwrap();
             let expected = this.guard_bytes.as_ref().ok_or("no prepared guard bytes")?;
             fs_ops::remove_file(
@@ -500,6 +520,53 @@ impl<'repo> Publication<'repo> {
         self.owns_guard = false;
         self.stage = Stage::Complete;
         Ok(self.identity())
+    }
+
+    /// Only this still-guarded publication's exact last entry can change. A
+    /// graceful Leave can become forced until S7; Left supplies the settled
+    /// outcome. Binding bytes, ordinals and all earlier index bytes stay fixed.
+    fn finalize_cause(&mut self, cause: PersistenceCause) -> Result<(), String> {
+        let entry = self.entry.as_ref().ok_or("no indexed entry")?;
+        if entry.cause == cause {
+            return Ok(());
+        }
+        if entry.cause != PersistenceCause::GracefulUnload
+            || cause != PersistenceCause::ForcedUnload
+            || !self.indexed
+            || !self.owns_guard
+            || !self.guard_durable
+            || self.stage != Stage::Published
+            || self.read_guard()? != *self.guard_bytes.as_ref().ok_or("no prepared guard bytes")?
+        {
+            return Err("final save cause requires the owned pending publication".into());
+        }
+        let mut expected = self.prefix.clone();
+        expected.extend(entry.to_json().map_err(|e| e.to_string())?);
+        expected.push(b'\n');
+        let mut final_entry = entry.clone();
+        final_entry.cause = cause;
+        let mut replacement = self.prefix.clone();
+        replacement.extend(final_entry.to_json().map_err(|e| e.to_string())?);
+        replacement.push(b'\n');
+        fs_ops::replace_file(
+            self.repository.directory.as_fd(),
+            MANIFEST,
+            &self.cause_part_name(),
+            &expected,
+            &replacement,
+            self.repository.root_owner,
+            0o644,
+        )
+        .map_err(|e| e.to_string())?;
+        self.entry = Some(final_entry);
+        Ok(())
+    }
+
+    fn cause_part_name(&self) -> String {
+        format!(
+            "{}.cause.part",
+            self.guard_name.as_ref().expect("owned serving guard")
+        )
     }
 
     /// Explicit cancellation before a guard exists removes owned unlisted work.
@@ -960,6 +1027,18 @@ impl<'repo> Publication<'repo> {
                 &name,
                 &name,
                 RetainedArtifactKind::Guard,
+                None,
+                &mut artifacts,
+                &mut detail,
+            );
+        }
+        if self.guard_name.is_some() {
+            let name = self.cause_part_name();
+            probe(
+                root,
+                &name,
+                &name,
+                RetainedArtifactKind::Part,
                 None,
                 &mut artifacts,
                 &mut detail,

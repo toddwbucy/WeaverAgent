@@ -129,16 +129,34 @@ pub use channel::{
 };
 pub use engine::{Ports, TurnError, TurnOutcome};
 pub use failure::{AdoptionFault, ChannelFault, Outcome, UnlicensedMessage};
+pub use flow::context::worker_startup::entered_rollback::forced::{
+    FoundationForcedLeave, FoundationForcedLeaveHandoff, FoundationForcedLeaveProgress,
+};
+pub use flow::context::worker_startup::entered_rollback::graceful_exit::{
+    FoundationGracefulLeave, FoundationGracefulLeaveHandoff, FoundationGracefulLeaveProgress,
+};
+pub use flow::context::worker_startup::entered_rollback::{
+    FoundationEnteredRollback, FoundationEnteredRollbackHandoff, FoundationEnteredRollbackProgress,
+};
+pub use flow::context::worker_startup::failed::{
+    FoundationStartupExit, FoundationStartupExitProgress, FoundationStartupHandoff,
+};
 pub use flow::context::worker_startup::input::generation::FoundationGeneration;
 pub use flow::context::worker_startup::input::generation::emission::{
     FoundationEmission, FoundationOutbound, FoundationRepairAdmission, FoundationRestatement,
 };
+pub use flow::context::worker_startup::input::halt::exit::{
+    FoundationExitProgress, FoundationFailedExit, FoundationFailedHandoff,
+};
+pub use flow::context::worker_startup::input::halt::{FoundationHalt, FoundationHaltProgress};
 pub use flow::context::worker_startup::input::management::{
     FoundationManagement, FoundationManagementProgress,
 };
+pub use flow::context::worker_startup::input::wind_down::FoundationWindDownProgress;
 pub use flow::context::worker_startup::input::{
     FoundationInput, FoundationInputProgress, FoundationInputResult, FoundationTurn,
 };
+pub use flow::context::worker_startup::rollback::{FoundationRollback, FoundationRollbackProgress};
 pub use flow::context::worker_startup::{
     FoundationAdmission, FoundationAdmissionProgress, FoundationEnter, FoundationEnterProgress,
     FoundationProgram, FoundationRun, FoundationServing,
@@ -156,3 +174,7 @@ pub use weaver_trace::LoopIdentity;
 /// a directory behind (#690 item C2.9).
 #[cfg(test)]
 mod scratch;
+
+pub use flow::context::worker_startup::rollback::failed::{
+    FoundationRollbackExit, FoundationRollbackExitProgress, FoundationRollbackHandoff,
+};

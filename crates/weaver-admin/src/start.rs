@@ -246,13 +246,43 @@ fn take_invocation_lock_with_deadline(
     take_invocation_lock_with_clock(run_directory, verb, invocation_deadline, Instant::now)
 }
 
+pub(crate) fn take_invocation_lock_for_enter(
+    run_directory: &Path,
+    window: &crate::serving_load::window::LoadWindow,
+) -> Result<InvocationLock, LifecycleRefusal> {
+    take_invocation_lock_with_limit(
+        run_directory,
+        crate::verb_table::HolderVerb::Load,
+        None,
+        Instant::now,
+        Some(window),
+    )
+    .map_err(|refused| match refused {
+        TakeRefused::Starved => LifecycleRefusal::InvocationInFlight,
+        TakeRefused::Other(refusal) => refusal,
+    })
+}
+
 fn take_invocation_lock_with_clock(
     run_directory: &Path,
     verb: crate::verb_table::HolderVerb,
     invocation_deadline: Option<Instant>,
     now: impl Fn() -> Instant,
 ) -> Result<InvocationLock, TakeRefused> {
+    take_invocation_lock_with_limit(run_directory, verb, invocation_deadline, now, None)
+}
+
+fn take_invocation_lock_with_limit(
+    run_directory: &Path,
+    verb: crate::verb_table::HolderVerb,
+    invocation_deadline: Option<Instant>,
+    now: impl Fn() -> Instant,
+    enter: Option<&crate::serving_load::window::LoadWindow>,
+) -> Result<InvocationLock, TakeRefused> {
     let check_invocation = || {
+        if let Some(window) = enter {
+            window.check().map_err(TakeRefused::Other)?;
+        }
         if invocation_deadline.is_some_and(|deadline| now() >= deadline) {
             Err(TakeRefused::Other(LifecycleRefusal::InvocationInFlight))
         } else {
@@ -289,6 +319,11 @@ fn take_invocation_lock_with_clock(
                     POLL.min(deadline.saturating_duration_since(now()))
                 } else {
                     POLL
+                };
+                let pause = if let Some(window) = enter {
+                    pause.min(window.remaining().map_err(TakeRefused::Other)?)
+                } else {
+                    pause
                 };
                 std::thread::sleep(pause);
             }
@@ -702,6 +737,17 @@ pub fn escalate_within(
     term_grace: Duration,
     kill_grace: Duration,
 ) -> Result<(), LifecycleRefusal> {
+    escalate_within_checked(run_directory, term_grace, kill_grace, || Ok(()))
+}
+
+/// Revalidate a serving caller's pinned containment before each signal. The
+/// target remains a pidfd-pinned run-lock holder, never the socket listener.
+pub(crate) fn escalate_within_checked(
+    run_directory: &Path,
+    term_grace: Duration,
+    kill_grace: Duration,
+    check: impl Fn() -> Result<(), LifecycleRefusal>,
+) -> Result<(), LifecycleRefusal> {
     if !run_lock_held(run_directory)? {
         return Ok(());
     }
@@ -724,6 +770,7 @@ pub fn escalate_within(
         }
         for holder in found {
             if let Some(pinned) = pin(holder, target) {
+                check()?;
                 signal(&pinned, sig);
             }
         }

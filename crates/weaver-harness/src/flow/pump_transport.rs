@@ -108,6 +108,12 @@ pub(super) enum Stage<T> {
 pub(super) struct PortIdentity(Arc<()>);
 
 impl PortIdentity {
+    pub(super) fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+    pub(super) fn matches_received(&self, received: &ReceivedOrgan) -> bool {
+        Arc::ptr_eq(&self.0, &received.port_identity().0)
+    }
     pub(super) fn matches_decode(&self, port: &DecodePort) -> bool {
         Arc::ptr_eq(&self.0, &port.identity.0)
     }
@@ -138,6 +144,17 @@ pub(super) struct OrganSend {
 }
 
 impl OrganSend {
+    #[cfg(test)]
+    pub(super) fn state_probe_for_test(&self) -> Box<dyn Fn() -> (bool, bool) + Send> {
+        let tracked = Arc::clone(&self.tracked);
+        Box::new(move || {
+            let status = tracked.status.load(Ordering::Acquire);
+            (
+                matches!(status, SEND_SENT | SEND_OBSERVED),
+                status == SEND_WITHDRAWN,
+            )
+        })
+    }
     #[cfg(test)]
     pub(super) fn sent_probe_for_test(&self) -> Box<dyn Fn() -> bool> {
         let tracked = Arc::clone(&self.tracked);
@@ -314,8 +331,16 @@ pub(super) enum SendProgress {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Wire {
+    Organ,
     Packet,
     Decode,
+}
+
+#[derive(Debug)]
+enum ClosedReceive {
+    Finished,
+    Pending,
+    Refused(Failure),
 }
 
 #[derive(Debug)]
@@ -360,11 +385,65 @@ pub(super) struct PacketPort<T, E = OwnedFd> {
     send_interrupted: bool,
     generation_send_held: bool,
     zero_received: bool,
+    closed_receive: ClosedReceive,
 }
 
 pub(super) type OrganPort = PacketPort<OrganEnvelope>;
 pub(super) type DecodePort = PacketPort<DecodeReply>;
 pub(super) type LabelPort = PacketPort<ClassifyReply>;
+
+impl PacketPort<OrganEnvelope, ()> {
+    /// Retiring the descriptor does not erase an already received tool answer.
+    /// No socket read or fabricated decoded envelope occurs on this path.
+    pub(super) fn take_retired_tool_answer(&mut self) -> Option<ReceivedOrgan> {
+        if !self.held.as_ref().is_some_and(|envelope| {
+            matches!(envelope.payload, weaver_types::Payload::ToolAnswer(_))
+        }) {
+            return None;
+        }
+        Some(ReceivedOrgan {
+            envelope: self.held.take().unwrap(),
+            raw: self
+                .received_wire
+                .take()
+                .expect("original decoded datagram"),
+            identity: self.identity.clone(),
+        })
+    }
+    /// A consumed port can dispose its exact wholly unsent datagram without
+    /// regaining any transport operation. Its original ticket records withdrawal.
+    pub(super) fn withdraw_retired_unsent(
+        &mut self,
+        exchange: &weaver_types::ExchangeId,
+    ) -> Result<Option<OrganEnvelope>, Failure> {
+        let Some(outbound) = self.outgoing.as_ref() else {
+            return Ok(None);
+        };
+        if outbound.preamble.is_some() || outbound.preamble_sent || outbound.offset != 0 {
+            return Err(Failure::invalid(
+                "retired withdrawal requires a wholly unsent datagram",
+            ));
+        }
+        let pending = (self.decode)(&outbound.body)?;
+        if pending.exchange != *exchange {
+            return Ok(None);
+        }
+        let Some(tracked) = &outbound.tracked else {
+            return Err(Failure::invalid(
+                "retired withdrawal requires its original send ticket",
+            ));
+        };
+        if tracked.status.load(Ordering::Acquire) != SEND_PENDING {
+            return Err(Failure::invalid(
+                "retired withdrawal cannot replace a sent ticket",
+            ));
+        }
+        let tracked = self.outgoing.take().unwrap().tracked.unwrap();
+        tracked.status.store(SEND_WITHDRAWN, Ordering::Release);
+        self.send_interrupted = false;
+        Ok(Some(pending))
+    }
+}
 
 /// One actual organ datagram, with its decoded view and original octets held
 /// together. Only the owning socket port constructs this fact. It is not a
@@ -389,8 +468,8 @@ impl ReceivedOrgan {
         self.identity.clone()
     }
 
-    pub(super) fn belongs_to(&self, port: &OrganPort) -> bool {
-        self.identity.matches(port)
+    pub(super) fn belongs_to<End>(&self, port: &PacketPort<OrganEnvelope, End>) -> bool {
+        Arc::ptr_eq(&self.identity.0, &port.identity.0)
     }
 
     pub(super) fn into_parts(self) -> (OrganEnvelope, Vec<u8>) {
@@ -413,7 +492,7 @@ impl OrganPort {
         Self::from_owned(channel.into_fd())
     }
     pub(super) fn from_owned(end: OwnedFd) -> Result<Self, Failure> {
-        Self::new(end, Wire::Packet, |bytes| {
+        Self::new(end, Wire::Organ, |bytes| {
             serde_json::from_slice(bytes).map_err(|error| Failure::invalid(error.to_string()))
         })
     }
@@ -495,6 +574,35 @@ impl OrganPort {
         }
     }
 
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_capture(
+        &mut self,
+        input: weaver_types::state_flow::capture::CaptureEnvelope,
+    ) -> Result<
+        TrackedStage<weaver_types::state_flow::capture::CaptureEnvelope>,
+        StageFailure<weaver_types::state_flow::capture::CaptureEnvelope>,
+    > {
+        use weaver_types::state_flow::capture::{CaptureCodecError, CaptureSender};
+        let bytes = match input.encode(CaptureSender::Harness) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let failure = match error {
+                    CaptureCodecError::TooLarge => Failure::truncated(MAX_ENVELOPE_BYTES),
+                    _ => Failure::invalid(format!("replacement capture: {error}")),
+                };
+                return Err(StageFailure {
+                    input,
+                    failure: self.fail(failure),
+                });
+            }
+        };
+        let exchange = input.exchange.clone();
+        match self.stage_encoded(input, |_| Ok(bytes))? {
+            Stage::Queued => Ok(TrackedStage::Queued(self.track_staged(exchange))),
+            Stage::Busy(input) => Ok(TrackedStage::Busy(input)),
+        }
+    }
+
     /// Withdraw only this exact exchange's wholly unsent organ datagram. A
     /// successful SEQPACKET send removes it atomically, so absence after send
     /// never becomes a claim that the operation was not dispatched. A failed
@@ -523,6 +631,111 @@ impl OrganPort {
         Ok(Some(pending))
     }
 
+    /// The paired projection keeps its exact port-minted send witness. It may
+    /// withdraw only that still-unsent datagram, never a matching scalar alone.
+    pub(super) fn withdraw_capture_pending(
+        &mut self,
+        send: &OrganSend,
+    ) -> Result<Option<weaver_types::state_flow::capture::CaptureEnvelope>, Failure> {
+        use weaver_types::state_flow::capture::{CaptureEnvelope, CaptureSender};
+        // Closing the peer cannot authorize a Commit that is still wholly
+        // unsent. Return that exact ticket's bytes while retaining the failure.
+        if !self
+            .failure
+            .as_ref()
+            .is_some_and(|failure| failure.fault == ChannelFault::Closed)
+        {
+            self.live()?;
+        }
+        let Some(outbound) = self.outgoing.as_ref() else {
+            return Ok(None);
+        };
+        if !send.belongs_to(self)
+            || outbound
+                .tracked
+                .as_ref()
+                .is_none_or(|tracked| !Arc::ptr_eq(tracked, &send.tracked))
+        {
+            return Ok(None);
+        }
+        if outbound.preamble.is_some() || outbound.preamble_sent || outbound.offset != 0 {
+            return Err(self.fail(Failure::invalid(
+                "capture withdrawal requires a wholly unsent datagram",
+            )));
+        }
+        let original = CaptureEnvelope::decode(&outbound.body, CaptureSender::Harness)
+            .map_err(|error| self.fail(Failure::invalid(format!("capture withdrawal: {error}"))))?;
+        if !send.matches_exchange(&original.exchange) || send.sent() {
+            return Err(self.fail(Failure::invalid(
+                "capture withdrawal changed its original ticket",
+            )));
+        }
+        self.outgoing
+            .take()
+            .unwrap()
+            .tracked
+            .unwrap()
+            .status
+            .store(SEND_WITHDRAWN, Ordering::Release);
+        self.send_interrupted = false;
+        Ok(Some(original))
+    }
+
+    /// Closed serving transport can return its exact wholly unsent datagram.
+    /// The port-minted ticket is required; its failure and received evidence stay.
+    pub(super) fn withdraw_closed_pending(
+        &mut self,
+        send: &OrganSend,
+    ) -> Result<Option<OrganEnvelope>, Failure> {
+        if !self
+            .failure
+            .as_ref()
+            .is_some_and(|failure| failure.fault == ChannelFault::Closed)
+            || !send.belongs_to(self)
+        {
+            return Err(Failure::invalid(
+                "closed withdrawal requires its actual port and ticket",
+            ));
+        }
+        let Some(outbound) = self.outgoing.as_ref() else {
+            return Ok(None);
+        };
+        if outbound
+            .tracked
+            .as_ref()
+            .is_none_or(|tracked| !Arc::ptr_eq(tracked, &send.tracked))
+        {
+            return Err(Failure::invalid(
+                "closed withdrawal cannot consume another send",
+            ));
+        }
+        if outbound.preamble.is_some()
+            || outbound.preamble_sent
+            || outbound.offset != 0
+            || send.sent()
+            || send.withdrawn()
+        {
+            return Err(Failure::invalid(
+                "closed withdrawal requires a wholly unsent datagram",
+            ));
+        }
+        let original = (self.decode)(&outbound.body)?;
+        if !send.matches_exchange(&original.exchange) {
+            return Err(Failure::invalid(
+                "closed withdrawal changed its original exchange",
+            ));
+        }
+        self.outgoing
+            .take()
+            .unwrap()
+            .tracked
+            .unwrap()
+            .status
+            .store(SEND_WITHDRAWN, Ordering::Release);
+        self.send_interrupted = false;
+        Ok(Some(original))
+    }
+
     /// Transfer the typed envelope and exact received datagram atomically.
     /// A later EOF does not erase a completion already held. Neither taking
     /// that completion nor its raw evidence clears the terminal transport fault.
@@ -540,6 +753,77 @@ impl OrganPort {
         }
         self.live()?;
         Ok(None)
+    }
+
+    /// Closure freezes ordinary I/O, but a reset can precede packets already
+    /// queued by this peer. Their original owner must reduce them before
+    /// assigning a missing result. This never reopens admission or sending.
+    pub(super) fn closed_receive_pending(&self) -> bool {
+        matches!(self.closed_receive, ClosedReceive::Pending)
+    }
+
+    /// One bounded receive into the same single completion slot. The caller
+    /// owns the applicable deadline and the disposition of each original.
+    pub(super) fn receive_closed(&mut self) -> Result<ReceiveProgress, Failure> {
+        self.receive_closed_with(receive_packet)
+    }
+
+    fn receive_closed_with(
+        &mut self,
+        receive: impl FnOnce(RawFd) -> Result<Packet, ReadFault>,
+    ) -> Result<ReceiveProgress, Failure> {
+        if !self
+            .failure()
+            .is_some_and(|failure| failure.fault == ChannelFault::Closed)
+        {
+            return Err(Failure::invalid(
+                "queued receive requires a closed organ port",
+            ));
+        }
+        if let ClosedReceive::Refused(failure) = &self.closed_receive {
+            return Err(failure.clone());
+        }
+        if self.held.is_some() {
+            return Ok(ReceiveProgress::Held);
+        }
+        if !self.closed_receive_pending() {
+            return Ok(ReceiveProgress::Pending);
+        }
+        let packet = match receive(self.end.as_raw_fd()) {
+            Ok(packet) => packet,
+            Err(ReadFault::Interrupted) => return Ok(ReceiveProgress::Pending),
+            Err(ReadFault::Pending) => {
+                self.closed_receive = ClosedReceive::Finished;
+                return Ok(ReceiveProgress::Pending);
+            }
+            Err(ReadFault::Failed {
+                failure,
+                received_wire,
+            }) => {
+                // A send or status probe can observe closure before recvmsg
+                // consumes its pending reset. Retry on a later bounded step.
+                if failure.errno == Some(libc::ECONNRESET) && received_wire.is_none() {
+                    return Ok(ReceiveProgress::Pending);
+                }
+                self.received_wire = received_wire;
+                if failure.fault == ChannelFault::Closed {
+                    self.closed_receive = ClosedReceive::Finished;
+                } else {
+                    self.closed_receive = ClosedReceive::Refused(failure.clone());
+                }
+                return Err(failure);
+            }
+        };
+        if packet.bytes.is_empty() {
+            self.closed_receive = ClosedReceive::Finished;
+            return Ok(ReceiveProgress::Pending);
+        }
+        self.received_wire = Some(packet.bytes);
+        self.accept_packet().inspect_err(|failure| {
+            // Keep the first transport failure and the malformed tail's raw
+            // evidence. Its distinct refusal must reach the owning caller.
+            self.closed_receive = ClosedReceive::Refused(failure.clone());
+        })
     }
 
     /// Available malformed packet bytes, or a truncated packet's received
@@ -574,6 +858,16 @@ impl OrganPort {
 }
 
 impl DecodePort {
+    /// Lifecycle can retain an idle organ loss without discarding an owed
+    /// exchange. A reservation, partial message or held reply still has an owner.
+    pub(super) fn has_no_exchange(&self) -> bool {
+        self.outgoing.is_none()
+            && self.series.is_none()
+            && self.received_wire.is_none()
+            && self.held.is_none()
+            && self.decode_reservation.is_none()
+    }
+
     pub(super) fn port_identity(&self) -> PortIdentity {
         self.identity.clone()
     }
@@ -1086,6 +1380,7 @@ impl<T> PacketPort<T> {
             send_interrupted,
             generation_send_held,
             zero_received,
+            closed_receive,
         } = self;
         drop(end);
         PacketPort {
@@ -1104,6 +1399,7 @@ impl<T> PacketPort<T> {
             send_interrupted,
             generation_send_held,
             zero_received,
+            closed_receive,
         }
     }
 
@@ -1142,6 +1438,7 @@ impl<T> PacketPort<T> {
             send_interrupted: false,
             generation_send_held: false,
             zero_received: false,
+            closed_receive: ClosedReceive::Finished,
         })
     }
 
@@ -1220,6 +1517,12 @@ impl<T> PacketPort<T> {
 
     fn fail(&mut self, failure: Failure) -> Failure {
         if self.failure.is_none() {
+            if self.wire == Wire::Organ
+                && failure.fault == ChannelFault::Closed
+                && !self.zero_received
+            {
+                self.closed_receive = ClosedReceive::Pending;
+            }
             self.failure = Some(failure);
             let _ = shutdown(self.end.as_raw_fd(), Shutdown::Both);
         }
@@ -1240,7 +1543,7 @@ impl<T> PacketPort<T> {
         let prepared = (|| {
             let body = encode(&input).map_err(|error| Failure::invalid(error.to_string()))?;
             let limit = match self.wire {
-                Wire::Packet => MAX_ENVELOPE_BYTES,
+                Wire::Organ | Wire::Packet => MAX_ENVELOPE_BYTES,
                 Wire::Decode => DECODE_MESSAGE_BOUND,
             };
             if body.is_empty() {

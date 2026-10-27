@@ -656,6 +656,40 @@ fn recorded_cancelled_result_disarms_before_a_backpressured_close() {
 }
 
 #[test]
+fn lost_response_keeps_checks_owed_and_never_claims_a_send() {
+    let mut slot = input_slot();
+    let operation = checking(&mut slot);
+    assert_eq!(slot.response_lost(), Err(InputError::InvalidTransition));
+    slot.cancel().unwrap();
+    slot.response_lost().unwrap();
+    assert!(!slot.snapshot().unwrap().response_sent);
+    assert_eq!(slot.snapshot().unwrap().bound, bound());
+    assert!(
+        slot.finish().is_err(),
+        "lost connection does not settle an owed check"
+    );
+    let (reply, grant) = recorded_grant(&operation);
+    slot.accept_completion(operation, reply, Some(grant))
+        .unwrap();
+    assert!(!slot.snapshot().unwrap().response_sent);
+    assert!(slot.take_accepted().is_none());
+    slot.finish().unwrap();
+
+    let mut slot = input_slot();
+    let operation = checking(&mut slot);
+    slot.accept_completion(operation.clone(), rejected(&operation), None)
+        .unwrap();
+    assert!(
+        slot.response_lost().is_err(),
+        "refusal still owes its record"
+    );
+    slot.refusal_recorded(Sequence(3)).unwrap();
+    slot.response_lost().unwrap();
+    assert!(!slot.snapshot().unwrap().response_sent);
+    slot.finish().unwrap();
+}
+
+#[test]
 fn a_recorded_grant_for_another_offer_cannot_authorize_this_input() {
     let mut slot = input_slot();
     slot.begin(frame(), bound()).unwrap();

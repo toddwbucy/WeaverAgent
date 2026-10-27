@@ -33,15 +33,25 @@ pub(super) struct CorrectionWork {
     detail: Option<String>,
 }
 impl CorrectionWork {
+    pub(super) fn retire_failed_placement_grants(
+        &mut self,
+        context: &mut RecordingContext,
+    ) -> Result<(), RunFailure> {
+        retire_failed_placement_grant(&mut self.placement, context)
+    }
+
     pub(super) fn finish_refusal(
         &self,
         context: &mut RecordingContext,
         io: &mut impl PumpIo,
     ) -> Result<RepairAccount, RunFailure> {
-        let Some(PlacementCompletion::Refused(refusal)) = &self.placement else {
-            return Err(RunFailure::PlaceOwned);
-        };
-        context.finish_refused_restatement(&self.restatement, refusal, io)
+        if let Some(PlacementCompletion::Refused(refusal)) = &self.placement {
+            context.finish_refused_restatement(&self.restatement, refusal, io)
+        } else if let Some(GenerationCompletion::Refused(account)) = &self.generation {
+            context.finish_refused_restatement_generation(&self.restatement, account, io)
+        } else {
+            Err(RunFailure::PlaceOwned)
+        }
     }
     pub(super) fn progress(&self) -> FoundationInputProgress {
         if self.stage == CorrectionStage::Placed {
@@ -191,6 +201,7 @@ impl CorrectionWork {
                 }
             }
             CorrectionStage::Start => {
+                decision(context, ports.io)?;
                 let Some(PlacementCompletion::Granted(grant)) = self.placement.take() else {
                     unreachable!()
                 };
@@ -273,7 +284,7 @@ impl CorrectionWork {
 }
 
 impl FoundationInput<'_> {
-    /// Elect the mandatory placement-refusal close. This pass's purpose now
+    /// Elect the placement or decoder refusal close. This pass's purpose now
     /// bars dispatch; all original conforming requests receive real terminal
     /// filings before the refused turn and original world exchange close.
     pub fn close_correction_refusal(&mut self) -> Result<(), FoundationInputProgress> {
@@ -287,16 +298,9 @@ impl FoundationInput<'_> {
             .emission
             .as_mut()
             .ok_or(FoundationInputProgress::OperationRefused)?;
-        if !work.corrections.last().is_some_and(|correction| {
-            matches!(correction.placement, Some(PlacementCompletion::Refused(_)))
-        }) || work.closing_correction
-        {
-            return Err(FoundationInputProgress::OperationRefused);
-        }
-        work.closing_correction = true;
-        work.stage = EmissionStage::PlacementRefusal;
-        Ok(())
+        work.close_correction_refusal()
     }
+
     /// Place only this attempt's certified, actually filed instruction. The
     /// existing turn argument stays intact; repair never selects a cut.
     pub fn place_restatement(&mut self, label: String, method: CutMethod) -> Result<(), String> {
@@ -304,6 +308,63 @@ impl FoundationInput<'_> {
             return Err(label);
         }
         let work = self.engine.as_mut().unwrap().emission.as_mut().unwrap();
+        work.place_restatement(label, method)
+    }
+
+    /// Use the actual measured grant once. Completion returns to repair and
+    /// may yield another restatement, exhaustion, or checked effective output.
+    pub fn generate_correction(&mut self) -> Result<(), FoundationInputProgress> {
+        if self.progress() != FoundationInputProgress::CorrectionPlaced {
+            return Err(self.progress());
+        }
+        self.engine
+            .as_mut()
+            .unwrap()
+            .emission
+            .as_mut()
+            .unwrap()
+            .generate_correction()
+    }
+}
+
+impl EmissionWork {
+    pub(in crate::flow::context::worker_startup::input) fn close_correction_refusal(
+        &mut self,
+    ) -> Result<(), FoundationInputProgress> {
+        let work = self;
+        if !work.corrections.last().is_some_and(|correction| {
+            matches!(correction.placement, Some(PlacementCompletion::Refused(_)))
+                || matches!(
+                    correction.generation,
+                    Some(GenerationCompletion::Refused(_))
+                )
+        }) || work.cancelled.is_some()
+            || work.closing_refusal.is_some()
+        {
+            return Err(FoundationInputProgress::OperationRefused);
+        }
+        work.closing_refusal = Some(
+            if matches!(
+                work.corrections.last().unwrap().placement,
+                Some(PlacementCompletion::Refused(_))
+            ) {
+                RefusalElection::Placement
+            } else {
+                RefusalElection::Operation
+            },
+        );
+        work.stage = EmissionStage::CorrectionRefusal;
+        Ok(())
+    }
+    pub(in crate::flow::context::worker_startup::input) fn place_restatement(
+        &mut self,
+        label: String,
+        method: CutMethod,
+    ) -> Result<(), String> {
+        if self.progress() != FoundationInputProgress::Restatement || label.is_empty() {
+            return Err(label);
+        }
+        let work = self;
         work.corrections.push(CorrectionWork {
             stage: CorrectionStage::Prepare,
             restatement: work.restatement.take().unwrap(),
@@ -320,22 +381,13 @@ impl FoundationInput<'_> {
         work.stage = EmissionStage::Correction;
         Ok(())
     }
-    /// Use the actual measured grant once. Completion returns to repair and
-    /// may yield another restatement, exhaustion, or checked effective output.
-    pub fn generate_correction(&mut self) -> Result<(), FoundationInputProgress> {
+    pub(in crate::flow::context::worker_startup::input) fn generate_correction(
+        &mut self,
+    ) -> Result<(), FoundationInputProgress> {
         if self.progress() != FoundationInputProgress::CorrectionPlaced {
             return Err(self.progress());
         }
-        self.engine
-            .as_mut()
-            .unwrap()
-            .emission
-            .as_mut()
-            .unwrap()
-            .corrections
-            .last_mut()
-            .unwrap()
-            .stage = CorrectionStage::Start;
+        self.corrections.last_mut().unwrap().stage = CorrectionStage::Start;
         Ok(())
     }
 }

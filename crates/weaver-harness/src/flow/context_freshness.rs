@@ -194,7 +194,9 @@ impl RecordingContext {
                     self.completed_author = Some(sequence);
                 }
                 Err(failure) => {
-                    let AuthorFailure { reason, original } = failure;
+                    let AuthorFailure {
+                        reason, original, ..
+                    } = failure;
                     if let Some(event) = original {
                         // Freshness only progresses the previous caller. Keep
                         // its withdrawn input in the same waiting slot for that

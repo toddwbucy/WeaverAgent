@@ -5,9 +5,7 @@
 use super::pair_driver::PairTransaction;
 use super::pairs::GateObservation;
 use super::*;
-use crate::flow::author::AuthoredSource;
 use crate::flow::pump_transport::{OrganPort, TrackedStage};
-use weaver_trace::Subsystem;
 use weaver_types::state_flow::{CallId, NonDispatchCause, PairRequest, SourcePosition};
 use weaver_types::{ExchangeId, Payload as OrganPayload};
 
@@ -344,6 +342,164 @@ impl RecordingContext {
         }
     }
 
+    /// A result already received retains its fate. Only the actual rollback
+    /// gate's retired transport permits fault settlement of a still-sent call.
+    pub(in crate::flow::context) fn close_rollback_gate_execution(
+        &mut self,
+        closed: &super::worker_startup::expired::gate::RollbackGateClosed,
+        retired: &mut crate::flow::pump_transport::PacketPort<weaver_types::OrganEnvelope, ()>,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        self.live(io)?;
+        if !closed.allows(self) {
+            return Err(RunFailure::PairOwned);
+        }
+        let Some((call, exchange, sent)) = self.pairs.executing() else {
+            return Ok(true);
+        };
+        if self
+            .pair_gate_identity
+            .as_ref()
+            .is_none_or(|port| !closed.owns_port(port))
+        {
+            return Err(RunFailure::PairOwned);
+        }
+        let call = call.clone();
+        if !sent {
+            let exchange = exchange.clone();
+            let withdrawn = retired
+                .withdraw_retired_unsent(&exchange)
+                .map_err(|failure| RunFailure::Transport {
+                    source: PumpSource::Gate,
+                    failure,
+                })?
+                .ok_or(RunFailure::PairOwned)?;
+            let work = self.pair_work.as_mut().ok_or(RunFailure::PairOwned)?;
+            work.refused_send = Some(withdrawn);
+            if !work
+                .send
+                .as_ref()
+                .is_some_and(|send| send.withdrawn() && send.matches_exchange(&exchange))
+            {
+                return Err(RunFailure::PairOwned);
+            }
+            self.pairs
+                .set_not_dispatched(NonDispatchCause::Unload)
+                .map_err(|error| {
+                    self.pair_fault(io, format!("retired rollback dispatch bar: {error:?}"))
+                })?;
+            self.pairs
+                .cancel_unsent(&call, &exchange)
+                .map_err(|error| {
+                    self.pair_fault(io, format!("retired rollback withdrawal: {error:?}"))
+                })?;
+            return self.arm_pair_terminal_wait(io).map(|()| true);
+        }
+        self.pairs
+            .set_not_dispatched(NonDispatchCause::Unload)
+            .map_err(|error| {
+                self.pair_fault(io, format!("retired rollback dispatch bar: {error:?}"))
+            })?;
+        if !closed.execution_reaped() {
+            return Ok(false);
+        }
+        self.pairs.close_gate_fault(&call).map_err(|error| {
+            self.pair_fault(io, format!("rollback gate disposition: {error:?}"))
+        })?;
+        self.arm_pair_terminal_wait(io).map(|()| true)
+    }
+
+    /// Retired transport bars future dispatch before an earlier rejection is
+    /// filed. It does not decide the current sent call's outcome or its reap.
+    pub(in crate::flow::context) fn prepare_rollback_gate_execution(
+        &mut self,
+        closed: &super::worker_startup::expired::gate::RollbackGateClosed,
+        retired: &mut crate::flow::pump_transport::PacketPort<weaver_types::OrganEnvelope, ()>,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        self.live(io)?;
+        if !closed.allows(self) {
+            return Err(RunFailure::PairOwned);
+        }
+        let Some((_, _, sent)) = self.pairs.executing() else {
+            return Ok(());
+        };
+        if !sent {
+            return self
+                .close_rollback_gate_execution(closed, retired, io)
+                .map(|_| ());
+        }
+        if self
+            .pair_gate_identity
+            .as_ref()
+            .is_none_or(|port| !closed.owns_port(port))
+        {
+            return Err(RunFailure::PairOwned);
+        }
+        self.pairs
+            .set_not_dispatched(NonDispatchCause::Unload)
+            .map_err(|error| {
+                self.pair_fault(io, format!("retired rollback dispatch bar: {error:?}"))
+            })
+    }
+
+    /// Lower may retire a port while its last received answer is still held.
+    /// Transfer that exact receive before assigning a no-result gate fate.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow::context) fn observe_rollback_pair_reply(
+        &mut self,
+        closed: &super::worker_startup::expired::gate::RollbackGateClosed,
+        received: crate::flow::pump_transport::ReceivedOrgan,
+        io: &mut impl PumpIo,
+    ) -> Result<
+        ExecutionProgress,
+        (
+            Option<crate::flow::pump_transport::ReceivedOrgan>,
+            RunFailure,
+        ),
+    > {
+        if let Err(error) = self.live(io) {
+            return Err((Some(received), error));
+        }
+        if !closed.allows(self)
+            || !closed.owns(&received)
+            || self
+                .pair_work
+                .as_ref()
+                .is_some_and(|work| work.leg.is_some() || work.inward.is_some())
+            || self.pair_rejected_authoring
+            || self.pair_refused_gate.is_some()
+            || self.pairs.pending_rejection().is_some()
+            || self
+                .pair_gate_identity
+                .as_ref()
+                .is_some_and(|port| !closed.owns_port(port))
+        {
+            return Err((Some(received), RunFailure::PairOwned));
+        }
+        if self.pair_gate_identity.is_none() {
+            self.pair_gate_identity = Some(received.port_identity());
+        }
+        match self.pairs.observe_gate(received) {
+            Ok(GateObservation::Matched(_)) => self
+                .arm_pair_terminal_wait(io)
+                .map(|()| ExecutionProgress::Terminal)
+                .map_err(|error| (None, error)),
+            Ok(GateObservation::Rejected) => Ok(ExecutionProgress::Rejected),
+            Ok(GateObservation::Halted(_)) => Err((
+                None,
+                self.pair_fault(io, "rollback answer reached a halted pair"),
+            )),
+            Err((received, error)) => {
+                self.pair_refused_gate = Some(received);
+                Err((
+                    None,
+                    self.pair_fault(io, format!("invalid rollback gate answer: {error:?}")),
+                ))
+            }
+        }
+    }
+
     pub(super) fn arm_pair_terminal_wait(
         &mut self,
         io: &mut impl PumpIo,
@@ -427,11 +583,20 @@ impl RecordingContext {
         }
         self.pair_rejected_return.check()?;
         let sequence = if self.pair_rejected_authoring {
-            self.resume_owned_author_and_wait(ports)
-                .map_err(|failure| {
-                    self.pair_rejected_return
-                        .retain_started(failure, &mut self.pair_rejected_authoring)
-                })?
+            let claim = self
+                .pair_rejected_claim
+                .as_ref()
+                .expect("owned rejection claim");
+            self.resume_claimed_author_and_wait(
+                ports,
+                Some(AuthorClaim::PairRejection(std::sync::Arc::clone(
+                    &claim.identity,
+                ))),
+            )
+            .map_err(|failure| {
+                self.pair_rejected_return
+                    .retain_started(failure, &mut self.pair_rejected_authoring)
+            })?
         } else {
             if self.filing.is_some()
                 || self.waiting_content.is_some()
@@ -462,36 +627,47 @@ impl RecordingContext {
                 }
             };
             self.pair_rejection_wait = Some((bound, inherited.is_none()));
-            let record = self.pairs.pending_rejection().unwrap().record().clone();
-            self.waiting_content = Some(WaitingAuthor::ordinary(AuthoredEvent {
-                kind: Kind::ToolReturnRejected,
-                subsystem: Subsystem::Gate,
-                turn: self.open_turn.clone(),
-                source: AuthoredSource::Tool,
-                causal_parent: record
-                    .call_id
-                    .as_ref()
-                    .map(|call| Sequence(call.sequence.0)),
-                payload: Some(Payload::RejectedReturn(Box::new(record))),
-            }));
+            let claim = super::halt_rejection::RejectedAuthor::new(self.open_turn.clone());
+            let identity = std::sync::Arc::clone(&claim.identity);
+            self.pair_rejected_claim = Some(claim);
+            self.waiting_content = Some(WaitingAuthor::claimed(
+                self.rejected_event(),
+                AuthorClaim::PairRejection(std::sync::Arc::clone(&identity)),
+            ));
             self.pair_rejected_authoring = true;
-            self.continue_waiting_content(ports).map_err(|failure| {
-                self.pair_rejected_return
-                    .retain_started(failure, &mut self.pair_rejected_authoring)
-            })?
+            self.continue_claimed_content(ports, Some(AuthorClaim::PairRejection(identity)))
+                .map_err(|failure| {
+                    self.pair_rejected_return
+                        .retain_started(failure, &mut self.pair_rejected_authoring)
+                })?
         };
+        if self
+            .pair_rejected_claim
+            .as_ref()
+            .and_then(|claim| claim.sequence)
+            != Some(sequence)
+        {
+            return Err(self.pair_fault(ports.io, "rejected reply lost its exact Recorded ticket"));
+        }
         let source = SourcePosition {
             block_id: weaver_types::state_flow::SourceBlockId {
                 run: self.flow.state().identity().1.to_owned(),
                 sequence: sequence.0.into(),
                 block: 0.into(),
             },
-            turn: self.open_turn.as_ref().map(|turn| turn.0.clone()),
+            turn: self
+                .pair_rejected_claim
+                .as_ref()
+                .unwrap()
+                .turn
+                .as_ref()
+                .map(|turn| turn.0.clone()),
         };
         self.pairs.ack_rejection_recorded(source).map_err(|error| {
             self.pair_fault(ports.io, format!("recorded rejected reply: {error:?}"))
         })?;
         self.pair_rejected_authoring = false;
+        self.pair_rejected_claim = None;
         if let Some((_, created)) = self.pair_rejection_wait.take()
             && (created
                 || self

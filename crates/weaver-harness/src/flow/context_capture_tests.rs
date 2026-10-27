@@ -4,6 +4,9 @@
 #[path = "context_capture_edge_tests.rs"]
 mod edge_tests;
 
+#[path = "context_capture_parent_tests.rs"]
+mod parent_tests;
+
 use super::super::clock::ReadyFd;
 use super::super::coordinator::{CapturePhase, ControlOperation, OperationStart};
 use super::super::pump::LifecyclePorts;
@@ -20,6 +23,204 @@ use weaver_types::state_flow as s;
 const SAVE_NS: u64 = 10_000_000_000;
 const SNAPSHOT_NS: u64 = 1000;
 const SMALL_CONTROL_NS: u64 = 2_000_000_000;
+
+#[test]
+fn capture_confirmation_checks_the_finished_original_not_the_live_watermark() {
+    for fault in [None, Some("id"), Some("frontier"), Some("phase")] {
+        let mut run = active();
+        let mut member = Member::new(&mut run);
+        if fault == Some("phase") {
+            member.snapshot(42, SAVE_NS);
+        } else {
+            member.finished_capture(42);
+        }
+        let frozen = member.run.context.capture_snapshot().unwrap();
+        if fault != Some("phase") {
+            assert!(member.run.context.barrier.latest_recorded().unwrap().0 > frozen.frontier);
+        }
+        let id = if fault == Some("id") { 43 } else { 42 };
+        let frontier = frozen.frontier + u64::from(fault == Some("frontier"));
+        let answer = member.run.context.confirmable_member_capture(
+            id.into(),
+            frontier,
+            &mut member.run.clock,
+        );
+        if fault.is_some() {
+            assert!(answer.is_err());
+            assert!(member.run.context.halt().is_some());
+        } else {
+            assert!(answer.unwrap());
+            assert_eq!(member.run.context.capture_snapshot().unwrap(), frozen);
+            assert!(member.run.context.halt().is_none());
+        }
+    }
+}
+
+#[test]
+fn capture_prearmed_before_beginning_keeps_its_exact_window_at_the_barrier() {
+    for changed in [false, true] {
+        let mut run = active();
+        let window = Member::new(&mut run).requested(42, SAVE_NS);
+        let original = AbsoluteBound::from_absolute(
+            window.began_ns.0,
+            window.deadline_ns.0 - u64::from(changed),
+        )
+        .unwrap();
+        run.context
+            .arm(PumpDeadline::CaptureWindow, original, &mut run.clock)
+            .unwrap();
+        let result = run
+            .context
+            .prepare_member_capture(42.into(), window, &mut run.clock);
+        assert_eq!(
+            run.context.deadlines.get(PumpDeadline::CaptureWindow),
+            Some(original)
+        );
+        if changed {
+            assert!(result.is_err());
+            assert!(run.context.capture_snapshot().is_none());
+            assert!(run.context.member_capture.is_none());
+        } else {
+            result.unwrap();
+            assert_eq!(
+                run.context.capture_snapshot().unwrap().phase,
+                CapturePhase::Barrier
+            );
+        }
+    }
+}
+
+#[test]
+fn complete_watermark_starts_at_actual_load_and_survives_activation() {
+    let mut run = Fixture::new(config());
+    assert_eq!(run.context.barrier.latest_recorded(), None);
+    run.opened();
+    assert_eq!(run.context.barrier.latest_recorded(), None);
+    run.author(run.load_event()).unwrap();
+    assert_eq!(run.context.barrier.latest_recorded(), Some(Sequence(0)));
+    run.context.activate(&mut run.clock).unwrap();
+    assert_eq!(run.context.barrier.latest_recorded(), Some(Sequence(0)));
+    for _ in 0..64 {
+        run.context.reduce_flow(&mut run.clock).unwrap();
+        if run.context.flow.operation_completion().is_some() {
+            break;
+        }
+    }
+    assert!(run.context.flow.operation_completion().is_some());
+    assert_eq!(run.context.barrier.latest_recorded(), Some(Sequence(1)));
+}
+
+#[test]
+fn capture_freezes_recorded_measurements_and_preserves_the_frontier_after_image() {
+    let mut run = active();
+    let window = Member::new(&mut run).requested(42, SAVE_NS);
+    let requested = run
+        .context
+        .barrier
+        .recorder()
+        .structure()
+        .by_kind(Kind::SavePoint)
+        .last()
+        .unwrap()
+        .sequence;
+    let context = &mut run.context;
+    assert!(matches!(
+        context
+            .flow
+            .begin_control(
+                &mut FlowRecording {
+                    barrier: &mut context.barrier,
+                    inbox: &mut context.inbox,
+                    budget: &mut context.budget,
+                    author: &context.author,
+                },
+                &mut run.clock,
+                ControlOperation::try_from((s::StateControl::Position {}, None)).unwrap(),
+            )
+            .unwrap(),
+        OperationStart::Started { .. }
+    ));
+    let mut member = Member::new(&mut run);
+    let request = member.sent();
+    let answer = member.answer(&request, s::StateControlAnswer::Position(None));
+    member.receive(&answer).unwrap();
+    let mut completed = false;
+    for _ in 0..64 {
+        member
+            .run
+            .context
+            .reduce_flow(&mut member.run.clock)
+            .unwrap();
+        if member
+            .run
+            .context
+            .take_operation_completion(&mut member.run.clock)
+            .unwrap()
+            .is_some()
+        {
+            completed = true;
+            break;
+        }
+    }
+    assert!(completed, "actual Position observation must be Recorded");
+    let frontier = member
+        .run
+        .context
+        .barrier
+        .recorder()
+        .structure()
+        .iter()
+        .last()
+        .unwrap()
+        .sequence;
+    assert!(frontier.0 > requested.0);
+    member
+        .run
+        .context
+        .prepare_member_capture(42.into(), window, &mut member.run.clock)
+        .unwrap();
+    assert_eq!(
+        member.run.context.capture_snapshot().unwrap().frontier,
+        frontier.0,
+        "capture must include the coordinator's actual Recorded measurement"
+    );
+    for _ in 0..64 {
+        member.advance().unwrap();
+        if !member.run.context.flow.state().outstanding().is_empty() {
+            break;
+        }
+    }
+    let request = member.sent();
+    let image = member.image(&request, 42);
+    let result = member.result(CaptureProgress::ImageReady, &image);
+    assert!(matches!(
+        result.answer,
+        s::StateFrame::ControlAnswer {
+            frame: s::StateControlAnswer::Snapshot { position: None, .. },
+            ..
+        }
+    ));
+    assert_eq!(
+        member.run.context.capture_snapshot().unwrap().frontier,
+        frontier.0,
+        "snapshot observations cannot move the frozen frontier"
+    );
+    assert!(member.run.context.barrier.latest_recorded().unwrap().0 > frontier.0);
+    assert!(
+        member
+            .run
+            .context
+            .barrier
+            .recorder()
+            .structure()
+            .iter()
+            .last()
+            .unwrap()
+            .sequence
+            .0
+            > frontier.0
+    );
+}
 
 #[test]
 fn held_boundary_capture_returns_busy_without_freezing_a_frontier_or_new_window() {
