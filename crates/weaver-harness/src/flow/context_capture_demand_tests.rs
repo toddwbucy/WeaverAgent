@@ -223,6 +223,200 @@ fn demand_capture_expired_prepare_keeps_late_reply_without_granting_commit() {
 }
 
 #[test]
+fn demand_capture_expiry_withdraws_commit_after_admin_disconnect() {
+    let mut run = active();
+    let window = demand_window(&mut run);
+    let received = run.clock.now().unwrap();
+    let mut parent = demand(&mut run, window, received);
+    parent.step().unwrap();
+    assert!(
+        parent
+            .capture
+            .begin_demand_boundary(&mut parent.member.run.context, &mut parent.member.run.clock,)
+            .unwrap()
+    );
+    let (beginning, artifact) = parent.prepared();
+    parent.submit(CapturePayload::SavePointPrepared(artifact));
+    parent.pressure();
+    for _ in 0..8 {
+        parent.step().unwrap();
+    }
+    assert!(
+        !parent
+            .capture
+            .at_halt(&parent.member.run.context)
+            .commit_sent
+    );
+    nix::sys::socket::shutdown(parent.admin.as_raw_fd(), nix::sys::socket::Shutdown::Both).unwrap();
+    assert_eq!(
+        parent
+            .peer
+            .try_send_observed(&mut parent.member.run.clock)
+            .unwrap_err()
+            .fault,
+        crate::ChannelFault::Closed
+    );
+    parent
+        .member
+        .run
+        .clock
+        .advance_to(window.deadline_ns.0)
+        .unwrap();
+    let expiry = parent
+        .member
+        .run
+        .context
+        .live(&mut parent.member.run.clock)
+        .unwrap_err();
+    assert!(
+        parent
+            .capture
+            .retain_window_expiry(&parent.member.run.context, &expiry)
+    );
+    parent
+        .capture
+        .prepare_retained_window_expiry(
+            &mut parent.member.run.context,
+            &mut parent.peer,
+            &mut parent.member.run.clock,
+        )
+        .unwrap();
+    let request = parent.request();
+    assert!(
+        matches!(request, s::StateFrame::Control { frame: s::StateControl::Abort { capture_id }, .. }
+        if capture_id == beginning.capture_id)
+    );
+    let answer = parent.member.answer(
+        &request,
+        s::StateControlAnswer::Aborted {
+            capture_id: beginning.capture_id,
+        },
+    );
+    parent.member.receive(&answer).unwrap();
+    for _ in 0..64 {
+        if parent.step().unwrap() == ServingCaptureProgress::Refused {
+            break;
+        }
+    }
+    assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Refused);
+    assert!(parent.member.run.context.failure().is_none());
+    assert!(parent.member.run.context.capture_snapshot().is_none());
+    assert!(
+        !parent
+            .capture
+            .at_halt(&parent.member.run.context)
+            .commit_sent
+    );
+    assert_eq!(parent.member.records(Kind::SavePoint).len(), 3);
+}
+
+#[test]
+fn demand_capture_expiry_withdraws_commit_before_a_cleanup_clock_failure() {
+    struct BrokenClock;
+    impl PumpIo for BrokenClock {
+        fn now(&mut self) -> std::io::Result<u64> {
+            Err(std::io::Error::other("cleanup clock failed"))
+        }
+        fn wait(
+            &mut self,
+            _: &[crate::flow::clock::WaitInterest<'_>],
+            _: Option<u64>,
+        ) -> std::io::Result<crate::flow::clock::WaitOutcome> {
+            panic!("withdrawal must not wait");
+        }
+    }
+    for outer_worker in [true, false] {
+        let mut run = active();
+        let window = demand_window(&mut run);
+        let received = run.clock.now().unwrap();
+        let mut parent = demand(&mut run, window, received);
+        parent.step().unwrap();
+        assert!(parent.capture.begin_demand_boundary(
+            &mut parent.member.run.context,
+            &mut parent.member.run.clock,
+        ).unwrap());
+        let (_, artifact) = parent.prepared();
+        parent.submit(CapturePayload::SavePointPrepared(artifact));
+        parent.pressure();
+        for _ in 0..8 {
+            parent.step().unwrap();
+        }
+        assert!(
+            !parent
+                .capture
+                .at_halt(&parent.member.run.context)
+                .commit_sent
+        );
+        parent
+            .member
+            .run
+            .clock
+            .advance_to(window.deadline_ns.0)
+            .unwrap();
+        let expiry = parent
+            .member
+            .run
+            .context
+            .live(&mut parent.member.run.clock)
+            .unwrap_err();
+        assert!(
+            parent
+                .capture
+                .retain_window_expiry(&parent.member.run.context, &expiry)
+        );
+        let failure = if outer_worker {
+            parent.capture.prepare_retained_window_expiry(
+                &mut parent.member.run.context,
+                &mut parent.peer,
+                &mut BrokenClock,
+            )
+        } else {
+            parent
+                .capture
+                .advance(
+                    &mut parent.member.run.context,
+                    &mut PumpPorts {
+                        lifecycle: LifecyclePorts {
+                            leave_peer: Some(&mut parent.peer),
+                            ..Default::default()
+                        },
+                        gate: None,
+                        decode: None,
+                        label: None,
+                        io: &mut BrokenClock,
+                    },
+                )
+                .map(|_| ())
+        }
+        .unwrap_err();
+        assert!(matches!(
+            failure,
+            RunFailure::Flow {
+                reason: FlowHaltReason::TraceFailed,
+                ..
+            }
+        ));
+        parent.drain_pressure();
+        parent
+            .peer
+            .try_send_observed(&mut parent.member.run.clock)
+            .unwrap();
+        let mut bytes = [0; 4096];
+        assert_eq!(
+            recv(parent.admin.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
+            Err(nix::errno::Errno::EAGAIN),
+            "expired Commit escaped after cleanup failed (worker={outer_worker})"
+        );
+        assert!(
+            !parent
+                .capture
+                .at_halt(&parent.member.run.context)
+                .commit_sent
+        );
+    }
+}
+
+#[test]
 fn demand_capture_expiry_before_beginning_starts_no_member_capture() {
     let mut run = active();
     let window = demand_window(&mut run);
@@ -462,7 +656,7 @@ fn demand_capture_allocation_retains_its_request_until_an_explicit_turn_boundary
 #[test]
 fn demand_capture_expiry_at_author_admission_retains_its_exact_private_original() {
     use crate::flow::author::AuthoredSource;
-    use crate::flow::context::capture_author::QueuedSaveAuthor;
+    use crate::flow::context::serving_observation::ServingObservationAuthor;
     use std::sync::Arc;
     let mut run = active();
     let window = demand_window(&mut run);
@@ -490,8 +684,8 @@ fn demand_capture_expiry_at_author_admission_retains_its_exact_private_original(
         payload: Some(Payload::SavePointRecord(Box::new(payload.clone()))),
     };
     let context = &mut parent.member.run.context;
-    let claim = Arc::new(QueuedSaveAuthor::new(context, &payload));
-    let other = Arc::new(QueuedSaveAuthor::new(context, &payload));
+    let claim = Arc::new(ServingObservationAuthor::new(context, &payload));
+    let other = Arc::new(ServingObservationAuthor::new(context, &payload));
     parent
         .member
         .run
@@ -511,7 +705,7 @@ fn demand_capture_expiry_at_author_admission_retains_its_exact_private_original(
     let original = event();
     let bytes = format!("{original:?}");
     let failure = context
-        .author_queued_save(&mut ports, &claim, original)
+        .author_serving_observation(&mut ports, &claim, original)
         .unwrap_err();
     assert!(matches!(
         failure.reason,
@@ -531,14 +725,14 @@ fn demand_capture_expiry_at_author_admission_retains_its_exact_private_original(
         bytes
     );
     assert!(Arc::ptr_eq(
-        context.queued_save_author.as_ref().unwrap(),
+        context.serving_observation_author.as_ref().unwrap(),
         &claim
     ));
     let competitor = context.author_and_wait(&mut ports, event()).unwrap_err();
     assert_eq!(competitor.reason, RunFailure::Busy(HeldInput::Caller));
     assert!(competitor.original.is_some());
     let impostor = context
-        .author_queued_save(&mut ports, &other, event())
+        .author_serving_observation(&mut ports, &other, event())
         .unwrap_err();
     assert_eq!(impostor.reason, RunFailure::Busy(HeldInput::Caller));
     assert!(impostor.original.is_some());
@@ -553,10 +747,12 @@ fn demand_capture_expiry_at_author_admission_retains_its_exact_private_original(
         format!("{:?}", context.waiting_content.as_ref().unwrap().event),
         bytes
     );
-    let sequence = context.resume_queued_save(&mut ports, &claim).unwrap();
+    let sequence = context
+        .resume_serving_observation(&mut ports, &claim)
+        .unwrap();
     assert_eq!(claim.sequence(), Some(sequence));
     assert!(other.sequence().is_none());
-    assert!(context.queued_save_author.is_none());
+    assert!(context.serving_observation_author.is_none());
     assert!(context.waiting_content.is_none());
     assert!(context.failure().is_none());
     assert!(context.capture_snapshot().is_none());
@@ -918,4 +1114,44 @@ fn demand_capture_failed_queued_owner_keeps_its_identity_without_a_leave() {
             .is_none()
     );
     assert!(parent.member.run.context.capture_snapshot().is_none());
+}
+
+#[test]
+fn queued_save_yields_its_unstarted_record_while_context_is_releasing() {
+    let mut run = active();
+    let window = demand_window(&mut run);
+    let received = run.clock.now().unwrap();
+    let mut parent = demand(&mut run, window, received);
+    let original = parent.capture.at_halt(&parent.member.run.context);
+    parent.member.run.context.phase = RecordingPhase::Releasing;
+    for _ in 0..3 {
+        assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Pending);
+        assert!(parent.member.records(Kind::SavePoint).is_empty());
+        assert!(parent.member.run.context.failure().is_none());
+        assert!(
+            parent
+                .member
+                .run
+                .context
+                .serving_observation_author
+                .is_none()
+        );
+        assert_eq!(
+            parent
+                .capture
+                .at_halt(&parent.member.run.context)
+                .capture_id,
+            original.capture_id
+        );
+    }
+    // This boundary test restores the same eligible phase to prove that the
+    // original request was retained, not discarded or submitted on refusal.
+    parent.member.run.context.phase = RecordingPhase::Entered;
+    parent.step().unwrap();
+    let rows = parent.member.records(Kind::SavePoint);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["payload"]["capture_id"],
+        original.capture_id.0.to_string()
+    );
 }

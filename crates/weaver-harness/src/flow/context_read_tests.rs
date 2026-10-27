@@ -171,6 +171,44 @@ pub(super) fn with_three_inspection_holds(
     caller(&mut member.run.context, &mut member.run.clock, true);
 }
 
+/// A real control receipt at its enclosing Leave boundary, before the context
+/// performs its next clock check. The callback cannot consume the inspection.
+pub(super) fn with_late_inspection_receipt(
+    caller: impl FnOnce(
+        &mut RecordingContext,
+        &mut crate::flow::clock::testing::FakePumpIo,
+        AbsoluteBound,
+    ),
+) {
+    let mut member = Member::new();
+    let outer = AbsoluteBound::after(member.now(), 20).unwrap();
+    member
+        .run
+        .context
+        .arm(PumpDeadline::Leave, outer, &mut member.run.clock)
+        .unwrap();
+    member
+        .run
+        .context
+        .begin_inspection(InspectionKind::Shape, None, &mut member.run.clock)
+        .unwrap();
+    let request = member.sent();
+    member.respond(&request, s::StateControlAnswer::Shape(vec![]));
+    member.run.clock.advance_to(outer.deadline_ns()).unwrap();
+    member.record_completion_only();
+    assert!(
+        member
+            .run
+            .context
+            .flow
+            .control_recorded_boundary()
+            .is_some()
+    );
+    caller(&mut member.run.context, &mut member.run.clock, outer);
+    assert!(member.run.context.flow.operation_completion().is_some());
+    assert!(member.run.context.inspection.is_some());
+}
+
 impl Member {
     fn new() -> Self {
         let mut run = Fixture::new(config());

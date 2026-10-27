@@ -210,6 +210,20 @@ impl PendingSave {
 }
 
 impl FoundationInput<'_> {
+    pub(super) fn prepare_save_window_expiry(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        if let Some(save) = &mut self.serving.save {
+            save.capture.prepare_retained_window_expiry(
+                self.serving.owner.context,
+                &mut save.peer,
+                io,
+            )?;
+        }
+        Ok(())
+    }
+
     pub(super) fn save_blocks_turn(&self) -> bool {
         self.serving
             .save

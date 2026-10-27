@@ -25,7 +25,10 @@ fn generation(mode: &str, pass: u64, stopped: bool) -> TokenAnswer {
         } else {
             Finish::Completed
         },
-        content: if pass == 0 || mode.contains("-final-return-round-limit") {
+        content: if pass == 0
+            || mode.contains("-final-return-round-limit")
+            || (mode.ends_with("gate-death-repeat") && pass == 1)
+        {
             super::emission::tests::content(mode)
         } else {
             vec![ContentBlock::Text {

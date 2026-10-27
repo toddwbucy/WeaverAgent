@@ -93,6 +93,10 @@ impl<'a> FoundationManagement<'a> {
             detail,
             ..
         } = *self;
+        let organ_dead = crate::lifecycle_table::leave_on_arrival(
+            crate::lifecycle_table::Leave::Graceful,
+            input.serving.owner.context.serving_organs.any(),
+        ) == crate::lifecycle_table::Leave::Forced;
         input.serving.graceful = Some(Box::new(super::super::graceful::PendingGraceful {
             peer,
             message: message.expect("consumed actual graceful Leave"),
@@ -100,7 +104,7 @@ impl<'a> FoundationManagement<'a> {
             heard_ns,
             drain,
             wind_down_seconds,
-            forced: false,
+            forced: organ_dead,
             forced_by: None,
             joins: Vec::new(),
             peer_unavailable,
@@ -108,7 +112,8 @@ impl<'a> FoundationManagement<'a> {
             quiesce: None,
             wind_down: None,
         }));
-        if let Some(bound) = drain
+        if !organ_dead
+            && let Some(bound) = drain
             && let Err(failure) =
                 input
                     .serving

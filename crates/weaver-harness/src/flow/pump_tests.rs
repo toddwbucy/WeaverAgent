@@ -292,6 +292,84 @@ struct Fixture {
     author: ServingAuthor,
     reader: Option<UnixStream>,
 }
+
+#[test]
+fn an_observation_wake_keeps_real_interests_and_terminal_deadline_precedence() {
+    for terminal in [None, Some(104), Some(105), Some(106)] {
+        let mut fixture = Fixture::new(false);
+        let (end, _peer) = pair();
+        let mut admin = LifecyclePeer::from_owned(end).unwrap();
+        let fd = admin.fd().as_raw_fd();
+        let mut io = FakePumpIo::new(100);
+        let mut pump = CommonPump::new(ClockOrigin::at(100));
+        let mut deadlines = DeadlineRegistry::new();
+        if let Some(end) = terminal {
+            deadlines
+                .arm(
+                    PumpDeadline::Leave,
+                    AbsoluteBound::from_absolute(100, end).unwrap(),
+                )
+                .unwrap();
+        }
+        let mut ports = PumpPorts {
+            lifecycle: LifecyclePorts::default(),
+            gate: None,
+            decode: None,
+            label: None,
+            io: &mut io,
+        };
+        ports.lifecycle.peer = Some(&mut admin);
+        assert!(matches!(
+            pump.step_with_observation(
+                &mut ports,
+                None,
+                &mut fixture.cx(),
+                &deadlines,
+                false,
+                Some(105)
+            )
+            .unwrap(),
+            PumpStep::Idle
+        ));
+        assert!(ports.io.waits().is_empty(), "advance must not sleep");
+        let result = pump
+            .step_with_observation(
+                &mut ports,
+                None,
+                &mut fixture.cx(),
+                &deadlines,
+                true,
+                Some(105),
+            )
+            .unwrap();
+        if terminal.is_some_and(|end| end <= 105) {
+            assert!(matches!(
+                result,
+                PumpStep::Deadline {
+                    key: PumpDeadline::Leave,
+                    ..
+                }
+            ));
+        } else {
+            assert!(matches!(result, PumpStep::Observation));
+        }
+        let wait = ports.io.waits().last().unwrap();
+        assert_eq!(
+            wait.absolute_deadline,
+            Some(terminal.unwrap_or(105).min(105))
+        );
+        assert!(
+            wait.descriptors
+                .iter()
+                .any(|(actual, flags)| *actual == fd && flags.contains(PollFlags::POLLIN))
+        );
+        assert_eq!(
+            deadlines.nearest(),
+            terminal,
+            "the wake cannot arm or renew a protocol bound"
+        );
+    }
+}
 impl Fixture {
     fn new(pressure: bool) -> Self {
         let (sink, reader) = UnixStream::pair().unwrap();

@@ -13,6 +13,14 @@ pub(in crate::flow::context::worker_startup) fn is_mode(mode: &str) -> bool {
 }
 
 pub(super) fn gate(mode: &str, root: &Path, fd: i32) {
+    if mode.contains("-organ-settling") {
+        wait_file(root, "ready-rollback-observe-death");
+        nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
+        // Actual protocol EOF precedes stderr EOF, leaving the existing
+        // bounded last-word observation pending at the consuming Leave.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        return;
+    }
     if super::forced_leave::quiesce_conversion::is_mode(mode) {
         return super::forced_leave::quiesce_conversion::gate(mode, root, fd);
     }
@@ -192,6 +200,56 @@ pub(in crate::flow::context::worker_startup) fn handoff(
             management: Some(management),
         };
         return None;
+    }
+    if mode.contains("-organ-settling") {
+        let owner = &mut management.input.serving.owner;
+        std::fs::write(root.join("ready-rollback-observe-death"), b"close").unwrap();
+        let watch = Instant::now() + Duration::from_secs(3);
+        let failure = loop {
+            if let Err(failure) = owner.gate.try_receive() {
+                break failure;
+            }
+            assert!(Instant::now() < watch);
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(failure.fault, crate::ChannelFault::Closed);
+        use crate::flow::context::serving_organ_loss::{ObservationProgress, ServingOrganPorts};
+        let mut io = crate::flow::clock::MonotonicIo;
+        assert!(
+            owner
+                .context
+                .observe_serving_organ_end(
+                    crate::flow::pump::PumpSource::Gate,
+                    &failure,
+                    ServingOrganPorts {
+                        gate: &owner.gate,
+                        decode: owner.decode,
+                        residency: owner.resident.residency,
+                        tools: &owner.tools,
+                    },
+                    false,
+                    &mut io,
+                )
+                .unwrap()
+        );
+        owner.context.serving_organs.refresh_gate(&owner.gate_child);
+        let mut ports = crate::flow::pump::PumpPorts {
+            lifecycle: crate::flow::pump::LifecyclePorts::default(),
+            gate: Some(&mut owner.gate),
+            decode: None,
+            label: None,
+            io: &mut io,
+        };
+        if !mode.ends_with("-unlatched") {
+            assert!(matches!(
+                owner
+                    .context
+                    .advance_serving_organ_faults(&mut ports, &owner.tools)
+                    .unwrap(),
+                ObservationProgress::Pending { .. }
+            ));
+        }
+        assert!(owner.context.has_owed_organ_observation());
     }
     let actual = match management.rollback_handoff() {
         Ok(handoff) => handoff,
@@ -413,6 +471,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
     assert!(run.context.deadlines.get(PumpDeadline::Enter).is_none());
     assert!(run.context.failure().is_none());
     assert!(run.context.flow.halt().is_none());
+    assert!(!run.context.has_owed_organ_observation());
     assert!(run.context.phase == crate::flow::context::RecordingPhase::Closed);
     assert!(!run.context.ever_started_turn);
     assert!(matches!(
@@ -434,23 +493,27 @@ pub(in crate::flow::context::worker_startup) fn finish(
         lower.deadline_ns(),
         (leave.began_ns() + weaver_types::LOWER_BOUND_MS * 1_000_000).min(leave.deadline_ns())
     );
-    let (request, sent, sent_at) = gate.test_lower().unwrap();
-    assert!(sent);
-    assert!(sent_at.is_some_and(|at| at >= leave.began_ns() && !lower.expired(at)));
-    assert_eq!(
-        request.exchange.ordinal,
-        original_raise.exchange.ordinal + 1
-    );
-    assert_eq!(
-        serde_json::from_slice::<OrganEnvelope>(
-            &std::fs::read(root.join("ready-rollback-lower.json")).unwrap()
-        )
-        .unwrap(),
-        *request
-    );
-    let reply = gate.test_replies().1.unwrap().envelope();
-    assert_eq!(reply.exchange, request.exchange);
-    assert_eq!(reply.payload, Payload::Answer(LifecycleAnswer::GateStopped));
+    if !mode.contains("-organ-settling") {
+        let (request, sent, sent_at) = gate.test_lower().unwrap();
+        assert!(sent);
+        assert!(sent_at.is_some_and(|at| at >= leave.began_ns() && !lower.expired(at)));
+        assert_eq!(
+            request.exchange.ordinal,
+            original_raise.exchange.ordinal + 1
+        );
+        assert_eq!(
+            serde_json::from_slice::<OrganEnvelope>(
+                &std::fs::read(root.join("ready-rollback-lower.json")).unwrap()
+            )
+            .unwrap(),
+            *request
+        );
+        let reply = gate.test_replies().1.unwrap().envelope();
+        assert_eq!(reply.exchange, request.exchange);
+        assert_eq!(reply.payload, Payload::Answer(LifecycleAnswer::GateStopped));
+    } else {
+        assert!(!root.join("ready-rollback-lower.json").exists());
+    }
     assert!(gate.test_disposition().1);
     let mut expected = before;
     expected.push("grants".into());
@@ -481,10 +544,20 @@ pub(in crate::flow::context::worker_startup) fn finish(
     .unwrap();
     assert_eq!(rows.iter().filter(|row| row["kind"] == "load").count(), 1);
     assert_eq!(rows.iter().filter(|row| row["kind"] == "unload").count(), 1);
-    assert!(rows.iter().all(|row| !matches!(
-        row["kind"].as_str(),
-        Some("turn.started" | "save_point" | "fault")
-    )));
+    assert!(
+        rows.iter()
+            .all(|row| !matches!(row["kind"].as_str(), Some("turn.started" | "save_point")))
+    );
+    let faults: Vec<_> = rows.iter().filter(|row| row["kind"] == "fault").collect();
+    assert_eq!(faults.len(), usize::from(mode.contains("-organ-settling")));
+    if let Some(fault) = faults.first() {
+        assert_eq!(fault["payload"]["case"], "organ_death_observed");
+        assert_eq!(fault["payload"]["account"]["organ"], "gate");
+        assert_eq!(
+            fault["payload"]["account"]["death"],
+            "its channel was lost while serving"
+        );
+    }
     let load = rows.iter().find(|row| row["kind"] == "load").unwrap();
     let unload = rows.last().unwrap();
     assert_eq!(unload["kind"], "unload");

@@ -265,6 +265,36 @@ impl Drop for Guard {
     }
 }
 
+pub(super) fn fill_lower_writer(owner: &mut FoundationFailedExit, clock: &mut FakePumpIo) {
+    let event = owner
+        .tail
+        .context
+        .author
+        .prepare(
+            &AuthoredEvent {
+                kind: serving::Kind::Refusal,
+                subsystem: Subsystem::Harness,
+                turn: None,
+                source: AuthoredSource::Runtime,
+                causal_parent: None,
+                payload: Some(serving::Payload::Refusal(
+                    serde_json::value::to_raw_value(
+                        &serde_json::json!({"fixture":"x".repeat(32_768)}),
+                    )
+                    .unwrap(),
+                )),
+            },
+            clock.now().unwrap(),
+            1,
+        )
+        .unwrap();
+    owner
+        .tail
+        .context
+        .barrier
+        .fill_stopped_writer_for_test(event);
+}
+
 struct LatePressure {
     through_unload: bool,
     wake: bool,
@@ -280,33 +310,7 @@ impl LatePressure {
         }
         assert!(owner.tail.context.open_turn.is_none());
         assert!(owner.tail.context.pairs.pending_rejection().is_none());
-        let event = owner
-            .tail
-            .context
-            .author
-            .prepare(
-                &AuthoredEvent {
-                    kind: serving::Kind::Refusal,
-                    subsystem: Subsystem::Harness,
-                    turn: None,
-                    source: AuthoredSource::Runtime,
-                    causal_parent: None,
-                    payload: Some(serving::Payload::Refusal(
-                        serde_json::value::to_raw_value(
-                            &serde_json::json!({"fixture":"x".repeat(32_768)}),
-                        )
-                        .unwrap(),
-                    )),
-                },
-                clock.now().unwrap(),
-                1,
-            )
-            .unwrap();
-        owner
-            .tail
-            .context
-            .barrier
-            .fill_stopped_writer_for_test(event);
+        fill_lower_writer(owner, clock);
         self.filled = true;
     }
 

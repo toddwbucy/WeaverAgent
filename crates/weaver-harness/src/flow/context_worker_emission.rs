@@ -99,6 +99,11 @@ pub(in crate::flow::context::worker_startup::input) struct EmissionWork {
 }
 
 impl EmissionWork {
+    pub(super) fn lost_gate_pairs_need_step(&self, context: &RecordingContext) -> bool {
+        self.execution
+            .as_ref()
+            .is_some_and(|work| work.lost_gate_needs_step(context))
+    }
     pub(in crate::flow::context::worker_startup::input) fn retire_failed_placement_grants(
         &mut self,
         context: &mut RecordingContext,

@@ -13,6 +13,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use weaver_types::{ExchangeId, KillCause, ToolOutcome, state_flow as s};
 
+#[path = "context_worker_gate_loss_tests.rs"]
+mod gate_loss;
+
 fn expected(mode: &str, ordinal: u64) -> ToolOutcome {
     if mode.contains("refused") {
         ToolOutcome::Refused {
@@ -44,6 +47,13 @@ fn packet(fd: i32, frame: &OrganEnvelope) {
 pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
     let mut tool_child = None;
     let end = Instant::now() + Duration::from_secs(30);
+    if mode.contains("gate-death-unsent") {
+        while !root.join("gate-loss-close").exists() {
+            assert!(Instant::now() < end);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        return;
+    }
     if mode.contains("stop-unsent") || mode.contains("halt-gate-unsent") {
         while !root.join("drain-external").exists() {
             assert!(Instant::now() < end);
@@ -122,7 +132,9 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         assert_eq!(frame.exchange.opener, Opener::Harness);
                         assert_eq!(
                             frame.exchange.ordinal,
-                            if mode.contains("start-pending") || mode.contains("placement-pending")
+                            if mode.contains("start-pending")
+                                || mode.contains("placement-pending")
+                                || mode.contains("-lower-organ-")
                             {
                                 2
                             } else {
@@ -132,6 +144,33 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         assert!(pending.is_none());
                         assert!(!root.join("halt-lower.json").exists());
                         std::fs::write(root.join("halt-lower.json"), &bytes[..n]).unwrap();
+                        if mode.contains("-lower-organ-") {
+                            if mode.ends_with("-return") {
+                                let rejected = OrganEnvelope {
+                                    exchange: ExchangeId {
+                                        opener: Opener::Harness,
+                                        ordinal: 999,
+                                    },
+                                    position: Position::Close,
+                                    payload: Payload::ToolAnswer(ToolOutcome::Result {
+                                        content: "late unclaimed result".into(),
+                                    }),
+                                };
+                                let raw = format!(
+                                    " \n{}\n ",
+                                    serde_json::to_string_pretty(&rejected).unwrap()
+                                );
+                                std::fs::write(root.join("lower-organ-return.json"), &raw).unwrap();
+                                assert_eq!(
+                                    send(fd, raw.as_bytes(), MsgFlags::MSG_NOSIGNAL),
+                                    Ok(raw.len())
+                                );
+                            }
+                            while !root.join("lower-organ-recorded").exists() {
+                                assert!(Instant::now() < end, "Lower observation fixture watchdog");
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                        }
                         if mode.contains("lower-silent") {
                             continue;
                         }
@@ -209,6 +248,7 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         std::fs::write(root.join(format!("external-{ordinal}.json")), &bytes[..n])
                             .unwrap();
                         if mode.contains("gate-death") {
+                            gate_loss::end(mode, root, fd, &frame, end);
                             return;
                         }
                         let answer = OrganEnvelope {
@@ -432,7 +472,11 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                                 "stopped"
                             }
                         );
-                        assert_eq!(value["turn"], "generation-turn");
+                        if mode.contains("-lower-organ-") {
+                            assert!(value.get("turn").is_none() && value.get("run").is_none());
+                        } else {
+                            assert_eq!(value["turn"], "generation-turn");
+                        }
                         assert!(!root.join("closed.json").exists(), "duplicate world close");
                         std::fs::write(root.join("closed.json"), &bytes[..n]).unwrap();
                         if mode.contains("queued-input") {
@@ -519,7 +563,10 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         assert_eq!(input.execute(foreign.clone()), Err(foreign));
         assert!(input.recall(request.call_id.clone()).is_err());
         assert_eq!(input.ready_pair(), Some(request));
-        if mode.contains("stop-unsent") || mode.contains("halt-gate-unsent") {
+        if mode.contains("stop-unsent")
+            || mode.contains("halt-gate-unsent")
+            || mode.contains("gate-death-unsent")
+        {
             loop {
                 match send(
                     input.serving.owner.gate.fd().as_raw_fd(),
@@ -569,18 +616,18 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             }
         }
         if mode.contains("gate-death") {
-            for _ in 0..1000 {
-                if step(input, member, clock, mode) == FoundationInputProgress::Stopped {
-                    break;
-                }
+            if mode.contains("gate-death-stop") {
+                return gate_loss::stop::exercise(
+                    guard,
+                    member,
+                    reader,
+                    clock,
+                    (socket, root),
+                    mode,
+                    requests,
+                );
             }
-            assert_eq!(input.progress(), FoundationInputProgress::Stopped);
-            assert!(input.serving.owner.context.failure().is_some());
-            assert!(input.pair_outcome(&request.call_id).is_none());
-            assert!(input.serving.owner.context.pairs.executing().is_some());
-            assert!(!root.join("external-3.json").exists());
-            assert!(!root.join("closed.json").exists());
-            return;
+            return gate_loss::exercise(guard, member, reader, clock, root, mode, requests);
         }
         if ((mode.contains("wrong-return") || mode.contains("multiline")) && ordinal == 2)
             || (mode.contains("duplicate") && ordinal == 3)

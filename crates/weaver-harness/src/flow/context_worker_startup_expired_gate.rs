@@ -249,9 +249,13 @@ pub(in crate::flow) struct RollbackGateClosed {
     leave: AbsoluteBound,
     disposed: bool,
     execution_reaped: bool,
+    containment: Option<Containment>,
 }
 
 impl RollbackGateClosed {
+    pub(in crate::flow::context) fn containment(&self) -> Option<Containment> {
+        self.disposed.then_some(self.containment).flatten()
+    }
     pub(in crate::flow::context) fn allows(&self, context: &RecordingContext) -> bool {
         self.disposed
             && Arc::ptr_eq(&self.origin, &context.read_origin)
@@ -549,6 +553,7 @@ impl RollbackGate {
                 leave,
                 disposed: false,
                 execution_reaped: false,
+                containment: None,
             }),
             bound,
             lower,
@@ -649,6 +654,18 @@ impl RollbackGate {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         assert!(self.death.is_none(), "one observed original gate death");
+        if host
+            .arms
+            .port
+            .as_ref()
+            .is_some_and(|port| host.context.serving_organs.gate_matches(port))
+        {
+            // The serving owner retains this exact observation and its author.
+            // Lower still closes and reaps the original child under its cap,
+            // but cannot create a second death or a new last-word allowance.
+            self.end_transport(host.arms, false, false);
+            return Ok(());
+        }
         self.death = Some(GateDeath {
             observed_ns: None,
             deadline_ns: None,
@@ -746,6 +763,7 @@ impl RollbackGate {
         }
         if let Some(proof) = &mut self.closed {
             proof.disposed = true;
+            proof.containment = self.containment;
         }
     }
 

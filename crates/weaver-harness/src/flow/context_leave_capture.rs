@@ -185,7 +185,7 @@ struct Record {
     settled: bool,
     returned: StoppedAuthor,
     sequence: Option<Sequence>,
-    queued: Option<Arc<super::capture_author::QueuedSaveAuthor>>,
+    queued: Option<Arc<super::serving_observation::ServingObservationAuthor>>,
 }
 impl Record {
     fn advance_queued<I: PumpIo>(
@@ -195,9 +195,9 @@ impl Record {
         payload: trace::SavePointRecord,
     ) -> Result<(), RunFailure> {
         if self.queued.is_none() {
-            self.queued = Some(Arc::new(super::capture_author::QueuedSaveAuthor::new(
-                context, &payload,
-            )));
+            self.queued = Some(Arc::new(
+                super::serving_observation::ServingObservationAuthor::new(context, &payload),
+            ));
         }
         self.advance(context, ports, payload)
     }
@@ -214,7 +214,7 @@ impl Record {
         self.returned.check()?;
         let result = if self.started {
             if let Some(owner) = &self.queued {
-                context.resume_queued_save(ports, owner)
+                context.resume_serving_observation(ports, owner)
             } else {
                 context.resume_author_and_wait(ports)
             }
@@ -229,7 +229,7 @@ impl Record {
                 payload: Some(Payload::SavePointRecord(Box::new(payload))),
             };
             if let Some(owner) = &self.queued {
-                context.author_queued_save(ports, owner, event)
+                context.author_serving_observation(ports, owner, event)
             } else {
                 context.author_and_wait(ports, event)
             }
@@ -1079,17 +1079,95 @@ impl ServingCapture {
         context: &mut RecordingContext,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<ServingCaptureProgress, RunFailure> {
+        if let Some(peer) = ports.lifecycle.leave_peer.as_deref_mut() {
+            self.withdraw_pending_carries(context, peer, ports.io)?;
+        }
+        self.prepare_window_expiry(context, ports.io)?;
+        self.cancel_after_window(context, ports)
+    }
+
+    /// The containing worker may encounter this expiry while recording an
+    /// unrelated observation. Let the original capture start its existing
+    /// cleanup before that observer checks the same expired window again.
+    /// This step neither authors a refusal nor takes another author's ticket.
+    pub(super) fn prepare_retained_window_expiry(
+        &mut self,
+        context: &mut RecordingContext,
+        peer: &mut LifecyclePeer,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        if self.expired_at.is_none() {
+            return Ok(());
+        }
+        if !matches!(self.capture_origin, CaptureOrigin::Demand { .. })
+            || !Arc::ptr_eq(&self.origin, &context.read_origin)
+            || context.barrier.run() != self.run.0
+            || !self.capture_origin.matches(context)
+            || !peer.owns_capture_identity(&self.peer)
+        {
+            return Err(fault(
+                context,
+                io,
+                "capture expiry lost its original run or peer",
+            ));
+        }
+        self.withdraw_pending_carries(context, peer, io)?;
+        self.prepare_window_expiry(context, io)
+    }
+
+    fn prepare_window_expiry(
+        &mut self,
+        context: &mut RecordingContext,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
         if self.expired_at.is_some()
             && context.deadlines.get(PumpDeadline::CaptureWindow) == Some(self.window)
         {
             if context.member_capture.is_some() {
-                context.expire_member_capture(self.beginning.capture_id, ports.io)?;
+                context.expire_member_capture(self.beginning.capture_id, io)?;
             } else {
                 // Beginning did not reach a member barrier. Only this exact
                 // capture's wait retires; no publication allowance is renewed.
                 context.deadlines.disarm(PumpDeadline::CaptureWindow);
             }
         }
+        Ok(())
+    }
+
+    fn withdraw_pending_carries(
+        &mut self,
+        context: &mut RecordingContext,
+        peer: &mut LifecyclePeer,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        // An expired or cancelled Commit must be unsendable before any
+        // fallible cleanup step or any other owner gets the common pump.
+        for carry in self.carries.iter_mut().flatten() {
+            if let Some(ticket) = carry.send.as_ref()
+                && !ticket.sent()
+                && !ticket.withdrawn()
+            {
+                let returned = peer.withdraw_capture_pending(ticket).map_err(|error| {
+                    fault(context, io, format!("capture cancellation: {error:?}"))
+                })?;
+                if returned.as_ref() != Some(&carry.envelope) {
+                    return Err(fault(
+                        context,
+                        io,
+                        "capture cancellation lost original unsent packet",
+                    ));
+                }
+                carry.returned = returned;
+            }
+        }
+        Ok(())
+    }
+
+    fn cancel_after_window<I: PumpIo>(
+        &mut self,
+        context: &mut RecordingContext,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<ServingCaptureProgress, RunFailure> {
         // Finish the exact already-admitted author before starting its refusal.
         // A retained original is never replaced by a fresh equivalent event.
         if !self.requested.settled && (self.requested.started || self.queued()) {
@@ -1104,30 +1182,6 @@ impl ServingCapture {
         if self.confirmed.started && !self.confirmed.settled {
             self.confirmed
                 .advance(context, ports, self.payload(Stage::Confirmed))?;
-        }
-        if let Some(peer) = ports.lifecycle.leave_peer.as_deref_mut() {
-            for carry in self.carries.iter_mut().flatten() {
-                if let Some(ticket) = carry.send.as_ref()
-                    && !ticket.sent()
-                    && !ticket.withdrawn()
-                {
-                    let returned = peer.withdraw_capture_pending(ticket).map_err(|error| {
-                        fault(
-                            context,
-                            ports.io,
-                            format!("capture cancellation: {error:?}"),
-                        )
-                    })?;
-                    if returned.as_ref() != Some(&carry.envelope) {
-                        return Err(fault(
-                            context,
-                            ports.io,
-                            "capture cancellation lost original unsent packet",
-                        ));
-                    }
-                    carry.returned = returned;
-                }
-            }
         }
         if !matches!(self.stage, Stage::CancelRecord | Stage::CancelMember) {
             self.stage = Stage::CancelRecord;
@@ -1264,7 +1318,7 @@ impl ServingCapture {
         if self.queued()
             && (!self.requested.started || self.requested.settled)
             && (!self.refused_record.started || self.refused_record.settled)
-            && !context.queued_save_author_available()
+            && !context.serving_save_observation_author_available()
         {
             return Ok(ServingCaptureProgress::Pending);
         }

@@ -189,6 +189,8 @@ impl RecordingContext {
                     HaltTraceProgress::Unavailable
                 }
             }
+        } else if self.has_owed_organ_observation() {
+            self.advance_halt_organ_observation()
         } else {
             HaltTraceProgress::Idle
         };
@@ -253,7 +255,7 @@ impl RecordingContext {
         )
     }
 
-    fn halt_report_clock(&mut self, io: &mut impl PumpIo) -> bool {
+    pub(super) fn halt_report_clock(&mut self, io: &mut impl PumpIo) -> bool {
         if self.halt_report.as_ref().unwrap().aborted.is_some() {
             return false;
         }
@@ -282,7 +284,7 @@ impl RecordingContext {
         true
     }
 
-    fn halt_report_secondary(&mut self, observed: Option<u64>, detail: String) {
+    pub(super) fn halt_report_secondary(&mut self, observed: Option<u64>, detail: String) {
         // Even failure to retain secondary evidence leaves the original cause
         // and stopped owner intact. It cannot recursively attempt another fault.
         let _ = self

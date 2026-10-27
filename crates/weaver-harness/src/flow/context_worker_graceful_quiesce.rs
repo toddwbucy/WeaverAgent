@@ -225,9 +225,6 @@ impl FoundationInput<'_> {
         &mut self,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
-        if self.advance_report(io)? {
-            return Ok(());
-        }
         let serving = &mut self.serving;
         let owner = &mut serving.owner;
         let work = serving.graceful.as_mut().unwrap().quiesce.as_mut().unwrap();

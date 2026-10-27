@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #260
+**Landing PR:** #348
 
-**Version:** 0.35 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.37 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -499,11 +499,21 @@ exactly once, reusing bindings only for identical text and scheme. Its causal_pa
 input.offered's sequence, so the recorded input_id joins the accepted result to its
 source block without changing Message. [GATE-1, CLASS-4, FLOW-3]
 
+When admin Spec section 3.0's current-position table requires NoResidency for the
+request, follow Spec 02 INPUT-NO-RESIDENCY after recording its input.offered and
+before parsing or check submission. The table's S4/S5 Unloading rows keep their
+precedence over the fact that an SPU is dead. Use the typed
+WorldRequest/NoResidency lifecycle refusal and its causal parent, retaining the exact
+request and close through backpressure. This road creates no classifier exchange or
+AcceptedInput. All already-admitted work retains its existing accounting and failure
+rules. [GATE-1, FLOW-2, FLOW-3, CLASS-8]
+
 | Input state | Event | Next state and trace or wire action |
 | --- | --- | --- |
 | Idle | Serialized check intake receives next queued frame | Offered, assign input_id and start gate deadline |
 | Offered | input.offered recorded, shape and dialer accepted | Checking, submit exact Text at block zero |
 | Offered | Bad input shape | Refused, record refusal/Input(invalid_input_shape) |
+| Offered | Admin section 3.0's current-position table requires NoResidency before parsing or check submission | Refused under INPUT-NO-RESIDENCY, record refusal/Lifecycle(WorldRequest, NoResidency) |
 | Offered, Checking or Accepted | Quiesce or operator leave | Cancel this input operation, revoke any token, send unnamed stopped close, account for any outstanding check through its result or bounded teardown |
 | Offered or Checking | Component failure or deadline | Halt, no input reaches model |
 | Checking | Accepted reply recorded | Accepted, disarm gate_wait and mint the single-use token, no turn yet |
@@ -514,7 +524,8 @@ source block without changing Message. [GATE-1, CLASS-4, FLOW-3]
 | Refused | component failure | Halt, no refusal success fabricated |
 | Refused | Trace records complete | Answer refused, return Idle, no turn opened or closed |
 
-The reply uses existing Payload::Frame(TurnFrame::carry(...)) with UTF-8 JSON
+For shape or language rejection, the reply uses existing
+Payload::Frame(TurnFrame::carry(...)) with UTF-8 JSON
 `{"kind":"refused","reason":"Restate the input in STE100."}`. There is no turn or run
 member because no turn opened. The fixed response is not filed and is not a model
 restatement instruction. Input offered while a turn runs remains queued by existing turn
@@ -758,6 +769,15 @@ retains its bytes and does not disarm the window. A force join keeps the same ca
 and can shorten but never restart a deadline. The measured wait values remain
 qualification obligations. [PERSIST-4, FLOW-5, COST-4]
 
+For a refused pre-Commit leave capture, follow foundation PERSIST-LEAVE-REFUSAL.
+Only proven member cleanup and Recorded refusal permit the worker's matching
+SavePointCaptureRefused acknowledgement. It ends no Leave. Preserve the shared tail
+through release and the real final response, Left without a save report for a forced
+leave or
+SavePointNotTaken at S9 for a leave that stayed graceful. A refused capture never sends
+CaptureComplete. Admin loss does not renew a wait or create delivery evidence.
+[PERSIST-4, FLOW-5, admin Spec 3.0, harness Spec 6]
+
 The fixture drives a graceful S4/S5 longer than save_wait with either lifecycle bound
 absent and proves no save timer or Beginning exists yet. It then lowers the gate and
 checks the original tail plus the fresh capture window. Other cases fragment
@@ -775,9 +795,28 @@ are validated and their observations recorded, but discarded as save results. Th
 neither reach admin nor restart the cleanup bound. Partial writes retain their offsets.
 [PERSIST-4, CLASS-8, FLOW-4, COST-2, R20-6]
 
-Only aborted proves Ready and permits SavePointNotTaken, barrier release and the
-operator retry. Failed carry, dead peer, missing or invalid aborted, cleanup refusal or
-failed room-file deletion is component failure. R20-6 still forbids halting merely for
+A matching admin Aborted before Commit follows the same member cleanup ownership.
+Before snapshot is enqueued, finish owed authoring and filing without starting capture.
+With snapshot or acknowledge still outstanding, or a held image awaiting ImageChecked,
+abort on the original exchange. After a timely finished exchange completes, use fresh
+release_capture. Preserve a pending confirmation author's original event and ticket,
+but send no Commit after cancellation. Keep the existing small-control cleanup bounds.
+Admin preparation refusal names Published, unless the worker already retained an
+Answer or Finished refusal. The first retained attribution wins. [PERSIST-4, SEAM-2]
+
+RefusingCapture owns that attribution and the incomplete cleanup/accounting. It is
+entered from explicit refusal, from cancellation before any member request, or after
+the abort/release proof. Only completed cleanup and a Recorded refusal permit
+CarryCaptureRefused. A first admin Aborted may cross the worker's own refusal, including
+the acknowledgement carry. Retain it without a second cleanup, refusal record or
+acknowledgement. A second Aborted is protocol failure. Foundation's actor rows own the
+exact transitions and After Commit treatment. [PERSIST-4, FLOW-4, SEAM-2]
+
+While Aborting, only aborted proves Ready and permits barrier release and the final
+refusal disposition. On demand that is SavePointNotTaken and operator retry. On leave,
+PERSIST-LEAVE-REFUSAL keeps the accepted lifecycle outcome owed. Failed carry,
+dead peer, missing or invalid aborted, cleanup refusal or failed room-file deletion
+is component failure. R20-6 still forbids halting merely for
 the original image/finished timeout. The snapshot allowance is the loaded
 persistence.snapshot_wait from TYPES-CONFIG, initially declared as 120 seconds with no
 silent compiled fallback. The finished allowance stays two seconds. Cleanup neither
@@ -795,19 +834,37 @@ the category decides whether serving stops, while the reason records what broke.
 
 | Save-control state | Event | Action and next state |
 | --- | --- | --- |
+| Beginning or Barrier, leave | First matching admin Aborted | Retain Published and its code/detail, settle partial Beginning and owed authoring/filing, no snapshot, RefusingCapture |
+| AwaitImage, AwaitChecked or AwaitFinished, leave | First matching admin Aborted | Retain Published and its code/detail, keep barrier, abort original request/capture, Aborting |
+| AwaitPrepared or AwaitRecorded, leave | First matching admin Aborted before Commit | Retain Published and its code/detail, settle admitted confirmation without Commit, release_capture after the finished exchange, ReleasingRefusedCapture |
 | AwaitImage or AwaitFinished | Original result bound expires | Keep barrier, enqueue correlated abort, Aborting |
-| Aborting | Expected late snapshot, finished or capture refusal for the timed-out leg | Validate and record observation, discard result, remain Aborting |
-| Aborting | Matching aborted | Record refusal, release barrier, return SavePointNotTaken, lifecycle owns retry |
+| Aborting | Expected late snapshot, finished or capture refusal for the original leg | Validate and record observation, discard result, remain Aborting |
+| Aborting | Matching aborted | Retain cleanup proof, RefusingCapture |
+| ReleasingRefusedCapture | Matching capture_released | Retain cleanup proof, RefusingCapture |
+| RefusingCapture | Member holdings remain and no cleanup is pending | Abort the original request before completed finished, or fresh release_capture afterward, Aborting or ReleasingRefusedCapture |
+| RefusingCapture | Required cleanup and admitted authoring/filing settled | Record retained refusal, release barrier once Recorded, CarryCaptureRefused on leave or SavePointNotTaken on demand |
+| CarryCaptureRefused | Whole acknowledgement carried | RefusedLeave under the unchanged shared tail, forced Left or graceful S9 as foundation specifies |
+| CarryCaptureRefused | Partial carry or WouldBlock | Retain exact bytes and offset under the unchanged shared tail |
+| CarryCaptureRefused | Admin disconnected | Retain undelivered acknowledgement, RefusedLeave under the same shared tail, no invented response |
+| Any pre-Commit refusal state, leave | First matching admin Aborted crosses worker refusal | Retain it without replacing attribution, another cleanup or another acknowledgement |
+| Any pre-Commit refusal state, leave | Second admin Aborted or wrong capture | Protocol failure, no successful Leave |
 | Aborting | Partial carry or WouldBlock | Retain bytes and deadline, remain Aborting |
 | Aborting | Cleanup bound expires without aborted | Latch control_bound at barrier, no further ask or successful leave |
 | Aborting | Refused, malformed or wrongly correlated cleanup | Latch protocol_failed at state_reply, no further ask or successful leave |
 | Aborting | EOF or failed carry | Latch carry_failed at state_reply or state_send, no further ask or successful leave |
+| ReleasingRefusedCapture | Partial carry or WouldBlock | Preserve original release bytes/deadline, remain ReleasingRefusedCapture |
+| ReleasingRefusedCapture | Expiry, invalid result, failed carry or dead peer | Use the same small-control failure categories as the abort rows, no successful leave |
 
 These are the foundation's capture-state projections, not a second channel owner or
-timer policy. No ordinary file/read enters the channel until aborted. Tests delay the
-snapshot answer in CaptureHeld and the finished answer in FinishedHeld, then prove a
-subsequent filing and retried save both succeed without wrong_phase. They also exercise
-a late explicit capture refusal, wrong capture ID, deletion failure and silent cleanup.
+timer policy. During Aborting, no ordinary file/read enters the channel until aborted.
+Tests delay the snapshot answer in CaptureHeld and the finished answer in FinishedHeld,
+then prove a subsequent filing and retried save both succeed without wrong_phase. They
+also exercise a late explicit capture refusal, wrong capture ID, deletion failure and
+silent cleanup.
+Admin Aborted is exercised in every pre-Commit phase and crossing each refusal state,
+including the no-member-request case and the fresh release after finished. No callback
+may infer cleanup from receipt of Aborted. A late CaptureRefused after admin expiry
+must leave Unanswered and an Open marker. A still-graceful orphan stays in S9.
 Removing the abort, correlation, barrier or cleanup-bound guard must fail its case.
 [SEAM-2, PERSIST-4, FLOW-4]
 
@@ -1125,6 +1182,7 @@ the one-exchange assumption. Neither number is elected here. [CLASS-6, FALS-5, C
 | HARNESS-RECALL-REFUSAL | Actual recorder pressure and lifecycle waits, mixed original/correction identities and cap fixtures | Admit a second event, lose an owed receipt, return before Recorded, dispatch a refused ID or charge several attempts for one correction |
 | TEMPLATE-CHECK | Inventory and substitution certificate fixtures | Serve with missing certificate or unlisted template |
 | HARNESS-INPUT | Existing {text,role} accepted/refused frames and later-turn assembly | Place one rejected block or open a refused turn |
+| INPUT-NO-RESIDENCY | Actual SPU exit, two later world exchanges, held trace capacity and graceful Leave | Accept or classify a later request, send before its refusal records, lose its input.offered link, duplicate organ death, invent a Released confirmation, or replace an S4/S5 Unloading refusal with NoResidency |
 | HARNESS-LEDGER | Every table row, real commit with lost receipt | Accept send success or resend uncertain commit |
 | HARNESS-PUMP | Busy decoder, label wait, asks, writer pressure, nearest deadline | Restore a blocking recv or starve one source |
 | HARNESS-CLOCK | Fake clock/wait pair plus real poll watchdog | Reset anchor on progress or omit a nearer deadline |

@@ -66,9 +66,7 @@ struct FailedInput {
     _seated: Option<SeatedInput>,
     _close: Option<OrganEnvelope>,
     _send: Option<OrganSend>,
-    _report: Option<(ReceivedOrgan, Subsystem)>,
-    _report_started: bool,
-    _returned_report: StoppedAuthor,
+    _report: Option<report::Report>,
     _failure: Option<RunFailure>,
     _engine: Option<Box<generation::EngineWork>>,
 }
@@ -120,8 +118,6 @@ impl FoundationHalt<'_> {
             close,
             send,
             report,
-            report_started,
-            returned_report,
             failure,
             engine,
         } = *input;
@@ -185,8 +181,6 @@ impl FoundationHalt<'_> {
                 _close: close,
                 _send: send,
                 _report: report,
-                _report_started: report_started,
-                _returned_report: returned_report,
                 _failure: failure,
                 _engine: engine,
             },
@@ -420,6 +414,10 @@ impl FoundationFailedExit {
         if self.stage == ExitStage::Closed {
             return FoundationExitProgress::Closed;
         }
+        self.tail
+            .context
+            .serving_organs
+            .refresh_gate(&self.handoff.gate_child);
         if !self.clock(io) {
             return self.progress;
         }
@@ -686,18 +684,26 @@ impl FoundationFailedExit {
     }
 
     fn lower(&mut self, io: &mut impl PumpIo) -> FoundationExitProgress {
-        if self.tail.context.pairs.pending_rejection().is_some() {
+        if self.tail.context.has_owed_organ_observation()
+            || (self.tail.context.pairs.pending_rejection().is_some()
+                && !self.tail.rejection_unavailable)
+        {
             // Drain before attempting admission. Capacity freed after that
             // attempt must leave its notification readable for the wait.
-            if !self.tail.rejection_unavailable
-                && !self.handoff._capacity_unavailable
+            if !self.handoff._capacity_unavailable
                 && let Err(error) = self.tail.context.barrier.drain_capacity_wake()
             {
                 self.handoff._capacity_unavailable = true;
                 self.tail
                     .secondary(format!("failed serving Lower capacity wake: {error:?}"));
             }
-            self.tail.advance_serving_rejection();
+            // Turn accounts already retired before Closing. This advances
+            // only their run-scoped successors, preserving each exact owner,
+            // and never waits ahead of the mandatory Lower send.
+            if !self.tail.advance_accounts(io) {
+                self.abort();
+                return FoundationExitProgress::Closed;
+            }
             if !self.clock(io) {
                 return FoundationExitProgress::Closed;
             }
@@ -863,17 +869,23 @@ impl FoundationFailedExit {
         }
         let now = self.tail.context.last_ns;
         let deadline = self.handoff.deadline.unwrap();
-        let wake = if self.stage == ExitStage::Containment {
+        let mut wake = if self.stage == ExitStage::Containment {
             now.saturating_add(10_000_000)
                 .min(deadline)
                 .min(self.containment_deadline.unwrap())
         } else {
             deadline
         };
+        if self.stage == ExitStage::Lower
+            && let Some(settle) = self.tail.context.halt_organ_settle_wake()
+        {
+            wake = wake.min(settle);
+        }
         let mut interests = vec![];
         if self.stage == ExitStage::Lower
-            && self.tail.context.pairs.pending_rejection().is_some()
-            && !self.tail.rejection_unavailable
+            && (self.tail.context.has_owed_organ_observation()
+                || (self.tail.context.pairs.pending_rejection().is_some()
+                    && !self.tail.rejection_unavailable))
             && !self.handoff._capacity_unavailable
         {
             interests.push(WaitInterest {
@@ -909,3 +921,7 @@ impl FoundationFailedExit {
 #[cfg(test)]
 #[path = "context_worker_exit_tests.rs"]
 pub(in crate::flow::context) mod tests;
+
+#[cfg(test)]
+#[path = "context_worker_exit_organ_tests.rs"]
+pub(in crate::flow::context) mod organ_tests;

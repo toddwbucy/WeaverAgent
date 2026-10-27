@@ -98,6 +98,11 @@ struct RetainedRound {
     _emission: Option<Box<emission::EmissionWork>>,
 }
 impl EngineWork {
+    pub(super) fn lost_gate_pairs_need_step(&self, context: &RecordingContext) -> bool {
+        self.emission
+            .as_ref()
+            .is_some_and(|emission| emission.lost_gate_pairs_need_step(context))
+    }
     pub(super) fn graceful_pairs_need_step(&self, context: &RecordingContext) -> bool {
         self.stage == EngineStage::Emission
             && self
@@ -766,6 +771,19 @@ impl<'a> FoundationInput<'a> {
                         position: Position::Close,
                         payload: Payload::Frame(frame.clone()),
                     });
+                }
+                let gate = ports.gate.as_deref_mut().unwrap();
+                if context.serving_organs.gate_delivery_lost(gate) {
+                    if super::close::retain_lost_world(
+                        gate,
+                        &self.received.as_ref().unwrap().envelope().exchange,
+                        &mut self.close,
+                        self.send.as_ref(),
+                    )? {
+                        context.place_response_lost(gate, ports.io)?;
+                        self.stage = Stage::Refused;
+                    }
+                    return Ok(());
                 }
                 if let Some(close) = self.close.take() {
                     match ports.gate.as_deref_mut().unwrap().stage_tracked(close) {

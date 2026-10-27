@@ -4,7 +4,7 @@
 
 **Landing PR:** #263
 
-**Version:** 0.17 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
+**Version:** 0.18 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -499,6 +499,7 @@ while checking. [FLOW-3, CLASS-4, GATE-1, COST-4]
 | HeldFrame | Earlier turn/check still owns service | Remain queued, no new check deadline |
 | HeldFrame | Frame becomes eligible | Assign input_id, start gate_wait, author input.offered, Offered |
 | Offered | Shape/dialer refusal | Record refusal, send unnamed refused close, Idle |
+| Offered | Admin section 3.0's current-position table requires NoResidency before parsing or check submission | INPUT-NO-RESIDENCY refusal, no classifier request or turn, Idle after the refused close |
 | Offered | input.offered recorded, shape and dialer accepted | Submit exact text, Checking |
 | Checking | Accepted reply recorded | Mint AcceptedInput, disarm gate_wait, no turn or message.user yet |
 | Checking | Correct non_ste100 recorded | Record refusal/Input(non_ste100), send unnamed refused close, Idle |
@@ -515,7 +516,8 @@ token. Reason: the input check and turn authoring are different steps, and neith
 cancellation nor a nested cut may reuse the input or silently renew its check. [GATE-1,
 CLASS-8, FLOW-3, FLOW-4]
 
-The refused close is the following single line. It has neither run nor turn.
+For shape or language rejection, the refused close is the following single line.
+It has neither run nor turn.
 
 ```json
 {"kind":"refused","reason":"Restate the input in STE100."}
@@ -526,6 +528,39 @@ sender already has that input. A halted check uses {"kind":"stopped","reason":"T
 stopped because state flow failed."}. Operator leave uses reason "The agent is leaving."
 Both are unnamed when no turn opened. The gate merely relays the line. [GATE-1, FLOW-4,
 FLOW-5]
+
+**INPUT-NO-RESIDENCY.** Use this outcome only when weaver-admin-Spec section 3.0's
+current-position table requires NoResidency for a dialer request: serving at rest
+with the SPU dead, S2(Dead). SPU death alone does not select it. The leave positions
+S4/S5 keep their Unloading refusal, including when the SPU is dead. Follow the
+existing serialized intake: assign input_id, start gate_wait, and record
+input.offered with the exact original frame. After that record, and before parsing
+or submitting a content check, retain the lifecycle refusal required by
+weaver-gate-world-contract section 5 and weaver-admin-Spec section 3(B). This
+outcome precedes input-shape and language checks on that road. It does not classify
+the request's contents. An already-submitted check or opened turn retains its own
+failure and cancellation duties; this clause does not reinterpret those outcomes.
+[GATE-1, FLOW-3, CLASS-8]
+
+Author one refusal with TYPES-WORLD-REQUEST's LifecycleAsk::WorldRequest and the
+existing LifecycleRefusal::NoResidency. Its envelope uses the same run, no turn,
+internal/runtime and subsystem harness, with causal_parent equal to this request's
+input.offered sequence. Retain that original frame, gate exchange and author ticket
+through trace pressure. Only after Recorded may the worker send the existing
+unnamed close {"kind":"refused","reason":"no model is resident"} on that exchange.
+No AcceptedInput, message.user, turn.started, filing, placement or generation is
+granted. The input and required-send waits retain their applicable existing bounds;
+partial progress grants no renewed interval. If gate_wait expires while either
+input.offered or its refusal is still unrecorded, the existing input deadline row
+halts with GateBound; it grants no late successful refusal. A flow failure keeps
+HARNESS-HALT's precedence, and cannot be reported as a successful lifecycle refusal. [GATE-1,
+FLOW-2, FLOW-3, FLOW-4, CLASS-8]
+
+This is a serving boundary refusal, not a language rejection, so it uses the
+existing world-contract sentence instead of the STE100 restatement sentence above.
+After complete delivery the next queued request can receive its own refusal while
+the run remains standing. No second organ death is inferred from another request.
+[GATE-1, FLOW-3]
 
 **REUSE.** AcceptedInput privately holds input_id, exact checked UTF-8 text, scheme_id
 and bindings. Its consumed message.user is Role::User with one Text block at content

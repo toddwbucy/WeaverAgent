@@ -105,7 +105,63 @@ fn worker_input_gate_child() {
     if mode.contains("-session-") {
         return super::generation::session_tests::gate(&mode, &root, 3);
     }
+    if mode == "input-report-queued" {
+        let watch = Instant::now() + Duration::from_secs(10);
+        while !root.join("report-queued").exists() {
+            assert!(Instant::now() < watch);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        for ordinal in [201, 202] {
+            packet(
+                3,
+                &OrganEnvelope {
+                    exchange: ExchangeId {
+                        opener: Opener::Gate,
+                        ordinal,
+                    },
+                    position: Position::Close,
+                    payload: Payload::Fault(weaver_types::FaultReport {
+                        case: weaver_types::FaultCase::ClientConnectionFailedMidTurn,
+                        account: serde_json::value::to_raw_value(
+                            &serde_json::json!({"report": ordinal}),
+                        )
+                        .unwrap(),
+                    }),
+                },
+            );
+        }
+        while !root.join("reports-recorded").exists() {
+            assert!(Instant::now() < watch);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
     packet(3, &frame(&mode, 101));
+    if mode == "input-report-held" {
+        for (ordinal, stage) in [(201, "accepted"), (202, "turn")] {
+            let watch = Instant::now() + Duration::from_secs(10);
+            while !root.join(format!("report-{stage}")).exists() {
+                assert!(Instant::now() < watch, "worker must reach {stage}");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            packet(
+                3,
+                &OrganEnvelope {
+                    exchange: ExchangeId {
+                        opener: Opener::Gate,
+                        ordinal,
+                    },
+                    position: Position::Close,
+                    payload: Payload::Fault(weaver_types::FaultReport {
+                        case: weaver_types::FaultCase::ClientConnectionFailedMidTurn,
+                        account: serde_json::value::to_raw_value(
+                            &serde_json::json!({"held_report": stage}),
+                        )
+                        .unwrap(),
+                    }),
+                },
+            );
+        }
+    }
     if mode.contains("-external-") {
         return super::generation::emission::execution::external_tests::gate(&mode, &root, 3);
     }
@@ -253,6 +309,76 @@ fn seq(row: &serde_json::Value) -> u64 {
     row["sequence"].as_str().unwrap().parse().unwrap()
 }
 
+fn held_report_at_rest(
+    owner: &mut FoundationInput<'_>,
+    clock: &mut FakePumpIo,
+    root: &Path,
+    name: &str,
+) {
+    use crate::flow::context::HeldInput;
+    use crate::flow::context::held_input_tests::hold;
+    let stage = owner.stage;
+    let expected = owner.progress();
+    let before = owner
+        .serving
+        .owner
+        .context
+        .barrier
+        .recorder()
+        .structure()
+        .by_kind(serving::Kind::Fault)
+        .count();
+    let held = hold(owner.serving.owner.context, HeldInput::Caller);
+    std::fs::write(root.join(format!("report-{name}")), b"ready").unwrap();
+    let watch = Instant::now() + Duration::from_secs(5);
+    while owner.report.is_none() {
+        owner.advance_with_io(&mut CircuitIo(clock));
+        assert!(owner.failure.is_none(), "{:?}", owner.detail());
+        assert!(
+            Instant::now() < watch,
+            "gate must deliver its actual report"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    for _ in 0..3 {
+        assert_eq!(
+            owner.advance_with_io(&mut CircuitIo(clock)),
+            FoundationInputProgress::Pending
+        );
+        assert!(owner.stage == stage);
+        assert!(owner.report.is_some());
+        held.assert_held(owner.serving.owner.context);
+        assert_eq!(
+            owner
+                .serving
+                .owner
+                .context
+                .barrier
+                .recorder()
+                .structure()
+                .by_kind(serving::Kind::Fault)
+                .count(),
+            before
+        );
+    }
+    held.take(owner.serving.owner.context);
+    assert_eq!(owner.advance_with_io(&mut CircuitIo(clock)), expected);
+    assert!(owner.stage == stage);
+    assert!(owner.report.is_none());
+    assert_eq!(
+        owner
+            .serving
+            .owner
+            .context
+            .barrier
+            .recorder()
+            .structure()
+            .by_kind(serving::Kind::Fault)
+            .count(),
+        before + 1
+    );
+}
+
 pub(in super::super) fn exercise(
     serving: FoundationServing<'_>,
     member: &mut Member,
@@ -279,6 +405,56 @@ pub(in super::super) fn exercise(
     guard.0 = Some(Held::Input(
         input.finish().err().expect("no fabricated completion"),
     ));
+    let mut prefix_records = vec![];
+    if mode == "input-report-queued" {
+        let owner = guard.input();
+        let held = crate::flow::context::held_input_tests::hold(
+            owner.serving.owner.context,
+            crate::flow::context::HeldInput::Caller,
+        );
+        std::fs::write(root.join("report-queued"), b"ready").unwrap();
+        let watch = Instant::now() + Duration::from_secs(5);
+        while owner.report.is_none() || owner.serving.owner.gate.held().is_none() {
+            if owner.report.is_some() && owner.serving.owner.gate.held().is_none() {
+                owner.serving.owner.gate.try_receive().unwrap();
+            }
+            if owner.report.is_some() && owner.serving.owner.gate.held().is_some() {
+                break;
+            }
+            owner.advance_with_io(&mut CircuitIo(clock));
+            assert!(owner.failure.is_none(), "{:?}", owner.detail());
+            assert!(
+                Instant::now() < watch,
+                "both actual reports must be retained"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        for _ in 0..3 {
+            assert_eq!(
+                owner.advance_with_io(&mut CircuitIo(clock)),
+                FoundationInputProgress::Pending
+            );
+            assert!(owner.stage == Stage::Waiting);
+            assert!(owner.report.is_some());
+            assert_eq!(
+                owner.serving.owner.gate.held().unwrap().exchange.ordinal,
+                202
+            );
+            held.assert_held(owner.serving.owner.context);
+        }
+        held.take(owner.serving.owner.context);
+        for _ in 0..4 {
+            owner.advance_with_io(&mut CircuitIo(clock));
+        }
+        assert!(owner.failure.is_none(), "{:?}", owner.detail());
+        let records = trace(reader);
+        let faults = rows(&records, "fault");
+        assert_eq!(faults.len(), 2);
+        assert_eq!(faults[0]["payload"]["account"]["report"], 201);
+        assert_eq!(faults[1]["payload"]["account"]["report"], 202);
+        prefix_records = records;
+        std::fs::write(root.join("reports-recorded"), b"continue").unwrap();
+    }
     if mode == "input-worker" || mode == "input-worker-accepted" {
         let Some(Held::Input(input)) = guard.0.take() else {
             unreachable!()
@@ -432,7 +608,11 @@ pub(in super::super) fn exercise(
         FoundationInputProgress::Accepted
     };
     assert_eq!(owner.progress(), expected, "{:?}", owner.detail());
-    let mut records = trace(reader);
+    if mode == "input-report-held" {
+        held_report_at_rest(owner, clock, root, "accepted");
+    }
+    prefix_records.extend(trace(reader));
+    let mut records = prefix_records;
     assert!(rows(&records, "turn.started").is_empty());
     assert!(rows(&records, "message.user").is_empty());
     if stopped || mode == "input-management" {
@@ -539,15 +719,6 @@ pub(in super::super) fn exercise(
     ); // Three templates plus input.
     if mode == "input-source-eof" {
         reap(&mut owner.serving.owner.gate_child);
-        owner.start_turn(TurnKey("t-1".into())).unwrap();
-        assert_eq!(
-            owner.advance_with_io(&mut CircuitIo(clock)),
-            FoundationInputProgress::Stopped
-        );
-        assert!(owner.serving.owner.context.failure().is_some());
-        assert!(owner.serving.owner.context.input.snapshot().unwrap().halted);
-        assert!(rows(&trace(reader), "turn.started").is_empty());
-        return;
     }
     owner.start_turn(TurnKey("t-1".into())).unwrap();
     for _ in 0..3000 {
@@ -562,7 +733,36 @@ pub(in super::super) fn exercise(
         "{:?}",
         owner.detail()
     );
+    if mode == "input-report-held" {
+        held_report_at_rest(owner, clock, root, "turn");
+    }
     records.extend(trace(reader));
+    if mode == "input-source-eof" {
+        assert!(owner.serving.owner.context.failure().is_none());
+        assert!(owner.failure.is_none());
+        assert!(
+            owner
+                .serving
+                .owner
+                .context
+                .serving_organs
+                .gate_delivery_lost(&owner.serving.owner.gate)
+        );
+        assert_eq!(owner.serving.owner.tools.populated(), Some(false));
+        let faults = rows(&records, "fault");
+        assert_eq!(
+            faults.len(),
+            1,
+            "one fault, accepted input still has a turn"
+        );
+        assert_eq!(faults[0]["payload"]["case"], "organ_death_observed");
+        assert!(owner.serving.owner.context.input.snapshot().is_none());
+        assert!(
+            owner.seated.is_some(),
+            "accepted token became the original source"
+        );
+        assert!(!root.join("closed.json").exists());
+    }
     let Some(Held::Input(input)) = guard.0.take() else {
         unreachable!()
     };

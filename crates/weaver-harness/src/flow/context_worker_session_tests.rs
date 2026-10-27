@@ -77,6 +77,9 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
         assert_eq!(recv(fd, &mut bytes, MsgFlags::empty()).unwrap_or(0), 0);
         return;
     }
+    if demand_save::organ_loss::is_mode(mode) {
+        return demand_save::organ_loss::gate(mode, root, fd);
+    }
     if wind_down::is_mode(mode) {
         return wind_down::gate(mode, root, fd);
     }
@@ -155,6 +158,9 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
 }
 
 pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
+    if demand_save::organ_loss::is_mode(mode) {
+        return demand_save::organ_loss::spu(mode, fd);
+    }
     if forced_leave::wind_conversion::is_mode(mode) {
         return forced_leave::wind_conversion::spu(mode, fd);
     }

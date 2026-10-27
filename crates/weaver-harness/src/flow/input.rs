@@ -129,7 +129,7 @@ struct Current {
     refusal: Option<InputRefusal>,
     refusal_sequence: Option<Sequence>,
     cancellation_disposed: bool,
-    lowered: bool,
+    closed_without_response: bool,
     revoked: Arc<AtomicBool>,
     accepted: Option<AcceptedInput>,
 }
@@ -202,7 +202,7 @@ impl InputSlot {
             refusal: None,
             refusal_sequence: None,
             cancellation_disposed: false,
-            lowered: false,
+            closed_without_response: false,
             revoked: Arc::new(AtomicBool::new(false)),
             accepted: None,
         });
@@ -472,7 +472,22 @@ impl InputSlot {
             return Err(InputError::InvalidTransition);
         }
         current.cancellation_disposed = true;
-        current.lowered = true;
+        current.closed_without_response = true;
+        Ok(())
+    }
+
+    /// The checked gate-loss owner settles transport without a send receipt.
+    /// The existing refusal or cancellation must still have its full account.
+    pub(super) fn response_lost(&mut self) -> Result<(), InputError> {
+        let current = self.live_current()?;
+        if !matches!(
+            current.snapshot.state,
+            InputState::Cancelled | InputState::Refused
+        ) {
+            return Err(InputError::InvalidTransition);
+        }
+        current.cancellation_disposed |= current.snapshot.cancelled;
+        current.closed_without_response = true;
         Ok(())
     }
 
@@ -575,7 +590,7 @@ impl InputSlot {
         let current = self.current.as_ref()?;
         if current.snapshot.state == InputState::Consumed
             || current.snapshot.response_sent
-            || current.lowered
+            || current.closed_without_response
             || (!self.halted && current.snapshot.offered_sequence.is_none())
         {
             return None;
@@ -622,7 +637,8 @@ impl InputSlot {
         }
         let current = self.current.as_ref().ok_or(InputError::InvalidTransition)?;
         if current.snapshot.state != InputState::Consumed
-            && !((current.snapshot.response_sent || current.lowered) && self.gate_may_disarm())
+            && !((current.snapshot.response_sent || current.closed_without_response)
+                && self.gate_may_disarm())
         {
             return Err(InputError::InvalidTransition);
         }

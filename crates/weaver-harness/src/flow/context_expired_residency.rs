@@ -221,6 +221,14 @@ impl RollbackResidencyRelease {
                 format!("{release} Release has invalid retained Admit evidence"),
             ));
         }
+        if context.serving_organs.residency_matches(port) {
+            // This exact SPU end was already observed while serving. Keep the
+            // original Admit evidence, close the retained transport and report
+            // no release confirmation. The lifecycle tail still owns its child
+            // through actual reap before Unload.
+            self.finish(resources, ReleaseOutcome::Unconfirmed);
+            return Ok(true);
+        }
         if self.request.is_none() {
             match resources.stage_residency_inner(LifecycleDirective::Release) {
                 Ok(()) => self.request = resources.spu.as_mut().unwrap().residency_request.take(),

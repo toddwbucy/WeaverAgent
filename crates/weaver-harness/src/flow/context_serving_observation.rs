@@ -1,20 +1,38 @@
-//! A queued save records only its own requested/refused observation. An active
+//! A serving observation records its exact private runtime fact. An active
 //! generation or read keeps its owner; any earlier author keeps its exact ticket.
 use super::*;
 use std::sync::{Arc, OnceLock};
 use weaver_trace::serving::payloads as trace;
 
+#[cfg(test)]
+#[path = "context_serving_observation_tests.rs"]
+pub(super) mod tests;
+
 #[derive(Debug)]
-pub(super) struct QueuedSaveAuthor {
+pub(super) struct ServingObservationAuthor {
     origin: Arc<()>,
-    capture_id: trace::DecimalU64,
-    window: trace::SaveWindow,
-    refusal: Option<String>,
+    observation: Observation,
     ticket: OnceLock<u64>,
     sequence: OnceLock<Sequence>,
 }
 
-impl QueuedSaveAuthor {
+#[derive(Debug)]
+enum Observation {
+    Save {
+        capture_id: trace::DecimalU64,
+        window: trace::SaveWindow,
+        refusal: Option<String>,
+    },
+    OrganLoss {
+        payload: String,
+    },
+    OrganReport {
+        payload: String,
+        subsystem: weaver_trace::Subsystem,
+    },
+}
+
+impl ServingObservationAuthor {
     pub(super) fn new(context: &RecordingContext, payload: &trace::SavePointRecord) -> Self {
         let (capture_id, window, refusal) = match payload {
             trace::SavePointRecord::Requested {
@@ -34,9 +52,46 @@ impl QueuedSaveAuthor {
         };
         Self {
             origin: Arc::clone(&context.read_origin),
-            capture_id,
-            window,
-            refusal,
+            observation: Observation::Save {
+                capture_id,
+                window,
+                refusal,
+            },
+            ticket: OnceLock::new(),
+            sequence: OnceLock::new(),
+        }
+    }
+
+    pub(super) fn organ_loss(
+        context: &RecordingContext,
+        report: &weaver_types::FaultReport,
+    ) -> Self {
+        assert_eq!(report.case, weaver_types::FaultCase::OrganDeathObserved);
+        Self {
+            origin: Arc::clone(&context.read_origin),
+            observation: Observation::OrganLoss {
+                payload: serde_json::to_string(report).expect("typed fault serializes"),
+            },
+            ticket: OnceLock::new(),
+            sequence: OnceLock::new(),
+        }
+    }
+
+    pub(super) fn organ_report(
+        context: &RecordingContext,
+        report: &weaver_types::FaultReport,
+        subsystem: weaver_trace::Subsystem,
+    ) -> Self {
+        assert!(matches!(
+            subsystem,
+            weaver_trace::Subsystem::Gate | weaver_trace::Subsystem::Spu
+        ));
+        Self {
+            origin: Arc::clone(&context.read_origin),
+            observation: Observation::OrganReport {
+                payload: serde_json::to_string(report).expect("typed fault serializes"),
+                subsystem,
+            },
             ticket: OnceLock::new(),
             sequence: OnceLock::new(),
         }
@@ -44,24 +99,45 @@ impl QueuedSaveAuthor {
 
     fn allows(&self, context: &RecordingContext) -> bool {
         Arc::ptr_eq(&self.origin, &context.read_origin)
-            && context.phase == RecordingPhase::Entered
+            && (context.phase == RecordingPhase::Entered
+                || (matches!(
+                    self.observation,
+                    Observation::OrganLoss { .. } | Observation::OrganReport { .. }
+                ) && context.phase == RecordingPhase::Releasing))
             && context.failure.is_none()
             && context.flow.halt().is_none()
     }
 
     fn allows_event(&self, event: &AuthoredEvent) -> bool {
-        if event.kind != Kind::SavePoint
-            || event.subsystem != weaver_trace::Subsystem::Harness
+        let subsystem = match &self.observation {
+            Observation::OrganReport { subsystem, .. } => *subsystem,
+            _ => weaver_trace::Subsystem::Harness,
+        };
+        if event.subsystem != subsystem
             || event.turn.is_some()
             || event.causal_parent.is_some()
             || !matches!(event.source, super::super::author::AuthoredSource::Runtime)
         {
             return false;
         }
+        let (expected_id, expected_window, expected_refusal) = match &self.observation {
+            Observation::OrganLoss { payload } | Observation::OrganReport { payload, .. } => {
+                return event.kind == Kind::Fault
+                    && matches!(&event.payload, Some(Payload::Fault(raw)) if raw.get() == payload);
+            }
+            Observation::Save {
+                capture_id,
+                window,
+                refusal,
+            } => (*capture_id, *window, refusal),
+        };
+        if event.kind != Kind::SavePoint {
+            return false;
+        }
         let Some(Payload::SavePointRecord(payload)) = &event.payload else {
             return false;
         };
-        match (&**payload, &self.refusal) {
+        match (&**payload, expected_refusal) {
             (
                 trace::SavePointRecord::Requested {
                     capture_id,
@@ -70,7 +146,7 @@ impl QueuedSaveAuthor {
                     cause: trace::PersistenceCause::Requested,
                 },
                 None,
-            ) => *capture_id == self.capture_id && *window == self.window,
+            ) => *capture_id == expected_id && *window == expected_window,
             (
                 trace::SavePointRecord::Refused {
                     capture_id,
@@ -81,16 +157,22 @@ impl QueuedSaveAuthor {
                 },
                 Some(expected),
             ) => {
-                *capture_id == self.capture_id && *window == self.window && refusal_code == expected
+                *capture_id == expected_id && *window == expected_window && refusal_code == expected
             }
             _ => false,
         }
     }
 
+    fn queued_expiry(&self, bound: crate::flow::clock::AbsoluteBound) -> bool {
+        matches!(&self.observation, Observation::Save { window, .. }
+            if bound.began_ns() == window.began_ns.0
+                && bound.deadline_ns() == window.deadline_ns.0)
+    }
+
     pub(super) fn claim(&self, ticket: u64) -> bool {
         self.ticket.set(ticket).is_ok()
     }
-    fn ticket(&self) -> Option<u64> {
+    pub(super) fn ticket(&self) -> Option<u64> {
         self.ticket.get().copied()
     }
     pub(super) fn sequence(&self) -> Option<Sequence> {
@@ -99,12 +181,18 @@ impl QueuedSaveAuthor {
 }
 
 impl RecordingContext {
-    pub(super) fn queued_save_author_available(&self) -> bool {
-        self.phase == RecordingPhase::Entered
-            && self.failure.is_none()
+    pub(super) fn serving_save_observation_author_available(&self) -> bool {
+        self.phase == RecordingPhase::Entered && self.serving_observation_author_available()
+    }
+
+    pub(super) fn serving_observation_author_available(&self) -> bool {
+        matches!(
+            self.phase,
+            RecordingPhase::Entered | RecordingPhase::Releasing
+        ) && self.failure.is_none()
             && self.flow.halt().is_none()
             && self.rollback_gate_author.is_none()
-            && self.queued_save_author.is_none()
+            && self.serving_observation_author.is_none()
             && self.held_input().is_none()
             && self.refused_author.is_none()
             && self.waiting_content.is_none()
@@ -122,8 +210,8 @@ impl RecordingContext {
             && !self.author_admission_pending
     }
 
-    pub(super) fn bind_queued_save_author(&mut self, sequence: Sequence) {
-        if let Some(owner) = &self.queued_save_author
+    pub(super) fn bind_serving_observation_author(&mut self, sequence: Sequence) {
+        if let Some(owner) = &self.serving_observation_author
             && owner.ticket().is_some()
             && owner.ticket() == self.barrier.recorded_author_ticket(sequence)
         {
@@ -131,11 +219,17 @@ impl RecordingContext {
         }
     }
 
+    pub(super) fn serving_observation_recorded(&self, sequence: Sequence) -> bool {
+        self.serving_observation_author
+            .as_ref()
+            .is_some_and(|owner| owner.sequence() == Some(sequence))
+    }
+
     #[allow(clippy::result_large_err)]
-    pub(super) fn author_queued_save<I: PumpIo>(
+    pub(super) fn author_serving_observation<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
-        owner: &Arc<QueuedSaveAuthor>,
+        owner: &Arc<ServingObservationAuthor>,
         event: AuthoredEvent,
     ) -> Result<Sequence, AuthorFailure> {
         if !owner.allows(self) || !owner.allows_event(&event) || owner.ticket().is_some() {
@@ -145,7 +239,7 @@ impl RecordingContext {
                 held: None,
             });
         }
-        if !self.queued_save_author_available() {
+        if !self.serving_observation_author_available() {
             return Err(AuthorFailure {
                 reason: RunFailure::Busy(HeldInput::Caller),
                 original: Some(event),
@@ -159,11 +253,7 @@ impl RecordingContext {
                     key: PumpDeadline::SaveQueued,
                     bound,
                 },
-            ) if bound.began_ns() == owner.window.began_ns.0
-                && bound.deadline_ns() == owner.window.deadline_ns.0 =>
-            {
-                Some(reason)
-            }
+            ) if owner.queued_expiry(bound) => Some(reason),
             Err(reason) => {
                 return Err(AuthorFailure {
                     reason,
@@ -172,10 +262,10 @@ impl RecordingContext {
                 });
             }
         };
-        self.queued_save_author = Some(Arc::clone(owner));
+        self.serving_observation_author = Some(Arc::clone(owner));
         self.waiting_content = Some(WaitingAuthor::claimed(
             event,
-            AuthorClaim::QueuedSave(Arc::clone(owner)),
+            AuthorClaim::ServingObservation(Arc::clone(owner)),
         ));
         // Expiry can race the preflight. Preserve this exact waiting original
         // while the capture owner reduces its queued timeout; do not make it a
@@ -183,20 +273,22 @@ impl RecordingContext {
         if let Some(reason) = queued_expiry {
             return Err(reason.into());
         }
-        let result =
-            self.continue_claimed_content(ports, Some(AuthorClaim::QueuedSave(Arc::clone(owner))));
-        self.finish_queued_save_author(owner, result)
+        let result = self.continue_claimed_content(
+            ports,
+            Some(AuthorClaim::ServingObservation(Arc::clone(owner))),
+        );
+        self.finish_serving_observation_author(owner, result)
     }
 
     #[allow(clippy::result_large_err)]
-    pub(super) fn resume_queued_save<I: PumpIo>(
+    pub(super) fn resume_serving_observation<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
-        owner: &Arc<QueuedSaveAuthor>,
+        owner: &Arc<ServingObservationAuthor>,
     ) -> Result<Sequence, AuthorFailure> {
         if !owner.allows(self)
             || !self
-                .queued_save_author
+                .serving_observation_author
                 .as_ref()
                 .is_some_and(|actual| Arc::ptr_eq(actual, owner))
         {
@@ -204,7 +296,7 @@ impl RecordingContext {
         }
         self.live(ports.io)?;
         let waiting = self.waiting_content.as_ref().is_some_and(|waiting| {
-            waiting.matches(Some(&AuthorClaim::QueuedSave(Arc::clone(owner))))
+            waiting.matches(Some(&AuthorClaim::ServingObservation(Arc::clone(owner))))
         });
         let pending = owner.ticket().is_some_and(|ticket| {
             self.barrier
@@ -219,24 +311,24 @@ impl RecordingContext {
         }
         let result = self.resume_claimed_author_and_wait(
             ports,
-            Some(AuthorClaim::QueuedSave(Arc::clone(owner))),
+            Some(AuthorClaim::ServingObservation(Arc::clone(owner))),
         );
-        self.finish_queued_save_author(owner, result)
+        self.finish_serving_observation_author(owner, result)
     }
 
     #[allow(clippy::result_large_err)]
-    fn finish_queued_save_author(
+    fn finish_serving_observation_author(
         &mut self,
-        owner: &Arc<QueuedSaveAuthor>,
+        owner: &Arc<ServingObservationAuthor>,
         result: Result<Sequence, AuthorFailure>,
     ) -> Result<Sequence, AuthorFailure> {
         match &result {
             Ok(sequence) if owner.sequence() == Some(*sequence) => {
-                self.queued_save_author.take();
+                self.serving_observation_author.take();
             }
             Ok(_) => return Err(RunFailure::Closed.into()),
             Err(error) if error.original.is_some() && owner.ticket().is_none() => {
-                self.queued_save_author.take();
+                self.serving_observation_author.take();
             }
             Err(_) => (),
         }

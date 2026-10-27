@@ -43,6 +43,18 @@ fn generated(mode: &str, finish: Finish) -> TokenAnswer {
     })
 }
 pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
+    if mode.contains("-lower-organ-") {
+        let root = std::path::PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
+        let end = Instant::now() + Duration::from_secs(10);
+        while !root.join("lower-observe-spu").exists() {
+            assert!(Instant::now() < end, "idle SPU EOF fixture watchdog");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        eprintln!("{{\"fixture\":\"idle SPU lost decode before failed Lower\"}}");
+        nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
+        // The actual child keeps stderr and residency open until Release.
+        return;
+    }
     if mode.contains("-session-") {
         return super::session_tests::spu(mode, fd);
     }
@@ -703,7 +715,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         "generation is no final-answer election"
     );
     if mode.contains("election-wait") {
-        return super::election_wait_tests::exercise(guard, member, clock, socket, root, mode);
+        return super::election_wait_tests::exercise(
+            guard, member, reader, clock, socket, root, mode,
+        );
     }
     let work = input.engine.as_mut().unwrap();
     let Some(GenerationCompletion::Generated(proof)) = &mut work.generation else {
