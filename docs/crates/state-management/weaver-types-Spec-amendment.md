@@ -4,7 +4,7 @@
 
 **Landing PR:** #268
 
-**Version:** 0.31 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.32 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -563,6 +563,22 @@ identity echoes, missing/extra fields and a legacy label-ready body. Removing an
 or strict-key check must fail its fixture. This is representation evidence, not artifact
 qualification. [CLASS-2, CLASS-7, CLASS-8, PERSIST-6]
 
+**TYPES-WORLD-REQUEST.** Add the unit variant LifecycleAsk::WorldRequest, encoded as
+{"ask":"world_request"} under LifecycleAsk's existing internal tag. It identifies a
+world request refused before a turn because the serving SPU has died. Author it only
+as RefusalRecord::Lifecycle {asked:WorldRequest, refusal:NoResidency}. No new
+LifecycleDirective, LifecycleRefusal, trace event kind or world message is added.
+The ask identifies what was refused; Enter, Admit and Release must not stand in for a
+world request. The record's causal_parent identifies the original input.offered, so
+the ask contains no duplicate input_id or frame bytes. Spec 02 INPUT-NO-RESIDENCY
+owns that intake and trace-before-answer order. [GATE-1, FLOW-3, SEAM-2]
+
+This extends the baseline section 4 lifecycle ask set for the foundation. Its
+ask-naming rule includes this world request as well as lifecycle directives. The
+existing directive cases and their encodings stay valid. A decoder must preserve
+the new ask distinctly, and must not interpret it as a directive or an accepted
+input. [GATE-1, SEAM-2]
+
 **TYPES-INPUT.** Add RefusalRecord::Input with InputRefusal {input_id, case, detail},
 where case is non_ste100 or invalid_input_shape. The JSON tagged refusal names seam
 input. Also add RefusalRecord::ProtocolRepair {source_id:SourceBlockId,case,detail},
@@ -639,6 +655,7 @@ both absent. The floor defines no second unload payload or operator_leave spelli
 | TYPES-LIMITS | Exact-bound and one-byte-over socket fixtures | Permit over-bound allocation or silently truncate |
 | TYPES-CLASSIFIER | Compile pin plus valid, rejected, failed, and wrong-target corpus | Reuse the state request counter or erase target |
 | TYPES-INPUT | Round trips consumed by harness and gate | Conflate live-gate flow_failure with gate-death fault, encode it as unload, or lose input attribution |
+| TYPES-WORLD-REQUEST | RefusalRecord round trip and trace payload fixture with WorldRequest and NoResidency | Render another lifecycle ask, lose the input.offered causal parent, or add a directive or world message |
 | TYPES-RECALL-REFUSAL | Exact tagged bytes, identity round trips and strict invalid-shape corpus | Lose call_block or corrected StatementRef, accept zero nouns or valid recall shape, change detail, accept unknown/duplicate fields or invent a subject |
 
 The fixture dictionary is exactly scheme_id fixture-read/1 with verbs [read] and a
