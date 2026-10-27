@@ -100,7 +100,7 @@ All four controls compiled and failed at their intended assertions. Every source
 byte was restored before the final checks. These are behavior protections, not
 compiler failures or timeouts of the test runner.
 
-## Combined verification
+## Combined verification at 2c645e62
 
 Pinned nightly-2026-02-13, --locked, private target
 /tmp/weaver-state-146-graceful-management-target, CARGO_INCREMENTAL=0,
@@ -139,13 +139,58 @@ and this updated record are also retained in the adjacent
 state-graceful-management-20261026-07f41cd5-publication deposit; the tested
 source files are unchanged.
 
+## Planner review and fixture verification
+
+The Planner accepted the production change at 2c645e62 and graded one fix, G1:
+the secondary Quiesce fixture pumped the live Leave while waiting for the gate
+child to write its request file. Once Quiesce had been sent, another advance
+could wait until phase expiry or child departure before the secondary dial
+existed. A child scheduling delay made the test miss the boundary it meant to
+exercise. The gate-end variants waited until the classifier double's watchdog;
+the expiry variants encountered the declared phase bound.
+
+The fixture now advances only until its original Quiesce send ticket is sent,
+then waits for the child file without driving the worker. The helper uses the
+existing control accessor. The child accepts a test-only scheduling delay from
+WEAVER_QUIESCE_REQUEST_DELAY_MS. No runtime behavior or deadline changes.
+The secondary helper also asserts that the Leave remains graceful immediately
+after acceptance and read arming, answering B4's coverage gap: conversion must
+occur while management owns that accepted dial.
+
+The original wait, compiled with a 5 ms child delay, failed all eight affected
+gate/Quiesce cases at the expected Stopped assertion. After the correction, all
+sixteen secondary cases passed at 0, 5 and 50 ms delays (48 executions). All
+eleven earlier Quiesce cases selected by the recorded filter also passed. The
+source remained unchanged through strict harness all-target clippy, formatting,
+diff checks, and first/last lock gates. The same pinned toolchain, private target
+and serial Cargo/Git discipline apply. The broader combined counts above belong
+to 2c645e62; they were not rerun for this test-only correction.
+
+Both source snapshots, delay controls, logs and exact commands are retained in
+the state-graceful-management-g1-20261026 evidence deposit under the approved
+state-management-146-olympus-2026-10-22 root. Its manifest and publication receipt
+identify the corrected source separately. This is an author answer to G1/B4,
+pending the Planner's regrade.
+
+| Review rows | Disposition |
+| --- | --- |
+| G1, B4 | Corrected and exercised as above. |
+| B1, B3 | Carry: Enter while leaving and Stop during an already-settling refusal still need their named cases. |
+| B2 | Carry: exact gate identity is an invariant of current ownership, not pinned by the four runtime controls; lending consolidation remains. |
+| B5, B8-B10 | Carry: bounded silent-dial spin, shared directive disposition and sealing Observe inconsistency, dead join guard and fixture duplication remain. |
+| B6 | Carry: the pre-existing contract's pending-Leave wording needs its own reviewed reconciliation; no contract copy changes here. |
+| B7 | Named review skills remain unavailable; this executor claims manual review and executable gates only, with no waiver inferred. |
+| L1, L2 | Filed in WeaverAgent#355 with their separate confirmed-by-reading/plausible qualifications and reproduction criteria. |
+| C1 | Cutover carry: the foundation dispatcher must answer JoinLeave with no pending Leave as OutOfOrder. No dispatcher is selected here. |
+
 ## Remaining work and after-action
 
 #350 F1/Q1 and L3/Q2, #348/#349 elections, the separate post-send clock priority
 B4, component-death L6, #351/#352 permanent holds and other graded carries remain.
 #353's rejected-return-after-close carry remains. This branch does not implement
 capture-refusal policy, change persistence causes or reorder admin publication.
-Its answer to L5/B3 is author evidence awaiting Planner and final review.
+The Planner accepts this PR's production answer to L5/B3. Its G1/B4 fixture
+correction awaits regrade; the remaining review rows above stay carried.
 
 Foundation remains unselected and production still calls dev_loop::drive.
 Model/classifier peers in these instruments are declared doubles. No language,

@@ -73,6 +73,11 @@ pub(in crate::flow::context::worker_startup) fn gate(mode: &str, root: &Path, fd
         Payload::Directive(LifecycleDirective::Quiesce)
     );
     assert_eq!(quiesce.exchange.ordinal, 2);
+    if mode.contains("-secondary-")
+        && let Ok(delay) = std::env::var("WEAVER_QUIESCE_REQUEST_DELAY_MS")
+    {
+        std::thread::sleep(Duration::from_millis(delay.parse().unwrap()));
+    }
     std::fs::write(root.join("quiesce-convert-request.json"), &bytes[..n]).unwrap();
     if mode.contains("-secondary-") && mode.ends_with("gate-end") {
         wait_file(root, "secondary-leave-read-armed");
@@ -305,14 +310,30 @@ pub(super) fn handoff(
         };
         if secondary {
             let end = Instant::now() + Duration::from_secs(4);
-            while !root.join("quiesce-convert-request.json").exists() {
+            while !guard
+                .input
+                .as_ref()
+                .unwrap()
+                .serving
+                .graceful
+                .as_ref()
+                .unwrap()
+                .quiesce
+                .as_ref()
+                .unwrap()
+                .control()
+                .is_some_and(|(_, send)| send.sent())
+            {
                 assert!(Instant::now() < end, "actual Quiesce was not sent");
                 assert_ne!(
                     guard.input.as_mut().unwrap().advance(),
                     FoundationInputProgress::Stopped
                 );
-                std::thread::sleep(Duration::from_millis(1));
             }
+            // Sending Quiesce is the final worker action before the secondary
+            // dial. Waiting for the child's file must not pump a Leave whose
+            // next wake is its phase expiry or the gate child's departure.
+            wait_file(root, "quiesce-convert-request.json");
             first = secondary::convert(
                 &mut guard,
                 socket,

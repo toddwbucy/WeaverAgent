@@ -204,6 +204,19 @@ pub(in crate::flow::context::worker_startup) fn convert(
         assert_eq!(leave.heard_ns, original_heard);
     }
     let peer = receive_owner(guard, socket);
+    assert!(
+        !guard
+            .management
+            .as_ref()
+            .unwrap()
+            .input
+            .serving
+            .graceful
+            .as_ref()
+            .unwrap()
+            .forced,
+        "the original graceful phase must survive acceptance of the secondary dial"
+    );
     let read = guard.management.as_ref().unwrap().read.unwrap();
     if let Some(phase) = phase {
         assert!(
