@@ -699,6 +699,19 @@ impl Member {
                             ) =>
                         {
                             self.requests.push("abort".into());
+                            if matches!(self.hold_control, Some("snapshot" | "finished")) {
+                                // The original result crosses its bound and
+                                // arrives before the correlated abort answer.
+                                let late = self.held_control.take().unwrap();
+                                assert_eq!(late.common(), request.common());
+                                self.peer
+                                    .write_all(
+                                        &s::encode_state_line(&late, s::FrameDirection::Response)
+                                            .unwrap(),
+                                    )
+                                    .unwrap();
+                                self.hold_control = None;
+                            }
                             s::StateControlAnswer::Aborted {
                                 capture_id: *capture_id,
                             }
@@ -819,6 +832,14 @@ impl Member {
                 _ => panic!("unexpected request {request:?}"),
             };
             let hold_control = match &request {
+                s::StateFrame::Control {
+                    frame: s::StateControl::Snapshot { .. },
+                    ..
+                } => self.hold_control == Some("snapshot"),
+                s::StateFrame::Control {
+                    frame: s::StateControl::Acknowledge { .. },
+                    ..
+                } => self.hold_control == Some("finished"),
                 s::StateFrame::Control {
                     frame:
                         s::StateControl::Read {
@@ -1025,6 +1046,9 @@ fn circuit(mode: &str) {
     if super::input::generation::session_tests::forced_leave::is_mode(mode) {
         load.state_flow.persistence.save_wait.elapsed_ns = 10_000_000_000.into();
         load.state_flow.persistence.snapshot_wait.elapsed_ns = 2_000_000_000.into();
+        if mode.ends_with("-window-timeout") || mode.ends_with("-published-timeout") {
+            load.state_flow.persistence.save_wait.elapsed_ns = 1_000_000_000.into();
+        }
     }
     if mode.starts_with("input-worker") {
         load.state_flow.ste100.decision_wait.elapsed_ns = 5_000_000_000.into();
@@ -4211,6 +4235,26 @@ scenario!(
 scenario!(
     worker_session_composition_forced_save_refused,
     "input-worker-generation-emission-session-forced-save-refused"
+);
+scenario!(
+    worker_session_composition_forced_save_snapshot_timeout,
+    "input-worker-generation-emission-session-forced-save-snapshot-timeout"
+);
+scenario!(
+    worker_session_composition_graceful_save_snapshot_timeout,
+    "input-worker-generation-emission-session-graceful-save-snapshot-timeout"
+);
+scenario!(
+    worker_session_composition_forced_save_finished_timeout,
+    "input-worker-generation-emission-session-forced-save-finished-timeout"
+);
+scenario!(
+    worker_session_composition_forced_save_window_timeout,
+    "input-worker-generation-emission-session-forced-save-window-timeout"
+);
+scenario!(
+    worker_session_composition_forced_save_published_timeout,
+    "input-worker-generation-emission-session-forced-save-published-timeout"
 );
 scenario!(
     worker_session_composition_forced_save_wrong_published,
