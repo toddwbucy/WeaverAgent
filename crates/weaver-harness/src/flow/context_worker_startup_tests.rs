@@ -2562,8 +2562,63 @@ scenario!(
     "input-generation-emission-pending-observe-sort-refusal"
 );
 scenario!(
-    worker_emission_composition_completed_observe_repair_refusal,
-    "input-generation-emission-completed-observe-repair-refusal"
+    worker_emission_composition_pending_observe_repair_refusal,
+    "input-generation-emission-pending-observe-repair-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_repair_account_deadline,
+    "input-generation-emission-refusal-budget-account-deadline-repair-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_repair_trace_pressure,
+    "input-generation-emission-refusal-budget-refusal-boundary-trace-pressure-repair-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_repair_gate_deadline,
+    "input-generation-emission-refusal-budget-refusal-boundary-gate-deadline-repair-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_repair_unelected_deadline,
+    "input-generation-emission-refusal-budget-unelected-deadline-repair-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_exhausted_trace_pressure,
+    "input-generation-emission-correction-refusal-budget-refusal-boundary-trace-pressure-cap"
+);
+
+scenario!(
+    worker_emission_refusal_budget_exhausted_trace_deadline,
+    "input-generation-emission-correction-refusal-budget-refusal-boundary-trace-deadline-cap"
+);
+
+scenario!(
+    worker_emission_refusal_budget_exhausted_gate_deadline,
+    "input-generation-emission-correction-refusal-budget-refusal-boundary-gate-deadline-cap"
+);
+
+scenario!(
+    worker_emission_refusal_budget_exhausted_unelected_deadline,
+    "input-generation-emission-correction-refusal-budget-unelected-deadline-cap"
+);
+
+scenario!(
+    worker_emission_refusal_budget_candidate_unelected_deadline,
+    "input-generation-emission-refusal-budget-unelected-deadline-foreign"
+);
+
+scenario!(
+    worker_emission_refusal_budget_classifier_unelected_deadline,
+    "input-generation-emission-refusal-budget-unelected-deadline-sort-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_template_unelected_deadline,
+    "input-generation-emission-refusal-budget-unelected-deadline-no-sort"
 );
 
 scenario!(

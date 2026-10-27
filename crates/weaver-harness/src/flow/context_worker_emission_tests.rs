@@ -498,7 +498,7 @@ pub(in crate::flow::context) fn sequence(row: &serde_json::Value) -> u64 {
     row["sequence"].as_str().unwrap().parse().unwrap()
 }
 
-fn await_decision_bound(
+pub(in crate::flow::context::worker_startup) fn await_decision_bound(
     input: &mut FoundationInput<'_>,
     member: &mut Member,
     clock: &mut FakePumpIo,
@@ -518,6 +518,71 @@ fn await_decision_bound(
         assert_eq!(progress, FoundationInputProgress::Pending);
     }
     panic!("the exercised operation must arm a real Decision wait");
+}
+
+pub(in crate::flow::context::worker_startup) fn refusal_election(
+    guard: &mut Guard<'_>,
+    clock: &mut FakePumpIo,
+    socket: &Path,
+    reader: &mut UnixStream,
+    root: &Path,
+    bound: AbsoluteBound,
+    mode: &str,
+) -> bool {
+    let input = guard.input.as_ref().unwrap();
+    assert_eq!(input.progress(), FoundationInputProgress::OperationRefused);
+    assert_eq!(
+        input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision),
+        Some(bound)
+    );
+    let original = input.received.as_ref().unwrap().raw_bytes().as_ptr();
+    let delayed = clock.now().unwrap() + 100;
+    clock.advance_to(delayed).unwrap();
+    super::super::tests::observe(guard, clock, socket);
+    let input = guard.input.as_mut().unwrap();
+    assert_eq!(
+        input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision),
+        Some(bound)
+    );
+    assert_eq!(
+        input.received.as_ref().unwrap().raw_bytes().as_ptr(),
+        original
+    );
+    if mode.contains("unelected-deadline") {
+        clock.advance_to(bound.deadline_ns()).unwrap();
+        assert_eq!(
+            input.advance_with_io(&mut CircuitIo(clock)),
+            FoundationInputProgress::Stopped
+        );
+        assert!(matches!(
+            input.serving.owner.context.failure(),
+            Some(RunFailure::Flow {
+                reason: FlowHaltReason::DecisionBound,
+                ..
+            })
+        ));
+        assert!(input.serving.owner.context.open_turn.is_some());
+        assert!(input.engine.as_ref().unwrap().emission.is_some());
+        assert_eq!(
+            input.received.as_ref().unwrap().raw_bytes().as_ptr(),
+            original
+        );
+        assert!(!root.join("closed.json").exists());
+        assert!(!trace(reader).iter().any(|row| row["kind"] == "turn.closed"));
+        return true;
+    }
+    input.close_operation_refusal().unwrap();
+    false
 }
 
 fn observe_completed_after_bound(
@@ -633,8 +698,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         return;
     }
     if mode.contains("restatement") || mode.contains("repair-refusal") {
-        let completed_bound = mode
-            .contains("completed-observe")
+        let completed_bound = (mode.contains("completed-observe")
+            || mode.contains("pending-observe"))
+        .then(|| await_decision_bound(input, member, clock, mode));
+        let refusal_bound = mode
+            .contains("refusal-budget")
             .then(|| await_decision_bound(input, member, clock, mode));
         let target = if mode.contains("repair-refusal") {
             FoundationInputProgress::OperationRefused
@@ -652,8 +720,34 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             assert!(input.serving.owner.certificate.is_some());
         }
         assert_eq!(std::fs::read(root.join("appended.json")).unwrap(), before);
+        if let Some(bound) = refusal_bound {
+            if refusal_election(&mut guard, clock, socket, reader, root, bound, mode) {
+                return;
+            }
+            return super::correction::tests::refusal_boundary(
+                guard, member, reader, clock, socket, root, mode,
+            );
+        }
         if let Some(bound) = completed_bound {
-            observe_completed_after_bound(&mut guard, clock, socket, bound);
+            if target == FoundationInputProgress::Restatement {
+                observe_completed_after_bound(&mut guard, clock, socket, bound);
+            } else {
+                let delayed = clock.now().unwrap() + 100;
+                clock.advance_to(delayed).unwrap();
+                super::super::tests::observe(&mut guard, clock, socket);
+                assert_eq!(
+                    guard
+                        .input
+                        .as_ref()
+                        .unwrap()
+                        .serving
+                        .owner
+                        .context
+                        .deadlines
+                        .get(PumpDeadline::Decision),
+                    Some(bound)
+                );
+            }
         }
         stop(&mut guard, member, clock, mode, socket, root);
         let rows = trace(reader);
@@ -914,9 +1008,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             Some(bound),
             "an outbound refusal still owes accounting and delivery"
         );
-        let delayed = clock.now().unwrap() + 100;
-        clock.advance_to(delayed).unwrap();
-        input.close_operation_refusal().unwrap();
+        if refusal_election(&mut guard, clock, socket, reader, root, bound, mode) {
+            return;
+        }
         return super::correction::tests::refusal_boundary(
             guard, member, reader, clock, socket, root, mode,
         );

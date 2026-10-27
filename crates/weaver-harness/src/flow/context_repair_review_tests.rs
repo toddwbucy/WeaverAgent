@@ -7,31 +7,31 @@ mod accounting_review_tests;
 fn finish_refused(fx: &mut RepairFixture) -> RepairRefused {
     for _ in 0..512 {
         if fx.step(true) == RepairProgress::Refused {
-            assert!(
-                fx.input
-                    .run
-                    .context
-                    .deadlines
-                    .get(PumpDeadline::Decision)
-                    .is_none()
-            );
+            let bound = fx
+                .input
+                .run
+                .context
+                .deadlines
+                .get(PumpDeadline::Decision)
+                .unwrap();
             // Readiness is stable; another poll cannot renew the original wait.
             assert_eq!(fx.step(true), RepairProgress::Refused);
-            assert!(
-                fx.input
-                    .run
-                    .context
-                    .deadlines
-                    .get(PumpDeadline::Decision)
-                    .is_none()
+            assert_eq!(
+                fx.input.run.context.deadlines.get(PumpDeadline::Decision),
+                Some(bound)
             );
-            return fx
+            let refused = fx
                 .input
                 .run
                 .context
                 .take_refused_repair(&mut fx.input.run.clock)
                 .unwrap()
                 .unwrap();
+            assert_eq!(
+                fx.input.run.context.deadlines.get(PumpDeadline::Decision),
+                Some(bound)
+            );
+            return refused;
         }
     }
     panic!("refusal did not settle its admitted obligations");
