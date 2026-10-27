@@ -4,7 +4,7 @@
 
 **Landing PR:** #244
 
-**Version:** 0.10 **Date filed:** 2026-10-20
+**Version:** 0.11 **Date filed:** 2026-10-20
 
 ## 0. Scope and parties
 
@@ -104,6 +104,14 @@ tail and its existing outer leave limit continue. That announcement is not Left 
 cannot close the run marker or license public unload success. On demand, the save's
 final answer itself completes its window. A missing answer gives no authority to invent
 a phase-specific refusal. [PERSIST-4, FLOW-5]
+
+A Leave's successful final Left.forced supplies the settled termination mode for
+the completed save's cause, including conversion during S6. Admin finalizes that cause
+under foundation PERSIST-LEAVE-CAUSE before releasing the publication guard; joiners
+verify it. Trace events retain the mode at their original submission, with the final
+unload recording the settled mode. Caller cause and forced_by keep their separate
+lifecycle meanings. Demand remains requested. This changes the admin-harness parties'
+interpretation of existing fields only. [PERSIST-2, PERSIST-3, FLOW-5]
 
 **PERSIST-CONFIRM.** The harness confirms one capture only after checking its trace
 boundary remains frozen, selected-source obligations through it are settled and its flow

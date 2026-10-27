@@ -186,7 +186,7 @@ fn join(
                         FailureCause::Protocol("joined Left names another run").into(),
                     ));
                 }
-                return conclude(config, bounds, evidence, report).map(Some);
+                return conclude(config, bounds, evidence, report, *forced).map(Some);
             }
             CapturePayload::Refusal(CaptureRefusal::Lifecycle(LifecycleRefusal::OutOfOrder)) => {
                 std::thread::sleep(crate::JOIN_RETRY);
@@ -240,6 +240,7 @@ fn conclude(
     bounds: UnloadBounds,
     evidence: &Evidence,
     report: &weaver_types::state_flow::SavePointReport,
+    forced: bool,
 ) -> Result<LifecycleAnswer, Failure> {
     let _behind = start::take_invocation_lock_waiting(
         &config.run_directory(),
@@ -281,7 +282,7 @@ fn conclude(
                 save_points::ROOT,
                 config.access_gid,
             )?;
-            repository.verify_completed_leave(report, &config.territory)
+            repository.verify_completed_leave(report, forced, &config.territory)
         };
         verify().map_err(|error| {
             Failure::from(LifecycleRefusal::StatePersistenceInvalid {

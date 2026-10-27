@@ -4639,6 +4639,10 @@ scenario!(
     "input-worker-generation-emission-session-graceful-save-sqlite-join-before"
 );
 scenario!(
+    worker_session_graceful_save_sqlite_join_published,
+    "input-worker-generation-emission-session-graceful-save-sqlite-join-published"
+);
+scenario!(
     worker_session_graceful_save_sqlite_join_sealed,
     "input-worker-generation-emission-session-graceful-save-sqlite-join-sealed"
 );

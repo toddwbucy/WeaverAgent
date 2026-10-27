@@ -2,7 +2,6 @@
 //! A graceful unload may be joined without taking over its publisher. Workerless
 //! runs end without recovering room images or inventing a Left.
 use super::{Capture, FailureCause, Observed, Progress};
-use crate::save_points::serving::publication::FinalOutcome;
 use crate::save_points::serving::repository::Repository;
 use crate::{ServiceConfig, UnloadBounds, agent_cgroup, conclusion, inventory, save_points, start};
 use std::os::fd::AsFd;
@@ -306,7 +305,7 @@ fn conclude(
     leave: &mut Capture<'_>,
     completed: &mut Option<StartIdentity>,
 ) -> Result<LifecycleAnswer, Fault> {
-    let run = &leave.observed.facts.run;
+    let run = leave.observed.facts.run.clone();
     let marker = crate::read_marker_or_refuse(config);
     if matches!(&marker, Ok(Some(save_points::Marker::Open { run: open })) if *open != run.0) {
         // The normal marker rule forbids escalation of another run. Leave all
@@ -318,7 +317,7 @@ fn conclude(
             .map_err(Fault::Admission)?;
         return crate::unloaded_by_ladder(config).map_err(Fault::Admission);
     }
-    end_run(config, bounds, run, leave.verb()).map_err(Fault::Admission)?;
+    end_run(config, bounds, &run, leave.verb()).map_err(Fault::Admission)?;
     if !matches!(marker.map_err(Fault::Admission)?, Some(save_points::Marker::Open { run: open }) if open == run.0)
     {
         // The idempotent conclusion writes/publishes nothing for an already
@@ -328,15 +327,7 @@ fn conclude(
     // This exact, timely whole Left already ended the protocol waits. Expected
     // EOF or the old capture deadline cannot revoke it during run cleanup.
     // In particular do not reuse the pre-Left socket/clock checkpoint here.
-    let report = leave.report.as_ref().expect("LeftReceived retains report");
-    *completed = Some(
-        leave
-            .publication
-            .as_mut()
-            .expect("Left follows publication")
-            .finish(FinalOutcome::Left(report), &mut |_| Ok(()))
-            .map_err(|error| Fault::Sequence(FailureCause::Publication(Box::new(error))))?,
-    );
+    *completed = Some(leave.finish_leave().map_err(Fault::Sequence)?);
     crate::write_by_rule(config, Some(&run.0), conclusion::MarkerWrite::Closed)
         .map_err(Fault::Admission)?;
     crate::unloaded_by_ladder(config).map_err(Fault::Admission)

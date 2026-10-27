@@ -836,9 +836,14 @@ impl FoundationEnteredRollback {
                     handoff.peer.as_ref().unwrap(),
                     handoff.message.envelope.exchange.clone(),
                     leave,
+                    dials.outcome().0,
                     io,
                 )?);
             }
+            self.capture
+                .as_mut()
+                .unwrap()
+                .observe_leave_mode(dials.outcome().0);
             let progress = self.capture.as_mut().unwrap().advance(
                 &mut run.context,
                 &mut PumpPorts {

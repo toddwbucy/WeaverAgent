@@ -4,7 +4,7 @@
 
 **Landing PR:** #244
 
-**Version:** 0.20 **Date filed:** 2026-10-20 **Document ID:**
+**Version:** 0.21 **Date filed:** 2026-10-20 **Document ID:**
 `state-management-foundation-Spec` **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -358,6 +358,34 @@ validate an already indexed entry, but never promote a bare member-room image or
 unlisted directory. This retires automatic recovered publication from room files.
 [PERSIST-3, FLOW-5, R3]
 
+**PERSIST-LEAVE-CAUSE.** A completed Leave save uses the settled termination
+mode: graceful_unload when successful Left has forced false, forced_unload when
+it has forced true. This includes a graceful Leave converted by a deadline or
+JoinLeave before S7 fixes the outcome. The initiating command does not fix the save
+cause. The original caller cause and forced_by retain their lifecycle meanings.
+A demand save remains requested. [PERSIST-2, FLOW-5, operator 2026-10-27]
+
+Admin initially indexes the Leave request's cause while its publication guard still
+blocks load. After the exact matching Left and the existing successful-Left duties,
+before removing that guard, the same publisher finalizes its pending entry's cause.
+This is the sole exception to preserving appended index records: only
+graceful_unload may become forced_unload, only in this publisher's last entry, under
+its retained invocation lock and exact durable pending guard. Admin verifies the entire
+original index prefix and tail, then atomically replaces the index with those same
+bytes except for this entry's cause and syncs the parent. Every other entry, ordinal,
+artifact identity, binding and confirmation stays unchanged. No completed save, demand
+save or failed publication can be revised this way. A forced Leave answered as graceful
+refuses. [PERSIST-2, PERSIST-3, PERSIST-4, FLOW-5]
+
+The replacement is prepared at the admin-derived sibling
+.<artifact_id>.pending.cause.part with root ownership and index permissions. A failed
+or uncertain replacement preserves the publication guard and follows
+PERSIST-PUBLICATION-GUARD; any extant replacement part is reported as retained part
+work. It grants no retry or automatic repair. Joined invocations verify the completed
+entry against their actual Left.forced and never revise another publisher's entry.
+No wire field, artifact codec field or new timing allowance is added. [PERSIST-3,
+PERSIST-4, FLOW-5]
+
 **PERSIST-ARTIFACT-CODEC.** admin's save_points.rs owns StateBinding and
 StateIndexEntry. The former is the binding.json object, and the latter is one
 save-points.manifest JSON line. They deny missing, unknown and duplicate fields at every
@@ -441,7 +469,7 @@ rewrite follows from this distinction. [FLOW-3, PERSIST-3, PERSIST-4, STORE-5, C
 | Publishing | Rename, index append and sync complete | Send Published, AwaitOutcome |
 | AwaitOutcome, on demand | Matching SavePointTaken | Validate report against indexed artifact, answer caller, Done |
 | AwaitOutcome, leave | Matching SavePointCaptureComplete | Disarm capture window, retain shared/outer leave windows, AwaitLeft |
-| AwaitLeft | Matching Left | Validate indexed report and normal leave duties, answer caller, Done |
+| AwaitLeft | Matching Left | Validate indexed report and normal leave duties, finalize PERSIST-LEAVE-CAUSE under the pending guard, answer caller, Done |
 | AwaitImage or AwaitFinished | SavePointNotTaken after worker cleanup | Cancel unconfirmed publication, refuse caller, Done, merged retry remains available |
 | Any before Commit | Explicit worker refusal or local preparation error | Send Aborted where the exchange permits, remove unlisted root part, refuse caller, Done |
 | Any before Commit | Worker EOF, invalid message or deadline expiry | Do not publish, preserve Open marker, failed-run recovery, Done |
@@ -514,7 +542,8 @@ capture_id:DecimalU64,state:PublicationState,phase:PersistencePhase,
 locations:Vec<String>}. PublicationState is pending or broken. locations are
 admin-derived artifact/part names relative to the judged save-point root, never caller
 paths. The file survives rename/index append. After the matching final SavePointTaken or
-successful Left, admin removes it and fsyncs the parent before reporting success. It is
+successful Left and PERSIST-LEAVE-CAUSE finalization, admin removes it and fsyncs
+the parent before reporting success. It is
 protocol custody metadata, not a fourth file in a completed save-point directory.
 [PERSIST-2, PERSIST-3, PERSIST-4, R20-7, R20-20]
 
@@ -766,6 +795,7 @@ document-PR direction, R20-5]
 | PERSIST-ARTIFACT-CODEC | Shared publication/load/restore corpus, including invalid newest with valid older artifact, plus types' state-start-v1 fixtures | Accept an old alias, inconsistent binding/index, wrong ordinal/name or A/B, or fall back past malformed newest |
 | PERSIST-TIME, PERSIST-LEAVE-TIME | Admin/harness fake-clock actor walk, existing leave_window baseline | Arm save_wait during an unbounded S4/S5, move an anchor on partial carry, or ignore an earlier tail |
 | PERSIST-BEGIN | Shared frame corpus and fragmented lifecycle exchange | Accept Image before Beginning, change a window, or accept CaptureComplete as Left |
+| PERSIST-LEAVE-CAUSE | Graceful, forced, converted and joined Leave; pending-tail replacement failures | Use the initiating mode after conversion, revise a completed save or foreign index bytes, remove a guard after uncertain finalization |
 | PERSIST-PUBLICATION-GUARD | Crash before/after rename, index append and final outcome, plus failed guard update | Publish after worker failure, load a guarded artifact, skip newest silently or remove guard before final success |
 | PERSIST-EXPIRY | Queued and active save cases, delayed local I/O completion | Infer CaptureNotReady from silence, issue a late Commit, or claim kernel I/O was preempted |
 | PERSIST-CLEANUP projections | Harness/member actor walk through late snapshot, finished and refusal, successful abort and cleanup failure | Send filing before aborted, retain a held image after cleanup, publish a late result or halt on the original timeout alone |

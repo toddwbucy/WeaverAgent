@@ -233,6 +233,7 @@ impl Repository {
     pub(crate) fn verify_completed_leave(
         &self,
         report: &weaver_types::state_flow::SavePointReport,
+        forced: bool,
         territory: &Path,
     ) -> Result<(), Fault> {
         let selector = ArtifactId::parse(&report.start.artifact_id)
@@ -242,14 +243,17 @@ impl Repository {
             .iter()
             .find(|entry| entry.artifact_id == selector && entry.arrival == Arrival::Published)
             .ok_or_else(|| layout("joined artifact has no publication entry"))?;
-        if !matches!(
-            entry.cause,
-            PersistenceCause::GracefulUnload | PersistenceCause::ForcedUnload
-        ) || entry.confirmation
-            != (weaver_types::state_flow::Confirmation::Serving {
-                run_id: report.event_run.0.clone(),
-                capture_id: report.capture_id,
-            })
+        let cause = if forced {
+            PersistenceCause::ForcedUnload
+        } else {
+            PersistenceCause::GracefulUnload
+        };
+        if entry.cause != cause
+            || entry.confirmation
+                != (weaver_types::state_flow::Confirmation::Serving {
+                    run_id: report.event_run.0.clone(),
+                    capture_id: report.capture_id,
+                })
         {
             return Err(binding_fault(
                 "joined report differs from the published capture",

@@ -481,6 +481,7 @@ fn expected_forced(mode: &str) -> bool {
         || quiesce_conversion::is_mode(mode)
         || wind_conversion::is_mode(mode)
         || mode.ends_with("join-before")
+        || mode.ends_with("join-published")
         || mode.ends_with("join-handoff")
 }
 
@@ -614,6 +615,22 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 assert!(inner.unload_sequence().is_none());
                 assert!(report.is_none());
                 break;
+            }
+            if mode.ends_with("join-published") && joins.is_empty() {
+                let context = owner.0.test_inner().test_context();
+                if context
+                    .barrier
+                    .recorder()
+                    .structure()
+                    .by_kind(weaver_trace::serving::Kind::SavePoint)
+                    .count()
+                    == 3
+                {
+                    // Published is Recorded but S6 still owes release/Complete.
+                    assert!(!owner.0.test_inner().test_at_grants());
+                    assert!(report.is_none());
+                    joins = join_pair(&socket);
+                }
             }
             if mode.ends_with("join-sealed")
                 && joins.is_empty()
@@ -1039,6 +1056,21 @@ pub(in crate::flow::context::worker_startup) fn finish(
         let unload = rows.iter().find(|r| r["kind"] == "unload").unwrap();
         assert_eq!(unload["payload"]["cause"]["uid"], 74);
         assert_eq!(unload["payload"]["forced"], expected_forced(mode));
+        for row in rows.iter().filter(|r| r["kind"] == "save_point") {
+            let forced = expected_forced(mode)
+                && !mode.ends_with("join-published")
+                && !(mode.ends_with("join-before") && row["payload"]["phase"] == "requested");
+            assert_eq!(
+                row["payload"]["cause"],
+                if forced {
+                    "forced_unload"
+                } else {
+                    "graceful_unload"
+                },
+                "{mode}: {row}"
+            );
+        }
+
         if wind_conversion::is_mode(mode) {
             wind_conversion::assert_tail(
                 &mut owner,

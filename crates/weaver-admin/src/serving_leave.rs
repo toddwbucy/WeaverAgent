@@ -428,6 +428,44 @@ impl<'repo> Capture<'repo> {
         }
     }
 
+    /// The containing invocation has completed its normal successful-Left
+    /// duties. Use the validated whole reply's settled mode, never the request.
+    pub(crate) fn finish_leave(
+        &mut self,
+    ) -> Result<weaver_types::state_flow::StartIdentity, FailureCause> {
+        if self.stage != Stage::LeftReceived {
+            return Err(FailureCause::Protocol("Leave publication lacks Left"));
+        }
+        let CapturePayload::Answer(CaptureAnswer::Left {
+            save_point: Some(report),
+            forced,
+            ..
+        }) = &self
+            .received
+            .last()
+            .expect("LeftReceived retains reply")
+            .envelope
+            .payload
+        else {
+            unreachable!("LeftReceived validated the whole reply")
+        };
+        self.publication
+            .as_mut()
+            .expect("Left follows publication")
+            .finish(
+                publication::FinalOutcome::Left {
+                    report,
+                    forced: *forced,
+                },
+                &mut |_| Ok(()),
+            )
+            .map_err(|error| {
+                self.publication_failure = Some(error.clone());
+                self.stage = Stage::Stopped;
+                FailureCause::Publication(Box::new(error))
+            })
+    }
+
     /// An expired original initial-Leave wait, or a forced directive's matching
     /// OutOfOrder, selects S11. A capture that has begun, EOF, a protocol
     /// failure or a different refusal supplies no such escalation authority.

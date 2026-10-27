@@ -44,20 +44,20 @@ enum Stage {
 #[derive(Clone, Copy)]
 enum CaptureOrigin {
     Demand { received_ns: u64 },
-    Leave(AbsoluteBound),
+    Leave { bound: AbsoluteBound, forced: bool },
 }
 impl CaptureOrigin {
     fn matches(self, context: &RecordingContext) -> bool {
         match self {
             Self::Demand { received_ns } => context.last_ns >= received_ns,
-            Self::Leave(bound) => context.deadlines.get(PumpDeadline::Leave) == Some(bound),
+            Self::Leave { bound, .. } => context.deadlines.get(PumpDeadline::Leave) == Some(bound),
         }
     }
     fn cause(self) -> trace::PersistenceCause {
         match self {
             Self::Demand { .. } => trace::PersistenceCause::Requested,
-            // Preserve the existing Leave election pending #350's ruling.
-            Self::Leave(_) => trace::PersistenceCause::ForcedUnload,
+            Self::Leave { forced: true, .. } => trace::PersistenceCause::ForcedUnload,
+            Self::Leave { forced: false, .. } => trace::PersistenceCause::GracefulUnload,
         }
     }
 }
@@ -509,7 +509,7 @@ impl ServingCapture {
             facts,
         }))
     }
-    /// The containing lifecycle owner proves Ready, the real forced directive,
+    /// The containing lifecycle owner proves Ready, the accepted Leave,
     /// settled input and actual Lower/reap. This internal constructor cannot
     /// return a serving seat, a release seal, or a successful Leave outcome.
     pub(super) fn begin(
@@ -517,6 +517,7 @@ impl ServingCapture {
         peer: &LifecyclePeer,
         exchange: ExchangeId,
         leave: AbsoluteBound,
+        forced: bool,
         io: &mut impl PumpIo,
     ) -> Result<Self, RunFailure> {
         context.live(io)?;
@@ -540,7 +541,7 @@ impl ServingCapture {
             return Err(fault(
                 context,
                 io,
-                "forced capture requires its settled Leave boundary",
+                "capture requires its settled Leave boundary",
             ));
         }
         let loaded = context
@@ -584,8 +585,22 @@ impl ServingCapture {
             exchange,
             loaded,
             beginning,
-            CaptureOrigin::Leave(leave),
+            CaptureOrigin::Leave {
+                bound: leave,
+                forced,
+            },
         ))
+    }
+
+    /// S6 can still convert a graceful Leave. Each new event uses the current
+    /// mode; an author already holding an event keeps that exact original.
+    pub(super) fn observe_leave_mode(&mut self, forced: bool) {
+        if let CaptureOrigin::Leave {
+            forced: current, ..
+        } = &mut self.capture_origin
+        {
+            *current |= forced;
+        }
     }
 
     fn new(
@@ -1332,7 +1347,7 @@ impl ServingCapture {
                 self.stage = match self.capture_origin {
                     CaptureOrigin::Demand { .. } if self.queued_expired => Stage::QueueRefused,
                     CaptureOrigin::Demand { .. } => Stage::QueueBoundary,
-                    CaptureOrigin::Leave(_) => Stage::Beginning,
+                    CaptureOrigin::Leave { .. } => Stage::Beginning,
                 };
             }
             Stage::QueueBoundary => {
@@ -1546,7 +1561,7 @@ impl ServingCapture {
                     if let Some(answer) = context.take_capture_answer(ports.io)? {
                         self.member_results.push(answer);
                         let payload = match self.capture_origin {
-                            CaptureOrigin::Leave(_) => {
+                            CaptureOrigin::Leave { .. } => {
                                 CapturePayload::SavePointCaptureComplete(CaptureIdentity {
                                     capture_id: id,
                                 })
