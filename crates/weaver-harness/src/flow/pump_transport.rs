@@ -638,7 +638,15 @@ impl OrganPort {
         send: &OrganSend,
     ) -> Result<Option<weaver_types::state_flow::capture::CaptureEnvelope>, Failure> {
         use weaver_types::state_flow::capture::{CaptureEnvelope, CaptureSender};
-        self.live()?;
+        // Closing the peer cannot authorize a Commit that is still wholly
+        // unsent. Return that exact ticket's bytes while retaining the failure.
+        if !self
+            .failure
+            .as_ref()
+            .is_some_and(|failure| failure.fault == ChannelFault::Closed)
+        {
+            self.live()?;
+        }
         let Some(outbound) = self.outgoing.as_ref() else {
             return Ok(None);
         };

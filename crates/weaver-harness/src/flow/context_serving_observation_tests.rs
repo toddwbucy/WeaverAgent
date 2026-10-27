@@ -217,3 +217,45 @@ fn observation_waits_behind_the_exact_pending_output_author() {
     assert_eq!(fx.input.records(Kind::MessageAssistant).len(), 1);
     assert_eq!(fx.input.records(Kind::Fault).len(), 1);
 }
+
+pub(in crate::flow::context) fn expire_after_record(
+    claim: Arc<ServingObservationAuthor>,
+    now: u64,
+    deadline: u64,
+) -> impl PumpIo {
+    struct Clock {
+        claim: Arc<ServingObservationAuthor>,
+        inner: crate::flow::clock::testing::FakePumpIo,
+        deadline: u64,
+    }
+    impl PumpIo for Clock {
+        fn now(&mut self) -> std::io::Result<u64> {
+            if self.claim.sequence().is_some() && self.inner.now()? < self.deadline {
+                self.inner.advance_to(self.deadline)?;
+            }
+            self.inner.now()
+        }
+        fn wait(
+            &mut self,
+            interests: &[crate::flow::clock::WaitInterest<'_>],
+            deadline: Option<u64>,
+        ) -> std::io::Result<crate::flow::clock::WaitOutcome> {
+            self.inner.wait(interests, deadline)
+        }
+    }
+    Clock {
+        claim,
+        inner: crate::flow::clock::testing::FakePumpIo::new(now),
+        deadline,
+    }
+}
+
+pub(in crate::flow::context) fn record_next_save<I: PumpIo>(
+    context: &mut RecordingContext,
+    ports: &mut PumpPorts<'_, I>,
+) -> Sequence {
+    let (owner, event) = observation(context, true);
+    context
+        .author_serving_observation(ports, &owner, event)
+        .unwrap()
+}

@@ -16,7 +16,7 @@ mod gate_loss;
 
 #[cfg(test)]
 #[path = "context_serving_organ_loss_tests.rs"]
-mod tests;
+pub(super) mod tests;
 
 #[cfg(test)]
 #[path = "context_serving_organ_clock_tests.rs"]
@@ -24,7 +24,7 @@ mod clock_tests;
 
 pub(super) enum ObservationProgress {
     Complete,
-    Pending,
+    Pending { wake_ns: u64 },
     EarlierAuthor,
 }
 
@@ -40,6 +40,7 @@ pub(super) struct ObservedOrgans {
     gate: Option<ObservedGate>,
     spu: Option<ObservedSpu>,
     first_gate: Option<bool>,
+    wake_ns: Option<u64>,
 }
 
 struct ObservedGate {
@@ -81,6 +82,10 @@ impl OwedOrganObservation {
 }
 
 impl ObservedOrgans {
+    pub(super) fn wake(&self) -> Option<u64> {
+        self.wake_ns
+    }
+
     fn order(&self) -> [bool; 2] {
         let first = self.first_gate.unwrap_or(true);
         [first, !first]
@@ -332,15 +337,9 @@ impl Observation {
             if let Some(bound) = context.deadlines.nearest() {
                 wake = wake.min(bound);
             }
-            ports.io.wait(&[], Some(wake)).map_err(|error| {
-                context.fail(
-                    ports.io,
-                    FlowHaltReason::TraceFailed,
-                    HaltPoint::Author,
-                    format!("organ-loss observation wait: {error}"),
-                )
-            })?;
-            return Ok(ObservationProgress::Pending);
+            // The caller's common pump combines this wake with every real
+            // interest and original deadline. Advancing here never sleeps.
+            return Ok(ObservationProgress::Pending { wake_ns: wake });
         }
         self.prepare(context);
         let owner = self.author.as_ref().unwrap();
@@ -356,7 +355,8 @@ impl Observation {
         match result {
             Ok(sequence) => self.sequence = Some(sequence),
             Err(error) => {
-                self.sequence = owner.sequence();
+                // The claim retains any actual Recorded evidence. A recoverable
+                // wait still owes the exact completion/claim continuation.
                 return Err(self.returned.retain_started(error, &mut self.started));
             }
         }
@@ -483,14 +483,64 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
         tools: &ToolsCgroup,
     ) -> Result<ObservationProgress, RunFailure> {
+        self.advance_organ_faults(ports, Some(tools))
+    }
+
+    pub(super) fn advance_leaving_organ_faults<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+        closed: Option<&worker_startup::expired::gate::RollbackGateClosed>,
+    ) -> Result<ObservationProgress, RunFailure> {
+        // The consuming Leave owner carries the same observations, anchors and
+        // author claims. A gate's unfinished Serving containment adopts only
+        // the actual original gate's completed Leave sweep.
+        self.serving_organs.wake_ns = None;
+        for gate in self.serving_organs.order() {
+            let containment = if gate {
+                self.serving_organs.gate.as_ref().and_then(|end| {
+                    closed
+                        .filter(|proof| proof.allows(self) && proof.owns_port(&end.port))
+                        .and_then(|proof| proof.containment())
+                })
+            } else {
+                None
+            };
+            let Some(mut observation) = self.serving_organs.take(gate) else {
+                continue;
+            };
+            if observation.sequence.is_none() {
+                observation.leaving = true;
+                if gate && observation.containment.is_none() {
+                    observation.containment = containment;
+                    if observation.containment.is_none() {
+                        self.serving_organs.restore(gate, observation);
+                        return Ok(ObservationProgress::EarlierAuthor);
+                    }
+                }
+            }
+            self.serving_organs.restore(gate, observation);
+        }
+        self.advance_organ_faults(ports, None)
+    }
+
+    fn advance_organ_faults<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+        tools: Option<&ToolsCgroup>,
+    ) -> Result<ObservationProgress, RunFailure> {
+        self.serving_organs.wake_ns = None;
         for gate in self.serving_organs.order() {
             let Some(mut observation) = self.serving_organs.take(gate) else {
                 continue;
             };
-            let result = observation.advance(self, ports, gate.then_some(tools));
+            let result = observation.advance(self, ports, if gate { tools } else { None });
             self.serving_organs.restore(gate, observation);
             match result? {
                 ObservationProgress::Complete => (),
+                pending @ ObservationProgress::Pending { wake_ns } => {
+                    self.serving_organs.wake_ns = Some(wake_ns);
+                    return Ok(pending);
+                }
                 pending => return Ok(pending),
             }
         }

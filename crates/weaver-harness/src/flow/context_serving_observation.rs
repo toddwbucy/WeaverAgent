@@ -6,7 +6,7 @@ use weaver_trace::serving::payloads as trace;
 
 #[cfg(test)]
 #[path = "context_serving_observation_tests.rs"]
-mod tests;
+pub(super) mod tests;
 
 #[derive(Debug)]
 pub(super) struct ServingObservationAuthor {
@@ -181,6 +181,10 @@ impl ServingObservationAuthor {
 }
 
 impl RecordingContext {
+    pub(super) fn serving_save_observation_author_available(&self) -> bool {
+        self.phase == RecordingPhase::Entered && self.serving_observation_author_available()
+    }
+
     pub(super) fn serving_observation_author_available(&self) -> bool {
         matches!(
             self.phase,

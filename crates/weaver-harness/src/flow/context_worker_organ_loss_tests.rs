@@ -28,6 +28,9 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
         eprintln!("{{\"fixture\":\"gate last word before image verification\"}}");
         return;
     }
+    if mode.ends_with("-spu-release") {
+        return super::super::ready_rollback::gate(mode, root, fd);
+    }
     wait_file(root, "organ-loss-requests-ready");
     for index in 0..2 {
         let request = super::super::frame(300 + index, false);
@@ -52,7 +55,7 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
 }
 
 pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
-    if mode.ends_with("-spu") {
+    if mode.ends_with("-spu") || mode.ends_with("-spu-release") {
         let root = std::path::PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
         wait_file(&root, "organ-loss-image-held");
         eprintln!("{{\"fixture\":\"SPU last word before image verification\"}}");

@@ -158,3 +158,88 @@ fn received_report_cannot_use_another_ports_custody() {
     );
     assert_eq!(fx.records(serving::Kind::Fault).len(), 1);
 }
+
+#[test]
+fn rollback_report_keeps_custody_while_a_crossed_packet_withholds_the_gate() {
+    let mut fx = InputFixture::new();
+    let (mut gate, peer, received) = received();
+    let original = received.raw_bytes().to_vec();
+    let mut report = Report::new(&fx.run.context, received, Subsystem::Gate);
+    // A second real packet occupies the original port's sole receive slot.
+    assert_eq!(
+        send(peer.as_fd().as_raw_fd(), &original, MsgFlags::MSG_NOSIGNAL),
+        Ok(original.len())
+    );
+    assert_eq!(gate.try_receive(), Ok(ReceiveProgress::Held));
+    let held = gate.held().unwrap().clone();
+    let run = &mut fx.run;
+    run.context.phase = crate::flow::context::RecordingPhase::Releasing;
+    let (other, _peer) = crate::channel::OrganChannel::pair().unwrap();
+    let mut other = OrganPort::from_channel(other).unwrap();
+    for identity in [None, Some(other.port_identity())] {
+        run.context.rollback_gate_port = identity;
+        let mut ports = ports(&mut gate, &mut run.clock);
+        ports.gate = None;
+        assert_eq!(
+            report.advance(&mut run.context, &mut ports),
+            Err(RunFailure::Closed)
+        );
+        assert!(!report.started);
+        assert!(report.event.is_some());
+    }
+    run.context.rollback_gate_port = Some(gate.port_identity());
+    // A supplied foreign port cannot borrow even a valid rollback identity.
+    assert_eq!(
+        report.advance(&mut run.context, &mut ports(&mut other, &mut run.clock)),
+        Err(RunFailure::Closed)
+    );
+    let mut ports = ports(&mut gate, &mut run.clock);
+    ports.gate = None;
+    assert!(report.advance(&mut run.context, &mut ports).unwrap());
+    assert_eq!(report.received.raw_bytes(), original);
+    assert_eq!(gate.held(), Some(&held));
+    assert_eq!(fx.records(serving::Kind::Fault).len(), 1);
+}
+
+#[test]
+fn received_report_resumes_its_recorded_completion_after_save_expiry() {
+    use crate::flow::context::serving_observation::tests::{expire_after_record, record_next_save};
+    let mut fx = InputFixture::new();
+    let (mut gate, _peer, received) = received();
+    let bytes = received.raw_bytes().to_vec();
+    let mut report = Report::new(&fx.run.context, received, Subsystem::Gate);
+    let run = &mut fx.run;
+    let now = run.clock.now().unwrap();
+    let bound = AbsoluteBound::after(now, 100).unwrap();
+    run.context
+        .arm(PumpDeadline::SaveQueued, bound, &mut run.clock)
+        .unwrap();
+    let mut io = expire_after_record(Arc::clone(&report.author), now, bound.deadline_ns());
+    let mut ports = ports(&mut gate, &mut io);
+    assert!(
+        matches!(report.advance(&mut run.context, &mut ports), Err(RunFailure::Wait { key: PumpDeadline::SaveQueued, bound: actual }) if actual == bound)
+    );
+    let sequence = report
+        .author
+        .sequence()
+        .expect("actual record precedes post-work expiry");
+    assert_eq!(run.context.completed_author, Some(sequence));
+    assert!(run.context.serving_observation_author.is_some());
+    assert!(report.started);
+    assert!(
+        report.sequence.is_none(),
+        "Recorded evidence alone is not completed continuation"
+    );
+    assert_eq!(
+        run.context.complete_wait(PumpDeadline::SaveQueued),
+        Some(bound)
+    );
+    assert!(report.advance(&mut run.context, &mut ports).unwrap());
+    assert_eq!(report.sequence, Some(sequence));
+    assert!(run.context.completed_author.is_none());
+    assert!(run.context.serving_observation_author.is_none());
+    assert_eq!(report.received.raw_bytes(), bytes);
+    assert!(record_next_save(&mut run.context, &mut ports).0 > sequence.0);
+    assert_eq!(fx.records(serving::Kind::Fault).len(), 1);
+    assert_eq!(fx.records(serving::Kind::SavePoint).len(), 1);
+}

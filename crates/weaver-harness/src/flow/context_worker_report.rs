@@ -59,13 +59,25 @@ impl Report {
         context: &mut RecordingContext,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<bool, RunFailure> {
-        let port = match self.subsystem {
-            Subsystem::Gate => ports.gate.as_deref(),
-            Subsystem::Spu => ports.lifecycle.residency.as_deref(),
+        let owns_source = match self.subsystem {
+            Subsystem::Gate => match ports.gate.as_deref() {
+                Some(port) => self.received.belongs_to(port),
+                // Rollback retains the actual port but withholds its I/O while
+                // a crossed packet occupies its sole receive slot. Its private
+                // identity still proves the earlier report's source.
+                None => context
+                    .rollback_gate_port
+                    .as_ref()
+                    .is_some_and(|identity| identity.matches_received(&self.received)),
+            },
+            Subsystem::Spu => ports
+                .lifecycle
+                .residency
+                .as_deref()
+                .is_some_and(|port| self.received.belongs_to(port)),
             _ => unreachable!("only received gate and residency reports"),
-        }
-        .ok_or(RunFailure::Closed)?;
-        if !self.received.belongs_to(port) {
+        };
+        if !owns_source {
             return Err(RunFailure::Closed);
         }
         if self.sequence.is_some() {
@@ -84,7 +96,8 @@ impl Report {
         match result {
             Ok(sequence) => self.sequence = Some(sequence),
             Err(error) => {
-                self.sequence = self.author.sequence();
+                // The claim retains any actual Recorded evidence. A recoverable
+                // wait still owes the exact completion/claim continuation.
                 return Err(self.returned.retain_started(error, &mut self.started));
             }
         }

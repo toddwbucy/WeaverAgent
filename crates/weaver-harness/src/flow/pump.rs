@@ -902,10 +902,24 @@ impl CommonPump {
     pub(super) fn step_with_wait<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
+        coordinator: Option<&mut FlowCoordinator<SocketPort>>,
+        cx: &mut FlowRecording<'_>,
+        deadlines: &DeadlineRegistry<PumpDeadline>,
+        wait: bool,
+    ) -> Result<PumpStep, PumpFailure> {
+        self.step_with_observation(ports, coordinator, cx, deadlines, wait, None)
+    }
+
+    /// A local observation wake shares the ordinary poll interests and never
+    /// becomes a protocol deadline or preempts an expired terminal bound.
+    pub(super) fn step_with_observation<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
         mut coordinator: Option<&mut FlowCoordinator<SocketPort>>,
         cx: &mut FlowRecording<'_>,
         deadlines: &DeadlineRegistry<PumpDeadline>,
         wait: bool,
+        observation_wake: Option<u64>,
     ) -> Result<PumpStep, PumpFailure> {
         if let Some(expired) = self.deadline(ports.io, deadlines)? {
             return Ok(expired);
@@ -963,7 +977,10 @@ impl CommonPump {
                 .map(|owner| owner.observation_wake(cx))
                 .transpose()
                 .map_err(PumpFailure::Flow)?
-                .flatten();
+                .flatten()
+                .into_iter()
+                .chain(observation_wake)
+                .min();
             if !wait {
                 return Ok(if observation.is_some_and(|tick| self.previous >= tick) {
                     PumpStep::Observation

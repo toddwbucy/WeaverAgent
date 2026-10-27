@@ -249,9 +249,13 @@ pub(in crate::flow) struct RollbackGateClosed {
     leave: AbsoluteBound,
     disposed: bool,
     execution_reaped: bool,
+    containment: Option<Containment>,
 }
 
 impl RollbackGateClosed {
+    pub(in crate::flow::context) fn containment(&self) -> Option<Containment> {
+        self.disposed.then_some(self.containment).flatten()
+    }
     pub(in crate::flow::context) fn allows(&self, context: &RecordingContext) -> bool {
         self.disposed
             && Arc::ptr_eq(&self.origin, &context.read_origin)
@@ -549,6 +553,7 @@ impl RollbackGate {
                 leave,
                 disposed: false,
                 execution_reaped: false,
+                containment: None,
             }),
             bound,
             lower,
@@ -758,6 +763,7 @@ impl RollbackGate {
         }
         if let Some(proof) = &mut self.closed {
             proof.disposed = true;
+            proof.containment = self.containment;
         }
     }
 

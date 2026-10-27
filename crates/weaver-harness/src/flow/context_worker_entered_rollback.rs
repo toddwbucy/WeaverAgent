@@ -645,6 +645,33 @@ impl FoundationEnteredRollback {
                 false,
                 io,
             )?;
+            if let Some(child) = &handoff.arms.child {
+                run.context.serving_organs.refresh_gate(child);
+            }
+            run.resources.refresh_spu_observation(&mut run.context);
+            {
+                let (residency, decode) = run.resources.spu_ports_mut().unwrap();
+                let mut lifecycle = dials.ports(handoff.peer.as_mut().unwrap());
+                lifecycle.residency = Some(residency);
+                let mut ports = PumpPorts {
+                    lifecycle,
+                    gate: handoff
+                        .arms
+                        .port
+                        .as_mut()
+                        .filter(|port| port.held().is_none()),
+                    decode: Some(decode),
+                    label: None,
+                    io: &mut *io,
+                };
+                if matches!(
+                    run.context
+                        .advance_leaving_organ_faults(&mut ports, gate.world_closed())?,
+                    crate::flow::context::serving_organ_loss::ObservationProgress::Pending { .. }
+                ) {
+                    return Ok(());
+                }
+            }
             if !wind_down_pending && let Some(port) = &mut handoff.arms.port {
                 handoff.input.route_reply(&mut run.context, port, io)?;
             }
@@ -820,7 +847,11 @@ impl FoundationEnteredRollback {
                     cause,
                 )?
             };
-            if settled && self.gate_done && handoff.queued_inputs.is_empty() {
+            if settled
+                && self.gate_done
+                && handoff.queued_inputs.is_empty()
+                && !run.context.has_owed_organ_observation()
+            {
                 self.stage = if handoff.kind.captures() {
                     CleanupStage::Capture
                 } else {

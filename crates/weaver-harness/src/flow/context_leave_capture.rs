@@ -1318,7 +1318,7 @@ impl ServingCapture {
         if self.queued()
             && (!self.requested.started || self.requested.settled)
             && (!self.refused_record.started || self.refused_record.settled)
-            && !context.serving_observation_author_available()
+            && !context.serving_save_observation_author_available()
         {
             return Ok(ServingCaptureProgress::Pending);
         }

@@ -1548,6 +1548,52 @@ fn rejected_reply_retains_its_exact_author_across_trace_pressure_and_leave_wait(
         .context
         .complete_wait(PumpDeadline::Leave)
         .unwrap();
+    // Close the original gate while the rejected packet, its actual Decision
+    // wait and its author remain retained under trace pressure.
+    drop(peer);
+    assert_eq!(
+        gate.try_receive().unwrap_err().fault,
+        crate::ChannelFault::Closed
+    );
+    let claim = std::sync::Arc::clone(
+        &fx.output
+            .input
+            .run
+            .context
+            .pair_rejected_claim
+            .as_ref()
+            .unwrap()
+            .identity,
+    );
+    assert!(
+        !crate::flow::context::serving_organ_loss::tests::settle_contained_gate(
+            &mut fx.output.input.run.context,
+            &mut gate,
+            &mut fx.output.input.run.clock,
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        fx.output
+            .input
+            .run
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision),
+        Some(original_bound)
+    );
+    assert!(std::sync::Arc::ptr_eq(
+        &claim,
+        &fx.output
+            .input
+            .run
+            .context
+            .pair_rejected_claim
+            .as_ref()
+            .unwrap()
+            .identity,
+    ));
+    assert!(fx.output.input.run.context.failure().is_none());
     fx.output.input.drain_trace();
     fx.output
         .input

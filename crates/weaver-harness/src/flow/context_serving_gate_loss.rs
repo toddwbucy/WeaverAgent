@@ -37,16 +37,20 @@ impl Observation {
             .map_err(|error| {
                 context.pair_fault(ports.io, format!("lost gate dispatch bar: {error:?}"))
             })?;
+        // A rejected reply already owns its original Decision wait and author.
+        // Do not arm a competing terminal wait before that claim is discharged.
+        if context.pairs.pending_rejection().is_some() {
+            return Ok(false);
+        }
         // Containment ends execution. Its remaining receive/filing work uses
         // the same terminal Decision bound, never a fresh bound per packet.
-        context.arm_pair_terminal_wait(ports.io)?;
+        if context.pairs.executing().is_some() {
+            context.arm_pair_terminal_wait(ports.io)?;
+        }
         // A valid answer can be held, or queued behind the reset that reported
         // closure. The original caller must route it before an absent result
         // is elected. The port never admits another send on this path.
-        if gate.held().is_some()
-            || gate.closed_receive_pending()
-            || context.pairs.pending_rejection().is_some()
-        {
+        if gate.held().is_some() || gate.closed_receive_pending() {
             return Ok(false);
         }
         let Some((call, exchange, sent)) = context.pairs.executing() else {

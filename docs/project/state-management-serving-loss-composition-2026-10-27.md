@@ -2,7 +2,8 @@
 
 Date filed: 2026-10-27. Author working record for issue #146.
 Branch: code/state-serving-organ-loss.
-Base: #356 at 7a0d2b94c8dad65ba490430b91de37e323edd16d.
+Base: #350 at 3a0f9d9538db205a74fc475e157a365a9777a83c.
+Merge order: #360 into #350, then #350 into #332, then #332 into main.
 
 A gate exit during a tool call now retains the original report and any result
 already sent by that gate, contains the actual tools, files the resulting pair
@@ -24,16 +25,16 @@ deploy or select the incomplete replacement. Only the operator merges and deploy
 
 Implements: admin Spec 3.0's gate/SPU death table and 6.1 containment;
 state-management-foundation-Spec 5.2 PERSIST-SAVE's gate-death row;
-weaver-harness-Spec 2.2 and 6; harness amendment HARNESS-CLOCK, HARNESS-CAPTURE,
+weaver-harness-Spec 2.2 and 6; harness amendment HARNESS-CLOCK, HARNESS-PUMP, HARNESS-CAPTURE,
 HARNESS-RECORD-LIFETIME, HARNESS-HALT and HALT-BOUND; Spec 05 PAIR-END and
 PAIR-LEAVE; harness-gate and harness-SPU contracts section 5.
 
 | Section | Author assessment, pending Planner verification |
 | --- | --- |
 | Admin 3.0 and 6.1; Spec 05 PAIR-END | Conforms for exercised serving gate loss: actual containment before an absent sent result becomes gate_fault, a received result keeps its fate, unsent requests become no_gate, original identities and filings precede one close. S4-S7 integration remains incomplete. |
-| PERSIST-SAVE; HARNESS-CAPTURE | Conforms for exercised gate loss during a healthy SQLite save and save-window expiry: retain the same capture, frontier and image, settle the original cleanup, and preserve later Leave. Later SPU-dead input is an explicit failing case held on #358. |
-| HARNESS-RECORD-LIFETIME; harness and channel contracts | Conforms for exact received reports and observation claims on the tested paths. Earlier authors keep their originals and receipts. Graceful and failed handoff of a still-owed received report remains incomplete. |
-| HARNESS-CLOCK | Conforms for the measured observation and S3 boundaries: the first fresh observation sample is retained, duplicate EOF cannot renew it, and terminal accounting is bounded before a report's author wait. Save and Leave deadlines return to their existing owners. |
+| PERSIST-SAVE; HARNESS-CAPTURE | Conforms for exercised gate loss during a healthy SQLite save and save-window expiry: retain the same capture, frontier and image, settle the original cleanup, and preserve later Leave. The SPU-death release path has a separate actual-child test. Later input remains an explicit failing case awaiting implementation of merged #358. |
+| HARNESS-RECORD-LIFETIME; harness and channel contracts | Conforms for exact received reports and observation claims on the tested paths. Earlier authors keep their originals and receipts. Ordinary Leave carries owed organ observations to Recorded before exiting the gate stage. Every graceful and failed handoff of a still-owed received report remains incomplete. |
+| HARNESS-CLOCK / HARNESS-PUMP | Conforms for the common observation wake, real readiness interests and measured S3 boundaries: the first fresh observation sample is retained, duplicate EOF cannot renew it, and terminal accounting is bounded before a report's author wait. Save and Leave deadlines return to their existing owners. |
 | HARNESS-HALT / HALT-BOUND | Conforms for the exercised retained-observation and Lower paths: first fatal cause wins, mandatory teardown is not postponed for ordinary trace capacity, and late accounting uses the original halt cap. Actual failed kernel containment and every failed-report handoff are not qualified. |
 
 ## Owner and caller census
@@ -58,73 +59,124 @@ precedence, closed-port receive, pair fate and failed-tail ordering. The require
 code-review and verification-before-completion skills are unavailable in this
 session. No invocation or waiver is claimed.
 
+## Planner review disposition at the revised head
+
+The merge order is #360 into #350, then #350 into #332, then #332 into main.
+The base is code/state-leave-save-composition at 3a0f9d95. Merge ancestry retains
+that correction and main at 2cdfa715. No parent union was squashed or replayed.
+The operator alone merges. #332 remains draft.
+
+| Review row | Disposition and evidence |
+| --- | --- |
+| G1 / C8 | Corrected. Observation advance returns its wake to the common pump, which retains real interests and earlier terminal deadlines. The non-waiting path does not sleep. Separate tests pin both the observation and the common wait. |
+| C1 / X1 / X4 | Corrected. Waiting also yields to the existing report, retaining a second Fault on its original port. An actual two-report process case records both in arrival order after the held original returns. Accepted, Turn, Refused, Aborted and Completed stages retain a pending report without entering the input-work panic arm. The real gate-process test exercises Accepted and Turn with an earlier held original, then records exactly one report after that original is returned. |
+| C2 / X6 | Corrected for the crossed held-packet boundary. A withheld rollback gate can use only the rollback owner's retained exact port identity. Missing identity, foreign identity and an explicitly supplied foreign port still refuse. The held packet remains untouched. This does not claim every failed-report handoff. |
+| C4 | Corrected. An observed closed gate with an empty receive slot and pending tail receive supplies an immediate wake through the common pump. Reset/interruption cannot leave that local receive waiting only for Decision expiry. Real sources and an already expired terminal deadline keep precedence. |
+| C5 | Guarded. Only an executing call can acquire a new terminal wait during gate settlement. A boundary test uses a recorded batch, a retained owner and no execution, with its wait removed to isolate that predicate. This is not a reproduction of every claimed between-call path. |
+| C6 | Corrected for unstarted queued-save records. Eligibility requires Entered. Releasing yields while keeping the original request. Already-admitted save authors and the complete release handoff remain under the existing integration limit. |
+| H7 | The release proof no longer depends on later-input handling. A separate actual-SPU-exit case completes its healthy SQLite save, performs the later forced Leave, reaps the child and records Unconfirmed. Removing the known-dead residency branch must fail this case. |
+| Codex 4390037527 | Corrected in received Report and organ Observation. Actual Recorded evidence stays on the private claim when a recoverable deadline interrupts continuation. Each owner resumes that claim before reporting success. Deterministic post-Recorded expiry tests consume the original completion, clear the claim, record the next save and detect each restored early-success mutation. |
+| X2 | Corrected. An owed rejected reply is checked before a terminal Decision wait is armed. The actual rejected packet retains its original wait and author across trace pressure and closure of the same gate; it then records exactly once. |
+| X3 | Corrected for ordinary accepted Leave/rollback. The consuming owner advances the same observation after mandatory Lower transport work and cannot pass the gate stage with observation debt. Its original last-word anchor and author claim remain unchanged. Unlatched Serving containment can use only the actual gate's private, completed Leave-sweep proof. Two actual gate EOF cases enter rollback during the last-word window, with containment already latched and still unlatched, and record one serving-death account before Unload. |
+| X9 | Corrected. The exact port-minted capture ticket can withdraw its wholly unsent bytes after Closed, retaining the first failure and returning the original packet. Other failures remain refusals. A disconnected-admin case revokes the original Commit before member Abort, records the capture refusal and leaves the run live. |
+| X7 | Retained batch in the SPU loss/received-report composition act. A held SPU Fault before observed EOF still needs intake and recording after residency is marked lost. The H7 release case does not establish that packet race. |
+| X11 | Retained batch in graceful conversion: an interrupted SaveQueued/CaptureWindow observation can delay setting forced until the existing drain bound. No new window or successful continuation is claimed. |
+| X12 | Retained batch in accepted Stop/pair cancellation: an unsent request still uses live-port withdrawal while gate settlement yields. The exact closed-port send witness and existing Decision bound must carry through that caller. |
+| X15 | Required self-check skill availability remains an explicit process carry; no invocation or waiver is claimed. |
+| C3 / X5 / X8 | Retained batch work in #146's failed-handoff act. FailedRunCleanup has no tools handle to finish the earlier gate observation's containment. The gate debt can therefore hold a later SPU debt until bounded abandonment. That act must carry the owned tools evidence through Lower, preserve first-observed order under the original halt cap, and prevent observation authors from taking the slot reserved for a deferred TurnClosed. No invented containment result or claim that this path is complete. |
+| C7 / X10 | Planner's decline retained. A whole send proves delivery to the gate, not the world. The original send evidence is preserved. |
+| C9 / X13 | Retained consolidation batch for the close-owner act. WorldClose, input refusal and placement refusal share retain_lost_world but still reduce different duties: turn/input close, input finish, and place_response_lost. The caller census below keeps those sites visible. |
+| C10 / X14 | Retained consolidation batch for the failed-report handoff act. Received reports and local observations still hold separate claimed-author state machines. Their common claim must be consolidated with the handoff, retaining exact originals and tickets. Exact-ticket capture and closed-organ withdrawal also retain duplicate transport checks; consolidation must preserve their distinct decoded types and failure rules. |
+
+| Changed boundary | Callers and new surface |
+| --- | --- |
+| Observation wake | FoundationInput and FoundationManagement advance the retained observation. RecordingContext lends its wake to CommonPump, used by ordinary input, turn and lifecycle waits. Non-waiting advance stays local. |
+| Pending report | FoundationInput's progress remains Pending until Recorded. Its at-rest step does no input work. Report validates a supplied port first, or the private withheld rollback identity. No public identity or new port is introduced. |
+| Closed receive wake | All RecordingContext pump callers retain terminal precedence and real readiness probes. Only the exact observed gate with no held packet and an outstanding closed receive becomes immediately runnable. No send is re-enabled. |
+| Ordinary Leave / rollback | After actual Lower transport progress, refresh the original children and advance retained observation debt. A private exact-gate sweep proof can settle earlier containment. No move to Capture/Grants until every owed observation records. Failed-run teardown remains separately limited. |
+| Capture withdrawal | LifecyclePeer delegates the exact capture send ticket. Closed permits withdrawal of only the original wholly unsent datagram; no send is enabled and the failure stays latched. |
+| Gate settlement | A pending rejection owns its existing wait before terminal arming. Executing pairs retain the existing terminal wait. A batch with no executing call gets no new wait from this observation. Existing waits are not cleared or renewed. |
+| Queued save | ServingCapture checks Entered before starting its queued observation. Organ loss and received reports remain eligible in Releasing. No new save capability is granted there. |
+| Lost world response | WorldClose::advance, FoundationInput::step(Closing), and FoundationInput's generation Closing keep their distinct completion duties after the shared exact-ticket withdrawal. |
+
+## Merged authority awaiting implementation
+
+Do not select or deploy the foundation dispatcher. The joined main now includes
+#348/#349 and #358. Their merge removes the Spec authority holds, not the owed
+code. The next INPUT-NO-RESIDENCY act in #146 implements Spec 02's WorldRequest
+refusal, its types amendment and the two-request pressure/precedence tests. The
+existing worker_session_demand_save_sqlite_organ_loss_spu case still reproduces
+that separate gap and remains excluded. The new release-only case answers H7.
+The capture-refusal composition act implements #348/#349's S4-S7 teardown and
+publication outcomes. Neither act is completed by this review correction.
+
 ## Validation
 
-The final source passed 2,148 ordinary harness tests and doctests, with 772
-ignored by that invocation. Counts exclude nested child summaries. All 704
-selected delegated worker cases passed in one serial run. The only excluded
-worker case is worker_session_demand_save_sqlite_organ_loss_spu, which reproduces
-the later-input refusal gap proposed in #358. Other ignored non-worker
-instruments remain outside this run. The eight privileged admin-startup cases
-and production model/device qualification are not claimed.
+- 2,157 ordinary harness tests and doctests passed; 778 ignored by that invocation. Nested child summaries are excluded from this count.
+- Three runs of all 703 selected non-joint worker cases passed at default parallelism. All six joint admin/SQLite cases passed serially, for 709 distinct selected worker cases. The only excluded worker case is the disclosed later-input SPU-loss case awaiting merged #358's implementation.
+- Strict harness all-target clippy, workspace formatting, diff and first/last lock checks passed.
+- Pinned nightly, --locked, a private target, four ordinary test threads, and serial Cargo/Git mutations. Actual worker fixtures used private delegated scopes and the built admin test participant; no deployed agent changed.
+- All 796 checked crate/config source files remained unchanged across the final gates. The working record was updated afterward.
 
-Strict harness all-target clippy with -D warnings, workspace formatting, diff
-checks and lock.sh before and after Cargo passed. Pinned nightly-2026-02-13 and
---locked were used with a private target, no incremental compilation and four
-build jobs. Ordinary tests used four threads and process cases one. The normal
-SQLite member and actual admin test participant were built in that same target.
-Joint process fixtures used real root in delegated scopes. Source hashes matched
-before and after the final gates.
 
-The report checks include 67 transport tests, three private report-ownership
-tests and five actual gate-process cases: a received report, report under trace
-pressure, accepted Stop with a report, unread Stop control at gate exit, and that
-same reset boundary with a completed result already queued.
+Fourteen independent protective mutations compiled and failed the assertions intended
+to catch them. Eight covered the first Planner corrections, two covered the Codex continuation finding, and four covered the latest Planner round. Each original was restored before the next mutation. The final
+gates ran on the restored source.
 
-| Compiled protective control | Observed failure |
+| Mutation | Detecting boundary |
 | --- | --- |
-| Disable closed receive | Accepted Stop cannot settle the original exchange. |
-| Remove queued-receive guard | A completed crossed result becomes Killed instead. |
-| Remove terminal Decision bound | Full writer wait has no declared terminal bound. |
-| Resume report before containment/bound progress | The same full-writer case loses its bound. |
-| Remove source-port check | A foreign port incorrectly supplies report custody. |
-| Borrow the prior author's claim | The report encounters the earlier caller's held original. |
-| Read with the sole slot already full | The next receive overwrites or misuses held evidence. |
-| Ignore a malformed queued tail | The required tail refusal disappears. |
+| Restore the interest-free wait | Non-waiting observation refuses any wait call. |
+| Drop the common observation wake | Real-interest wait loses its required wake or terminal precedence. |
+| Remove the retained-report stage guard | Actual gate report at Accepted/Turn reaches the panic arm. |
+| Reject the withheld rollback port | The original report cannot record beside a crossed held packet. |
+| Drop the closed-receive wake | Pending receive waits for Decision expiry instead of running. |
+| Arm a terminal wait with no execution | The recorded-batch boundary acquires an unowned Decision wait. |
+| Admit an unstarted save in Releasing | The queued request fails instead of staying retained. |
+| Ask the known-dead SPU for Release | The actual SPU-exit/SQLite/Leave circuit cannot reach its required Unconfirmed result. |
+| Treat report admission as completed continuation | Post-Recorded save expiry strands the completion and claim. |
+| Treat observation admission as completed continuation | The same post-Recorded boundary prevents the next save. |
+| Consume a second report while the first waits | The two-report process loses the first report or consumes the second packet early. |
+| Arm terminal wait before an owed rejection | The actual rejected-return wait collides with terminal arming. |
+| Drop observation continuation and exit guard at Leave | The real gate-death handoff retains unrecorded debt or omits its trace account. |
+| Refuse withdrawal through a Closed capture sender | The disconnected-admin expiry halts instead of completing cancellation. |
 
-All eight controls compiled and failed their intended assertions. The first four
-were compiled and detected again after the final timeout correction. The other
-four reach unchanged private report/transport paths. All originals were restored
-before the final gates. Earlier checkpoint controls cover exact observation
-claims, first-fatal ordering, original clocks, save cancellation and Lower wakes.
-Those earlier controls were not all repeated at this final source.
+The eight earlier report/transport controls at a52ffb63 remain scoped to that
+checkpoint. They are not counted as new controls here. The full-writer fixture's
+earlier unexplained pre-marker failure and contaminated MSG_PEEK diagnostic are
+retained in that commit's working record. No peek or extra receive was added by
+this correction. The Planner's G1 reproduction exposed the interest-free wait
+that a single serial pass had missed.
 
-The first broad run passed 700 worker cases and failed four save/Leave cases. An
-added generic live check intercepted their deadlines before the owning operation
-could reduce them. Removing that preemption restored all four cases, followed by
-the complete passing run above. The full-writer fixture also had a pre-marker
-failure whose cause is still unexplained. Its improved diagnostics perform no
-extra socket read. Five unchanged standalone repeats, the focused regression
-sequence and the final full run passed. Failed runs and exact source snapshots
-remain retained as evidence.
+An initial parallel run of this correction passed 698 worker cases. Eight
+fixtures failed before their admin participant ran because the invocation did
+not supply its test-binary environment. The rerun builds that participant and
+passes its exact path to the fixtures. The six joint fixtures share a parent
+process root, so they run serially. The other cases use default parallelism; the final counts below include the new Leave and two-report fixtures.
+This changes the test invocation, not their production deadlines or assertions.
 
-An early diagnostic MSG_PEEK consumed ECONNRESET and contaminated a pass. Those
-probes were removed. A separate socket check disproved the initial theory that
-shutdown discarded the queued packets. The tested correction leaves shutdown
-unchanged and permits the private receive through the port's logical freeze.
+The first versions of two new boundary fixtures failed on their setup: a plain
+EOF had no closed-receive debt, and an empty ledger was not an admitted batch.
+They now use an actual unread-request reset and a recorded checked batch. The
+receive test also checks DecisionBound, the existing terminal outcome. Failed
+attempts and the exact restored source remain retained with the test evidence.
+
+The latest fixture setup corrections are retained with the evidence: the rejection's wait was already armed, so no test re-arm is needed; the two-report boundary uses the original port's actual receive while intake is backpressured, and retains the earlier template records for later assertions. The initial compile corrections changed only test paths and inaccessible-field assertions.
 
 ## Remaining integration and limits
 
-- Complete still-owed received reports through graceful and failed handoff,
-  including retired-port identity and bounded trace-only accounting. Retaining
-  Report in FailedInput is custody only.
+- Carry X7, X11 and X12 through the SPU report, graceful-conversion and Stop/pair-cancellation acts, respectively.
+- Complete C3/X5/X8 and C10/X14's still-owed observation/report handoff through graceful
+  and failed teardown, including actual tools evidence, retired-port identity,
+  first-observed order and the original halt cap.
+- Consolidate C9's close callers while preserving their different completion
+  duties. The shared withdrawal already retains exact send evidence.
 - Complete S4-S7 loss composition, capture/release port lending, failed teardown
   and actual worker-process integration. Existing primitive and selected circuit
   passes do not establish these paths.
-- Implement later NoResidency input only after #358's operator elections, Planner
-  review and merge. Its actual SPU-exit fixture remains a known failing case.
-- Resolve #348/#349 and #350's authority holds, inherited review carries, and the
-  separate retained-result and copied-byte qualification work.
+- Implement merged #358's later NoResidency input. Its actual SPU-exit fixture
+  with two subsequent requests remains a known failing case.
+- Implement merged #348/#349's capture-refusal outcomes, carry the inherited
+  review findings, and finish retained-result and copied-byte qualification.
 - Qualify pinned language artifacts, classifier, separately reviewed prompt,
   measured limits and security before the coupled serving cutover.
 

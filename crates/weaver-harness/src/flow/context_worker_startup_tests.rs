@@ -2164,6 +2164,14 @@ scenario!(worker_input_composition_expiry, "input-silent");
 scenario!(worker_input_composition_checker_eof, "input-check-eof");
 scenario!(worker_input_composition_management, "input-management");
 scenario!(worker_input_composition_fault_before_input, "input-fault");
+scenario!(
+    worker_input_composition_report_held_at_rest,
+    "input-report-held"
+);
+scenario!(
+    worker_input_composition_two_reports_held_while_waiting,
+    "input-report-queued"
+);
 scenario!(worker_input_composition_actual_dev_loop, "input-worker");
 
 scenario!(
@@ -3352,6 +3360,14 @@ scenario!(
 scenario!(
     worker_session_composition_ready_rollback,
     "input-worker-generation-emission-session-ready-rollback"
+);
+scenario!(
+    worker_session_composition_ready_rollback_organ_settling,
+    "input-worker-generation-emission-session-ready-rollback-organ-settling"
+);
+scenario!(
+    worker_session_composition_ready_rollback_organ_settling_unlatched,
+    "input-worker-generation-emission-session-ready-rollback-organ-settling-unlatched"
 );
 scenario!(
     worker_session_composition_ready_rollback_late,
@@ -5083,4 +5099,9 @@ scenario!(
 scenario!(
     worker_session_graceful_secondary_gate_refused,
     "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-outoforder-gate-end"
+);
+
+scenario!(
+    worker_session_demand_save_sqlite_organ_loss_spu_release,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-spu-release"
 );

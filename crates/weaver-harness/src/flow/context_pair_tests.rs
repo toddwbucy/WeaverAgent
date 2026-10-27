@@ -1546,3 +1546,18 @@ mod refusal;
 
 #[path = "context_inward_recall_tests.rs"]
 mod inward;
+
+pub(super) fn with_recorded_pair_batch(
+    check: impl FnOnce(&mut RecordingContext, &mut crate::flow::clock::testing::FakePumpIo),
+) {
+    let mut fx = PairFixture::new();
+    let original = fx.generation(vec![
+        text("Read first."),
+        call("first"),
+        text("Read second."),
+        call("second"),
+    ]);
+    fx.begin(original, s::NonDispatchCause::NoGate);
+    let run = &mut fx.output.input.run;
+    check(&mut run.context, &mut run.clock);
+}

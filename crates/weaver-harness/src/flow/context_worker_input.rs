@@ -262,7 +262,7 @@ impl<'a> FoundationInput<'a> {
             .and_then(|()| self.advance_organ_faults(None, io))
             .and_then(|ready| {
                 if !ready {
-                    return self.observe(io);
+                    return self.observe_with_wait(io, wait);
                 }
                 self.advance_save(io)?;
                 if self.save_blocks_turn() {
@@ -419,7 +419,7 @@ impl<'a> FoundationInput<'a> {
             .advance_serving_organ_faults(&mut ports, &owner.tools)?;
         if matches!(
             result,
-            crate::flow::context::serving_organ_loss::ObservationProgress::Pending
+            crate::flow::context::serving_organ_loss::ObservationProgress::Pending { .. }
         ) {
             return Ok(false);
         }
@@ -536,6 +536,11 @@ impl<'a> FoundationInput<'a> {
         match self.stage {
             Stage::Waiting => {
                 owner.context.reduce_flow(ports.io)?;
+                // The first report retains its exact received packet while an
+                // earlier author owns the slot. A second Fault stays on its port.
+                if self.report.is_some() {
+                    return Ok(());
+                }
                 // Residency announcements remain on their actual seam. They
                 // are opaque trace facts, not invented management decisions.
                 if ports
@@ -740,6 +745,12 @@ impl<'a> FoundationInput<'a> {
                 } else {
                     owner.context.pump_once(&mut ports)?;
                 }
+            }
+            Stage::Accepted | Stage::Turn | Stage::Refused | Stage::Aborted | Stage::Completed
+                if self.report.is_some() =>
+            {
+                // Only the retained report is pending. The stage has no input
+                // work to reduce, and cannot finish until its report records.
             }
             _ => unreachable!("only pending stages advance"),
         }

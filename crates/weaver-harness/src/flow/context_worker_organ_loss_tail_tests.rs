@@ -88,7 +88,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         ));
                         assert_eq!(
                             root.join("ready-rollback-lower.json").exists(),
-                            mode.ends_with("-spu")
+                            mode.ends_with("-spu") || mode.ends_with("-spu-release")
                         );
                         None
                     }
@@ -212,7 +212,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
     assert!(unload["payload"]["forced_by"].is_null());
     assert_eq!(
         unload["payload"]["release"]["spu"],
-        if mode.ends_with("-spu") {
+        if mode.ends_with("-spu") || mode.ends_with("-spu-release") {
             "unconfirmed"
         } else {
             "confirmed"

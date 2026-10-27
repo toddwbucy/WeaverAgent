@@ -242,6 +242,12 @@ impl FailedEnterResources {
         Some((spu.residency.as_mut()?, spu.decode.as_mut()?))
     }
 
+    pub(super) fn refresh_spu_observation(&self, context: &mut RecordingContext) {
+        if let Some(spu) = &self.spu {
+            context.serving_organs.refresh_spu(&spu.child);
+        }
+    }
+
     pub(in crate::flow) fn decode_mut(&mut self) -> Option<&mut DecodePort> {
         self.spu.as_mut()?.decode.as_mut()
     }

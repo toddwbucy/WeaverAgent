@@ -43,6 +43,49 @@ fn observed_gate(now: u64, outcome: Containment) -> Observation {
     observation
 }
 
+pub(in crate::flow::context) fn settle_contained_gate(
+    context: &mut RecordingContext,
+    gate: &mut OrganPort,
+    io: &mut impl PumpIo,
+) -> Result<bool, RunFailure> {
+    assert_eq!(gate.failure().unwrap().fault, crate::ChannelFault::Closed);
+    context.serving_organs.gate = Some(ObservedGate {
+        port: gate.port_identity(),
+        observation: None,
+    });
+    let observation = observed_gate(io.now().unwrap(), Containment::Emptied);
+    let mut ports = ports(io);
+    ports.gate = Some(gate);
+    observation.settle_gate_pairs(context, &mut ports)
+}
+
+#[test]
+fn organ_last_word_advance_returns_its_original_wake_without_waiting() {
+    let mut fx = InputFixture::new();
+    let now = fx.run.clock.now().unwrap();
+    let mut observation = observed_gate(now, Containment::Emptied);
+    let settle_by = observation.settle_by.unwrap();
+    let mut io = NoWaitClock(now);
+    let progress = observation
+        .advance(&mut fx.run.context, &mut ports(&mut io), None)
+        .unwrap();
+    assert!(matches!(progress, ObservationProgress::Pending { wake_ns }
+        if wake_ns == (now + 10_000_000).min(settle_by)));
+    assert!(observation.author.is_none());
+    assert!(observation.sequence.is_none());
+    assert_eq!(io.0, now);
+    io.0 = settle_by;
+    assert!(matches!(
+        observation
+            .advance(&mut fx.run.context, &mut ports(&mut io), None)
+            .unwrap(),
+        ObservationProgress::Complete
+    ));
+    assert_eq!(observation.settle_by, Some(settle_by));
+    assert!(observation.sequence.is_some());
+    assert_eq!(fx.records(Kind::Fault).len(), 1);
+}
+
 fn install_and_latch(fx: &mut InputFixture) -> RunFailure {
     let now = fx.run.clock.now().unwrap();
     let mut observation = observed_gate(now, Containment::PastBound);
@@ -416,4 +459,140 @@ fn organ_loss_halt_records_in_observation_order_when_spu_precedes_gate() {
     assert_eq!(faults[2]["payload"]["account"]["organ"], "gate");
     assert_eq!(fx.run.context.failure(), Some(&first));
     assert!(!fx.run.context.has_owed_organ_observation());
+}
+
+#[test]
+fn closed_gate_receive_debt_stays_runnable_before_its_terminal_deadline() {
+    let mut fx = InputFixture::new();
+    let now = fx.run.clock.now().unwrap();
+    let (channel, peer) = crate::channel::OrganChannel::pair().unwrap();
+    let mut gate = OrganPort::from_channel(channel).unwrap();
+    gate.stage(weaver_types::OrganEnvelope {
+        exchange: weaver_types::ExchangeId {
+            opener: weaver_types::Opener::Harness,
+            ordinal: 99,
+        },
+        position: weaver_types::Position::Open,
+        payload: weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Lower),
+    })
+    .unwrap();
+    gate.try_send().unwrap();
+    // Closing with the unread request produces the actual reset ahead of EOF.
+    drop(peer);
+    let failure = gate.try_receive().unwrap_err();
+    assert_eq!(failure.fault, crate::ChannelFault::Closed);
+    assert!(gate.closed_receive_pending());
+    fx.run.context.serving_organs.gate = Some(ObservedGate {
+        port: gate.port_identity(),
+        observation: None,
+    });
+    let bound = AbsoluteBound::after(now, 100).unwrap();
+    fx.run
+        .context
+        .arm(PumpDeadline::Decision, bound, &mut fx.run.clock)
+        .unwrap();
+    let mut io = crate::flow::clock::testing::FakePumpIo::new(now);
+    let mut ports = ports(&mut io);
+    ports.gate = Some(&mut gate);
+    assert_eq!(
+        fx.run.context.pump_with_wait(&mut ports, true).unwrap(),
+        PumpStep::Observation
+    );
+    assert_eq!(
+        fx.run.context.deadlines.get(PumpDeadline::Decision),
+        Some(bound)
+    );
+    assert_eq!(
+        ports.io.waits().last().unwrap().absolute_deadline,
+        Some(now)
+    );
+    ports.io.advance_to(bound.deadline_ns()).unwrap();
+    assert!(matches!(
+        fx.run.context.pump_with_wait(&mut ports, true),
+        Err(RunFailure::Flow {
+            reason: FlowHaltReason::DecisionBound,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn contained_gate_with_no_executing_call_does_not_create_a_terminal_wait() {
+    super::super::pair_tests::with_recorded_pair_batch(|context, clock| {
+        let now = clock.now().unwrap();
+        // Isolate the settlement boundary with a real checked batch and owner.
+        // No executing call or terminal receipt authorizes a new terminal wait.
+        context.pair_work.as_mut().unwrap().bound = None;
+        assert!(context.complete_wait(PumpDeadline::Decision).is_some());
+        let (channel, peer) = crate::channel::OrganChannel::pair().unwrap();
+        let mut gate = OrganPort::from_channel(channel).unwrap();
+        drop(peer);
+        assert_eq!(
+            gate.try_receive().unwrap_err().fault,
+            crate::ChannelFault::Closed
+        );
+        gate.receive_closed().unwrap();
+        assert!(!gate.closed_receive_pending());
+        context.serving_organs.gate = Some(ObservedGate {
+            port: gate.port_identity(),
+            observation: None,
+        });
+        let mut ports = ports(clock);
+        ports.gate = Some(&mut gate);
+        let observation = observed_gate(now, Containment::Emptied);
+        assert!(observation.settle_gate_pairs(context, &mut ports).unwrap());
+        assert!(context.deadlines.get(PumpDeadline::Decision).is_none());
+        assert!(context.pair_work.as_ref().unwrap().bound.is_none());
+        assert!(context.pairs.executing().is_none());
+    });
+}
+
+#[test]
+fn organ_observation_resumes_its_recorded_completion_after_save_expiry() {
+    use crate::flow::context::serving_observation::tests::{expire_after_record, record_next_save};
+    let mut fx = InputFixture::new();
+    let now = fx.run.clock.now().unwrap();
+    let mut observation = observed_gate(now, Containment::Emptied);
+    observation.last_word = Some(crate::spawn::LastWordSnapshot {
+        word: None,
+        eof: true,
+    });
+    observation.prepare(&fx.run.context);
+    let bound = AbsoluteBound::after(now, 100).unwrap();
+    fx.run
+        .context
+        .arm(PumpDeadline::SaveQueued, bound, &mut fx.run.clock)
+        .unwrap();
+    let owner = Arc::clone(observation.author.as_ref().unwrap());
+    let mut io = expire_after_record(Arc::clone(&owner), now, bound.deadline_ns());
+    let mut ports = ports(&mut io);
+    assert!(
+        matches!(observation.advance(&mut fx.run.context, &mut ports, None), Err(RunFailure::Wait { key: PumpDeadline::SaveQueued, bound: actual }) if actual == bound)
+    );
+    let sequence = owner
+        .sequence()
+        .expect("actual record precedes post-work expiry");
+    assert_eq!(fx.run.context.completed_author, Some(sequence));
+    assert!(fx.run.context.serving_observation_author.is_some());
+    assert!(observation.started);
+    assert!(
+        observation.sequence.is_none(),
+        "Recorded evidence alone is not completed continuation"
+    );
+    assert_eq!(
+        fx.run.context.complete_wait(PumpDeadline::SaveQueued),
+        Some(bound)
+    );
+    assert!(matches!(
+        observation
+            .advance(&mut fx.run.context, &mut ports, None)
+            .unwrap(),
+        ObservationProgress::Complete
+    ));
+    assert_eq!(observation.sequence, Some(sequence));
+    assert!(fx.run.context.completed_author.is_none());
+    assert!(fx.run.context.serving_observation_author.is_none());
+    assert!(record_next_save(&mut fx.run.context, &mut ports).0 > sequence.0);
+    assert_eq!(fx.records(Kind::Fault).len(), 1);
+    assert_eq!(fx.records(Kind::SavePoint).len(), 1);
 }

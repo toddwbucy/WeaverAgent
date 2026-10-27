@@ -2124,7 +2124,21 @@ impl RecordingContext {
             .lifecycle
             .residency
             .take_if(|port| self.serving_organs.residency_matches(port));
-        let step = self.pump.step_with_wait(
+        // A reset or interruption may precede an already queued result. Its
+        // owner owes one more bounded receive before electing an absent result.
+        // Keep that local work runnable even though ordinary dead-port polling
+        // is disabled. The common pump still probes real sources and checks
+        // every original deadline before returning this observation wake.
+        let receive_wake = ended_gate.as_deref().and_then(|gate| {
+            (gate.held().is_none() && gate.closed_receive_pending()).then_some(self.last_ns)
+        });
+        let observation_wake = self
+            .serving_organs
+            .wake()
+            .into_iter()
+            .chain(receive_wake)
+            .min();
+        let step = self.pump.step_with_observation(
             ports,
             Some(&mut self.flow),
             &mut FlowRecording {
@@ -2135,6 +2149,7 @@ impl RecordingContext {
             },
             &self.deadlines,
             wait,
+            observation_wake,
         );
         if let Some(port) = ended_gate {
             ports.gate = Some(port);
