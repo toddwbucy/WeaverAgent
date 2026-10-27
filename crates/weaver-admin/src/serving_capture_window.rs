@@ -1,9 +1,9 @@
-//! Absolute windows for Leave's capture/unwind or a JoinLeave's outer wait.
+//! Original absolute windows for demand saves, Leave and JoinLeave.
 //! The actor validates exchange and phase before installing Beginning or Complete.
 use crate::channel::ChannelFault;
 use std::cell::Cell;
 use std::time::Duration;
-use weaver_types::state_flow::{DecimalU64, capture::CaptureBeginning};
+use weaver_types::state_flow::{DecimalU64, SaveWindow, capture::CaptureBeginning};
 
 const LEAVE_NS: u64 = weaver_types::LEAVE_BOUND_MS * 1_000_000;
 
@@ -14,9 +14,31 @@ pub(crate) struct CaptureWindows {
     last: Cell<u64>,
     capture: Option<CaptureBeginning>,
     complete: bool,
+    demand: Option<SaveWindow>,
 }
 
 impl CaptureWindows {
+    /// Begin after Observe and loaded-copy verification, before the first send.
+    pub(crate) fn demand(save_wait: u64) -> Result<Self, ChannelFault> {
+        Self::demand_at(Self::now()?, save_wait)
+    }
+
+    fn demand_at(now: u64, save_wait: u64) -> Result<Self, ChannelFault> {
+        let end = now
+            .checked_add(save_wait)
+            .ok_or(ChannelFault::Undecodable)?;
+        let mut windows = Self::with_limit(now, Some(end), Some(save_wait), false)?;
+        windows.demand = Some(SaveWindow {
+            began_ns: now.into(),
+            deadline_ns: end.into(),
+        });
+        Ok(windows)
+    }
+
+    pub(crate) fn demand_window(&self) -> Option<SaveWindow> {
+        self.demand
+    }
+
     /// Start before carrying the actual forced Leave. Observe has its own bound.
     pub(crate) fn begin(outer: Duration, save_wait: u64) -> Result<Self, ChannelFault> {
         Self::begin_with(outer, Some(save_wait))
@@ -84,6 +106,7 @@ impl CaptureWindows {
             last: Cell::new(now),
             capture: None,
             complete: false,
+            demand: None,
         })
     }
 
@@ -96,7 +119,7 @@ impl CaptureWindows {
     }
 
     pub(crate) fn matches_leave(&self, forced: bool) -> bool {
-        !self.is_join() && self.forced == forced
+        self.demand.is_none() && !self.is_join() && self.forced == forced
     }
 
     pub(crate) fn accept(&mut self, value: &CaptureBeginning) -> Result<(), ChannelFault> {
@@ -107,6 +130,13 @@ impl CaptureWindows {
         self.remaining_at(now)?;
         if self.capture.is_some() || value.capture_id.0 == 0 {
             return Err(ChannelFault::Undecodable);
+        }
+        if let Some(original) = self.demand {
+            if value.window != original || value.tail_window.is_some() {
+                return Err(ChannelFault::Undecodable);
+            }
+            self.capture = Some(value.clone());
+            return Ok(());
         }
         let tail = value.tail_window.ok_or(ChannelFault::Undecodable)?;
         value
@@ -141,7 +171,8 @@ impl CaptureWindows {
     }
     fn complete_at(&mut self, id: DecimalU64, now: u64) -> Result<(), ChannelFault> {
         self.remaining_at(now)?;
-        if self.complete
+        if self.demand.is_some()
+            || self.complete
             || self
                 .capture
                 .as_ref()
@@ -166,12 +197,11 @@ impl CaptureWindows {
         self.last.set(now);
         let mut deadline = self.outer_deadline;
         if let Some(value) = &self.capture {
-            let tail = value
-                .tail_window
-                .expect("validated leave tail")
-                .deadline_ns
-                .0;
-            deadline = Some(deadline.map_or(tail, |outer| outer.min(tail)));
+            if let Some(tail) = value.tail_window {
+                deadline = Some(
+                    deadline.map_or(tail.deadline_ns.0, |outer| outer.min(tail.deadline_ns.0)),
+                );
+            }
             if !self.complete {
                 deadline = deadline.map(|end| end.min(value.window.deadline_ns.0));
             }

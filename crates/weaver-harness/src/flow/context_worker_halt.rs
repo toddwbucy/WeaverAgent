@@ -62,16 +62,25 @@ pub struct FoundationHalt<'a> {
 
 fn can_begin(input: &FoundationInput<'_>) -> bool {
     let context = &input.serving.owner.context;
+    let capture = input
+        .serving
+        .save
+        .as_ref()
+        .map(|save| save.capture.at_halt(context));
     context.phase == RecordingPhase::Failed
         && context.failure.is_some()
         && context.flow.halt().is_some()
-        && context.member_capture.is_none()
+        && context.member_capture.as_ref().is_none_or(|owner| {
+            capture
+                .as_ref()
+                .is_some_and(|facts| facts.capture_id == owner.id)
+        })
         && context
             .flow
             .halt()
             .unwrap()
             .account()
-            .is_none_or(|account| account.capture.is_none())
+            .is_none_or(|account| account.capture == capture)
 }
 impl<'a> FoundationInput<'a> {
     /// Move the actual failed run; a healthy or capture-owned attempt is unchanged.
@@ -188,11 +197,17 @@ impl<'a> FoundationHalt<'a> {
         }
         self.progress = FoundationHaltProgress::Pending;
         if self.reporting {
-            let context = &mut self.owner.input_mut().serving.owner.context;
+            let input = self.owner.input_mut();
+            let capture = input
+                .serving
+                .save
+                .as_ref()
+                .map(|save| save.capture.at_halt(input.serving.owner.context));
+            let context = &mut input.serving.owner.context;
             if context.flow.halt().unwrap().account().is_none() {
                 let facts = ExternalFacts {
                     outstanding_pairs: context.outstanding_pairs(),
-                    capture: None,
+                    capture,
                     wait: context.halt_wait().cloned(),
                     input_id: context.input.snapshot().map(|input| input.input_id),
                 };

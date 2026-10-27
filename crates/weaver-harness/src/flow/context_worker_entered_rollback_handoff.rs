@@ -44,6 +44,7 @@ impl FoundationManagement<'_> {
             || self.send.is_some()
             || self.stop.is_some()
             || self.input.has_graceful_leave()
+            || self.input.serving.save.is_some()
             || !self.input.rollback_admissible()
             || !self.peer.held().is_some_and(|message| {
                 message.envelope.exchange.opener == Opener::Admin
@@ -135,6 +136,7 @@ impl FoundationInput<'_> {
         let owner = &seat.owner;
         let source = owner.resident.evidence.startup.original_enter.as_ref();
         rollback_context(owner.context)
+            && seat.save.is_none()
             && owner.context.deadlines.get(PumpDeadline::Leave).is_none()
             && owner.context.retired_enter == Some(owner.enter)
             && owner.context.deadlines.get(PumpDeadline::Enter).is_none()
@@ -195,6 +197,7 @@ impl FoundationInput<'_> {
             queued_inputs,
             gate_outgoing,
             graceful,
+            save,
         } = serving;
         let crate::flow::context::boot_composition::gate_startup::ready::EnteredServing {
             context,
@@ -226,6 +229,10 @@ impl FoundationInput<'_> {
         assert!(
             graceful.is_none(),
             "the actual graceful holder must already be detached"
+        );
+        assert!(
+            save.is_none(),
+            "an on-demand save cannot become a Leave holder"
         );
         Box::new(FoundationEnteredRollbackHandoff {
             kind: directive.kind,

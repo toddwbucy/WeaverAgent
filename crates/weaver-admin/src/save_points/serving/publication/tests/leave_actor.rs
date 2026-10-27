@@ -1,7 +1,7 @@
 //! Actual admin channel and publisher sequence, with a scripted worker peer.
 use super::*;
 use crate::channel::{ChannelFault, Coordination};
-use crate::serving_leave::{FailureCause, Leave, Observed, Progress as LeaveProgress};
+use crate::serving_leave::{Capture, FailureCause, Observed, Progress as LeaveProgress};
 use nix::sys::socket::{AddressFamily, MsgFlags, SockFlag, SockType, recv, send, socketpair};
 use serde_json::json;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -143,7 +143,7 @@ fn observed(
     result
 }
 
-fn pending(owner: &mut Leave<'_>) {
+fn pending(owner: &mut Capture<'_>) {
     assert_eq!(
         owner.advance(),
         LeaveProgress::Pending,
@@ -156,54 +156,80 @@ fn through_prepared<'a>(
     fixture: &Fixture,
     repo: &'a mut Repository,
     case: &str,
-) -> (Leave<'a>, OwnedFd, ExchangeId, CaptureArtifact) {
+) -> (Capture<'a>, OwnedFd, ExchangeId, CaptureArtifact) {
     let loaded = seed(fixture, repo);
     let observed = observed(fixture, repo, &loaded, "valid").unwrap();
     let (channel, peer) = pair();
-    let begin = if case.starts_with("graceful") {
-        Leave::graceful
+    let demand = case.starts_with("demand");
+    let room = open_directory(&fixture.room).unwrap();
+    let mut owner = if demand {
+        Capture::demand(
+            observed,
+            repo,
+            channel,
+            room,
+            fixture.owner.uid,
+            weaver_types::Cause { uid: 73 },
+        )
     } else {
-        Leave::begin
-    };
-    let mut owner = begin(
-        observed,
-        repo,
-        channel,
-        open_directory(&fixture.room).unwrap(),
-        fixture.owner.uid,
-        weaver_types::Cause { uid: 73 },
-        Duration::from_secs(30),
-    )
+        let begin = if case.starts_with("graceful") {
+            Capture::graceful
+        } else {
+            Capture::begin
+        };
+        begin(
+            observed,
+            repo,
+            channel,
+            room,
+            fixture.owner.uid,
+            weaver_types::Cause { uid: 73 },
+            Duration::from_secs(30),
+        )
+    }
     .unwrap();
     pending(&mut owner);
-    let request: weaver_types::OrganEnvelope = serde_json::from_slice(&read(&peer)).unwrap();
+    let (exchange, demand_window) = if demand {
+        let request = CaptureEnvelope::decode(&read(&peer), CaptureSender::Admin).unwrap();
+        assert_eq!(request.position, Position::Open);
+        let CapturePayload::Directive(CaptureDirective::SavePoint { cause, window }) =
+            request.payload
+        else {
+            panic!("paired demand opener")
+        };
+        assert_eq!(cause, weaver_types::Cause { uid: 73 });
+        assert_eq!(window.deadline_ns.0 - window.began_ns.0, SAVE_NS);
+        (request.exchange, Some(window))
+    } else {
+        let request: weaver_types::OrganEnvelope = serde_json::from_slice(&read(&peer)).unwrap();
+        assert_eq!(
+            request.payload,
+            weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Leave {
+                cause: weaver_types::Cause { uid: 73 },
+                forced: !case.starts_with("graceful"),
+                rollback: false,
+            })
+        );
+        (request.exchange, None)
+    };
     assert_eq!(
-        request.exchange,
+        exchange,
         ExchangeId {
             opener: Opener::Admin,
             ordinal: 1
         }
     );
-    assert_eq!(
-        request.payload,
-        weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Leave {
-            cause: weaver_types::Cause { uid: 73 },
-            forced: !case.starts_with("graceful"),
-            rollback: false
-        })
-    );
-    let exchange = request.exchange;
     let now = crate::serving_load::window::raw_ns().unwrap();
     packet(
         &peer,
         &exchange,
         CapturePayload::SavePointBeginning(CaptureBeginning {
             capture_id: 9.into(),
-            window: weaver_types::state_flow::SaveWindow {
+            window: demand_window.unwrap_or(weaver_types::state_flow::SaveWindow {
                 began_ns: now.into(),
                 deadline_ns: (now + SAVE_NS).into(),
-            },
-            tail_window: Some(weaver_types::state_flow::SaveWindow {
+            }),
+            tail_window: (!demand).then_some(weaver_types::state_flow::SaveWindow {
                 began_ns: now.into(),
                 deadline_ns: (now + weaver_types::LEAVE_BOUND_MS * 1_000_000).into(),
             }),
@@ -265,6 +291,212 @@ fn forced_leave_admin_pins_actual_observe_before_requesting_capture() {
         );
         assert_eq!(fixture.index().len(), 1);
         assert_eq!(fixture.names().len(), 2);
+    }
+}
+
+#[test]
+fn demand_admin_requires_the_indexed_report_and_no_leave_completion() {
+    for case in [
+        "demand",
+        "demand-complete",
+        "demand-left",
+        "demand-position",
+        "demand-run",
+        "demand-capture",
+    ] {
+        let fixture = Fixture::new();
+        let mut repo = fixture.repository();
+        let (mut owner, peer, exchange, prepared) = through_prepared(&fixture, &mut repo, case);
+        assert!(
+            owner.finish_demand().is_err(),
+            "Prepared is not a saved outcome"
+        );
+        packet(
+            &peer,
+            &exchange,
+            CapturePayload::SavePointCommit(CaptureIdentity {
+                capture_id: 9.into(),
+            }),
+        );
+        for _ in 0..4 {
+            pending(&mut owner);
+        }
+        assert_eq!(
+            response(&peer),
+            CapturePayload::SavePointPublished(prepared)
+        );
+        let entry = fixture.index().last().unwrap().clone();
+        assert_eq!(entry.cause, PersistenceCause::Requested);
+        let identity = fixture
+            .repository()
+            .verify_unindexed_publication(entry, &fixture.scope())
+            .unwrap()
+            .identity();
+        fixture.assert_guarded(&identity, PublicationState::Pending);
+        let mut value = report(&identity, 9);
+        match case {
+            "demand-position" => value.start.position = None,
+            "demand-run" => value.event_run = RunId("other".into()),
+            "demand-capture" => value.capture_id = 10.into(),
+            _ => (),
+        }
+        let payload = match case {
+            "demand-complete" => CapturePayload::SavePointCaptureComplete(CaptureIdentity {
+                capture_id: 9.into(),
+            }),
+            "demand-left" => CapturePayload::Answer(CaptureAnswer::Left {
+                save_point: Some(value),
+                forced: false,
+                no_state: false,
+            }),
+            _ => CapturePayload::Answer(CaptureAnswer::SavePointTaken { report: value }),
+        };
+        packet(&peer, &exchange, payload);
+        if case == "demand" {
+            assert_eq!(owner.advance(), LeaveProgress::TakenReceived);
+            assert_eq!(owner.finish_demand().unwrap(), identity);
+            assert_eq!(
+                fixture
+                    .repository()
+                    .verify_indexed(
+                        &ArtifactId::parse(&identity.artifact_id).unwrap(),
+                        &fixture.scope()
+                    )
+                    .unwrap()
+                    .identity(),
+                identity
+            );
+            assert!(
+                !fixture
+                    .names()
+                    .iter()
+                    .any(|name| name.ends_with(".pending"))
+            );
+        } else {
+            assert_eq!(
+                owner.advance(),
+                LeaveProgress::Stopped,
+                "{case}: {:?}",
+                owner.failure()
+            );
+            assert!(owner.finish_demand().is_err());
+            fixture.assert_guarded(&identity, PublicationState::Broken);
+        }
+    }
+}
+
+#[test]
+fn demand_admin_accepts_a_queued_capture_not_ready_without_publication() {
+    let fixture = Fixture::new();
+    let mut repo = fixture.repository();
+    let loaded = seed(&fixture, &mut repo);
+    let observed = observed(&fixture, &repo, &loaded, "valid").unwrap();
+    let (channel, peer) = pair();
+    let mut owner = Capture::demand(
+        observed,
+        &mut repo,
+        channel,
+        open_directory(&fixture.room).unwrap(),
+        fixture.owner.uid,
+        weaver_types::Cause { uid: 73 },
+    )
+    .unwrap();
+    pending(&mut owner);
+    let request = CaptureEnvelope::decode(&read(&peer), CaptureSender::Admin).unwrap();
+    packet(
+        &peer,
+        &request.exchange,
+        CapturePayload::Refusal(CaptureRefusal::Save(SaveRefusal::SavePointNotTaken {
+            missed: SavePointLeg::CaptureNotReady,
+        })),
+    );
+    assert_eq!(owner.advance(), LeaveProgress::Stopped);
+    assert!(matches!(owner.failure(), Some(FailureCause::WorkerOutcome)));
+    assert_eq!(fixture.index().len(), 1);
+    assert_eq!(fixture.names().len(), 2);
+}
+
+#[test]
+fn demand_admin_local_copy_failure_aborts_before_returning_and_keeps_first_cause() {
+    for foreign in [false, true] {
+        let fixture = Fixture::new();
+        let mut repo = fixture.repository();
+        let loaded = seed(&fixture, &mut repo);
+        let observed = observed(&fixture, &repo, &loaded, "valid").unwrap();
+        let (channel, peer) = pair();
+        let mut owner = Capture::demand(
+            observed,
+            &mut repo,
+            channel,
+            open_directory(&fixture.room).unwrap(),
+            fixture.owner.uid,
+            weaver_types::Cause { uid: 73 },
+        )
+        .unwrap();
+        pending(&mut owner);
+        let request = CaptureEnvelope::decode(&read(&peer), CaptureSender::Admin).unwrap();
+        let CapturePayload::Directive(CaptureDirective::SavePoint { window, .. }) = request.payload
+        else {
+            panic!("demand opener")
+        };
+        packet(
+            &peer,
+            &request.exchange,
+            CapturePayload::SavePointBeginning(CaptureBeginning {
+                capture_id: 9.into(),
+                window,
+                tail_window: None,
+            }),
+        );
+        pending(&mut owner);
+        fixture.write_room("capture-9.sqlite.part", CAPTURE_BYTES);
+        packet(
+            &peer,
+            &request.exchange,
+            CapturePayload::SavePointImage(CaptureImage {
+                capture_id: 9.into(),
+                room_name: "capture-9.sqlite.part".into(),
+                size_bytes: (CAPTURE_BYTES.len() as u64 + 1).into(),
+                position: None,
+            }),
+        );
+        pending(&mut owner);
+        pending(&mut owner);
+        assert!(matches!(
+            owner.failure(),
+            Some(FailureCause::Publication(_))
+        ));
+        let first = format!("{:?}", owner.failure());
+        pending(&mut owner);
+        assert_eq!(
+            response(&peer),
+            CapturePayload::SavePointAborted(CaptureAborted {
+                capture_id: 9.into(),
+                code: "publication_failed".into(),
+                detail: "admin could not prepare the capture for publication".into()
+            })
+        );
+        assert_eq!(fixture.index().len(), 1);
+        assert_eq!(
+            fixture.names().len(),
+            2,
+            "unlisted root part removed after local copy failure"
+        );
+        let mut exchange = request.exchange;
+        if foreign {
+            exchange.ordinal += 1;
+        }
+        packet(
+            &peer,
+            &exchange,
+            CapturePayload::Refusal(CaptureRefusal::Save(SaveRefusal::SavePointNotTaken {
+                missed: SavePointLeg::Published,
+            })),
+        );
+        assert_eq!(owner.advance(), LeaveProgress::Stopped);
+        assert_eq!(format!("{:?}", owner.failure()), first);
+        assert_eq!(owner.cleanup_failure().is_some(), foreign);
+        assert!(owner.finish_demand().is_err());
     }
 }
 
@@ -413,7 +645,7 @@ fn forced_leave_admin_expired_beginning_starts_no_publication() {
     let loaded = seed(&fixture, &mut repo);
     let observed = observed(&fixture, &repo, &loaded, "valid").unwrap();
     let (channel, peer) = pair();
-    let mut owner = Leave::begin(
+    let mut owner = Capture::begin(
         observed,
         &mut repo,
         channel,

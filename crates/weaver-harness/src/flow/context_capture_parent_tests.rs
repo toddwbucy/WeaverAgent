@@ -2,16 +2,19 @@
 //! The peer's image is synthetic. Publication and process composition are separate.
 use super::*;
 use crate::flow::clock::testing::FakePumpIo;
-use crate::flow::context::leave_capture::{LeaveCapture, LeaveCaptureProgress};
+use crate::flow::context::leave_capture::{ServingCapture, ServingCaptureProgress};
 use crate::flow::pump::LifecyclePeer;
 use nix::sys::socket::{AddressFamily, MsgFlags, SockFlag, SockType, recv, send, socketpair};
 use std::os::fd::{AsRawFd, OwnedFd};
 use weaver_types::state_flow::capture::*;
 use weaver_types::{ExchangeId, Opener, Position};
 
+#[path = "context_capture_demand_tests.rs"]
+mod demand_tests;
+
 struct Parent<'a> {
     member: Member<'a>,
-    capture: LeaveCapture,
+    capture: ServingCapture,
     peer: LifecyclePeer,
     admin: OwnedFd,
     exchange: ExchangeId,
@@ -37,7 +40,7 @@ impl<'a> Parent<'a> {
         run.context
             .arm(PumpDeadline::Leave, leave, &mut run.clock)
             .unwrap();
-        let capture = LeaveCapture::begin(
+        let capture = ServingCapture::begin(
             &mut run.context,
             &peer,
             exchange.clone(),
@@ -53,7 +56,7 @@ impl<'a> Parent<'a> {
             exchange,
         }
     }
-    fn step(&mut self) -> Result<LeaveCaptureProgress, RunFailure> {
+    fn step(&mut self) -> Result<ServingCaptureProgress, RunFailure> {
         self.capture.advance(
             &mut self.member.run.context,
             &mut PumpPorts {
@@ -258,11 +261,11 @@ fn leave_capture_parent_records_confirmation_before_commit_and_keeps_tail_after_
         matches!(complete.payload, CapturePayload::SavePointCaptureComplete(CaptureIdentity { capture_id }) if capture_id == beginning.capture_id)
     );
     for _ in 0..8 {
-        if parent.step().unwrap() == LeaveCaptureProgress::Published {
+        if parent.step().unwrap() == ServingCaptureProgress::Published {
             break;
         }
     }
-    assert_eq!(parent.step().unwrap(), LeaveCaptureProgress::Published);
+    assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Published);
     let report = parent.capture.report().unwrap();
     assert_eq!(report.start.seed_id, loaded.seed_id);
     assert_eq!(report.start.parent_artifact_id, Some(loaded.artifact_id));
@@ -446,7 +449,7 @@ fn leave_capture_parent_admin_abort_cleans_the_member_before_refusal_disposition
         parent.member.receive(&answer).unwrap();
         let mut done = false;
         for _ in 0..64 {
-            if parent.step().unwrap() == LeaveCaptureProgress::Refused {
+            if parent.step().unwrap() == ServingCaptureProgress::Refused {
                 done = true;
                 break;
             }
@@ -497,7 +500,7 @@ fn leave_capture_parent_missing_image_cleans_without_commit_or_component_halt() 
     let late = parent.member.image(&original, beginning.capture_id.0);
     parent.member.receive(&late).unwrap();
     for _ in 0..16 {
-        assert_ne!(parent.step().unwrap(), LeaveCaptureProgress::Refused);
+        assert_ne!(parent.step().unwrap(), ServingCaptureProgress::Refused);
     }
     assert!(parent.member.run.context.capture_snapshot().is_some());
     let aborted = parent.member.answer(
@@ -509,7 +512,7 @@ fn leave_capture_parent_missing_image_cleans_without_commit_or_component_halt() 
     parent.member.receive(&aborted).unwrap();
     let mut done = false;
     for _ in 0..64 {
-        if parent.step().unwrap() == LeaveCaptureProgress::Refused {
+        if parent.step().unwrap() == ServingCaptureProgress::Refused {
             done = true;
             break;
         }
@@ -544,7 +547,7 @@ fn leave_capture_parent_beginning_backpressure_precedes_barrier_and_keeps_window
     parent.step().unwrap();
     parent.pressure();
     for _ in 0..8 {
-        assert_eq!(parent.step().unwrap(), LeaveCaptureProgress::Pending);
+        assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Pending);
         assert!(parent.member.run.context.capture_snapshot().is_none());
         assert!(
             parent
@@ -712,7 +715,7 @@ fn leave_capture_parent_reduces_only_timely_complete_before_checking_remaining_l
             );
         }
         if boundary == "timely" {
-            assert_eq!(parent.step().unwrap(), LeaveCaptureProgress::Published);
+            assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Published);
             assert!(parent.capture.report().is_some());
             assert!(parent.member.run.context.capture_snapshot().is_none());
             assert!(
@@ -849,11 +852,11 @@ fn leave_capture_parent_abort_after_recorded_confirmation_cannot_send_commit() {
     );
     parent.member.receive(&answer).unwrap();
     for _ in 0..64 {
-        if parent.step().unwrap() == LeaveCaptureProgress::Refused {
+        if parent.step().unwrap() == ServingCaptureProgress::Refused {
             break;
         }
     }
-    assert_eq!(parent.step().unwrap(), LeaveCaptureProgress::Refused);
+    assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Refused);
     assert!(
         !parent
             .capture
@@ -904,7 +907,7 @@ fn leave_capture_parent_halt_phase_keeps_a_waiting_barrier_distinct_from_snapsho
     let CapturePayload::SavePointBeginning(_) = parent.next().payload else {
         panic!("Beginning first")
     };
-    assert_eq!(parent.step().unwrap(), LeaveCaptureProgress::Pending);
+    assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Pending);
     assert_eq!(
         parent.member.run.context.capture_snapshot().unwrap().phase,
         CapturePhase::Barrier
@@ -1003,11 +1006,11 @@ fn leave_capture_parent_disconnect_racing_send_or_receive_cancels_without_compon
             parent.member.receive(&answer).unwrap();
         }
         for _ in 0..32 {
-            if parent.step().unwrap() == LeaveCaptureProgress::Refused {
+            if parent.step().unwrap() == ServingCaptureProgress::Refused {
                 break;
             }
         }
-        assert_eq!(parent.step().unwrap(), LeaveCaptureProgress::Refused);
+        assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Refused);
         assert!(parent.member.run.context.halt().is_none());
         assert!(parent.capture.report().is_none());
         assert!(
@@ -1068,11 +1071,11 @@ fn leave_capture_parent_abort_with_pending_commit_withdraws_the_original_datagra
     );
     parent.member.receive(&answer).unwrap();
     for _ in 0..64 {
-        if parent.step().unwrap() == LeaveCaptureProgress::Refused {
+        if parent.step().unwrap() == ServingCaptureProgress::Refused {
             break;
         }
     }
-    assert_eq!(parent.step().unwrap(), LeaveCaptureProgress::Refused);
+    assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Refused);
     assert!(
         !parent
             .capture
@@ -1125,11 +1128,11 @@ fn leave_capture_parent_records_exact_member_refusal_only_after_matching_abort()
             .answer(&abort, s::StateControlAnswer::Aborted { capture_id: id });
         parent.member.receive(&answer).unwrap();
         for _ in 0..64 {
-            if parent.step().unwrap() == LeaveCaptureProgress::Refused {
+            if parent.step().unwrap() == ServingCaptureProgress::Refused {
                 break;
             }
         }
-        assert_eq!(parent.step().unwrap(), LeaveCaptureProgress::Refused);
+        assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Refused);
         assert_eq!(
             parent.member.records(Kind::SavePoint)[1]["payload"]["refusal_code"],
             "snapshot_failed"
