@@ -59,7 +59,14 @@ fn author_failure_worker_emission_keeps_exact_refusal_after_cancel() {
     assert!(!work.refusal_started);
     assert!(work.refusal_record.is_none());
     assert!(work.refusal_author.is_none());
-    work.cancel(&mut fx.context, None, None, ports.io).unwrap();
+    work.cancel(
+        weaver_types::state_flow::NonDispatchCause::Stop,
+        &mut fx.context,
+        None,
+        None,
+        ports.io,
+    )
+    .unwrap();
     assert!(work.stage == EmissionStage::RefusalAuthor);
     assert_eq!(
         work.advance(&mut None, &mut None, &mut fx.context, &mut ports),

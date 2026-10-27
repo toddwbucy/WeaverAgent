@@ -1,5 +1,5 @@
 //! Consume a stopped expired rollback without retrying its Release or Unload.
-use super::gate::ExpiredGateRollback;
+use super::gate::{ExpiredGateRollback, GateRollbackEvidence};
 use super::*;
 use crate::flow::context::failed_enter_driver::{FailedEnterProgress, FailedRunCleanup};
 use crate::flow::context::worker_startup::rollback::failed::{
@@ -90,9 +90,14 @@ impl FoundationExpiredRollback {
             .as_mut()
             .and_then(|active| active.gate.take())
             .or_else(|| {
-                self.handoff.gate.as_ref().map(|_| {
+                self.handoff.gate.as_ref().map(|arms| {
+                    let gate = match self.handoff.held.as_ref() {
+                        HeldStartup::Gate(gate) | HeldStartup::Ready { gate, .. } => gate,
+                        _ => unreachable!("checked actual gate handoff"),
+                    };
                     ExpiredGateRollback::failed_new(
-                        &self.handoff,
+                        GateRollbackEvidence::from_held(gate, self.handoff.identity.enter),
+                        arms,
                         self.leave,
                         deadline,
                         self.run.context.last_ns,
@@ -310,8 +315,17 @@ impl FoundationExpiredRollbackExit {
                     tail.abort();
                     FoundationRollbackExitProgress::Closed
                 } else {
+                    let gate = match self.held.handoff.held.as_ref() {
+                        HeldStartup::Gate(gate) | HeldStartup::Ready { gate, .. } => gate,
+                        _ => unreachable!("checked actual gate handoff"),
+                    };
                     match work.failed_step(
-                        &mut self.held.handoff,
+                        GateRollbackEvidence::from_held(gate, self.held.handoff.identity.enter),
+                        self.held
+                            .handoff
+                            .gate
+                            .as_mut()
+                            .expect("actual gate resources"),
                         &mut self.gate_sweep_reported,
                         tail,
                         io,
@@ -353,7 +367,7 @@ impl FoundationExpiredRollbackExit {
         self.progress = match &mut self.driver {
             Driver::Halt(tail) if !self.gate_done => {
                 let work = self.held.gate_work.as_mut().unwrap();
-                if work.failed_wait(&self.held.handoff, tail, io) {
+                if work.failed_wait(self.held.handoff.gate.as_ref().unwrap(), tail, io) {
                     FoundationRollbackExitProgress::Pending
                 } else {
                     work.failed_dispose(self.held.handoff.gate.as_mut().unwrap());

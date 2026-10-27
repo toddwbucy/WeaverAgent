@@ -1298,6 +1298,12 @@ impl PairLedger {
         Ok(())
     }
 
+    pub(super) fn barred_for(&self, cause: NonDispatchCause) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|batch| batch.cause == Some(cause))
+    }
+
     /// Operator leave dominates stop. An accepted stop dominates ordinary
     /// caller barriers. No change rewrites a record already given to authoring.
     pub(super) fn set_not_dispatched(&mut self, cause: NonDispatchCause) -> Result<(), PairError> {

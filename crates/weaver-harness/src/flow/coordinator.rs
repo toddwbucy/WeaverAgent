@@ -4161,6 +4161,18 @@ impl FlowCoordinator<super::ste100_socket::SocketPort> {
             .then(|| self.retire_failed_ports_owned())
     }
 
+    /// The consuming serving rollback supplies its actual Leave-expiry or
+    /// Recorded-Unload seal. Retain current ledgers and completions even when
+    /// input IDs and earlier turns exist; disposal grants no release success.
+    pub(super) fn retire_abandoned_serving_rollback_ports(
+        &mut self,
+        permit: &super::context::worker_startup::entered_rollback::EnteredRollbackDisposal,
+        barrier: &super::recording::RecordBarrier,
+    ) -> Option<FailedFlowResources> {
+        (permit.matches_record(&barrier.author_identity()) && self.capture.is_none())
+            .then(|| self.retire_failed_ports_owned())
+    }
+
     /// Unadmitted Enter disposal closes only actual owned endpoints. A Load
     /// receipt forbids this road even before semantic activation has completed.
     pub(super) fn retire_unadmitted_ports(
