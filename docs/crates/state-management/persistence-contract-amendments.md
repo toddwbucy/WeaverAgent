@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #244
+**Landing PR:** #349
 
-**Version:** 0.10 **Date filed:** 2026-10-20
+**Version:** 0.13 **Date filed:** 2026-10-20
 
 ## 0. Scope and parties
 
@@ -82,6 +82,13 @@ that frozen boundary is settled. No selected source from the current run beyond 
 boundary may enter the image. Admin may prepare a publication only from the matching
 capture result. [PERSIST-1, PERSIST-4, FLOW-3, SEAM-2, MARK-4]
 
+Before a sole force-unload sends Leave, admin may be unable to establish the loaded
+facts and declaration needed for capture. Foundation PERSIST-FORCE-ADMISSION and
+ADMIN-FORCE-ADMISSION then govern its bounded run end without capture. No new wire
+exchange, save claim or successful Left follows from that end. A known failed worker
+keeps the failed-run outcome. This does not change the obligations of an admitted
+capture or grant an unverified request to the harness. [PERSIST-3, PERSIST-4, FLOW-5]
+
 The harness-local watermark is not sent as a member control field or substituted for
 the image's SourcePosition. That position names the member's last committed content
 source. The member's operation metadata keeps STATE-OBSERVE's cutoff before capture,
@@ -133,7 +140,7 @@ elects no independent states, transition order or deadlines. [PERSIST-2, PERSIST
 | Publication reported | Return success only after final matching outcome | Record publication, release capture, return outcome | Completion makes the named start loadable |
 | Worker fails before final outcome | Stop publication, retain broken artifacts and report them | No successful outcome or new capture | Broken save, manual repair only |
 | Refused operation | Preserve previous selection | Report typed refusal and release healthy resources | No successful new save |
-| Image or finish timeout | Publish nothing and permit retry only after the worker's cleanup outcome | Keep barrier, send correlated abort, discard late result and await aborted | SavePointNotTaken only after image holdings are released |
+| Image or finish timeout | Publish nothing and await the worker's cleanup outcome | Keep barrier, send correlated abort, discard late result and await aborted | Refusal disposition only after image holdings are released |
 | Broken flow before confirmation | Publish nothing new | Halt and report without another capture | Failed run, never successful leave |
 
 **PERSIST-END.** A flow halt takes no dump and supplies no successful leave. It retains
@@ -143,6 +150,23 @@ typed operation refusal differs from a missing component result. Missing image/f
 answers keep the timeout/retry rule under R20-6 after PERSIST-CLEANUP. The timeout alone
 is not a component-failure halt. A failed cleanup is component failure. [FLOW-4, FLOW-5,
 PERSIST-4, October 18 R3]
+
+A refused save within an accepted leave is not itself the leave's final outcome.
+The worker confirms cleanup and refusal accounting before the lifecycle continues.
+Admin retains that refusal and waits for the final outcome. Under the existing policy,
+a forced leave completes without a save and a leave still graceful remains available
+for retry. Neither permits a save report for the refused capture. Failed cleanup or
+failed flow follows failed-run recovery. Foundation
+PERSIST-LEAVE-REFUSAL owns the actor order and windows. [PERSIST-4, FLOW-4, FLOW-5]
+
+Admin's local preparation refusal carries one correlated Aborted and waits for actual
+cleanup acknowledgement. The harness retains the first refusal attribution, settles
+owed authoring/filing and any member holding, then records the refusal before its
+CaptureRefused. A crossed admin cancellation cannot reset that work or produce another
+acknowledgement. A capture deadline that expires at admin still gives Unanswered and
+an Open marker, even if the worker later completes forced teardown. A still-graceful
+orphan remains in S9. No party fabricates delivery or successful conclusion.
+[PERSIST-4, FLOW-4, FLOW-5]
 
 ## 3. Harness-state - adoption, reads and image custody
 
@@ -184,8 +208,10 @@ timed-out leg is validated for identity, shape and operation observation, then d
 as a save result. Any other result is protocol failure. The late result is never relayed
 to admin, acknowledged or used for publication. Its observation still reaches
 the trace. Only the matching aborted result releases the barrier and permits
-SavePointNotTaken and operator retry. Partial writes retain their offsets, so abort
-cannot splice into an unfinished frame. No later filing or read is sent during cleanup.
+the final refusal disposition. On demand this permits operator retry. On leave the
+accepted lifecycle disposition remains owed under PERSIST-LEAVE-REFUSAL. Partial writes
+retain their offsets, so abort cannot splice into an unfinished frame. No later filing
+or read is sent during cleanup.
 [PERSIST-4, SEAM-2, FLOW-3, COST-2]
 
 Cleanup uses the existing two-second small-control bound, starting when abort is
