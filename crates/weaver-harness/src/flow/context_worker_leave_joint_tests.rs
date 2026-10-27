@@ -111,8 +111,10 @@ fn copy_tree(from: &Path, to: &Path) {
 }
 
 pub(super) fn scenario(name: &str, mode: &str) {
-    let layout = crate::tools_cgroup::tests::ScratchLayout::new("joint");
-    let root = std::env::temp_dir().join(format!("wj-{}", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let scenario = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let layout = crate::tools_cgroup::tests::ScratchLayout::new(&format!("joint-{scenario}"));
+    let root = std::env::temp_dir().join(format!("wj-{}-{scenario}", std::process::id()));
     fs::create_dir(&root).unwrap();
     let files = Files(root.clone(), true);
     let cgroup = layout.run.strip_suffix("/worker/run").unwrap();

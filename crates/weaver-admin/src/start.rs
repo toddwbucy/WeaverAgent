@@ -737,6 +737,17 @@ pub fn escalate_within(
     term_grace: Duration,
     kill_grace: Duration,
 ) -> Result<(), LifecycleRefusal> {
+    escalate_within_checked(run_directory, term_grace, kill_grace, || Ok(()))
+}
+
+/// Revalidate a serving caller's pinned containment before each signal. The
+/// target remains a pidfd-pinned run-lock holder, never the socket listener.
+pub(crate) fn escalate_within_checked(
+    run_directory: &Path,
+    term_grace: Duration,
+    kill_grace: Duration,
+    check: impl Fn() -> Result<(), LifecycleRefusal>,
+) -> Result<(), LifecycleRefusal> {
     if !run_lock_held(run_directory)? {
         return Ok(());
     }
@@ -759,6 +770,7 @@ pub fn escalate_within(
         }
         for holder in found {
             if let Some(pinned) = pin(holder, target) {
+                check()?;
                 signal(&pinned, sig);
             }
         }

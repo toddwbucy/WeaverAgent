@@ -63,6 +63,7 @@ impl PumpIo for SendAfterClock {
 pub(in crate::flow::context::worker_startup) fn exercise(
     serving: FoundationServing<'_>,
     socket: &Path,
+    close_before_projection: bool,
 ) {
     let duration = serving
         .owner
@@ -108,6 +109,27 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         .expect("the same receiving pump carried the request");
     assert!(clock.before.unwrap() < window.began_ns.0);
     let owner = guard.management.take().unwrap();
+    if close_before_projection {
+        drop(clock.peer);
+        guard.input = Some(
+            crate::flow::context::worker_startup::input::management::tests::closed_save_projection(
+                owner,
+            ),
+        );
+        assert!(guard.input.as_ref().unwrap().serving.save.is_none());
+        assert!(
+            guard
+                .input
+                .as_ref()
+                .unwrap()
+                .serving
+                .owner
+                .context
+                .failure()
+                .is_none()
+        );
+        return;
+    }
     match owner.queue_save() {
         Ok(input) => guard.input = Some(input),
         Err(owner) => {

@@ -519,6 +519,51 @@ fn replacement_enter_sender_bounds_whole_packet_before_transferring_descriptors(
 }
 
 #[test]
+fn bounded_replacement_enter_reports_oversize_without_transferring_descriptors() {
+    use crate::serving_load::window::LoadWindow;
+    use std::os::fd::AsFd;
+    use weaver_types::state_flow::enter::{
+        EnterBinding, EnterContent, EnterDirective, EnterEnvelope,
+    };
+    let (end, far) = nix::sys::socket::socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+    let owner = Coordination::adopt(end);
+    let (sink, _) = std::os::unix::net::UnixStream::pair().unwrap();
+    let (state, _) = std::os::unix::net::UnixStream::pair().unwrap();
+    let window = LoadWindow::begin(Duration::from_secs(2)).unwrap();
+    let mut envelope = EnterEnvelope::decode(include_bytes!(
+        "../../../weaver-types/tests/fixtures/state-enter.json"
+    ))
+    .unwrap();
+    let EnterContent::Directive(EnterDirective::Enter { payload }) = &mut envelope.payload;
+    let EnterBinding::Serving {
+        enter_window,
+        ste100_scheme,
+        ..
+    } = &mut payload.binding
+    else {
+        panic!()
+    };
+    *enter_window = window.original();
+    *ste100_scheme = "x".repeat(MAX_ENVELOPE_BYTES);
+    assert_eq!(
+        owner.send_replacement_enter_within(&envelope, sink.as_fd(), state.as_fd(), &window),
+        Err(ChannelFault::Truncated {
+            bound: MAX_ENVELOPE_BYTES
+        })
+    );
+    assert_eq!(
+        nix::sys::socket::recv(far.as_raw_fd(), &mut [0; 1], MsgFlags::MSG_DONTWAIT),
+        Err(nix::errno::Errno::EAGAIN)
+    );
+}
+
+#[test]
 fn original_enter_window_bounds_dial_send_pressure_and_already_readable_late_ready() {
     use crate::serving_load::window::LoadWindow;
     use std::os::fd::AsFd;

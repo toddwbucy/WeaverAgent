@@ -137,18 +137,40 @@ fn run_mode(
     if !start::run_lock_held(&directory)? {
         return conclude_workerless(config, verb);
     }
+    // The unjudged territory supplies no run identity. Pin only the trusted
+    // root-owned containment record, before dialing or reading any state.
+    let unjudged_force = if forced && config.territory_unjudged {
+        let record = pinned_containment(config, None)?;
+        Some(record)
+    } else {
+        None
+    };
     let mut observation = match crate::dial_worker(config) {
         Ok(channel) => channel,
         Err(crate::channel::ChannelFault::NoListener) => {
             // S8b: the worker is gone. End the actual remaining lock holders,
             // then the recorded cgroup, preserving the prior marker. These
             // leftovers provide no capture or successful-Leave evidence.
-            start::escalate_within(&directory, bounds.term, bounds.kill)?;
+            start::escalate_within_checked(&directory, bounds.term, bounds.kill, || {
+                if let Some(record) = &unjudged_force {
+                    pinned_containment(config, Some(record))?;
+                }
+                Ok(())
+            })?;
+            if let Some(record) = &unjudged_force {
+                pinned_containment(config, Some(record))?;
+            }
             return conclude_workerless(config, verb);
+        }
+        Err(crate::channel::ChannelFault::WrongPeer { .. }) if unjudged_force.is_some() => {
+            return force_unjudged(config, bounds, unjudged_force.as_ref().unwrap(), verb);
         }
         Err(error) => return Err(FailureCause::Channel(error).into()),
     };
     if config.territory_unjudged {
+        if let Some(record) = &unjudged_force {
+            return force_unjudged(config, bounds, record, verb);
+        }
         return Err(LifecycleRefusal::BoundaryUnverified.into());
     }
     let mut repository = Repository::from_judged_directory(
@@ -260,6 +282,56 @@ fn run_mode(
     }
 }
 
+fn pinned_containment(
+    config: &ServiceConfig,
+    expected: Option<&crate::containment::Record>,
+) -> Result<crate::containment::Record, LifecycleRefusal> {
+    use crate::containment::{Cgroup, RecordedAt, owned_by, read_record, recorded_at};
+    let directory = agent_cgroup::open_run_directory(&config.run_directory())
+        .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
+    let record = read_record(directory.as_fd(), &config.agent)
+        .map_err(|_| LifecycleRefusal::BoundaryUnverified)?
+        .ok_or(LifecycleRefusal::BoundaryUnverified)?;
+    if expected.is_some_and(|expected| expected.run != record.run) {
+        return Err(LifecycleRefusal::AgentRunning);
+    }
+    if record.run.is_empty()
+        || expected.is_some_and(|expected| *expected != record)
+        || recorded_at(&record) != RecordedAt::Same
+        || !Cgroup::open(&record.path).is_ok_and(|group| owned_by(&group, 0))
+    {
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    }
+    Ok(record)
+}
+
+fn force_unjudged(
+    config: &ServiceConfig,
+    bounds: UnloadBounds,
+    record: &crate::containment::Record,
+    verb: &'static str,
+) -> Result<Concluded, Failure> {
+    diag!("weaver-admin: unjudged territory prevents capture; ending the verified run");
+    if let Some(answer) = crate::behind_another_run(config, bounds, Some(&record.run))? {
+        return Ok(Concluded {
+            answer: answer?,
+            evidence: None,
+            joined: None,
+        });
+    }
+    start::escalate_within_checked(&config.run_directory(), bounds.term, bounds.kill, || {
+        pinned_containment(config, Some(record)).map(|_| ())
+    })?;
+    pinned_containment(config, Some(record))?;
+    crate::end_agent_cgroup(config, verb, agent_cgroup::Concluding::Run(&record.run))?;
+    crate::write_by_rule(config, Some(&record.run), conclusion::MarkerWrite::Forced)?;
+    Ok(Concluded {
+        answer: crate::unloaded_by_ladder(config)?,
+        evidence: None,
+        joined: None,
+    })
+}
+
 /// The sole caller already holds its invocation lock. An unanswered initial
 /// Leave or a forced Leave's correlated OutOfOrder ends the run, then writes Forced
 /// by the existing marker rule. No capture was begun and nothing is published.
@@ -322,8 +394,9 @@ fn conclude(
     // A validated Left and this run's eligible marker complete the exact
     // guarded save before process cleanup. A later cleanup failure still
     // refuses Unloaded, but cannot make that completed save ineligible.
-    let publication = if matches!(&marker, Ok(Some(save_points::Marker::Open { run: open })) if *open == run.0)
-    {
+    let eligible =
+        matches!(&marker, Ok(Some(save_points::Marker::Open { run: open })) if *open == run.0);
+    let publication = if eligible {
         leave
             .finish_leave()
             .map(|identity| *completed = Some(identity))
@@ -337,8 +410,8 @@ fn conclude(
         return Err(cause);
     }
     ended.map_err(Fault::Admission)?;
-    if !matches!(marker.map_err(Fault::Admission)?, Some(save_points::Marker::Open { run: open }) if open == run.0)
-    {
+    marker.map_err(Fault::Admission)?;
+    if !eligible {
         // The idempotent conclusion writes/publishes nothing for an already
         // closed or absent marker. Any guarded capture remains ineligible.
         return crate::unloaded_by_ladder(config).map_err(Fault::Admission);

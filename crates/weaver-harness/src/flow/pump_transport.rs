@@ -759,7 +759,7 @@ impl OrganPort {
     /// queued by this peer. Their original owner must reduce them before
     /// assigning a missing result. This never reopens admission or sending.
     pub(super) fn closed_receive_pending(&self) -> bool {
-        !matches!(self.closed_receive, ClosedReceive::Finished)
+        matches!(self.closed_receive, ClosedReceive::Pending)
     }
 
     /// One bounded receive into the same single completion slot. The caller

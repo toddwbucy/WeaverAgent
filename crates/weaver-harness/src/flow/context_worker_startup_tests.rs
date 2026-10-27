@@ -1391,7 +1391,9 @@ fn circuit(mode: &str) {
             drop(peer);
             if mode.ends_with("-demand-receive-clock") {
                 super::input::generation::session_tests::demand_save::receive_clock::exercise(
-                    serving, &path,
+                    serving,
+                    &path,
+                    mode.contains("-closed-"),
                 );
                 return;
             }
@@ -2038,6 +2040,10 @@ scenario!(worker_startup_composition_ready, "ready");
 scenario!(
     worker_session_demand_save_receive_clock,
     "input-worker-generation-emission-session-demand-receive-clock"
+);
+scenario!(
+    worker_session_demand_save_closed_before_projection,
+    "input-worker-generation-emission-session-closed-demand-receive-clock"
 );
 scenario!(
     worker_session_demand_save_sqlite_organ_loss_gate,

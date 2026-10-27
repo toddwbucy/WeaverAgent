@@ -54,6 +54,8 @@ impl<'a> FoundationManagement<'a> {
         };
         if let Err(error) = self.peer.enable_capture() {
             self.detail = Some(format!("serving save projection: {error:?}"));
+            self.peer_unavailable = true;
+            self.progress = FoundationManagementProgress::Dropped;
             return Err(self);
         }
         let result = ServingCapture::queue_demand(

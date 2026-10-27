@@ -782,8 +782,6 @@ impl Ledger {
         Some(receipt)
     }
 
-    /// No completion crosses this port on failure or before every subscribed
-    /// disposition was recorded. Taking it relinquishes the one subscription.
     /// Retain actual completed evidence without releasing a consumer grant.
     pub(super) fn retain_boot_filing_receipts(&mut self) -> Result<ReceiptSet, LedgerError> {
         self.live()?;
@@ -795,6 +793,8 @@ impl Ledger {
         Ok(self.receipts.take().expect("complete receipt set"))
     }
 
+    /// No completion crosses this port on failure or before every subscribed
+    /// disposition was recorded. Taking it relinquishes the one subscription.
     pub(super) fn take_receipts(&mut self) -> Result<Option<ReceiptSet>, LedgerError> {
         self.live()?;
         if self.receipts.as_ref().is_some_and(ReceiptSet::is_complete) {

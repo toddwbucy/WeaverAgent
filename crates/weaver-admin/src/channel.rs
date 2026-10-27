@@ -413,7 +413,7 @@ impl Coordination {
         state: BorrowedFd<'_>,
         window: &crate::serving_load::window::LoadWindow,
     ) -> Result<(), ChannelFault> {
-        use weaver_types::state_flow::enter::EnterBinding;
+        use weaver_types::state_flow::enter::{CodecError, EnterBinding};
         let EnterBinding::Serving { enter_window, .. } = &envelope.enter().binding else {
             return Err(ChannelFault::Undecodable);
         };
@@ -421,7 +421,12 @@ impl Coordination {
             return Err(ChannelFault::Undecodable);
         }
         window.check_channel()?;
-        let body = envelope.encode().map_err(|_| ChannelFault::Undecodable)?;
+        let body = envelope.encode().map_err(|error| match error {
+            CodecError::TooLarge => ChannelFault::Truncated {
+                bound: MAX_ENVELOPE_BYTES,
+            },
+            _ => ChannelFault::Undecodable,
+        })?;
         window.check_channel()?;
         let fds = [sink.as_raw_fd(), state.as_raw_fd()];
         loop {

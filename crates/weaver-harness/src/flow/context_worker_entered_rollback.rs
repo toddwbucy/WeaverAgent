@@ -372,6 +372,10 @@ impl FoundationEnteredRollback {
     pub(in crate::flow::context::worker_startup) fn test_account(
         &self,
     ) -> (&FoundationRun, &FoundationEnteredRollbackHandoff) {
+        assert!(
+            matches!(self.stage, CleanupStage::Gate) || self.handoff.arms.port.is_none(),
+            "a retired Gate must not be polled in later rollback stages"
+        );
         (
             self.run.as_deref().expect("healthy retained run"),
             &self.handoff,

@@ -16,10 +16,14 @@ enum Case {
     UnjudgedDown,
     UnjudgedMember,
     BadRecord,
+    UnjudgedLive,
+    UnjudgedLiveGraceful,
+    UnjudgedLiveBadRecord,
+    UnjudgedLiveChangedRecord,
 }
 
 const LEFTOVER: &str = r#"#!/usr/bin/python3
-import errno,fcntl,os,signal,sys,time
+import errno,fcntl,json,os,signal,socket,sys,time
 signal.alarm(15)
 def term(sig,frame):
     with open(sys.argv[4],'r+') as lock:
@@ -27,8 +31,16 @@ def term(sig,frame):
         except OSError as e: assert e.errno in (errno.EAGAIN,errno.EACCES)
         else: raise AssertionError('force escaped its invocation lock')
     with open(sys.argv[3],'w') as out: out.write('locked\n')
+    if sys.argv[1]=='changed':
+        with open(sys.argv[6]) as source: record=json.load(source)
+        record['run']='different-run-after-term'
+        with open(sys.argv[6],'w') as out: json.dump(record,out)
 signal.signal(signal.SIGTERM,term)
 if sys.argv[1]=='unlocked': os.close(9)
+if sys.argv[1] in ('live','changed'):
+    listener=socket.socket(socket.AF_UNIX,socket.SOCK_SEQPACKET)
+    listener.bind(sys.argv[5])
+    listener.listen(1)
 open(sys.argv[2],'w').close()
 while True: time.sleep(1)
 "#;
@@ -152,12 +164,24 @@ fn recovery(case: Case, marker: Option<save_points::Marker>) {
     let before_saves = files(&saves);
     save_points::write_marker(&f.config.root, marker.as_ref()).unwrap();
 
-    let has_child = matches!(
+    let live = matches!(
         case,
-        Case::Orphan | Case::MemberOnly | Case::UnjudgedMember | Case::BadRecord
+        Case::UnjudgedLive
+            | Case::UnjudgedLiveGraceful
+            | Case::UnjudgedLiveBadRecord
+            | Case::UnjudgedLiveChangedRecord
     );
-    let held = matches!(case, Case::MemberOnly | Case::UnjudgedMember);
-    if matches!(case, Case::UnjudgedDown | Case::UnjudgedMember) {
+    if live {
+        start::prepare_runtime_directory(&f.config.coordination_root, &f.config.agent, 0, 0)
+            .unwrap();
+    }
+    let has_child = live
+        || matches!(
+            case,
+            Case::Orphan | Case::MemberOnly | Case::UnjudgedMember | Case::BadRecord
+        );
+    let held = live || matches!(case, Case::MemberOnly | Case::UnjudgedMember);
+    if live || matches!(case, Case::UnjudgedDown | Case::UnjudgedMember) {
         f.config.territory_unjudged = true;
         f.config.territory_fd = None;
         f.config.save_points = None;
@@ -175,10 +199,25 @@ fn recovery(case: Case, marker: Option<save_points::Marker>) {
         let worker = start::spawn_worker(start::WorkerStart {
             binary: &f.config.worker,
             arguments: vec![
-                if held { "held" } else { "unlocked" }.into(),
+                if case == Case::UnjudgedLiveChangedRecord {
+                    "changed"
+                } else if live {
+                    "live"
+                } else if held {
+                    "held"
+                } else {
+                    "unlocked"
+                }
+                .into(),
                 ready.to_str().unwrap().into(),
                 term_seen.to_str().unwrap().into(),
                 run_dir.join("admin.lock").to_str().unwrap().into(),
+                f.config.coordination_socket().to_str().unwrap().into(),
+                run_dir
+                    .join(crate::containment::RECORD)
+                    .to_str()
+                    .unwrap()
+                    .into(),
             ],
             uid: 0,
             gid: 0,
@@ -206,15 +245,15 @@ fn recovery(case: Case, marker: Option<save_points::Marker>) {
         children
     });
     assert_eq!(start::run_lock_held(&run_dir).unwrap(), held);
-    assert!(!f.config.coordination_socket().exists());
-    if case == Case::BadRecord {
+    assert_eq!(f.config.coordination_socket().exists(), live);
+    if matches!(case, Case::BadRecord | Case::UnjudgedLiveBadRecord) {
         fs::write(
             run_dir.join(crate::containment::RECORD),
             b"invalid cgroup identity",
         )
         .unwrap();
     }
-    let outcome = run_authorized(
+    let outcome = run_mode(
         &f.config,
         &AgentName(f.config.agent.clone()),
         Cause { uid: 73 },
@@ -224,6 +263,7 @@ fn recovery(case: Case, marker: Option<save_points::Marker>) {
             term: Duration::from_millis(100),
             kill: Duration::from_secs(1),
         },
+        case != Case::UnjudgedLiveGraceful,
         |_| panic!("workerless recovery must not look up a member or request capture"),
     );
     let outcome_text = format!("{outcome:?}");
@@ -233,17 +273,37 @@ fn recovery(case: Case, marker: Option<save_points::Marker>) {
         before_saves,
         "{case:?}: indexed or guarded state changed"
     );
+    let foreign = matches!(&marker, Some(save_points::Marker::Open { run }) if run != RUN);
+    let refused = matches!(
+        case,
+        Case::BadRecord
+            | Case::UnjudgedLiveGraceful
+            | Case::UnjudgedLiveBadRecord
+            | Case::UnjudgedLiveChangedRecord
+    ) || (live && foreign);
+    let expected_marker = if live
+        && !refused
+        && matches!(&marker, Some(save_points::Marker::Open { run }) if run == RUN)
+    {
+        Some(save_points::Marker::Forced { run: RUN.into() })
+    } else {
+        marker.clone()
+    };
     assert_eq!(
         save_points::load_marker(&f.config.root).unwrap(),
-        marker,
-        "{case:?}: no Left grants no marker conclusion"
+        expected_marker,
+        "{case:?}: only a verified direct force ends the matching Open marker"
     );
-    if case == Case::BadRecord {
+    if refused {
         let failure = outcome.unwrap_err();
         assert_eq!(
             failure.refusal(),
             weaver_types::state_flow::capture::CaptureRefusal::Lifecycle(
-                LifecycleRefusal::BoundaryUnverified
+                if foreign || case == Case::UnjudgedLiveChangedRecord {
+                    LifecycleRefusal::AgentRunning
+                } else {
+                    LifecycleRefusal::BoundaryUnverified
+                }
             )
         );
         assert!(
@@ -288,7 +348,7 @@ fn recovery(case: Case, marker: Option<save_points::Marker>) {
             );
         }
     }
-    if matches!(case, Case::UnjudgedDown | Case::UnjudgedMember) {
+    if live || matches!(case, Case::UnjudgedDown | Case::UnjudgedMember) {
         assert!(!f.config.territory.join("admin.log").exists());
     }
     if let Some(destination) = std::env::var_os("WEAVER_LEAVE_RECOVERY_EVIDENCE") {
@@ -357,4 +417,32 @@ fn forced_leave_invocation_recovery_refuses_unverified_containment() {
         Case::BadRecord,
         Some(save_points::Marker::Open { run: RUN.into() }),
     );
+}
+
+#[test]
+#[ignore = "root-owned delegated cgroup scope; actual live force with unjudged territory"]
+fn forced_leave_invocation_unjudged_live_run_ends_without_capture_or_territory_access() {
+    for marker in [
+        None,
+        Some(save_points::Marker::Open { run: RUN.into() }),
+        Some(save_points::Marker::Closed { run: RUN.into() }),
+        Some(save_points::Marker::Forced { run: RUN.into() }),
+        Some(save_points::Marker::Open {
+            run: "other-run".into(),
+        }),
+    ] {
+        recovery(Case::UnjudgedLive, marker);
+    }
+}
+
+#[test]
+#[ignore = "root-owned delegated cgroup scope; actual live force refusal and signal boundaries"]
+fn forced_leave_invocation_unjudged_live_run_preserves_graceful_and_containment_refusals() {
+    for case in [
+        Case::UnjudgedLiveGraceful,
+        Case::UnjudgedLiveBadRecord,
+        Case::UnjudgedLiveChangedRecord,
+    ] {
+        recovery(case, Some(save_points::Marker::Open { run: RUN.into() }));
+    }
 }

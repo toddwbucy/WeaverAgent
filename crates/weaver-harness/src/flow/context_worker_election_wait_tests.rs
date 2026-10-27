@@ -286,10 +286,17 @@ pub(super) fn exercise(
             input.advance_with_io(&mut wait),
             FoundationInputProgress::Generated
         );
-        assert_eq!(
-            wait.calls, 0,
-            "ordinary election observation stays nonblocking"
-        );
+        if lost_gate {
+            assert!(
+                wait.calls <= 1,
+                "gate settlement may perform one bounded wait"
+            );
+        } else {
+            assert_eq!(
+                wait.calls, 0,
+                "ordinary election observation stays nonblocking"
+            );
+        }
     }
     for _ in 0..8 {
         let progress = input.drive_with_io(&mut wait, true);

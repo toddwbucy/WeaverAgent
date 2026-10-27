@@ -53,6 +53,45 @@ impl Drop for Guard<'_> {
         }
     }
 }
+
+pub(in crate::flow::context::worker_startup) fn closed_save_projection(
+    owner: Box<FoundationManagement<'_>>,
+) -> Box<FoundationInput<'_>> {
+    let mut guard = Guard {
+        input: None,
+        management: Some(owner),
+    };
+    let owner = guard.management.as_mut().unwrap();
+    assert_eq!(
+        owner.peer.try_receive().unwrap_err().fault,
+        crate::ChannelFault::Closed
+    );
+    let original = owner.peer.capture_held().unwrap().envelope.clone();
+    guard.management = Some(
+        guard
+            .management
+            .take()
+            .unwrap()
+            .queue_save()
+            .err()
+            .expect("closed peer cannot change projection"),
+    );
+    let owner = guard.management.as_mut().unwrap();
+    assert_eq!(owner.progress(), FoundationManagementProgress::Dropped);
+    assert_eq!(
+        owner.save_message.as_ref().unwrap().message.envelope,
+        original
+    );
+    assert!(owner.peer.capture_held().is_none());
+    assert_eq!(owner.advance(), FoundationManagementProgress::Dropped);
+    match guard.management.take().unwrap().finish() {
+        Ok(input) => input,
+        Err(owner) => {
+            guard.management = Some(owner);
+            panic!("dropped save peer must return the input owner");
+        }
+    }
+}
 pub(in crate::flow::context::worker_startup) fn dial(path: &Path) -> OwnedFd {
     let fd = socket(
         AddressFamily::Unix,

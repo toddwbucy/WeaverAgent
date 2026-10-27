@@ -579,6 +579,73 @@ fn fill_trace(fx: &mut Fixture) {
 }
 
 #[test]
+fn failed_serving_rollback_promotes_pending_turn_close_before_session_under_pressure() {
+    let mut fx = Fixture::new(config());
+    fx.activate();
+    let turn = weaver_trace::TurnRef("rollback-pending-close".into());
+    let mut started = event(Kind::TurnStarted, None);
+    started.turn = Some(turn.clone());
+    fx.author(started).unwrap();
+    let resources = fx.context.failed_enter_resources().unwrap();
+    let leave = AbsoluteBound::after(fx.clock.now().unwrap(), 1000).unwrap();
+    fx.context
+        .arm(PumpDeadline::Leave, leave, &mut fx.clock)
+        .unwrap();
+    fill_trace(&mut fx);
+    let mut close = event(
+        Kind::TurnClosed,
+        Some(Payload::TurnClosed(weaver_trace::TurnClose::Stopped {
+            reason: weaver_trace::StopReason::Directive,
+            cause: Some(weaver_trace::Cause { uid: 42 }),
+        })),
+    );
+    close.turn = Some(turn.clone());
+    fx.context.author_turn = Some((Kind::TurnClosed, Some(turn)));
+    let now = fx.clock.now().unwrap();
+    assert!(matches!(
+        fx.context.barrier.submit_authored_with_clock(
+            close,
+            RecordPurpose::Observation,
+            &fx.context.author,
+            1,
+            &mut fx.context.inbox,
+            &mut fx.context.budget,
+            &mut || Ok(now)
+        ),
+        RecordProgress::Pending
+    ));
+    let ticket = fx.context.pending_author().unwrap().ticket;
+    state_eof(&mut fx);
+    let mut owner = FailedEnterCleanup::after_serving_rollback(
+        take_context(&mut fx),
+        resources,
+        leave,
+        weaver_types::Cause { uid: 42 },
+        None,
+        None,
+    );
+    assert_eq!(owner.advance(&mut fx.clock), FailedEnterProgress::Progress);
+    assert!(owner.advance_rollback_scope(&mut fx.clock));
+    assert!(owner.context.open_turn.is_none());
+    assert!(owner.context.pending_author().is_none());
+    let scope = owner.rollback_scope.as_ref().unwrap();
+    assert!(scope.attempted);
+    assert_eq!(scope.sequences.len(), 2);
+    let close = scope.sequences[0];
+    let session = scope.sequences[1];
+    assert!(close.0 < session.0);
+    assert_eq!(
+        owner.context.barrier.recorded_author_ticket(close),
+        Some(ticket)
+    );
+    let structure = owner.context.barrier.recorder().structure();
+    assert_eq!(structure.by_kind(Kind::TurnClosed).count(), 1);
+    assert_eq!(structure.by_kind(Kind::SessionClosed).count(), 1);
+    assert!(owner.context.barrier.recorder().boundary().queued >= serving::ORDINARY_CAPACITY);
+    owner.abort();
+}
+
+#[test]
 fn failed_enter_cleanup_reserved_terminals_do_not_wait_for_ordinary_pressure_or_lose_original_ticket()
  {
     let mut fx = Fixture::new(config());

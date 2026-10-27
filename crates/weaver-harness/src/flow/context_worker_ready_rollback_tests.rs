@@ -16,9 +16,8 @@ pub(super) fn gate(mode: &str, root: &Path, fd: i32) {
     if mode.contains("-organ-settling") {
         wait_file(root, "ready-rollback-observe-death");
         nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
-        // Actual protocol EOF precedes stderr EOF, leaving the existing
-        // bounded last-word observation pending at the consuming Leave.
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        // Keep stderr open until the parent observes the bounded pending wake.
+        wait_file(root, "ready-rollback-wake-observed");
         return;
     }
     if super::forced_leave::quiesce_conversion::is_mode(mode) {
@@ -483,6 +482,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         "rollback must tell the driver to wait for observation settlement"
                     );
                     waited = true;
+                    std::fs::write(root.join("ready-rollback-wake-observed"), b"observed").unwrap();
                 }
                 if progress == FoundationEnteredRollbackProgress::Closed {
                     break;
@@ -504,6 +504,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
     assert!(!owner.abandoned(), "{:?}", owner.detail());
     assert!(owner.detail().is_none(), "{:?}", owner.detail());
     let (run, account) = owner.test_account();
+    assert!(
+        account.arms.port.is_none(),
+        "Gate retirement removes the receive owner before later rollback stages"
+    );
     assert!(Arc::ptr_eq(&run.context.read_origin, &origin));
     assert!(Arc::ptr_eq(&account.origin, &origin));
     assert_eq!(account.enter, enter);

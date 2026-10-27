@@ -1510,6 +1510,9 @@ impl FailedRunCleanup {
             )
         });
         if existing_terminal {
+            // Terminal promotion uses reserved per-kind capacity, so ordinary
+            // writer pressure cannot leave this pending. Bind TurnClosed before
+            // deciding whether the rollback still owes a turn or session close.
             if session_owned {
                 self.context.abandon_halt_organ_observations(
                     "observation incomplete before rollback session close",

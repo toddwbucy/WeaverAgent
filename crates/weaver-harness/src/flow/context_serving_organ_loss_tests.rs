@@ -84,6 +84,23 @@ fn organ_last_word_advance_returns_its_original_wake_without_waiting() {
     assert_eq!(observation.settle_by, Some(settle_by));
     assert!(observation.sequence.is_some());
     assert_eq!(fx.records(Kind::Fault).len(), 1);
+    // Exercise the getter before any halt can clear the cache or any pump can
+    // phase-filter it. A Recorded observation is no longer a runnable wake.
+    let (channel, _peer) = crate::channel::OrganChannel::pair().unwrap();
+    let gate = OrganPort::from_channel(channel).unwrap();
+    let organs = ObservedOrgans {
+        gate: Some(ObservedGate {
+            port: gate.port_identity(),
+            observation: Some(observation),
+        }),
+        wake_ns: Some((true, now)),
+        ..Default::default()
+    };
+    assert!(fx.run.context.failure().is_none());
+    assert!(
+        organs.wake().is_none(),
+        "Recorded completion retires its cached wake without a halt"
+    );
 }
 
 fn install_and_latch(fx: &mut InputFixture) -> RunFailure {
@@ -640,11 +657,19 @@ fn closed_gate_malformed_tail_returns_its_refusal_without_an_input_driver() {
     let mut io = crate::flow::clock::testing::FakePumpIo::new(now);
     let mut ports = ports(&mut io);
     ports.gate = Some(&mut gate);
+    assert!(matches!(fx.run.context.pump_with_wait(&mut ports, true),
+        Err(RunFailure::Transport { source: PumpSource::Gate, failure })
+            if failure.fault == crate::ChannelFault::Undecodable));
+    let gate = ports.gate.as_deref_mut().unwrap();
     for _ in 0..2 {
-        assert!(matches!(fx.run.context.pump_with_wait(&mut ports, true),
-            Err(RunFailure::Transport { source: PumpSource::Gate, failure })
-                if failure.fault == crate::ChannelFault::Undecodable));
-        let gate = ports.gate.as_deref().unwrap();
+        assert!(
+            !gate.closed_receive_pending(),
+            "retained refusal is no receive work"
+        );
+        assert_eq!(
+            gate.receive_closed().unwrap_err().fault,
+            crate::ChannelFault::Undecodable
+        );
         assert_eq!(gate.failure(), Some(&first));
         assert_eq!(gate.failed_wire(), Some(raw.as_slice()));
     }

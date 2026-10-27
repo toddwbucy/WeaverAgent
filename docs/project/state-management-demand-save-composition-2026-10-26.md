@@ -126,7 +126,7 @@ changed. Logs retain that failed fixture run.
 | End demand with Leave's CaptureComplete | Exact saved-report test rejects the wrong terminal form. |
 | Permit Beginning to replace the original window | Admin window test accepts a changed anchor. |
 | Skip indexed identity equality on Taken | Admin report test accepts the wrong image position. |
-| Stop immediately on local preparation error | Admin actor test fails before the required Aborted and cleanup. |
+| Stop immediately on local preparation error | Admin actor test fails before the required Aborted response and cleanup. |
 | Convert silence to CaptureNotReady | Admin response test rejects the invented worker result. |
 
 The nine-control table describes the original 618ea138 evidence. Its logs retain
