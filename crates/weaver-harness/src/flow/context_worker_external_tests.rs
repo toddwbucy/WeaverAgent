@@ -367,7 +367,21 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
                         assert_eq!(frame.position, Position::Continue);
                         assert_eq!(frame.exchange, pending.as_ref().unwrap().exchange);
                         assert!(!root.join("halt-interrupt.json").exists());
-                        std::fs::write(root.join("halt-interrupt.json"), &bytes[..n]).unwrap();
+                        if mode.contains("trace-loss-late") {
+                            // Force the observer to reach the old racy assertion
+                            // before this child publishes its evidence.
+                            let end = Instant::now() + Duration::from_secs(10);
+                            while !root.join("halt-observe-interrupt").exists() {
+                                assert!(Instant::now() < end, "interrupt observer watchdog");
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                        }
+                        std::fs::write(root.join("halt-interrupt.json.part"), &bytes[..n]).unwrap();
+                        std::fs::rename(
+                            root.join("halt-interrupt.json.part"),
+                            root.join("halt-interrupt.json"),
+                        )
+                        .unwrap();
                         if mode.contains("halt-gate-deadline") || mode.contains("halt-gate-clock") {
                             continue;
                         }

@@ -78,6 +78,8 @@ mod verbs;
 /// item C2.9).
 #[cfg(test)]
 mod scratch;
+#[cfg(test)]
+mod test_isolation;
 
 use std::path::PathBuf;
 

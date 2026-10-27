@@ -42,6 +42,9 @@ fn holding_child(lock: &RunLock) -> std::process::Child {
 /// lock reads free the moment the invocation's copy closes.
 #[test]
 fn the_run_lock_outlives_its_taker_and_the_escalation_ends_its_holder() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     let dir = scratch("run-lock");
     let lock = take_run_lock(dir.0.as_path())
         .unwrap()
@@ -56,8 +59,7 @@ fn the_run_lock_outlives_its_taker_and_the_escalation_ends_its_holder() {
         take_run_lock(dir.0.as_path()).unwrap().is_none(),
         "a second take refuses while a constituent stands"
     );
-    // The stand-in is found at the run lock's number; a concurrent test's
-    // child between fork and exec may appear for an instant beside it.
+    // The expected constituent is found at the run lock's descriptor.
     let found = holders(dir.0.as_path());
     assert!(
         found.contains(&Holder {
@@ -85,6 +87,9 @@ fn the_run_lock_outlives_its_taker_and_the_escalation_ends_its_holder() {
 /// holder survives, refusing `WorkerWouldNotExit`.
 #[test]
 fn the_escalation_kills_a_holder_that_ignores_term() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     use std::os::unix::process::CommandExt;
     let dir = scratch("ignores-term");
     let lock = take_run_lock(dir.0.as_path()).unwrap().unwrap();
@@ -122,15 +127,15 @@ fn the_escalation_kills_a_holder_that_ignores_term() {
 /// `WorkerWouldNotExit`.
 #[test]
 fn the_escalation_ends_every_holder() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     let dir = scratch("every-holder");
     let lock = take_run_lock(dir.0.as_path()).unwrap().unwrap();
     let mut first = holding_child(&lock);
     let mut second = holding_child(&lock);
     drop(lock);
-    // Both stand-ins are found. A concurrent test's child, between its
-    // fork and its exec, can hold this test's close-on-exec copy for an
-    // instant, which single-threaded admin never meets, so the scan is
-    // asked for both rather than for exactly two.
+    // Both stand-ins are found at the inherited run-lock descriptor.
     let found: Vec<i32> = holders(dir.0.as_path()).iter().map(|h| h.pid).collect();
     assert!(found.contains(&(first.id() as i32)), "{found:?}");
     assert!(found.contains(&(second.id() as i32)), "{found:?}");
@@ -152,6 +157,9 @@ fn the_escalation_ends_every_holder() {
 /// the stale holder is pinned.
 #[test]
 fn a_holder_no_longer_holding_the_file_is_never_pinned() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     let dir = scratch("pin");
     let lock = take_run_lock(dir.0.as_path()).unwrap().unwrap();
     let mut child = holding_child(&lock);
@@ -183,6 +191,9 @@ fn a_holder_no_longer_holding_the_file_is_never_pinned() {
 /// named at its standard input.
 #[test]
 fn a_process_with_the_lock_file_merely_open_is_no_holder() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     let dir = scratch("merely-open");
     let lock = take_run_lock(dir.0.as_path()).unwrap().unwrap();
     let mut holder = holding_child(&lock);

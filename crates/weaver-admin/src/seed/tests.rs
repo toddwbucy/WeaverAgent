@@ -21,6 +21,9 @@ fn coordination(fixture: &preparation::tests::Fixture) -> std::path::PathBuf {
 
 #[test]
 fn seed_reads_the_unloaded_ladder_before_inventory_and_preserves_unverified_evidence() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     let fixture = preparation::tests::fixture();
     let directory = coordination(&fixture);
     let agent = AgentName(fixture.config.agent.clone());

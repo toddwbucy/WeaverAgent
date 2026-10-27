@@ -145,6 +145,9 @@ fn admin_startup_selects_verified_settings_without_publishing_room_leftovers() {
 
 #[test]
 fn admin_startup_refuses_selector_scope_and_corrupt_image_before_preparation() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     for case in ["selector", "session", "image", "missing-index"] {
         let f = fixture();
         let identity = setup(&f);
@@ -202,6 +205,9 @@ fn admin_startup_refuses_selector_scope_and_corrupt_image_before_preparation() {
 
 #[test]
 fn admin_startup_preparation_and_frame_bound_precede_every_fork() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     for oversized in [false, true] {
         let f = fixture();
         setup(&f);
@@ -696,6 +702,9 @@ fn admin_startup_composition_eof_rolls_back_without_loaded() {
 
 #[test]
 fn admin_original_enter_window_includes_preparation_and_preserves_actual_failure() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     for actual_failure in [false, true] {
         let mut f = fixture();
         setup(&f);

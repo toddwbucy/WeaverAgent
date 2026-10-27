@@ -245,6 +245,9 @@ fn lock_probe_process() {
 
 #[test]
 fn both_real_locks_precede_file_preparation_and_are_released_afterward() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     for operation in [Operation::Restore, Operation::BindState] {
         let fixture = fixture();
         let identity = seed(&fixture);
@@ -273,6 +276,9 @@ fn both_real_locks_precede_file_preparation_and_are_released_afterward() {
 
 #[test]
 fn competing_invocation_or_held_run_never_reaches_preparation() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     for operation in [Operation::Restore, Operation::BindState] {
         let fixture = fixture();
         seed(&fixture);
@@ -302,6 +308,9 @@ fn competing_invocation_or_held_run_never_reaches_preparation() {
 
 #[test]
 fn unloaded_judgment_precedes_preparation_and_is_repeated_for_publication() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     for changed_after_prepare in [false, true] {
         for operation in [Operation::Restore, Operation::BindState] {
             let fixture = fixture();
@@ -349,6 +358,9 @@ fn unloaded_judgment_precedes_preparation_and_is_repeated_for_publication() {
 
 #[test]
 fn bind_keeps_the_image_and_seed_but_binds_the_judged_new_configuration() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     let fixture = fixture();
     let original = seed(&fixture);
     let before = triple(&fixture, &original);
@@ -374,6 +386,9 @@ fn bind_keeps_the_image_and_seed_but_binds_the_judged_new_configuration() {
 
 #[test]
 fn restore_historic_and_latest_append_selection_without_rewriting_the_artifact() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     let fixture = fixture();
     let first = seed(&fixture);
     let original = triple(&fixture, &first);
@@ -404,6 +419,9 @@ fn restore_historic_and_latest_append_selection_without_rewriting_the_artifact()
 
 #[test]
 fn bind_rejects_a_stale_selector_and_a_changed_scheme_before_publication() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     let fixture = fixture();
     let first = seed(&fixture);
     fixture.edit("synthetic-decoder", "replacement-decoder");
@@ -428,6 +446,9 @@ fn bind_rejects_a_stale_selector_and_a_changed_scheme_before_publication() {
 
 #[test]
 fn independently_judged_identity_and_pending_guards_cannot_be_bypassed() {
+    if crate::test_isolation::reexec() {
+        return;
+    }
     for operation in [Operation::Restore, Operation::BindState] {
         for defect in ["session", "trace", "guard"] {
             let fixture = fixture();

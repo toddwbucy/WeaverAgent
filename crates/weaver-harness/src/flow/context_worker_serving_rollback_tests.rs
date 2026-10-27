@@ -400,6 +400,7 @@ pub(in crate::flow::context::worker_startup) fn handoff(
     let leave_at_held_member = mode.ends_with("-source-file")
         || mode.ends_with("-task-read")
         || mode.ends_with("-mark-file");
+    let leave_at_held_measurement = mode.contains("-placement") && !is_correction(mode);
     let root_leave = || {
         management(
             socket,
@@ -428,6 +429,15 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                     if leave_at_held_member && peer.is_none() {
                         peer = Some(root_leave());
                     }
+                }
+                // advance() can already be sleeping on the withheld decoder
+                // answer. The independent peer must deliver Leave at that
+                // boundary, without waiting for the worker driver to return.
+                if leave_at_held_measurement
+                    && peer.is_none()
+                    && root.join("serving-rollback-measured").exists()
+                {
+                    peer = Some(root_leave());
                 }
                 std::thread::sleep(Duration::from_millis(1));
             }
@@ -666,7 +676,7 @@ pub(in crate::flow::context::worker_startup) fn handoff(
         }
         let peer = pending_peer
             .take()
-            .or_else(|| (!leave_at_held_member).then(&root_leave));
+            .or_else(|| (!leave_at_held_member && !leave_at_held_measurement).then(&root_leave));
         if let Some(held) = &mut direct {
             let end = Instant::now() + Duration::from_secs(10);
             let input = held.input.as_mut().unwrap();
