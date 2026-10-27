@@ -230,6 +230,8 @@ fn residency_composition_child() {
             Ok(0)
                 if mode == "cleanup-ready"
                     || mode.contains("-session-graceful-save")
+                    || (mode.contains("-session-demand-save-sqlite-organ-loss-")
+                        && mode.ends_with("-gate"))
                     || mode == "failed-startup"
                     || mode == "expired-admit-held"
                     || mode == "expired-admit-unsent"
@@ -271,7 +273,10 @@ fn residency_composition_child() {
                         &mode,
                         decode.as_raw_fd(),
                     );
-                    if mode.contains("-session-graceful-save") {
+                    if mode.contains("-session-graceful-save")
+                        || (mode.contains("-session-demand-save-sqlite-organ-loss-")
+                            && mode.ends_with("-gate"))
+                    {
                         continue;
                     }
                     if mode.contains("-exit") {

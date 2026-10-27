@@ -8,6 +8,8 @@ use weaver_types::state_flow::capture::*;
 pub(in crate::flow::context::worker_startup) mod failed;
 #[path = "context_worker_demand_management_tests.rs"]
 mod management;
+#[path = "context_worker_organ_loss_tests.rs"]
+pub(in crate::flow::context) mod organ_loss;
 #[path = "context_worker_demand_receive_tests.rs"]
 pub(in crate::flow::context) mod receive_clock;
 

@@ -1041,6 +1041,8 @@ impl FailedRunCleanup {
         // Preserve the stopped owners even when expiry precedes Reporting.
         // Freezing an account performs no transport or trace write.
         self.freeze_account();
+        self.context
+            .abandon_halt_organ_observations("observation incomplete at cleanup abort");
         // At expiry no account or writer may keep a descriptor or blocking wait.
         // Original unfinished owners remain in context, never relabelled settled.
         self.retire_flow();
@@ -1235,8 +1237,20 @@ impl FailedRunCleanup {
     /// Some(true) means an actual local account step advanced. None preserves
     /// the existing failed-clock/cap exit; false never authorizes a close wait.
     fn advance_account_step(&mut self, io: &mut impl PumpIo) -> Option<bool> {
+        if let Some(spu) = &self.resources.spu {
+            self.context.serving_organs.refresh_spu(&spu.child);
+        }
         if self.serving && self.serving_turn_accounts_retired {
-            return Some(self.advance_serving_rejection());
+            let observation = if self.context.has_owed_organ_observation() {
+                match self.context.advance_halt_organ_trace(io) {
+                    HaltTraceProgress::AbortRequired => return None,
+                    HaltTraceProgress::TraceRecorded(_) => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            return Some(self.advance_serving_rejection() || observation);
         }
         // Ordinary failed exit retires unavailable turn accounts before Closing.
         // Rollback still owns its decoder and must settle that original account.
@@ -1371,7 +1385,9 @@ impl FailedRunCleanup {
                 return Some(false);
             }
             let detail = "serving turn accounts incomplete before mandatory close";
-            self.stopped_turn_record = self.context.barrier.retain_halt_record();
+            if !self.context.owns_halt_organ_record() {
+                self.stopped_turn_record = self.context.barrier.retain_halt_record();
+            }
             if let Some(decode) = self.resources.decode_mut() {
                 self.context.abandon_place_account(decode, detail);
             }
@@ -1418,7 +1434,7 @@ impl FailedRunCleanup {
     fn serving_turn_accounts_pending(&self) -> bool {
         self.context.place_owed()
             || self.context.plan_summary.is_some()
-            || self.context.barrier.pending().is_some()
+            || (self.context.barrier.pending().is_some() && !self.context.owns_halt_organ_record())
             || self.context.pairs.pending_rejection().is_some()
             || self.context.has_owed_measure_refusal()
     }
@@ -1428,6 +1444,8 @@ impl FailedRunCleanup {
         if !self.serving || self.serving_rollback() || self.session_close_attempted {
             return;
         }
+        self.context
+            .abandon_halt_organ_observations("observation incomplete before session close");
         if !self.rejection_unavailable && self.context.pairs.pending_rejection().is_some() {
             let detail = "failed serving rejection incomplete before session close";
             self.rejection_unavailable = true;
@@ -1486,6 +1504,11 @@ impl FailedRunCleanup {
             )
         });
         if existing_terminal {
+            if session_owned {
+                self.context.abandon_halt_organ_observations(
+                    "observation incomplete before rollback session close",
+                );
+            }
             match self.context.resume_halt_terminal_and_bind() {
                 Ok(Some(sequence)) => self
                     .rollback_scope
@@ -1518,6 +1541,9 @@ impl FailedRunCleanup {
         {
             return false;
         }
+        self.context.abandon_halt_organ_observations(
+            "observation incomplete before rollback session close",
+        );
         let scope = self.rollback_scope.as_mut().unwrap();
         scope.attempted = true;
         if let Some(event) = self.context.failed_gate_terminal_event() {

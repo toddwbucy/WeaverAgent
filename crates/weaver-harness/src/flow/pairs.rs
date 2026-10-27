@@ -487,6 +487,19 @@ impl PairLedger {
         })
     }
 
+    /// Read-only continuation for the exact worker execution after lifecycle
+    /// settled its outcome or withdrew its original unsent exchange.
+    pub(super) fn execution_settled(&self, call: &CallId, exchange: &ExchangeId) -> bool {
+        self.entry(call).is_ok_and(|entry| {
+            entry.ending.is_some()
+                && (entry.execution.as_ref() == Some(exchange)
+                    || self
+                        .cancelled_exchanges
+                        .iter()
+                        .any(|(held, owner)| held == exchange && owner == call))
+        })
+    }
+
     /// Frozen inspection keeps an already received terminal attached to its
     /// execution. It grants no new dispatch or ordinary terminal filing.
     pub(super) fn halt_execution(&self) -> Option<(&CallId, &ExchangeId, bool)> {

@@ -180,6 +180,24 @@ impl<'a> FoundationManagement<'a> {
             return self.progress;
         }
         if let Err(mut failure) = self.step(io) {
+            if self.input.final_send_clock_failed()
+                || self
+                    .send
+                    .as_ref()
+                    .is_some_and(|send| send.sent() && send.sent_at().is_none())
+                || self
+                    .stop
+                    .as_ref()
+                    .and_then(|stop| stop.gate_send())
+                    .is_some_and(|send| send.sent() && send.sent_at().is_none())
+            {
+                failure = self.input.serving.owner.context.fail(
+                    io,
+                    FlowHaltReason::TraceFailed,
+                    HaltPoint::Author,
+                    format!("management send clock observation failed: {failure:?}"),
+                );
+            }
             if matches!(&failure, RunFailure::Wait { key: PumpDeadline::AdminRead, bound }
                 if self.read_armed && self.read == Some(*bound))
             {
@@ -192,6 +210,11 @@ impl<'a> FoundationManagement<'a> {
                 self.progress = FoundationManagementProgress::Dropped;
                 self.detail = Some("secondary Leave dial supplied no timely directive".into());
                 return self.progress;
+            }
+            match self.input.retain_organ_end(&failure, io) {
+                Ok(true) => return self.progress,
+                Ok(false) => (),
+                Err(error) => failure = error,
             }
             if self.input.retain_save_interrupt(&failure)
                 || self.input.retain_graceful_expiry(&failure)
@@ -217,24 +240,6 @@ impl<'a> FoundationManagement<'a> {
                 self.detail =
                     Some("secondary management yielded to the original save deadline".into());
                 return self.progress;
-            }
-            if self.input.final_send_clock_failed()
-                || self
-                    .send
-                    .as_ref()
-                    .is_some_and(|send| send.sent() && send.sent_at().is_none())
-                || self
-                    .stop
-                    .as_ref()
-                    .and_then(|stop| stop.gate_send())
-                    .is_some_and(|send| send.sent() && send.sent_at().is_none())
-            {
-                failure = self.input.serving.owner.context.fail(
-                    io,
-                    FlowHaltReason::TraceFailed,
-                    HaltPoint::Author,
-                    format!("management send clock observation failed: {failure:?}"),
-                );
             }
             self.detail = Some(format!("{failure:?}"));
             if matches!(
@@ -264,6 +269,7 @@ impl<'a> FoundationManagement<'a> {
         self.progress
     }
     fn step(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        self.input.prepare_save_window_expiry(io)?;
         if let Some(bound) = self.read
             && !self.read_armed
             && self.message.is_none()
@@ -276,6 +282,19 @@ impl<'a> FoundationManagement<'a> {
                 .context
                 .arm(PumpDeadline::AdminRead, bound, io)?;
             self.read_armed = true;
+        }
+        match self
+            .input
+            .advance_organ_faults((!self.peer_unavailable).then_some(&mut self.peer), io)
+        {
+            Ok(true) => (),
+            Ok(false) => return Ok(()),
+            Err(failure) => {
+                // A root departure must not strand its already accepted Stop.
+                // The observation and the original directive keep their owners.
+                self.keep_dial_failure::<()>(Err(failure))?;
+                return Ok(());
+            }
         }
         self.input.serving.owner.context.live(io)?;
         let done = self.stop.as_ref().is_none_or(|stop| stop.gate_done);

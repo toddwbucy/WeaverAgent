@@ -130,6 +130,7 @@ fn worker_fixture_clock_waits_for_complete_request_receipt() {
     let mut member = Member {
         peer: member,
         normal: None,
+        fixture_root: None,
         bytes: vec![],
         seed: "seed".into(),
         ordinal: 0,
@@ -186,10 +187,19 @@ impl Files {
         if let Some(root) = std::env::var_os("WEAVER_LEAVE_JOINT_ROOT") {
             return Self(root.into(), false);
         }
-        let path =
-            std::env::temp_dir().join(format!("weaver-worker-startup-{}", std::process::id()));
-        std::fs::create_dir(&path).unwrap();
-        Self(path, true)
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        loop {
+            let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "weaver-worker-startup-{}-{serial}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self(path, true),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("worker fixture directory: {error}"),
+            }
+        }
     }
     fn child(&self, name: &str, variable: &str, mode: &str, test: &str) -> PathBuf {
         let path = self.0.join(name);
@@ -456,6 +466,7 @@ impl Drop for ServingGuard<'_> {
 pub(super) struct Member {
     peer: UnixStream,
     normal: Option<normal_member::NormalMember>,
+    fixture_root: Option<PathBuf>,
     bytes: Vec<u8>,
     seed: String,
     ordinal: u64,
@@ -657,8 +668,7 @@ impl Member {
                                 mode,
                             ) =>
                         {
-                            let root = std::env::temp_dir()
-                                .join(format!("weaver-worker-startup-{}", std::process::id()));
+                            let root = self.fixture_root.as_ref().expect("snapshot fixture root");
                             assert!(
                                 root.join("ready-rollback-lower.json").exists(),
                                 "snapshot precedes actual Lower"
@@ -1064,6 +1074,12 @@ fn circuit(mode: &str) {
         {
             load.state_flow.persistence.save_wait.elapsed_ns = 1_000_000_000.into();
         }
+        if mode.contains("-organ-loss-expiry-") {
+            // The actual writer queue takes several seconds to fill in this
+            // debug fixture. Leave time to retain the fault at trace admission
+            // before the declared window expires; never replace its deadline.
+            load.state_flow.persistence.save_wait.elapsed_ns = 6_000_000_000.into();
+        }
         if super::input::generation::session_tests::demand_save::is_mode(mode)
             && mode.ends_with("-expires")
         {
@@ -1326,6 +1342,7 @@ fn circuit(mode: &str) {
     let mut member = Member {
         peer: member,
         normal,
+        fixture_root: Some(files.0.clone()),
         bytes: vec![],
         seed: load.state_start.seed_id.clone(),
         ordinal: 0,
@@ -1375,6 +1392,27 @@ fn circuit(mode: &str) {
             if mode.ends_with("-demand-receive-clock") {
                 super::input::generation::session_tests::demand_save::receive_clock::exercise(
                     serving, &path,
+                );
+                return;
+            }
+            if super::input::generation::session_tests::demand_save::organ_loss::is_mode(mode) {
+                let handoff =
+                    super::input::generation::session_tests::demand_save::organ_loss::handoff(
+                        serving,
+                        &mut member,
+                        &mut reader,
+                        &path,
+                        &files.0,
+                        mode,
+                    );
+                let actual = run.take_boxed();
+                super::input::generation::session_tests::demand_save::organ_loss::finish(
+                    actual,
+                    handoff,
+                    &mut member,
+                    &mut reader,
+                    &files.0,
+                    mode,
                 );
                 return;
             }
@@ -1685,6 +1723,27 @@ fn circuit(mode: &str) {
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-") {
             drop(peer); // Normal admin departure does not revoke serving.
+            if mode.contains("-lower-organ-") {
+                let (handoff, rows, observed_at) = super::input::halt::exit::organ_tests::start(
+                    serving,
+                    &mut member,
+                    &mut reader,
+                    &mut clock,
+                    &files.0,
+                );
+                super::input::halt::exit::organ_tests::finish(
+                    run.take_boxed(),
+                    handoff,
+                    rows,
+                    observed_at,
+                    &mut member,
+                    &mut reader,
+                    &mut clock,
+                    &files.0,
+                    mode,
+                );
+                return;
+            }
             if mode.contains("start-pending") {
                 super::input::halt::exit::tests::start_pending(
                     serving,
@@ -1979,6 +2038,18 @@ scenario!(worker_startup_composition_ready, "ready");
 scenario!(
     worker_session_demand_save_receive_clock,
     "input-worker-generation-emission-session-demand-receive-clock"
+);
+scenario!(
+    worker_session_demand_save_sqlite_organ_loss_gate,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-gate"
+);
+scenario!(
+    worker_session_demand_save_sqlite_organ_loss_spu,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-spu"
+);
+scenario!(
+    worker_session_demand_save_sqlite_organ_loss_expiry_gate,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-expiry-gate"
 );
 scenario!(
     worker_session_demand_save_sqlite_idle,
@@ -2863,6 +2934,66 @@ scenario!(
 );
 
 scenario!(
+    worker_external_composition_gate_death_mixed,
+    "input-generation-emission-pairs-external-gate-death-mixed"
+);
+scenario!(
+    worker_external_composition_gate_death_crossed,
+    "input-generation-emission-pairs-external-gate-death-crossed"
+);
+scenario!(
+    worker_external_composition_gate_death_unsent,
+    "input-generation-emission-pairs-external-gate-death-unsent"
+);
+
+scenario!(
+    worker_external_composition_gate_death_repeat,
+    "input-generation-emission-pairs-external-gate-death-repeat"
+);
+scenario!(
+    worker_external_composition_gate_death_pressure,
+    "input-generation-emission-pairs-external-gate-death-pressure"
+);
+scenario!(
+    worker_external_composition_gate_death_fit_refusal,
+    "input-generation-emission-pairs-external-gate-death-fit-refusal"
+);
+
+scenario!(
+    worker_external_composition_gate_death_stop,
+    "input-generation-emission-pairs-external-gate-death-stop"
+);
+scenario!(
+    worker_external_composition_gate_death_stop_crossed,
+    "input-generation-emission-pairs-external-gate-death-stop-crossed"
+);
+scenario!(
+    worker_external_composition_gate_death_stop_peer_eof,
+    "input-generation-emission-pairs-external-gate-death-stop-peer-eof"
+);
+
+scenario!(
+    worker_external_composition_gate_death_report,
+    "input-generation-emission-pairs-external-gate-death-report"
+);
+scenario!(
+    worker_external_composition_gate_death_report_pressure,
+    "input-generation-emission-pairs-external-gate-death-report-pressure"
+);
+scenario!(
+    worker_external_composition_gate_death_stop_report,
+    "input-generation-emission-pairs-external-gate-death-stop-report"
+);
+scenario!(
+    worker_external_composition_gate_death_stop_report_unread,
+    "input-generation-emission-pairs-external-gate-death-stop-report-unread"
+);
+scenario!(
+    worker_external_composition_gate_death_stop_report_crossed_unread,
+    "input-generation-emission-pairs-external-gate-death-stop-report-crossed-unread"
+);
+
+scenario!(
     worker_external_composition_multiline,
     "input-generation-emission-pairs-external-multiline"
 );
@@ -3506,6 +3637,18 @@ scenario!(
 scenario!(
     worker_external_composition_failed_exit_start_pending,
     "input-generation-external-halt-gate-exit-start-pending"
+);
+scenario!(
+    worker_external_composition_failed_exit_lower_organ_wake,
+    "input-generation-external-halt-gate-exit-lower-organ-wake"
+);
+scenario!(
+    worker_external_composition_failed_exit_lower_organ_return,
+    "input-generation-external-halt-gate-exit-lower-organ-return"
+);
+scenario!(
+    worker_external_composition_failed_exit_lower_organ_cap,
+    "input-generation-external-halt-gate-exit-lower-organ-cap"
 );
 scenario!(
     worker_external_composition_failed_exit_start_ready,

@@ -483,7 +483,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             std::thread::sleep(Duration::from_millis(1));
         }
         let m = guard.management.as_mut().unwrap();
-        if mode.ends_with("gate-eof") || mode.ends_with("trace-failure") {
+        if mode.ends_with("trace-failure") {
             assert_eq!(
                 m.progress(),
                 FoundationManagementProgress::Stopped,
@@ -520,6 +520,24 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         );
         if mode.ends_with("admin-pressure") || mode.ends_with("gate-pressure") {
             assert!(pressured);
+        }
+        if mode.ends_with("gate-eof") {
+            assert!(m.stop.as_ref().unwrap().gate_done);
+            assert!(m.stop.as_ref().unwrap().close_recorded());
+            assert!(m.stop.as_ref().unwrap().gate_send().is_none());
+            assert!(m.input.serving.owner.context.failure().is_none());
+            assert!(
+                m.input
+                    .serving
+                    .owner
+                    .context
+                    .serving_organs
+                    .gate_delivery_lost(&m.input.serving.owner.gate)
+            );
+            assert_eq!(
+                m.input.received.as_ref().map(|r| r.envelope()),
+                original.as_ref()
+            );
         }
         if !dropped {
             let answer: OrganEnvelope =
@@ -580,24 +598,38 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             guard.input.as_ref().unwrap().progress(),
             FoundationInputProgress::Aborted
         );
-        for _ in 0..1000 {
-            if root.join("closed.json").exists() {
-                break;
+        if mode.ends_with("gate-eof") {
+            assert!(!root.join("closed.json").exists());
+            assert!(!guard.input.as_ref().unwrap().failed_world_was_sent());
+        } else {
+            for _ in 0..1000 {
+                if root.join("closed.json").exists() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
             }
-            std::thread::sleep(Duration::from_millis(1));
+            let close: OrganEnvelope =
+                serde_json::from_slice(&std::fs::read(root.join("closed.json")).unwrap()).unwrap();
+            assert_eq!(close.exchange, original.as_ref().unwrap().exchange);
+            let Payload::Frame(frame) = close.payload else {
+                panic!()
+            };
+            let close: serde_json::Value =
+                serde_json::from_slice(&frame.octets().unwrap()).unwrap();
+            assert_eq!(
+                close,
+                serde_json::json!({"kind":"stopped","reason":"the operator stopped the turn","run":run,"turn":"stopped-turn"})
+            );
         }
-        let close: OrganEnvelope =
-            serde_json::from_slice(&std::fs::read(root.join("closed.json")).unwrap()).unwrap();
-        assert_eq!(close.exchange, original.as_ref().unwrap().exchange);
-        let Payload::Frame(frame) = close.payload else {
-            panic!()
-        };
-        let close: serde_json::Value = serde_json::from_slice(&frame.octets().unwrap()).unwrap();
-        assert_eq!(
-            close,
-            serde_json::json!({"kind":"stopped","reason":"the operator stopped the turn","run":run,"turn":"stopped-turn"})
-        );
         records.extend(trace(reader));
+        if mode.ends_with("gate-eof") {
+            let faults: Vec<_> = records
+                .iter()
+                .filter(|row| row["kind"] == "fault")
+                .collect();
+            assert_eq!(faults.len(), 1);
+            assert_eq!(faults[0]["payload"]["case"], "organ_death_observed");
+        }
         let closes: Vec<_> = records
             .iter()
             .filter(|r| r["kind"] == "turn.closed")

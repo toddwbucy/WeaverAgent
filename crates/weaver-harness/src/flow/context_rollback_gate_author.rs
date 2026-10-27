@@ -11,7 +11,7 @@ impl RecordingContext {
             && self.failure.is_none()
             && self.flow.halt().is_none()
             && self.rollback_gate_author.is_none()
-            && self.queued_save_author.is_none()
+            && self.serving_observation_author.is_none()
             && !self.caller_author_held()
             && self.refused_author.is_none()
             && self.waiting_content.is_none()

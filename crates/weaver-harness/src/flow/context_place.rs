@@ -1250,6 +1250,20 @@ impl RecordingContext {
         }
         Ok(())
     }
+    pub(in crate::flow::context) fn place_response_lost(
+        &mut self,
+        gate: &crate::flow::pump_transport::OrganPort,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        self.live(io)?;
+        if !self.serving_organs.gate_delivery_lost(gate)
+            || !self.place_response_ready()
+            || self.place_close.take().is_none()
+        {
+            return Err(RunFailure::PlaceOwned);
+        }
+        Ok(())
+    }
     fn place_instruction_valid(&self, context: &PlacementContext) -> bool {
         let Some(source) = &context.instruction else {
             return true;

@@ -539,15 +539,6 @@ pub(in super::super) fn exercise(
     ); // Three templates plus input.
     if mode == "input-source-eof" {
         reap(&mut owner.serving.owner.gate_child);
-        owner.start_turn(TurnKey("t-1".into())).unwrap();
-        assert_eq!(
-            owner.advance_with_io(&mut CircuitIo(clock)),
-            FoundationInputProgress::Stopped
-        );
-        assert!(owner.serving.owner.context.failure().is_some());
-        assert!(owner.serving.owner.context.input.snapshot().unwrap().halted);
-        assert!(rows(&trace(reader), "turn.started").is_empty());
-        return;
     }
     owner.start_turn(TurnKey("t-1".into())).unwrap();
     for _ in 0..3000 {
@@ -563,6 +554,32 @@ pub(in super::super) fn exercise(
         owner.detail()
     );
     records.extend(trace(reader));
+    if mode == "input-source-eof" {
+        assert!(owner.serving.owner.context.failure().is_none());
+        assert!(owner.failure.is_none());
+        assert!(
+            owner
+                .serving
+                .owner
+                .context
+                .serving_organs
+                .gate_delivery_lost(&owner.serving.owner.gate)
+        );
+        assert_eq!(owner.serving.owner.tools.populated(), Some(false));
+        let faults = rows(&records, "fault");
+        assert_eq!(
+            faults.len(),
+            1,
+            "one fault, accepted input still has a turn"
+        );
+        assert_eq!(faults[0]["payload"]["case"], "organ_death_observed");
+        assert!(owner.serving.owner.context.input.snapshot().is_none());
+        assert!(
+            owner.seated.is_some(),
+            "accepted token became the original source"
+        );
+        assert!(!root.join("closed.json").exists());
+    }
     let Some(Held::Input(input)) = guard.0.take() else {
         unreachable!()
     };

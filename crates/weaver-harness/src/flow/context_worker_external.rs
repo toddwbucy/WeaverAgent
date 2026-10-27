@@ -55,16 +55,18 @@ impl ExternalWork {
             ExecutionProgress::Terminal => {
                 // A result that crosses an unsent control retains its fate.
                 // Withdraw only our exact still-queued packet before Lower.
-                if self.cancel_send.as_ref().is_some_and(|send| !send.sent())
-                    && let Some(frame) =
-                        gate.withdraw_pending(&self.exchange).map_err(|failure| {
-                            RunFailure::Transport {
-                                source: PumpSource::Gate,
-                                failure,
-                            }
-                        })?
-                {
-                    self.cancel = Some(frame);
+                if let Some(send) = self.cancel_send.as_ref().filter(|send| !send.sent()) {
+                    let withdrawn = if context.serving_organs.gate_delivery_lost(gate) {
+                        gate.withdraw_closed_pending(send)
+                    } else {
+                        gate.withdraw_pending(&self.exchange)
+                    };
+                    if let Some(frame) = withdrawn.map_err(|failure| RunFailure::Transport {
+                        source: PumpSource::Gate,
+                        failure,
+                    })? {
+                        self.cancel = Some(frame);
+                    }
                 }
                 self.stage = Stage::Terminal;
                 Ok(true)
@@ -97,7 +99,10 @@ impl ExternalWork {
                 return Ok(false);
             }
         }
-        if cause == NonDispatchCause::Unload && matches!(self.stage, Stage::Waiting) {
+        if matches!(self.stage, Stage::Waiting)
+            && (cause == NonDispatchCause::Unload
+                || context.serving_organs.gate_delivery_lost(gate))
+        {
             self.route_cancel_reply(context, gate, io)?;
             if matches!(self.stage, Stage::Terminal) {
                 return Ok(true);
@@ -199,9 +204,9 @@ impl ExternalWork {
                 }
             }
             Stage::Sending => {
-                // The Stop owner reconciled the actual ticket before withdrawing
-                // an unsent packet. Its not_dispatched terminal still owes filing.
-                if cancelled.is_some() && context.pairs.executing().is_none() {
+                // Lifecycle reconciles the exact send before settling its fate.
+                // This call's terminal still owes its original filing.
+                if context.pairs.execution_settled(&self.call, &self.exchange) {
                     self.stage = Stage::Terminal;
                     return Ok(true);
                 }
@@ -219,6 +224,10 @@ impl ExternalWork {
                 }
             }
             Stage::Waiting => {
+                if context.pairs.execution_settled(&self.call, &self.exchange) {
+                    self.stage = Stage::Terminal;
+                    return Ok(true);
+                }
                 if let Some(cause) = cancelled {
                     if context.pairs.executing().is_none() {
                         self.stage = Stage::Terminal;

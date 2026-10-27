@@ -86,6 +86,181 @@ fn assert_frozen<T>(port: &mut PacketPort<T>, failure: &Failure) {
 }
 
 #[test]
+fn organ_reset_keeps_both_queued_packets_without_reopening_sends() {
+    let (end, peer) = pair();
+    let mut port = OrganPort::from_owned(end).unwrap();
+    port.stage(envelope()).unwrap();
+    assert_eq!(port.try_send(), Ok(SendProgress::Complete));
+    let first = format!(
+        " \n{}\n ",
+        serde_json::to_string_pretty(&envelope()).unwrap()
+    );
+    let mut second_envelope = envelope();
+    second_envelope.exchange.ordinal += 1;
+    let second = serde_json::to_vec(&second_envelope).unwrap();
+    send_bytes(&peer, first.as_bytes());
+    send_bytes(&peer, &second);
+    // The peer exits without reading the sent packet. Linux reports reset
+    // before making its two final queued packets available to this owner.
+    drop(peer);
+    let failure = port.try_receive().unwrap_err();
+    assert_eq!(failure.errno, Some(libc::ECONNRESET));
+    assert_eq!(port.stage(envelope()).unwrap_err().failure, failure);
+    assert_frozen(&mut port, &failure);
+    assert!(port.closed_receive_pending());
+    for expected in [first.as_bytes(), second.as_slice()] {
+        assert_eq!(port.receive_closed(), Ok(ReceiveProgress::Held));
+        assert_eq!(
+            port.receive_closed_with(|_| panic!("one retained completion blocks another read")),
+            Ok(ReceiveProgress::Held)
+        );
+        let packet = port.take_received().unwrap().unwrap();
+        assert!(packet.belongs_to(&port));
+        assert_eq!(packet.raw_bytes(), expected);
+        assert_eq!(
+            packet.envelope(),
+            &serde_json::from_slice(expected).unwrap()
+        );
+        assert_frozen(&mut port, &failure);
+    }
+    assert_eq!(port.receive_closed(), Ok(ReceiveProgress::Pending));
+    assert!(!port.closed_receive_pending());
+    assert_eq!(
+        port.receive_closed_with(|_| panic!("drained closure is final")),
+        Ok(ReceiveProgress::Pending)
+    );
+    assert_frozen(&mut port, &failure);
+}
+
+#[test]
+fn organ_closed_receive_keeps_malformed_tail_and_first_reset() {
+    let (end, peer) = pair();
+    let mut port = OrganPort::from_owned(end).unwrap();
+    port.stage(envelope()).unwrap();
+    port.try_send().unwrap();
+    let original = b"{\"malformed\": [  ";
+    send_bytes(&peer, original);
+    send_bytes(&peer, &serde_json::to_vec(&envelope()).unwrap());
+    drop(peer);
+    let first = port.try_receive().unwrap_err();
+    assert_eq!(first.errno, Some(libc::ECONNRESET));
+    let refusal = port.receive_closed().unwrap_err();
+    assert_eq!(refusal.fault, ChannelFault::Undecodable);
+    assert_eq!(port.failure(), Some(&first));
+    assert!(port.held().is_none());
+    assert_eq!(port.failed_wire(), Some(original.as_slice()));
+    assert_eq!(
+        port.receive_closed_with(|_| panic!("a refused tail cannot be skipped")),
+        Err(refusal)
+    );
+    assert_eq!(port.take_failed_wire(), Some(original.to_vec()));
+    assert_frozen(&mut port, &first);
+}
+
+#[test]
+fn organ_closed_receive_yields_each_interruption_and_reset() {
+    let (end, _peer) = pair();
+    let mut port = OrganPort::from_owned(end).unwrap();
+    assert!(
+        port.receive_closed_with(|_| panic!("live read is forbidden"))
+            .is_err()
+    );
+    assert!(port.failure().is_none());
+    let first = port.fail(Failure::io(Errno::EPIPE));
+    let calls = Cell::new(0);
+    for fault in [
+        ReadFault::Interrupted,
+        ReadFault::Failed {
+            failure: Failure::io(Errno::ECONNRESET),
+            received_wire: None,
+        },
+    ] {
+        let before = calls.get();
+        assert_eq!(
+            port.receive_closed_with(|_| {
+                calls.set(calls.get() + 1);
+                Err(fault)
+            }),
+            Ok(ReceiveProgress::Pending)
+        );
+        assert_eq!(calls.get(), before + 1);
+        assert!(port.closed_receive_pending());
+        assert_frozen(&mut port, &first);
+    }
+    assert_eq!(
+        port.receive_closed_with(|_| Err(ReadFault::Pending)),
+        Ok(ReceiveProgress::Pending)
+    );
+    assert!(!port.closed_receive_pending());
+    assert_frozen(&mut port, &first);
+}
+
+#[test]
+fn closed_withdrawal_requires_the_original_ticket_and_preserves_received_bytes() {
+    let (end, peer) = pair();
+    let mut port = OrganPort::from_owned(end).unwrap();
+    let original = envelope();
+    let TrackedStage::Queued(earlier) = port.stage_tracked(original.clone()).unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        port.try_send_observed(&mut MonotonicIo),
+        Ok(SendProgress::Complete)
+    );
+    assert!(receive_bytes(&peer).is_some());
+    let TrackedStage::Queued(current) = port.stage_tracked(original.clone()).unwrap() else {
+        panic!()
+    };
+    assert!(port.withdraw_closed_pending(&current).is_err());
+    assert!(port.send_pending() && !current.withdrawn());
+    let (other, _peer) = pair();
+    let mut other = OrganPort::from_owned(other).unwrap();
+    let TrackedStage::Queued(foreign) = other.stage_tracked(original.clone()).unwrap() else {
+        panic!()
+    };
+    let raw = format!(" \n{}\n ", serde_json::to_string_pretty(&original).unwrap());
+    send_bytes(&peer, raw.as_bytes());
+    assert_eq!(port.try_receive(), Ok(ReceiveProgress::Held));
+    drop(peer);
+    let failure = port.try_send_observed(&mut MonotonicIo).unwrap_err();
+    assert_eq!(failure.fault, ChannelFault::Closed);
+    for wrong in [&earlier, &foreign] {
+        assert!(port.withdraw_closed_pending(wrong).is_err());
+        assert!(port.send_pending() && !current.withdrawn());
+        assert_eq!(port.failure(), Some(&failure));
+    }
+    assert_eq!(
+        port.withdraw_closed_pending(&current).unwrap(),
+        Some(original.clone())
+    );
+    assert!(current.withdrawn() && !current.sent());
+    assert!(earlier.sent() && !earlier.withdrawn());
+    assert!(!foreign.sent() && !foreign.withdrawn());
+    assert_eq!(port.failure(), Some(&failure));
+    let held = port.take_received().unwrap().unwrap();
+    assert_eq!(held.envelope(), &original);
+    assert_eq!(held.raw_bytes(), raw.as_bytes());
+    assert_eq!(port.withdraw_closed_pending(&current).unwrap(), None);
+    assert_frozen(&mut port, &failure);
+}
+
+#[test]
+fn closed_withdrawal_never_relabels_an_undecodable_port_as_closed() {
+    let (end, peer) = pair();
+    let mut port = OrganPort::from_owned(end).unwrap();
+    let TrackedStage::Queued(send) = port.stage_tracked(envelope()).unwrap() else {
+        panic!()
+    };
+    send_bytes(&peer, b"not JSON");
+    let failure = port.try_receive().unwrap_err();
+    assert_eq!(failure.fault, ChannelFault::Undecodable);
+    assert!(port.withdraw_closed_pending(&send).is_err());
+    assert!(port.send_pending() && !send.withdrawn() && !send.sent());
+    assert_eq!(port.failed_wire(), Some(b"not JSON".as_slice()));
+    assert_frozen(&mut port, &failure);
+}
+
+#[test]
 fn conversions_move_the_actual_socket_and_a_retired_label_cannot_reopen() {
     let (channel, _) = OrganChannel::pair().unwrap();
     let fd = channel.as_fd().as_raw_fd();

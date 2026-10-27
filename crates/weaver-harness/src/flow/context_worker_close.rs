@@ -26,6 +26,42 @@ enum CloseTarget {
     Input(AcceptedInput),
 }
 
+/// Keep the original response after the observed gate closes. A whole send
+/// remains a whole send; only the exact pending ticket permits withdrawal.
+pub(super) fn retain_lost_world(
+    gate: &mut crate::flow::pump_transport::OrganPort,
+    exchange: &ExchangeId,
+    close: &mut Option<OrganEnvelope>,
+    send: Option<&OrganSend>,
+) -> Result<bool, RunFailure> {
+    let Some(send) = send else {
+        return Ok(close
+            .as_ref()
+            .is_some_and(|frame| &frame.exchange == exchange));
+    };
+    if !send.belongs_to(gate) || !send.matches_exchange(exchange) {
+        return Err(RunFailure::PlaceOwned);
+    }
+    if send.sent() {
+        return send.sent_at().map(|_| true).ok_or(RunFailure::Closed);
+    }
+    if !send.withdrawn() {
+        let original =
+            gate.withdraw_closed_pending(send)
+                .map_err(|failure| RunFailure::Transport {
+                    source: PumpSource::Gate,
+                    failure,
+                })?;
+        if let Some(original) = original {
+            *close = Some(original);
+        }
+    }
+    Ok(send.withdrawn()
+        && close
+            .as_ref()
+            .is_some_and(|frame| &frame.exchange == exchange))
+}
+
 impl WorldClose {
     fn begin(
         input: &FoundationInput<'_>,
@@ -373,6 +409,19 @@ impl WorldClose {
             }
         }
         let preparing = self.prepare(context, ports, false)?;
+        let gate = ports.gate.as_deref_mut().ok_or(RunFailure::PlaceOwned)?;
+        if context.serving_organs.gate_delivery_lost(gate) {
+            context.live(ports.io)?;
+            if !retain_lost_world(gate, &self.exchange, &mut self.close, self.send.as_ref())? {
+                return Ok(false);
+            }
+            if matches!(self.target, CloseTarget::Input(_)) {
+                context.input_closed_by_gate_loss(gate, ports.io)?;
+                context.finish_input(ports.io)?;
+            }
+            context.complete_wait(PumpDeadline::Decision);
+            return Ok(true);
+        }
         if let Some(close) = self.close.take() {
             match ports.gate.as_deref_mut().unwrap().stage_tracked(close) {
                 Ok(TrackedStage::Queued(send)) => self.send = Some(send),

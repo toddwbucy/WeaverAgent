@@ -69,6 +69,10 @@ impl WorkerPairs {
             || (matches!(self.stage, Stage::Complete) && self.ended_by_unload(context))
     }
 
+    pub(super) fn lost_gate_needs_step(&self, context: &RecordingContext) -> bool {
+        matches!(self.stage, Stage::Ready) && context.pairs.barred_for(NonDispatchCause::NoGate)
+    }
+
     pub(super) fn ended_by_unload(&self, context: &RecordingContext) -> bool {
         matches!(self.stage, Stage::Complete)
             && self.calls.iter().any(|call| {
@@ -278,6 +282,7 @@ impl WorkerPairs {
                     self.stage = Stage::Opening;
                 }
             }
+            Stage::Ready if self.lost_gate_needs_step(context) => self.stage = Stage::Opening,
             Stage::Ready | Stage::Complete => {}
         }
         Ok(())
@@ -316,6 +321,15 @@ impl FoundationInput<'_> {
             input.effective,
             if self.serving.graceful.is_some() {
                 Some(NonDispatchCause::Unload)
+            } else if barred.is_none()
+                && self
+                    .serving
+                    .owner
+                    .context
+                    .serving_organs
+                    .gate_matches(&self.serving.owner.gate)
+            {
+                Some(NonDispatchCause::NoGate)
             } else {
                 barred
             },

@@ -649,6 +649,18 @@ impl RollbackGate {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         assert!(self.death.is_none(), "one observed original gate death");
+        if host
+            .arms
+            .port
+            .as_ref()
+            .is_some_and(|port| host.context.serving_organs.gate_matches(port))
+        {
+            // The serving owner retains this exact observation and its author.
+            // Lower still closes and reaps the original child under its cap,
+            // but cannot create a second death or a new last-word allowance.
+            self.end_transport(host.arms, false, false);
+            return Ok(());
+        }
         self.death = Some(GateDeath {
             observed_ns: None,
             deadline_ns: None,

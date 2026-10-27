@@ -6,7 +6,7 @@ use super::FoundationServing;
 use crate::flow::author::{AuthoredEvent, AuthoredSource};
 use crate::flow::clock::{MonotonicIo, PumpIo};
 use crate::flow::input::AcceptedInput;
-use crate::flow::pump::{LifecyclePorts, PumpPorts, PumpSource};
+use crate::flow::pump::{LifecyclePeer, LifecyclePorts, PumpPorts, PumpSource};
 use crate::flow::pump_transport::{OrganSend, ReceivedOrgan, TrackedStage};
 use crate::flow::report::{FlowHaltReason, HaltPoint};
 use weaver_trace::{Subsystem, TurnRef, serving};
@@ -32,6 +32,9 @@ pub(crate) mod halt;
 #[path = "context_worker_close.rs"]
 mod close;
 
+#[path = "context_worker_report.rs"]
+mod report;
+
 #[path = "context_worker_input_rollback.rs"]
 pub(in crate::flow::context::worker_startup) mod rollback;
 
@@ -52,12 +55,13 @@ pub enum FoundationInputProgress {
     PairReady,
     /// Every conforming request has its actual terminal filing proof.
     PairsComplete,
-    /// The clean turn close is Recorded and its exact world reply fully sent.
+    /// The clean turn close is Recorded. Its exact world reply was sent or
+    /// retained as lost delivery on this run's observed closed gate.
     Completed,
     /// An operation refused. Its full account remains with this owner.
     OperationRefused,
     Refused,
-    /// The stopped turn's world close has been completely carried.
+    /// The stopped turn's close was carried or retained as checked lost delivery.
     Aborted,
     /// The actual root connection is retained for management judgment. Mere
     /// acceptance is not a Leave and does not revoke input or grant cleanup.
@@ -107,9 +111,7 @@ pub struct FoundationInput<'a> {
     seated: Option<SeatedInput>,
     close: Option<OrganEnvelope>,
     send: Option<OrganSend>,
-    report: Option<(ReceivedOrgan, Subsystem)>,
-    report_started: bool,
-    returned_report: StoppedAuthor,
+    report: Option<report::Report>,
     failure: Option<RunFailure>,
     engine: Option<Box<generation::EngineWork>>,
 }
@@ -165,8 +167,6 @@ impl<'a> FoundationServing<'a> {
             close: None,
             send: None,
             report: None,
-            report_started: false,
-            returned_report: StoppedAuthor::default(),
             failure: None,
             engine: None,
         })
@@ -194,6 +194,16 @@ impl<'a> FoundationInput<'a> {
             return FoundationInputProgress::LeavePending;
         }
         if self.graceful_pairs_need_step() {
+            return FoundationInputProgress::Pending;
+        }
+        if self
+            .engine
+            .as_ref()
+            .is_some_and(|work| work.lost_gate_pairs_need_step(self.serving.owner.context))
+        {
+            return FoundationInputProgress::Pending;
+        }
+        if self.report.is_some() {
             return FoundationInputProgress::Pending;
         }
         match self.stage {
@@ -247,30 +257,52 @@ impl<'a> FoundationInput<'a> {
             .context
             .management_listener
             .replace(listener.clone());
-        let result = self.advance_save(io).and_then(|()| {
-            if self.save_blocks_turn() {
-                return Ok(());
-            }
-            self.observe(io)?;
-            if self.progress() == FoundationInputProgress::ManagementPending {
-                Ok(())
-            } else if wait {
-                self.serving
-                    .owner
-                    .context
-                    .reduce_flow(io)
-                    .and_then(|_| self.observe_with_wait(io, true))
-            } else if matches!(
-                self.progress(),
-                FoundationInputProgress::Pending | FoundationInputProgress::WindDown
-            ) {
-                self.step(io)
-            } else {
-                Ok(())
-            }
-        });
+        let result = self
+            .prepare_save_window_expiry(io)
+            .and_then(|()| self.advance_organ_faults(None, io))
+            .and_then(|ready| {
+                if !ready {
+                    return self.observe(io);
+                }
+                self.advance_save(io)?;
+                if self.save_blocks_turn() {
+                    return Ok(());
+                }
+                self.observe(io)?;
+                if self.progress() == FoundationInputProgress::ManagementPending {
+                    Ok(())
+                } else if wait {
+                    self.serving
+                        .owner
+                        .context
+                        .reduce_flow(io)
+                        .and_then(|_| self.observe_with_wait(io, true))
+                } else if matches!(
+                    self.progress(),
+                    FoundationInputProgress::Pending | FoundationInputProgress::WindDown
+                ) {
+                    self.step(io)
+                } else {
+                    Ok(())
+                }
+            });
         self.serving.owner.context.management_listener = previous_listener;
         if let Err(mut failure) = result {
+            // A successful send without its clock witness remains fatal even
+            // when an organ EOF is the next readiness observation.
+            if self.final_send_clock_failed() {
+                failure = self.serving.owner.context.fail(
+                    io,
+                    FlowHaltReason::TraceFailed,
+                    HaltPoint::Author,
+                    format!("final reply send clock observation failed: {failure:?}"),
+                );
+            }
+            match self.retain_organ_end(&failure, io) {
+                Ok(true) => return self.progress(),
+                Ok(false) => (),
+                Err(error) => failure = error,
+            }
             if self.retain_save_interrupt(&failure)
                 || self.retain_graceful_expiry(&failure)
                 || self.retain_quiesce_gate_end(&failure)
@@ -284,14 +316,6 @@ impl<'a> FoundationInput<'a> {
                 && self.failure.is_none()
             {
                 return self.progress();
-            }
-            if self.final_send_clock_failed() {
-                failure = self.serving.owner.context.fail(
-                    io,
-                    FlowHaltReason::TraceFailed,
-                    HaltPoint::Author,
-                    format!("final reply send clock observation failed: {failure:?}"),
-                );
             }
             if self.serving.save.is_some()
                 && matches!(
@@ -319,6 +343,92 @@ impl<'a> FoundationInput<'a> {
             self.stage = Stage::Stopped;
         }
         self.progress()
+    }
+
+    fn retain_organ_end(
+        &mut self,
+        failure: &RunFailure,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        let RunFailure::Transport { source, failure } = failure else {
+            return Ok(false);
+        };
+        let owner = &mut self.serving.owner;
+        let retained = owner.context.observe_serving_organ_end(
+            *source,
+            failure,
+            crate::flow::context::serving_organ_loss::ServingOrganPorts {
+                gate: &owner.gate,
+                decode: owner.decode,
+                residency: owner.resident.residency,
+                tools: &owner.tools,
+            },
+            self.serving.graceful.is_some(),
+            io,
+        )?;
+        if retained {
+            owner
+                .context
+                .serving_organs
+                .refresh(&owner.gate_child, owner.resident.spu);
+            if let Some(leave) = &mut self.serving.graceful {
+                leave.forced = true;
+                owner
+                    .context
+                    .complete_wait(crate::flow::pump::PumpDeadline::GracefulDrain);
+                owner
+                    .context
+                    .complete_wait(crate::flow::pump::PumpDeadline::WindDown);
+            }
+        }
+        Ok(retained)
+    }
+
+    fn advance_organ_faults(
+        &mut self,
+        peer: Option<&mut LifecyclePeer>,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        // Intake only retains evidence. The existing operation owners reduce
+        // due save/Leave waits; observation and report authoring check live
+        // before their own work. Do not preempt a save owner's timeout here.
+        self.retain_report()?;
+        let owner = &mut self.serving.owner;
+        owner
+            .context
+            .serving_organs
+            .refresh(&owner.gate_child, owner.resident.spu);
+        let mut ports = PumpPorts {
+            lifecycle: LifecyclePorts {
+                listener: Some(&mut owner.listener),
+                dial: peer,
+                residency: Some(owner.resident.residency),
+                leave_peer: self.serving.save.as_mut().and_then(|save| save.port()),
+                ..Default::default()
+            },
+            gate: Some(&mut owner.gate),
+            decode: Some(owner.decode),
+            label: None,
+            io,
+        };
+        // Containment and the terminal accounting bound precede a received
+        // report's trace wait. Its exact claim keeps the observation author
+        // from borrowing its ticket while the report remains pending.
+        let result = owner
+            .context
+            .advance_serving_organ_faults(&mut ports, &owner.tools)?;
+        if matches!(
+            result,
+            crate::flow::context::serving_organ_loss::ObservationProgress::Pending
+        ) {
+            return Ok(false);
+        }
+        if let Some(report) = &mut self.report
+            && report.advance(owner.context, &mut ports)?
+        {
+            self.report = None;
+        }
+        Ok(true)
     }
 
     /// Workflow policy supplies the turn identity only after accepted input is
@@ -359,61 +469,44 @@ impl<'a> FoundationInput<'a> {
         Ok(())
     }
 
-    fn advance_report(&mut self, io: &mut impl PumpIo) -> Result<bool, RunFailure> {
-        let owner = &mut self.serving.owner;
-        let mut ports = PumpPorts {
-            lifecycle: LifecyclePorts {
-                listener: Some(&mut owner.listener),
-                residency: Some(owner.resident.residency),
-                leave_peer: self.serving.save.as_mut().and_then(|save| save.port()),
-                ..Default::default()
-            },
-            gate: Some(&mut owner.gate),
-            decode: Some(owner.decode),
-            label: None,
-            io,
-        };
+    fn retain_report(&mut self) -> Result<(), RunFailure> {
         if self.report.is_some() {
-            self.returned_report.check()?;
-            if self.report_started {
-                owner
-                    .context
-                    .resume_author_and_wait(&mut ports)
-                    .map_err(|failure| {
-                        self.returned_report
-                            .retain_started(failure, &mut self.report_started)
-                    })?;
-            } else {
-                let (received, subsystem) = self.report.as_ref().unwrap();
-                let Payload::Fault(report) = &received.envelope().payload else {
-                    unreachable!()
-                };
-                let payload = serde_json::value::to_raw_value(report)
-                    .expect("a received fault is serializable");
-                self.report_started = true;
-                owner
-                    .context
-                    .author_and_wait(
-                        &mut ports,
-                        AuthoredEvent {
-                            kind: serving::Kind::Fault,
-                            subsystem: *subsystem,
-                            turn: None,
-                            source: AuthoredSource::Runtime,
-                            causal_parent: None,
-                            payload: Some(serving::Payload::Fault(payload)),
-                        },
-                    )
-                    .map_err(|failure| {
-                        self.returned_report
-                            .retain_started(failure, &mut self.report_started)
-                    })?;
-            }
-            self.report = None;
-            self.report_started = false;
-            return Ok(true);
+            return Ok(());
         }
-        Ok(false)
+        let owner = &mut self.serving.owner;
+        // One nonblocking read preserves a final report/result queued before
+        // closure. Its sole port keeps non-report packets for their own owner.
+        if owner.gate.held().is_none() {
+            let received = if owner.gate.failure().is_none() {
+                owner.gate.try_receive()
+            } else if owner.gate.closed_receive_pending() {
+                owner.gate.receive_closed()
+            } else {
+                Ok(crate::flow::pump_transport::ReceiveProgress::Pending)
+            };
+            received.map_err(|failure| RunFailure::Transport {
+                source: PumpSource::Gate,
+                failure,
+            })?;
+        }
+        if owner.gate.held().is_some_and(|frame| {
+            frame.exchange.opener == Opener::Gate && matches!(frame.payload, Payload::Fault(_))
+        }) {
+            let received = owner
+                .gate
+                .take_received()
+                .map_err(|failure| RunFailure::Transport {
+                    source: PumpSource::Gate,
+                    failure,
+                })?
+                .expect("held gate report");
+            self.report = Some(report::Report::new(
+                owner.context,
+                received,
+                Subsystem::Gate,
+            ));
+        }
+        Ok(())
     }
 
     fn step(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
@@ -425,9 +518,6 @@ impl<'a> FoundationInput<'a> {
         }
         if self.stage == Stage::Engine {
             return self.advance_engine(None, io);
-        }
-        if self.advance_report(io)? {
-            return Ok(());
         }
         let owner = &mut self.serving.owner;
         owner.context.live(io)?;
@@ -448,32 +538,52 @@ impl<'a> FoundationInput<'a> {
                 owner.context.reduce_flow(ports.io)?;
                 // Residency announcements remain on their actual seam. They
                 // are opaque trace facts, not invented management decisions.
-                if let Some(received) = ports
+                if ports
                     .lifecycle
                     .residency
-                    .as_deref_mut()
+                    .as_deref()
                     .unwrap()
-                    .take_received()
-                    .map_err(|failure| RunFailure::Transport {
-                        source: PumpSource::Residency,
-                        failure,
-                    })?
+                    .held()
+                    .is_some_and(|frame| {
+                        frame.exchange.opener != Opener::Spu
+                            || !matches!(frame.payload, Payload::Fault(_))
+                    })
                 {
-                    self.report = Some((received, Subsystem::Spu));
-                    let (received, _) = self.report.as_ref().unwrap();
-                    if received.envelope().exchange.opener != Opener::Spu
-                        || !matches!(received.envelope().payload, Payload::Fault(_))
-                    {
-                        return Err(owner.context.fail(
-                            ports.io,
-                            FlowHaltReason::ProtocolFailed,
-                            HaltPoint::Barrier,
-                            "unexpected serving residency reply",
-                        ));
-                    }
+                    return Err(owner.context.fail(
+                        ports.io,
+                        FlowHaltReason::ProtocolFailed,
+                        HaltPoint::Barrier,
+                        "unexpected serving residency reply",
+                    ));
+                }
+                if !owner
+                    .context
+                    .serving_organs
+                    .residency_matches(ports.lifecycle.residency.as_deref().unwrap())
+                    && let Some(received) = ports
+                        .lifecycle
+                        .residency
+                        .as_deref_mut()
+                        .unwrap()
+                        .take_received()
+                        .map_err(|failure| RunFailure::Transport {
+                            source: PumpSource::Residency,
+                            failure,
+                        })?
+                {
+                    self.report =
+                        Some(report::Report::new(owner.context, received, Subsystem::Spu));
                     return Ok(());
                 }
                 if self.received.is_none() {
+                    if owner
+                        .context
+                        .serving_organs
+                        .gate_matches(ports.gate.as_deref().unwrap())
+                    {
+                        owner.context.pump_once(&mut ports)?;
+                        return Ok(());
+                    }
                     self.received = self.serving.queued_inputs.pop_front();
                     if self.received.is_none() {
                         self.received =
@@ -501,7 +611,11 @@ impl<'a> FoundationInput<'a> {
                     ));
                 }
                 if let Payload::Fault(_) = &envelope.payload {
-                    self.report = Some((self.received.take().unwrap(), Subsystem::Gate));
+                    self.report = Some(report::Report::new(
+                        owner.context,
+                        self.received.take().unwrap(),
+                        Subsystem::Gate,
+                    ));
                     return Ok(());
                 }
                 let Payload::Frame(frame) = &envelope.payload else {
@@ -592,6 +706,20 @@ impl<'a> FoundationInput<'a> {
                 }
             }
             Stage::Closing => {
+                let gate = ports.gate.as_deref_mut().unwrap();
+                if owner.context.serving_organs.gate_delivery_lost(gate) {
+                    if close::retain_lost_world(
+                        gate,
+                        &self.received.as_ref().unwrap().envelope().exchange,
+                        &mut self.close,
+                        self.send.as_ref(),
+                    )? {
+                        owner.context.input_closed_by_gate_loss(gate, ports.io)?;
+                        owner.context.finish_input(ports.io)?;
+                        self.stage = Stage::Refused;
+                    }
+                    return Ok(());
+                }
                 if let Some(close) = self.close.take() {
                     match ports.gate.as_deref_mut().unwrap().stage_tracked(close) {
                         Ok(TrackedStage::Queued(send)) => self.send = Some(send),
@@ -618,8 +746,9 @@ impl<'a> FoundationInput<'a> {
         Ok(())
     }
 
-    /// Only whole world-close delivery, Recorded checked source authoring or a
-    /// confirmed/check-recorded generation grants a result. The generated arm
+    /// Only settled world-close delivery (including checked gate loss), Recorded
+    /// checked source authoring or a confirmed/check-recorded generation grants
+    /// a result. The generated arm
     /// retains custody for repair/sort; it grants no final answer or dispatch.
     /// Every other attempt returns the full original owner.
     pub fn finish(mut self: Box<Self>) -> Result<FoundationInputResult<'a>, Box<Self>> {
@@ -688,8 +817,6 @@ impl<'a> FoundationTurn<'a> {
             close: None,
             send: None,
             report: None,
-            report_started: false,
-            returned_report: StoppedAuthor::default(),
             failure: None,
             engine: None,
         })

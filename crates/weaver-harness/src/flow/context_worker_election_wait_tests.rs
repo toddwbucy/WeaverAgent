@@ -127,6 +127,7 @@ fn proof(input: &FoundationInput<'_>) -> Vec<u8> {
 pub(super) fn exercise(
     mut guard: Guard<'_>,
     member: &mut Member,
+    reader: &mut std::os::unix::net::UnixStream,
     clock: &mut FakePumpIo,
     socket: &Path,
     root: &Path,
@@ -141,7 +142,9 @@ pub(super) fn exercise(
     ));
     let original = input.received.as_ref().unwrap().raw_bytes().to_vec();
     let generation = proof(input);
-    let stopped = mode.ends_with("bound") || mode.ends_with("failure");
+    let lost_gate = mode.ends_with("gate-failure");
+    let fatal = mode.ends_with("first-failure");
+    let stopped = mode.ends_with("bound") || fatal;
     if mode.ends_with("filing") {
         for _ in 0..1000 {
             assert_eq!(
@@ -215,26 +218,31 @@ pub(super) fn exercise(
             member.step(clock.now().unwrap(), mode);
             if input.serving.owner.gate.held().is_some()
                 || progress == FoundationInputProgress::Stopped
+                || (lost_gate
+                    && input
+                        .serving
+                        .owner
+                        .context
+                        .serving_organs
+                        .gate_delivery_lost(&input.serving.owner.gate))
             {
                 break;
             }
             std::thread::sleep(Duration::from_millis(1));
         }
-        if mode.ends_with("gate-failure") {
-            assert!(matches!(
-                input.failure,
-                Some(RunFailure::Transport {
-                    source: PumpSource::Gate,
-                    ..
-                })
-            ));
-            assert!(matches!(
-                input.serving.owner.context.failure(),
-                Some(RunFailure::Flow {
-                    reason: FlowHaltReason::ProtocolFailed,
-                    ..
-                })
-            ));
+        if lost_gate {
+            assert!(input.failure.is_none());
+            assert!(input.serving.owner.context.failure().is_none());
+            assert!(
+                input
+                    .serving
+                    .owner
+                    .context
+                    .serving_organs
+                    .gate_delivery_lost(&input.serving.owner.gate)
+            );
+            assert_eq!(input.serving.owner.tools.populated(), Some(false));
+            assert_eq!(input.progress(), FoundationInputProgress::Generated);
         } else {
             assert_eq!(
                 input.serving.owner.gate.held().unwrap().exchange.ordinal,
@@ -285,7 +293,7 @@ pub(super) fn exercise(
     }
     for _ in 0..8 {
         let progress = input.drive_with_io(&mut wait, true);
-        if mode.ends_with("failure") {
+        if fatal {
             assert_eq!(progress, FoundationInputProgress::Stopped);
         } else {
             assert_eq!(progress, FoundationInputProgress::Generated);
@@ -302,7 +310,7 @@ pub(super) fn exercise(
         assert_eq!(input.received.as_ref().unwrap().raw_bytes(), original);
         assert_eq!(proof(input), generation);
     }
-    if mode.ends_with("failure") {
+    if fatal {
         assert_eq!(wait.calls, 0);
         if mode.ends_with("first-failure") {
             assert!(
@@ -360,6 +368,27 @@ pub(super) fn exercise(
             assert_eq!(input.serving.gate_exchanges.len(), 1);
             assert!(input.serving.queued_inputs.is_empty());
             assert!(input.serving.owner.gate.held().is_none());
+        }
+        if lost_gate {
+            let records = super::super::management::tests::trace(reader);
+            let faults: Vec<_> = records
+                .iter()
+                .filter(|row| row["kind"] == "fault")
+                .collect();
+            let closes: Vec<_> = records
+                .iter()
+                .filter(|row| row["kind"] == "turn.closed")
+                .collect();
+            assert_eq!(faults.len(), 1);
+            assert_eq!(faults[0]["payload"]["case"], "organ_death_observed");
+            assert_eq!(closes.len(), 1);
+            assert_eq!(closes[0]["turn"], "generation-turn");
+            assert_eq!(closes[0]["payload"]["close"], "stopped");
+            assert_eq!(closes[0]["payload"]["reason"], "directive");
+            assert!(!input.failed_world_was_sent());
+            assert!(!root.join("closed.json").exists());
+            assert!(input.serving.owner.context.failure().is_none());
+            assert!(input.serving.owner.context.open_turn.is_none());
         }
     }
 }
