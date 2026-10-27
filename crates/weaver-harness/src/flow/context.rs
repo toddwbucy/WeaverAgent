@@ -1678,6 +1678,24 @@ impl RecordingContext {
         self.resume_stopped_and_bind(true)
     }
 
+    fn resume_deferred_halt_close(
+        &mut self,
+        close: &mut Option<super::recording::DeferredHaltClose>,
+    ) -> Result<Option<Sequence>, weaver_trace::Failure> {
+        let Some(original) = close.take() else {
+            return Ok(None);
+        };
+        if let Err(original) = self.barrier.restore_halt_close(original) {
+            *close = Some(original);
+            return Ok(None);
+        }
+        let result = self.resume_halt_terminal_and_bind();
+        if !matches!(result, Ok(Some(_))) {
+            *close = self.barrier.defer_halt_close();
+        }
+        result
+    }
+
     fn resume_stopped_and_bind(
         &mut self,
         terminal: bool,

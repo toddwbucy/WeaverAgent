@@ -627,7 +627,7 @@ impl RecordingContext {
                 }
             };
             self.pair_rejection_wait = Some((bound, inherited.is_none()));
-            let claim = super::halt_rejection::RejectedAuthor::new();
+            let claim = super::halt_rejection::RejectedAuthor::new(self.open_turn.clone());
             let identity = std::sync::Arc::clone(&claim.identity);
             self.pair_rejected_claim = Some(claim);
             self.waiting_content = Some(WaitingAuthor::claimed(
@@ -655,7 +655,13 @@ impl RecordingContext {
                 sequence: sequence.0.into(),
                 block: 0.into(),
             },
-            turn: self.open_turn.as_ref().map(|turn| turn.0.clone()),
+            turn: self
+                .pair_rejected_claim
+                .as_ref()
+                .unwrap()
+                .turn
+                .as_ref()
+                .map(|turn| turn.0.clone()),
         };
         self.pairs.ack_rejection_recorded(source).map_err(|error| {
             self.pair_fault(ports.io, format!("recorded rejected reply: {error:?}"))

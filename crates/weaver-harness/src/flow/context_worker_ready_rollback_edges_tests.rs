@@ -277,6 +277,21 @@ pub(super) fn finish(
         );
         assert_eq!(rows.last().unwrap()["kind"], "unload");
     }
+    if mode.ends_with("-clock-failure") {
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row["kind"] == "session.closed")
+                .count(),
+            1,
+            "failed rollback owns exactly one session close before Unload"
+        );
+        let close = rows
+            .iter()
+            .position(|row| row["kind"] == "session.closed")
+            .unwrap();
+        assert_eq!(close + 2, rows.len(), "only Unload follows session close");
+        assert_eq!(rows[close + 1]["kind"], "unload");
+    }
     assert_eq!(
         rows.iter().filter(|row| row["kind"] == "fault").count(),
         usize::from(mode.ends_with("-clock-failure"))

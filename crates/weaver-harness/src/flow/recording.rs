@@ -226,6 +226,21 @@ pub(super) struct TerminalAuthorFailure {
     pub detail: String,
 }
 
+/// The failed closer retains an already prepared closing record while earlier
+/// obligations use ordinary capacity. This is the same ticket and preparation,
+/// not a new author or an ordinary overflow slot.
+pub(super) struct DeferredHaltClose {
+    owner: Arc<()>,
+    pending: (Event, RecordPurpose),
+    author: AuthorTicket,
+}
+
+impl DeferredHaltClose {
+    pub(super) fn kind(&self) -> Kind {
+        self.author.event.kind
+    }
+}
+
 /// This object owns the only ordinary serving-recorder handle. The later
 /// recording context supplies author attribution, drains the inbox and owns
 /// the halt latch. This component never turns a failure into a success token.
@@ -1205,6 +1220,56 @@ impl RecordBarrier {
         &mut self,
     ) -> Result<Option<Sequence>, weaver_trace::Failure> {
         self.resume_stopped_record(true)
+    }
+
+    pub(super) fn defer_halt_close(&mut self) -> Option<DeferredHaltClose> {
+        if !self.recorder.tap_stopped()
+            || !self.pending_author.as_ref().is_some_and(|author| {
+                matches!(author.event.kind, Kind::TurnClosed | Kind::SessionClosed)
+            })
+            || self.pending.is_none()
+        {
+            return None;
+        }
+        // Keep the original preparation time. Trace sequence, not timestamp,
+        // orders this close after the earlier obligations settled by its owner.
+        Some(DeferredHaltClose {
+            owner: Arc::clone(&self.author_identity),
+            pending: self.pending.take().unwrap(),
+            author: self.pending_author.take().unwrap(),
+        })
+    }
+
+    /// Keep an unavailable ordinary original without granting a later retry.
+    /// The frozen first-failure account stays unchanged; this also retains an
+    /// exact original whose attempt began after that snapshot.
+    /// Reserved closing records must remain usable after this slot is retired.
+    pub(super) fn retain_halt_record(&mut self) -> Option<StoppedStartupRecord> {
+        if !self.recorder.tap_stopped() || (self.pending.is_none() && self.pending_author.is_none())
+        {
+            return None;
+        }
+        Some(StoppedStartupRecord {
+            _pending: self.pending.take(),
+            _author: self.pending_author.take(),
+        })
+    }
+
+    #[allow(clippy::result_large_err)] // Refusal returns the exact original ticket.
+    pub(super) fn restore_halt_close(
+        &mut self,
+        close: DeferredHaltClose,
+    ) -> Result<(), DeferredHaltClose> {
+        if !self.recorder.tap_stopped()
+            || !Arc::ptr_eq(&self.author_identity, &close.owner)
+            || self.pending.is_some()
+            || self.pending_author.is_some()
+        {
+            return Err(close);
+        }
+        self.pending = Some(close.pending);
+        self.pending_author = Some(close.author);
+        Ok(())
     }
 
     fn resume_stopped_record(
