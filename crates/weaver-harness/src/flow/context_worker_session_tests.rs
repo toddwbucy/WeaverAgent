@@ -72,6 +72,11 @@ fn frame(index: usize, malformed: bool) -> OrganEnvelope {
     }
 }
 pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
+    if mode.ends_with("-demand-receive-clock") {
+        let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
+        assert_eq!(recv(fd, &mut bytes, MsgFlags::empty()).unwrap_or(0), 0);
+        return;
+    }
     if wind_down::is_mode(mode) {
         return wind_down::gate(mode, root, fd);
     }

@@ -3,6 +3,334 @@
 use super::*;
 use crate::flow::report::CaptureState;
 
+fn expire_demand_before_commit(finished: bool) {
+    let mut run = active();
+    let window = demand_window(&mut run);
+    let received = run.clock.now().unwrap();
+    let mut parent = demand(&mut run, window, received);
+    parent.step().unwrap();
+    assert!(
+        parent
+            .capture
+            .begin_demand_boundary(&mut parent.member.run.context, &mut parent.member.run.clock)
+            .unwrap()
+    );
+    let id = if finished {
+        parent.prepared().0.capture_id
+    } else {
+        parent.image().0.capture_id
+    };
+    parent
+        .member
+        .run
+        .clock
+        .advance_to(window.deadline_ns.0)
+        .unwrap();
+    let request = parent.request();
+    assert!(
+        matches!(request, s::StateFrame::Control { frame: s::StateControl::Abort { capture_id }, .. } if capture_id == id)
+    );
+    assert!(
+        parent.capture.refusal_leg().is_none(),
+        "cleanup has not yet proved Ready"
+    );
+    assert!(parent.member.run.context.capture_snapshot().is_some());
+    assert!(
+        !parent
+            .capture
+            .at_halt(&parent.member.run.context)
+            .commit_sent
+    );
+    assert!(parent.capture.report().is_none());
+    let reply = parent
+        .member
+        .answer(&request, s::StateControlAnswer::Aborted { capture_id: id });
+    parent.member.receive(&reply).unwrap();
+    for _ in 0..64 {
+        if parent.step().unwrap() == ServingCaptureProgress::Refused {
+            break;
+        }
+    }
+    assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Refused);
+    assert_eq!(
+        parent.capture.refusal_leg(),
+        Some(if finished {
+            SavePointLeg::Published
+        } else {
+            SavePointLeg::Finished
+        })
+    );
+    assert!(parent.member.run.context.failure().is_none());
+    assert!(parent.member.run.context.capture_snapshot().is_none());
+    let records = parent.member.records(Kind::SavePoint);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[1]["payload"]["phase"], "refused");
+    for row in &records {
+        assert_eq!(row["payload"]["capture_id"], id.0.to_string());
+        assert_eq!(
+            row["payload"]["window"]["deadline_ns"],
+            window.deadline_ns.0.to_string()
+        );
+    }
+    let next = demand_window(parent.member.run);
+    let received = parent.member.run.clock.now().unwrap();
+    let mut retry = demand(parent.member.run, next, received);
+    retry.step().unwrap();
+    assert!(
+        retry
+            .capture
+            .begin_demand_boundary(&mut retry.member.run.context, &mut retry.member.run.clock)
+            .unwrap()
+    );
+    assert!(
+        matches!(retry.next().payload, CapturePayload::SavePointBeginning(beginning) if beginning.capture_id != id)
+    );
+}
+
+#[test]
+fn demand_capture_image_check_expiry_aborts_without_halting_and_allows_retry() {
+    expire_demand_before_commit(false);
+}
+
+#[test]
+fn demand_capture_prepare_expiry_aborts_without_halting_and_allows_retry() {
+    expire_demand_before_commit(true);
+}
+
+#[test]
+fn demand_capture_expiry_withdraws_unsent_commit_before_refusing() {
+    let mut run = active();
+    let window = demand_window(&mut run);
+    let received = run.clock.now().unwrap();
+    let mut parent = demand(&mut run, window, received);
+    parent.step().unwrap();
+    assert!(
+        parent
+            .capture
+            .begin_demand_boundary(&mut parent.member.run.context, &mut parent.member.run.clock)
+            .unwrap()
+    );
+    let (beginning, artifact) = parent.prepared();
+    parent.submit(CapturePayload::SavePointPrepared(artifact));
+    parent.pressure();
+    for _ in 0..8 {
+        parent.step().unwrap();
+    }
+    assert_eq!(
+        parent.member.records(Kind::SavePoint).len(),
+        2,
+        "Confirmed is retained before the blocked Commit"
+    );
+    assert!(
+        !parent
+            .capture
+            .at_halt(&parent.member.run.context)
+            .commit_sent
+    );
+    parent
+        .member
+        .run
+        .clock
+        .advance_to(window.deadline_ns.0)
+        .unwrap();
+    let request = parent.request();
+    assert!(
+        matches!(request, s::StateFrame::Control { frame: s::StateControl::Abort { capture_id }, .. } if capture_id == beginning.capture_id)
+    );
+    let answer = parent.member.answer(
+        &request,
+        s::StateControlAnswer::Aborted {
+            capture_id: beginning.capture_id,
+        },
+    );
+    parent.member.receive(&answer).unwrap();
+    for _ in 0..64 {
+        if parent.step().unwrap() == ServingCaptureProgress::Refused {
+            break;
+        }
+    }
+    parent.drain_pressure();
+    assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Refused);
+    assert_eq!(parent.capture.refusal_leg(), Some(SavePointLeg::Published));
+    parent
+        .peer
+        .try_send_observed(&mut parent.member.run.clock)
+        .unwrap();
+    assert!(parent.member.run.context.failure().is_none());
+    assert!(parent.member.run.context.capture_snapshot().is_none());
+    assert!(
+        !parent
+            .capture
+            .at_halt(&parent.member.run.context)
+            .commit_sent
+    );
+    assert_eq!(parent.member.records(Kind::SavePoint).len(), 3);
+    let mut bytes = [0; 4096];
+    assert_eq!(
+        recv(parent.admin.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
+        Err(nix::errno::Errno::EAGAIN),
+        "the withdrawn Commit cannot reappear after pressure drains"
+    );
+}
+
+#[test]
+fn demand_capture_expired_prepare_keeps_late_reply_without_granting_commit() {
+    let mut run = active();
+    let window = demand_window(&mut run);
+    let received = run.clock.now().unwrap();
+    let mut parent = demand(&mut run, window, received);
+    parent.step().unwrap();
+    assert!(
+        parent
+            .capture
+            .begin_demand_boundary(&mut parent.member.run.context, &mut parent.member.run.clock)
+            .unwrap()
+    );
+    let (beginning, artifact) = parent.prepared();
+    parent
+        .member
+        .run
+        .clock
+        .advance_to(window.deadline_ns.0)
+        .unwrap();
+    assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Progress);
+    parent.submit(CapturePayload::SavePointPrepared(artifact));
+    let request = parent.request();
+    assert!(
+        matches!(request, s::StateFrame::Control { frame: s::StateControl::Abort { capture_id }, .. } if capture_id == beginning.capture_id)
+    );
+    let answer = parent.member.answer(
+        &request,
+        s::StateControlAnswer::Aborted {
+            capture_id: beginning.capture_id,
+        },
+    );
+    parent.member.receive(&answer).unwrap();
+    for _ in 0..64 {
+        if parent.step().unwrap() == ServingCaptureProgress::Refused {
+            break;
+        }
+    }
+    assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Refused);
+    assert!(parent.member.run.context.failure().is_none());
+    assert!(
+        !parent
+            .capture
+            .at_halt(&parent.member.run.context)
+            .commit_sent
+    );
+    assert_eq!(parent.member.records(Kind::SavePoint).len(), 2);
+}
+
+#[test]
+fn demand_capture_expiry_before_beginning_starts_no_member_capture() {
+    let mut run = active();
+    let window = demand_window(&mut run);
+    let received = run.clock.now().unwrap();
+    let mut parent = demand(&mut run, window, received);
+    parent.step().unwrap();
+    assert!(
+        parent
+            .capture
+            .begin_demand_boundary(&mut parent.member.run.context, &mut parent.member.run.clock)
+            .unwrap()
+    );
+    parent.pressure();
+    assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Pending);
+    parent
+        .member
+        .run
+        .clock
+        .advance_to(window.deadline_ns.0)
+        .unwrap();
+    for _ in 0..32 {
+        if parent.step().unwrap() == ServingCaptureProgress::Refused {
+            break;
+        }
+    }
+    parent.drain_pressure();
+    assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Refused);
+    assert_eq!(parent.capture.refusal_leg(), Some(SavePointLeg::Answer));
+    assert!(parent.member.run.context.capture_snapshot().is_none());
+    assert!(
+        parent
+            .member
+            .run
+            .context
+            .flow
+            .state()
+            .outstanding()
+            .is_empty()
+    );
+    assert!(parent.member.run.context.failure().is_none());
+    let mut bytes = [0; 4096];
+    assert_eq!(
+        recv(parent.admin.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
+        Err(nix::errno::Errno::EAGAIN)
+    );
+    assert_eq!(parent.member.records(Kind::SavePoint).len(), 2);
+}
+
+#[test]
+fn demand_capture_expiry_retains_the_confirmation_author_through_cleanup() {
+    let mut run = active();
+    let window = demand_window(&mut run);
+    let received = run.clock.now().unwrap();
+    let mut parent = demand(&mut run, window, received);
+    parent.step().unwrap();
+    assert!(
+        parent
+            .capture
+            .begin_demand_boundary(&mut parent.member.run.context, &mut parent.member.run.clock)
+            .unwrap()
+    );
+    let (beginning, artifact) = parent.prepared();
+    parent.member.fill_trace();
+    parent.submit(CapturePayload::SavePointPrepared(artifact));
+    parent.step().unwrap();
+    parent.step().unwrap();
+    assert!(
+        parent.member.run.clock.now().unwrap() >= window.deadline_ns.0,
+        "the blocked confirmation reaches the original capture bound"
+    );
+    assert!(
+        !parent
+            .capture
+            .at_halt(&parent.member.run.context)
+            .commit_sent
+    );
+    parent.member.drain_trace();
+    let request = parent.request();
+    assert!(
+        matches!(request, s::StateFrame::Control { frame: s::StateControl::Abort { capture_id }, .. } if capture_id == beginning.capture_id)
+    );
+    let answer = parent.member.answer(
+        &request,
+        s::StateControlAnswer::Aborted {
+            capture_id: beginning.capture_id,
+        },
+    );
+    parent.member.receive(&answer).unwrap();
+    for _ in 0..64 {
+        if parent.step().unwrap() == ServingCaptureProgress::Refused {
+            break;
+        }
+    }
+    assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Refused);
+    let rows = parent.member.records(Kind::SavePoint);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[1]["payload"]["phase"], "confirmed");
+    assert_eq!(rows[2]["payload"]["phase"], "refused");
+    assert!(parent.member.run.context.failure().is_none());
+    assert!(parent.member.run.context.capture_snapshot().is_none());
+    assert!(
+        !parent
+            .capture
+            .at_halt(&parent.member.run.context)
+            .commit_sent
+    );
+}
+
 fn demand_window(run: &mut Fixture) -> s::SaveWindow {
     let began = run.clock.now().unwrap();
     let wait = run

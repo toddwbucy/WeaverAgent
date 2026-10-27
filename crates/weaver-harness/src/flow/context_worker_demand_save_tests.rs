@@ -8,6 +8,8 @@ use weaver_types::state_flow::capture::*;
 pub(in crate::flow::context::worker_startup) mod failed;
 #[path = "context_worker_demand_management_tests.rs"]
 mod management;
+#[path = "context_worker_demand_receive_tests.rs"]
+pub(in crate::flow::context) mod receive_clock;
 
 pub(in crate::flow::context::worker_startup) fn is_mode(mode: &str) -> bool {
     mode.contains("-session-demand-save")
@@ -42,6 +44,8 @@ pub(super) fn exercise(
     let bad_published = mode.ends_with("-bad-published");
     let secondary = mode.ends_with("-secondary");
     let retry = mode.ends_with("-timeout-retry");
+    let image_window = mode.ends_with("-image-window-timeout-retry");
+    let prepare_window = mode.ends_with("-prepare-window-timeout-retry");
     let mut failed_handoff = None;
     let mut guard = SessionGuard(Some(Session::begin(serving, &FAMILY, CutMethod::Flush)));
     let done = AtomicBool::new(false);
@@ -122,6 +126,8 @@ pub(super) fn exercise(
                 answered.store(true, Ordering::SeqCst);
                 return (packets, vec![window]);
             }
+            // Match real admin: the dial precedes sampling the save window.
+            let mut peer = dial(socket);
             let now = crate::flow::clock::monotonic_ns().unwrap();
             let began = if late {
                 now.checked_sub(wait).unwrap()
@@ -143,7 +149,6 @@ pub(super) fn exercise(
                     window,
                 }),
             };
-            let mut peer = dial(socket);
             let bytes = request.encode(CaptureSender::Admin).unwrap();
             assert_eq!(
                 send(peer.as_raw_fd(), &bytes, MsgFlags::MSG_NOSIGNAL),
@@ -222,7 +227,11 @@ pub(super) fn exercise(
                             dump_sha256: value.dump_sha256.clone(),
                         });
                         artifact = Some(value);
-                        Some(reply)
+                        if image_window && windows.len() == 1 {
+                            None
+                        } else {
+                            Some(reply)
+                        }
                     }
                     CapturePayload::SavePointImageFinished(finished) => {
                         assert_eq!(
@@ -232,9 +241,13 @@ pub(super) fn exercise(
                             .unwrap(),
                             std::fs::read(root.join("demand-captured.sqlite")).unwrap()
                         );
-                        Some(CapturePayload::SavePointPrepared(
-                            artifact.as_ref().unwrap().clone(),
-                        ))
+                        if prepare_window && windows.len() == 1 {
+                            None
+                        } else {
+                            Some(CapturePayload::SavePointPrepared(
+                                artifact.as_ref().unwrap().clone(),
+                            ))
+                        }
                     }
                     CapturePayload::SavePointCommit(commit) => {
                         assert_eq!(commit.capture_id, artifact.as_ref().unwrap().capture_id);
@@ -306,13 +319,21 @@ pub(super) fn exercise(
                             *missed,
                             if mode.ends_with("-snapshot-timeout-retry") {
                                 SavePointLeg::Answer
+                            } else if prepare_window {
+                                SavePointLeg::Published
                             } else {
                                 SavePointLeg::Finished
                             }
                         );
                         assert_eq!(message.position, Position::Close);
-                        assert!(root.join("demand-late-result.jsonl").exists());
-                        assert!(root.join("demand-aborted.jsonl").exists());
+                        if image_window || prepare_window {
+                            assert!(
+                                crate::flow::clock::monotonic_ns().unwrap() >= window.deadline_ns.0
+                            );
+                        } else {
+                            assert!(root.join("demand-late-result.jsonl").exists());
+                            assert!(root.join("demand-aborted.jsonl").exists());
+                        }
                         assert_eq!(
                             std::fs::read_dir(root.join("normal-member/room"))
                                 .unwrap()
@@ -324,6 +345,7 @@ pub(super) fn exercise(
                             CapturePayload::SavePointCommit(_)
                         )));
                         packets.push(message);
+                        peer = dial(socket);
                         let now = crate::flow::clock::monotonic_ns().unwrap();
                         window = s::SaveWindow {
                             began_ns: now.into(),
@@ -334,7 +356,6 @@ pub(super) fn exercise(
                             cause: weaver_types::Cause { uid: 74 },
                             window,
                         });
-                        peer = dial(socket);
                         let bytes = request.encode(CaptureSender::Admin).unwrap();
                         assert_eq!(
                             send(peer.as_raw_fd(), &bytes, MsgFlags::MSG_NOSIGNAL),

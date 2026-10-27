@@ -323,6 +323,32 @@ impl<'a> FoundationManagement<'a> {
             io,
         });
         self.keep_dial_failure(pumped)?;
+        if self.heard_ns.is_none()
+            && (self.peer.capture_held().is_some() || self.peer.held().is_some())
+        {
+            // The opener is already retained by the sole recvmsg owner. Its
+            // receive reading must follow that read, not the pump's earlier
+            // liveness sample: admin may have sent between those two actions.
+            let context = &mut self.input.serving.owner.context;
+            let now = io.now().map_err(|error| {
+                context.fail(
+                    io,
+                    FlowHaltReason::TraceFailed,
+                    HaltPoint::Author,
+                    format!("management receive clock: {error}"),
+                )
+            })?;
+            if now < context.last_ns {
+                return Err(context.fail(
+                    io,
+                    FlowHaltReason::TraceFailed,
+                    HaltPoint::Author,
+                    "management receive clock reversed",
+                ));
+            }
+            context.last_ns = now;
+            self.heard_ns = Some(now);
+        }
         if self.message.is_none()
             && self.save_message.is_none()
             && let Some(message) = self.peer.capture_held()
@@ -340,8 +366,6 @@ impl<'a> FoundationManagement<'a> {
                 self.progress = FoundationManagementProgress::Dropped;
                 return Ok(());
             }
-            self.heard_ns
-                .get_or_insert(self.input.serving.owner.context.last_ns);
             if self.read_armed {
                 self.input
                     .serving
@@ -419,8 +443,6 @@ impl<'a> FoundationManagement<'a> {
                 )
             };
             if delegate {
-                self.heard_ns
-                    .get_or_insert(self.input.serving.owner.context.last_ns);
                 if self.read_armed {
                     self.input
                         .serving

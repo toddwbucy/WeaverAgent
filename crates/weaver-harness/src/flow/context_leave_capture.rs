@@ -281,6 +281,7 @@ pub(super) struct ServingCapture {
     refusal_code: Option<String>,
     refusal_leg: Option<SavePointLeg>,
     queued_expired: bool,
+    expired_at: Option<Stage>,
     release_started: bool,
     cancelling: bool,
     disconnected: bool,
@@ -632,6 +633,7 @@ impl ServingCapture {
             refusal_code: None,
             refusal_leg: None,
             queued_expired: false,
+            expired_at: None,
             release_started: false,
             cancelling: false,
             disconnected: false,
@@ -708,6 +710,36 @@ impl ServingCapture {
         } else {
             false
         }
+    }
+
+    /// An expired on-demand publication window revokes Commit, not the run.
+    /// Retain its exact phase before the member's bounded cleanup begins.
+    pub(super) fn retain_window_expiry(
+        &mut self,
+        context: &RecordingContext,
+        failure: &RunFailure,
+    ) -> bool {
+        if !matches!(self.capture_origin, CaptureOrigin::Demand { .. })
+            || self.queued()
+            || self.commit_sent()
+            || self.expired_at.is_some()
+            || context.failure.is_some()
+            || !Arc::ptr_eq(&self.origin, &context.read_origin)
+            || !matches!(failure, RunFailure::Wait { key: PumpDeadline::CaptureWindow, bound } if *bound == self.window)
+            || context.deadlines.get(PumpDeadline::CaptureWindow) != Some(self.window)
+        {
+            return false;
+        }
+        self.expired_at = Some(self.stage);
+        self.cancelling = true;
+        self.refusal_code
+            .get_or_insert_with(|| "capture_window_expired".into());
+        self.refusal_leg.get_or_insert(match self.stage {
+            Stage::Beginning | Stage::Barrier => SavePointLeg::Answer,
+            Stage::Image | Stage::AwaitChecked | Stage::Acknowledge => SavePointLeg::Finished,
+            _ => SavePointLeg::Published,
+        });
+        true
     }
 
     fn published_report(&self) -> shared::SavePointReport {
@@ -955,7 +987,7 @@ impl ServingCapture {
         let Some(message) = peer.capture_held() else {
             return Ok(());
         };
-        if self.cancelling {
+        if self.cancelling && self.expired_at.is_none() {
             self.unexpected = peer.take_capture().expect("held complete packet");
             return Err(fault(
                 context,
@@ -971,6 +1003,14 @@ impl ServingCapture {
             && let CapturePayload::SavePointAborted(aborted) = &message.envelope.payload
             && !self.commit_sent()
         {
+            if self.aborted.is_some() {
+                self.unexpected = peer.take_capture().expect("held duplicate abort");
+                return Err(fault(
+                    context,
+                    ports.io,
+                    "capture received duplicate admin abort",
+                ));
+            }
             self.refusal_code
                 .get_or_insert_with(|| aborted.code.clone());
             self.refusal_leg.get_or_insert(SavePointLeg::Published);
@@ -978,7 +1018,7 @@ impl ServingCapture {
             self.cancelling = true;
             return Ok(());
         }
-        let expected = match self.stage {
+        let expected = match self.expired_at.unwrap_or(self.stage) {
             Stage::AwaitChecked => Some(0),
             Stage::Image if self.carries[1].as_ref().is_some_and(Carry::sent) => Some(0),
             Stage::AwaitPrepared => Some(1),
@@ -1002,6 +1042,20 @@ impl ServingCapture {
                 "capture continuation changed exchange, capture, direction or phase",
             ));
         }
+        if self.expired_at.is_some() {
+            let slot = expected.expect("validated late continuation");
+            if self.incoming[slot].is_some() {
+                self.unexpected = peer.take_capture().expect("held duplicate packet");
+                return Err(fault(
+                    context,
+                    ports.io,
+                    "capture expiry received duplicate continuation",
+                ));
+            }
+            // Keep one valid in-flight reply as evidence; it cannot advance
+            // publication or reset the old window while Abort is outstanding.
+            self.incoming[slot] = peer.take_capture().expect("held complete packet");
+        }
         Ok(())
     }
 
@@ -1010,6 +1064,17 @@ impl ServingCapture {
         context: &mut RecordingContext,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<ServingCaptureProgress, RunFailure> {
+        if self.expired_at.is_some()
+            && context.deadlines.get(PumpDeadline::CaptureWindow) == Some(self.window)
+        {
+            if context.member_capture.is_some() {
+                context.expire_member_capture(self.beginning.capture_id, ports.io)?;
+            } else {
+                // Beginning did not reach a member barrier. Only this exact
+                // capture's wait retires; no publication allowance is renewed.
+                context.deadlines.disarm(PumpDeadline::CaptureWindow);
+            }
+        }
         // Finish the exact already-admitted author before starting its refusal.
         // A retained original is never replaced by a fresh equivalent event.
         if !self.requested.settled && (self.requested.started || self.queued()) {
@@ -1207,11 +1272,20 @@ impl ServingCapture {
         if !matches!(
             self.stage,
             Stage::Barrier | Stage::Acknowledge | Stage::Release
-        ) {
-            context.live(ports.io)?;
+        ) && let Err(failure) = context.live(ports.io)
+        {
+            if self.retain_window_expiry(context, &failure) {
+                return Ok(ServingCaptureProgress::Progress);
+            }
+            return Err(failure);
         }
         let id = self.beginning.capture_id;
         let result = self.step(context, ports, id);
+        if let Err(failure) = &result
+            && self.retain_window_expiry(context, failure)
+        {
+            return Ok(ServingCaptureProgress::Progress);
+        }
         match result {
             Err(RunFailure::Transport {
                 source: PumpSource::LeavePeer,

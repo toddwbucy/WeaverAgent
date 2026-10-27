@@ -223,6 +223,9 @@ impl FoundationInput<'_> {
         };
         save.capture
             .retain_queued_expiry(self.serving.owner.context, failure)
+            || save
+                .capture
+                .retain_window_expiry(self.serving.owner.context, failure)
             || save.capture.retain_peer_end(failure)
     }
 

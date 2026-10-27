@@ -1058,7 +1058,10 @@ fn circuit(mode: &str) {
     {
         load.state_flow.persistence.save_wait.elapsed_ns = 10_000_000_000.into();
         load.state_flow.persistence.snapshot_wait.elapsed_ns = 2_000_000_000.into();
-        if mode.ends_with("-window-timeout") || mode.ends_with("-published-timeout") {
+        if mode.ends_with("-window-timeout")
+            || mode.ends_with("-published-timeout")
+            || mode.ends_with("-window-timeout-retry")
+        {
             load.state_flow.persistence.save_wait.elapsed_ns = 1_000_000_000.into();
         }
         if super::input::generation::session_tests::demand_save::is_mode(mode)
@@ -1369,6 +1372,12 @@ fn circuit(mode: &str) {
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-worker") {
             drop(peer);
+            if mode.ends_with("-demand-receive-clock") {
+                super::input::generation::session_tests::demand_save::receive_clock::exercise(
+                    serving, &path,
+                );
+                return;
+            }
             if super::input::generation::session_tests::forced_leave::is_mode(mode) {
                 let handoff = super::input::generation::session_tests::forced_leave::handoff(
                     serving,
@@ -1968,6 +1977,10 @@ macro_rules! scenario {
 }
 scenario!(worker_startup_composition_ready, "ready");
 scenario!(
+    worker_session_demand_save_receive_clock,
+    "input-worker-generation-emission-session-demand-receive-clock"
+);
+scenario!(
     worker_session_demand_save_sqlite_idle,
     "input-worker-generation-emission-session-demand-save-sqlite-idle"
 );
@@ -2010,6 +2023,14 @@ scenario!(
 scenario!(
     worker_session_demand_save_sqlite_finished_timeout_retry,
     "input-worker-generation-emission-session-demand-save-sqlite-finished-timeout-retry"
+);
+scenario!(
+    worker_session_demand_save_sqlite_image_window_timeout_retry,
+    "input-worker-generation-emission-session-demand-save-sqlite-image-window-timeout-retry"
+);
+scenario!(
+    worker_session_demand_save_sqlite_prepare_window_timeout_retry,
+    "input-worker-generation-emission-session-demand-save-sqlite-prepare-window-timeout-retry"
 );
 scenario!(
     worker_session_forced_leave_joint_sqlite_idle,
