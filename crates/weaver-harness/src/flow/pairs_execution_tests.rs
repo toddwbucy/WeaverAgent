@@ -406,6 +406,59 @@ fn rejection_keeps_exact_wire_until_actual_recorded_disposition() {
 }
 
 #[test]
+fn only_failed_rejection_receipts_can_omit_the_active_turn() {
+    let (mut ledger, call, _) = ready();
+    dispatch(&mut ledger, &call, 1);
+    let packet = received(97, result());
+    let raw = packet.raw_bytes().to_vec();
+    ledger.observe_gate(packet).unwrap();
+    let source = SourcePosition {
+        block_id: event_id(50),
+        turn: None,
+    };
+    assert_eq!(
+        ledger.ack_rejection_recorded(source.clone()).unwrap_err(),
+        PairError::InvalidIdentity
+    );
+    assert_eq!(
+        ledger
+            .ack_halt_rejection_recorded(source.clone())
+            .unwrap_err(),
+        PairError::WrongPhase
+    );
+    ledger.freeze();
+    assert_eq!(
+        ledger.ack_rejection_recorded(source.clone()).unwrap_err(),
+        PairError::InvalidIdentity
+    );
+    assert_eq!(
+        ledger
+            .ack_halt_rejection_recorded(SourcePosition {
+                turn: Some("wrong-turn".into()),
+                ..source.clone()
+            })
+            .unwrap_err(),
+        PairError::InvalidIdentity
+    );
+    assert_eq!(
+        ledger
+            .ack_halt_rejection_recorded(SourcePosition {
+                block_id: SourceBlockId {
+                    run: "foreign".into(),
+                    ..event_id(50)
+                },
+                turn: None
+            })
+            .unwrap_err(),
+        PairError::InvalidIdentity
+    );
+    let packet = ledger.ack_halt_rejection_recorded(source).unwrap();
+    assert_eq!(packet.raw_bytes(), raw);
+    assert!(ledger.pending_rejection().is_none());
+    assert_eq!(ledger.executing().unwrap().0, &call);
+}
+
+#[test]
 fn rejected_return_maximum_admitted_payload_keeps_every_byte() {
     let (mut ledger, call, _) = ready();
     dispatch(&mut ledger, &call, 1);

@@ -8,6 +8,9 @@ pub(in crate::flow::context::worker_startup) fn is_mode(mode: &str) -> bool {
     mode.contains("-session-graceful-save-sqlite-wind-convert-")
 }
 fn case(mode: &str) -> &str {
+    if mode.contains("-secondary-") {
+        return "unstarted";
+    }
     mode.split("-wind-convert-").nth(1).unwrap()
 }
 fn correction(mode: &str) -> bool {
@@ -20,6 +23,7 @@ pub(super) struct Evidence {
     ticket: Option<u64>,
     event: Option<serde_json::Value>,
     completed_author: Option<weaver_trace::Sequence>,
+    held_author: Option<(usize, String)>,
 }
 impl Evidence {
     pub(super) fn assert_run(&self, run: &FoundationRun) {
@@ -255,6 +259,247 @@ impl PumpIo for JoinDuringWait<'_> {
     }
 }
 
+struct LocalInspectionReady;
+impl PumpIo for LocalInspectionReady {
+    fn now(&mut self) -> std::io::Result<u64> {
+        MonotonicIo.now()
+    }
+    fn wait(
+        &mut self,
+        interests: &[WaitInterest<'_>],
+        deadline: Option<u64>,
+    ) -> std::io::Result<WaitOutcome> {
+        let now = MonotonicIo.now()?;
+        assert!(
+            deadline.is_some_and(|end| end <= now),
+            "local inspection must advance before blocking"
+        );
+        MonotonicIo.wait(interests, deadline)
+    }
+}
+
+fn retain_held_turn(
+    input: &mut FoundationInput<'_>,
+    resume: bool,
+    refusal: bool,
+) -> (usize, String) {
+    let mut original = None;
+    let mut decision = None;
+    for _ in 0..3 {
+        begin_original_inspection(input);
+        // Receive the normal member's actual reply without reducing it. The
+        // next author step must progress that admitted local work before sleep.
+        let end = Instant::now() + Duration::from_secs(5);
+        while input
+            .serving
+            .owner
+            .context
+            .flow
+            .state()
+            .held_measurement()
+            .is_none()
+        {
+            assert!(
+                Instant::now() < end,
+                "normal inspection reply did not arrive"
+            );
+            input
+                .serving
+                .owner
+                .context
+                .pump_once(&mut PumpPorts {
+                    lifecycle: LifecyclePorts::default(),
+                    gate: None,
+                    decode: None,
+                    label: None,
+                    io: &mut MonotonicIo,
+                })
+                .unwrap();
+        }
+        assert_eq!(
+            input.advance_with_io(&mut LocalInspectionReady),
+            FoundationInputProgress::WindDown,
+            "{:?}",
+            input.detail()
+        );
+        let context = &input.serving.owner.context;
+        let work = input
+            .serving
+            .graceful
+            .as_ref()
+            .unwrap()
+            .wind_down
+            .as_ref()
+            .unwrap();
+        let held = if refusal {
+            work.test_unadmitted_refusal()
+        } else {
+            work.test_unadmitted_author()
+        }
+        .expect("the exact caller regained its unadmitted event");
+        if let Some(original) = &original {
+            assert_eq!(
+                &held, original,
+                "another attempt must move the original event"
+            );
+            assert_eq!(context.deadlines.get(PumpDeadline::Decision), decision);
+        } else {
+            original = Some(held);
+            decision = context.deadlines.get(PumpDeadline::Decision);
+            assert!(decision.is_some());
+        }
+        assert!(!context.caller_author_held());
+        assert!(context.pending_author().is_none() && context.completed_author.is_none());
+        assert!(
+            context.inspection.is_some(),
+            "the earlier real inspection still owns its answer"
+        );
+        assert!(context.failure().is_none());
+        finish_original_inspection(input);
+    }
+    assert_eq!(
+        input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision),
+        decision
+    );
+    if resume {
+        assert_eq!(
+            input.advance(),
+            FoundationInputProgress::WindDown,
+            "{:?}",
+            input.detail()
+        );
+        let work = input
+            .serving
+            .graceful
+            .as_ref()
+            .unwrap()
+            .wind_down
+            .as_ref()
+            .unwrap();
+        if refusal {
+            assert!(work.test_unadmitted_refusal().is_none());
+            assert!(work.test_refusal_record().is_some());
+        } else {
+            assert!(work.test_unadmitted_author().is_none());
+        }
+    }
+    original.unwrap()
+}
+
+fn begin_original_inspection(input: &mut FoundationInput<'_>) {
+    use crate::flow::context::{InspectionBeginRefusal, InspectionKind};
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let context = &mut input.serving.owner.context;
+        match context.begin_inspection(InspectionKind::Shape, None, &mut MonotonicIo) {
+            Ok(()) => return,
+            Err(error) => {
+                assert_eq!(error.refusal, InspectionBeginRefusal::Busy, "{error:?}");
+                assert!(error.failure.is_none() && !error.retained, "{error:?}");
+                assert!(
+                    Instant::now() < end,
+                    "preceding account never allowed inspection"
+                );
+            }
+        }
+        // A prior content filing can still own its actual member exchange.
+        // Settle it through the common reducer and readiness wait before the
+        // inspection asks to own that same channel.
+        if context.reduce_flow(&mut MonotonicIo).unwrap()
+            == crate::flow::coordinator::Advance::Pending
+        {
+            context
+                .pump_once(&mut PumpPorts {
+                    lifecycle: LifecyclePorts::default(),
+                    gate: None,
+                    decode: None,
+                    label: None,
+                    io: &mut MonotonicIo,
+                })
+                .unwrap();
+        }
+    }
+}
+
+fn finish_original_inspection(input: &mut FoundationInput<'_>) {
+    use crate::flow::context::{InspectionCompletion, InspectionProgress};
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(Instant::now() < end, "original inspection did not settle");
+        let context = &mut input.serving.owner.context;
+        let mut io = MonotonicIo;
+        let mut ports = PumpPorts {
+            lifecycle: LifecyclePorts::default(),
+            gate: None,
+            decode: None,
+            label: None,
+            io: &mut io,
+        };
+        let progress = context.advance_inspection(&mut ports).unwrap();
+        if progress == InspectionProgress::Complete {
+            break;
+        }
+        if progress == InspectionProgress::Pending {
+            context.pump_once(&mut ports).unwrap();
+        }
+    }
+    loop {
+        assert!(Instant::now() < end, "inspection flow did not become idle");
+        let context = &mut input.serving.owner.context;
+        match context.reduce_flow(&mut MonotonicIo).unwrap() {
+            crate::flow::coordinator::Advance::Idle => break,
+            crate::flow::coordinator::Advance::Progress => {}
+            crate::flow::coordinator::Advance::Pending => {
+                context
+                    .pump_once(&mut PumpPorts {
+                        lifecycle: LifecyclePorts::default(),
+                        gate: None,
+                        decode: None,
+                        label: None,
+                        io: &mut MonotonicIo,
+                    })
+                    .unwrap();
+            }
+        }
+    }
+    let decision = input
+        .serving
+        .owner
+        .context
+        .deadlines
+        .get(PumpDeadline::Decision)
+        .unwrap();
+    // The answer is already in its owner's slot. Supply no spurious wake:
+    // any blocking wait here would prevent that owner from taking it.
+    assert_eq!(
+        input.advance_with_io(&mut LocalInspectionReady),
+        FoundationInputProgress::WindDown
+    );
+    assert_eq!(
+        input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision),
+        Some(decision)
+    );
+    let completion = input
+        .serving
+        .owner
+        .context
+        .take_inspection(&mut MonotonicIo)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(completion, InspectionCompletion::Shape { .. }));
+    assert!(MonotonicIo.now().unwrap() < decision.deadline_ns());
+}
+
 pub(super) fn handoff(
     serving: FoundationServing<'_>,
     socket: &Path,
@@ -264,7 +509,8 @@ pub(super) fn handoff(
     reader: &mut UnixStream,
 ) -> Handoff {
     let scenario = case(mode);
-    let expiry = matches!(scenario, "expiry-generation" | "expiry-close-recorded");
+    let expiry = matches!(scenario, "expiry-generation" | "expiry-close-recorded")
+        || mode.contains("-secondary-");
     let author = matches!(scenario, "start-author" | "close-author");
     let mut session = SessionGuard(Some(Session::begin(serving, &FAMILY, CutMethod::Flush)));
     let done = AtomicBool::new(false);
@@ -377,9 +623,15 @@ pub(super) fn handoff(
             .begin_graceful_wind_down(TurnKey("wind-down-0".into()), CutMethod::Flush)
             .unwrap();
         let end = Instant::now() + Duration::from_secs(5);
-        let mut join = None;
+        let mut join = mode
+            .contains("-secondary-")
+            .then(|| {
+                secondary::convert(&mut guard, socket, root, mode, Some(PumpDeadline::WindDown))
+            })
+            .flatten();
         let mut ticket = None;
         let mut event = None;
+        let mut held_author = None;
         loop {
             assert!(
                 Instant::now() < end,
@@ -407,17 +659,38 @@ pub(super) fn handoff(
                 .unwrap()
                 .test_stage();
             let stop = match scenario {
-                "unstarted" | "start-author" => phase == "Start",
-                "instruction" => phase == "Instruction",
+                "unstarted" | "start-author" | "held-start" | "held-start-resume" => {
+                    phase == "Start"
+                }
+                "instruction" | "held-refusal" | "held-refusal-resume" => phase == "Instruction",
                 "placed" => phase == "Placed",
                 "generated" => phase == "Generated",
                 "repair" => input.serving.owner.context.repair.is_some(),
                 "restatement" => input.wind_down_progress() == Some(W::Restatement),
-                "closing" | "close-author" | "expiry-close-recorded" => phase == "Closing",
+                "closing"
+                | "close-author"
+                | "expiry-close-recorded"
+                | "held-close"
+                | "held-close-resume" => phase == "Closing",
                 _ => false,
             };
             if stop {
-                if scenario == "expiry-close-recorded" {
+                if matches!(
+                    scenario,
+                    "held-start"
+                        | "held-start-resume"
+                        | "held-close"
+                        | "held-close-resume"
+                        | "held-refusal"
+                        | "held-refusal-resume"
+                ) {
+                    held_author = Some(retain_held_turn(
+                        input,
+                        scenario.ends_with("-resume"),
+                        scenario.starts_with("held-refusal"),
+                    ));
+                    join = Some(joining(socket, 75, 100));
+                } else if scenario == "expiry-close-recorded" {
                     let mut io = CloseClock {
                         reads: 0,
                         // The seventh reading is the post-Recorded live check
@@ -551,6 +824,7 @@ pub(super) fn handoff(
             ticket,
             event,
             completed_author: input.serving.owner.context.completed_author,
+            held_author,
         };
         assert!(!root.join("ready-rollback-lower.json").exists());
         let actual = match guard.input.take().unwrap().graceful_leave_handoff() {
@@ -607,9 +881,10 @@ pub(super) fn assert_tail(
     filings: &[s::StateFrame],
     root: &Path,
     mode: &str,
+    evidence: &Evidence,
 ) {
     let scenario = case(mode);
-    let unstarted = scenario == "unstarted";
+    let unstarted = matches!(scenario, "unstarted" | "held-start");
     let sequence =
         |row: &serde_json::Value| row["sequence"].as_str().unwrap().parse::<u64>().unwrap();
     let started: Vec<_> = rows
@@ -630,14 +905,26 @@ pub(super) fn assert_tail(
         assert!(
             sequence(started[0]) < sequence(closed[0]) && sequence(closed[0]) < sequence(confirmed)
         );
-        if matches!(scenario, "close-author" | "expiry-close-recorded") {
+        if matches!(
+            scenario,
+            "close-author" | "expiry-close-recorded" | "held-close-resume"
+        ) {
             assert_eq!(closed[0]["payload"]["close"], "clean");
         } else {
             assert_eq!(closed[0]["payload"]["reason"], "unload");
             assert_eq!(closed[0]["payload"]["cause"]["uid"], 74);
         }
     }
-    let instruction = !matches!(scenario, "unstarted" | "start-author" | "instruction");
+    let instruction = !matches!(
+        scenario,
+        "unstarted"
+            | "start-author"
+            | "instruction"
+            | "held-start"
+            | "held-start-resume"
+            | "held-refusal"
+            | "held-refusal-resume"
+    );
     assert_eq!(filings.iter().filter(|frame| matches!(frame,s::StateFrame::File { filing,.. } if filing.text=="Read summary.")).count(),usize::from(instruction));
     let cancel = matches!(
         scenario,
@@ -646,7 +933,16 @@ pub(super) fn assert_tail(
     assert_eq!(root.join("wc-cancel.json").exists(), cancel);
     if matches!(
         scenario,
-        "unstarted" | "start-author" | "instruction" | "held-filing" | "measure" | "placed"
+        "unstarted"
+            | "start-author"
+            | "instruction"
+            | "held-filing"
+            | "measure"
+            | "placed"
+            | "held-start"
+            | "held-start-resume"
+            | "held-refusal"
+            | "held-refusal-resume"
     ) {
         assert!(!root.join("wc-generation-0").exists());
     }
@@ -654,7 +950,9 @@ pub(super) fn assert_tail(
     assert_eq!(unload["kind"], "unload");
     assert_eq!(
         unload["payload"]["forced_by"],
-        if matches!(scenario, "expiry-generation" | "expiry-close-recorded") {
+        if matches!(scenario, "expiry-generation" | "expiry-close-recorded")
+            || mode.contains("-secondary-")
+        {
             serde_json::Value::Null
         } else {
             serde_json::json!({"uid":75})
@@ -662,10 +960,14 @@ pub(super) fn assert_tail(
     );
     assert_eq!(
         joins.len(),
-        usize::from(!matches!(
-            scenario,
-            "expiry-generation" | "expiry-close-recorded"
-        ))
+        if mode.contains("-secondary-") {
+            usize::from(mode.contains("-secondary-joiner"))
+        } else {
+            usize::from(!matches!(
+                scenario,
+                "expiry-generation" | "expiry-close-recorded"
+            ))
+        }
     );
     assert!(joins.iter().all(|join| join.answer.is_some()));
     let inner = owner.0.test_inner();
@@ -688,6 +990,38 @@ pub(super) fn assert_tail(
     );
     if scenario == "placed" {
         assert!(work.test_cancelled_placement());
+    }
+    if let Some(expected) = &evidence.held_author {
+        match scenario {
+            "held-start" => assert_eq!(work.test_unadmitted_author().as_ref(), Some(expected)),
+            "held-close" => assert_eq!(work.test_unadmitted_close().as_ref(), Some(expected)),
+            _ => {
+                assert!(work.test_unadmitted_author().is_none());
+                assert!(work.test_unadmitted_close().is_none());
+            }
+        }
+    }
+    if scenario.starts_with("held-refusal") {
+        let refusals: Vec<_> = rows
+            .iter()
+            .filter(|row| row["kind"] == "refusal" && row["turn"] == "wind-down-0")
+            .collect();
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(refusals[0]["payload"]["template_id"], "wind_down");
+        assert_eq!(refusals[0]["payload"]["case"], "invalid_template");
+        assert_eq!(
+            refusals[0]["payload"]["detail"],
+            "wind-down family is not in this run's certificate"
+        );
+        assert!(
+            sequence(started[0]) < sequence(refusals[0])
+                && sequence(refusals[0]) < sequence(closed[0])
+        );
+        assert_eq!(
+            work.test_refusal_record().map(|value| value.0),
+            Some(sequence(refusals[0]))
+        );
+        assert!(work.test_unadmitted_refusal().is_none());
     }
     assert!(inner.test_context().wind_down.is_none() && inner.test_context().open_turn.is_none());
     assert!(inner.test_context().input.snapshot().is_none());

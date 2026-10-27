@@ -99,6 +99,78 @@ struct Member {
     requests: Vec<s::StateControl>,
 }
 
+/// Interleave a caller with actual inspection requests and recorded replies.
+/// The callback cannot take the inspection's answer; its original owner does.
+pub(super) fn with_three_inspection_holds(
+    mut caller: impl FnMut(&mut RecordingContext, &mut crate::flow::clock::testing::FakePumpIo, bool),
+) {
+    let mut member = Member::new();
+    for _ in 0..3 {
+        member
+            .run
+            .context
+            .begin_inspection(InspectionKind::Shape, None, &mut member.run.clock)
+            .unwrap();
+        let request = member.sent();
+        let answer = member.answer(&request, s::StateControlAnswer::Shape(vec![]));
+        member.receive(&answer).unwrap();
+        caller(&mut member.run.context, &mut member.run.clock, false);
+        assert!(member.run.context.inspection.is_some());
+        let mut completed = false;
+        for _ in 0..128 {
+            let progress = member
+                .run
+                .context
+                .advance_inspection(&mut ports(&mut member.run.clock))
+                .unwrap();
+            if progress == InspectionProgress::Complete {
+                completed = true;
+                break;
+            }
+        }
+        assert!(
+            completed,
+            "original inspection owner must take its own answer"
+        );
+        assert_eq!(
+            member
+                .run
+                .context
+                .reduce_flow(&mut member.run.clock)
+                .unwrap(),
+            Advance::Idle
+        );
+        let before = member.run.clock.waits().len();
+        let now = member.run.clock.now().unwrap();
+        // No readiness is scheduled. The completion is already local and its
+        // original owner can take it only after this caller returns.
+        caller(&mut member.run.context, &mut member.run.clock, false);
+        assert_eq!(
+            member.run.clock.waits().len(),
+            before,
+            "a ready inspection completion must return to its owner without waiting"
+        );
+        assert_eq!(member.run.clock.now().unwrap(), now);
+        let done = member
+            .run
+            .context
+            .take_inspection(&mut member.run.clock)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(done, InspectionCompletion::Shape { .. }));
+        assert!(
+            now < member
+                .run
+                .context
+                .deadlines
+                .get(PumpDeadline::Decision)
+                .unwrap()
+                .deadline_ns()
+        );
+    }
+    caller(&mut member.run.context, &mut member.run.clock, true);
+}
+
 impl Member {
     fn new() -> Self {
         let mut run = Fixture::new(config());

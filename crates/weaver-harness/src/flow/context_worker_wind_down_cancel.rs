@@ -18,6 +18,41 @@ impl WindDown {
     pub(in crate::flow::context) fn test_cancelled_placement(&self) -> bool {
         matches!(self.pass.placement, Some(PlacementCompletion::Cancelled(_)))
     }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn test_unadmitted_author(&self) -> Option<(usize, String)> {
+        self.turn_event.as_ref().map(|event| {
+            assert!(!self.author_started);
+            (
+                event.turn.as_ref().unwrap().0.as_ptr() as usize,
+                format!("{event:?}"),
+            )
+        })
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn test_unadmitted_close(&self) -> Option<(usize, String)> {
+        self.unadmitted_close.as_ref().map(|event| {
+            (
+                event.turn.as_ref().unwrap().0.as_ptr() as usize,
+                format!("{event:?}"),
+            )
+        })
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn test_unadmitted_refusal(&self) -> Option<(usize, String)> {
+        self.pass.refusal.as_ref().map(|event| {
+            assert!(!self.pass.refusal_started);
+            let Some(serving::Payload::Refusal(raw) | serving::Payload::Fault(raw)) =
+                &event.payload
+            else {
+                panic!("wind-down refusal keeps its exact payload");
+            };
+            (raw.get().as_ptr() as usize, format!("{event:?}"))
+        })
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn test_refusal_record(&self) -> Option<Sequence> {
+        self.pass.refusal_record
+    }
     pub(in crate::flow::context::worker_startup) fn owns_context(
         &self,
         context: &RecordingContext,
@@ -216,6 +251,19 @@ impl WindDown {
                 "wind-down close lost its recorded start".into(),
             ));
         }
+        if !matches!(
+            self.outcome,
+            TurnClose::Stopped {
+                reason: StopReason::Unload,
+                ..
+            }
+        ) && let Some(original) = self.turn_event.take()
+        {
+            // Force elects a stopped close only while the old close has no
+            // ticket. Preserve that exact unadmitted event as caller evidence.
+            assert!(self.unadmitted_close.is_none());
+            self.unadmitted_close = Some(original);
+        }
         self.outcome = TurnClose::Stopped {
             reason: StopReason::Unload,
             cause: Some(weaver_trace::Cause { uid: cause.uid }),
@@ -237,13 +285,11 @@ impl WindDown {
             return Ok(());
         }
         let closing = self.stage == WindStage::Closing;
-        let sequence = if self.author_started {
+        let result = if self.author_started {
             context.resume_author_and_wait(ports)
         } else {
-            self.author_started = true;
-            context.author_and_wait(
-                ports,
-                AuthoredEvent {
+            if self.turn_event.is_none() {
+                self.turn_event = Some(AuthoredEvent {
                     kind: if closing {
                         serving::Kind::TurnClosed
                     } else {
@@ -254,13 +300,32 @@ impl WindDown {
                     source: AuthoredSource::Runtime,
                     causal_parent: None,
                     payload: closing.then(|| serving::Payload::TurnClosed(self.outcome.clone())),
-                },
-            )
-        }
-        .map_err(|failure| {
-            self.returned_author
-                .retain_started(failure, &mut self.author_started)
-        })?;
+                });
+            }
+            self.author_started = true;
+            context.author_and_wait(ports, self.turn_event.take().unwrap())
+        };
+        let sequence = match result {
+            Ok(sequence) => sequence,
+            Err(mut failure) => {
+                if failure.reclaim_held(context) {
+                    self.author_started = false;
+                    self.turn_event = failure.original.take();
+                    // The hold granted no author ticket. Only this caller
+                    // regains its event; the original owner still owes work.
+                    // Reduce admitted local work and wait only while Pending.
+                    // Idle returns to the owner of an already completed answer.
+                    if context.reduce_flow(ports.io)? == crate::flow::coordinator::Advance::Pending
+                    {
+                        context.pump_once(ports)?;
+                    }
+                    return Ok(());
+                }
+                return Err(self
+                    .returned_author
+                    .retain_started(failure, &mut self.author_started));
+            }
+        };
         self.author_started = false;
         if closing {
             self.closed = Some(sequence);

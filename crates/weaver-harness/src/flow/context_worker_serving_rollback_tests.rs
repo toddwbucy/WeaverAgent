@@ -1727,6 +1727,10 @@ fn finish_failed(
         );
         assert_eq!(owner.test_context().failure(), first.as_ref());
         assert_eq!(owner.test_failed().unwrap().deadline(), failed_deadline);
+        assert!(
+            !owner.test_context().place_owed(),
+            "failed rollback settles its original decoder account with an unavailable trace"
+        );
         assert!(owner.test_context().halt_report().unwrap().attempted());
         assert!(
             owner.abandoned(),

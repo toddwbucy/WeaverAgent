@@ -86,6 +86,15 @@ pub(super) enum RunFailure {
 pub(super) struct AuthorFailure {
     pub(super) reason: RunFailure,
     pub(super) original: Option<AuthoredEvent>,
+    held: Option<HeldAuthorReturn>,
+}
+
+/// Only the failed attempt receives this identity. It grants the unchanged
+/// unadmitted original back to that caller, never a ticket or another attempt.
+#[derive(Debug)]
+struct HeldAuthorReturn {
+    slot: HeldInput,
+    identity: std::sync::Arc<()>,
 }
 
 impl From<RunFailure> for AuthorFailure {
@@ -93,11 +102,38 @@ impl From<RunFailure> for AuthorFailure {
         Self {
             reason,
             original: None,
+            held: None,
         }
     }
 }
 
 impl AuthorFailure {
+    /// The exact caller may remove its hold. A foreign context or replaced
+    /// slot leaves both the original and this return identity unchanged.
+    fn reclaim_held(&mut self, context: &mut RecordingContext) -> bool {
+        let Some(held) = &self.held else { return false };
+        let (slot, identity) = match held.slot {
+            HeldInput::Caller => (&mut context.held_author, &mut context.held_author_identity),
+            HeldInput::Template => (
+                &mut context.template_blocked_author,
+                &mut context.template_blocked_identity,
+            ),
+            HeldInput::Both => unreachable!("one attempted original occupies one slot"),
+        };
+        if self.original.is_some()
+            || slot.is_none()
+            || !identity
+                .as_ref()
+                .is_some_and(|id| std::sync::Arc::ptr_eq(id, &held.identity))
+        {
+            return false;
+        }
+        self.original = slot.take();
+        *identity = None;
+        self.held = None;
+        true
+    }
+
     /// Restore an unaccepted original into this attempt's existing owner. The
     /// caller keeps the reason as its stopped disposition; this grants no retry.
     fn retain(self, original: &mut Option<AuthoredEvent>) -> RunFailure {
@@ -191,6 +227,7 @@ struct LoadDuty {
 enum AuthorClaim {
     Placement(std::sync::Arc<()>),
     Measurement(std::sync::Arc<()>),
+    QueuedSave(std::sync::Arc<capture_author::QueuedSaveAuthor>),
     EnterRefusal(std::sync::Arc<()>),
     PairRejection(std::sync::Arc<()>),
     RollbackGate(std::sync::Arc<worker_startup::expired::gate::RollbackGateAuthor>),
@@ -203,6 +240,7 @@ impl AuthorClaim {
             | (Self::Measurement(a), Self::Measurement(b))
             | (Self::EnterRefusal(a), Self::EnterRefusal(b))
             | (Self::PairRejection(a), Self::PairRejection(b)) => std::sync::Arc::ptr_eq(a, b),
+            (Self::QueuedSave(a), Self::QueuedSave(b)) => std::sync::Arc::ptr_eq(a, b),
             (Self::RollbackGate(a), Self::RollbackGate(b)) => std::sync::Arc::ptr_eq(a, b),
             _ => false,
         }
@@ -318,6 +356,7 @@ pub(crate) struct RecordingContext {
     template_checks: Option<template_driver::TemplateChecks>,
     template_setup_refusal: Option<super::templates::TemplateError>,
     template_blocked_author: Option<AuthoredEvent>,
+    template_blocked_identity: Option<std::sync::Arc<()>>,
     input: super::input::InputSlot,
     input_author: Option<input_driver::InputAuthor>,
     input_turn: Option<input_driver::InputTurn>,
@@ -384,8 +423,10 @@ pub(crate) struct RecordingContext {
     // First fatal original is immutable; retryable holds have separate custody.
     refused_author: Option<AuthoredEvent>,
     held_author: Option<AuthoredEvent>,
+    held_author_identity: Option<std::sync::Arc<()>>,
     waiting_content: Option<WaitingAuthor>,
     rollback_gate_author: Option<std::sync::Arc<worker_startup::expired::gate::RollbackGateAuthor>>,
+    queued_save_author: Option<std::sync::Arc<capture_author::QueuedSaveAuthor>>,
     rollback_gate_port: Option<crate::flow::pump_transport::PortIdentity>,
     management_listener: Option<crate::flow::pump::LifecycleListenerIdentity>,
     #[cfg(test)]
@@ -472,6 +513,7 @@ impl RecordingContext {
             template_checks: None,
             template_setup_refusal: None,
             template_blocked_author: None,
+            template_blocked_identity: None,
             input,
             input_author: None,
             input_turn: None,
@@ -528,8 +570,10 @@ impl RecordingContext {
             failed_enter_resources_issued: false,
             refused_author: None,
             held_author: None,
+            held_author_identity: None,
             waiting_content: None,
             rollback_gate_author: None,
+            queued_save_author: None,
             rollback_gate_port: None,
             management_listener: None,
             #[cfg(test)]
@@ -576,6 +620,7 @@ impl RecordingContext {
     /// Return the exact unadmitted original. Taking it does not grant admission:
     /// retry must pass the same owner/phase/deadline checks as any new attempt.
     pub(super) fn take_held_author(&mut self) -> Option<AuthoredEvent> {
+        self.held_author_identity = None;
         self.held_author.take()
     }
 
@@ -1128,10 +1173,11 @@ impl RecordingContext {
                 return Err(self.refused_author_failure(failure, event));
             }
         };
-        if self.rollback_gate_author.is_some() {
+        if self.rollback_gate_author.is_some() || self.queued_save_author.is_some() {
             return Err(AuthorFailure {
                 reason: RunFailure::Busy(HeldInput::Caller),
                 original: Some(event),
+                held: None,
             });
         }
         // Earlier owners may complete only their synchronous private author
@@ -1153,6 +1199,8 @@ impl RecordingContext {
         {
             return Err(Self::hold_author_failure(
                 &mut self.held_author,
+                &mut self.held_author_identity,
+                HeldInput::Caller,
                 RunFailure::PlaceOwned,
                 event,
             ));
@@ -1162,6 +1210,8 @@ impl RecordingContext {
         {
             return Err(Self::hold_author_failure(
                 &mut self.held_author,
+                &mut self.held_author_identity,
+                HeldInput::Caller,
                 RunFailure::PlanSummaryOwned,
                 event,
             ));
@@ -1169,6 +1219,8 @@ impl RecordingContext {
         if self.boot_open_blocks_external() {
             return Err(Self::hold_author_failure(
                 &mut self.held_author,
+                &mut self.held_author_identity,
+                HeldInput::Caller,
                 RunFailure::BootOpenOwned,
                 event,
             ));
@@ -1176,6 +1228,8 @@ impl RecordingContext {
         if self.boot_pairs_blocks_external() {
             return Err(Self::hold_author_failure(
                 &mut self.held_author,
+                &mut self.held_author_identity,
+                HeldInput::Caller,
                 RunFailure::BootPairsOwned,
                 event,
             ));
@@ -1183,6 +1237,8 @@ impl RecordingContext {
         if self.marks_blocks_external() {
             return Err(Self::hold_author_failure(
                 &mut self.held_author,
+                &mut self.held_author_identity,
+                HeldInput::Caller,
                 RunFailure::MarksOwned,
                 event,
             ));
@@ -1190,6 +1246,8 @@ impl RecordingContext {
         if self.freshness.is_some() && !retained_retry {
             return Err(Self::hold_author_failure(
                 &mut self.held_author,
+                &mut self.held_author_identity,
+                HeldInput::Caller,
                 RunFailure::FreshnessOwned,
                 event,
             ));
@@ -1197,6 +1255,8 @@ impl RecordingContext {
         if self.inspection.is_some() {
             return Err(Self::hold_author_failure(
                 &mut self.held_author,
+                &mut self.held_author_identity,
+                HeldInput::Caller,
                 RunFailure::InspectionOwned,
                 event,
             ));
@@ -1204,6 +1264,8 @@ impl RecordingContext {
         if self.read.is_some() {
             return Err(Self::hold_author_failure(
                 &mut self.held_author,
+                &mut self.held_author_identity,
+                HeldInput::Caller,
                 RunFailure::ReadOwned,
                 event,
             ));
@@ -1211,6 +1273,8 @@ impl RecordingContext {
         if self.repair_blocks_external() {
             return Err(Self::hold_author_failure(
                 &mut self.held_author,
+                &mut self.held_author_identity,
+                HeldInput::Caller,
                 RunFailure::RepairOwned,
                 event,
             ));
@@ -1218,6 +1282,8 @@ impl RecordingContext {
         if self.measure_blocks_external() {
             return Err(Self::hold_author_failure(
                 &mut self.held_author,
+                &mut self.held_author_identity,
+                HeldInput::Caller,
                 RunFailure::MeasureOwned,
                 event,
             ));
@@ -1244,6 +1310,8 @@ impl RecordingContext {
             // resume_author_and_wait cannot turn it into admitted content.
             return Err(Self::hold_author_failure(
                 &mut self.template_blocked_author,
+                &mut self.template_blocked_identity,
+                HeldInput::Template,
                 RunFailure::TemplateBlocked,
                 event,
             ));
@@ -1251,6 +1319,8 @@ impl RecordingContext {
         if matches!(event.kind, Kind::ToolCallStarted | Kind::ToolCallCompleted) {
             return Err(Self::hold_author_failure(
                 &mut self.held_author,
+                &mut self.held_author_identity,
+                HeldInput::Caller,
                 RunFailure::PairOwned,
                 event,
             ));
@@ -1326,6 +1396,11 @@ impl RecordingContext {
         }) {
             return Err(RunFailure::Busy(HeldInput::Caller).into());
         }
+        if self.queued_save_author.as_ref().is_some_and(|actual| {
+            !matches!(&claim, Some(AuthorClaim::QueuedSave(owner)) if std::sync::Arc::ptr_eq(actual, owner))
+        }) {
+            return Err(RunFailure::Busy(HeldInput::Caller).into());
+        }
         let claim_phase = match &claim {
             Some(AuthorClaim::PairRejection(_)) => matches!(
                 self.phase,
@@ -1338,7 +1413,9 @@ impl RecordingContext {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 Some(AuthorClaim::PairRejection(_)) => RunFailure::PairOwned,
-                Some(AuthorClaim::RollbackGate(_)) => RunFailure::Busy(HeldInput::Caller),
+                Some(AuthorClaim::RollbackGate(_) | AuthorClaim::QueuedSave(_)) => {
+                    RunFailure::Busy(HeldInput::Caller)
+                }
                 _ => RunFailure::MeasureOwned,
             })
             .into());
@@ -1362,7 +1439,9 @@ impl RecordingContext {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 Some(AuthorClaim::PairRejection(_)) => RunFailure::PairOwned,
-                Some(AuthorClaim::RollbackGate(_)) => RunFailure::Busy(HeldInput::Caller),
+                Some(AuthorClaim::RollbackGate(_) | AuthorClaim::QueuedSave(_)) => {
+                    RunFailure::Busy(HeldInput::Caller)
+                }
                 _ => RunFailure::MeasureOwned,
             })
             .into());
@@ -1460,6 +1539,11 @@ impl RecordingContext {
                         AuthorClaim::Measurement(identity) => {
                             self.claim_measure_author_ticket(&identity, ticket)
                         }
+                        AuthorClaim::QueuedSave(owner) => {
+                            self.queued_save_author.as_ref().is_some_and(|actual| {
+                                std::sync::Arc::ptr_eq(actual, &owner) && owner.claim(ticket)
+                            })
+                        }
                         AuthorClaim::RollbackGate(owner) => {
                             self.rollback_gate_author.as_ref().is_some_and(|actual| {
                                 std::sync::Arc::ptr_eq(actual, &owner) && owner.claim(ticket)
@@ -1499,7 +1583,7 @@ impl RecordingContext {
             return Err(failure);
         }
         self.live(ports.io)?;
-        if self.rollback_gate_author.is_some() {
+        if self.rollback_gate_author.is_some() || self.queued_save_author.is_some() {
             return Err(RunFailure::Busy(HeldInput::Caller).into());
         }
         if self.place_blocks_external() {
@@ -1578,6 +1662,11 @@ impl RecordingContext {
         }) {
             return Err(RunFailure::Busy(HeldInput::Caller).into());
         }
+        if self.queued_save_author.as_ref().is_some_and(|actual| {
+            !matches!(&claim, Some(AuthorClaim::QueuedSave(owner)) if std::sync::Arc::ptr_eq(actual, owner))
+        }) {
+            return Err(RunFailure::Busy(HeldInput::Caller).into());
+        }
         if let Some(sequence) = self.completed_author.take() {
             self.finish_release_author();
             return Ok(sequence);
@@ -1612,6 +1701,24 @@ impl RecordingContext {
         self.resume_stopped_and_bind(true)
     }
 
+    fn resume_deferred_halt_close(
+        &mut self,
+        close: &mut Option<super::recording::DeferredHaltClose>,
+    ) -> Result<Option<Sequence>, weaver_trace::Failure> {
+        let Some(original) = close.take() else {
+            return Ok(None);
+        };
+        if let Err(original) = self.barrier.restore_halt_close(original) {
+            *close = Some(original);
+            return Ok(None);
+        }
+        let result = self.resume_halt_terminal_and_bind();
+        if !matches!(result, Ok(Some(_))) {
+            *close = self.barrier.defer_halt_close();
+        }
+        result
+    }
+
     fn resume_stopped_and_bind(
         &mut self,
         terminal: bool,
@@ -1642,6 +1749,7 @@ impl RecordingContext {
             self.bind_enter_refusal_author(sequence);
             self.bind_rejected_author(sequence);
             self.bind_rollback_gate_author(sequence);
+            self.bind_queued_save_author(sequence);
             if let Some(report) = &mut self.halt_report {
                 report.retain_trace_sequence(sequence);
             }
@@ -1673,6 +1781,7 @@ impl RecordingContext {
                 self.bind_enter_refusal_author(sequence);
                 self.bind_rejected_author(sequence);
                 self.bind_rollback_gate_author(sequence);
+                self.bind_queued_save_author(sequence);
             }
             // Other completion hooks keep their existing successful boundary.
             if let RecordProgress::Recorded {
@@ -1688,6 +1797,7 @@ impl RecordingContext {
                 self.bind_enter_refusal_author(*sequence);
                 self.bind_rejected_author(*sequence);
                 self.bind_rollback_gate_author(*sequence);
+                self.bind_queued_save_author(*sequence);
                 if !self.rollback_gate_recorded(*sequence) {
                     self.bind_marks_author(*sequence, ports.io)?;
                     self.bind_repair_author(*sequence, ports.io)?;
@@ -1746,8 +1856,11 @@ impl RecordingContext {
                         let AuthorFailure {
                             reason: owed_reason,
                             original,
+                            mut held,
                         } = Self::hold_author_failure(
                             &mut self.held_author,
+                            &mut self.held_author_identity,
+                            HeldInput::Caller,
                             match owed {
                                 OwedAuthor::BootOpen => RunFailure::BootOpenOwned,
                                 OwedAuthor::Placement => RunFailure::PlaceOwned,
@@ -1766,15 +1879,25 @@ impl RecordingContext {
                             // A simultaneous intake failure makes it first-fatal
                             // evidence, without touching any earlier original.
                             self.refused_author = self.held_author.take();
+                            self.held_author_identity = None;
+                            held = None;
                         }
-                        return Err(AuthorFailure { reason, original });
+                        return Err(AuthorFailure {
+                            reason,
+                            original,
+                            held,
+                        });
                     }
                     let original = self.retain_refused(event);
                     let reason = match self.drain_intake(ports.io) {
                         Err(reason) => reason,
                         Ok(()) => self.record_failed(ports.io),
                     };
-                    return Err(AuthorFailure { reason, original });
+                    return Err(AuthorFailure {
+                        reason,
+                        original,
+                        held: None,
+                    });
                 }
                 RecordProgress::Failed => return Err((self.record_failed(ports.io)).into()),
                 RecordProgress::Busy { .. } | RecordProgress::Recorded { proof: Some(_), .. } => {
@@ -2203,6 +2326,7 @@ impl RecordingContext {
             | PumpDeadline::Label
             | PumpDeadline::AdminRead
             | PumpDeadline::CaptureResult
+            | PumpDeadline::SaveQueued
             | PumpDeadline::CaptureWindow => {
                 return RunFailure::Wait { key, bound };
             }
@@ -2329,16 +2453,30 @@ impl RecordingContext {
 
     fn hold_author_failure(
         slot: &mut Option<AuthoredEvent>,
+        identity: &mut Option<std::sync::Arc<()>>,
+        kind: HeldInput,
         reason: RunFailure,
         event: AuthoredEvent,
     ) -> AuthorFailure {
-        let original = if slot.is_some() {
-            Some(event)
+        let (original, held) = if slot.is_some() {
+            (Some(event), None)
         } else {
+            let token = std::sync::Arc::new(());
+            *identity = Some(std::sync::Arc::clone(&token));
             *slot = Some(event);
-            None
+            (
+                None,
+                Some(HeldAuthorReturn {
+                    slot: kind,
+                    identity: token,
+                }),
+            )
         };
-        AuthorFailure { reason, original }
+        AuthorFailure {
+            reason,
+            original,
+            held,
+        }
     }
 
     #[must_use]
@@ -2359,6 +2497,7 @@ impl RecordingContext {
         AuthorFailure {
             reason,
             original: self.retain_refused(event),
+            held: None,
         }
     }
 
@@ -2382,6 +2521,7 @@ impl RecordingContext {
         Some(AuthorFailure {
             reason: observed.unwrap_or_else(|| waiting.withdrawn.unwrap()),
             original: Some(waiting.event),
+            held: None,
         })
     }
 
@@ -2740,3 +2880,6 @@ pub(super) use failed_enter_driver::{
     FailedEnterCleanup, FailedEnterFinished, FailedEnterProgress, FailedEnterRefusal,
     FailedEnterRejected, FailedEnterResources,
 };
+
+#[path = "context_capture_author.rs"]
+mod capture_author;

@@ -4,7 +4,9 @@ use super::{ChannelFault, Coordination, MAX_ENVELOPE_BYTES, poll_cap_ms};
 use crate::serving_capture_window::CaptureWindows;
 use nix::sys::socket::MsgFlags;
 use std::os::fd::AsRawFd;
-use weaver_types::state_flow::capture::{CaptureEnvelope, CaptureSender};
+use weaver_types::state_flow::capture::{
+    CaptureDirective, CaptureEnvelope, CapturePayload, CaptureSender,
+};
 
 #[derive(Debug)]
 pub(crate) struct ReceivedCapture {
@@ -18,6 +20,12 @@ impl Coordination {
         envelope: &CaptureEnvelope,
         windows: &CaptureWindows,
     ) -> Result<(), ChannelFault> {
+        if let CapturePayload::Directive(CaptureDirective::SavePoint { window, .. }) =
+            &envelope.payload
+            && (windows.demand_window() != Some(*window) || windows.capture().is_some())
+        {
+            return Err(ChannelFault::Undecodable);
+        }
         windows.check()?;
         let bytes = envelope
             .encode(CaptureSender::Admin)
