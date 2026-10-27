@@ -4,7 +4,7 @@
 
 **Landing PR:** #349
 
-**Version:** 0.22 **Date filed:** 2026-10-20 **Document ID:**
+**Version:** 0.23 **Date filed:** 2026-10-20 **Document ID:**
 `state-management-foundation-Spec` **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -444,11 +444,17 @@ rewrite follows from this distinction. [FLOW-3, PERSIST-3, PERSIST-4, STORE-5, C
 | AwaitLeft | Matching Left | Validate indexed report and normal leave duties, answer caller, Done |
 | AwaitImage or AwaitFinished, on demand | SavePointNotTaken after worker cleanup | Cancel unconfirmed publication, refuse caller, Done, merged retry remains available |
 | Any before Commit, on demand | Explicit worker refusal or local preparation error | Send Aborted where the exchange permits, remove unlisted root part, refuse caller, Done |
-| After Beginning and before Commit, leave | Local preparation error | Send Aborted with the same capture ID, remove unlisted root part, await CaptureRefused under unchanged windows |
+| After Beginning and before Commit, leave | Local preparation error | Send one Aborted with the same capture ID, retain its bytes through partial carry, remove unlisted root part, AwaitCaptureRefused under unchanged windows |
+| AwaitCaptureRefused | Image or ImageFinished crossed the Aborted | Validate identity and phase, discard as a save result, no ImageChecked or Prepared, remain AwaitCaptureRefused |
+| AwaitCaptureRefused | Commit crossed the Aborted | Failed-run recovery, retain uncertain publication evidence, no successful Left |
+| AwaitCaptureRefused | Worker Aborted after a latched failure | Cancel unconfirmed publication and follow failed-run recovery, never read it as an echo or cleanup acknowledgement |
+| AwaitCaptureRefused | Capture, shared-tail or outer leave deadline expires | Unanswered, preserve Open marker, Done, accept no late CaptureRefused or Left as success |
 | After Beginning and before Commit, leave | Matching CaptureRefused | Cancel unconfirmed publication, retain missed leg, disarm capture window only, AwaitRefusedLeave |
 | After Beginning and before Commit, leave | Worker Aborted after a latched failure | Cancel unconfirmed publication and follow failed-run recovery, no successful Left |
 | AwaitRefusedLeave | Matching Left with forced true, no_state false and no save report | Complete normal forced-leave duties, Done, no save published |
 | AwaitRefusedLeave | SavePointNotTaken with the same missed leg | Report the graceful leave refusal, Done, merged retry remains available |
+| AwaitRefusedLeave | Save report, CaptureComplete or renewed publication | Protocol failure, no publication or successful command result |
+| AwaitRefusedLeave | Shared-tail or outer leave deadline expires | Unanswered, preserve Open marker, Done, accept no late Left as success. The capture wait was already disarmed by CaptureRefused |
 | Any before Commit | Worker EOF, invalid message or deadline expiry | Do not publish, preserve Open marker, failed-run recovery, Done |
 | After Commit | Worker fails or no final outcome | Mark the pending capture broken, publish nothing further, retain artifacts, never invent Left |
 | Any | Wrong run, capture ID, direction, phase or hash | Protocol failure, cancel unconfirmed publication, preserve evidence |
@@ -470,14 +476,29 @@ rewrite follows from this distinction. [FLOW-3, PERSIST-3, PERSIST-4, STORE-5, C
 | AwaitPublished | Matching Published | Author published, release_capture, Completing |
 | Completing, on demand | Capture released and trace records complete | Answer SavePointTaken within capture window, resume serving |
 | Completing, leave | Capture released and trace records complete | Carry SavePointCaptureComplete within capture window, then release/unload/Left under shared tail |
-| Any before Commit | Explicit operation refusal | Author refused, abort or release only when its state slot permits, follow the on-demand or leave refusal disposition |
+| Any before Commit | Explicit operation refusal | Retain the typed refusal and its missed leg, RefusingCapture, settle the required abort or release before its final disposition |
 | Any | Flow component fails or an undisputed blocking bound expires | Latch halt, no new capture, preserve phase and uncertain outcome |
-| AwaitImage or AwaitFinished | Member result still pending at its bound | Keep barrier, enqueue correlated abort, Aborting |
-| Aborting | Matching late result for the timed-out leg | Validate identity and observation, record observation, discard result, remain Aborting |
-| Aborting | Matching aborted | Record refusal, release barrier, follow the on-demand or leave refusal disposition |
-| Refused capture, leave | Cleanup proven and refusal Recorded | Carry matching CaptureRefused, retain shared tail, then follow the forced or graceful leave outcome under PERSIST-LEAVE-REFUSAL |
+| Beginning or Barrier, leave | First matching admin Aborted | Retain Published and admin's code/detail, finish any partial Beginning and owed authoring/filing, no snapshot, RefusingCapture with no member holding |
+| AwaitImage, AwaitChecked or AwaitFinished, leave | First matching admin Aborted | Retain Published and admin's code/detail, keep barrier, enqueue abort on the original member request/capture after any partial carry, Aborting |
+| AwaitPrepared or AwaitRecorded, leave | First matching admin Aborted before Commit | Retain Published and admin's code/detail, settle any admitted confirmation author without sending Commit, enqueue fresh release_capture after the completed finished exchange, ReleasingRefusedCapture |
+| AwaitImage or AwaitFinished | Member result still pending at its bound | Retain Answer or Finished and the missing-result attribution, keep barrier, enqueue correlated abort, Aborting |
+| Aborting | Matching late result for the original snapshot or finished leg | Validate identity and observation, record observation, discard result, remain Aborting |
+| Aborting | Matching aborted | Retain the cleanup proof, RefusingCapture |
+| ReleasingRefusedCapture | Matching capture_released | Retain the cleanup proof, RefusingCapture |
+| RefusingCapture | Member holdings remain before a timely finished exchange completes, with no cleanup already pending | Enqueue abort on the original request/capture, Aborting |
+| RefusingCapture | Timely finished exchange completed but its image is still held, with no cleanup already pending | Enqueue fresh release_capture, ReleasingRefusedCapture |
+| RefusingCapture | Required cleanup and every admitted author/filing are settled | Author refused with the retained attribution, release barrier only once Recorded, then CarryCaptureRefused on leave or final SavePointNotTaken on demand |
+| CarryCaptureRefused | Whole CaptureRefused carried | Keep original shared tail and retained missed leg, RefusedLeave |
+| CarryCaptureRefused | Partial carry or WouldBlock | Keep exact bytes, offset and original shared tail, remain CarryCaptureRefused |
+| CarryCaptureRefused | Admin disconnected | Retain undelivered acknowledgement without a delivery claim, RefusedLeave under the same shared tail |
+| RefusedLeave | Leave is forced | Complete existing release, Unload, drain and reap, Left with no save report only where admin remains |
+| RefusedLeave | Leave stayed graceful | S9 with the run standing, SavePointNotTaken with the retained missed leg only where admin remains |
+| Aborting, ReleasingRefusedCapture, RefusingCapture, CarryCaptureRefused or RefusedLeave, leave | First matching admin Aborted crosses the worker's own refusal | Retain that one cancellation, keep the original refusal attribution, no second cleanup or acknowledgement, remain in the current state |
+| Any pre-Commit refusal state, leave | A second admin Aborted, wrong capture or other backward continuation | Protocol failure, no successful Leave |
 | Aborting | Partial carry or WouldBlock | Retain bytes and cleanup deadline, remain Aborting |
 | Aborting | Missing, refused, malformed or wrongly correlated cleanup, failed carry or dead peer | Component failure, halt without successful leave |
+| ReleasingRefusedCapture | Partial carry or WouldBlock | Retain bytes and the original small-control release deadline, remain ReleasingRefusedCapture |
+| ReleasingRefusedCapture | Missing, refused, malformed or wrongly correlated cleanup, failed carry or dead peer | Component failure, halt without successful leave |
 | After Commit | Aborted or other backward continuation | Protocol failure, do not retract a sent Commit |
 
 **PERSIST-LEAVE-REFUSAL.** A save refusal does not close an accepted Leave before
@@ -491,10 +512,35 @@ Once the member has released its holdings and the refusal is Recorded, the harne
 carries SavePointCaptureRefused {capture_id,missed} on the original Leave exchange.
 It is a Continue frame acknowledging the completed refused capture, not the command's
 final response. missed is Answer, Finished or Published under TYPES-PERSIST. The trace
-retains the detailed refusal or missing-result attribution. If admin initiated
+retains the refusal_code or missing-result attribution in its existing save_point
+record. The owner retains the complete received admin Aborted through the capture's
+disposition without adding a trace field. If admin initiated
 cancellation with Aborted, CaptureRefused acknowledges cleanup, never receipt of the
 cancellation alone. No Commit, Published, save report or CaptureComplete follows this
 disposition. [PERSIST-4, SEAM-2]
+
+The first retained refusal determines missed and the refusal record. A snapshot
+refusal or timeout names Answer, a finished refusal or timeout names Finished, and
+admin's own preparation refusal names Published, including failure before ImageChecked
+or Prepared. Published names admin's preparation/publication duty, not a claim that an
+artifact was published. A crossed admin Aborted cannot replace a refusal already held
+by the worker, reset its clock or create a second refusal acknowledgement. Retain at
+most one such cancellation on the original capture. [PERSIST-4, SEAM-2, CLASS-8]
+
+RefusingCapture retains the refusal while its admitted authors, filing and member
+cleanup finish. No member request is needed if snapshot was never enqueued. Before a
+timely finished result has completed, use abort on the original capture exchange.
+Validate and record any pending snapshot or finished result before discarding it, then
+await aborted. After that finished exchange has completed, use fresh release_capture.
+Abort keeps the original capture request identity, and release uses its fresh exchange.
+Each cleanup keeps its existing small-control bound without renewal.
+No ordinary state ask or publication can pass this owner. [PERSIST-4, SEAM-2, FLOW-4]
+
+An Aborted crossing Commit follows the existing After Commit rule and cannot retract
+a sent Commit. Keep the original carry evidence, including any uncertainty. Queuing
+Commit is not complete transmission under HARNESS-HALT-ACCOUNT. An admitted confirmation
+author settles before cancellation continues, and its Recorded result alone never
+sends Commit after cancellation. [PERSIST-4, FLOW-4, R20-7]
 
 SavePointAborted retains its cancellation and failed-flow meaning. It proves no
 cleanup. A latched worker failure before Commit may still send Aborted under
@@ -510,6 +556,13 @@ capture deadline has already expired, it reports the existing unanswered-command
 outcome and never accepts a later acknowledgement as timely success. No new deadline
 is created by Aborted or CaptureRefused. [PERSIST-4, FLOW-5, CLASS-8]
 
+Where the capture deadline caps the missing-result wait, abort cleanup begins at that
+deadline and may finish later. Admin therefore reports Unanswered, preserves the Open
+marker and cannot accept the later CaptureRefused or Left as timely success. A forced
+worker still completes its existing bounded unwind where possible. Without a later
+normal admin conclusion, the next load sees NoCleanUnload. This rule reserves no
+cleanup margin inside the capture window. [PERSIST-4, FLOW-5, CLASS-8]
+
 Admin cancels unconfirmed publication and removes unlisted root parts. It then awaits
 the final lifecycle response. A leave forced at the refusal continues release, Unload,
 drain and reap and answers Left with forced true, no_state false and no save report.
@@ -522,13 +575,20 @@ harness Spec 6]
 On-demand save keeps its existing final SavePointNotTaken response after cleanup.
 An absent admin permits no invented acknowledgement or final response. The worker
 still completes bounded cleanup and follows its accepted leave's existing disposition.
+A leave that stayed graceful remains in S9 with the run standing, even when no admin
+remains to receive its refusal or retry it.
 Any failure after Commit uses the broken-publication and failed-run rules instead of
 this pre-Commit refusal path. [PERSIST-4, FLOW-4, FLOW-5, R20-7]
 
 The three-party fixture covers direct force, force elected during a graceful leave,
 and a leave that remains graceful. It exercises explicit image and finish refusal,
-timeout with a late result, failed cleanup, admin preparation failure, acknowledgement
-backpressure, Aborted crossing Commit, admin expiry and disconnect. Removing
+timeout with a late result, failed cleanup, and admin Aborted in Beginning, Barrier,
+AwaitImage, AwaitChecked, AwaitFinished, AwaitPrepared and AwaitRecorded. It includes
+Aborted crossing a worker refusal in each refusal state, partial carry, duplicated
+Aborted, acknowledgement backpressure and Aborted crossing Commit.
+It also checks CaptureRefused after admin capture expiry gives Unanswered with no late
+success, and a save report or CaptureComplete after CaptureRefused fails the protocol.
+Admin disconnect includes a still-graceful run left at S9. Removing
 cleanup-before-acknowledgement,
 the original tail, the final-response wait or the no-report condition must fail its
 case. Neither Aborted nor CaptureRefused alone establishes Unloaded. [PERSIST-4, COST-4]

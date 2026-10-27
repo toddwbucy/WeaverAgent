@@ -4,7 +4,7 @@
 
 **Landing PR:** #349
 
-**Version:** 0.19 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
+**Version:** 0.20 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -252,6 +252,14 @@ requirement to direct Leave first only in the pre-capture cases below. It does n
 relax ADMIN-SAVE's loaded-copy check. It sends neither Leave nor a save continuation
 without that check, and it starts no capture or publisher. [PERSIST-4, FLOW-5]
 
+The external [admin-operator contract section 4.1][force-contract] requires
+force-unload to end the run alone or joining unload. Its sole-force row also keeps
+the force outcome when the save point cannot be taken. This amendment changes the
+internal admission and escalation sequence, with no new command or public success
+shape. The containment refusals remain mandatory. [FLOW-5, PERSIST-4, I3]
+
+[force-contract]: ../contracts/weaver-admin-operator-contract.md
+
 After root authorization, judged configuration-root admission and the exclusive
 invocation lock, a free run lock follows ADMIN-RECOVERY. Otherwise pin the agent's
 trusted containment record, including its run and cgroup identity. An absent or
@@ -278,17 +286,31 @@ BoundaryUnverified outcome, ending nothing of that run. Root-held containment
 identity, not an unverified LoadFacts run or a room filename, identifies what may
 be ended. [FLOW-3, FLOW-5, admin Spec 6.1]
 
-| Pre-capture evidence | Action and marker |
-| --- | --- |
-| Free run lock, or positive NoListener | ADMIN-RECOVERY ends leftovers and preserves the prior marker. No new operator force is inferred. |
-| Worker/component failure, a refusal outside the four standing cases, EOF, or malformed or wrong-exchange authenticated observation | ADMIN-FLOW-END ends the failed run without successful Left and preserves the prior marker. Retain the failure outcome. No new capture is requested. |
-| Authenticated observation names a run different from the pinned containment | Refuse AgentRunning. Do not signal either run or change its marker. |
-| Valid observation without LoadFacts, unanswered Observe, one of the four standing refusals, wrong peer, unjudged territory, or failed loaded-copy verification | Direct escalation without capture. After verified run end, request Forced only for an Open marker on the pinned run. |
-| Unreadable or changed containment identity, invalid ownership, failed end or removal | Return the existing containment refusal. No marker write or successful Unloaded. |
+| Order | Pre-capture evidence | Action and marker |
+| --- | --- | --- |
+| 1 | Root authorization, configuration-root, invocation-lock or clock admission fails | Return its existing refusal. Perform no force admission or new marker write. |
+| 2 | Run lock is free | ADMIN-RECOVERY handles leftovers under its own containment checks and preserves the prior marker. Territory judgment cannot turn this into a new operator force. |
+| 3 | Run lock is held but its containment cannot be pinned, ownership does not judge, or a pinned run changes | Return the existing BoundaryUnverified or AgentRunning refusal. Signal nothing of a changed or unjudged run, write no marker. |
+| 4 | A valid authenticated observation names a run different from pinned containment | Refuse AgentRunning. Do not signal either run or change its marker. |
+| 5 | Known worker/component failure, a refusal outside the four standing cases, EOF, or malformed or wrong-exchange authenticated observation | ADMIN-FLOW-END ends only the verified failed run, without successful Left, and preserves its prior marker. Retain the failure outcome. |
+| 6 | Positive NoListener, with no earlier matching row | ADMIN-RECOVERY handles leftovers and preserves the prior marker. No new operator force is inferred. |
+| 7 | Valid observation without LoadFacts, unanswered Observe, one of the four standing refusals, wrong peer, unjudged territory, or failed loaded-copy verification | Direct escalation without capture. After verified run end, request Forced only for an Open marker on the pinned run. |
+| 8 | Authenticated matching run, judged territory and verified loaded copy | Use the ordinary forced Leave/capture protocol with its existing windows. |
 
-The failure and run-mismatch rows take precedence over a later admission problem.
-Other root-admission, lock, clock or containment errors keep their existing refusals.
-This rule supplies no permission to continue without those judgments. [FLOW-3, FLOW-5]
+Apply the rows in order and select the first that matches the evidence obtained at
+that phase. Steps 1 through 3 precede Observe or loaded-copy verification. A socket
+that fails authentication contributes no worker failure or run identity, only the
+wrong-peer condition. Thus a free run lock plus unjudged territory selects row 2,
+and a wrong peer plus failed loaded-copy verification selects row 7. A trusted
+failure or run mismatch cannot be replaced by a later admission problem.
+[FLOW-3, FLOW-5]
+
+The selected path still owes every containment check. Revalidate the pinned identity
+after Observe and before the first signal, and before any later signal required by
+the existing end protocol. A changed identity then selects row 3 instead of the
+earlier end decision. A failed end or removal returns its existing refusal with no
+marker write or successful Unloaded. Selection never waives these later checks.
+[FLOW-3, FLOW-5, admin Spec 6.1]
 
 The containment end precedes the marker write and the unloaded-state check. A marker
 for another run, an already closed marker, or an absent marker is unchanged. Failure
@@ -334,12 +356,28 @@ duties. Capture expiry still gives the existing unanswered-command outcome, neve
 new wait for a late success. A worker Aborted after a latched failure instead follows
 failed-run recovery and proves no cleanup. [PERSIST-4, FLOW-5, admin Spec 3.0]
 
+Send at most one admin Aborted for this capture and preserve it through partial carry.
+While awaiting CaptureRefused, validate any crossed Image or ImageFinished but discard
+it as a save result. Send no ImageChecked or Prepared after cancellation. A crossed
+worker refusal keeps its own first retained missed leg, so admin must not require
+Published merely because admin also sent Aborted. A crossed Commit follows failed-run
+recovery, never a healthy refusal. Foundation's admin rows govern these cases.
+[PERSIST-4, SEAM-2]
+
+If cleanup finishes after admin's capture deadline, the result remains Unanswered with
+the Open marker. No late CaptureRefused or Left changes it. The worker may finish a
+forced unwind, but without a later normal admin conclusion the next load observes
+NoCleanUnload. A still-graceful worker with no admin remains at S9. [PERSIST-4, FLOW-5]
+
 These clauses amend admin Spec 3.0 and section 3's leave/save wait routines. The
 protocol fixture checks both graceful bound omissions, finite and forced windows, stale
 Beginning, reordered Image and early or duplicate CaptureComplete. It must fail when a
 later frame resets an earlier deadline or when a save bound forces an otherwise
-unbounded S4/S5. This is a protocol pass, not a wall-time guarantee for an
-uninterruptible filesystem call. [PERSIST-4, COST-4, FLOW-5]
+unbounded S4/S5. It also exercises every PERSIST-LEAVE-REFUSAL admin row, including
+Aborted crossed by an image or worker refusal, expired capture before CaptureRefused,
+and a save report or CaptureComplete after that acknowledgement. This is a protocol
+pass, not a wall-time guarantee for an uninterruptible filesystem call.
+[PERSIST-4, COST-4, FLOW-5]
 
 Do not publish before the matching SavePointCommit. A prepared artifact is not loadable.
 Before Commit, a worker failure cancels publication. After Commit, failure before the
@@ -454,7 +492,7 @@ serving contract remains applicable.
 | ADMIN-SAVE | Three-party protocol, timeout cleanup then retry, cleanup failure, and fsync/rename failure hooks | Index before Commit, overwrite a good artifact, infer cleanup from silence or retry after FlowFailed |
 | ADMIN-FLOW-END | Every replaced lifecycle cell and tool fault cause | Serve on dead member, return Left, or let worker write marker |
 | ADMIN-RECOVERY | Crash before/after Commit, rename and index append, next-load tuple | Promote unconfirmed room data, skip malformed latest or associate load.reset with another selected start |
-| ADMIN-FORCE-ADMISSION | Real locks, authenticated and wrong peers, InTransition without facts, silent/refused Observe, bad loaded copy, unjudged territory, EOF and changed containment | Request capture without verified facts, signal a socket peer, mark Forced before run end, relabel worker failure, touch retained publication files or end another run |
+| ADMIN-FORCE-ADMISSION | Real locks, paired evidence for every precedence row, authenticated and wrong peers, InTransition without facts, silent/refused Observe, bad loaded copy, unjudged territory, EOF and containment changed after Observe but before signaling | Request capture without verified facts, skip pinned-containment revalidation between Observe and the first signal, signal a socket peer, mark Forced before run end, relabel worker failure, touch retained publication files or end another run |
 | ADMIN-RETIRE | Deployment plan tests and old-format corpus | Accept --system, empty load, none or old one-file save |
 | Custody | Existing manifest and descriptor tests | Link state implementation or add caller-chosen root path |
 

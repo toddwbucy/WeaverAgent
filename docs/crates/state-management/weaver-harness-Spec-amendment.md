@@ -4,7 +4,7 @@
 
 **Landing PR:** #348
 
-**Version:** 0.36 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.37 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -784,9 +784,26 @@ are validated and their observations recorded, but discarded as save results. Th
 neither reach admin nor restart the cleanup bound. Partial writes retain their offsets.
 [PERSIST-4, CLASS-8, FLOW-4, COST-2, R20-6]
 
-Only aborted proves Ready and permits barrier release and the final refusal
-disposition. On demand that is SavePointNotTaken and operator retry. On leave it is
-PERSIST-LEAVE-REFUSAL, with the accepted lifecycle outcome still owed. Failed carry,
+A matching admin Aborted before Commit follows the same member cleanup ownership.
+Before snapshot is enqueued, finish owed authoring and filing without starting capture.
+With snapshot or acknowledge still outstanding, or a held image awaiting ImageChecked,
+abort on the original exchange. After a timely finished exchange completes, use fresh
+release_capture. Preserve a pending confirmation author's original event and ticket,
+but send no Commit after cancellation. Keep the existing small-control cleanup bounds.
+Admin preparation refusal names Published, unless the worker already retained an
+Answer or Finished refusal. The first retained attribution wins. [PERSIST-4, SEAM-2]
+
+RefusingCapture owns that attribution and the incomplete cleanup/accounting. It is
+entered from explicit refusal, from cancellation before any member request, or after
+the abort/release proof. Only completed cleanup and a Recorded refusal permit
+CarryCaptureRefused. A first admin Aborted may cross the worker's own refusal, including
+the acknowledgement carry. Retain it without a second cleanup, refusal record or
+acknowledgement. A second Aborted is protocol failure. Foundation's actor rows own the
+exact transitions and After Commit treatment. [PERSIST-4, FLOW-4, SEAM-2]
+
+While Aborting, only aborted proves Ready and permits barrier release and the final
+refusal disposition. On demand that is SavePointNotTaken and operator retry. On leave,
+PERSIST-LEAVE-REFUSAL keeps the accepted lifecycle outcome owed. Failed carry,
 dead peer, missing or invalid aborted, cleanup refusal or failed room-file deletion
 is component failure. R20-6 still forbids halting merely for
 the original image/finished timeout. The snapshot allowance is the loaded
@@ -806,19 +823,37 @@ the category decides whether serving stops, while the reason records what broke.
 
 | Save-control state | Event | Action and next state |
 | --- | --- | --- |
+| Beginning or Barrier, leave | First matching admin Aborted | Retain Published and its code/detail, settle partial Beginning and owed authoring/filing, no snapshot, RefusingCapture |
+| AwaitImage, AwaitChecked or AwaitFinished, leave | First matching admin Aborted | Retain Published and its code/detail, keep barrier, abort original request/capture, Aborting |
+| AwaitPrepared or AwaitRecorded, leave | First matching admin Aborted before Commit | Retain Published and its code/detail, settle admitted confirmation without Commit, release_capture after the finished exchange, ReleasingRefusedCapture |
 | AwaitImage or AwaitFinished | Original result bound expires | Keep barrier, enqueue correlated abort, Aborting |
-| Aborting | Expected late snapshot, finished or capture refusal for the timed-out leg | Validate and record observation, discard result, remain Aborting |
-| Aborting | Matching aborted | Record refusal, release barrier, follow PERSIST-LEAVE-REFUSAL on leave or return SavePointNotTaken on demand |
+| Aborting | Expected late snapshot, finished or capture refusal for the original leg | Validate and record observation, discard result, remain Aborting |
+| Aborting | Matching aborted | Retain cleanup proof, RefusingCapture |
+| ReleasingRefusedCapture | Matching capture_released | Retain cleanup proof, RefusingCapture |
+| RefusingCapture | Member holdings remain and no cleanup is pending | Abort the original request before completed finished, or fresh release_capture afterward, Aborting or ReleasingRefusedCapture |
+| RefusingCapture | Required cleanup and admitted authoring/filing settled | Record retained refusal, release barrier once Recorded, CarryCaptureRefused on leave or SavePointNotTaken on demand |
+| CarryCaptureRefused | Whole acknowledgement carried | RefusedLeave under the unchanged shared tail, forced Left or graceful S9 as foundation specifies |
+| CarryCaptureRefused | Partial carry or WouldBlock | Retain exact bytes and offset under the unchanged shared tail |
+| CarryCaptureRefused | Admin disconnected | Retain undelivered acknowledgement, RefusedLeave under the same shared tail, no invented response |
+| Any pre-Commit refusal state, leave | First matching admin Aborted crosses worker refusal | Retain it without replacing attribution, another cleanup or another acknowledgement |
+| Any pre-Commit refusal state, leave | Second admin Aborted or wrong capture | Protocol failure, no successful Leave |
 | Aborting | Partial carry or WouldBlock | Retain bytes and deadline, remain Aborting |
 | Aborting | Cleanup bound expires without aborted | Latch control_bound at barrier, no further ask or successful leave |
 | Aborting | Refused, malformed or wrongly correlated cleanup | Latch protocol_failed at state_reply, no further ask or successful leave |
 | Aborting | EOF or failed carry | Latch carry_failed at state_reply or state_send, no further ask or successful leave |
+| ReleasingRefusedCapture | Partial carry or WouldBlock | Preserve original release bytes/deadline, remain ReleasingRefusedCapture |
+| ReleasingRefusedCapture | Expiry, invalid result, failed carry or dead peer | Use the same small-control failure categories as the abort rows, no successful leave |
 
 These are the foundation's capture-state projections, not a second channel owner or
-timer policy. No ordinary file/read enters the channel until aborted. Tests delay the
-snapshot answer in CaptureHeld and the finished answer in FinishedHeld, then prove a
-subsequent filing and retried save both succeed without wrong_phase. They also exercise
-a late explicit capture refusal, wrong capture ID, deletion failure and silent cleanup.
+timer policy. During Aborting, no ordinary file/read enters the channel until aborted.
+Tests delay the snapshot answer in CaptureHeld and the finished answer in FinishedHeld,
+then prove a subsequent filing and retried save both succeed without wrong_phase. They
+also exercise a late explicit capture refusal, wrong capture ID, deletion failure and
+silent cleanup.
+Admin Aborted is exercised in every pre-Commit phase and crossing each refusal state,
+including the no-member-request case and the fresh release after finished. No callback
+may infer cleanup from receipt of Aborted. A late CaptureRefused after admin expiry
+must leave Unanswered and an Open marker. A still-graceful orphan stays in S9.
 Removing the abort, correlation, barrier or cleanup-bound guard must fail its case.
 [SEAM-2, PERSIST-4, FLOW-4]
 
