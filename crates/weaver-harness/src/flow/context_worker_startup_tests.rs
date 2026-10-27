@@ -1081,6 +1081,10 @@ fn circuit(mode: &str) {
             .then_some(
                 if mode.ends_with("expiry") || mode.ends_with("join-delayed") {
                     1
+                } else if mode.ends_with("-wind-down-author-wait") {
+                    // Filling the real trace queue consumes this allowance too.
+                    // Leave time for Observe and the retained author to finish.
+                    15
                 } else {
                     5
                 },
