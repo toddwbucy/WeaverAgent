@@ -3,6 +3,7 @@
 //! Model/classifier and admin replies remain scripted, not qualified deployment.
 use super::*;
 use crate::flow::context::worker_startup::FoundationRun;
+use crate::flow::context::worker_startup::input::management::tests::secondary;
 use crate::flow::pump::PumpDeadline;
 use std::os::fd::OwnedFd;
 use weaver_harness::{
@@ -630,7 +631,11 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 match &message.payload {
                     CapturePayload::SavePointBeginning(beginning) => {
                         assert!(packets.is_empty());
-                        assert!(root.join("ready-rollback-lower.json").exists());
+                        assert_eq!(
+                            root.join("ready-rollback-lower.json").exists(),
+                            !mode.ends_with("-gate-end"),
+                            "a closed gate cannot acknowledge Lower"
+                        );
                         let inner = owner.0.test_inner();
                         let (_, account) = inner.test_account();
                         assert!(matches!(

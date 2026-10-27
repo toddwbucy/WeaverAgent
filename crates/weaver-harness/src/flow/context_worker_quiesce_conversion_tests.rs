@@ -74,6 +74,10 @@ pub(in crate::flow::context::worker_startup) fn gate(mode: &str, root: &Path, fd
     );
     assert_eq!(quiesce.exchange.ordinal, 2);
     std::fs::write(root.join("quiesce-convert-request.json"), &bytes[..n]).unwrap();
+    if mode.contains("-secondary-") && mode.ends_with("gate-end") {
+        wait_file(root, "secondary-leave-read-armed");
+        return;
+    }
     if mode.ends_with("queued-close") {
         wait_file(root, "quiesce-convert-drain");
     }
@@ -228,6 +232,7 @@ pub(super) fn handoff(
     reader: &mut UnixStream,
 ) -> Handoff {
     let expiry = mode.ends_with("expiry");
+    let secondary = mode.contains("-secondary-");
     let pending = pending(mode);
     let author = mode.ends_with("pending-author");
     let queued = mode.ends_with("queued-control") || mode.ends_with("queued-close");
@@ -246,7 +251,12 @@ pub(super) fn handoff(
                 } else {
                     "quiesce-convert-request.json"
                 };
-                if !pending && !expiry && !queued && joined.is_none() && root.join(trigger).exists()
+                if !pending
+                    && !expiry
+                    && !secondary
+                    && !queued
+                    && joined.is_none()
+                    && root.join(trigger).exists()
                 {
                     joined = Some(joining(socket, 75, 100));
                 }
@@ -293,6 +303,24 @@ pub(super) fn handoff(
             original: None,
             probe: None,
         };
+        if secondary {
+            let end = Instant::now() + Duration::from_secs(4);
+            while !root.join("quiesce-convert-request.json").exists() {
+                assert!(Instant::now() < end, "actual Quiesce was not sent");
+                assert_ne!(
+                    guard.input.as_mut().unwrap().advance(),
+                    FoundationInputProgress::Stopped
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            first = secondary::convert(
+                &mut guard,
+                socket,
+                root,
+                mode,
+                expiry.then_some(PumpDeadline::GracefulDrain),
+            );
+        }
         if pending {
             let end = Instant::now() + Duration::from_secs(4);
             while !guard
@@ -382,7 +410,17 @@ pub(super) fn handoff(
             evidence.probe = Some(send.state_probe_for_test());
         }
         let end = Instant::now() + Duration::from_secs(4);
-        if expiry {
+        if secondary {
+            assert!(
+                guard
+                    .owned_input()
+                    .serving
+                    .graceful
+                    .as_ref()
+                    .unwrap()
+                    .forced
+            );
+        } else if expiry {
             while !guard
                 .input
                 .as_ref()
@@ -442,7 +480,7 @@ pub(super) fn handoff(
         assert!(leave.forced);
         assert_eq!(
             leave.forced_by,
-            (!expiry).then_some(weaver_types::Cause { uid: 75 })
+            (!expiry && !secondary).then_some(weaver_types::Cause { uid: 75 })
         );
         let quiesce = leave.quiesce.as_ref().unwrap();
         assert!(!quiesce.test_accounts().0, "no invented Quiesced grant");
@@ -518,6 +556,8 @@ pub(super) fn assert_tail(
     mode: &str,
 ) {
     let expiry = mode.ends_with("expiry");
+    let secondary = mode.contains("-secondary-");
+    let gate_end = secondary && mode.ends_with("gate-end");
     let expected = if accepted(mode) {
         1
     } else if pending(mode) {
@@ -528,13 +568,20 @@ pub(super) fn assert_tail(
     let unload = rows.iter().find(|row| row["kind"] == "unload").unwrap();
     assert_eq!(
         unload["payload"]["forced_by"],
-        if expiry {
+        if expiry || secondary {
             serde_json::Value::Null
         } else {
             serde_json::json!({"uid":75})
         }
     );
-    assert_eq!(joins.len(), usize::from(!expiry));
+    assert_eq!(
+        joins.len(),
+        if secondary {
+            usize::from(mode.contains("-secondary-joiner-"))
+        } else {
+            usize::from(!expiry)
+        }
+    );
     assert!(joins.iter().all(|join| join.answer.is_some()));
     assert!(filings.is_empty());
     assert!(!rows.iter().any(|row| matches!(
@@ -592,6 +639,12 @@ pub(super) fn assert_tail(
     );
     assert!(inner.test_context().input.snapshot().is_none());
     let gate = inner.test_gate().unwrap();
+    if gate_end {
+        assert!(gate.test_quiesce_reply().is_none());
+        assert!(gate.test_replies().1.is_none());
+        assert!(!root.join("ready-rollback-lower.json").exists());
+        return;
+    }
     let bad_ack = mode.ends_with("wrong-ack") || mode.ends_with("duplicate-ack");
     assert_eq!(
         gate.refusal(),

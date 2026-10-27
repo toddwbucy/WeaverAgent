@@ -48,6 +48,20 @@ impl Quiesce {
 }
 
 impl FoundationInput<'_> {
+    /// A retained EOF belongs to this exact gate until the forced tail reaps
+    /// it. Polling it again must not preempt the secondary management dial.
+    pub(in crate::flow::context::worker_startup::input) fn retained_quiesce_gate_end(
+        &self,
+    ) -> bool {
+        self.serving
+            .graceful
+            .as_ref()
+            .and_then(|leave| leave.quiesce.as_ref())
+            .is_some_and(|work| {
+                work.gate_failure.is_some() && work.port.matches(&self.serving.owner.gate)
+            })
+    }
+
     /// Failed-run cleanup consults the actual ticket, including a send that
     /// crossed just before its post-send clock or input accounting failed.
     pub(in crate::flow::context::worker_startup::input) fn quiesce_input_send(

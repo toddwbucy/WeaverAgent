@@ -182,9 +182,8 @@ impl<'a> FoundationManagement<'a> {
             if self.input.retain_graceful_expiry(&failure)
                 || self.input.retain_quiesce_gate_end(&failure)
             {
-                // The current secondary dial remains owned, even if it has
-                // not supplied a complete directive. Lifecycle takes both.
-                self.progress = FoundationManagementProgress::DirectivePending;
+                // Conversion does not supply a directive. Keep this owner's
+                // original read/answer work runnable until its actual outcome.
                 return self.progress;
             }
             if self.input.final_send_clock_failed()
@@ -261,6 +260,7 @@ impl<'a> FoundationManagement<'a> {
                 return Ok(());
             }
         }
+        let retained_gate_end = self.input.retained_quiesce_gate_end();
         let owner = &mut self.input.serving.owner;
         let pumped = owner.context.observe_ready(&mut PumpPorts {
             lifecycle: LifecyclePorts {
@@ -269,7 +269,7 @@ impl<'a> FoundationManagement<'a> {
                 residency: Some(owner.resident.residency),
                 ..Default::default()
             },
-            gate: Some(&mut owner.gate),
+            gate: (!retained_gate_end).then_some(&mut owner.gate),
             decode: Some(owner.decode),
             label: None,
             io,
@@ -296,15 +296,21 @@ impl<'a> FoundationManagement<'a> {
                 self.progress = FoundationManagementProgress::Dropped;
                 return Ok(());
             }
-            if !matches!(
-                envelope.payload,
-                Payload::Directive(LifecycleDirective::Observe | LifecycleDirective::Stop { .. })
-            ) || (self.input.has_graceful_leave()
-                && !matches!(
+            let leaving = self.input.has_graceful_leave();
+            let delegate = if leaving {
+                matches!(
                     envelope.payload,
-                    Payload::Directive(LifecycleDirective::Observe)
-                ))
-            {
+                    Payload::Directive(LifecycleDirective::JoinLeave { .. })
+                )
+            } else {
+                !matches!(
+                    envelope.payload,
+                    Payload::Directive(
+                        LifecycleDirective::Observe | LifecycleDirective::Stop { .. }
+                    )
+                )
+            };
+            if delegate {
                 self.heard_ns
                     .get_or_insert(self.input.serving.owner.context.last_ns);
                 if self.read_armed {
@@ -321,13 +327,16 @@ impl<'a> FoundationManagement<'a> {
             // An earlier measured refusal owns its close. Settle that exact
             // transaction before deciding whether this Stop has a turn left;
             // two owners must never author competing turn.closed events.
-            if matches!(
-                envelope.payload,
-                Payload::Directive(LifecycleDirective::Stop { .. })
-            ) && !self.input.settle_refusal_before_stop(
-                (!self.peer_unavailable).then_some(&mut self.peer),
-                io,
-            )? {
+            if !leaving
+                && matches!(
+                    envelope.payload,
+                    Payload::Directive(LifecycleDirective::Stop { .. })
+                )
+                && !self.input.settle_refusal_before_stop(
+                    (!self.peer_unavailable).then_some(&mut self.peer),
+                    io,
+                )?
+            {
                 return Ok(());
             }
             self.message =
@@ -346,7 +355,6 @@ impl<'a> FoundationManagement<'a> {
                     .complete_wait(PumpDeadline::AdminRead);
                 self.read_armed = false;
             }
-            let leaving = self.input.has_graceful_leave();
             let owner = &mut self.input.serving.owner;
             match &message.envelope.payload {
                 Payload::Directive(LifecycleDirective::Observe) => {
@@ -376,6 +384,13 @@ impl<'a> FoundationManagement<'a> {
                                 constituents: Vec::new(),
                             }
                         }),
+                    }));
+                }
+                Payload::Directive(_) if leaving => {
+                    self.answer = Some(ManagementAnswer::Lifecycle(OrganEnvelope {
+                        exchange: message.envelope.exchange.clone(),
+                        position: Position::Close,
+                        payload: Payload::Refusal(weaver_types::LifecycleRefusal::OutOfOrder),
                     }));
                 }
                 Payload::Directive(LifecycleDirective::Stop { cause }) => {

@@ -315,6 +315,7 @@ impl<'a> FoundationInput<'a> {
     fn observe_with_wait(&mut self, io: &mut impl PumpIo, wait: bool) -> Result<(), RunFailure> {
         // The same pump owns both observation and an explicitly elected wait.
         // Neither changes the operation's clocks or consumes its completion.
+        let retained_gate_end = self.retained_quiesce_gate_end();
         let owner = &mut self.serving.owner;
         owner.context.pump_with_wait(
             &mut PumpPorts {
@@ -323,7 +324,7 @@ impl<'a> FoundationInput<'a> {
                     residency: Some(owner.resident.residency),
                     ..Default::default()
                 },
-                gate: Some(&mut owner.gate),
+                gate: (!retained_gate_end).then_some(&mut owner.gate),
                 decode: Some(owner.decode),
                 label: None,
                 io,

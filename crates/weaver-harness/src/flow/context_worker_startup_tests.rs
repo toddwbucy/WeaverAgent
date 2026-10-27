@@ -1098,6 +1098,7 @@ fn circuit(mode: &str) {
         payload.drain_bound = (mode.contains("graceful-expiry")
             || mode.contains("-graceful-save-sqlite-drain-expiry")
             || mode.contains("-graceful-save-sqlite-quiesce-expiry")
+            || (mode.contains("-quiesce-secondary-") && mode.ends_with("-expiry"))
             || mode.ends_with("quiesce-expiry")
             || mode.ends_with("quiesce-bounded"))
         .then_some(1);
@@ -4747,4 +4748,84 @@ scenario!(
 scenario!(
     worker_session_graceful_save_sqlite_wind_convert_expiry_close_recorded,
     "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-expiry-close-recorded"
+);
+
+scenario!(
+    worker_session_graceful_secondary_drain_observe,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-expiry-secondary-observe-held-filing"
+);
+
+scenario!(
+    worker_session_graceful_secondary_drain_joiner,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-expiry-secondary-joiner-held-filing"
+);
+
+scenario!(
+    worker_session_graceful_secondary_drain_silent,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-expiry-secondary-silent-held-filing"
+);
+
+scenario!(
+    worker_session_graceful_secondary_drain_refused,
+    "input-worker-generation-emission-session-graceful-save-sqlite-drain-expiry-secondary-outoforder-held-filing"
+);
+
+scenario!(
+    worker_session_graceful_secondary_wind_observe,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-expiry-secondary-observe"
+);
+
+scenario!(
+    worker_session_graceful_secondary_wind_joiner,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-expiry-secondary-joiner"
+);
+
+scenario!(
+    worker_session_graceful_secondary_wind_silent,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-expiry-secondary-silent"
+);
+
+scenario!(
+    worker_session_graceful_secondary_wind_refused,
+    "input-worker-generation-emission-session-graceful-save-sqlite-wind-convert-expiry-secondary-outoforder"
+);
+
+scenario!(
+    worker_session_graceful_secondary_quiesce_observe,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-observe-expiry"
+);
+
+scenario!(
+    worker_session_graceful_secondary_quiesce_joiner,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-joiner-expiry"
+);
+
+scenario!(
+    worker_session_graceful_secondary_quiesce_silent,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-silent-expiry"
+);
+
+scenario!(
+    worker_session_graceful_secondary_quiesce_refused,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-outoforder-expiry"
+);
+
+scenario!(
+    worker_session_graceful_secondary_gate_observe,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-observe-gate-end"
+);
+
+scenario!(
+    worker_session_graceful_secondary_gate_joiner,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-joiner-gate-end"
+);
+
+scenario!(
+    worker_session_graceful_secondary_gate_silent,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-silent-gate-end"
+);
+
+scenario!(
+    worker_session_graceful_secondary_gate_refused,
+    "input-worker-generation-emission-session-graceful-save-sqlite-quiesce-secondary-outoforder-gate-end"
 );

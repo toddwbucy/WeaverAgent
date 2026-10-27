@@ -8,6 +8,9 @@ pub(in crate::flow::context::worker_startup) fn is_mode(mode: &str) -> bool {
     mode.contains("-session-graceful-save-sqlite-wind-convert-")
 }
 fn case(mode: &str) -> &str {
+    if mode.contains("-secondary-") {
+        return "unstarted";
+    }
     mode.split("-wind-convert-").nth(1).unwrap()
 }
 fn correction(mode: &str) -> bool {
@@ -506,7 +509,8 @@ pub(super) fn handoff(
     reader: &mut UnixStream,
 ) -> Handoff {
     let scenario = case(mode);
-    let expiry = matches!(scenario, "expiry-generation" | "expiry-close-recorded");
+    let expiry = matches!(scenario, "expiry-generation" | "expiry-close-recorded")
+        || mode.contains("-secondary-");
     let author = matches!(scenario, "start-author" | "close-author");
     let mut session = SessionGuard(Some(Session::begin(serving, &FAMILY, CutMethod::Flush)));
     let done = AtomicBool::new(false);
@@ -619,7 +623,12 @@ pub(super) fn handoff(
             .begin_graceful_wind_down(TurnKey("wind-down-0".into()), CutMethod::Flush)
             .unwrap();
         let end = Instant::now() + Duration::from_secs(5);
-        let mut join = None;
+        let mut join = mode
+            .contains("-secondary-")
+            .then(|| {
+                secondary::convert(&mut guard, socket, root, mode, Some(PumpDeadline::WindDown))
+            })
+            .flatten();
         let mut ticket = None;
         let mut event = None;
         let mut held_author = None;
@@ -941,7 +950,9 @@ pub(super) fn assert_tail(
     assert_eq!(unload["kind"], "unload");
     assert_eq!(
         unload["payload"]["forced_by"],
-        if matches!(scenario, "expiry-generation" | "expiry-close-recorded") {
+        if matches!(scenario, "expiry-generation" | "expiry-close-recorded")
+            || mode.contains("-secondary-")
+        {
             serde_json::Value::Null
         } else {
             serde_json::json!({"uid":75})
@@ -949,10 +960,14 @@ pub(super) fn assert_tail(
     );
     assert_eq!(
         joins.len(),
-        usize::from(!matches!(
-            scenario,
-            "expiry-generation" | "expiry-close-recorded"
-        ))
+        if mode.contains("-secondary-") {
+            usize::from(mode.contains("-secondary-joiner"))
+        } else {
+            usize::from(!matches!(
+                scenario,
+                "expiry-generation" | "expiry-close-recorded"
+            ))
+        }
     );
     assert!(joins.iter().all(|join| join.answer.is_some()));
     let inner = owner.0.test_inner();

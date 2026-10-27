@@ -13,6 +13,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use weaver_types::{Cause, ExchangeId};
 
+#[path = "context_worker_secondary_leave_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod secondary;
+
 pub(in crate::flow::context::worker_startup) struct Guard<'a> {
     pub(in crate::flow::context::worker_startup) input: Option<Box<FoundationInput<'a>>>,
     pub(in crate::flow::context::worker_startup) management: Option<Box<FoundationManagement<'a>>>,
