@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #268
+**Landing PR:** #348
 
-**Version:** 0.32 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.33 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -914,6 +914,7 @@ run-local DecimalU64 starting at 1), and only the listed additional members:
 | SavePointPublished | admin to harness | artifact_id, dump_sha256, config_sha256 |
 | SavePointCaptureComplete | harness to admin, leave only | none |
 | SavePointAborted | either direction before Commit | code, detail |
+| SavePointCaptureRefused | harness to admin, leave only before Commit | missed:SavePointLeg |
 
 These are ordered continuations of the original SavePoint or Leave exchange, not
 unsolicited new invocations. Each receiver must be in the matching phase of
@@ -925,6 +926,31 @@ until index publication and the actual final response. If the worker exits after
 R20-7 makes an incomplete capture broken. The failed_run shape below can report an
 indexed artifact, but never substitutes for successful Left or elects the pending
 branch. [PERSIST-2, PERSIST-4, FLOW-5]
+
+On a leave exchange after Beginning and before Commit, SavePointCaptureRefused
+acknowledges that the refused capture's cleanup and trace accounting are complete.
+Its missed leg is Answer, Finished or Published, never CaptureNotReady or MemberDead.
+Answer and Finished name the worker's snapshot and finished refusal or timeout.
+Published includes admin's preparation refusal before ImageChecked or Prepared, not
+only failure after publication begins. The first retained refusal supplies the leg,
+so a crossed admin Aborted cannot replace an earlier Answer or Finished.
+It uses Continue and the original exchange and capture IDs. PERSIST-LEAVE-REFUSAL owns
+the ordering and timing. The next final outcome is either Left with forced true,
+no_state false and no save report, or SavePointNotTaken with the same missed leg for a
+still-graceful leave. The receiver rejects a save report, CaptureComplete or a return
+to publication after this acknowledgement. Aborted keeps its cancellation and failure
+meaning and never substitutes for CaptureRefused. This adds one internal continuation,
+no trace field, event kind or external command. [PERSIST-4, SEAM-2, FLOW-5]
+
+On a leave exchange, admin sends at most one Aborted for a capture. Its first matching
+Aborted may cross the worker's refusal acknowledgement before the final leave outcome.
+The worker keeps
+that cancellation with the same refused capture, sends no second acknowledgement and
+changes no deadline or attribution. A duplicate, wrong ID or Aborted crossing Commit
+uses the existing protocol-failure disposition. While awaiting CaptureRefused, admin
+validates crossed Image/ImageFinished frames but sends no further preparation reply.
+These are phase allowances of PERSIST-LEAVE-REFUSAL, not reordered success paths.
+[PERSIST-4, SEAM-2]
 
 State adds release_capture {capture_id}, returning capture_released {capture_id}, as a
 fresh exchange after finished. It releases the retained image and room file after admin
@@ -1024,8 +1050,10 @@ Add SavePointLeg::CaptureNotReady, serialized capture_not_ready. It is used only
 queued on-demand save's outer deadline expires before its barrier starts.
 LifecycleRefusal::SavePointNotTaken {missed: CaptureNotReady} leaves serving active.
 Admin and harness match it explicitly, never treating it as a component failure or
-reusing Answer/Finished. Other explicit save operation refusals use SavePointNotTaken
-with Answer, Finished, or Published. For serving, these mean an explicit refusal at
+reusing Answer/Finished. Other explicit save operation refusals on demand or on a
+still-graceful leave use SavePointNotTaken with Answer, Finished, or Published.
+A forced leave follows PERSIST-LEAVE-REFUSAL. For serving, these mean an explicit
+refusal at
 image creation, image finish, or root publication respectively. R20-6 preserves their
 missing image/finished timeout use and retry after PERSIST-CLEANUP confirms aborted,
 with late-answer discard. A failed cleanup follows FlowFailed, not SavePointNotTaken.
