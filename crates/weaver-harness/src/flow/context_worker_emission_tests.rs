@@ -127,7 +127,10 @@ fn emission_refusal_keeps_original_through_inspection_holds_and_cancel() {
                 assert!(work.refusal_record.is_some());
                 assert!(work.refusal_author.is_none());
                 assert!(!work.refusal_started);
-                assert!(context.deadlines.get(PumpDeadline::Decision).is_none());
+                assert_eq!(
+                    context.deadlines.get(PumpDeadline::Decision),
+                    decision_bound
+                );
                 assert!(
                     work.stage
                         == if cancellation.is_some() {
@@ -879,8 +882,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     }
     let input = guard.input.as_mut().unwrap();
     let refused = invalid || mode.contains("sort-refusal") || mode.contains("no-sort");
-    let completed_bound = mode
-        .contains("completed-observe")
+    let completed_bound = (mode.contains("observe-sort-refusal")
+        || mode.contains("completed-observe"))
+    .then(|| await_decision_bound(input, member, clock, mode));
+    let refusal_bound = mode
+        .contains("refusal-budget")
         .then(|| await_decision_bound(input, member, clock, mode));
     until(
         input,
@@ -896,6 +902,25 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     assert_eq!(std::fs::read(root.join("appended.json")).unwrap(), before);
     assert_eq!(input.received.as_ref().unwrap().raw_bytes(), raw);
     assert!(input.serving.owner.context.failure().is_none());
+    if let Some(bound) = refusal_bound {
+        assert!(refused);
+        assert_eq!(
+            input
+                .serving
+                .owner
+                .context
+                .deadlines
+                .get(PumpDeadline::Decision),
+            Some(bound),
+            "an outbound refusal still owes accounting and delivery"
+        );
+        let delayed = clock.now().unwrap() + 100;
+        clock.advance_to(delayed).unwrap();
+        input.close_operation_refusal().unwrap();
+        return super::correction::tests::refusal_boundary(
+            guard, member, reader, clock, socket, root, mode,
+        );
+    }
     let rows = trace(reader);
     assert!(
         !rows
@@ -915,7 +940,12 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             assert!(rows.iter().any(|r| r["kind"] == "fault"));
         }
         if let Some(bound) = completed_bound {
-            observe_completed_after_bound(&mut guard, clock, socket, bound);
+            let delayed = clock.now().unwrap() + 100;
+            clock.advance_to(delayed).unwrap();
+            super::super::tests::observe(&mut guard, clock, socket);
+            let context = &guard.input.as_ref().unwrap().serving.owner.context;
+            assert!(context.failure().is_none());
+            assert_eq!(context.deadlines.get(PumpDeadline::Decision), Some(bound));
         }
         if mode.ends_with("operation-close-stop") {
             let input = guard.input.as_mut().unwrap();

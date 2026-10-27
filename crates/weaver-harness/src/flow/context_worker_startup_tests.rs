@@ -2558,12 +2558,72 @@ scenario!(
     "input-generation-emission-completed-observe-unselected"
 );
 scenario!(
-    worker_emission_composition_completed_observe_sort_refusal,
-    "input-generation-emission-completed-observe-sort-refusal"
+    worker_emission_composition_pending_observe_sort_refusal,
+    "input-generation-emission-pending-observe-sort-refusal"
 );
 scenario!(
     worker_emission_composition_completed_observe_repair_refusal,
     "input-generation-emission-completed-observe-repair-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_classifier_account_deadline,
+    "input-generation-emission-refusal-budget-account-deadline-sort-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_classifier_trace_pressure,
+    "input-generation-emission-refusal-budget-refusal-boundary-trace-pressure-sort-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_classifier_gate_deadline,
+    "input-generation-emission-refusal-budget-refusal-boundary-gate-deadline-sort-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_candidate_account_deadline,
+    "input-generation-emission-refusal-budget-account-deadline-foreign"
+);
+
+scenario!(
+    worker_emission_refusal_budget_candidate_trace_pressure,
+    "input-generation-emission-refusal-budget-refusal-boundary-trace-pressure-foreign"
+);
+
+scenario!(
+    worker_emission_refusal_budget_candidate_gate_deadline,
+    "input-generation-emission-refusal-budget-refusal-boundary-gate-deadline-foreign"
+);
+
+scenario!(
+    worker_emission_refusal_budget_template_account_deadline,
+    "input-generation-emission-refusal-budget-account-deadline-no-sort"
+);
+
+scenario!(
+    worker_emission_refusal_budget_template_trace_pressure,
+    "input-generation-emission-refusal-budget-refusal-boundary-trace-pressure-no-sort"
+);
+
+scenario!(
+    worker_emission_refusal_budget_template_gate_deadline,
+    "input-generation-emission-refusal-budget-refusal-boundary-gate-deadline-no-sort"
+);
+
+scenario!(
+    worker_emission_refusal_budget_gate_pressure,
+    "input-generation-emission-refusal-budget-refusal-boundary-gate-pressure-sort-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_trace_deadline,
+    "input-generation-emission-refusal-budget-refusal-boundary-trace-deadline-foreign"
+);
+
+scenario!(
+    worker_emission_refusal_budget_ready_stop,
+    "input-generation-emission-refusal-budget-refusal-boundary-ready-stop-no-sort"
 );
 
 scenario!(

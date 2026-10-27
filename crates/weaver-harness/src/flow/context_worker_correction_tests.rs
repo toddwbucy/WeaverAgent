@@ -675,7 +675,7 @@ pub(in crate::flow::context::worker_startup) fn assert_public_refusal(
     );
 }
 
-fn refusal_boundary(
+pub(in crate::flow::context::worker_startup) fn refusal_boundary(
     mut guard: Guard<'_>,
     member: &mut Member,
     reader: &mut UnixStream,
@@ -692,10 +692,34 @@ fn refusal_boundary(
     use std::os::fd::AsRawFd;
 
     let input = guard.input.as_mut().unwrap();
-    let mut bound = None;
+    let original = mode.contains("refusal-budget").then(|| {
+        input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision)
+            .expect("refusal election keeps the outbound bound")
+    });
+    let mut bound = original;
+    let mut held_seen = false;
+    if original.is_some() {
+        member.hold_kind = Some("tool.call.completed");
+    }
     for _ in 0..2000 {
         let work = input.engine.as_ref().unwrap().emission.as_ref().unwrap();
-        if work.stage == EmissionStage::Pairs {
+        if original.is_some() {
+            assert_eq!(
+                input
+                    .serving
+                    .owner
+                    .context
+                    .deadlines
+                    .get(PumpDeadline::Decision),
+                original,
+                "required terminal receipts keep the outbound bound"
+            );
+        } else if work.stage == EmissionStage::Pairs {
             bound = input
                 .serving
                 .owner
@@ -706,11 +730,75 @@ fn refusal_boundary(
         if work.stage == EmissionStage::RefusalClose {
             break;
         }
+        if !held_seen
+            && member.held_file.is_some()
+            && let Some(inherited) = original
+        {
+            held_seen = true;
+            assert!(!root.join("closed.json").exists());
+            let deadline = inherited.deadline_ns();
+            clock.advance_to(deadline - 1000).unwrap();
+            if mode.contains("account-deadline") {
+                struct Expire<'a>(&'a mut FakePumpIo, u64, bool);
+                impl PumpIo for Expire<'_> {
+                    fn now(&mut self) -> std::io::Result<u64> {
+                        self.0.now()
+                    }
+                    fn wait(
+                        &mut self,
+                        _: &[WaitInterest<'_>],
+                        deadline: Option<u64>,
+                    ) -> std::io::Result<WaitOutcome> {
+                        assert_eq!(deadline, Some(self.1));
+                        self.2 = true;
+                        self.0.advance_to(self.1)?;
+                        Ok(WaitOutcome::Timeout)
+                    }
+                }
+                let mut io = Expire(clock, deadline, false);
+                for _ in 0..2000 {
+                    if input.advance_with_io(&mut io) == FoundationInputProgress::Stopped {
+                        break;
+                    }
+                }
+                assert!(io.2, "held receipt reaches the non-ready wait");
+                assert_eq!(input.progress(), FoundationInputProgress::Stopped);
+                assert!(matches!(
+                    input.serving.owner.context.failure(),
+                    Some(RunFailure::Flow {
+                        reason: FlowHaltReason::DecisionBound,
+                        ..
+                    })
+                ));
+                assert!(member.held_file.is_some());
+                assert!(input.serving.owner.context.open_turn.is_some());
+                assert!(!root.join("closed.json").exists());
+                assert!(!trace(reader).iter().any(|r| r["kind"] == "turn.closed"));
+                return;
+            }
+            for _ in 0..8 {
+                assert_eq!(
+                    step(input, member, clock, mode),
+                    FoundationInputProgress::Pending
+                );
+                assert_eq!(
+                    input
+                        .serving
+                        .owner
+                        .context
+                        .deadlines
+                        .get(PumpDeadline::Decision),
+                    original
+                );
+            }
+            member.hold_kind = None;
+        }
         assert_eq!(
             step(input, member, clock, mode),
             FoundationInputProgress::Pending
         );
     }
+    assert_eq!(held_seen, original.is_some());
     assert_eq!(
         input
             .engine
@@ -747,9 +835,9 @@ fn refusal_boundary(
         rows.iter()
             .filter(|r| r["kind"] == "tool.call.completed")
             .count(),
-        1
+        if original.is_some() { 2 } else { 1 }
     );
-    if mode.ends_with("ready-stop") {
+    if mode.contains("ready-stop") {
         stop(&mut guard, member, clock, mode, socket, root);
     } else {
         // Move time before the close is elected: a fresh Decision would extend
@@ -757,7 +845,7 @@ fn refusal_boundary(
         let delayed = clock.now().unwrap() + 100;
         clock.advance_to(delayed).unwrap();
         let trace_pressure = mode.contains("boundary-trace-");
-        let expired = mode.ends_with("deadline");
+        let expired = mode.contains("deadline");
         let count = if trace_pressure {
             fill_trace(input.serving.owner.context, clock)
         } else {
@@ -861,10 +949,18 @@ fn refusal_boundary(
         );
     }
     let input = guard.input.as_ref().unwrap();
-    if mode.ends_with("ready-stop") {
+    if mode.contains("ready-stop") {
         rows.extend(trace(reader));
     }
-    assert_eq!(input.progress(), FoundationInputProgress::Refused);
+    let stopped = original.is_some() && mode.contains("ready-stop");
+    assert_eq!(
+        input.progress(),
+        if stopped {
+            FoundationInputProgress::Aborted
+        } else {
+            FoundationInputProgress::Refused
+        }
+    );
     assert!(input.serving.owner.context.failure().is_none());
     assert!(
         input
@@ -877,13 +973,39 @@ fn refusal_boundary(
     );
     let closes: Vec<_> = rows.iter().filter(|r| r["kind"] == "turn.closed").collect();
     assert_eq!(closes.len(), 1);
-    assert_eq!(closes[0]["payload"]["reason"], "refused");
+    assert_eq!(
+        closes[0]["payload"]["reason"],
+        if stopped { "directive" } else { "refused" }
+    );
     assert!(
         rows.iter()
             .filter(|r| r["kind"] == "tool.call.completed")
             .all(|r| sequence(r) < sequence(closes[0]))
     );
-    assert_public_refusal(input, root);
+    assert_refusal_account(input, mode, &rows);
+    if stopped {
+        let end = Instant::now() + Duration::from_secs(2);
+        while !root.join("closed.json").exists() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let close: OrganEnvelope =
+            serde_json::from_slice(&std::fs::read(root.join("closed.json")).unwrap()).unwrap();
+        assert_eq!(
+            close.exchange,
+            input.received.as_ref().unwrap().envelope().exchange
+        );
+        assert_eq!(close.position, Position::Close);
+        let Payload::Frame(frame) = close.payload else {
+            panic!("actual world close")
+        };
+        let close: serde_json::Value = serde_json::from_slice(&frame.octets().unwrap()).unwrap();
+        assert_eq!(
+            close,
+            serde_json::json!({"kind":"stopped", "reason":"the operator stopped the turn", "turn":"generation-turn", "run":input.serving.owner.context.flow.run()})
+        );
+    } else {
+        assert_public_refusal(input, root);
+    }
 }
 
 fn actual_worker(
