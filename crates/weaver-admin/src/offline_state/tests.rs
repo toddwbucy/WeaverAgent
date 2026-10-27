@@ -245,7 +245,9 @@ fn lock_probe_process() {
 
 #[test]
 fn both_real_locks_precede_file_preparation_and_are_released_afterward() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(
+        both_real_locks_precede_file_preparation_and_are_released_afterward
+    ) {
         return;
     }
     for operation in [Operation::Restore, Operation::BindState] {
@@ -276,7 +278,8 @@ fn both_real_locks_precede_file_preparation_and_are_released_afterward() {
 
 #[test]
 fn competing_invocation_or_held_run_never_reaches_preparation() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(competing_invocation_or_held_run_never_reaches_preparation)
+    {
         return;
     }
     for operation in [Operation::Restore, Operation::BindState] {
@@ -308,7 +311,9 @@ fn competing_invocation_or_held_run_never_reaches_preparation() {
 
 #[test]
 fn unloaded_judgment_precedes_preparation_and_is_repeated_for_publication() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(
+        unloaded_judgment_precedes_preparation_and_is_repeated_for_publication
+    ) {
         return;
     }
     for changed_after_prepare in [false, true] {
@@ -358,7 +363,9 @@ fn unloaded_judgment_precedes_preparation_and_is_repeated_for_publication() {
 
 #[test]
 fn bind_keeps_the_image_and_seed_but_binds_the_judged_new_configuration() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(
+        bind_keeps_the_image_and_seed_but_binds_the_judged_new_configuration
+    ) {
         return;
     }
     let fixture = fixture();
@@ -386,7 +393,9 @@ fn bind_keeps_the_image_and_seed_but_binds_the_judged_new_configuration() {
 
 #[test]
 fn restore_historic_and_latest_append_selection_without_rewriting_the_artifact() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(
+        restore_historic_and_latest_append_selection_without_rewriting_the_artifact
+    ) {
         return;
     }
     let fixture = fixture();
@@ -419,7 +428,9 @@ fn restore_historic_and_latest_append_selection_without_rewriting_the_artifact()
 
 #[test]
 fn bind_rejects_a_stale_selector_and_a_changed_scheme_before_publication() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(
+        bind_rejects_a_stale_selector_and_a_changed_scheme_before_publication
+    ) {
         return;
     }
     let fixture = fixture();
@@ -446,7 +457,9 @@ fn bind_rejects_a_stale_selector_and_a_changed_scheme_before_publication() {
 
 #[test]
 fn independently_judged_identity_and_pending_guards_cannot_be_bypassed() {
-    if crate::test_isolation::reexec() {
+    if crate::test_isolation::isolated!(
+        independently_judged_identity_and_pending_guards_cannot_be_bypassed
+    ) {
         return;
     }
     for operation in [Operation::Restore, Operation::BindState] {

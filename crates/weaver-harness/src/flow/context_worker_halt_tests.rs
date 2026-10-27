@@ -177,9 +177,19 @@ pub(super) fn exercise(
                 .gate
                 .held()
                 .is_some_and(|frame| matches!(frame.payload, Payload::ToolAnswer(_)));
-        let silent = mode.contains("-deadline") && root.join("halt-interrupt.json").exists();
+        let timed_interrupt = (mode.contains("-deadline") || mode.contains("halt-gate-clock"))
+            && input
+                .serving
+                .owner
+                .context
+                .halt_gate()
+                .is_some_and(|gate| gate.interrupt_sent());
+        if timed_interrupt {
+            observe_interrupt(root);
+        }
+        let silent = mode.contains("-deadline") && timed_interrupt;
         if mode.contains("halt-gate-clock")
-            && root.join("halt-interrupt.json").exists()
+            && timed_interrupt
             && progress == FoundationHaltProgress::Pending
         {
             let previous = clock.now().unwrap();
