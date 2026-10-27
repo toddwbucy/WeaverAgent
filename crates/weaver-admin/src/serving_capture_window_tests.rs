@@ -2,6 +2,62 @@ use super::*;
 use std::time::Duration;
 use weaver_types::state_flow::SaveWindow;
 
+#[test]
+fn demand_window_keeps_send_time_and_rejects_leave_completion() {
+    let mut windows = CaptureWindows::demand_at(100, 50).unwrap();
+    let original = windows.demand_window().unwrap();
+    assert_eq!(
+        original,
+        SaveWindow {
+            began_ns: 100.into(),
+            deadline_ns: 150.into()
+        }
+    );
+    assert_eq!(windows.remaining_at(125).unwrap(), Some(25));
+    assert!(!windows.is_join() && !windows.matches_leave(false) && !windows.matches_leave(true));
+    let value = CaptureBeginning {
+        capture_id: 9.into(),
+        window: original,
+        tail_window: None,
+    };
+    windows.accept_at(&value, 130).unwrap();
+    assert_eq!(windows.remaining_at(149).unwrap(), Some(1));
+    assert!(windows.complete_at(9.into(), 149).is_err());
+    assert_eq!(windows.remaining_at(150), Err(ChannelFault::Unanswered));
+    assert_eq!(windows.demand_window(), Some(original));
+    assert_eq!(windows.capture(), Some(&value));
+}
+
+#[test]
+fn demand_beginning_cannot_replace_the_original_window_or_add_a_tail() {
+    for case in ["shift", "short", "long", "tail", "zero", "expired"] {
+        let mut windows = CaptureWindows::demand_at(100, 50).unwrap();
+        let mut value = CaptureBeginning {
+            capture_id: 9.into(),
+            window: windows.demand_window().unwrap(),
+            tail_window: None,
+        };
+        let mut now = 120;
+        match case {
+            "shift" => {
+                value.window.began_ns.0 += 1;
+                value.window.deadline_ns.0 += 1;
+            }
+            "short" => value.window.deadline_ns.0 -= 1,
+            "long" => value.window.deadline_ns.0 += 1,
+            "tail" => value.tail_window = Some(value.window),
+            "zero" => value.capture_id = 0.into(),
+            "expired" => now = 150,
+            _ => unreachable!(),
+        }
+        assert!(windows.accept_at(&value, now).is_err(), "{case}");
+        assert!(windows.capture().is_none(), "{case}");
+        assert_eq!(windows.demand_window().unwrap().deadline_ns.0, 150);
+    }
+    assert!(CaptureWindows::demand_at(100, 0).is_err());
+    assert!(CaptureWindows::demand_at(u64::MAX, 1).is_err());
+}
+
 fn beginning() -> CaptureBeginning {
     CaptureBeginning {
         capture_id: 7.into(),

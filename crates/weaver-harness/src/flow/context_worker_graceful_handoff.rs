@@ -19,6 +19,7 @@ impl<'a> FoundationManagement<'a> {
             || self.stop.is_some()
             || self.send.is_some()
             || self.input.has_graceful_leave()
+            || self.input.serving.save.is_some()
             || !self.input.rollback_admissible()
         {
             return Err(self);

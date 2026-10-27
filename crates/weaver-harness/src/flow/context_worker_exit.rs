@@ -30,6 +30,8 @@ pub struct FoundationFailedHandoff {
     input: FailedInput,
     management: Option<super::super::management::FailedManagement>,
     _graceful: Option<super::super::graceful::FailedGraceful>,
+    capture: Option<Box<crate::flow::context::leave_capture::FailedCapture>>,
+    _save_request: Option<super::super::save::FailedSaveRequest>,
     gate: Option<OrganPort>,
     gate_child: OwnedChild,
     tools: Option<ToolsCgroup>,
@@ -78,6 +80,14 @@ impl FoundationHalt<'_> {
         if !self.terminal() {
             return Err(self);
         }
+        let input = self.owner.input();
+        if input.serving.save.as_ref().is_some_and(|save| {
+            !save
+                .capture
+                .failed_handoff_ready(input.serving.owner.context, &save.peer)
+        }) {
+            return Err(self);
+        }
         let Self {
             owner,
             progress,
@@ -121,6 +131,7 @@ impl FoundationHalt<'_> {
             queued_inputs,
             gate_outgoing,
             graceful,
+            save,
         } = serving;
         let crate::flow::context::boot_composition::gate_startup::ready::EnteredServing {
             context,
@@ -148,6 +159,13 @@ impl FoundationHalt<'_> {
             .original_enter
             .take()
             .map(|peer| peer.retire_failed());
+        let (capture, save_request) = match save {
+            Some(save) => {
+                let (capture, request) = save.into_failed(context);
+                (Some(capture), Some(request))
+            }
+            None => (None, None),
+        };
         Ok(Box::new(FoundationFailedHandoff {
             origin,
             decode,
@@ -156,6 +174,8 @@ impl FoundationHalt<'_> {
             progress,
             world_already_sent,
             _graceful: graceful.map(|leave| leave.retire_failed()),
+            capture,
+            _save_request: save_request,
             input: FailedInput {
                 received: original,
                 turn,
@@ -249,13 +269,34 @@ impl FoundationRun {
     #[allow(clippy::result_large_err)]
     pub fn failed_exit(
         self: Box<Self>,
-        handoff: Box<FoundationFailedHandoff>,
+        mut handoff: Box<FoundationFailedHandoff>,
     ) -> Result<Box<FoundationFailedExit>, (Box<Self>, Box<FoundationFailedHandoff>)> {
         let valid = Arc::ptr_eq(&self.context.read_origin, &handoff.origin)
             && self.context.phase == RecordingPhase::Failed
             && self.context.failure.is_some()
             && self.context.flow.halt().is_some()
-            && self.context.member_capture.is_none()
+            && match handoff.capture.as_ref() {
+                Some(capture) => {
+                    capture.matches(&self.context)
+                        && self
+                            .context
+                            .flow
+                            .halt()
+                            .unwrap()
+                            .account()
+                            .is_none_or(|account| account.capture.as_ref() == Some(capture.facts()))
+                }
+                None => {
+                    self.context.member_capture.is_none()
+                        && self
+                            .context
+                            .flow
+                            .halt()
+                            .unwrap()
+                            .account()
+                            .is_none_or(|account| account.capture.is_none())
+                }
+            }
             && self.resources.matches(&self.context)
             && self.resources.original_ports()
             && self
@@ -285,10 +326,11 @@ impl FoundationRun {
             ExitStage::Terminals
         };
         Ok(Box::new(FoundationFailedExit {
-            tail: FailedRunCleanup::after_serving(
+            tail: FailedRunCleanup::after_serving_with_capture(
                 context,
                 resources,
                 handoff._rejection_unavailable,
+                handoff.capture.take(),
             ),
             handoff,
             stage,

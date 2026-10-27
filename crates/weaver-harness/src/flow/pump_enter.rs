@@ -65,7 +65,7 @@ impl EnterReceiver {
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn from_peer(peer: LifecyclePeer) -> Result<Self, LifecyclePeer> {
         if peer.held.is_some()
-            || peer.capture_mode
+            || peer.projection != LifecycleProjection::Legacy
             || peer.capture_held.is_some()
             || peer.wire.is_some()
             || peer.failure().is_some()

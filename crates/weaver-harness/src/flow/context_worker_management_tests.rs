@@ -264,7 +264,36 @@ pub(in super::super::super) fn exercise(
             payload: Payload::Directive(directive),
         };
         if !mode.ends_with("expiry") && !mode.ends_with("eof") {
-            let bytes = if mode.ends_with("bad") {
+            let bytes = if mode.ends_with("save") {
+                let began = clock.now().unwrap();
+                let wait = guard
+                    .input
+                    .as_ref()
+                    .unwrap()
+                    .serving
+                    .owner
+                    .context
+                    .load_duty
+                    .as_ref()
+                    .unwrap()
+                    .persistence
+                    .save_wait
+                    .elapsed_ns
+                    .0;
+                CaptureEnvelope {
+                    exchange: request.exchange.clone(),
+                    position: request.position,
+                    payload: CapturePayload::Directive(CaptureDirective::SavePoint {
+                        cause: Cause { uid: 73 },
+                        window: weaver_types::state_flow::SaveWindow {
+                            began_ns: began.into(),
+                            deadline_ns: began.checked_add(wait).unwrap().into(),
+                        },
+                    }),
+                }
+                .encode(weaver_types::state_flow::capture::CaptureSender::Admin)
+                .unwrap()
+            } else if mode.ends_with("bad") {
                 b"{".to_vec()
             } else {
                 serde_json::to_vec(&request).unwrap()
@@ -407,8 +436,13 @@ pub(in super::super::super) fn exercise(
         }
         if ["leave", "save"].iter().any(|s| mode.ends_with(s)) {
             assert_eq!(m.progress(), FoundationManagementProgress::DirectivePending);
-            assert_eq!(m.peer.held().unwrap().envelope.exchange.ordinal, 73);
-            assert!(m.message.is_none() && m.send.is_none());
+            let exchange = if mode.ends_with("save") {
+                &m.peer.capture_held().unwrap().envelope.exchange
+            } else {
+                &m.peer.held().unwrap().envelope.exchange
+            };
+            assert_eq!(exchange.ordinal, 73);
+            assert!(m.message.is_none() && m.save_message.is_none() && m.send.is_none());
             assert!(read_packet(peer.as_ref().unwrap()).is_none());
             return;
         }

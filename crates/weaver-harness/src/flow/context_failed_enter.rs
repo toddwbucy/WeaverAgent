@@ -815,6 +815,19 @@ impl FailedRunCleanup {
         owner.rejection_unavailable = rejection_unavailable;
         owner
     }
+
+    /// The consuming serving handoff has checked the run, frozen account and
+    /// exact retired capture peer before releasing any of its original loans.
+    pub(in crate::flow::context) fn after_serving_with_capture(
+        context: RecordingContext,
+        resources: FailedEnterResources,
+        rejection_unavailable: bool,
+        capture: Option<Box<super::leave_capture::FailedCapture>>,
+    ) -> Self {
+        let mut owner = Self::after_serving(context, resources, rejection_unavailable);
+        owner.capture = capture;
+        owner
+    }
 }
 
 impl FailedEnterResources {

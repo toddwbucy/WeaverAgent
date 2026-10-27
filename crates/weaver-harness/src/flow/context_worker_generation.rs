@@ -544,6 +544,7 @@ impl<'a> FoundationInput<'a> {
             lifecycle: LifecyclePorts {
                 listener: Some(&mut owner.listener),
                 dial: peer,
+                leave_peer: self.serving.save.as_mut().and_then(|save| save.port()),
                 residency: Some(owner.resident.residency),
                 ..Default::default()
             },

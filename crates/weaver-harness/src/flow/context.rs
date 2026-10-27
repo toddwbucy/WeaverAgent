@@ -227,6 +227,7 @@ struct LoadDuty {
 enum AuthorClaim {
     Placement(std::sync::Arc<()>),
     Measurement(std::sync::Arc<()>),
+    QueuedSave(std::sync::Arc<capture_author::QueuedSaveAuthor>),
     EnterRefusal(std::sync::Arc<()>),
     PairRejection(std::sync::Arc<()>),
     RollbackGate(std::sync::Arc<worker_startup::expired::gate::RollbackGateAuthor>),
@@ -239,6 +240,7 @@ impl AuthorClaim {
             | (Self::Measurement(a), Self::Measurement(b))
             | (Self::EnterRefusal(a), Self::EnterRefusal(b))
             | (Self::PairRejection(a), Self::PairRejection(b)) => std::sync::Arc::ptr_eq(a, b),
+            (Self::QueuedSave(a), Self::QueuedSave(b)) => std::sync::Arc::ptr_eq(a, b),
             (Self::RollbackGate(a), Self::RollbackGate(b)) => std::sync::Arc::ptr_eq(a, b),
             _ => false,
         }
@@ -424,6 +426,7 @@ pub(crate) struct RecordingContext {
     held_author_identity: Option<std::sync::Arc<()>>,
     waiting_content: Option<WaitingAuthor>,
     rollback_gate_author: Option<std::sync::Arc<worker_startup::expired::gate::RollbackGateAuthor>>,
+    queued_save_author: Option<std::sync::Arc<capture_author::QueuedSaveAuthor>>,
     rollback_gate_port: Option<crate::flow::pump_transport::PortIdentity>,
     management_listener: Option<crate::flow::pump::LifecycleListenerIdentity>,
     #[cfg(test)]
@@ -570,6 +573,7 @@ impl RecordingContext {
             held_author_identity: None,
             waiting_content: None,
             rollback_gate_author: None,
+            queued_save_author: None,
             rollback_gate_port: None,
             management_listener: None,
             #[cfg(test)]
@@ -1169,7 +1173,7 @@ impl RecordingContext {
                 return Err(self.refused_author_failure(failure, event));
             }
         };
-        if self.rollback_gate_author.is_some() {
+        if self.rollback_gate_author.is_some() || self.queued_save_author.is_some() {
             return Err(AuthorFailure {
                 reason: RunFailure::Busy(HeldInput::Caller),
                 original: Some(event),
@@ -1392,6 +1396,11 @@ impl RecordingContext {
         }) {
             return Err(RunFailure::Busy(HeldInput::Caller).into());
         }
+        if self.queued_save_author.as_ref().is_some_and(|actual| {
+            !matches!(&claim, Some(AuthorClaim::QueuedSave(owner)) if std::sync::Arc::ptr_eq(actual, owner))
+        }) {
+            return Err(RunFailure::Busy(HeldInput::Caller).into());
+        }
         let claim_phase = match &claim {
             Some(AuthorClaim::PairRejection(_)) => matches!(
                 self.phase,
@@ -1404,7 +1413,9 @@ impl RecordingContext {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 Some(AuthorClaim::PairRejection(_)) => RunFailure::PairOwned,
-                Some(AuthorClaim::RollbackGate(_)) => RunFailure::Busy(HeldInput::Caller),
+                Some(AuthorClaim::RollbackGate(_) | AuthorClaim::QueuedSave(_)) => {
+                    RunFailure::Busy(HeldInput::Caller)
+                }
                 _ => RunFailure::MeasureOwned,
             })
             .into());
@@ -1428,7 +1439,9 @@ impl RecordingContext {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 Some(AuthorClaim::PairRejection(_)) => RunFailure::PairOwned,
-                Some(AuthorClaim::RollbackGate(_)) => RunFailure::Busy(HeldInput::Caller),
+                Some(AuthorClaim::RollbackGate(_) | AuthorClaim::QueuedSave(_)) => {
+                    RunFailure::Busy(HeldInput::Caller)
+                }
                 _ => RunFailure::MeasureOwned,
             })
             .into());
@@ -1526,6 +1539,11 @@ impl RecordingContext {
                         AuthorClaim::Measurement(identity) => {
                             self.claim_measure_author_ticket(&identity, ticket)
                         }
+                        AuthorClaim::QueuedSave(owner) => {
+                            self.queued_save_author.as_ref().is_some_and(|actual| {
+                                std::sync::Arc::ptr_eq(actual, &owner) && owner.claim(ticket)
+                            })
+                        }
                         AuthorClaim::RollbackGate(owner) => {
                             self.rollback_gate_author.as_ref().is_some_and(|actual| {
                                 std::sync::Arc::ptr_eq(actual, &owner) && owner.claim(ticket)
@@ -1565,7 +1583,7 @@ impl RecordingContext {
             return Err(failure);
         }
         self.live(ports.io)?;
-        if self.rollback_gate_author.is_some() {
+        if self.rollback_gate_author.is_some() || self.queued_save_author.is_some() {
             return Err(RunFailure::Busy(HeldInput::Caller).into());
         }
         if self.place_blocks_external() {
@@ -1641,6 +1659,11 @@ impl RecordingContext {
         }
         if self.rollback_gate_author.as_ref().is_some_and(|actual| {
             !matches!(&claim, Some(AuthorClaim::RollbackGate(owner)) if std::sync::Arc::ptr_eq(actual, owner))
+        }) {
+            return Err(RunFailure::Busy(HeldInput::Caller).into());
+        }
+        if self.queued_save_author.as_ref().is_some_and(|actual| {
+            !matches!(&claim, Some(AuthorClaim::QueuedSave(owner)) if std::sync::Arc::ptr_eq(actual, owner))
         }) {
             return Err(RunFailure::Busy(HeldInput::Caller).into());
         }
@@ -1726,6 +1749,7 @@ impl RecordingContext {
             self.bind_enter_refusal_author(sequence);
             self.bind_rejected_author(sequence);
             self.bind_rollback_gate_author(sequence);
+            self.bind_queued_save_author(sequence);
             if let Some(report) = &mut self.halt_report {
                 report.retain_trace_sequence(sequence);
             }
@@ -1757,6 +1781,7 @@ impl RecordingContext {
                 self.bind_enter_refusal_author(sequence);
                 self.bind_rejected_author(sequence);
                 self.bind_rollback_gate_author(sequence);
+                self.bind_queued_save_author(sequence);
             }
             // Other completion hooks keep their existing successful boundary.
             if let RecordProgress::Recorded {
@@ -1772,6 +1797,7 @@ impl RecordingContext {
                 self.bind_enter_refusal_author(*sequence);
                 self.bind_rejected_author(*sequence);
                 self.bind_rollback_gate_author(*sequence);
+                self.bind_queued_save_author(*sequence);
                 if !self.rollback_gate_recorded(*sequence) {
                     self.bind_marks_author(*sequence, ports.io)?;
                     self.bind_repair_author(*sequence, ports.io)?;
@@ -2300,6 +2326,7 @@ impl RecordingContext {
             | PumpDeadline::Label
             | PumpDeadline::AdminRead
             | PumpDeadline::CaptureResult
+            | PumpDeadline::SaveQueued
             | PumpDeadline::CaptureWindow => {
                 return RunFailure::Wait { key, bound };
             }
@@ -2853,3 +2880,6 @@ pub(super) use failed_enter_driver::{
     FailedEnterCleanup, FailedEnterFinished, FailedEnterProgress, FailedEnterRefusal,
     FailedEnterRejected, FailedEnterResources,
 };
+
+#[path = "context_capture_author.rs"]
+mod capture_author;

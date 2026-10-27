@@ -32,6 +32,9 @@ pub(in crate::flow::context) mod quiesce;
 #[path = "context_worker_wind_down_tests.rs"]
 pub(in crate::flow::context) mod wind_down;
 
+#[path = "context_worker_demand_save_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod demand_save;
+
 fn wait_file(root: &Path, name: &str) {
     let end = Instant::now() + Duration::from_secs(25);
     while !root.join(name).exists() {
@@ -40,7 +43,7 @@ fn wait_file(root: &Path, name: &str) {
     }
 }
 fn turns(mode: &str) -> usize {
-    if mode.ends_with("election") {
+    if mode.ends_with("election") || demand_save::failed::is_mode(mode) {
         1
     } else if mode.ends_with("three") {
         3
@@ -130,7 +133,20 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
         .unwrap();
     }
     // The same gate remains alive until the test's retained owner reaps it.
-    let _ = recv(fd, &mut bytes, MsgFlags::empty());
+    let n = recv(fd, &mut bytes, MsgFlags::empty()).unwrap_or(0);
+    if demand_save::failed::is_mode(mode) {
+        let lower: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
+        assert_eq!(lower.payload, Payload::Directive(LifecycleDirective::Lower));
+        std::fs::write(root.join("demand-failed-lower.json"), &bytes[..n]).unwrap();
+        packet!(
+            fd,
+            &OrganEnvelope {
+                exchange: lower.exchange,
+                position: Position::Close,
+                payload: Payload::Answer(LifecycleAnswer::GateStopped)
+            }
+        );
+    }
 }
 
 pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
@@ -244,6 +260,13 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                     &bytes[..n],
                 )
                 .unwrap();
+                if index == 0
+                    && demand_save::is_mode(mode)
+                    && !mode.ends_with("-idle")
+                    && !mode.ends_with("-held-filing")
+                {
+                    wait_file(&root, "demand-resume-generation");
+                }
                 if mode.ends_with("graceful-active")
                     || mode.ends_with("quiesce-active")
                     || mode.ends_with("quiesce-queued")
@@ -448,6 +471,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     root: &Path,
     mode: &str,
 ) {
+    if demand_save::is_mode(mode) {
+        return demand_save::exercise(serving, member, reader, socket, root, mode);
+    }
     if wind_down::is_mode(mode) {
         return wind_down::exercise(serving, member, reader, socket, root, mode);
     }

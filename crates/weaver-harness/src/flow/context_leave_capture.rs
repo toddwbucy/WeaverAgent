@@ -1,4 +1,4 @@
-//! The capture interval of an already accepted forced Leave, after actual Lower.
+//! The shared capture interval of a demand save or an accepted Leave after Lower.
 //! It retains every lifecycle carry and member result through final accounting.
 //! A refusal ends only this capture interval. Its lifecycle disposition belongs
 //! to the parent and is distinct from successful publication or actual Left.
@@ -12,12 +12,15 @@ use std::sync::Arc;
 use weaver_trace::Subsystem;
 use weaver_trace::serving::payloads as trace;
 use weaver_types::state_flow as shared;
+use weaver_types::state_flow::capture::CaptureAnswer as LifecycleCaptureAnswer;
 use weaver_types::state_flow::capture::*;
 use weaver_types::{ExchangeId, Opener, Position, RunId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
     Requested,
+    QueueBoundary,
+    QueueRefused,
     Beginning,
     Barrier,
     Image,
@@ -38,8 +41,29 @@ enum Stage {
     CancelMember,
 }
 
+#[derive(Clone, Copy)]
+enum CaptureOrigin {
+    Demand { received_ns: u64 },
+    Leave(AbsoluteBound),
+}
+impl CaptureOrigin {
+    fn matches(self, context: &RecordingContext) -> bool {
+        match self {
+            Self::Demand { received_ns } => context.last_ns >= received_ns,
+            Self::Leave(bound) => context.deadlines.get(PumpDeadline::Leave) == Some(bound),
+        }
+    }
+    fn cause(self) -> trace::PersistenceCause {
+        match self {
+            Self::Demand { .. } => trace::PersistenceCause::Requested,
+            // Preserve the existing Leave election pending #350's ruling.
+            Self::Leave(_) => trace::PersistenceCause::ForcedUnload,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LeaveCaptureProgress {
+pub(super) enum ServingCaptureProgress {
     Progress,
     Pending,
     Published,
@@ -57,7 +81,14 @@ impl Carry {
         Self {
             envelope: CaptureEnvelope {
                 exchange: exchange.clone(),
-                position: Position::Continue,
+                position: if matches!(
+                    payload,
+                    CapturePayload::Answer(_) | CapturePayload::Refusal(_)
+                ) {
+                    Position::Close
+                } else {
+                    Position::Continue
+                },
                 payload,
             },
             send: None,
@@ -140,6 +171,7 @@ impl Carry {
         if !matches!(
             self.envelope.payload,
             CapturePayload::SavePointCaptureComplete(_)
+                | CapturePayload::Answer(LifecycleCaptureAnswer::SavePointTaken { .. })
         ) {
             context.live(io)?;
         }
@@ -153,8 +185,23 @@ struct Record {
     settled: bool,
     returned: StoppedAuthor,
     sequence: Option<Sequence>,
+    queued: Option<Arc<super::capture_author::QueuedSaveAuthor>>,
 }
 impl Record {
+    fn advance_queued<I: PumpIo>(
+        &mut self,
+        context: &mut RecordingContext,
+        ports: &mut PumpPorts<'_, I>,
+        payload: trace::SavePointRecord,
+    ) -> Result<(), RunFailure> {
+        if self.queued.is_none() {
+            self.queued = Some(Arc::new(super::capture_author::QueuedSaveAuthor::new(
+                context, &payload,
+            )));
+        }
+        self.advance(context, ports, payload)
+    }
+
     fn advance<I: PumpIo>(
         &mut self,
         context: &mut RecordingContext,
@@ -166,20 +213,26 @@ impl Record {
         }
         self.returned.check()?;
         let result = if self.started {
-            context.resume_author_and_wait(ports)
+            if let Some(owner) = &self.queued {
+                context.resume_queued_save(ports, owner)
+            } else {
+                context.resume_author_and_wait(ports)
+            }
         } else {
             self.started = true;
-            context.author_and_wait(
-                ports,
-                AuthoredEvent {
-                    kind: Kind::SavePoint,
-                    subsystem: Subsystem::Harness,
-                    turn: None,
-                    source: AuthoredSource::Runtime,
-                    causal_parent: None,
-                    payload: Some(Payload::SavePointRecord(Box::new(payload))),
-                },
-            )
+            let event = AuthoredEvent {
+                kind: Kind::SavePoint,
+                subsystem: Subsystem::Harness,
+                turn: None,
+                source: AuthoredSource::Runtime,
+                causal_parent: None,
+                payload: Some(Payload::SavePointRecord(Box::new(payload))),
+            };
+            if let Some(owner) = &self.queued {
+                context.author_queued_save(ports, owner, event)
+            } else {
+                context.author_and_wait(ports, event)
+            }
         };
         match result {
             Ok(sequence) => {
@@ -190,14 +243,18 @@ impl Record {
             Err(error) => {
                 // A post-Recorded observer failure cannot erase this fact and
                 // still cannot grant Commit because the failure is returned.
-                self.sequence = context.completed_author;
+                self.sequence = if let Some(owner) = &self.queued {
+                    owner.sequence()
+                } else {
+                    context.completed_author
+                };
                 Err(self.returned.retain_started(error, &mut self.started))
             }
         }
     }
 }
 
-pub(super) struct LeaveCapture {
+pub(super) struct ServingCapture {
     origin: Arc<()>,
     peer: PortIdentity,
     exchange: ExchangeId,
@@ -205,7 +262,7 @@ pub(super) struct LeaveCapture {
     loaded: StartIdentity,
     beginning: CaptureBeginning,
     window: AbsoluteBound,
-    leave: AbsoluteBound,
+    capture_origin: CaptureOrigin,
     stage: Stage,
     frontier: Option<u64>,
     image: Option<CaptureImage>,
@@ -222,6 +279,8 @@ pub(super) struct LeaveCapture {
     artifact: Option<CaptureArtifact>,
     published: Option<StartIdentity>,
     refusal_code: Option<String>,
+    refusal_leg: Option<SavePointLeg>,
+    queued_expired: bool,
     release_started: bool,
     cancelling: bool,
     disconnected: bool,
@@ -230,7 +289,7 @@ pub(super) struct LeaveCapture {
 /// A latched capture failure with its exact lifecycle descriptor retired. No
 /// caller can update a send ticket after these phase facts are frozen.
 pub(super) struct FailedCapture {
-    owner: LeaveCapture,
+    owner: ServingCapture,
     _peer: RetiredLifecyclePeer,
     facts: CaptureAtHalt,
 }
@@ -270,7 +329,7 @@ impl FailedCapture {
     pub(super) fn matches(&self, context: &RecordingContext) -> bool {
         Arc::ptr_eq(&self.owner.origin, &context.read_origin)
             && context.barrier.run() == self.owner.run.0
-            && context.deadlines.get(PumpDeadline::Leave) == Some(self.owner.leave)
+            && self.owner.capture_origin.matches(context)
             && context
                 .member_capture
                 .as_ref()
@@ -314,20 +373,132 @@ fn artifact_identity(artifact: &CaptureArtifact) -> bool {
         })
 }
 
-impl LeaveCapture {
+impl ServingCapture {
+    /// Allocate the identity at acceptance, even while the turn owns the
+    /// recorder. Beginning and the filing barrier still require an explicit
+    /// between-turn handoff after the requested record settles.
+    pub(super) fn queue_demand(
+        context: &mut RecordingContext,
+        peer: &LifecyclePeer,
+        exchange: ExchangeId,
+        window: shared::SaveWindow,
+        received_ns: u64,
+        io: &mut impl PumpIo,
+    ) -> Result<Self, RunFailure> {
+        context.live(io)?;
+        let bound = AbsoluteBound::from_absolute(window.began_ns.0, window.deadline_ns.0)
+            .map_err(|error| fault(context, io, error.to_string()))?;
+        let peer = peer.capture_identity().ok_or_else(|| {
+            fault(
+                context,
+                io,
+                "demand capture projection not selected on original peer",
+            )
+        })?;
+        let save_wait = context
+            .load_duty
+            .as_ref()
+            .map(|duty| duty.persistence.save_wait.elapsed_ns.0);
+        if context.phase != RecordingPhase::Entered
+            || context.member_capture.is_some()
+            || context.deadlines.get(PumpDeadline::Leave).is_some()
+            || context.deadlines.get(PumpDeadline::SaveQueued).is_some()
+            || context.deadlines.get(PumpDeadline::CaptureWindow).is_some()
+            || exchange.opener != Opener::Admin
+            || bound.began_ns() > received_ns
+            || received_ns > context.last_ns
+            || save_wait != Some(bound.deadline_ns() - bound.began_ns())
+        {
+            return Err(fault(
+                context,
+                io,
+                "demand capture changed its phase, original window or loaded duration",
+            ));
+        }
+        let loaded = context
+            .open_start
+            .clone()
+            .ok_or_else(|| fault(context, io, "capture has no original start"))?;
+        let id = context
+            .next_capture_id
+            .filter(|id| *id != 0)
+            .ok_or_else(|| fault(context, io, "capture ID exhausted"))?;
+        // arm preserves an already-expired but valid window. Its next live
+        // check returns the queued-save outcome to the enclosing owner.
+        context.arm(PumpDeadline::SaveQueued, bound, io)?;
+        context.next_capture_id = id.checked_add(1);
+        Ok(Self::new(
+            context,
+            peer,
+            exchange,
+            loaded,
+            CaptureBeginning {
+                capture_id: id.into(),
+                window,
+                tail_window: None,
+            },
+            CaptureOrigin::Demand { received_ns },
+        ))
+    }
+
+    pub(super) fn begin_demand_boundary(
+        &mut self,
+        context: &mut RecordingContext,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        context.live(io)?;
+        if !Arc::ptr_eq(&self.origin, &context.read_origin)
+            || context.barrier.run() != self.run.0
+            || !matches!(self.capture_origin, CaptureOrigin::Demand { .. })
+            || !self.capture_origin.matches(context)
+            || context.deadlines.get(PumpDeadline::SaveQueued) != Some(self.window)
+            || context.deadlines.get(PumpDeadline::CaptureWindow).is_some()
+        {
+            return Err(fault(
+                context,
+                io,
+                "demand boundary lost its original run or window",
+            ));
+        }
+        if self.stage != Stage::QueueBoundary
+            || !self.requested.settled
+            || context.open_turn.is_some()
+            || context.input.snapshot().is_some()
+        {
+            return Ok(false);
+        }
+        context.check_held_input()?;
+        // Transfer the same registered timestamps. No clock is sampled to
+        // construct another duration at this boundary.
+        context.arm(PumpDeadline::CaptureWindow, self.window, io)?;
+        assert_eq!(
+            context.deadlines.disarm(PumpDeadline::SaveQueued),
+            Some(self.window)
+        );
+        self.stage = Stage::Beginning;
+        Ok(true)
+    }
+
+    pub(super) fn failed_handoff_ready(
+        &self,
+        context: &RecordingContext,
+        peer: &LifecyclePeer,
+    ) -> bool {
+        context.failure.is_some()
+            && context.flow.halt().is_some()
+            && Arc::ptr_eq(&self.origin, &context.read_origin)
+            && context.barrier.run() == self.run.0
+            && self.capture_origin.matches(context)
+            && peer.owns_capture_identity(&self.peer)
+    }
+
     #[allow(clippy::result_large_err)] // A refusal returns both exact move-owned resources.
     pub(super) fn into_failed(
         self,
         context: &RecordingContext,
         peer: LifecyclePeer,
     ) -> Result<Box<FailedCapture>, (Self, LifecyclePeer)> {
-        if context.failure.is_none()
-            || context.flow.halt().is_none()
-            || !Arc::ptr_eq(&self.origin, &context.read_origin)
-            || context.barrier.run() != self.run.0
-            || context.deadlines.get(PumpDeadline::Leave) != Some(self.leave)
-            || !peer.owns_capture_identity(&self.peer)
-        {
+        if !self.failed_handoff_ready(context, &peer) {
             return Err((self, peer));
         }
         let facts = self.at_halt(context);
@@ -360,6 +531,7 @@ impl LeaveCapture {
             || context.member_capture.is_some()
             || context.deadlines.get(PumpDeadline::Leave) != Some(leave)
             || context.deadlines.get(PumpDeadline::CaptureWindow).is_some()
+            || context.deadlines.get(PumpDeadline::SaveQueued).is_some()
             || exchange.opener != Opener::Admin
             || context.open_turn.is_some()
             || context.input.snapshot().is_some()
@@ -405,12 +577,35 @@ impl LeaveCapture {
                 deadline_ns: leave.deadline_ns().into(),
             }),
         };
+        Ok(Self::new(
+            context,
+            peer,
+            exchange,
+            loaded,
+            beginning,
+            CaptureOrigin::Leave(leave),
+        ))
+    }
+
+    fn new(
+        context: &RecordingContext,
+        peer: PortIdentity,
+        exchange: ExchangeId,
+        loaded: StartIdentity,
+        beginning: CaptureBeginning,
+        capture_origin: CaptureOrigin,
+    ) -> Self {
+        let window = AbsoluteBound::from_absolute(
+            beginning.window.began_ns.0,
+            beginning.window.deadline_ns.0,
+        )
+        .expect("validated original capture window");
         let mut carries = std::array::from_fn(|_| None);
         carries[0] = Some(Carry::new(
             &exchange,
             CapturePayload::SavePointBeginning(beginning.clone()),
         ));
-        Ok(Self {
+        Self {
             origin: Arc::clone(&context.read_origin),
             peer,
             run: RunId(context.barrier.run().into()),
@@ -418,7 +613,7 @@ impl LeaveCapture {
             loaded,
             beginning,
             window,
-            leave,
+            capture_origin,
             stage: Stage::Requested,
             frontier: None,
             image: None,
@@ -435,14 +630,88 @@ impl LeaveCapture {
             artifact: None,
             published: None,
             refusal_code: None,
+            refusal_leg: None,
+            queued_expired: false,
             release_started: false,
             cancelling: false,
             disconnected: false,
-        })
+        }
     }
 
     pub(super) fn report(&self) -> Option<shared::SavePointReport> {
-        (self.stage == Stage::Complete).then(|| shared::SavePointReport {
+        (self.stage == Stage::Complete).then(|| self.published_report())
+    }
+
+    pub(super) fn queued(&self) -> bool {
+        matches!(self.capture_origin, CaptureOrigin::Demand { .. })
+            && matches!(
+                self.stage,
+                Stage::Requested | Stage::QueueBoundary | Stage::QueueRefused
+            )
+    }
+
+    pub(super) fn blocks_turn(&self) -> bool {
+        (self.requested.started && !self.requested.settled)
+            || (self.refused_record.started && !self.refused_record.settled)
+            || (!self.queued() && !matches!(self.stage, Stage::Complete | Stage::RefusalReady))
+    }
+
+    pub(super) fn boundary_pending(&self) -> bool {
+        self.stage == Stage::QueueBoundary && !self.queued_expired && !self.cancelling
+    }
+
+    pub(super) fn peer_available(&self) -> bool {
+        !self.disconnected
+    }
+
+    pub(super) fn refusal_leg(&self) -> Option<SavePointLeg> {
+        (self.stage == Stage::RefusalReady)
+            .then(|| self.refusal_leg.expect("retained capture refusal leg"))
+    }
+
+    /// The enclosing current-turn owner may encounter this wait deep inside
+    /// its own author or model operation. Retire only the queued save's exact
+    /// registered deadline; its refusal is still owed and its ID is unchanged.
+    pub(super) fn retain_queued_expiry(
+        &mut self,
+        context: &mut RecordingContext,
+        failure: &RunFailure,
+    ) -> bool {
+        if !self.queued()
+            || self.queued_expired
+            || context.failure.is_some()
+            || !Arc::ptr_eq(&self.origin, &context.read_origin)
+            || !matches!(failure, RunFailure::Wait { key: PumpDeadline::SaveQueued, bound } if *bound == self.window)
+            || context.deadlines.get(PumpDeadline::SaveQueued) != Some(self.window)
+        {
+            return false;
+        }
+        context.deadlines.disarm(PumpDeadline::SaveQueued);
+        self.queued_expired = true;
+        self.refusal_code
+            .get_or_insert_with(|| "capture_not_ready".into());
+        self.refusal_leg = Some(SavePointLeg::CaptureNotReady);
+        true
+    }
+
+    pub(super) fn retain_peer_end(&mut self, failure: &RunFailure) -> bool {
+        if !self.commit_sent()
+            && !self.disconnected
+            && matches!(failure, RunFailure::Transport { source: PumpSource::LeavePeer, failure } if failure.fault == crate::ChannelFault::Closed)
+        {
+            self.disconnected = true;
+            self.cancelling = true;
+            self.refusal_code
+                .get_or_insert_with(|| "admin_disconnected".into());
+            self.refusal_leg.get_or_insert(SavePointLeg::Published);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn published_report(&self) -> shared::SavePointReport {
+        shared::SavePointReport {
             start: self.published.clone().expect("actual Published"),
             capture_id: self.beginning.capture_id,
             event_run: self.run.clone(),
@@ -452,7 +721,7 @@ impl LeaveCapture {
                 .expect("confirmed Recorded")
                 .0
                 .into(),
-        })
+        }
     }
 
     fn commit_sent(&self) -> bool {
@@ -463,6 +732,10 @@ impl LeaveCapture {
         CaptureAtHalt {
             capture_id: self.beginning.capture_id,
             state: match self.stage {
+                Stage::Requested if matches!(self.capture_origin, CaptureOrigin::Demand { .. }) => {
+                    CaptureState::QueueBoundary
+                }
+                Stage::QueueBoundary => CaptureState::QueueBoundary,
                 Stage::Requested | Stage::Beginning => CaptureState::Beginning,
                 Stage::Barrier => match context.capture_snapshot().map(|snapshot| snapshot.phase) {
                     None | Some(CapturePhase::Barrier) => CaptureState::Barrier,
@@ -477,7 +750,8 @@ impl LeaveCapture {
                 Stage::Published | Stage::Release | Stage::CompleteCarry | Stage::Complete => {
                     CaptureState::Completing
                 }
-                Stage::Refused
+                Stage::QueueRefused
+                | Stage::Refused
                 | Stage::RefusalReady
                 | Stage::CancelRecord
                 | Stage::CancelMember => CaptureState::Aborting,
@@ -491,7 +765,7 @@ impl LeaveCapture {
         let capture_id = self.beginning.capture_id.0.into();
         let window = trace_window(self.beginning.window);
         let tail_window = self.beginning.tail_window.map(trace_window);
-        let cause = trace::PersistenceCause::ForcedUnload;
+        let cause = self.capture_origin.cause();
         match phase {
             Stage::Requested => trace::SavePointRecord::Requested {
                 capture_id,
@@ -664,6 +938,7 @@ impl LeaveCapture {
                 self.cancelling = true;
                 self.refusal_code
                     .get_or_insert_with(|| "admin_disconnected".into());
+                self.refusal_leg.get_or_insert(SavePointLeg::Published);
                 return Ok(());
             }
             return Err(context.fail(
@@ -698,6 +973,7 @@ impl LeaveCapture {
         {
             self.refusal_code
                 .get_or_insert_with(|| aborted.code.clone());
+            self.refusal_leg.get_or_insert(SavePointLeg::Published);
             self.aborted = peer.take_capture().expect("held complete packet");
             self.cancelling = true;
             return Ok(());
@@ -733,12 +1009,17 @@ impl LeaveCapture {
         &mut self,
         context: &mut RecordingContext,
         ports: &mut PumpPorts<'_, I>,
-    ) -> Result<LeaveCaptureProgress, RunFailure> {
+    ) -> Result<ServingCaptureProgress, RunFailure> {
         // Finish the exact already-admitted author before starting its refusal.
         // A retained original is never replaced by a fresh equivalent event.
-        if self.requested.started && !self.requested.settled {
-            self.requested
-                .advance(context, ports, self.payload(Stage::Requested))?;
+        if !self.requested.settled && (self.requested.started || self.queued()) {
+            if matches!(self.capture_origin, CaptureOrigin::Demand { .. }) {
+                self.requested
+                    .advance_queued(context, ports, self.payload(Stage::Requested))?;
+            } else {
+                self.requested
+                    .advance(context, ports, self.payload(Stage::Requested))?;
+            }
         }
         if self.confirmed.started && !self.confirmed.settled {
             self.confirmed
@@ -772,19 +1053,29 @@ impl LeaveCapture {
             self.stage = Stage::CancelRecord;
         }
         if self.stage == Stage::CancelRecord {
-            self.refused_record
-                .advance(context, ports, self.payload(Stage::Refused))?;
+            if matches!(self.capture_origin, CaptureOrigin::Demand { .. })
+                && self.frontier.is_none()
+            {
+                self.refused_record
+                    .advance_queued(context, ports, self.payload(Stage::Refused))?;
+            } else {
+                self.refused_record
+                    .advance(context, ports, self.payload(Stage::Refused))?;
+            }
             self.stage = Stage::CancelMember;
         }
         if context.member_capture.is_none() {
             context.deadlines.disarm(PumpDeadline::CaptureWindow);
+            if matches!(self.capture_origin, CaptureOrigin::Demand { .. }) {
+                context.deadlines.disarm(PumpDeadline::SaveQueued);
+            }
             self.stage = Stage::RefusalReady;
-            return Ok(LeaveCaptureProgress::Refused);
+            return Ok(ServingCaptureProgress::Refused);
         }
         context.cancel_member_capture(self.beginning.capture_id, ports.io)?;
         if context.member_capture.is_none() {
             self.stage = Stage::RefusalReady;
-            return Ok(LeaveCaptureProgress::Refused);
+            return Ok(ServingCaptureProgress::Refused);
         }
         if context.advance_member_capture(ports.io)? == CaptureProgress::Complete
             && let Some(answer) = context.take_capture_answer(ports.io)?
@@ -793,9 +1084,9 @@ impl LeaveCapture {
             self.member_refusal = context.take_recorded_capture_refusal(self.beginning.capture_id);
             context.finish_member_capture(self.beginning.capture_id, ports.io)?;
             self.stage = Stage::RefusalReady;
-            return Ok(LeaveCaptureProgress::Refused);
+            return Ok(ServingCaptureProgress::Refused);
         }
-        Ok(LeaveCaptureProgress::Pending)
+        Ok(ServingCaptureProgress::Pending)
     }
 
     fn complete_sent<I: PumpIo>(
@@ -850,10 +1141,10 @@ impl LeaveCapture {
         &mut self,
         context: &mut RecordingContext,
         ports: &mut PumpPorts<'_, I>,
-    ) -> Result<LeaveCaptureProgress, RunFailure> {
+    ) -> Result<ServingCaptureProgress, RunFailure> {
         if !Arc::ptr_eq(&self.origin, &context.read_origin)
             || context.barrier.run() != self.run.0
-            || context.deadlines.get(PumpDeadline::Leave) != Some(self.leave)
+            || !self.capture_origin.matches(context)
             || ports
                 .lifecycle
                 .leave_peer
@@ -872,15 +1163,31 @@ impl LeaveCapture {
             return Err(failure.clone());
         }
         if self.stage == Stage::Complete {
-            return Ok(LeaveCaptureProgress::Published);
+            return Ok(ServingCaptureProgress::Published);
         }
         if self.stage == Stage::RefusalReady {
-            return Ok(LeaveCaptureProgress::Refused);
+            return Ok(ServingCaptureProgress::Refused);
         }
         if self.complete_sent(context, ports)? {
-            return Ok(LeaveCaptureProgress::Published);
+            return Ok(ServingCaptureProgress::Published);
+        }
+        if self.queued()
+            && let Err(failure) = context.live(ports.io)
+            && !self.retain_queued_expiry(context, &failure)
+        {
+            return Err(failure);
         }
         self.probe(context, ports)?;
+        // A queued save may share the running turn's context, but never its
+        // author slot. Let that actual earlier owner continue instead of
+        // installing a competing held original or taking its completion.
+        if self.queued()
+            && (!self.requested.started || self.requested.settled)
+            && (!self.refused_record.started || self.refused_record.settled)
+            && !context.queued_save_author_available()
+        {
+            return Ok(ServingCaptureProgress::Pending);
+        }
         if self.cancelling {
             // A disconnected admin is retained by the containing owner. It
             // cannot repeatedly fail the pump while cleanup drains its trace.
@@ -922,7 +1229,8 @@ impl LeaveCapture {
                     self.cancelling = true;
                     self.refusal_code
                         .get_or_insert_with(|| "admin_disconnected".into());
-                    Ok(LeaveCaptureProgress::Progress)
+                    self.refusal_leg.get_or_insert(SavePointLeg::Published);
+                    Ok(ServingCaptureProgress::Progress)
                 }
             }
             result => result,
@@ -934,16 +1242,41 @@ impl LeaveCapture {
         context: &mut RecordingContext,
         ports: &mut PumpPorts<'_, I>,
         id: shared::DecimalU64,
-    ) -> Result<LeaveCaptureProgress, RunFailure> {
+    ) -> Result<ServingCaptureProgress, RunFailure> {
         match self.stage {
             Stage::Requested => {
-                self.requested
-                    .advance(context, ports, self.payload(Stage::Requested))?;
-                self.stage = Stage::Beginning;
+                if matches!(self.capture_origin, CaptureOrigin::Demand { .. }) {
+                    self.requested.advance_queued(
+                        context,
+                        ports,
+                        self.payload(Stage::Requested),
+                    )?;
+                } else {
+                    self.requested
+                        .advance(context, ports, self.payload(Stage::Requested))?;
+                }
+                self.stage = match self.capture_origin {
+                    CaptureOrigin::Demand { .. } if self.queued_expired => Stage::QueueRefused,
+                    CaptureOrigin::Demand { .. } => Stage::QueueBoundary,
+                    CaptureOrigin::Leave(_) => Stage::Beginning,
+                };
+            }
+            Stage::QueueBoundary => {
+                if self.queued_expired {
+                    self.stage = Stage::QueueRefused;
+                } else {
+                    return Ok(ServingCaptureProgress::Pending);
+                }
+            }
+            Stage::QueueRefused => {
+                self.refused_record
+                    .advance_queued(context, ports, self.payload(Stage::Refused))?;
+                self.stage = Stage::RefusalReady;
+                return Ok(ServingCaptureProgress::Refused);
             }
             Stage::Beginning => {
                 if !self.carry(0, context, ports)? {
-                    return Ok(LeaveCaptureProgress::Pending);
+                    return Ok(ServingCaptureProgress::Pending);
                 }
                 self.stage = Stage::Barrier;
             }
@@ -959,7 +1292,7 @@ impl LeaveCapture {
                 }
                 let progress = context.advance_member_capture(ports.io)?;
                 if self.refused_member(context, ports.io)? {
-                    return Ok(LeaveCaptureProgress::Progress);
+                    return Ok(ServingCaptureProgress::Progress);
                 }
                 if progress == CaptureProgress::ImageReady {
                     if let Some(answer) = context.take_capture_answer(ports.io)? {
@@ -992,18 +1325,18 @@ impl LeaveCapture {
                         self.stage = Stage::Image;
                     }
                 } else if progress == CaptureProgress::Pending {
-                    return Ok(LeaveCaptureProgress::Pending);
+                    return Ok(ServingCaptureProgress::Pending);
                 }
             }
             Stage::Image => {
                 if !self.carry(1, context, ports)? {
-                    return Ok(LeaveCaptureProgress::Pending);
+                    return Ok(ServingCaptureProgress::Pending);
                 }
                 self.stage = Stage::AwaitChecked;
             }
             Stage::AwaitChecked => {
                 if !self.receive(context, ports, 0)? {
-                    return Ok(LeaveCaptureProgress::Pending);
+                    return Ok(ServingCaptureProgress::Pending);
                 }
                 let CapturePayload::SavePointImageChecked(checked) =
                     &self.incoming[0].as_ref().unwrap().message.envelope.payload
@@ -1016,7 +1349,7 @@ impl LeaveCapture {
             Stage::Acknowledge => {
                 let progress = context.advance_member_capture(ports.io)?;
                 if self.refused_member(context, ports.io)? {
-                    return Ok(LeaveCaptureProgress::Progress);
+                    return Ok(ServingCaptureProgress::Progress);
                 }
                 if progress == CaptureProgress::FinishedReady {
                     if let Some(answer) = context.take_capture_answer(ports.io)? {
@@ -1043,18 +1376,18 @@ impl LeaveCapture {
                         self.stage = Stage::Finished;
                     }
                 } else if progress == CaptureProgress::Pending {
-                    return Ok(LeaveCaptureProgress::Pending);
+                    return Ok(ServingCaptureProgress::Pending);
                 }
             }
             Stage::Finished => {
                 if !self.carry(2, context, ports)? {
-                    return Ok(LeaveCaptureProgress::Pending);
+                    return Ok(ServingCaptureProgress::Pending);
                 }
                 self.stage = Stage::AwaitPrepared;
             }
             Stage::AwaitPrepared => {
                 if !self.receive(context, ports, 1)? {
-                    return Ok(LeaveCaptureProgress::Pending);
+                    return Ok(ServingCaptureProgress::Pending);
                 }
                 let CapturePayload::SavePointPrepared(artifact) =
                     &self.incoming[1].as_ref().unwrap().message.envelope.payload
@@ -1080,7 +1413,7 @@ impl LeaveCapture {
                 if !self.confirmed.started
                     && !context.confirmable_member_capture(id, self.frontier.unwrap(), ports.io)?
                 {
-                    return Ok(LeaveCaptureProgress::Pending);
+                    return Ok(ServingCaptureProgress::Pending);
                 }
                 self.confirmed
                     .advance(context, ports, self.payload(Stage::Confirmed))?;
@@ -1092,16 +1425,16 @@ impl LeaveCapture {
             }
             Stage::Commit => {
                 if !context.confirmable_member_capture(id, self.frontier.unwrap(), ports.io)? {
-                    return Ok(LeaveCaptureProgress::Pending);
+                    return Ok(ServingCaptureProgress::Pending);
                 }
                 if !self.carry(3, context, ports)? {
-                    return Ok(LeaveCaptureProgress::Pending);
+                    return Ok(ServingCaptureProgress::Pending);
                 }
                 self.stage = Stage::AwaitPublished;
             }
             Stage::AwaitPublished => {
                 if !self.receive(context, ports, 2)? {
-                    return Ok(LeaveCaptureProgress::Pending);
+                    return Ok(ServingCaptureProgress::Pending);
                 }
                 let CapturePayload::SavePointPublished(published) =
                     &self.incoming[2].as_ref().unwrap().message.envelope.payload
@@ -1138,37 +1471,44 @@ impl LeaveCapture {
                 if context.advance_member_capture(ports.io)? == CaptureProgress::Complete {
                     if let Some(answer) = context.take_capture_answer(ports.io)? {
                         self.member_results.push(answer);
-                        self.carries[4] = Some(Carry::new(
-                            &self.exchange,
-                            CapturePayload::SavePointCaptureComplete(CaptureIdentity {
-                                capture_id: id,
-                            }),
-                        ));
+                        let payload = match self.capture_origin {
+                            CaptureOrigin::Leave(_) => {
+                                CapturePayload::SavePointCaptureComplete(CaptureIdentity {
+                                    capture_id: id,
+                                })
+                            }
+                            CaptureOrigin::Demand { .. } => {
+                                CapturePayload::Answer(LifecycleCaptureAnswer::SavePointTaken {
+                                    report: self.published_report(),
+                                })
+                            }
+                        };
+                        self.carries[4] = Some(Carry::new(&self.exchange, payload));
                         self.stage = Stage::CompleteCarry;
                     }
                 } else {
-                    return Ok(LeaveCaptureProgress::Pending);
+                    return Ok(ServingCaptureProgress::Pending);
                 }
             }
             Stage::CompleteCarry => {
                 if !self.carry(4, context, ports)? {
-                    return Ok(LeaveCaptureProgress::Pending);
+                    return Ok(ServingCaptureProgress::Pending);
                 }
                 assert!(self.complete_sent(context, ports)?);
-                return Ok(LeaveCaptureProgress::Published);
+                return Ok(ServingCaptureProgress::Published);
             }
             Stage::Refused => {
                 self.refused_record
                     .advance(context, ports, self.payload(Stage::Refused))?;
                 context.finish_member_capture(id, ports.io)?;
                 self.stage = Stage::RefusalReady;
-                return Ok(LeaveCaptureProgress::Refused);
+                return Ok(ServingCaptureProgress::Refused);
             }
             Stage::Complete | Stage::RefusalReady | Stage::CancelRecord | Stage::CancelMember => {
                 unreachable!()
             }
         }
-        Ok(LeaveCaptureProgress::Progress)
+        Ok(ServingCaptureProgress::Progress)
     }
 
     fn refused_member(
@@ -1188,6 +1528,11 @@ impl LeaveCapture {
         };
         self.member_results.push(answer);
         self.member_refusal = context.take_recorded_capture_refusal(self.beginning.capture_id);
+        self.refusal_leg = Some(if self.stage == Stage::Barrier {
+            SavePointLeg::Answer
+        } else {
+            SavePointLeg::Finished
+        });
         self.refusal_code = Some(if let Some(refusal) = self.member_refusal.as_ref() {
             match &refusal.answer {
                 shared::StateFrame::ControlAnswer {

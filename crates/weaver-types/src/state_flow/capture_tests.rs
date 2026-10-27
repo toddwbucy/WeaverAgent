@@ -356,3 +356,126 @@ fn capture_codec_bounds_the_whole_escaped_packet_and_retains_unicode_and_newline
         value
     );
 }
+
+fn demand_request() -> Value {
+    json!({
+        "exchange":{"opener":"admin","ordinal":31},
+        "position":"open",
+        "payload":{"kind":"directive","body":{
+            "kind":"save_point","cause":{"uid":74},
+            "window":{"began_ns":"100","deadline_ns":"200"}
+        }}
+    })
+}
+
+#[test]
+fn capture_save_point_request_retains_the_required_original_window() {
+    let value = demand_request();
+    let raw = serde_json::to_vec(&value).unwrap();
+    let request = CaptureEnvelope::decode(&raw, CaptureSender::Admin).unwrap();
+    assert_eq!(
+        request.capture_id(),
+        None,
+        "capture identity begins at the boundary"
+    );
+    assert_eq!(serde_json::to_value(&request).unwrap(), value);
+    let carried = request.encode(CaptureSender::Admin).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&carried).unwrap(), value);
+    assert!(request.encode(CaptureSender::Harness).is_err());
+    assert!(CaptureEnvelope::decode(&raw, CaptureSender::Harness).is_err());
+    let mut malformed = request.clone();
+    let CapturePayload::Directive(CaptureDirective::SavePoint { window, .. }) =
+        &mut malformed.payload
+    else {
+        panic!("the accepted opener must retain its typed window")
+    };
+    window.deadline_ns = window.began_ns;
+    assert!(malformed.encode(CaptureSender::Admin).is_err());
+    for position in ["continue", "close"] {
+        let mut wrong = value.clone();
+        wrong["position"] = json!(position);
+        assert!(
+            CaptureEnvelope::decode(&serde_json::to_vec(&wrong).unwrap(), CaptureSender::Admin)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn capture_save_point_request_keeps_expired_values_distinct_from_malformed_windows() {
+    let mut value = demand_request();
+    value["payload"]["body"]["window"] = json!({"began_ns":"0","deadline_ns":"1"});
+    let request =
+        CaptureEnvelope::decode(&serde_json::to_vec(&value).unwrap(), CaptureSender::Admin)
+            .unwrap();
+    assert_eq!(serde_json::to_value(&request).unwrap(), value);
+    for window in [
+        json!(null),
+        json!({"began_ns":"1","deadline_ns":"1"}),
+        json!({"began_ns":"2","deadline_ns":"1"}),
+        json!({"began_ns":0,"deadline_ns":"1"}),
+        json!({"began_ns":"00","deadline_ns":"1"}),
+        json!({"began_ns":"0","deadline_ns":"18446744073709551616"}),
+    ] {
+        let mut wrong = value.clone();
+        wrong["payload"]["body"]["window"] = window;
+        assert!(
+            CaptureEnvelope::decode(&serde_json::to_vec(&wrong).unwrap(), CaptureSender::Admin)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn capture_save_point_request_refuses_missing_duplicate_and_extra_fields() {
+    let value = demand_request();
+    for key in ["cause", "window"] {
+        let mut wrong = value.clone();
+        wrong["payload"]["body"]
+            .as_object_mut()
+            .unwrap()
+            .remove(key);
+        assert!(
+            CaptureEnvelope::decode(&serde_json::to_vec(&wrong).unwrap(), CaptureSender::Admin)
+                .is_err()
+        );
+    }
+    for path in [
+        vec![],
+        vec!["exchange"],
+        vec!["payload"],
+        vec!["payload", "body"],
+        vec!["payload", "body", "window"],
+        vec!["payload", "body", "cause"],
+    ] {
+        let mut wrong = value.clone();
+        let mut target = &mut wrong;
+        for key in path {
+            target = &mut target[key];
+        }
+        target["extra"] = json!(true);
+        assert!(
+            CaptureEnvelope::decode(&serde_json::to_vec(&wrong).unwrap(), CaptureSender::Admin)
+                .is_err(),
+            "{wrong}"
+        );
+    }
+    let raw = serde_json::to_string(&value).unwrap();
+    for key in ["began_ns", "deadline_ns"] {
+        let token = format!(
+            "\"{key}\":\"{}\"",
+            if key == "began_ns" { "100" } else { "200" }
+        );
+        let duplicate = raw.replace(&token, &format!("{token},{token}"));
+        assert_ne!(duplicate, raw);
+        assert!(CaptureEnvelope::decode(duplicate.as_bytes(), CaptureSender::Admin).is_err());
+    }
+    for kind in ["leave", "join_leave", "observe", "stop"] {
+        let mut wrong = value.clone();
+        wrong["payload"]["body"]["kind"] = json!(kind);
+        assert!(
+            CaptureEnvelope::decode(&serde_json::to_vec(&wrong).unwrap(), CaptureSender::Admin)
+                .is_err()
+        );
+    }
+}

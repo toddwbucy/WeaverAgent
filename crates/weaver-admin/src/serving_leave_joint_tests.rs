@@ -43,6 +43,11 @@ fn config(root: &Path, agent: String) -> ServiceConfig {
         fs::create_dir(&path).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
     }
+    existing_config(root, agent)
+}
+
+fn existing_config(root: &Path, agent: String) -> ServiceConfig {
+    let territory = root.join("territory");
     ServiceConfig {
         agent,
         coordination_root: root.join("coord"),
@@ -62,6 +67,44 @@ fn config(root: &Path, agent: String) -> ServiceConfig {
         boundary: Err("synthetic root fixture, not role qualification".into()),
         root: root.join("admin"),
     }
+}
+
+#[test]
+#[ignore = "separate invocation launched by the demand-save joint participant"]
+fn demand_save_joint_competing_admin() {
+    let root =
+        PathBuf::from(std::env::var_os("WEAVER_LEAVE_JOINT_ROOT").expect("joint parent root"));
+    let host: serde_json::Value = serde_json::from_slice(&wait(&root, "host.json")).unwrap();
+    let config = existing_config(&root, host["agent"].as_str().unwrap().into());
+    let failure = crate::serving_leave::save::run(
+        &config,
+        &AgentName(config.agent.clone()),
+        Cause { uid: 75 },
+        |_| Ok(0),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            failure.cause,
+            crate::serving_leave::save::Fault::Admission(LifecycleRefusal::InvocationInFlight)
+        ),
+        "second save: {failure:?}"
+    );
+    let failure = run_authorized(
+        &config,
+        &AgentName(config.agent.clone()),
+        Cause { uid: 75 },
+        crate::UNLOAD_BOUNDS,
+        |_| Ok(0),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            failure.cause,
+            Fault::Admission(LifecycleRefusal::InvocationInFlight)
+        ),
+        "forced unload during save: {failure:?}"
+    );
 }
 
 fn publish_seed(root: &Path, config: &ServiceConfig, payload: &EnterPayload) -> StartIdentity {
@@ -197,6 +240,120 @@ fn forced_leave_joint_actual_admin() {
     )
     .unwrap();
     crate::TEST_WORKER_UID.with(|uid| uid.set(Some(0)));
+    if host["mode"].as_str().unwrap().contains("-demand-save-") {
+        let taken = std::thread::scope(|scope| {
+            let contender = scope.spawn(|| {
+                wait(&root, "demand-save-accepted");
+                // Invocation locks are process-owned POSIX record locks.
+                // A second thread is the same holder, not another invocation.
+                let status = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "serving_leave::invocation::tests::joint::demand_save_joint_competing_admin",
+                        "--ignored",
+                        "--nocapture",
+                        "--test-threads=1",
+                    ])
+                    .env("WEAVER_LEAVE_JOINT_ROOT", &root)
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "competing admin invocation: {status}");
+                fs::write(
+                    root.join("demand-resume-generation"),
+                    b"save lock rejects second save and forced unload",
+                )
+                .unwrap();
+            });
+            let taken = crate::serving_leave::save::run(
+                &config,
+                &AgentName(config.agent.clone()),
+                Cause { uid: 74 },
+                |_| Ok(0),
+            )
+            .unwrap();
+            contender.join().unwrap();
+            taken
+        });
+        crate::TEST_WORKER_UID.with(|uid| uid.set(None));
+        assert!(
+            start::run_lock_held(&directory).unwrap(),
+            "demand save retains the serving run"
+        );
+        assert!(path.exists());
+        assert_eq!(
+            save_points::read_marker(&config.root).unwrap(),
+            save_points::Marker::Open {
+                run: payload.run.0.clone()
+            }
+        );
+        assert_eq!(taken.evidence.loaded, loaded);
+        assert_eq!(taken.evidence.completed.as_ref(), Some(&taken.report.start));
+        assert!(taken.evidence.committed && taken.evidence.publication_failure.is_none());
+        fs::write(
+            root.join("admin-save-request.json"),
+            taken
+                .evidence
+                .request
+                .encode(weaver_types::state_flow::capture::CaptureSender::Admin)
+                .unwrap(),
+        )
+        .unwrap();
+        for (index, received) in taken.evidence.received.iter().enumerate() {
+            fs::write(
+                root.join(format!("admin-received-{index}.json")),
+                &received.wire,
+            )
+            .unwrap();
+        }
+        let _inspection =
+            start::take_invocation_lock(&directory, crate::verb_table::HolderVerb::SavePoint)
+                .unwrap();
+        let repository = Repository::from_judged_directory(
+            config
+                .save_points_fd()
+                .unwrap()
+                .try_clone_to_owned()
+                .unwrap(),
+            save_points::ROOT,
+            0,
+        )
+        .unwrap();
+        let report = &taken.report;
+        let verified = repository
+            .verify_indexed(
+                &crate::save_points::serving::codec::ArtifactId::parse(&report.start.artifact_id)
+                    .unwrap(),
+                &LoadScope {
+                    session: &payload.session,
+                    trace_path: &config.territory.join("trace.jsonl"),
+                },
+            )
+            .unwrap();
+        assert_eq!(verified.identity(), report.start);
+        assert_eq!(
+            fs::read_to_string(
+                config
+                    .territory
+                    .join("save-points")
+                    .join(save_points::MANIFEST)
+            )
+            .unwrap()
+            .lines()
+            .count(),
+            2
+        );
+        let artifact = config
+            .territory
+            .join("save-points")
+            .join(&report.start.artifact_id)
+            .join("state.sqlite");
+        write(
+            &root,
+            "concluded.json",
+            &json!({"report":report,"artifact":artifact}),
+        );
+        return;
+    }
     let result = run_mode(
         &config,
         &AgentName(config.agent.clone()),
