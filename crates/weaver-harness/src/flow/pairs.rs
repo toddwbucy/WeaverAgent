@@ -711,6 +711,27 @@ impl PairLedger {
         &mut self,
         source: SourcePosition,
     ) -> Result<ReceivedOrgan, PairError> {
+        self.ack_rejection_recorded_inner(source, false)
+    }
+
+    /// Failed cleanup can observe a new late return after the turn's close.
+    /// Only a frozen ledger admits that run-scoped receipt; healthy pair
+    /// authoring still requires the exact active turn.
+    pub(super) fn ack_halt_rejection_recorded(
+        &mut self,
+        source: SourcePosition,
+    ) -> Result<ReceivedOrgan, PairError> {
+        if !self.frozen {
+            return Err(PairError::WrongPhase);
+        }
+        self.ack_rejection_recorded_inner(source, true)
+    }
+
+    fn ack_rejection_recorded_inner(
+        &mut self,
+        source: SourcePosition,
+        halted: bool,
+    ) -> Result<ReceivedOrgan, PairError> {
         let pending = self.rejected.as_ref().ok_or(PairError::WrongPhase)?;
         if source.block_id.run != self.run
             || source.block_id.block.0 != 0
@@ -722,19 +743,10 @@ impl PairLedger {
                 .call_id
                 .as_ref()
                 .is_some_and(|call| source.block_id.sequence.0 <= call.sequence.0)
-            || self.active.as_ref().is_some_and(|batch| {
-                source.turn.as_deref()
-                    != Some(
-                        batch
-                            .proof
-                            .original()
-                            .generation()
-                            .original()
-                            .turn
-                            .0
-                            .as_str(),
-                    )
-            })
+            || (!(halted && source.turn.is_none())
+                && self
+                    .active_turn()
+                    .is_some_and(|turn| source.turn.as_deref() != Some(turn.0.as_str())))
         {
             return Err(PairError::InvalidIdentity);
         }

@@ -136,6 +136,18 @@ pub(super) fn handoff(
             .open_turn
             .clone();
         assert_eq!(original_turn.is_some(), started);
+        let secondary_join = mode
+            .contains("-secondary-")
+            .then(|| {
+                secondary::convert(
+                    &mut guard,
+                    socket,
+                    root,
+                    mode,
+                    Some(PumpDeadline::GracefulDrain),
+                )
+            })
+            .flatten();
         if expiry {
             let end = Instant::now() + Duration::from_secs(3);
             while !guard
@@ -167,7 +179,14 @@ pub(super) fn handoff(
             );
             assert!(input.serving.graceful.as_ref().unwrap().forced_by.is_none());
         }
-        let mut joins = Vec::new();
+        let mut joins: Vec<_> = secondary_join
+            .into_iter()
+            .map(|peer| JoinReply {
+                peer,
+                ordinal: 100,
+                answer: None,
+            })
+            .collect();
         if mode.contains("-join-") {
             for (uid, ordinal) in [(75, 100), (76, 101)] {
                 let peer = joining(socket, uid, ordinal);
@@ -321,7 +340,16 @@ pub(super) fn assert_tail(
             serde_json::json!({"uid":75})
         }
     );
-    assert_eq!(joins.len(), if mode.contains("-join-") { 2 } else { 0 });
+    assert_eq!(
+        joins.len(),
+        if mode.contains("-secondary-joiner-") {
+            1
+        } else if mode.contains("-join-") {
+            2
+        } else {
+            0
+        }
+    );
     assert!(joins.iter().all(|join| join.answer.is_some()));
     assert!(!rows.iter().any(|r| r["turn"] == "wind-down-0"
         || (r["kind"] == "loop.instruction" && r["payload"]["template_id"] == "wind_down")));

@@ -1,7 +1,7 @@
 //! Serving force admission and conclusion under the real invocation lock.
 //! A graceful unload may be joined without taking over its publisher. Workerless
 //! runs end without recovering room images or inventing a Left.
-use super::{FailureCause, Leave, Observed, Progress};
+use super::{Capture, FailureCause, Observed, Progress};
 use crate::save_points::serving::publication::FinalOutcome;
 use crate::save_points::serving::repository::Repository;
 use crate::{ServiceConfig, UnloadBounds, agent_cgroup, conclusion, inventory, save_points, start};
@@ -178,9 +178,9 @@ fn run_mode(
         .map_err(FailureCause::Channel)?;
     drop(observation);
     let begin = if forced {
-        Leave::begin
+        Capture::begin
     } else {
-        Leave::graceful
+        Capture::graceful
     };
     let mut leave = begin(
         observed,
@@ -303,7 +303,7 @@ fn end_run(
 fn conclude(
     config: &ServiceConfig,
     bounds: UnloadBounds,
-    leave: &mut Leave<'_>,
+    leave: &mut Capture<'_>,
     completed: &mut Option<StartIdentity>,
 ) -> Result<LifecycleAnswer, Fault> {
     let run = &leave.observed.facts.run;
@@ -342,7 +342,7 @@ fn conclude(
     crate::unloaded_by_ladder(config).map_err(Fault::Admission)
 }
 
-fn evidence(leave: Leave<'_>, completed: Option<StartIdentity>) -> Evidence {
+fn evidence(leave: Capture<'_>, completed: Option<StartIdentity>) -> Evidence {
     let capture_id = leave
         .windows
         .capture()

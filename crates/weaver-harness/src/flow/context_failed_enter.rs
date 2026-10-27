@@ -460,6 +460,10 @@ pub(in crate::flow) type FailedEnterCleanup = FailedRunCleanup;
 
 pub(in crate::flow) struct FailedRunCleanup {
     serving: bool,
+    serving_turn_accounts_retired: bool,
+    pub(in crate::flow::context) rejection_unavailable: bool,
+    pub(in crate::flow::context) stopped_turn_record:
+        Option<crate::flow::recording::StoppedStartupRecord>,
     pub(in crate::flow::context) context: RecordingContext,
     resources: FailedEnterResources,
     stage: Stage,
@@ -484,6 +488,11 @@ pub(in crate::flow) struct FailedRunCleanup {
     unload_sequence: Option<Sequence>,
     unload_attempted: bool,
     unload_unavailable: Option<String>,
+    pub(in crate::flow::context) pending_session_close:
+        Option<crate::flow::recording::DeferredHaltClose>,
+    session_close: Option<AuthoredEvent>,
+    session_close_sequence: Option<Sequence>,
+    session_close_attempted: bool,
     abandoned: bool,
     trace_drained: bool,
     member_stood: bool,
@@ -743,6 +752,9 @@ impl FailedRunCleanup {
             .and_then(|spu| spu.residency_request.take());
         Self {
             serving,
+            serving_turn_accounts_retired: false,
+            rejection_unavailable: false,
+            stopped_turn_record: None,
             context,
             resources,
             stage: if serving {
@@ -771,6 +783,17 @@ impl FailedRunCleanup {
             unload_sequence: None,
             unload_attempted: false,
             unload_unavailable: None,
+            pending_session_close: None,
+            session_close: serving.then_some(AuthoredEvent {
+                kind: Kind::SessionClosed,
+                subsystem: Subsystem::Harness,
+                turn: None,
+                source: AuthoredSource::Runtime,
+                causal_parent: None,
+                payload: None,
+            }),
+            session_close_sequence: None,
+            session_close_attempted: false,
             abandoned: false,
             trace_drained: false,
             member_stood,
@@ -786,8 +809,24 @@ impl FailedRunCleanup {
     pub(in crate::flow::context) fn after_serving(
         context: RecordingContext,
         resources: FailedEnterResources,
+        rejection_unavailable: bool,
     ) -> Self {
-        Self::new(context, resources, true)
+        let mut owner = Self::new(context, resources, true);
+        owner.rejection_unavailable = rejection_unavailable;
+        owner
+    }
+
+    /// The consuming serving handoff has checked the run, frozen account and
+    /// exact retired capture peer before releasing any of its original loans.
+    pub(in crate::flow::context) fn after_serving_with_capture(
+        context: RecordingContext,
+        resources: FailedEnterResources,
+        rejection_unavailable: bool,
+        capture: Option<Box<super::leave_capture::FailedCapture>>,
+    ) -> Self {
+        let mut owner = Self::after_serving(context, resources, rejection_unavailable);
+        owner.capture = capture;
+        owner
     }
 }
 
@@ -1143,6 +1182,7 @@ impl FailedRunCleanup {
                 if self.context.plan_summary.is_some() {
                     FailedEnterProgress::Pending
                 } else {
+                    self.close_serving_session();
                     if self.attempt_unload(io) {
                         self.stage = Stage::Drain;
                         FailedEnterProgress::Progress
@@ -1189,36 +1229,59 @@ impl FailedRunCleanup {
     }
 
     pub(in crate::flow::context) fn advance_accounts(&mut self, io: &mut impl PumpIo) -> bool {
+        self.advance_account_step(io).is_some()
+    }
+
+    /// Some(true) means an actual local account step advanced. None preserves
+    /// the existing failed-clock/cap exit; false never authorizes a close wait.
+    fn advance_account_step(&mut self, io: &mut impl PumpIo) -> Option<bool> {
+        if self.serving && self.serving_turn_accounts_retired {
+            return Some(self.advance_serving_rejection());
+        }
+        // Ordinary failed exit retires unavailable turn accounts before Closing.
+        // Rollback still owns its decoder and must settle that original account.
+        if self.serving && !self.serving_rollback() && self.trace_accounts_unavailable() {
+            return Some(false);
+        }
         if let Some(account) = &mut self.rollback_read
             && !account.record_once(&mut self.context, io, self.deadline.unwrap())
         {
-            return false;
+            return None;
         }
+        let mut progress = false;
         let mut observed = AccountClock {
             io,
             last: self.context.last_ns,
             deadline: self.deadline,
             unavailable: false,
         };
-        if self.context.halt_report.is_some()
-            && matches!(
-                self.context.advance_halt_trace(&mut observed),
-                Ok(HaltTraceProgress::AbortRequired)
-            )
-        {
-            return false;
+        if self.context.halt_report.is_some() {
+            match self.context.advance_halt_trace(&mut observed) {
+                Ok(HaltTraceProgress::AbortRequired) => return None,
+                Ok(HaltTraceProgress::FaultRecorded(_) | HaltTraceProgress::TraceRecorded(_)) => {
+                    progress = true;
+                }
+                _ => {}
+            }
         }
         if observed.unavailable {
-            return false;
+            return None;
         }
         if self.serving
+            && !self.rejection_unavailable
             && self.context.pairs.pending_rejection().is_some()
-            && let Err(error) = self.context.advance_halt_rejection()
         {
-            self.secondary(format!("failed serving rejected-return account: {error}"));
+            match self.context.advance_halt_rejection() {
+                Ok(Some(_)) => progress = true,
+                Ok(None) => {}
+                Err(error) => {
+                    self.rejection_unavailable = true;
+                    self.secondary(format!("failed serving rejected-return account: {error}"));
+                }
+            }
         }
         if observed.unavailable {
-            return false;
+            return None;
         }
         if self.context.boot_open.is_some()
             && !self.context.boot_open_account_settled()
@@ -1227,14 +1290,17 @@ impl FailedRunCleanup {
                 .spu
                 .as_mut()
                 .and_then(|spu| spu.decode.as_mut())
-            && let Err(error) = self
+        {
+            match self
                 .context
                 .advance_boot_open_account(decode, &mut observed)
-        {
-            self.secondary(format!("failed Enter Open account: {error:?}"));
+            {
+                Ok(result) => progress |= result != BootOpenProgress::Pending,
+                Err(error) => self.secondary(format!("failed Enter Open account: {error:?}")),
+            }
         }
         if observed.unavailable {
-            return false;
+            return None;
         }
         if self.serving
             && self.context.place_owed()
@@ -1247,12 +1313,17 @@ impl FailedRunCleanup {
                 label: None,
                 io: &mut observed,
             };
-            if let Err(error) = self.context.advance_place_account(&mut ports) {
-                self.secondary(format!("failed serving placement account: {error:?}"));
+            match self.context.advance_place_account(&mut ports) {
+                Ok(PlaceProgress::Progress) => progress = true,
+                Ok(PlaceProgress::Complete) => progress |= !self.context.place_owed(),
+                Ok(PlaceProgress::Pending) => {}
+                Err(error) => {
+                    self.secondary(format!("failed serving placement account: {error:?}"))
+                }
             }
         }
         if observed.unavailable {
-            return false;
+            return None;
         }
         if self.serving {
             // Completion revokes the journal's outstanding grant only through
@@ -1267,12 +1338,127 @@ impl FailedRunCleanup {
                 self.secondary(format!("failed Enter summary account: {error:?}"));
             }
             match self.context.take_stopped_plan_summary() {
-                Ok(Some(account)) => self.summary_account = Some(account),
+                Ok(Some(account)) => {
+                    self.summary_account = Some(account);
+                    progress = true;
+                }
                 Ok(None) => {}
                 Err(error) => self.secondary(format!("failed Enter summary take: {error:?}")),
             }
         }
-        !observed.unavailable
+        (!observed.unavailable).then_some(progress)
+    }
+
+    fn trace_accounts_unavailable(&self) -> bool {
+        self.context.barrier.standing_failure().is_some()
+            || self
+                .context
+                .halt_report
+                .as_ref()
+                .is_some_and(|r| r.trace_unavailable())
+    }
+
+    /// Give ready accounts their own steps, but never wait on ordinary capacity
+    /// or an unavailable exchange ahead of mandatory Closing. The original
+    /// account and exact unrecorded owner remain evidence, without later retry.
+    pub(in crate::flow::context) fn settle_serving_turn_accounts(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Option<bool> {
+        let progress = self.advance_account_step(io)?;
+        if self.serving_turn_accounts_pending() {
+            if progress && !self.trace_accounts_unavailable() {
+                return Some(false);
+            }
+            let detail = "serving turn accounts incomplete before mandatory close";
+            self.stopped_turn_record = self.context.barrier.retain_halt_record();
+            if let Some(decode) = self.resources.decode_mut() {
+                self.context.abandon_place_account(decode, detail);
+            }
+            if self.context.plan_summary.is_some() {
+                self.context.abandon_plan_summary_account(detail);
+                match self.context.take_stopped_plan_summary() {
+                    Ok(Some(account)) => self.summary_account = Some(account),
+                    Ok(None) => {}
+                    Err(error) => self.secondary(format!("stopped summary retention: {error:?}")),
+                }
+            }
+            if self.context.pairs.pending_rejection().is_some() {
+                self.rejection_unavailable = true;
+                self.context.abandon_halt_rejection(detail);
+            }
+            self.secondary(detail);
+        }
+        self.serving_turn_accounts_retired = true;
+        Some(true)
+    }
+
+    /// A newly observed post-turn return is run-scoped. Ordinary pressure keeps
+    /// its exact owner eligible for later Lower and tail steps. Only an actual
+    /// unavailable driver, or the session-close boundary, retires this author.
+    pub(in crate::flow::context) fn advance_serving_rejection(&mut self) -> bool {
+        if self.rejection_unavailable || self.context.pairs.pending_rejection().is_none() {
+            return false;
+        }
+        let detail = if self.trace_accounts_unavailable() {
+            "failed serving rejection trace is unavailable".into()
+        } else {
+            match self.context.advance_halt_rejection() {
+                Ok(Some(_)) => return true,
+                Ok(None) => return false,
+                Err(detail) => detail,
+            }
+        };
+        self.rejection_unavailable = true;
+        self.context.abandon_halt_rejection(&detail);
+        self.secondary(detail);
+        false
+    }
+
+    fn serving_turn_accounts_pending(&self) -> bool {
+        self.context.place_owed()
+            || self.context.plan_summary.is_some()
+            || self.context.barrier.pending().is_some()
+            || self.context.pairs.pending_rejection().is_some()
+            || self.context.has_owed_measure_refusal()
+    }
+
+    fn close_serving_session(&mut self) {
+        // Serving rollback already owns this close in advance_rollback_scope.
+        if !self.serving || self.serving_rollback() || self.session_close_attempted {
+            return;
+        }
+        if !self.rejection_unavailable && self.context.pairs.pending_rejection().is_some() {
+            let detail = "failed serving rejection incomplete before session close";
+            self.rejection_unavailable = true;
+            self.context.abandon_halt_rejection(detail);
+            self.secondary(detail);
+        }
+        self.session_close_attempted = true;
+        // Lower retired the gate; accounts settled or remain incomplete evidence.
+        // From this point the only author is Unload, in this same stage.
+        let result = if self.pending_session_close.is_some() {
+            self.context
+                .resume_deferred_halt_close(&mut self.pending_session_close)
+                .map_err(|error| format!("pending session close: {error:?}"))
+        } else {
+            wall_ms().and_then(|wall| {
+                self.context
+                    .barrier
+                    .submit_terminal_authored_ref(
+                        self.session_close.as_ref().unwrap(),
+                        &self.context.author,
+                        self.context.last_ns,
+                        wall,
+                    )
+                    .map(Some)
+            })
+        };
+        match result {
+            Ok(Some(sequence)) => self.session_close_sequence = Some(sequence),
+            Ok(None) => self.secondary("failed serving session close remains unrecorded"),
+            Err(error) => self.secondary(error),
+        }
     }
 
     /// Called after the outer rollback has disposed its actual gate and after

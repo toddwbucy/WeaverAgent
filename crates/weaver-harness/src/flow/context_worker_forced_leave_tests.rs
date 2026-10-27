@@ -3,6 +3,7 @@
 //! Model/classifier and admin replies remain scripted, not qualified deployment.
 use super::*;
 use crate::flow::context::worker_startup::FoundationRun;
+use crate::flow::context::worker_startup::input::management::tests::secondary;
 use crate::flow::pump::PumpDeadline;
 use std::os::fd::OwnedFd;
 use weaver_harness::{
@@ -19,6 +20,9 @@ pub(super) mod quiesce_conversion;
 
 #[path = "context_worker_wind_down_conversion_tests.rs"]
 pub(super) mod wind_conversion;
+
+#[path = "context_worker_capture_wait_tests.rs"]
+mod capture_wait;
 
 pub(in crate::flow::context::worker_startup) fn is_mode(mode: &str) -> bool {
     mode.contains("-session-forced-save") || mode.contains("-session-graceful-save")
@@ -541,6 +545,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
     };
     let mut owner = ForcedGuard(owner);
+    let mut capture_wait = capture_wait::Probe::new(mode, member);
     let Some(peer) = peer else {
         finish_joint(owner, member, reader, root, mode, before, leave);
         return;
@@ -626,7 +631,11 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 match &message.payload {
                     CapturePayload::SavePointBeginning(beginning) => {
                         assert!(packets.is_empty());
-                        assert!(root.join("ready-rollback-lower.json").exists());
+                        assert_eq!(
+                            root.join("ready-rollback-lower.json").exists(),
+                            !mode.ends_with("-gate-end"),
+                            "a closed gate cannot acknowledge Lower"
+                        );
                         let inner = owner.0.test_inner();
                         let (_, account) = inner.test_account();
                         assert!(matches!(
@@ -740,11 +749,13 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         if mode.ends_with("-wrong-published") {
                             value.dump_sha256 = s::Digest::new("8".repeat(64)).unwrap();
                         }
-                        reply(
-                            &peer,
-                            &message.exchange,
-                            CapturePayload::SavePointPublished(value),
-                        );
+                        if !mode.ends_with("-published-timeout") {
+                            reply(
+                                &peer,
+                                &message.exchange,
+                                CapturePayload::SavePointPublished(value),
+                            );
+                        }
                     }
                     CapturePayload::SavePointCaptureComplete(_) => {
                         if mode.contains("-save-sqlite") {
@@ -843,7 +854,11 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 break;
             }
             if progress == FoundationForcedLeaveProgress::Pending {
-                owner.0.wait_for_progress();
+                if let Some(probe) = &mut capture_wait {
+                    probe.wait(&mut owner.0);
+                } else {
+                    owner.0.wait_for_progress();
+                }
             }
         }
         done.store(true, Ordering::SeqCst);
@@ -869,11 +884,33 @@ pub(in crate::flow::context::worker_startup) fn finish(
             std::fs::write(std::path::Path::new(&path).join("trace.jsonl"), &bytes).unwrap();
         }
     }
-    let rows: Vec<serde_json::Value> = bytes
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-        .map(|line| serde_json::from_slice(line).unwrap())
-        .collect();
+    let rows: Vec<serde_json::Value> =
+        if owner.0.progress() == FoundationForcedLeaveProgress::CaptureRefused {
+            // CaptureRefused proves Recorded admission, not writer completion.
+            // Read through that actual sequence for explicit refusals and timeouts.
+            trace_through(
+                reader,
+                bytes,
+                owner
+                    .0
+                    .test_inner()
+                    .test_context()
+                    .last_author_sequence
+                    .expect("capture refusal has its Recorded sequence"),
+                Instant::now() + Duration::from_secs(3),
+            )
+            .expect("the capture refusal's Recorded trace must reach its reader")
+        } else {
+            bytes
+                .split(|byte| *byte == b'\n')
+                .filter(|line| !line.is_empty())
+                .map(|line| serde_json::from_slice(line).unwrap())
+                .collect()
+        };
+    if let Some(probe) = &capture_wait {
+        probe.assert_finished(&mut owner.0, member, &packets, &rows, report.as_ref());
+        return;
+    }
     if mode.ends_with("-refused") {
         assert_eq!(
             owner.0.progress(),

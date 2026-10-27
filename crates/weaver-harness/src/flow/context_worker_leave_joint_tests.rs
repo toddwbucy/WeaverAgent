@@ -7,7 +7,9 @@ use std::process::{Child, Command};
 use weaver_types::state_flow::enter::{EnterBinding, EnterPayload};
 
 pub(super) fn is_mode(mode: &str) -> bool {
-    mode.contains("-forced-save-sqlite-joint") || mode.contains("-graceful-save-sqlite-joint")
+    mode.contains("-forced-save-sqlite-joint")
+        || mode.contains("-graceful-save-sqlite-joint")
+        || mode.contains("-demand-save-sqlite-joint")
 }
 
 pub(super) fn write(root: &Path, name: &str, value: &serde_json::Value) {
@@ -211,7 +213,7 @@ pub(super) fn scenario(name: &str, mode: &str) {
         &report,
         &requests,
         &filings,
-        usize::from(mode.ends_with("-held-filing")),
+        usize::from(mode.ends_with("-held-filing") || mode.contains("-demand-save-")),
     );
     let rows: Vec<serde_json::Value> = fs::read_to_string(root.join("worker-trace.jsonl"))
         .unwrap()
@@ -223,6 +225,18 @@ pub(super) fn scenario(name: &str, mode: &str) {
         .find(|r| r["kind"] == "save_point" && r["payload"]["phase"] == "confirmed")
         .unwrap();
     assert_eq!(confirmed["sequence"], report.event_sequence.0.to_string());
+    if mode.contains("-demand-save-") {
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row["kind"] == "turn.closed")
+                .count(),
+            2
+        );
+        assert!(!rows.iter().any(|row| row["kind"] == "unload"));
+        assert_eq!(confirmed["payload"]["cause"], "requested");
+        assert!(confirmed["payload"]["tail_window"].is_null());
+        return;
+    }
     let unload = rows.iter().find(|row| row["kind"] == "unload").unwrap();
     assert_eq!(
         unload["payload"]["forced"],

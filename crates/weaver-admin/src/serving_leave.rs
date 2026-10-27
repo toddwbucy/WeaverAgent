@@ -1,4 +1,4 @@
-//! Admin's Leave capture sequence, held for the complete lifecycle act.
+//! Shared admin capture sequence for a demand save or an accepted Leave.
 //! The original observation and publisher stay owned through actual Left.
 //! Run-end/conclusion and the refused-capture disposition remain the outer owner's.
 use crate::channel::{ChannelFault, Coordination, ReceivedCapture};
@@ -12,7 +12,8 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::path::PathBuf;
 use std::time::Duration;
 use weaver_types::state_flow::capture::{
-    CaptureAnswer, CaptureArtifact, CaptureEnvelope, CaptureImageChecked, CapturePayload,
+    CaptureAnswer, CaptureArtifact, CaptureDirective, CaptureEnvelope, CaptureImageChecked,
+    CapturePayload,
 };
 use weaver_types::state_flow::enter::{LoadFacts, LoadedStateFacts, ObservationAnswer};
 use weaver_types::state_flow::{PersistenceCause, PersistencePhase, SavePointReport};
@@ -20,6 +21,9 @@ use weaver_types::{AgentState, Cause, ExchangeId, LifecycleDirective, Opener, Po
 
 #[path = "serving_leave_invocation.rs"]
 pub(crate) mod invocation;
+
+#[path = "serving_save_invocation.rs"]
+pub(crate) mod save;
 
 #[derive(Debug)]
 pub(crate) enum FailureCause {
@@ -134,7 +138,7 @@ impl Observed {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stage {
-    SendLeave,
+    SendRequest,
     Beginning,
     Image,
     Hashing,
@@ -145,6 +149,9 @@ enum Stage {
     Complete,
     Left,
     LeftReceived,
+    TakenReceived,
+    Aborting,
+    AwaitAbortOutcome,
     Stopped,
 }
 
@@ -152,19 +159,20 @@ enum Stage {
 pub(crate) enum Progress {
     Pending,
     LeftReceived,
+    TakenReceived,
     Stopped,
 }
 
 /// The containing invocation retains its lock and judges the room before begin.
 /// This owner neither writes a marker nor grants a successful command result.
-pub(crate) struct Leave<'repo> {
+pub(crate) struct Capture<'repo> {
     observed: Observed,
     repository: Option<&'repo mut Repository>,
     publication: Option<Publication<'repo>>,
     channel: Coordination,
     room: OwnedFd,
     member_uid: u32,
-    directive: weaver_types::OrganEnvelope,
+    directive: RequestEnvelope,
     windows: CaptureWindows,
     stage: Stage,
     received: Vec<ReceivedCapture>,
@@ -176,6 +184,22 @@ pub(crate) struct Leave<'repo> {
     failure: Option<FailureCause>,
     publication_failure: Option<publication::Failure>,
     checkpoint_failure: Option<FailureCause>,
+    abort: Option<CaptureEnvelope>,
+    cleanup_failure: Option<FailureCause>,
+}
+
+#[derive(Debug)]
+enum RequestEnvelope {
+    Leave(weaver_types::OrganEnvelope),
+    Demand(CaptureEnvelope),
+}
+impl RequestEnvelope {
+    fn exchange(&self) -> &ExchangeId {
+        match self {
+            Self::Leave(value) => &value.exchange,
+            Self::Demand(value) => &value.exchange,
+        }
+    }
 }
 
 struct Request {
@@ -184,7 +208,46 @@ struct Request {
     tail: Duration,
 }
 
-impl<'repo> Leave<'repo> {
+impl<'repo> Capture<'repo> {
+    pub(crate) fn demand(
+        observed: Observed,
+        repository: &'repo mut Repository,
+        mut channel: Coordination,
+        room: OwnedFd,
+        member_uid: u32,
+        cause: Cause,
+    ) -> Result<Self, FailureCause> {
+        let wait = observed
+            .source
+            .declaration()
+            .state_management()
+            .persistence
+            .save_wait
+            .elapsed_ns
+            .0;
+        let windows = CaptureWindows::demand(wait).map_err(FailureCause::Channel)?;
+        let directive = CaptureEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Admin,
+                ordinal: channel.next_ordinal(),
+            },
+            position: Position::Open,
+            payload: CapturePayload::Directive(CaptureDirective::SavePoint {
+                cause,
+                window: windows.demand_window().expect("original demand window"),
+            }),
+        };
+        Ok(Self::new(
+            observed,
+            repository,
+            channel,
+            room,
+            member_uid,
+            RequestEnvelope::Demand(directive),
+            windows,
+        ))
+    }
+
     pub(crate) fn begin(
         observed: Observed,
         repository: &'repo mut Repository,
@@ -270,7 +333,27 @@ impl<'repo> Leave<'repo> {
                 rollback: false,
             }),
         };
-        Ok(Self {
+        Ok(Self::new(
+            observed,
+            repository,
+            channel,
+            room,
+            member_uid,
+            RequestEnvelope::Leave(directive),
+            windows,
+        ))
+    }
+
+    fn new(
+        observed: Observed,
+        repository: &'repo mut Repository,
+        channel: Coordination,
+        room: OwnedFd,
+        member_uid: u32,
+        directive: RequestEnvelope,
+        windows: CaptureWindows,
+    ) -> Self {
+        Self {
             observed,
             repository: Some(repository),
             publication: None,
@@ -279,7 +362,7 @@ impl<'repo> Leave<'repo> {
             member_uid,
             directive,
             windows,
-            stage: Stage::SendLeave,
+            stage: Stage::SendRequest,
             received: Vec::new(),
             unexpected: None,
             prepared: None,
@@ -289,12 +372,15 @@ impl<'repo> Leave<'repo> {
             failure: None,
             publication_failure: None,
             checkpoint_failure: None,
-        })
+            abort: None,
+            cleanup_failure: None,
+        }
     }
 
     pub(crate) fn progress(&self) -> Progress {
         match self.stage {
             Stage::LeftReceived => Progress::LeftReceived,
+            Stage::TakenReceived => Progress::TakenReceived,
             Stage::Stopped => Progress::Stopped,
             _ => Progress::Pending,
         }
@@ -304,11 +390,52 @@ impl<'repo> Leave<'repo> {
         self.failure.as_ref()
     }
 
+    pub(crate) fn cleanup_failure(&self) -> Option<&FailureCause> {
+        self.cleanup_failure.as_ref()
+    }
+
+    /// Finish only the exact timely demand outcome. The normal peer closes
+    /// after Taken, so guard removal checks the retained deadline, not new I/O.
+    pub(crate) fn finish_demand(
+        &mut self,
+    ) -> Result<weaver_types::state_flow::StartIdentity, FailureCause> {
+        if self.stage != Stage::TakenReceived || self.windows.demand_window().is_none() {
+            return Err(FailureCause::Protocol(
+                "demand publication lacks SavePointTaken",
+            ));
+        }
+        let result = self
+            .publication
+            .as_mut()
+            .expect("Taken follows indexed publication")
+            .finish(
+                publication::FinalOutcome::SavePointTaken(
+                    self.report.as_ref().expect("Taken retains report"),
+                ),
+                &mut |_| {
+                    self.windows
+                        .check()
+                        .map_err(|error| format!("save outcome window: {error:?}"))
+                },
+            );
+        match result {
+            Ok(identity) => Ok(identity),
+            Err(error) => {
+                self.publication_failure = Some(error.clone());
+                self.stage = Stage::Stopped;
+                Err(FailureCause::Publication(Box::new(error)))
+            }
+        }
+    }
+
     /// An expired original initial-Leave wait, or a forced directive's matching
     /// OutOfOrder, selects S11. A capture that has begun, EOF, a protocol
     /// failure or a different refusal supplies no such escalation authority.
     fn initial_escalation_due(&self) -> bool {
-        if self.windows.capture().is_some() || self.publication.is_some() {
+        if self.windows.demand_window().is_some()
+            || self.windows.capture().is_some()
+            || self.publication.is_some()
+        {
             return false;
         }
         match self.failure.as_ref() {
@@ -357,6 +484,12 @@ impl<'repo> Leave<'repo> {
             return self.progress();
         }
         if let Err(cause) = self.step() {
+            let local_preparation_failed = self.windows.demand_window().is_some()
+                && !self.committed
+                && self.failure.is_none()
+                && self.checkpoint_failure.is_none()
+                && matches!(&cause, FailureCause::Publication(_))
+                && self.windows.capture().is_some();
             if let FailureCause::Publication(error) = &cause {
                 self.publication_failure = Some((**error).clone());
             }
@@ -364,8 +497,27 @@ impl<'repo> Leave<'repo> {
             if let Some(publication) = &mut self.publication {
                 self.publication_failure = Some(publication.failed(format!("{cause:?}")));
             }
-            self.failure = Some(cause);
-            self.stage = Stage::Stopped;
+            if self.failure.is_none() {
+                self.failure = Some(cause);
+            } else {
+                self.cleanup_failure = Some(cause);
+            }
+            if local_preparation_failed {
+                self.abort = Some(CaptureEnvelope {
+                    exchange: self.directive.exchange().clone(),
+                    position: Position::Continue,
+                    payload: CapturePayload::SavePointAborted(
+                        weaver_types::state_flow::capture::CaptureAborted {
+                            capture_id: self.windows.capture().unwrap().capture_id,
+                            code: "publication_failed".into(),
+                            detail: "admin could not prepare the capture for publication".into(),
+                        },
+                    ),
+                });
+                self.stage = Stage::Aborting;
+            } else {
+                self.stage = Stage::Stopped;
+            }
         }
         self.progress()
     }
@@ -374,7 +526,7 @@ impl<'repo> Leave<'repo> {
         self.channel
             .send_capture(
                 &CaptureEnvelope {
-                    exchange: self.directive.exchange.clone(),
+                    exchange: self.directive.exchange().clone(),
                     position: Position::Continue,
                     payload,
                 },
@@ -384,13 +536,21 @@ impl<'repo> Leave<'repo> {
     }
 
     fn receive(&mut self) -> Result<(), FailureCause> {
+        self.receive_correlated()?;
+        if negative(&self.received.last().unwrap().envelope, self.committed) {
+            return Err(FailureCause::WorkerOutcome);
+        }
+        Ok(())
+    }
+
+    fn receive_correlated(&mut self) -> Result<(), FailureCause> {
         let received = self
             .channel
             .recv_capture(&self.windows)
             .map_err(FailureCause::Channel)?;
         self.received.push(received);
         let envelope = &self.received.last().unwrap().envelope;
-        if envelope.exchange != self.directive.exchange
+        if &envelope.exchange != self.directive.exchange()
             || !same_run(envelope, &self.observed.facts.run)
             || self.windows.capture().is_some_and(|beginning| {
                 envelope
@@ -400,19 +560,44 @@ impl<'repo> Leave<'repo> {
         {
             return Err(FailureCause::Protocol("foreign capture continuation"));
         }
-        if negative(envelope, self.committed) {
-            return Err(FailureCause::WorkerOutcome);
-        }
         Ok(())
     }
 
     fn step(&mut self) -> Result<(), FailureCause> {
         self.windows.check().map_err(FailureCause::Channel)?;
         match self.stage {
-            Stage::SendLeave => {
+            Stage::Aborting => {
                 self.channel
-                    .send_capture_leave(&self.directive, &self.windows)
+                    .send_capture(
+                        self.abort.as_ref().expect("original local abort"),
+                        &self.windows,
+                    )
                     .map_err(FailureCause::Channel)?;
+                self.stage = Stage::AwaitAbortOutcome;
+            }
+            Stage::AwaitAbortOutcome => {
+                self.receive_correlated()?;
+                if !matches!(self.received.last().unwrap().envelope.payload,
+                    CapturePayload::Refusal(weaver_types::state_flow::capture::CaptureRefusal::Save(
+                        weaver_types::state_flow::capture::SaveRefusal::SavePointNotTaken { missed }
+                    )) if missed != weaver_types::state_flow::capture::SavePointLeg::CaptureNotReady)
+                {
+                    return Err(FailureCause::Protocol(
+                        "local abort lacks the worker's capture cleanup outcome",
+                    ));
+                }
+                self.stage = Stage::Stopped;
+            }
+            Stage::SendRequest => {
+                match &self.directive {
+                    RequestEnvelope::Leave(request) => {
+                        self.channel.send_capture_leave(request, &self.windows)
+                    }
+                    RequestEnvelope::Demand(request) => {
+                        self.channel.send_capture(request, &self.windows)
+                    }
+                }
+                .map_err(FailureCause::Channel)?;
                 self.stage = Stage::Beginning;
             }
             Stage::Beginning => {
@@ -450,7 +635,9 @@ impl<'repo> Leave<'repo> {
                     ServingImage {
                         loaded: &self.observed.source.identity(),
                         run: self.observed.facts.run.clone(),
-                        cause: if self.windows.matches_leave(true) {
+                        cause: if self.windows.demand_window().is_some() {
+                            PersistenceCause::Requested
+                        } else if self.windows.matches_leave(true) {
                             PersistenceCause::ForcedUnload
                         } else {
                             PersistenceCause::GracefulUnload
@@ -465,7 +652,7 @@ impl<'repo> Leave<'repo> {
                     &mut checkpoint(
                         &self.channel,
                         &self.windows,
-                        &self.directive.exchange,
+                        self.directive.exchange(),
                         &self.observed.facts.run,
                         self.committed,
                         &mut self.unexpected,
@@ -508,7 +695,7 @@ impl<'repo> Leave<'repo> {
                         &mut checkpoint(
                             &self.channel,
                             &self.windows,
-                            &self.directive.exchange,
+                            self.directive.exchange(),
                             &self.observed.facts.run,
                             self.committed,
                             &mut self.unexpected,
@@ -543,7 +730,7 @@ impl<'repo> Leave<'repo> {
                         &mut checkpoint(
                             &self.channel,
                             &self.windows,
-                            &self.directive.exchange,
+                            self.directive.exchange(),
                             &self.observed.facts.run,
                             self.committed,
                             &mut self.unexpected,
@@ -561,7 +748,7 @@ impl<'repo> Leave<'repo> {
                     .advance(&mut checkpoint(
                         &self.channel,
                         &self.windows,
-                        &self.directive.exchange,
+                        self.directive.exchange(),
                         &self.observed.facts.run,
                         self.committed,
                         &mut self.unexpected,
@@ -586,6 +773,23 @@ impl<'repo> Leave<'repo> {
             }
             Stage::Complete => {
                 self.receive()?;
+                if self.windows.demand_window().is_some() {
+                    let CapturePayload::Answer(CaptureAnswer::SavePointTaken { report }) =
+                        &self.received.last().unwrap().envelope.payload
+                    else {
+                        return Err(FailureCause::Protocol("expected SavePointTaken"));
+                    };
+                    if report.event_run != self.observed.facts.run
+                        || Some(&report.start) != self.published.as_ref()
+                    {
+                        return Err(FailureCause::Protocol(
+                            "SavePointTaken differs from the indexed capture",
+                        ));
+                    }
+                    self.report = Some(report.clone());
+                    self.stage = Stage::TakenReceived;
+                    return Ok(());
+                }
                 let CapturePayload::SavePointCaptureComplete(value) =
                     &self.received.last().unwrap().envelope.payload
                 else {
@@ -623,7 +827,9 @@ impl<'repo> Leave<'repo> {
                 // real run end and the marker/conclusion before command success.
                 self.stage = Stage::LeftReceived;
             }
-            Stage::LeftReceived | Stage::Stopped => unreachable!("terminal actor does no work"),
+            Stage::LeftReceived | Stage::TakenReceived | Stage::Stopped => {
+                unreachable!("terminal actor does no work")
+            }
         }
         Ok(())
     }

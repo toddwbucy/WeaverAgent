@@ -146,6 +146,12 @@ impl RecordingContext {
             self.attempt_halt_fault()
         } else if self.halt_report.as_ref().unwrap().trace_unavailable {
             HaltTraceProgress::Unavailable
+        } else if self.barrier.pending_author().is_some_and(|author| {
+            matches!(author.event.kind, Kind::TurnClosed | Kind::SessionClosed)
+        }) {
+            // Only the consuming closer knows that every earlier author has
+            // settled. Reporting and interruption must not close its bracket.
+            HaltTraceProgress::Pending
         } else if self.has_owed_measure_refusal() {
             // This owner also resumes any earlier pending event. Do not steal
             // its queued refusal or assign its sequence from another road.

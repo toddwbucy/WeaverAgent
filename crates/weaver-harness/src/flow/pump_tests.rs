@@ -1405,3 +1405,98 @@ fn final_trace_unit_cannot_return_progress_after_the_absolute_bound() {
         "the final unit must have consumed the real wake before reporting expiry"
     );
 }
+
+fn demand_opener() -> weaver_types::state_flow::capture::CaptureEnvelope {
+    use weaver_types::state_flow::capture::*;
+    CaptureEnvelope {
+        exchange: ExchangeId {
+            opener: Opener::Admin,
+            ordinal: 19,
+        },
+        position: Position::Open,
+        payload: CapturePayload::Directive(CaptureDirective::SavePoint {
+            cause: weaver_types::Cause { uid: 74 },
+            window: weaver_types::state_flow::SaveWindow {
+                began_ns: 100.into(),
+                deadline_ns: 200.into(),
+            },
+        }),
+    }
+}
+
+#[test]
+fn serving_opener_keeps_the_original_save_bytes_and_the_single_receive_slot() {
+    use weaver_types::state_flow::capture::*;
+    let (end, peer) = pair();
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    owner.enable_serving_openers().unwrap();
+    assert!(owner.enable_serving_openers().is_err());
+    let request = demand_opener();
+    let bytes = serde_json::to_vec_pretty(&request).unwrap();
+    send_bytes(&peer, &bytes);
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    assert!(owner.held().is_none());
+    assert!(owner.capture_identity().is_none());
+    assert!(owner.enable_capture().is_err());
+    send_bytes(
+        &peer,
+        &capture_message(7).encode(CaptureSender::Admin).unwrap(),
+    );
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Pending);
+    let retained = owner.take_capture().unwrap().unwrap();
+    assert_eq!(retained.message.envelope, request);
+    assert_eq!(retained.wire, bytes);
+    owner.enable_capture().unwrap();
+    assert!(owner.capture_identity().is_some());
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    assert_eq!(
+        owner.take_capture().unwrap().unwrap().message.envelope,
+        capture_message(7)
+    );
+}
+
+#[test]
+fn serving_opener_keeps_ordinary_directives_and_refuses_legacy_save_downgrade() {
+    for save in [false, true] {
+        let (end, peer) = pair();
+        let mut owner = LifecyclePeer::from_owned(end).unwrap();
+        owner.enable_serving_openers().unwrap();
+        let message = weaver_types::OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Admin,
+                ordinal: 19,
+            },
+            position: Position::Open,
+            payload: weaver_types::Payload::Directive(if save {
+                weaver_types::LifecycleDirective::SavePoint {
+                    cause: weaver_types::Cause { uid: 74 },
+                }
+            } else {
+                weaver_types::LifecycleDirective::Observe
+            }),
+        };
+        let wire = serde_json::to_vec(&message).unwrap();
+        send_bytes(&peer, &wire);
+        if save {
+            assert!(owner.try_receive().is_err());
+            let failed = owner.retire_failed();
+            assert_eq!(failed.wire.as_ref(), Some(&wire));
+            assert!(failed.held.is_none() && failed.capture_held.is_none());
+        } else {
+            assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+            assert_eq!(owner.held().unwrap().envelope, message);
+            assert!(owner.capture_held().is_none());
+        }
+    }
+}
+
+#[test]
+fn serving_opener_selection_never_reinterprets_an_already_received_legacy_packet() {
+    let (end, peer) = pair();
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    send_envelope(&peer, 1);
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    assert!(owner.enable_serving_openers().is_err());
+    assert_eq!(owner.held().unwrap().envelope.exchange.ordinal, 1);
+    assert!(owner.capture_held().is_none());
+}

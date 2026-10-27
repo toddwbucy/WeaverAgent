@@ -68,6 +68,7 @@ pub(super) fn exercise(
     if mode.contains("pressure") {
         assert!(fill_trace(input.serving.owner.context, clock) > 0);
     }
+    super::super::halt::exit::tests::pending_close(input, clock, mode);
     if mode.contains("halt-gate-worker") {
         clock.advance_to(MonotonicIo.now().unwrap()).unwrap();
     }

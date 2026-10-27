@@ -535,21 +535,37 @@ impl EmissionWork {
                 }
             }
             EmissionStage::RefusalAuthor => {
+                // BeginOutbound already armed Decision on production paths.
+                // This preserves that caller's bound rather than renewing it.
+                decision(context, ports.io)?;
                 self.returned_refusal.check()?;
-                let sequence = if self.refusal_started {
-                    context.resume_author_and_wait(ports).map_err(|failure| {
-                        self.returned_refusal
-                            .retain_started(failure, &mut self.refusal_started)
-                    })?
+                let result = if self.refusal_started {
+                    context.resume_author_and_wait(ports)
                 } else {
                     self.refusal_started = true;
-                    context
-                        .author_and_wait(ports, self.refusal_author.take().unwrap())
-                        .map_err(|failure| {
-                            self.returned_refusal
-                                .retain_started(failure, &mut self.refusal_started)
-                        })?
+                    context.author_and_wait(ports, self.refusal_author.take().unwrap())
                 };
+                let sequence = match result {
+                    Ok(sequence) => sequence,
+                    Err(mut failure) => {
+                        if failure.reclaim_held(context) {
+                            self.refusal_started = false;
+                            self.refusal_author = failure.original.take();
+                            // Idle returns to the earlier owner so it can take
+                            // its completed answer without a descriptor wake.
+                            if context.reduce_flow(ports.io)?
+                                == crate::flow::coordinator::Advance::Pending
+                            {
+                                context.pump_once(ports)?;
+                            }
+                            return Ok(());
+                        }
+                        return Err(self
+                            .returned_refusal
+                            .retain_started(failure, &mut self.refusal_started));
+                    }
+                };
+                self.refusal_started = false;
                 self.refusal_record = Some(sequence);
                 context.complete_wait(PumpDeadline::Decision);
                 self.stage = if self.cancelled.is_some() {

@@ -133,6 +133,27 @@ impl<'a> Workflow<'a> {
         self.rounds
     }
 
+    pub fn queue_save(&mut self) -> bool {
+        if !self
+            .management
+            .as_ref()
+            .is_some_and(|owner| owner.progress() == FoundationManagementProgress::DirectivePending)
+        {
+            return false;
+        }
+        let owner = self.management.take().unwrap();
+        match owner.queue_save() {
+            Ok(input) => {
+                self.input = Some(input);
+                true
+            }
+            Err(owner) => {
+                self.management = Some(owner);
+                false
+            }
+        }
+    }
+
     /// Keep the running loop and its decisions while the original graceful
     /// Leave moves out of management's single verb slot. Other directives do
     /// not acquire this authority or lose their retained owner.

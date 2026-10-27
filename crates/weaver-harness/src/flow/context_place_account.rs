@@ -296,7 +296,11 @@ impl RecordingContext {
             }
         }
     }
-    fn abandon_place_account(&mut self, decode: &mut DecodePort, detail: &str) {
+    pub(in crate::flow::context) fn abandon_place_account(
+        &mut self,
+        decode: &mut DecodePort,
+        detail: &str,
+    ) {
         self.retain_place_wire(decode);
         if let Some(ticket) = self.active_place_author().and_then(|a| a.ticket) {
             let event = self
@@ -362,6 +366,13 @@ impl RecordingContext {
             w.cancelled = true;
             w.done = true;
             w.incomplete.get_or_insert_with(|| detail.into());
+        }
+        if let Some(identity) = self
+            .place_engine
+            .as_mut()
+            .and_then(|e| e.outstanding.take())
+        {
+            self.place_revoked_grant = Some(identity);
         }
         self.barrier.set_place_owed(false);
     }
@@ -433,6 +444,10 @@ impl RecordingContext {
                 &format!("stopped placement accounting failed: {error:?}"),
             );
         }
+        // A resumed final placement author can finish its owner in this step.
+        // Keep the recorder's Unload guard in step with that actual disposition,
+        // even when the caller has no further placement work to advance.
+        self.barrier.set_place_owed(self.place_owed());
         result
     }
     fn advance_place_account_inner<I: PumpIo>(
@@ -515,6 +530,7 @@ impl RecordingContext {
             .is_some_and(|w| w.reservation.is_some())
         {
             self.cancel_generation(decode, ports.io)?;
+            let mut received_terminal = false;
             if self.generation.as_ref().unwrap().reservation.is_some() {
                 self.pump
                     .stopped_decode_step(decode)
@@ -542,6 +558,7 @@ impl RecordingContext {
                         failure: e,
                     })?
                 {
+                    received_terminal = true;
                     if !received.matches(r)
                         || !received.after_send()
                         || !r.sent()
@@ -573,7 +590,13 @@ impl RecordingContext {
                     }
                 }
             }
-            return Ok(PlaceProgress::Progress);
+            return Ok(
+                if !received_terminal && self.generation.as_ref().unwrap().reservation.is_some() {
+                    PlaceProgress::Pending
+                } else {
+                    PlaceProgress::Progress
+                },
+            );
         }
         if self
             .reload
@@ -652,7 +675,11 @@ impl RecordingContext {
                     }
                 }
             }
-            return Ok(PlaceProgress::Progress);
+            return Ok(if self.reload.as_ref().unwrap().reservation.is_some() {
+                PlaceProgress::Pending
+            } else {
+                PlaceProgress::Progress
+            });
         }
         if let Some(w) = &mut self.place_notice {
             w.done = true;

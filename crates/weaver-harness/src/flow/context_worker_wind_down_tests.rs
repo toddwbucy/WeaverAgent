@@ -575,6 +575,8 @@ pub(super) fn exercise(
 struct ObserveDuringWait<'a> {
     socket: &'a Path,
     peer: Option<std::os::fd::OwnedFd>,
+    last_wait: Option<(u64, Option<u64>)>,
+    sent_ns: Option<u64>,
 }
 impl crate::flow::clock::PumpIo for ObserveDuringWait<'_> {
     fn now(&mut self) -> std::io::Result<u64> {
@@ -587,11 +589,40 @@ impl crate::flow::clock::PumpIo for ObserveDuringWait<'_> {
     ) -> std::io::Result<crate::flow::clock::WaitOutcome> {
         // The outer readiness observation has an immediate deadline. Send
         // only inside the blocking author wait, after its ticket is retained.
-        if self.peer.is_none() && deadline.is_none_or(|end| end > self.now().unwrap()) {
+        let now = self.now()?;
+        self.last_wait = Some((now, deadline));
+        if self.peer.is_none() && deadline.is_none_or(|end| end > now) {
             self.peer = Some(management(self.socket, LifecycleDirective::Observe));
+            self.sent_ns = Some(self.now()?);
         }
         MonotonicIo.wait(interests, deadline)
     }
+}
+
+fn author_wait_diagnostic(
+    input: &FoundationInput<'_>,
+    bound: AbsoluteBound,
+    io: &ObserveDuringWait<'_>,
+) -> String {
+    let now = MonotonicIo.now().unwrap();
+    let context = &input.serving.owner.context;
+    let leave = input.serving.graceful.as_ref().unwrap();
+    format!(
+        "now_ns={now} last_ns={} original_wind_down={bound:?} \
+         wind_down_remaining_ns={} wind_down_expired_at_last_read={} \
+         armed={:?} expired_now={:?} forced={} stage={} detail={:?} \
+         observe_sent_ns={:?} last_wait={:?}",
+        context.last_ns,
+        i128::from(bound.deadline_ns()) - i128::from(now),
+        bound.expired(context.last_ns),
+        context.deadlines.entries().collect::<Vec<_>>(),
+        context.deadlines.expired(now).collect::<Vec<_>>(),
+        leave.forced,
+        leave.wind_down.as_ref().unwrap().test_stage(),
+        input.detail(),
+        io.sent_ns,
+        io.last_wait,
+    )
 }
 
 fn author_wait(
@@ -661,13 +692,23 @@ fn author_wait(
         let bound = context.deadlines.get(PumpDeadline::WindDown).unwrap();
         let mut clock = FakePumpIo::new(context.last_ns);
         assert!(super::super::super::management::stop::tests::fill_trace(context, &mut clock) > 0);
-        let mut io = ObserveDuringWait { socket, peer: None };
+        let mut io = ObserveDuringWait {
+            socket,
+            peer: None,
+            last_wait: None,
+            sent_ns: None,
+        };
+        eprintln!(
+            "author wait filled: {}",
+            author_wait_diagnostic(input, bound, &io)
+        );
         assert_eq!(
             input.advance_with_io(&mut io),
             FoundationInputProgress::ManagementPending,
-            "Observe must interrupt the blocked author before its phase bound"
+            "Observe must interrupt the blocked author before its phase bound: {}",
+            author_wait_diagnostic(input, bound, &io),
         );
-        let peer = io.peer.unwrap();
+        let peer = io.peer.take().unwrap();
         let pending = input.serving.owner.context.pending_author().unwrap();
         assert_eq!(pending.event.kind, serving::Kind::TurnStarted);
         assert_eq!(pending.event.turn, Some(TurnRef("wind-down-0".into())));
@@ -700,6 +741,10 @@ fn author_wait(
             original
         );
         assert_eq!(context.deadlines.get(PumpDeadline::WindDown), Some(bound));
+        eprintln!(
+            "author wait observed: {}",
+            author_wait_diagnostic(input, bound, &io)
+        );
         assert!(!root.join("wind-measure-0").exists());
         assert!(read_packet(&primary).is_none());
         pause.store(false, Ordering::SeqCst);
@@ -711,8 +756,8 @@ fn author_wait(
             assert_eq!(
                 input.progress(),
                 FoundationInputProgress::WindDown,
-                "{:?}",
-                input.detail()
+                "{}",
+                author_wait_diagnostic(input, bound, &io),
             );
             match input.wind_down_progress().unwrap() {
                 W::Pending => {

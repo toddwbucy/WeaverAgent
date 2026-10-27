@@ -71,7 +71,7 @@ use weaver_types::OrganEnvelope;
 
 #[path = "context_worker_entered_rollback_terminal.rs"]
 mod terminal;
-use crate::flow::context::leave_capture::{LeaveCapture, LeaveCaptureProgress};
+use crate::flow::context::leave_capture::{ServingCapture, ServingCaptureProgress};
 use terminal::EnteredRollbackTerminal;
 
 #[path = "context_worker_forced_leave.rs"]
@@ -292,7 +292,7 @@ pub struct FoundationEnteredRollback {
     surface: Option<GrantSurface>,
     release: Option<RollbackResidencyRelease>,
     terminal: Option<EnteredRollbackTerminal>,
-    capture: Option<LeaveCapture>,
+    capture: Option<ServingCapture>,
     retained_failed_capture: Option<Box<crate::flow::context::leave_capture::FailedCapture>>,
     failed: Option<FailedRunCleanup>,
     reported: bool,
@@ -831,7 +831,7 @@ impl FoundationEnteredRollback {
         }
         if self.stage == CleanupStage::Capture {
             if self.capture.is_none() {
-                self.capture = Some(LeaveCapture::begin(
+                self.capture = Some(ServingCapture::begin(
                     &mut run.context,
                     handoff.peer.as_ref().unwrap(),
                     handoff.message.envelope.exchange.clone(),
@@ -850,15 +850,15 @@ impl FoundationEnteredRollback {
                 },
             )?;
             match progress {
-                LeaveCaptureProgress::Published => {
+                ServingCaptureProgress::Published => {
                     dials.freeze_outcome();
                     self.stage = CleanupStage::Grants;
                 }
-                LeaveCaptureProgress::Refused => self.stage = CleanupStage::CaptureRefused,
-                LeaveCaptureProgress::Pending => {
+                ServingCaptureProgress::Refused => self.stage = CleanupStage::CaptureRefused,
+                ServingCaptureProgress::Pending => {
                     self.progress = FoundationEnteredRollbackProgress::Pending
                 }
-                LeaveCaptureProgress::Progress => (),
+                ServingCaptureProgress::Progress => (),
             }
             dials.prepare(&mut run.context, leave, io)?;
             return Ok(());
@@ -1018,7 +1018,7 @@ impl FoundationEnteredRollback {
                         let report = self
                             .capture
                             .as_ref()
-                            .and_then(LeaveCapture::report)
+                            .and_then(ServingCapture::report)
                             .expect("Leave release requires the completed original capture");
                         self.terminal.as_mut().unwrap().captured(report);
                     }
@@ -1286,8 +1286,19 @@ impl FoundationEnteredRollback {
             label: None,
             io,
         });
-        if let Err(error) = result {
-            self.handle_error(error, io);
+        match result {
+            Err(RunFailure::Wait {
+                key: PumpDeadline::CaptureResult | PumpDeadline::CaptureWindow,
+                ..
+            }) if self.stage == CleanupStage::Capture => {
+                // The member owner must reduce a missing snapshot/finished
+                // result into its original abort and recorded refusal. Yield
+                // only pump expiry: an error returned by capture.advance still
+                // goes through handle_error, including post-Commit expiry.
+                self.progress = FoundationEnteredRollbackProgress::Progress;
+            }
+            Err(error) => self.handle_error(error, io),
+            Ok(_) => (),
         }
         self.progress
     }

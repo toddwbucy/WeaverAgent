@@ -30,6 +30,8 @@ pub struct FoundationFailedHandoff {
     input: FailedInput,
     management: Option<super::super::management::FailedManagement>,
     _graceful: Option<super::super::graceful::FailedGraceful>,
+    capture: Option<Box<crate::flow::context::leave_capture::FailedCapture>>,
+    _save_request: Option<super::super::save::FailedSaveRequest>,
     gate: Option<OrganPort>,
     gate_child: OwnedChild,
     tools: Option<ToolsCgroup>,
@@ -78,6 +80,14 @@ impl FoundationHalt<'_> {
         if !self.terminal() {
             return Err(self);
         }
+        let input = self.owner.input();
+        if input.serving.save.as_ref().is_some_and(|save| {
+            !save
+                .capture
+                .failed_handoff_ready(input.serving.owner.context, &save.peer)
+        }) {
+            return Err(self);
+        }
         let Self {
             owner,
             progress,
@@ -121,6 +131,7 @@ impl FoundationHalt<'_> {
             queued_inputs,
             gate_outgoing,
             graceful,
+            save,
         } = serving;
         let crate::flow::context::boot_composition::gate_startup::ready::EnteredServing {
             context,
@@ -148,6 +159,13 @@ impl FoundationHalt<'_> {
             .original_enter
             .take()
             .map(|peer| peer.retire_failed());
+        let (capture, save_request) = match save {
+            Some(save) => {
+                let (capture, request) = save.into_failed(context);
+                (Some(capture), Some(request))
+            }
+            None => (None, None),
+        };
         Ok(Box::new(FoundationFailedHandoff {
             origin,
             decode,
@@ -156,6 +174,8 @@ impl FoundationHalt<'_> {
             progress,
             world_already_sent,
             _graceful: graceful.map(|leave| leave.retire_failed()),
+            capture,
+            _save_request: save_request,
             input: FailedInput {
                 received: original,
                 turn,
@@ -239,6 +259,7 @@ pub struct FoundationFailedExit {
     terminal_events: Vec<AuthoredEvent>,
     terminal_sequences: Vec<Sequence>,
     terminal_attempted: bool,
+    pending_turn_close: Option<crate::flow::recording::DeferredHaltClose>,
     abandoned: bool,
 }
 
@@ -248,13 +269,34 @@ impl FoundationRun {
     #[allow(clippy::result_large_err)]
     pub fn failed_exit(
         self: Box<Self>,
-        handoff: Box<FoundationFailedHandoff>,
+        mut handoff: Box<FoundationFailedHandoff>,
     ) -> Result<Box<FoundationFailedExit>, (Box<Self>, Box<FoundationFailedHandoff>)> {
         let valid = Arc::ptr_eq(&self.context.read_origin, &handoff.origin)
             && self.context.phase == RecordingPhase::Failed
             && self.context.failure.is_some()
             && self.context.flow.halt().is_some()
-            && self.context.member_capture.is_none()
+            && match handoff.capture.as_ref() {
+                Some(capture) => {
+                    capture.matches(&self.context)
+                        && self
+                            .context
+                            .flow
+                            .halt()
+                            .unwrap()
+                            .account()
+                            .is_none_or(|account| account.capture.as_ref() == Some(capture.facts()))
+                }
+                None => {
+                    self.context.member_capture.is_none()
+                        && self
+                            .context
+                            .flow
+                            .halt()
+                            .unwrap()
+                            .account()
+                            .is_none_or(|account| account.capture.is_none())
+                }
+            }
             && self.resources.matches(&self.context)
             && self.resources.original_ports()
             && self
@@ -284,7 +326,12 @@ impl FoundationRun {
             ExitStage::Terminals
         };
         Ok(Box::new(FoundationFailedExit {
-            tail: FailedRunCleanup::after_serving(context, resources),
+            tail: FailedRunCleanup::after_serving_with_capture(
+                context,
+                resources,
+                handoff._rejection_unavailable,
+                handoff.capture.take(),
+            ),
             handoff,
             stage,
             progress: FoundationExitProgress::Progress,
@@ -305,6 +352,7 @@ impl FoundationRun {
             terminal_events: vec![],
             terminal_sequences: vec![],
             terminal_attempted: false,
+            pending_turn_close: None,
             abandoned,
         }))
     }
@@ -449,20 +497,22 @@ impl FoundationFailedExit {
             self.stage = ExitStage::World;
             return FoundationExitProgress::Progress;
         }
-        // An already pending close retains its original author. Its exact
-        // stopped-tap receipt updates open_turn before this independent attempt.
+        // Move the one prepared close into the consuming owner before driving
+        // earlier obligations. Neither its ticket nor its payload is replaced.
+        if !self.tail.context.place_owns_pending_author()
+            && let Some(close) = self.tail.context.barrier.defer_halt_close()
+        {
+            if close.kind() == serving::Kind::SessionClosed {
+                self.tail.pending_session_close = Some(close);
+            } else {
+                self.pending_turn_close = Some(close);
+            }
+        }
         let context = &mut self.tail.context;
-        let session_owned = context
-            .barrier
-            .pending_author()
-            .is_some_and(|author| author.event.kind == serving::Kind::SessionClosed);
         let existing_terminal = context.barrier.pending_author().is_some_and(|author| {
             matches!(
                 author.event.kind,
-                serving::Kind::ToolCallCompleted
-                    | serving::Kind::MessageToolResult
-                    | serving::Kind::TurnClosed
-                    | serving::Kind::SessionClosed
+                serving::Kind::ToolCallCompleted | serving::Kind::MessageToolResult
             )
         });
         if existing_terminal {
@@ -473,34 +523,26 @@ impl FoundationFailedExit {
                     .tail
                     .secondary(format!("failed serving pending terminal: {error:?}")),
             }
-        } else {
-            let _ = context.advance_halt_trace(io);
+        }
+        match self.tail.settle_serving_turn_accounts(io) {
+            Some(true) => {}
+            Some(false) => return FoundationExitProgress::Progress,
+            None => {
+                self.abort();
+                return FoundationExitProgress::Closed;
+            }
         }
         if !self.clock(io) {
             return FoundationExitProgress::Closed;
         }
         let context = &mut self.tail.context;
-        // A retained start can still become Recorded on the stopped tap. Close
-        // only after its actual disposition, or it could open a turn behind
-        // session.closed. This waits on ordinary capacity under the same cap;
-        // an unavailable trace leaves the exact unadmitted original retained.
-        if context
-            .barrier
-            .pending_author()
-            .is_some_and(|author| author.event.kind == serving::Kind::TurnStarted)
-            && !context.halt_report.as_ref().unwrap().trace_unavailable()
-        {
-            return FoundationExitProgress::Pending;
-        }
         self.terminal_attempted = true;
         if let Some(event) = context.failed_gate_terminal_event() {
             self.terminal_events.push(event);
         }
-        let pending_close = context
-            .barrier
-            .pending_author()
-            .is_some_and(|author| author.event.kind == serving::Kind::TurnClosed);
-        if !pending_close && let Some(turn) = context.open_turn.clone() {
+        if self.pending_turn_close.is_none()
+            && let Some(turn) = context.open_turn.clone()
+        {
             self.terminal_events.push(AuthoredEvent {
                 kind: serving::Kind::TurnClosed,
                 subsystem: Subsystem::Harness,
@@ -511,16 +553,6 @@ impl FoundationFailedExit {
                     reason: StopReason::Fault,
                     cause: None,
                 })),
-            });
-        }
-        if !session_owned {
-            self.terminal_events.push(AuthoredEvent {
-                kind: serving::Kind::SessionClosed,
-                subsystem: Subsystem::Harness,
-                turn: None,
-                source: AuthoredSource::Runtime,
-                causal_parent: None,
-                payload: None,
             });
         }
         for index in 0..self.terminal_events.len() {
@@ -551,6 +583,24 @@ impl FoundationFailedExit {
                 Err(error) => self
                     .tail
                     .secondary(format!("failed serving terminal {:?}: {error}", event.kind)),
+            }
+        }
+        if self.pending_turn_close.is_some() {
+            if !self.clock(io) {
+                return FoundationExitProgress::Closed;
+            }
+            match self
+                .tail
+                .context
+                .resume_deferred_halt_close(&mut self.pending_turn_close)
+            {
+                Ok(Some(sequence)) => self.terminal_sequences.push(sequence),
+                Ok(None) => self
+                    .tail
+                    .secondary("failed serving turn close remains unrecorded"),
+                Err(error) => self
+                    .tail
+                    .secondary(format!("failed serving turn close: {error:?}")),
             }
         }
         self.stage = ExitStage::World;
@@ -637,9 +687,17 @@ impl FoundationFailedExit {
 
     fn lower(&mut self, io: &mut impl PumpIo) -> FoundationExitProgress {
         if self.tail.context.pairs.pending_rejection().is_some() {
-            if let Err(error) = self.tail.context.advance_halt_rejection() {
-                self.tail.secondary(error);
+            // Drain before attempting admission. Capacity freed after that
+            // attempt must leave its notification readable for the wait.
+            if !self.tail.rejection_unavailable
+                && !self.handoff._capacity_unavailable
+                && let Err(error) = self.tail.context.barrier.drain_capacity_wake()
+            {
+                self.handoff._capacity_unavailable = true;
+                self.tail
+                    .secondary(format!("failed serving Lower capacity wake: {error:?}"));
             }
+            self.tail.advance_serving_rejection();
             if !self.clock(io) {
                 return FoundationExitProgress::Closed;
             }
@@ -676,6 +734,7 @@ impl FoundationFailedExit {
             .held()
             .is_some_and(|frame| matches!(frame.payload, Payload::ToolAnswer(_)))
             && self.tail.context.pairs.pending_rejection().is_some()
+            && !self.tail.rejection_unavailable
         {
             return FoundationExitProgress::Pending;
         }
@@ -689,11 +748,18 @@ impl FoundationFailedExit {
             Ok(Some(reply)) => {
                 let frame = reply.envelope();
                 if matches!(frame.payload, Payload::ToolAnswer(_)) {
+                    if self.tail.rejection_unavailable
+                        && self.tail.context.pairs.pending_rejection().is_some()
+                    {
+                        self.handoff.received.push(reply);
+                        self.tail.secondary(
+                            "failed serving Lower retained a later return behind an unavailable rejection",
+                        );
+                        return FoundationExitProgress::Progress;
+                    }
                     match self.tail.context.pairs.observe_gate(reply) {
                         Ok(crate::flow::context::pairs::GateObservation::Rejected) => {
-                            if let Err(error) = self.tail.context.advance_halt_rejection() {
-                                self.tail.secondary(error);
-                            }
+                            self.tail.advance_serving_rejection();
                         }
                         Ok(_) => self
                             .tail
@@ -789,7 +855,7 @@ impl FoundationFailedExit {
         if !self.clock(io) {
             return self.progress;
         }
-        if self.stage == ExitStage::Release {
+        if matches!(self.stage, ExitStage::Terminals | ExitStage::Release) {
             if self.tail.wait_for_progress(io) == FailedEnterProgress::Closed {
                 self.abort();
             }
@@ -805,21 +871,15 @@ impl FoundationFailedExit {
             deadline
         };
         let mut interests = vec![];
-        if (self.stage == ExitStage::Terminals
-            || (self.stage == ExitStage::Lower
-                && self.tail.context.pairs.pending_rejection().is_some()))
+        if self.stage == ExitStage::Lower
+            && self.tail.context.pairs.pending_rejection().is_some()
+            && !self.tail.rejection_unavailable
             && !self.handoff._capacity_unavailable
         {
-            if let Err(error) = self.tail.context.barrier.drain_capacity_wake() {
-                self.handoff._capacity_unavailable = true;
-                self.tail
-                    .secondary(format!("failed serving Lower capacity wake: {error:?}"));
-            } else {
-                interests.push(WaitInterest {
-                    fd: self.tail.context.barrier.capacity_fd(),
-                    events: PollFlags::POLLIN,
-                });
-            }
+            interests.push(WaitInterest {
+                fd: self.tail.context.barrier.capacity_fd(),
+                events: PollFlags::POLLIN,
+            });
         }
         if matches!(self.stage, ExitStage::World | ExitStage::Lower)
             && let Some(gate) = &self.handoff.gate

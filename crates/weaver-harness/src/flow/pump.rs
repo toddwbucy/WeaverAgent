@@ -54,6 +54,9 @@ pub(super) enum PumpDeadline {
     CaptureResult,
     /// The unchanged publication window, retained separately from leg waits.
     CaptureWindow,
+    /// An on-demand save still awaiting its turn boundary. Expiry withdraws
+    /// that request; it does not fail or cancel the current turn.
+    SaveQueued,
     Label,
 }
 
@@ -293,13 +296,52 @@ impl LifecycleListener {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LifecycleProjection {
+    Legacy,
+    ServingOpener,
+    Capture,
+}
+
+enum ServingOpener {
+    Ordinary(OrganEnvelope),
+    Save(CaptureEnvelope),
+}
+
+fn decode_serving_opener(bytes: &[u8]) -> Result<ServingOpener, serde_json::Error> {
+    if let Ok(envelope) = CaptureEnvelope::decode(bytes, CaptureSender::Admin) {
+        return if matches!(
+            envelope.payload,
+            weaver_types::state_flow::capture::CapturePayload::Directive(_)
+        ) {
+            Ok(ServingOpener::Save(envelope))
+        } else {
+            Err(serde_json::Error::io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "serving opener is not a directive",
+            )))
+        };
+    }
+    let envelope: OrganEnvelope = serde_json::from_slice(bytes)?;
+    if matches!(
+        envelope.payload,
+        weaver_types::Payload::Directive(weaver_types::LifecycleDirective::SavePoint { .. })
+    ) {
+        return Err(serde_json::Error::io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "serving SavePoint requires its original window",
+        )));
+    }
+    Ok(ServingOpener::Ordinary(envelope))
+}
+
 /// This owner reuses the ordinary bounded sender, but never invokes that port's
 /// reader. Its one recvmsg reader alone may receive Enter's ancillary handles.
 pub(super) struct LifecyclePeer {
     sender: OrganPort,
     held: Option<LifecycleMessage>,
     capture_held: Option<LifecycleMessage<CaptureEnvelope>>,
-    capture_mode: bool,
+    projection: LifecycleProjection,
     wire: Option<Vec<u8>>,
     failure: Option<Failure>,
     interrupted: bool,
@@ -316,7 +358,7 @@ impl LifecyclePeer {
             sender: OrganPort::from_owned(end)?,
             held: None,
             capture_held: None,
-            capture_mode: false,
+            projection: LifecycleProjection::Legacy,
             wire: None,
             failure: None,
             interrupted: false,
@@ -330,6 +372,25 @@ impl LifecyclePeer {
     pub(super) fn held(&self) -> Option<&LifecycleMessage> {
         self.held.as_ref()
     }
+    /// Select the paired serving opener before its sole reader consumes bytes.
+    /// A SavePoint without its required window cannot fall back to legacy.
+    pub(super) fn enable_serving_openers(&mut self) -> Result<(), Failure> {
+        self.live()?;
+        if self.projection != LifecycleProjection::Legacy
+            || self.held.is_some()
+            || self.capture_held.is_some()
+            || self.wire.is_some()
+            || self.zero_received
+            || self.sender.send_pending()
+        {
+            return Err(invalid_failure(
+                "serving opener requires an unused lifecycle transport",
+            ));
+        }
+        self.projection = LifecycleProjection::ServingOpener;
+        Ok(())
+    }
+
     /// Switch the one recvmsg owner only after its accepted directive is taken.
     /// A held packet or pending output cannot be reinterpreted by this switch.
     pub(super) fn enable_capture(&mut self) -> Result<(), Failure> {
@@ -339,13 +400,13 @@ impl LifecyclePeer {
             || self.wire.is_some()
             || self.zero_received
             || self.sender.send_pending()
-            || self.capture_mode
+            || self.projection == LifecycleProjection::Capture
         {
             return Err(invalid_failure(
                 "capture requires an empty lifecycle transport",
             ));
         }
-        self.capture_mode = true;
+        self.projection = LifecycleProjection::Capture;
         Ok(())
     }
 
@@ -354,14 +415,14 @@ impl LifecyclePeer {
     }
 
     pub(super) fn capture_identity(&self) -> Option<super::pump_transport::PortIdentity> {
-        self.capture_mode.then(|| self.sender.port_identity())
+        (self.projection == LifecycleProjection::Capture).then(|| self.sender.port_identity())
     }
 
     pub(super) fn owns_capture_identity(
         &self,
         identity: &super::pump_transport::PortIdentity,
     ) -> bool {
-        self.capture_mode && identity.matches(&self.sender)
+        self.projection == LifecycleProjection::Capture && identity.matches(&self.sender)
     }
 
     pub(super) fn take_capture(&mut self) -> Result<Option<ReceivedCapture>, Failure> {
@@ -484,7 +545,7 @@ impl LifecyclePeer {
                 failure,
             });
         }
-        if !self.capture_mode {
+        if self.projection != LifecycleProjection::Capture {
             return Err(StageFailure {
                 input: envelope,
                 failure: invalid_failure("capture transport is not selected"),
@@ -577,7 +638,7 @@ impl LifecyclePeer {
     }
 
     pub(super) fn try_receive(&mut self) -> Result<ReceiveProgress, Failure> {
-        if self.capture_mode {
+        if self.projection == LifecycleProjection::Capture {
             return match self.receive_message(|bytes| {
                 CaptureEnvelope::decode(bytes, CaptureSender::Admin).map_err(|error| {
                     serde_json::Error::io(io::Error::new(io::ErrorKind::InvalidData, error))
@@ -585,6 +646,34 @@ impl LifecyclePeer {
             })? {
                 Some(message) => {
                     self.capture_held = Some(message);
+                    Ok(ReceiveProgress::Held)
+                }
+                None => Ok(ReceiveProgress::Pending),
+            };
+        }
+        if self.projection == LifecycleProjection::ServingOpener {
+            return match self.receive_message(decode_serving_opener)? {
+                Some(LifecycleMessage {
+                    envelope,
+                    sink,
+                    state,
+                }) => {
+                    match envelope {
+                        ServingOpener::Ordinary(envelope) => {
+                            self.held = Some(LifecycleMessage {
+                                envelope,
+                                sink,
+                                state,
+                            });
+                        }
+                        ServingOpener::Save(envelope) => {
+                            self.capture_held = Some(LifecycleMessage {
+                                envelope,
+                                sink,
+                                state,
+                            });
+                        }
+                    }
                     Ok(ReceiveProgress::Held)
                 }
                 None => Ok(ReceiveProgress::Pending),
@@ -1552,6 +1641,18 @@ impl LifecyclePeer {
 pub(super) struct ReceivedCapture {
     pub(super) message: LifecycleMessage<CaptureEnvelope>,
     pub(super) wire: Vec<u8>,
+}
+pub(super) struct RetiredReceivedCapture {
+    pub(super) message: RetiredLifecycleMessage<CaptureEnvelope>,
+    pub(super) wire: Vec<u8>,
+}
+impl ReceivedCapture {
+    pub(super) fn retire_failed(self) -> RetiredReceivedCapture {
+        RetiredReceivedCapture {
+            message: self.message.retire_failed(),
+            wire: self.wire,
+        }
+    }
 }
 pub(super) struct RetiredLifecycleListener {
     pub(super) held: Option<RetiredLifecyclePeer>,
