@@ -23,6 +23,9 @@ pub(crate) mod wind_down;
 #[path = "context_worker_graceful_leave.rs"]
 pub(in crate::flow::context::worker_startup) mod graceful;
 
+#[path = "context_worker_save.rs"]
+pub(in crate::flow::context::worker_startup) mod save;
+
 #[path = "context_worker_halt.rs"]
 pub(crate) mod halt;
 
@@ -178,6 +181,9 @@ impl<'a> FoundationInput<'a> {
         if self.serving.owner.listener.held().is_some() {
             return FoundationInputProgress::ManagementPending;
         }
+        if self.save_blocks_turn() {
+            return FoundationInputProgress::Pending;
+        }
         if let Some(progress) = self.wind_down_input_progress() {
             return progress;
         }
@@ -241,7 +247,11 @@ impl<'a> FoundationInput<'a> {
             .context
             .management_listener
             .replace(listener.clone());
-        let result = self.observe(io).and_then(|()| {
+        let result = self.advance_save(io).and_then(|()| {
+            if self.save_blocks_turn() {
+                return Ok(());
+            }
+            self.observe(io)?;
             if self.progress() == FoundationInputProgress::ManagementPending {
                 Ok(())
             } else if wait {
@@ -261,7 +271,10 @@ impl<'a> FoundationInput<'a> {
         });
         self.serving.owner.context.management_listener = previous_listener;
         if let Err(mut failure) = result {
-            if self.retain_graceful_expiry(&failure) || self.retain_quiesce_gate_end(&failure) {
+            if self.retain_save_interrupt(&failure)
+                || self.retain_graceful_expiry(&failure)
+                || self.retain_quiesce_gate_end(&failure)
+            {
                 return self.progress();
             }
             if matches!(failure, RunFailure::ManagementPending)
@@ -279,6 +292,17 @@ impl<'a> FoundationInput<'a> {
                     HaltPoint::Author,
                     format!("final reply send clock observation failed: {failure:?}"),
                 );
+            }
+            if self.serving.save.is_some()
+                && matches!(
+                    failure,
+                    RunFailure::Wait {
+                        key: crate::flow::pump::PumpDeadline::CaptureWindow,
+                        ..
+                    }
+                )
+            {
+                failure = self.serving.owner.context.fail(io, FlowHaltReason::ProtocolFailed, HaltPoint::Barrier, format!("serving save did not complete within its original capture window: {failure:?}"));
             }
             // The common pump reports external transport failure without
             // electing the enclosing owner's disposition. This owner stops
@@ -322,6 +346,7 @@ impl<'a> FoundationInput<'a> {
                 lifecycle: LifecyclePorts {
                     listener: Some(&mut owner.listener),
                     residency: Some(owner.resident.residency),
+                    leave_peer: self.serving.save.as_mut().and_then(|save| save.port()),
                     ..Default::default()
                 },
                 gate: (!retained_gate_end).then_some(&mut owner.gate),
@@ -340,6 +365,7 @@ impl<'a> FoundationInput<'a> {
             lifecycle: LifecyclePorts {
                 listener: Some(&mut owner.listener),
                 residency: Some(owner.resident.residency),
+                leave_peer: self.serving.save.as_mut().and_then(|save| save.port()),
                 ..Default::default()
             },
             gate: Some(&mut owner.gate),
@@ -409,6 +435,7 @@ impl<'a> FoundationInput<'a> {
             lifecycle: LifecyclePorts {
                 listener: Some(&mut owner.listener),
                 residency: Some(owner.resident.residency),
+                leave_peer: self.serving.save.as_mut().and_then(|save| save.port()),
                 ..Default::default()
             },
             gate: Some(&mut owner.gate),

@@ -179,6 +179,12 @@ pub(super) enum ReceiptTreatment {
     Kill,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum CaptureDelay {
+    Snapshot,
+    Finished,
+}
+
 pub(super) struct NormalMember {
     process: Process,
     stream: UnixStream,
@@ -192,8 +198,11 @@ pub(super) struct NormalMember {
     fault_applied: bool,
     held_prefix: usize,
     pub(super) corrupt_release: bool,
+    pub(super) corrupt_abort: bool,
     held_filing: Option<Vec<u8>>,
     released_filing: Option<Vec<u8>>,
+    capture_delay: Option<CaptureDelay>,
+    held_capture_result: Option<Vec<u8>>,
     request_lines: Vec<u8>,
     harness_eof: bool,
     member_eof: bool,
@@ -265,8 +274,11 @@ impl NormalMember {
             fault_applied: false,
             held_prefix: 0,
             corrupt_release: false,
+            corrupt_abort: false,
             held_filing: None,
             released_filing: None,
+            capture_delay: None,
+            held_capture_result: None,
             request_lines: vec![],
             harness_eof: false,
             member_eof: false,
@@ -279,6 +291,22 @@ impl NormalMember {
     pub(super) fn treat_first_filing(&mut self, treatment: ReceiptTreatment) {
         assert!(!self.intercepted);
         self.treatment = Some(treatment);
+    }
+
+    pub(super) fn delay_first_capture_result(&mut self, delay: CaptureDelay) {
+        assert!(self.capture_delay.is_none() && self.held_capture_result.is_none());
+        self.capture_delay = Some(delay);
+    }
+
+    pub(super) fn release_held_filing(&mut self) {
+        assert!(matches!(
+            self.treatment,
+            Some(ReceiptTreatment::Hold | ReceiptTreatment::Fragment)
+        ));
+        let bytes = self.held_filing.take().expect("original held receipt");
+        self.to_harness
+            .extend_from_slice(&bytes[self.held_prefix..]);
+        self.released_filing = Some(bytes);
     }
 
     /// Apply a failure only after the circuit has observed pending custody.
@@ -357,6 +385,23 @@ impl NormalMember {
         while let Some(end) = self.request_lines.iter().position(|b| *b == b'\n') {
             let line: Vec<_> = self.request_lines.drain(..=end).collect();
             let frame = s::decode_state_line(&line, s::FrameDirection::Request).unwrap();
+            if let s::StateFrame::Control {
+                frame: s::StateControl::Abort { capture_id },
+                ..
+            } = &frame
+                && let Some(late) = self.held_capture_result.take()
+            {
+                let response = s::decode_state_line(&late, s::FrameDirection::Response).unwrap();
+                assert_eq!(response.common(), frame.common());
+                assert!(matches!(response, s::StateFrame::ControlAnswer {
+                    frame: s::StateControlAnswer::Snapshot { capture_id: actual, .. }
+                        | s::StateControlAnswer::Finished { capture_id: actual, .. }, ..
+                } if actual == *capture_id));
+                // Forward the actual late result before the real member's
+                // actual aborted reply, without creating either response here.
+                self.to_harness.extend(late);
+                self.capture_delay = None;
+            }
             requests.push(label(&frame));
             if matches!(
                 frame,
@@ -386,6 +431,54 @@ impl NormalMember {
             let line: Vec<_> = self.response_lines.drain(..=end).collect();
             let mut response = s::decode_state_line(&line, s::FrameDirection::Response).unwrap();
             if matches!(
+                (&response, self.capture_delay),
+                (
+                    s::StateFrame::ControlAnswer {
+                        frame: s::StateControlAnswer::Snapshot { .. },
+                        ..
+                    },
+                    Some(CaptureDelay::Snapshot)
+                ) | (
+                    s::StateFrame::ControlAnswer {
+                        frame: s::StateControlAnswer::Finished { .. },
+                        ..
+                    },
+                    Some(CaptureDelay::Finished)
+                )
+            ) {
+                assert!(self.held_capture_result.is_none());
+                std::fs::write(
+                    self.process
+                        .root
+                        .parent()
+                        .unwrap()
+                        .join("demand-late-result.jsonl"),
+                    &line,
+                )
+                .unwrap();
+                self.held_capture_result = Some(line);
+                continue;
+            }
+            if matches!(
+                response,
+                s::StateFrame::ControlAnswer {
+                    frame: s::StateControlAnswer::Aborted { .. },
+                    ..
+                }
+            ) {
+                assert!(self.held_capture_result.is_none());
+                assert_eq!(std::fs::read_dir(&self.process.room).unwrap().count(), 0);
+                std::fs::write(
+                    self.process
+                        .root
+                        .parent()
+                        .unwrap()
+                        .join("demand-aborted.jsonl"),
+                    &line,
+                )
+                .unwrap();
+            }
+            if matches!(
                 response,
                 s::StateFrame::ControlAnswer {
                     frame: s::StateControlAnswer::CaptureReleased { .. },
@@ -412,6 +505,28 @@ impl NormalMember {
                     "actual CaptureReleased retained room files: {names:?}"
                 );
             }
+            let line = if self.corrupt_abort
+                && let s::StateFrame::ControlAnswer {
+                    frame: s::StateControlAnswer::Aborted { capture_id },
+                    ..
+                } = &mut response
+            {
+                self.corrupt_abort = false;
+                capture_id.0 += 1;
+                let damaged = s::encode_state_line(&response, s::FrameDirection::Response).unwrap();
+                std::fs::write(
+                    self.process
+                        .root
+                        .parent()
+                        .unwrap()
+                        .join("demand-bad-aborted.jsonl"),
+                    &damaged,
+                )
+                .unwrap();
+                damaged
+            } else {
+                line
+            };
             let line = if self.corrupt_release
                 && let s::StateFrame::ControlAnswer {
                     frame: s::StateControlAnswer::CaptureReleased { capture_id },
@@ -501,6 +616,10 @@ impl NormalMember {
         }
         assert!(self.harness_eof && self.write_closed);
         assert!(self.to_member.is_empty() && self.to_harness.is_empty());
+        self.write_evidence(filings);
+    }
+
+    pub(super) fn write_evidence(&self, filings: &[s::StateFrame]) {
         let root = self.process.root.parent().unwrap();
         std::fs::write(root.join("member-requests.jsonl"), &self.request_bytes).unwrap();
         std::fs::write(root.join("member-responses.jsonl"), &self.response_bytes).unwrap();
@@ -579,7 +698,10 @@ pub(super) fn verify_image(
         let s::StateFrame::File { filing, .. } = frame else {
             continue;
         };
-        found += usize::from(filing.source.kind == "message.user");
+        let captured = report.start.position.as_ref().is_some_and(|position| {
+            filing.block_id.run == position.block_id.run && filing.block_id <= position.block_id
+        });
+        found += usize::from(captured && filing.source.kind == "message.user");
         let noun = filing
             .bindings
             .iter()
@@ -605,9 +727,12 @@ pub(super) fn verify_image(
             .collect();
         assert_eq!(
             matches.len(),
-            1,
-            "each original filed source survives capture exactly once"
+            usize::from(captured),
+            "the immutable image contains exactly the filings through its source position"
         );
+        if !captured {
+            continue;
+        }
         let entry = matches[0];
         assert_eq!(entry.text, filing.text);
         assert_eq!(entry.raw_block.get(), filing.raw_block.get());

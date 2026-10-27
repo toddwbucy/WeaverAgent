@@ -3,6 +3,9 @@
 use super::*;
 use crate::flow::clock::PumpIo;
 use crate::flow::pump::PumpDeadline;
+use weaver_types::state_flow::capture::{
+    CaptureDirective, CaptureEnvelope, CapturePayload, CaptureSender,
+};
 use weaver_types::state_flow::enter::{ObservationContent, ObservationEnvelope};
 
 fn receive_owner<'a>(guard: &mut Guard<'a>, socket: &Path) -> OwnedFd {
@@ -40,16 +43,49 @@ fn receive_owner<'a>(guard: &mut Guard<'a>, socket: &Path) -> OwnedFd {
     peer
 }
 
-fn send_directive(peer: &OwnedFd, ordinal: u64, directive: LifecycleDirective) -> OrganEnvelope {
-    let request = OrganEnvelope {
-        exchange: ExchangeId {
-            opener: Opener::Admin,
-            ordinal,
-        },
-        position: Position::Open,
-        payload: Payload::Directive(directive),
+enum SentDirective {
+    Ordinary(OrganEnvelope),
+    Save(CaptureEnvelope),
+}
+
+impl SentDirective {
+    fn exchange(&self) -> ExchangeId {
+        match self {
+            Self::Ordinary(request) => request.exchange.clone(),
+            Self::Save(request) => request.exchange.clone(),
+        }
+    }
+}
+
+fn send_directive(peer: &OwnedFd, ordinal: u64, directive: LifecycleDirective) -> SentDirective {
+    let exchange = ExchangeId {
+        opener: Opener::Admin,
+        ordinal,
     };
-    let bytes = serde_json::to_vec(&request).unwrap();
+    let (request, bytes) = if let LifecycleDirective::SavePoint { cause } = directive {
+        let began_ns = MonotonicIo.now().unwrap();
+        let request = CaptureEnvelope {
+            exchange,
+            position: Position::Open,
+            payload: CapturePayload::Directive(CaptureDirective::SavePoint {
+                cause,
+                window: weaver_types::state_flow::SaveWindow {
+                    began_ns: began_ns.into(),
+                    deadline_ns: (began_ns + 10_000_000_000).into(),
+                },
+            }),
+        };
+        let bytes = request.encode(CaptureSender::Admin).unwrap();
+        (SentDirective::Save(request), bytes)
+    } else {
+        let request = OrganEnvelope {
+            exchange,
+            position: Position::Open,
+            payload: Payload::Directive(directive),
+        };
+        let bytes = serde_json::to_vec(&request).unwrap();
+        (SentDirective::Ordinary(request), bytes)
+    };
     assert_eq!(
         send(peer.as_raw_fd(), &bytes, MsgFlags::MSG_NOSIGNAL),
         Ok(bytes.len())
@@ -57,7 +93,7 @@ fn send_directive(peer: &OwnedFd, ordinal: u64, directive: LifecycleDirective) -
     request
 }
 
-fn finish_answer(guard: &mut Guard<'_>, peer: &OwnedFd, request: &OrganEnvelope, observe: bool) {
+fn finish_answer(guard: &mut Guard<'_>, peer: &OwnedFd, request: &SentDirective, observe: bool) {
     let end = Instant::now() + Duration::from_secs(4);
     loop {
         assert!(Instant::now() < end, "secondary answer did not finish");
@@ -77,7 +113,7 @@ fn finish_answer(guard: &mut Guard<'_>, peer: &OwnedFd, request: &OrganEnvelope,
     let raw = read_packet(peer).expect("actual correlated secondary answer");
     if observe {
         let answer: ObservationEnvelope = serde_json::from_slice(&raw).unwrap();
-        assert_eq!(answer.exchange, request.exchange);
+        assert_eq!(answer.exchange, request.exchange());
         assert_eq!(answer.position, Position::Close);
         assert!(matches!(
             answer.payload,
@@ -85,7 +121,7 @@ fn finish_answer(guard: &mut Guard<'_>, peer: &OwnedFd, request: &OrganEnvelope,
         ));
     } else {
         let answer: OrganEnvelope = serde_json::from_slice(&raw).unwrap();
-        assert_eq!(answer.exchange, request.exchange);
+        assert_eq!(answer.exchange, request.exchange());
         assert_eq!(answer.position, Position::Close);
         assert_eq!(
             answer.payload,
@@ -327,7 +363,10 @@ pub(in crate::flow::context::worker_startup) fn convert(
                 let progress = owner.advance();
                 if progress == FoundationManagementProgress::DirectivePending {
                     assert!(!owner.read_armed);
-                    assert_eq!(owner.peer.held().unwrap().envelope, request);
+                    let SentDirective::Ordinary(request) = &request else {
+                        panic!("JoinLeave must remain the ordinary paired directive");
+                    };
+                    assert_eq!(&owner.peer.held().unwrap().envelope, request);
                     break;
                 }
                 assert_eq!(progress, FoundationManagementProgress::Pending);

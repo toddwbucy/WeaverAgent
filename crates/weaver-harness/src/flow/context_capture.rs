@@ -401,6 +401,32 @@ impl RecordingContext {
         self.begin_capture_wait(Phase::Releasing, SMALL_CONTROL_NS, io)
     }
 
+    /// The lifecycle owner has retained a pre-Commit window expiry. Preserve
+    /// the original capture and drain it under the existing Abort allowance;
+    /// even a held Finished image must not remain in the member after refusal.
+    pub(super) fn expire_member_capture(
+        &mut self,
+        id: DecimalU64,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        self.allow_capture_cleanup(io)?;
+        let Some(owner) = self.member_capture.as_ref().filter(|owner| owner.id == id) else {
+            return Err(self.capture_fault(io, "expiry names another capture"));
+        };
+        if !owner.window.expired(self.last_ns)
+            || self.deadlines.get(PumpDeadline::CaptureWindow) != Some(owner.window)
+        {
+            return Err(self.capture_fault(io, "expiry lost its original capture window"));
+        }
+        if owner.phase == Phase::Barrier {
+            // No request was issued. The ordinary cancellation releases the
+            // barrier only after its refused record has actually been retained.
+            self.deadlines.disarm(PumpDeadline::CaptureWindow);
+            return Ok(());
+        }
+        self.enqueue_capture_abort(io)
+    }
+
     /// Parent cancellation is allowed only before Commit. This member owner
     /// cannot infer that lifecycle fact from a store reply. Barrier cancellation
     /// requires the parent to record refusal first and starts no member request.

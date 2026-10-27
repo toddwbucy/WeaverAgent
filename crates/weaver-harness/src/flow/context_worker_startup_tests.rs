@@ -483,6 +483,14 @@ impl Member {
             .is_some_and(normal_member::NormalMember::filing_held)
     }
 
+    pub(super) fn release_normal_filing(&mut self) {
+        self.normal.as_mut().unwrap().release_held_filing();
+    }
+
+    pub(super) fn write_normal_evidence(&self) {
+        self.normal.as_ref().unwrap().write_evidence(&self.filings);
+    }
+
     pub(super) fn finish_normal(&mut self) {
         if let Some(normal) = &mut self.normal {
             normal.finish(&mut self.peer, &mut self.requests, &mut self.filings);
@@ -1029,7 +1037,9 @@ fn circuit(mode: &str) {
         config.gate_wait.elapsed_ns = 5_000_000_000.into();
         config.observation_interval.elapsed_ns = 100_000_000.into();
     }
-    if super::input::generation::session_tests::forced_leave::is_mode(mode) {
+    if super::input::generation::session_tests::forced_leave::is_mode(mode)
+        || super::input::generation::session_tests::demand_save::is_mode(mode)
+    {
         // Capture must file the wind-down's actual content through the normal
         // member. The fake-clock fixture's 1 ms cut allowance is not this
         // real-process circuit's declared test budget.
@@ -1043,11 +1053,22 @@ fn circuit(mode: &str) {
     load.ste100_scheme = bootstrap.scheme_text.clone();
     load.state_flow.gate_wait.elapsed_ns = config.gate_wait.elapsed_ns.0.into();
     load.state_flow.cut_wait.elapsed_ns = config.cut_wait.elapsed_ns.0.into();
-    if super::input::generation::session_tests::forced_leave::is_mode(mode) {
+    if super::input::generation::session_tests::forced_leave::is_mode(mode)
+        || super::input::generation::session_tests::demand_save::is_mode(mode)
+    {
         load.state_flow.persistence.save_wait.elapsed_ns = 10_000_000_000.into();
         load.state_flow.persistence.snapshot_wait.elapsed_ns = 2_000_000_000.into();
-        if mode.ends_with("-window-timeout") || mode.ends_with("-published-timeout") {
+        if mode.ends_with("-window-timeout")
+            || mode.ends_with("-published-timeout")
+            || mode.ends_with("-window-timeout-retry")
+        {
             load.state_flow.persistence.save_wait.elapsed_ns = 1_000_000_000.into();
+        }
+        if super::input::generation::session_tests::demand_save::is_mode(mode)
+            && mode.ends_with("-expires")
+        {
+            load.state_flow.persistence.save_wait.elapsed_ns = 250_000_000.into();
+            load.state_flow.persistence.snapshot_wait.elapsed_ns = 50_000_000.into();
         }
     }
     if mode.starts_with("input-worker") {
@@ -1067,11 +1088,17 @@ fn circuit(mode: &str) {
         load.state_start.dump_sha256 = normal_member::digest(image).as_str().into();
     }
     let mut normal = (mode.contains("-save-sqlite") && joint.is_none()).then(|| {
-        let normal = normal_member::NormalMember::seeded(
+        let mut normal = normal_member::NormalMember::seeded(
             &files.0,
             &bootstrap.scheme_text,
             mode.ends_with("-held-filing"),
         );
+        if mode.ends_with("-snapshot-timeout-retry") || mode.ends_with("-bad-aborted") {
+            normal.delay_first_capture_result(normal_member::CaptureDelay::Snapshot);
+        } else if mode.ends_with("-finished-timeout-retry") {
+            normal.delay_first_capture_result(normal_member::CaptureDelay::Finished);
+        }
+        normal.corrupt_abort = mode.ends_with("-bad-aborted");
         load.state_start.dump_sha256 = normal_member::digest(&normal.image).as_str().into();
         normal
     });
@@ -1345,6 +1372,12 @@ fn circuit(mode: &str) {
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-worker") {
             drop(peer);
+            if mode.ends_with("-demand-receive-clock") {
+                super::input::generation::session_tests::demand_save::receive_clock::exercise(
+                    serving, &path,
+                );
+                return;
+            }
             if super::input::generation::session_tests::forced_leave::is_mode(mode) {
                 let handoff = super::input::generation::session_tests::forced_leave::handoff(
                     serving,
@@ -1431,7 +1464,16 @@ fn circuit(mode: &str) {
                     &files.0,
                     mode,
                 );
-                if mode.contains("-exit") {
+                if super::input::generation::session_tests::demand_save::failed::is_mode(mode) {
+                    let actual = run.take_boxed();
+                    super::input::generation::session_tests::demand_save::failed::finish(
+                        actual,
+                        &mut member,
+                        &mut reader,
+                        &files.0,
+                        mode,
+                    );
+                } else if mode.contains("-exit") {
                     let actual = run.take_boxed();
                     super::input::halt::exit::tests::finish(
                         actual,
@@ -1671,7 +1713,16 @@ fn circuit(mode: &str) {
                     &files.0,
                     mode,
                 );
-                if mode.contains("-exit") {
+                if super::input::generation::session_tests::demand_save::failed::is_mode(mode) {
+                    let actual = run.take_boxed();
+                    super::input::generation::session_tests::demand_save::failed::finish(
+                        actual,
+                        &mut member,
+                        &mut reader,
+                        &files.0,
+                        mode,
+                    );
+                } else if mode.contains("-exit") {
                     let actual = run.take_boxed();
                     super::input::halt::exit::tests::finish(
                         actual,
@@ -1886,6 +1937,7 @@ fn scenario(name: &str, mode: &str) {
         .env("WEAVER_GATE_STARTUP_RUN", &layout.run);
     let status = if super::input::generation::session_tests::serving_rollback::is_mode(mode)
         || super::input::generation::session_tests::forced_leave::is_mode(mode)
+        || super::input::generation::session_tests::demand_save::is_mode(mode)
         || mode.contains("-graceful-quiesce-")
         || mode.contains("-graceful-wind-down-")
     {
@@ -1924,6 +1976,62 @@ macro_rules! scenario {
     };
 }
 scenario!(worker_startup_composition_ready, "ready");
+scenario!(
+    worker_session_demand_save_receive_clock,
+    "input-worker-generation-emission-session-demand-receive-clock"
+);
+scenario!(
+    worker_session_demand_save_sqlite_idle,
+    "input-worker-generation-emission-session-demand-save-sqlite-idle"
+);
+scenario!(
+    worker_session_demand_save_sqlite_queued,
+    "input-worker-generation-emission-session-demand-save-sqlite-queued"
+);
+scenario!(
+    worker_session_demand_save_sqlite_expired,
+    "input-worker-generation-emission-session-demand-save-sqlite-expired"
+);
+scenario!(
+    worker_session_demand_save_sqlite_expires_during_generation,
+    "input-worker-generation-emission-session-demand-save-sqlite-expires"
+);
+scenario!(
+    worker_session_demand_save_sqlite_held_filing,
+    "input-worker-generation-emission-session-demand-save-sqlite-held-filing"
+);
+scenario!(
+    worker_session_demand_save_sqlite_joint,
+    "input-worker-generation-emission-session-demand-save-sqlite-joint"
+);
+scenario!(
+    worker_session_demand_save_sqlite_bad_published,
+    "input-worker-generation-emission-session-demand-save-sqlite-bad-published"
+);
+scenario!(
+    worker_session_demand_save_sqlite_bad_aborted,
+    "input-worker-generation-emission-session-demand-save-sqlite-bad-aborted"
+);
+scenario!(
+    worker_session_demand_save_sqlite_secondary_management,
+    "input-worker-generation-emission-session-demand-save-sqlite-secondary"
+);
+scenario!(
+    worker_session_demand_save_sqlite_snapshot_timeout_retry,
+    "input-worker-generation-emission-session-demand-save-sqlite-snapshot-timeout-retry"
+);
+scenario!(
+    worker_session_demand_save_sqlite_finished_timeout_retry,
+    "input-worker-generation-emission-session-demand-save-sqlite-finished-timeout-retry"
+);
+scenario!(
+    worker_session_demand_save_sqlite_image_window_timeout_retry,
+    "input-worker-generation-emission-session-demand-save-sqlite-image-window-timeout-retry"
+);
+scenario!(
+    worker_session_demand_save_sqlite_prepare_window_timeout_retry,
+    "input-worker-generation-emission-session-demand-save-sqlite-prepare-window-timeout-retry"
+);
 scenario!(
     worker_session_forced_leave_joint_sqlite_idle,
     "input-worker-generation-emission-session-forced-save-sqlite-joint"

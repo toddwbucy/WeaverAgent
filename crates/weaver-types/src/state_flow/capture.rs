@@ -51,6 +51,7 @@ fn deserialize_exchange<'de, D: serde::Deserializer<'de>>(
     deny_unknown_fields
 )]
 pub enum CapturePayload {
+    Directive(CaptureDirective),
     SavePointBeginning(CaptureBeginning),
     SavePointImage(CaptureImage),
     SavePointImageChecked(CaptureImageChecked),
@@ -62,6 +63,17 @@ pub enum CapturePayload {
     SavePointAborted(CaptureAborted),
     Answer(CaptureAnswer),
     Refusal(CaptureRefusal),
+}
+
+/// The on-demand opener of the paired serving projection. Its absolute window
+/// is required; the actor checks the loaded duration and receipt clock.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CaptureDirective {
+    SavePoint {
+        cause: crate::Cause,
+        window: SaveWindow,
+    },
 }
 
 super::codec::closed_object! {
@@ -202,6 +214,7 @@ impl std::error::Error for CaptureCodecError {
 impl CaptureEnvelope {
     pub fn capture_id(&self) -> Option<DecimalU64> {
         match &self.payload {
+            CapturePayload::Directive(_) => None,
             CapturePayload::SavePointBeginning(value) => Some(value.capture_id),
             CapturePayload::SavePointImage(value) => Some(value.capture_id),
             CapturePayload::SavePointImageChecked(value) => Some(value.capture_id),
@@ -228,6 +241,7 @@ impl CaptureEnvelope {
     fn check(&self, sender: CaptureSender) -> Result<(), CaptureCodecError> {
         use CapturePayload::*;
         let (position, direction) = match &self.payload {
+            Directive(_) => (Position::Open, Some(CaptureSender::Admin)),
             SavePointBeginning(_)
             | SavePointImage(_)
             | SavePointImageFinished(_)
@@ -251,6 +265,11 @@ impl CaptureEnvelope {
             ));
         }
         match &self.payload {
+            Directive(CaptureDirective::SavePoint { window, .. }) => {
+                window
+                    .validate()
+                    .map_err(|_| CaptureCodecError::InvalidShape("invalid save window"))?;
+            }
             SavePointBeginning(value) => {
                 value
                     .window
