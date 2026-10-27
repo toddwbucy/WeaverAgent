@@ -596,6 +596,25 @@ fn forced_leave_admin_requires_commit_complete_and_exact_left() {
             },
         );
         assert_eq!(owner.advance(), owner.progress());
+        if matches!(case, "valid" | "graceful" | "graceful-converted") {
+            assert_eq!(owner.finish_leave().unwrap(), published);
+            assert_eq!(
+                fixture.index().last().unwrap().cause,
+                if case == "graceful" {
+                    PersistenceCause::GracefulUnload
+                } else {
+                    PersistenceCause::ForcedUnload
+                },
+                "the validated Left, not the initiating request, settles the save cause: {case}"
+            );
+            drop(owner);
+            assert_eq!(
+                repo.load(None, &fixture.scope()).unwrap().identity(),
+                published
+            );
+        } else {
+            assert!(owner.finish_leave().is_err());
+        }
     }
 }
 

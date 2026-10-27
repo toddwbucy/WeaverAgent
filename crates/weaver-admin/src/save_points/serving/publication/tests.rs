@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use weaver_types::state_flow::SourceBlockId;
 use weaver_types::{TraceSink, parse_serving_draft};
 
+mod causes;
 mod failures;
 mod leave_actor;
 
@@ -593,7 +594,10 @@ fn serving_guard_precedes_prepared_and_requires_commit_and_real_final_outcome() 
         let outcome = if cause == PersistenceCause::Requested {
             FinalOutcome::SavePointTaken(&report)
         } else {
-            FinalOutcome::Left(&report)
+            FinalOutcome::Left {
+                report: &report,
+                forced: cause == PersistenceCause::ForcedUnload,
+            }
         };
         assert_eq!(publication.finish(outcome, &mut alive).unwrap(), identity);
         drop(publication);

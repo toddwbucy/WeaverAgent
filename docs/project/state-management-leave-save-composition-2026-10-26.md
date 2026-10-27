@@ -1,157 +1,120 @@
 # Leave and save composition
 
-Date: 2026-10-26. Author working record for issue #146.
+Date: 2026-10-26. Updated: 2026-10-27. Author record for issue #146.
 Branch: code/state-leave-save-composition. PR: #350.
-Correction parent: 22d29f42f1f712d20e32cb3a500d029b032c69cc.
-Stack base: #347, 534eca304ad4d28d86a423093e7351b7002867d1.
+Correction parent: 6c07dcb876bbea4a0f889c5190bf390cd1cf20df.
+Stack base: #332, code/state-refusal-close-composition.
 
 ## Scope and authority
 
-This composition retains forced and graceful Leave through worker Lower,
-member capture, admin publication, release and the matching final outcome.
-The F2 correction returns a capture deadline observed by the outer wait to the
-existing capture owner. Missing snapshot/finished results receive correlated
-abort and a recorded refusal. A failure from the capture owner's own advance,
-including post-Commit expiry, still enters failed cleanup.
-The Planner accepted F2 at 22d29f42. The J1 correction makes the composed
-fixture read through the refusal's actual Recorded sequence before judging
-its trace. It changes no runtime behavior.
+Forced and graceful Leave retain their original worker, member and admin owners
+through Lower, capture, publication, release and the actual final outcome.
+The operator folded #351/#352/#354/#356 into #350 with their merge ancestry.
+The folded parent's tree equals #356's reviewed tree. This correction answers
+Planner F1 and the operator's Q1 ruling of 2026-10-27: the completed save follows
+the final termination mode, including a graceful Leave converted to forced.
 
-Implements: harness Spec section 6 Leave, Quiesce and wind-down; admin Spec
-section 3 unload and force-unload; foundation PERSIST-SAVE, PERSIST-BEGIN,
-PERSIST-TIME, PERSIST-EXPIRY and PERSIST-PUBLICATION-GUARD; persistence contract
-amendment sections 2-3 PERSIST-CAPTURE, PERSIST-CONFIRM, PERSIST-END,
-PERSIST-IMAGE and PERSIST-CLEANUP; HARNESS-CAPTURE, HARNESS-CONTROL-FAILURE,
-HARNESS-CLOCK, HARNESS-HELD-BOUNDARY, HARNESS-HALT and HARNESS-HALT-BOUND;
-TYPES-PERSIST; ADMIN-SAVE and ADMIN-RECOVERY; STATE-CIRCUIT-INSTRUMENT;
-Spec 05 pair accounting and Spec 06 placement/generation cancellation.
+Implements: foundation PERSIST-LEAVE-CAUSE, PERSIST-FORMAT,
+PERSIST-PUBLICATION-GUARD, PERSIST-BEGIN/TIME/EXPIRY; persistence contract
+amendment section 2 PERSIST-CAPTURE/CONFIRM; ADMIN-SAVE-TIME and admin Spec
+section 3 unload and force-unload; TRACE-PERSIST and TYPES-PERSIST; harness
+Spec section 6 Leave, Quiesce and wind-down; HARNESS-CAPTURE,
+HARNESS-CONTROL-FAILURE, HARNESS-CLOCK, HARNESS-HELD-BOUNDARY and
+HARNESS-HALT-BOUND. The folded stack also retains its demand-save and held
+source/author composition scopes.
 
 **Do not deploy or select foundation.** Production still uses dev_loop::drive.
-The replacement admin invocation remains dormant. #146 and this PR remain
-open; J1 has an author correction pending Planner regrade.
+The replacement admin invocation remains dormant. #146 remains open. The
+operator undrafted #350 during this correction; the new delta needs Planner
+review. No CodeRabbit review was requested.
 
-| Named boundary | Current assessment |
+| Named boundary | Author assessment |
 | --- | --- |
-| PERSIST-BEGIN/TIME/EXPIRY; HARNESS-CLOCK; HARNESS-CONTROL-FAILURE | F2 is Planner-accepted. The original capture and leg windows remain unchanged. Only the capture owner elects abort/refusal or failure. J1 corrects the fixture's later trace read. |
-| TYPES-PERSIST; persistence contract 2 | F1 remains drifted: graceful capture still has a forced trace cause. Q1 needs a shared rule for converted/joined Leave before its correction. No cause rule is elected here. |
-| HARNESS-CAPTURE; PERSIST-CAPTURE | Frozen Recorded frontier and owed filing remain under the existing owner. Planner B10's missing independent controls remain carried. |
-| PERSIST-CONFIRM/IMAGE/CLEANUP/END | The existing owner requires actual abort before a timeout refusal, and preserves late result observations. B1/B2 and L1/L2 remain carried. |
-| ADMIN-SAVE/RECOVERY; PUBLICATION-GUARD | This correction changes no admin behavior. L3/L4 and the publication review carries remain open. |
-| Harness 6; Spec 05/06; HELD-BOUNDARY/HALT/HALT-BOUND | Existing graceful/forced lifecycle, first-failure and ownership rules remain. The review's management and component-death carries remain open. |
-| STATE-CIRCUIT-INSTRUMENT | The affected worker run includes five joint cases with the actual admin participant and normal SQLite member. Synthetic model/classifier peers and test budgets do not qualify deployment. |
+| PERSIST-LEAVE-CAUSE; TYPES-PERSIST; contract section 2 | Conforms to the operator's final-mode ruling. The new foundation clause and code travel together; Planner regrade is pending. |
+| TRACE-PERSIST | Each save phase retains the mode when its event is first submitted. A pending author keeps that original. The terminal unload carries the settled mode. |
+| ADMIN-SAVE-TIME; PERSIST-FORMAT/PUBLICATION-GUARD | The validated Left settles the pending save's index cause before guard removal. Exact prefix, tail, guard and report identity are required. Failure retains guarded evidence. |
+| PERSIST-BEGIN/TIME/EXPIRY; HARNESS-CLOCK | No new window or restart. F2 and J1 are Planner-accepted at cb741ce5; their timeout and bounded trace-read cases pass on this union. |
+| HARNESS-CAPTURE; PERSIST-CAPTURE | The existing frozen frontier and owed filings remain. B10's separate Confirmed/Commit/frontier controls are not claimed by this correction. |
+| Harness 6; HELD-BOUNDARY/HALT-BOUND | Existing S6 conversions and S7 outcome freeze remain. Caller UID and forced_by remain separate from persistence cause. |
 
 ## Correction and caller census
 
 | Site | Handling |
 | --- | --- |
-| FoundationEnteredRollback::wait_with_io | A pump Wait for CaptureResult or CaptureWindow yields Progress only while CleanupStage is Capture. It neither resets a bound nor claims a completed operation. |
-| FoundationEnteredRollback::advance_with_io / handle_error | Errors returned by capture.advance still follow the existing failure path. Moving recovery to the common handler would swallow post-Commit expiry; a compiled control pins this distinction. |
-| LeaveCapture / RecordingContext::capture_live | Existing snapshot/finished timeout handling queues abort on the original request and capture IDs, measures/discards late results and waits for actual Aborted before recording refusal. |
-| Forced and graceful Leave wrappers | Both wait only on Pending and advance their same retained owner afterward. CaptureRefused returns that owner without electing a final Leave answer. |
-| Ordinary entered rollback | It never enters Capture, so its waits and cleanup are unchanged. |
-| Dormant worker runners | Continue the same owner on Progress and return it at CaptureRefused/Closed. Orchestration stays in worker/dev_loop. |
-| Member instrument | Holds a real socket response until it receives the correlated Abort, then sends the late result before Aborted. No private deadline, completion or failure is injected. |
-| Forced/graceful Leave fixture at CaptureRefused | After joining its reader thread, use the existing trace_through helper to read through last_author_sequence under a three-second fixture watch. This covers timeout and explicit refusals. The helper keeps partial lines and fails if the Recorded row never arrives. Other terminal modes keep their existing checks. |
+| ServingCapture / CaptureOrigin | The lifecycle owner supplies its actual current forced flag at begin and each capture step. Requested, Confirmed, Published and Refused use that mode. An already-started trace author retains its original event through backpressure. Demand remains requested. |
+| FoundationEnteredRollback | Carries the current RollbackDials outcome into capture. It freezes that outcome at the existing S7 boundary. No early freeze is introduced to simplify publication. |
+| Capture::finish_leave | Takes forced from the already validated, retained whole Left reply. It cannot finalize before LeftReceived and does not infer the outcome from CaptureComplete or the original command. |
+| Publication::finish / finalize_cause | Requires the matching final report and Published stage. Only the owned, durable, still-pending graceful tail may change to forced. It verifies the full original prefix and tail, atomically replaces the index and syncs before removing the guard. |
+| Failure accounting | An uncertain replacement leaves the save guarded; a retained cause.part file is reported as Part work. Failed or completed publications grant no revision or retry. |
+| Joined force invocation | After the original publisher concludes, verifies the completed index cause against its own actual Left.forced. It never writes the other publisher's metadata. |
+| Successful-Left conclusion | Existing run-end, publication completion and marker duties keep their order. L3/Q2 is not elected or changed by this correction. |
 
-The five new cases cover forced and graceful snapshot timeout, finished timeout,
-a capture window expiring during the snapshot leg, and post-Commit expiry.
-They use real monotonic poll and loaded test allowances: two seconds for the
-snapshot/finished leg and one second for the short-window cases. They check
-that the actual composed wait expires, the original bound is unchanged, the
-late observation keeps its request identity, and the abort observation precedes
-the exact snapshot_timeout or finished_timeout refusal. The late image/finished
-result never reaches publication. Post-Commit expiry still fails the run.
+The index replacement is a narrow, explicit PERSIST-LEAVE-CAUSE exception for
+an incomplete publication. It changes no previous entry, ordinal, artifact
+identity, immutable binding, confirmation or codec shape. The request's cause
+can be provisional while its publication guard blocks load. A late S6 force
+settles the completed metadata; it cannot rewrite prior trace events.
 
-The recoverable cases stop at the existing CaptureRefused boundary with no
-halt, successful report or Unload. They do not claim a delivered
-SavePointNotTaken wire answer, final Left or retry policy. Those final Leave
-outcomes still require #348's approval, review and merge.
+The foundation, admin and trace Specs and the internal admin-harness contract
+amendment state this rule together. No new wire field or external contract
+surface is introduced.
 
 ## Verification
 
-Pinned nightly-2026-02-13, --locked, CARGO_INCREMENTAL=0 and
-CARGO_BUILD_JOBS=4. Fresh private target:
-/tmp/weaver-state-146-capture-trace-target.
-Lock ran before Cargo. Cargo chains and Git mutations were serial; no source
-changed during a build or test invocation.
+Pinned nightly-2026-02-13, --locked, private Cargo target, no incremental
+compilation, four ordinary test threads and one delegated process-test thread.
+The lock gate ran first. Cargo, Git mutations and protective controls were
+serialized. Input hashes were checked after the gates and after restoration.
 
-The Planner reproduced J1 at 22d29f42: a CaptureRefused step can enqueue its
-refusal before the writer reaches the reader. Our unchanged-source baseline
-ran finished timeout and graceful snapshot timeout twenty times each; all
-forty passed. That sample did not reproduce the measured intermittent failure.
-The correction replaces the timing assumption with an actual sequence read.
+- Ordinary admin: 550 passed, 66 ignored. Counts: admin binary 518, relay
+  binary 3, invocation 6, manifest 3 and relay integration 20.
+- Ordinary harness: 2,126 passed, 749 ignored. Counts: library 2,045, worker 7,
+  authorship 11, channels 7, manifest 7, service 10, start_step 1, state_flow 7,
+  and doctests 2 + 29. Nested child summaries are excluded.
+- All 190 affected worker_session_ and worker_graceful_ cases passed in an
+  isolated root-owned delegated scope, with the actual admin test participant
+  and normal SQLite member built from the same source.
+- All four delegated admin-join tests passed, including graceful late joins,
+  forced completion, guarded artifacts and foreign terminal evidence.
+- Both changed crates passed strict all-target clippy. Formatting, diff and
+  first/last lock checks passed.
 
-- Full harness: 2,105 passed, including 31 doctests; 701 ignored by the ordinary
-  invocation. The five new process cases are among those ignores. The #331
-  case was included and passed.
-- Each of the five timeout cases passed twenty individual runs. The existing
-  explicit forced-refusal case also passed twenty, for 120 individual runs.
-- All 153 affected worker_session_ and worker_graceful_ cases passed in one
-  delegated invocation with one test thread. The other worker families from
-  the earlier 637-case F2 gate were not rerun for this fixture-only change.
-- The five joint worker cases each ran the actual admin participant and normal
-  SQLite member, including failed-release cases. No full privileged admin
-  startup gate or production qualification is claimed.
-- Strict harness clippy for all targets, formatting, diff and final lock passed.
-- The full ordinary suite includes the existing helper tests for a delayed,
-  partial Recorded row and a missing row at its deadline. The helper is
-  unchanged. No new runtime mutation claim is made for this fixture change.
-- F2's three compiled controls remain in its earlier evidence deposit: omit
-  CaptureResult handoff, omit CaptureWindow handoff, and swallow capture-owned
-  expiry. Those controls were not rerun here.
-- All 1,024 source-manifest files matched after verification. This working
-  record is updated afterward and is separately included in the deposit.
+Focused tests cover an unchanged graceful Leave, an original forced Leave,
+conversion before confirmation, conversion after confirmation and conversion
+after publication. The composed new join-published case sends real JoinLeave
+packets after Published is Recorded and before S7. It retains the earlier
+trace causes while the actual final unload and all joined answers are forced.
+The existing join-sealed case remains graceful after the S7 boundary.
 
-Count method for B9: use each Cargo test binary's final summary, then both
-rustdoc groups; do not add nested child summaries. The breakdown is library
-2,024; worker 7; authorship 11; channels 7; manifest 7; service 10; start_step 1;
-state_flow 7; doctests 2 + 29. This reproduces 2,105 on this source. The review's
-2,134 is not reproduced by this rule; the complete log and parsed groups are
-preserved without attributing that difference to an unobserved test change.
+Admin tests finalize the actual validated graceful-converted Left. They verify
+unchanged binding bytes and prior index entries, exact final cause, rejection
+of a forced-to-graceful regression, no rewrite of completed saves, foreign or
+missing guard, altered prefix/tail, extra index data, foreign temporary work,
+foreign report identity, and injected failures before and after atomic rename.
 
-B7 prerequisites were built in the same fresh target before the full gate:
+All five compiled protective controls failed their focused tests: hardcode all
+trace causes forced; ignore a capture's later conversion; ignore final Left's
+cause; rewrite without the pending guard check; replace unchecked index bytes.
+The source was restored after each control, and both focused suites passed again. Logs, inventories, source hashes,
+snapshot and control results are retained in the approved evidence deposit.
+These are author checks, not Planner or production qualification.
 
-    cargo build -p weaver-state --features sqlite --bin weaver-state --locked
-    cargo test -p weaver-admin --bin weaver-admin --no-run --locked
+## Remaining work
 
-The worker run supplies WEAVER_STOP_ADMIN_TEST_BIN,
-WEAVER_OBSERVE_ADMIN_TEST_BIN and WEAVER_LEAVE_ADMIN_TEST_BIN with the fresh
-admin test executable named in prerequisites.json. It runs in an isolated
-root-owned delegated scope. These author runs do not grant the Planner
-permission for a separate privileged run.
+F1 has an author correction and Q1 has the operator's ruling; both await the
+new Planner grade. F2 and J1 retain their accepted grades. The other findings
+in review 5657773404 and its regrades are not collectively closed.
+Implementation of the now-merged #348/#349 and #358 rules, L3/Q2's
+completed-save/run-end ordering, the remaining held-owner and failed-run
+boundaries, final dispatcher and
+process-exit integration, qualified artifacts, measured limits and security
+remain open. #360 carries the serving organ-loss work separately. Only the
+operator merges or deploys. The broad #146 goal remains paused.
 
-The current baseline and correction use the same fresh target in this
-worktree. F2's earlier failed baselines and compiled controls remain in their
-own immutable deposit. No baseline run is relabelled as a J1 reproduction.
+The named review skills are unavailable in this environment. Manual reading
+and tests claim neither their invocation nor a waiver.
 
-## Evidence and remaining work
-
-Immutable deposit:
-/bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/state-capture-trace-20261026-dbc6acee/.
-Source archive SHA256:
-dbc6acee409fb71f357c1ce232de4a70b0c2e06ea89eeeb165c8c54bc39da195.
-Source manifest SHA256:
-57b5650613dbdaf4d76d0225ff9578502707afca03e33c4e78f32699758c4fe5.
-
-The F2 runtime evidence remains in the same approved root under
-state-capture-wait-20261026-6602cb7d/.
-
-F2 is Planner-accepted. J1 has an author correction. F1/Q1 remains open. The rest
-of Planner review 5657773404 is not collectively closed. B7 has explicit prerequisites;
-B9 has the reproducible count above. B10's additional mutation claims remain
-unproven by merely running the joint baseline. #348/#349 authority, #350 L3,
-held-owner descendants #351/#352, integration with the #353 join into #332,
-on-demand save, final selection, artifact/limit qualification and security
-remain part of #146. Only the operator merges or deploys.
-
-The required named review skills remain unavailable. Manual review and tests
-do not claim those invocations, Planner clearance or production qualification.
-No CodeRabbit review is triggered by this correction.
-
-The review exposed a distinction the primitive tests missed: a recoverable
-capture deadline can escape through the containing owner's wait. Keep tests
-on the composed wait and keep recovery local to that handoff; recovery in the
-common error handler would hide capture-owned failures.
-J1 also distinguishes Recorded admission from bytes received at the sink. Keep
-composed trace assertions behind the actual Recorded sequence. The bounded
-helper makes that sequence the read boundary.
+The correction exposed two distinct times: a trace event describes the mode
+when it is submitted, while completed save metadata must follow the settled
+termination. Keep that distinction explicit, and retain the publication guard
+until the final cause is durable.

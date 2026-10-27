@@ -4,7 +4,7 @@
 
 **Landing PR:** #268
 
-**Version:** 0.17 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
+**Version:** 0.18 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -259,6 +259,14 @@ CaptureComplete is out of order. A queued-save timeout is CaptureNotReady only w
 worker's typed refusal says so. No answer is Unanswered, never an inferred phase or
 successful outcome. R20-6 governs missing-result retry, and R20-7 forbids completing
 publication after worker failure. [FLOW-5, PERSIST-4]
+
+The exact final Left.forced settles the completed save's cause under foundation
+PERSIST-LEAVE-CAUSE. Admin retains the pending guard while finalizing a converted
+Leave's own last index entry to forced_unload. It does not reuse the initiating
+command's graceful flag for the completed save. A joiner verifies that same settled
+cause after the original publisher finishes; it neither finalizes nor repairs a
+publication. Existing run-end and marker duties keep their order. [PERSIST-2,
+PERSIST-3, FLOW-5, operator 2026-10-27]
 
 These clauses amend admin Spec 3.0 and section 3's leave/save wait routines. The
 protocol fixture checks both graceful bound omissions, finite and forced windows, stale

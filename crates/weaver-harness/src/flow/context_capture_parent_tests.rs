@@ -22,6 +22,9 @@ struct Parent<'a> {
 
 impl<'a> Parent<'a> {
     fn new(run: &'a mut Fixture) -> Self {
+        Self::with_mode(run, true)
+    }
+    fn with_mode(run: &'a mut Fixture, forced: bool) -> Self {
         let (near, far) = socketpair(
             AddressFamily::Unix,
             SockType::SeqPacket,
@@ -45,6 +48,7 @@ impl<'a> Parent<'a> {
             &peer,
             exchange.clone(),
             leave,
+            forced,
             &mut run.clock,
         )
         .unwrap();
@@ -208,106 +212,138 @@ impl<'a> Parent<'a> {
 
 #[test]
 fn leave_capture_parent_records_confirmation_before_commit_and_keeps_tail_after_complete() {
-    let mut run = active();
-    let loaded = run.context.open_start.clone().unwrap();
-    let mut parent = Parent::new(&mut run);
-    assert!(parent.capture.report().is_none());
-    assert!(parent.member.run.context.capture_snapshot().is_none());
-    let (beginning, artifact) = parent.prepared();
-    let frozen = parent.member.run.context.capture_snapshot().unwrap();
-    parent.submit(CapturePayload::SavePointPrepared(artifact.clone()));
-    let commit = parent.next();
-    assert!(
-        matches!(commit.payload, CapturePayload::SavePointCommit(CaptureIdentity { capture_id }) if capture_id == beginning.capture_id)
-    );
-    let records = parent.member.records(Kind::SavePoint);
-    assert_eq!(records.len(), 2);
-    assert_eq!(records[1]["payload"]["phase"], "confirmed");
-    assert!(
-        parent.capture.report().is_none(),
-        "Commit is not publication or completion"
-    );
-    assert!(
-        parent
-            .capture
-            .at_halt(&parent.member.run.context)
-            .commit_sent
-    );
-    assert!(
-        parent
-            .capture
-            .at_halt(&parent.member.run.context)
-            .published
-            .is_none()
-    );
-    assert_eq!(
-        parent.member.run.context.capture_snapshot().unwrap(),
-        frozen
-    );
-    parent.submit(CapturePayload::SavePointPublished(artifact.clone()));
-    let request = parent.request();
-    assert!(
-        matches!(request, s::StateFrame::Control { frame: s::StateControl::ReleaseCapture { capture_id }, .. } if capture_id == beginning.capture_id)
-    );
-    let answer = parent.member.answer(
-        &request,
-        s::StateControlAnswer::CaptureReleased {
-            capture_id: beginning.capture_id,
-        },
-    );
-    parent.member.receive(&answer).unwrap();
-    let complete = parent.next();
-    assert!(
-        matches!(complete.payload, CapturePayload::SavePointCaptureComplete(CaptureIdentity { capture_id }) if capture_id == beginning.capture_id)
-    );
-    for _ in 0..8 {
-        if parent.step().unwrap() == ServingCaptureProgress::Published {
-            break;
+    for mode in [
+        "forced",
+        "graceful",
+        "convert-before-confirmation",
+        "convert-after-confirmation",
+        "convert-after-publication",
+    ] {
+        let mut run = active();
+        let loaded = run.context.open_start.clone().unwrap();
+        let mut parent = Parent::with_mode(&mut run, mode == "forced");
+        assert!(parent.capture.report().is_none());
+        assert!(parent.member.run.context.capture_snapshot().is_none());
+        let (beginning, artifact) = parent.prepared();
+        let frozen = parent.member.run.context.capture_snapshot().unwrap();
+        if mode == "convert-before-confirmation" {
+            parent.capture.observe_leave_mode(true);
+        }
+        parent.submit(CapturePayload::SavePointPrepared(artifact.clone()));
+        let commit = parent.next();
+        assert!(
+            matches!(commit.payload, CapturePayload::SavePointCommit(CaptureIdentity { capture_id }) if capture_id == beginning.capture_id)
+        );
+        let records = parent.member.records(Kind::SavePoint);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[1]["payload"]["phase"], "confirmed");
+        assert!(
+            parent.capture.report().is_none(),
+            "Commit is not publication or completion"
+        );
+        assert!(
+            parent
+                .capture
+                .at_halt(&parent.member.run.context)
+                .commit_sent
+        );
+        assert!(
+            parent
+                .capture
+                .at_halt(&parent.member.run.context)
+                .published
+                .is_none()
+        );
+        assert_eq!(
+            parent.member.run.context.capture_snapshot().unwrap(),
+            frozen
+        );
+        if mode == "convert-after-confirmation" {
+            parent.capture.observe_leave_mode(true);
+        }
+        parent.submit(CapturePayload::SavePointPublished(artifact.clone()));
+        let request = parent.request();
+        assert!(
+            matches!(request, s::StateFrame::Control { frame: s::StateControl::ReleaseCapture { capture_id }, .. } if capture_id == beginning.capture_id)
+        );
+        if mode == "convert-after-publication" {
+            parent.capture.observe_leave_mode(true);
+        }
+        let answer = parent.member.answer(
+            &request,
+            s::StateControlAnswer::CaptureReleased {
+                capture_id: beginning.capture_id,
+            },
+        );
+        parent.member.receive(&answer).unwrap();
+        let complete = parent.next();
+        assert!(
+            matches!(complete.payload, CapturePayload::SavePointCaptureComplete(CaptureIdentity { capture_id }) if capture_id == beginning.capture_id)
+        );
+        for _ in 0..8 {
+            if parent.step().unwrap() == ServingCaptureProgress::Published {
+                break;
+            }
+        }
+        assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Published);
+        let report = parent.capture.report().unwrap();
+        assert_eq!(report.start.seed_id, loaded.seed_id);
+        assert_eq!(report.start.parent_artifact_id, Some(loaded.artifact_id));
+        assert_eq!(report.start.artifact_id, artifact.artifact_id);
+        assert_eq!(report.start.position, None);
+        assert_eq!(
+            report.event_sequence.0,
+            parent
+                .member
+                .run
+                .context
+                .barrier
+                .recorder()
+                .structure()
+                .by_kind(Kind::SavePoint)
+                .nth(1)
+                .unwrap()
+                .sequence
+                .0
+        );
+        assert!(parent.member.run.context.capture_snapshot().is_none());
+        assert!(
+            parent
+                .member
+                .run
+                .context
+                .deadlines
+                .get(PumpDeadline::CaptureWindow)
+                .is_none()
+        );
+        assert_eq!(
+            parent
+                .member
+                .run
+                .context
+                .deadlines
+                .get(PumpDeadline::Leave)
+                .unwrap()
+                .deadline_ns(),
+            beginning.tail_window.unwrap().deadline_ns.0
+        );
+        let records = parent.member.records(Kind::SavePoint);
+        assert_eq!(records.len(), 3);
+        for (phase, record) in records.iter().enumerate() {
+            let forced = mode == "forced"
+                || (mode == "convert-before-confirmation" && phase >= 1)
+                || (mode == "convert-after-confirmation" && phase >= 2);
+            assert_eq!(
+                record["payload"]["cause"],
+                if forced {
+                    "forced_unload"
+                } else {
+                    "graceful_unload"
+                },
+                "{mode}, phase {phase}"
+            );
         }
     }
-    assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Published);
-    let report = parent.capture.report().unwrap();
-    assert_eq!(report.start.seed_id, loaded.seed_id);
-    assert_eq!(report.start.parent_artifact_id, Some(loaded.artifact_id));
-    assert_eq!(report.start.artifact_id, artifact.artifact_id);
-    assert_eq!(report.start.position, None);
-    assert_eq!(
-        report.event_sequence.0,
-        parent
-            .member
-            .run
-            .context
-            .barrier
-            .recorder()
-            .structure()
-            .by_kind(Kind::SavePoint)
-            .nth(1)
-            .unwrap()
-            .sequence
-            .0
-    );
-    assert!(parent.member.run.context.capture_snapshot().is_none());
-    assert!(
-        parent
-            .member
-            .run
-            .context
-            .deadlines
-            .get(PumpDeadline::CaptureWindow)
-            .is_none()
-    );
-    assert_eq!(
-        parent
-            .member
-            .run
-            .context
-            .deadlines
-            .get(PumpDeadline::Leave)
-            .unwrap()
-            .deadline_ns(),
-        beginning.tail_window.unwrap().deadline_ns.0
-    );
-    assert_eq!(parent.member.records(Kind::SavePoint).len(), 3);
 }
 
 #[test]

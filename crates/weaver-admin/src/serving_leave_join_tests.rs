@@ -1,6 +1,7 @@
 //! Actual force admission, locks, containment and indexed-file verification.
 //! The graceful holder and worker's terminal replies are scripted test peers.
 use super::*;
+use crate::save_points::serving::publication::FinalOutcome;
 use crate::save_points::serving::publication::{Progress, Publication, ServingImage};
 use crate::save_points::serving::repository::LoadScope;
 use std::path::{Path, PathBuf};
@@ -207,7 +208,10 @@ fn report(config: &ServiceConfig, loaded: &StartIdentity, mode: &str) -> SavePoi
                 if mode == "wrong-cause" {
                     FinalOutcome::SavePointTaken(&report)
                 } else {
-                    FinalOutcome::Left(&report)
+                    FinalOutcome::Left {
+                        report: &report,
+                        forced: mode != "late",
+                    }
                 },
                 &mut |_| Ok(()),
             )

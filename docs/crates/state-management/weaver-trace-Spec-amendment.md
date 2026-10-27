@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Version:** 0.28 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
+**Version:** 0.29 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
 **Landing branch:** code/state-expired-enter-rollback
 
 ## 0. What this document is
@@ -634,6 +634,15 @@ cause values. A seed or rebind has no live save_point event and is accounted for
 first load's StateStartRecord, which also carries the verified position. TRACE-LOAD's
 FlowDeclarationRecord additionally carries persistence.save_wait under persistence, with
 the same MeasuredWait spelling. [PERSIST-2, PERSIST-5, FLOW-3]
+
+For a Leave, each save_point event uses the termination mode when the harness
+first submits that event: graceful_unload until conversion, then forced_unload.
+A pending author retains its original event through backpressure. A later S6
+conversion does not rewrite an earlier trace event, even a published event. The
+terminal unload.forced records the settled mode, and the completed index cause
+follows that mode under foundation PERSIST-LEAVE-CAUSE. The original caller cause
+and forced_by are separate lifecycle facts. Demand events remain requested.
+[PERSIST-2, FLOW-5, operator 2026-10-27]
 
 window and tail_window are explicit trace-owned mirrors of TYPES-SAVE-TIME's SaveWindow,
 with decimal raw CLOCK_MONOTONIC timestamps. tail_window is null on demand. Each phase
