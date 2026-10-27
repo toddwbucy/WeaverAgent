@@ -2165,6 +2165,14 @@ scenario!(worker_input_composition_checker_eof, "input-check-eof");
 scenario!(worker_input_composition_management, "input-management");
 scenario!(worker_input_composition_fault_before_input, "input-fault");
 scenario!(
+    worker_input_composition_observation_waits,
+    "input-organ-wait"
+);
+scenario!(
+    worker_correction_composition_cancel_before_refusal_close,
+    "input-generation-emission-correction-fit-refusal-cancel-before-close"
+);
+scenario!(
     worker_input_composition_report_held_at_rest,
     "input-report-held"
 );
@@ -5104,4 +5112,9 @@ scenario!(
 scenario!(
     worker_session_demand_save_sqlite_organ_loss_spu_release,
     "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-spu-release"
+);
+
+scenario!(
+    worker_session_demand_save_sqlite_organ_loss_spu_queued_report,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-report-queued-spu-release"
 );

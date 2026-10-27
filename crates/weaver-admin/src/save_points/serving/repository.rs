@@ -243,6 +243,7 @@ impl Repository {
             .iter()
             .find(|entry| entry.artifact_id == selector && entry.arrival == Arrival::Published)
             .ok_or_else(|| layout("joined artifact has no publication entry"))?;
+        self.refuse_guard(&selector)?;
         let cause = if forced {
             PersistenceCause::ForcedUnload
         } else {
@@ -259,7 +260,6 @@ impl Repository {
                 "joined report differs from the published capture",
             ));
         }
-        self.refuse_guard(&selector)?;
         let artifact = self.verify_files(entry.clone())?;
         if artifact.identity() != report.start
             || crate::inventory::sink_directory(&artifact.declaration().agent().trace_sink)

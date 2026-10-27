@@ -71,6 +71,40 @@ fn final_left_settles_only_the_pending_tail_cause_and_keeps_artifact_identity() 
 }
 
 #[test]
+fn joined_converted_leave_checks_pending_and_broken_guards_before_cause() {
+    for broken in [false, true] {
+        let fixture = Fixture::new();
+        let mut repo = fixture.repository();
+        let loaded = fixture.seed_complete(&mut repo);
+        let mut publication =
+            fixture.capture(&mut repo, &loaded, 3, PersistenceCause::GracefulUnload);
+        let identity = publish(&mut publication, 3);
+        if broken {
+            publication.failed("converted Leave ended before finalization");
+        }
+        drop(publication);
+        let before = fixture.index_bytes();
+        let error = repo
+            .verify_completed_leave(
+                &report(&identity, 3),
+                true,
+                fixture.trace_path.parent().unwrap(),
+            )
+            .unwrap_err();
+        assert_eq!(error.case, PersistenceCase::BrokenSavePoint);
+        assert_eq!(fixture.index_bytes(), before);
+        fixture.assert_guarded(
+            &identity,
+            if broken {
+                PublicationState::Broken
+            } else {
+                PublicationState::Pending
+            },
+        );
+    }
+}
+
+#[test]
 fn final_left_cannot_downgrade_a_forced_publication() {
     let fixture = Fixture::new();
     let mut repo = fixture.repository();

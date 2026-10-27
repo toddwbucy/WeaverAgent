@@ -669,6 +669,7 @@ impl FoundationEnteredRollback {
                         .advance_leaving_organ_faults(&mut ports, gate.world_closed())?,
                     crate::flow::context::serving_organ_loss::ObservationProgress::Pending { .. }
                 ) {
+                    self.progress = FoundationEnteredRollbackProgress::Pending;
                     return Ok(());
                 }
             }

@@ -101,10 +101,10 @@ if case=='eof-postcommit': sys.exit(0)
 os.unlink(finished)
 reply(c,exchange,'save_point_capture_complete',{'capture_id':capture})
 if case=='late-silent': remain()
-if case=='guard-tamper':
+if case in ('guard-tamper','guard-tamper-cleanup'):
     guard_json=json.load(open(guard)); guard_json['capture_id']='10'
     with open(guard,'w') as out: json.dump(guard_json,out)
-if case in ('cgroup-record','failed-cleanup'):
+if case in ('cgroup-record','failed-cleanup','guard-tamper-cleanup'):
     with open(f['cgroup_record'],'w') as out: out.write('broken record')
 if case=='marker-write': os.mkdir(os.path.join(f['root'],'.run.marker.new'))
 report={'event_run':f['facts']['run'],'event_sequence':'12','capture_id':capture,'start':{k:entry[k] for k in ['seed_id','artifact_id','dump_sha256','config_sha256','parent_artifact_id','position']}}
@@ -484,7 +484,7 @@ fn root_case(case: &str) {
         if matches!(case, "success" | "escalate") || graceful {
             assert_eq!(
                 index[1]["cause"],
-                if graceful {
+                if graceful && case != "graceful-converted" {
                     "graceful_unload"
                 } else {
                     "forced_unload"
@@ -526,7 +526,7 @@ fn root_case(case: &str) {
         let expected = match case {
             "eof-postcommit" | "foreign-left" | "failed-cleanup" => "failed_run",
             "eof-precommit" => "unanswered",
-            "guard-tamper" => "state_persistence_invalid",
+            "guard-tamper" | "guard-tamper-cleanup" => "state_persistence_invalid",
             "cgroup-record" | "marker-write" => "boundary_unverified",
             _ => unreachable!(),
         };
@@ -551,10 +551,10 @@ fn root_case(case: &str) {
             for artifact in &evidence.publication_failure.as_ref().unwrap().artifacts {
                 assert!(failure.to_string().contains(&artifact.location));
             }
-        } else if case == "guard-tamper" {
+        } else if matches!(case, "guard-tamper" | "guard-tamper-cleanup") {
             assert_eq!(value["stage"], "publish");
             assert_eq!(value["case"], "publication_failed");
-        } else if case == "marker-write" {
+        } else if matches!(case, "cgroup-record" | "marker-write") {
             assert!(failure.to_string().contains("completed save remains"));
             assert!(value.get("published").is_none());
         }
@@ -577,7 +577,7 @@ fn root_case(case: &str) {
                 "{case}: {:?}",
                 failure.cause
             ),
-            "guard-tamper" => assert!(
+            "guard-tamper" | "guard-tamper-cleanup" => assert!(
                 matches!(failure.cause, Fault::Sequence(FailureCause::Publication(_))),
                 "{case}: {:?}",
                 failure.cause
@@ -594,7 +594,8 @@ fn root_case(case: &str) {
         }
         assert_eq!(
             failure.cleanup.as_deref(),
-            (case == "failed-cleanup").then_some(&LifecycleRefusal::BoundaryUnverified)
+            (matches!(case, "failed-cleanup" | "guard-tamper-cleanup"))
+                .then_some(&LifecycleRefusal::BoundaryUnverified)
         );
         let evidence = failure
             .evidence
@@ -610,16 +611,26 @@ fn root_case(case: &str) {
             save_points::load_marker(&f.config.root).unwrap(),
             initial_marker
         );
-        if case == "marker-write" {
-            assert!(evidence.completed.is_some());
+        if matches!(case, "cgroup-record" | "marker-write") {
+            assert_eq!(
+                evidence.completed,
+                Some(evidence.report.as_ref().unwrap().start.clone())
+            );
             assert!(guarded.is_empty());
+            assert!(
+                selected.is_ok(),
+                "a cleanup failure cannot revoke a completed save"
+            );
         } else {
             assert!(evidence.completed.is_none());
             assert_eq!(guarded.len(), 1);
         }
     }
     assert!(!start::run_lock_held(&run_dir).unwrap(), "{case}: {log}");
-    if !matches!(case, "cgroup-record" | "failed-cleanup") {
+    if !matches!(
+        case,
+        "cgroup-record" | "failed-cleanup" | "guard-tamper-cleanup"
+    ) {
         assert!(
             !run_dir.join(crate::containment::RECORD).exists(),
             "{case}: {log}"
@@ -647,6 +658,7 @@ fn forced_leave_invocation_retains_guard_on_protocol_and_conclusion_failure() {
         "eof-postcommit",
         "foreign-left",
         "guard-tamper",
+        "guard-tamper-cleanup",
         "cgroup-record",
         "failed-cleanup",
         "marker-write",

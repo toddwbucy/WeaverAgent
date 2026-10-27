@@ -4,7 +4,7 @@
 
 **Landing PR:** #349
 
-**Version:** 0.21 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
+**Version:** 0.22 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -130,8 +130,15 @@ Admin retains that same deadline through encoding, descriptor carry, socket pres
 worker scheduling and the answer. Bound those operations by the original deadline;
 check it before and after each work unit and after receipt/decode before accepting the
 matching Ready. A readable socket or a completed send is not a timely Enter answer.
-At now >= deadline_ns the load is expired: admit no further ordinary load work or late
-Ready, report the existing unanswered-load NoResidency outcome unless an actual
+Acceptance of that timely validated Ready ends the Enter window. The subsequent Open
+marker write, including its file and directory syncs, must succeed before Loaded, but
+its elapsed time cannot revoke Ready. A marker-write failure still follows the
+existing load-failure and rollback rules. This narrows the checks below to work before
+accepting Ready. [CLASS-8, PERSIST-6, operator 2026-10-27]
+
+At now >= deadline_ns, before a timely Ready has been accepted, the load is expired:
+admit no further ordinary load work or late Ready, report the existing unanswered-load
+NoResidency outcome unless an actual
 failure already determines the result, and run the existing rollback of what this
 invocation stood. That local timeout is not a fabricated peer refusal. A rollback
 containment failure retains its existing precedence over the load's refusal.
@@ -349,8 +356,21 @@ PERSIST-LEAVE-CAUSE. Admin retains the pending guard while finalizing a converte
 Leave's own last index entry to forced_unload. It does not reuse the initiating
 command's graceful flag for the completed save. A joiner verifies that same settled
 cause after the original publisher finishes; it neither finalizes nor repairs a
-publication. Existing run-end and marker duties keep their order. [PERSIST-2,
-PERSIST-3, FLOW-5, operator 2026-10-27]
+publication. [PERSIST-2, PERSIST-3, FLOW-5, operator 2026-10-27]
+
+**ADMIN-SAVE-COMPLETION.** For the replacement Serving conclusion only, replace admin
+Spec 3.0 and section 6's requirement that publication follows run end. Under the
+invocation lock, the existing marker rule must first permit this publisher's
+conclusion for the observed run. After the exact timely successful Left, finish
+PERSIST-LEAVE-CAUSE and remove and sync the pending guard before waiting for run end
+and ending the agent cgroup. Once that save completes, a later run-end or marker-write
+failure preserves its eligibility and identity, reports the cleanup or marker failure,
+and writes no successful conclusion marker. Unloaded still requires successful run
+cleanup and the existing marker and show rules. If finalization itself fails, retain
+the failed publication evidence and still attempt cleanup; retain both failures when
+both fail. A closed, absent or different-run marker retains the existing idempotent
+no-publication rule. A joiner remains a verifier, never a second publisher.
+[PERSIST-2, PERSIST-3, FLOW-5, operator 2026-10-27]
 
 For pre-Commit leave refusal, follow foundation PERSIST-LEAVE-REFUSAL. A local
 preparation refusal sends SavePointAborted and retains the exchange until the worker's

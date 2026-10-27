@@ -1,6 +1,6 @@
 # Leave and save composition
 
-Date: 2026-10-26. Updated: 2026-10-27. Author record for issue #146.
+Date filed: 2026-10-26. Author record for issue #146.
 Branch: code/state-leave-save-composition. PR: #350.
 Correction parent: 6c07dcb876bbea4a0f889c5190bf390cd1cf20df.
 Stack base: #332, code/state-refusal-close-composition.

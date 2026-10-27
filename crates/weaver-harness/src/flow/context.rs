@@ -2114,7 +2114,7 @@ impl RecordingContext {
         };
         // Retain the original dead ports and their evidence with their owners.
         // Only exact identities observed by serving lifecycle stop polling.
-        let ended_gate = ports
+        let mut ended_gate = ports
             .gate
             .take_if(|port| self.serving_organs.gate_matches(port));
         let ended_decode = ports
@@ -2132,9 +2132,9 @@ impl RecordingContext {
         let receive_wake = ended_gate.as_deref().and_then(|gate| {
             (gate.held().is_none() && gate.closed_receive_pending()).then_some(self.last_ns)
         });
-        let observation_wake = self
-            .serving_organs
-            .wake()
+        let observation_wake = (self.phase != RecordingPhase::Failed)
+            .then(|| self.serving_organs.wake())
+            .flatten()
             .into_iter()
             .chain(receive_wake)
             .min();
@@ -2151,6 +2151,22 @@ impl RecordingContext {
             wait,
             observation_wake,
         );
+        // This wake is local receive work, not a request that every caller
+        // know how to drain an ended gate. Read one packet only after the pump
+        // has checked real sources and the original terminal deadlines. A
+        // malformed tail returns its retained refusal rather than spinning.
+        let step = match step {
+            Ok(PumpStep::Observation) if receive_wake.is_some() => ended_gate
+                .as_deref_mut()
+                .unwrap()
+                .receive_closed()
+                .map(|_| PumpStep::Observation)
+                .map_err(|failure| PumpFailure::Transport {
+                    source: PumpSource::Gate,
+                    failure,
+                }),
+            other => other,
+        };
         if let Some(port) = ended_gate {
             ports.gate = Some(port);
         }

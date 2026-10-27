@@ -136,6 +136,20 @@ fn worker_input_gate_child() {
         }
     }
     packet(3, &frame(&mode, 101));
+    if mode == "input-organ-wait" {
+        let end = Instant::now() + Duration::from_secs(5);
+        while !root.join("organ-close-now").exists() {
+            assert!(Instant::now() < end);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        nix::sys::socket::shutdown(3, nix::sys::socket::Shutdown::Both).unwrap();
+        std::fs::write(root.join("organ-closed"), b"closed with stderr open").unwrap();
+        while !root.join("organ-settled").exists() {
+            assert!(Instant::now() < end);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        return;
+    }
     if mode == "input-report-held" {
         for (ordinal, stage) in [(201, "accepted"), (202, "turn")] {
             let watch = Instant::now() + Duration::from_secs(10);
@@ -608,6 +622,35 @@ pub(in super::super) fn exercise(
         FoundationInputProgress::Accepted
     };
     assert_eq!(owner.progress(), expected, "{:?}", owner.detail());
+    if mode == "input-organ-wait" {
+        std::fs::write(root.join("organ-close-now"), b"close").unwrap();
+        let end = Instant::now() + Duration::from_secs(5);
+        while !root.join("organ-closed").exists() {
+            assert!(Instant::now() < end);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let before = clock.now().unwrap();
+        let waits = clock.waits().len();
+        for step in 0..100 {
+            owner.advance_with_io(clock);
+            assert!(owner.failure.is_none(), "{:?}", owner.detail());
+            if owner.serving.owner.context.serving_organs.any()
+                && !owner.serving.owner.context.has_owed_organ_observation()
+            {
+                break;
+            }
+            assert!(
+                step < 99,
+                "advance spun instead of waiting for organ settlement"
+            );
+        }
+        assert!(clock.now().unwrap() >= before + 200_000_000);
+        assert!(clock.waits().len() >= waits + 20);
+        assert_eq!(owner.progress(), FoundationInputProgress::Accepted);
+        assert!(owner.serving.owner.context.serving_organs.wake().is_none());
+        std::fs::write(root.join("organ-settled"), b"settled").unwrap();
+        return;
+    }
     if mode == "input-report-held" {
         held_report_at_rest(owner, clock, root, "accepted");
     }

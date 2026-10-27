@@ -239,7 +239,8 @@ fn run_mode(
         });
     }
     let mut completed = None;
-    match conclude(config, bounds, &mut leave, &mut completed) {
+    let mut cleanup = None;
+    match conclude(config, bounds, &mut leave, &mut completed, &mut cleanup) {
         Ok(answer) => Ok(Concluded {
             answer,
             evidence: Some(Box::new(evidence(leave, completed))),
@@ -251,7 +252,7 @@ fn run_mode(
             }
             Err(Failure {
                 cause,
-                cleanup: None,
+                cleanup,
                 evidence: Some(Box::new(evidence(leave, completed))),
                 joined: None,
             })
@@ -304,6 +305,7 @@ fn conclude(
     bounds: UnloadBounds,
     leave: &mut Capture<'_>,
     completed: &mut Option<StartIdentity>,
+    cleanup: &mut Option<Box<LifecycleRefusal>>,
 ) -> Result<LifecycleAnswer, Fault> {
     let run = leave.observed.facts.run.clone();
     let marker = crate::read_marker_or_refuse(config);
@@ -317,17 +319,31 @@ fn conclude(
             .map_err(Fault::Admission)?;
         return crate::unloaded_by_ladder(config).map_err(Fault::Admission);
     }
-    end_run(config, bounds, &run, leave.verb()).map_err(Fault::Admission)?;
+    // A validated Left and this run's eligible marker complete the exact
+    // guarded save before process cleanup. A later cleanup failure still
+    // refuses Unloaded, but cannot make that completed save ineligible.
+    let publication = if matches!(&marker, Ok(Some(save_points::Marker::Open { run: open })) if *open == run.0)
+    {
+        leave
+            .finish_leave()
+            .map(|identity| *completed = Some(identity))
+            .map_err(Fault::Sequence)
+    } else {
+        Ok(())
+    };
+    let ended = end_run(config, bounds, &run, leave.verb());
+    if let Err(cause) = publication {
+        *cleanup = ended.err().map(Box::new);
+        return Err(cause);
+    }
+    ended.map_err(Fault::Admission)?;
     if !matches!(marker.map_err(Fault::Admission)?, Some(save_points::Marker::Open { run: open }) if open == run.0)
     {
         // The idempotent conclusion writes/publishes nothing for an already
         // closed or absent marker. Any guarded capture remains ineligible.
         return crate::unloaded_by_ladder(config).map_err(Fault::Admission);
     }
-    // This exact, timely whole Left already ended the protocol waits. Expected
-    // EOF or the old capture deadline cannot revoke it during run cleanup.
-    // In particular do not reuse the pre-Left socket/clock checkpoint here.
-    *completed = Some(leave.finish_leave().map_err(Fault::Sequence)?);
+    // Marker closure and Unloaded still require successful run cleanup.
     crate::write_by_rule(config, Some(&run.0), conclusion::MarkerWrite::Closed)
         .map_err(Fault::Admission)?;
     crate::unloaded_by_ladder(config).map_err(Fault::Admission)

@@ -4,7 +4,7 @@
 
 **Landing PR:** #349
 
-**Version:** 0.24 **Date filed:** 2026-10-20 **Document ID:**
+**Version:** 0.25 **Date filed:** 2026-10-20 **Document ID:**
 `state-management-foundation-Spec` **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -366,8 +366,10 @@ cause. The original caller cause and forced_by retain their lifecycle meanings.
 A demand save remains requested. [PERSIST-2, FLOW-5, operator 2026-10-27]
 
 Admin initially indexes the Leave request's cause while its publication guard still
-blocks load. After the exact matching Left and the existing successful-Left duties,
-before removing that guard, the same publisher finalizes its pending entry's cause.
+blocks load. After the exact matching Left and the existing marker-rule eligibility
+check, the same publisher finalizes its pending entry's cause before removing that
+guard. ADMIN-SAVE-COMPLETION places this completion before run-end and marker-write
+duties; a later cleanup failure cannot revoke the completed save.
 This is the sole exception to preserving appended index records: only
 graceful_unload may become forced_unload, only in this publisher's last entry, under
 its retained invocation lock and exact durable pending guard. Admin verifies the entire
@@ -469,7 +471,7 @@ rewrite follows from this distinction. [FLOW-3, PERSIST-3, PERSIST-4, STORE-5, C
 | Publishing | Rename, index append and sync complete | Send Published, AwaitOutcome |
 | AwaitOutcome, on demand | Matching SavePointTaken | Validate report against indexed artifact, answer caller, Done |
 | AwaitOutcome, leave | Matching SavePointCaptureComplete | Disarm capture window, retain shared/outer leave windows, AwaitLeft |
-| AwaitLeft | Matching Left | Validate indexed report and normal leave duties, finalize PERSIST-LEAVE-CAUSE under the pending guard, answer caller, Done |
+| AwaitLeft | Matching Left | Validate indexed report and marker eligibility, finalize PERSIST-LEAVE-CAUSE and the pending guard under ADMIN-SAVE-COMPLETION, then complete run-end and marker duties before answering Unloaded; preserve the completed save on a later cleanup refusal, Done |
 | AwaitImage or AwaitFinished, on demand | SavePointNotTaken after worker cleanup | Cancel unconfirmed publication, refuse caller, Done, merged retry remains available |
 | Any before Commit, on demand | Explicit worker refusal or local preparation error | Send Aborted where the exchange permits, remove unlisted root part, refuse caller, Done |
 | After Beginning and before Commit, leave | Local preparation error | Send one Aborted with the same capture ID, retain its bytes through partial carry, remove unlisted root part, AwaitCaptureRefused under unchanged windows |
@@ -662,8 +664,10 @@ locations:Vec<String>}. PublicationState is pending or broken. locations are
 admin-derived artifact/part names relative to the judged save-point root, never caller
 paths. The file survives rename/index append. After the matching final SavePointTaken or
 successful Left and PERSIST-LEAVE-CAUSE finalization, admin removes it and fsyncs
-the parent before reporting success. It is
-protocol custody metadata, not a fourth file in a completed save-point directory.
+the parent before reporting success. For Leave, ADMIN-SAVE-COMPLETION completes this
+save before subsequent run-end and marker duties; a failure of those duties still
+refuses the command but leaves the completed save eligible. It is protocol custody
+metadata, not a fourth file in a completed save-point directory.
 [PERSIST-2, PERSIST-3, PERSIST-4, R20-7, R20-20]
 
 A failed or uncertain operation keeps the guard. On observed failure admin atomically

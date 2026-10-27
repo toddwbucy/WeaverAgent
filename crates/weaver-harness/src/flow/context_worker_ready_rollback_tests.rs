@@ -445,7 +445,12 @@ pub(in crate::flow::context::worker_startup) fn finish(
             bytes
         });
         let _stop = StopThreads(&done);
-        let owner = match worker::entered_rollback(run, actual) {
+        let result = if mode.contains("-organ-settling") {
+            run.entered_rollback(actual)
+        } else {
+            worker::entered_rollback(run, actual)
+        };
+        let mut owner = match result {
             Ok(owner) => owner,
             Err((mut run, mut handoff)) => {
                 crate::flow::context::worker_startup::tests::reap(
@@ -455,6 +460,42 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 panic!("the original run rejected its successful Ready rollback handoff");
             }
         };
+        if mode.contains("-organ-settling") {
+            let mut waited = false;
+            let end = Instant::now() + Duration::from_secs(10);
+            loop {
+                let progress = owner.advance();
+                assert!(
+                    Instant::now() < end,
+                    "rollback must settle under its original bound"
+                );
+                if owner
+                    .test_account()
+                    .0
+                    .context
+                    .serving_organs
+                    .wake()
+                    .is_some()
+                {
+                    assert_eq!(
+                        progress,
+                        FoundationEnteredRollbackProgress::Pending,
+                        "rollback must tell the driver to wait for observation settlement"
+                    );
+                    waited = true;
+                }
+                if progress == FoundationEnteredRollbackProgress::Closed {
+                    break;
+                }
+                if progress == FoundationEnteredRollbackProgress::Pending {
+                    owner.wait_for_progress();
+                }
+            }
+            assert!(
+                waited,
+                "the child kept stderr open across rollback's observation wait"
+            );
+        }
         done.store(true, Ordering::SeqCst);
         responder.join().unwrap();
         (owner, recorder.join().unwrap())

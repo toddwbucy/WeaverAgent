@@ -59,6 +59,33 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
         let root = std::path::PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
         wait_file(&root, "organ-loss-image-held");
         eprintln!("{{\"fixture\":\"SPU last word before image verification\"}}");
+        if mode.ends_with("-spu-release") {
+            if mode.contains("-report-queued-") {
+                // Decode EOF wakes a worker waiting on the paused capture.
+                // The residency report remains unsent until that loss is seen.
+                nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
+                wait_file(&root, "spu-report-requested");
+            }
+            packet!(
+                3,
+                &OrganEnvelope {
+                    exchange: weaver_types::ExchangeId {
+                        opener: Opener::Spu,
+                        ordinal: 301
+                    },
+                    position: Position::Close,
+                    payload: Payload::Fault(weaver_types::FaultReport {
+                        case: weaver_types::FaultCase::ResidencyDegraded,
+                        account: serde_json::value::RawValue::from_string(
+                            "{ \"last_report\" : [1,  2] }".into()
+                        )
+                        .unwrap(),
+                    }),
+                }
+            );
+            std::fs::write(root.join("spu-report-sent"), b"sent").unwrap();
+            wait_file(&root, "spu-report-held");
+        }
         return;
     }
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
@@ -319,10 +346,89 @@ pub(in crate::flow::context::worker_startup) fn handoff(
         });
         let _stop = StopThreads(&done);
         let mut queued = false;
+        let mut report_pinned = false;
         let end = Instant::now() + Duration::from_secs(20);
         loop {
             assert!(Instant::now() < end, "organ loss driver stalled");
             if let Some(input) = &mut guard.input {
+                if mode.ends_with("-spu-release")
+                    && !report_pinned
+                    && root.join("organ-loss-image-held").exists()
+                {
+                    std::fs::write(root.join("spu-report-requested"), b"send original report")
+                        .unwrap();
+                    wait_file(root, "spu-report-sent");
+                    let watch = Instant::now() + Duration::from_secs(3);
+                    let queued_report = mode.contains("-report-queued-");
+                    while !queued_report && input.serving.owner.resident.residency.held().is_none()
+                    {
+                        input
+                            .serving
+                            .owner
+                            .resident
+                            .residency
+                            .try_receive()
+                            .unwrap();
+                        assert!(Instant::now() < watch);
+                        std::thread::yield_now();
+                    }
+                    std::fs::write(root.join("spu-report-held"), b"held before EOF").unwrap();
+                    let mut io = crate::flow::clock::MonotonicIo;
+                    let loss = loop {
+                        let step = if queued_report {
+                            input
+                                .serving
+                                .owner
+                                .decode
+                                .try_receive()
+                                .map(|_| ())
+                                .map_err(|failure| crate::flow::context::RunFailure::Transport {
+                                    source: crate::flow::pump::PumpSource::Decode,
+                                    failure,
+                                })
+                        } else {
+                            input.observe(&mut io)
+                        };
+                        if let Err(loss) = step {
+                            break loss;
+                        }
+                        assert!(
+                            Instant::now() < watch,
+                            "actual SPU must exit with its report held"
+                        );
+                        std::thread::yield_now();
+                    };
+                    assert!(input.retain_organ_end(&loss, &mut io).unwrap());
+                    assert!(
+                        input
+                            .serving
+                            .owner
+                            .context
+                            .serving_organs
+                            .residency_matches(input.serving.owner.resident.residency)
+                    );
+                    if queued_report {
+                        assert!(
+                            input.serving.owner.resident.residency.held().is_none(),
+                            "decode EOF was observed before receiving the final residency packet"
+                        );
+                    } else {
+                        assert_eq!(
+                            input
+                                .serving
+                                .owner
+                                .resident
+                                .residency
+                                .held()
+                                .unwrap()
+                                .exchange
+                                .ordinal,
+                            301
+                        );
+                    }
+                    assert!(input.report.is_none());
+                    report_pinned = true;
+                }
                 if expiry
                     && !pressure
                     && input.serving.owner.context.serving_organs.any()
@@ -448,6 +554,14 @@ pub(in crate::flow::context::worker_startup) fn handoff(
         assert!(leave.is_some());
         let input = guard.input.as_ref().unwrap();
         assert!(input.serving.owner.context.failure().is_none());
+        if mode.ends_with("-spu-release") {
+            assert!(report_pinned);
+            assert!(input.report.is_none());
+            assert!(
+                input.serving.owner.resident.residency.held().is_none(),
+                "final SPU Fault must leave the dead port"
+            );
+        }
         assert!(input.serving.save.is_none());
         assert!(input.serving.owner.context.capture_snapshot().is_none());
         let graceful = input.serving.graceful.as_ref().unwrap();
@@ -470,6 +584,23 @@ pub(in crate::flow::context::worker_startup) fn handoff(
         Instant::now() + Duration::from_secs(3),
     )
     .unwrap();
+    if mode.ends_with("-spu-release") {
+        let reports: Vec<_> = rows
+            .iter()
+            .filter(|row| row["kind"] == "fault" && row["payload"]["case"] == "residency_degraded")
+            .collect();
+        assert_eq!(
+            reports.len(),
+            1,
+            "the exact final Fault is recorded once after loss"
+        );
+        assert_eq!(reports[0]["subsystem"], "spu");
+        assert!(reports[0]["turn"].is_null());
+        assert_eq!(
+            reports[0]["payload"]["account"],
+            serde_json::json!({"last_report":[1,2]})
+        );
+    }
     assert_eq!(expiry_seen, expiry);
     let expected_refusals = if mode.ends_with("-spu") { 2 } else { 0 };
     assert_eq!(refused_worlds, expected_refusals);

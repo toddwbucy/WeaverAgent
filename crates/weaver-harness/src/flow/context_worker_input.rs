@@ -262,7 +262,9 @@ impl<'a> FoundationInput<'a> {
             .and_then(|()| self.advance_organ_faults(None, io))
             .and_then(|ready| {
                 if !ready {
-                    return self.observe_with_wait(io, wait);
+                    // Pending settlement must wait even when the driver calls advance.
+                    // The common pump still serves every socket and original bound.
+                    return self.observe_with_wait(io, true);
                 }
                 self.advance_save(io)?;
                 if self.save_blocks_turn() {
@@ -474,37 +476,43 @@ impl<'a> FoundationInput<'a> {
             return Ok(());
         }
         let owner = &mut self.serving.owner;
-        // One nonblocking read preserves a final report/result queued before
-        // closure. Its sole port keeps non-report packets for their own owner.
-        if owner.gate.held().is_none() {
-            let received = if owner.gate.failure().is_none() {
-                owner.gate.try_receive()
-            } else if owner.gate.closed_receive_pending() {
-                owner.gate.receive_closed()
-            } else {
-                Ok(crate::flow::pump_transport::ReceiveProgress::Pending)
-            };
-            received.map_err(|failure| RunFailure::Transport {
-                source: PumpSource::Gate,
-                failure,
-            })?;
-        }
-        if owner.gate.held().is_some_and(|frame| {
-            frame.exchange.opener == Opener::Gate && matches!(frame.payload, Payload::Fault(_))
-        }) {
-            let received = owner
-                .gate
-                .take_received()
-                .map_err(|failure| RunFailure::Transport {
-                    source: PumpSource::Gate,
-                    failure,
-                })?
-                .expect("held gate report");
-            self.report = Some(report::Report::new(
-                owner.context,
-                received,
+        for (port, subsystem, source, opener) in [
+            (
+                &mut owner.gate,
                 Subsystem::Gate,
-            ));
+                PumpSource::Gate,
+                Opener::Gate,
+            ),
+            (
+                &mut *owner.resident.residency,
+                Subsystem::Spu,
+                PumpSource::Residency,
+                Opener::Spu,
+            ),
+        ] {
+            // A Fault and EOF can arrive together, including an unread final
+            // packet when another seam first reports the same organ's loss.
+            // Read once into the original port's sole slot; never reopen it.
+            if port.held().is_none() {
+                let received = if port.failure().is_none() {
+                    port.try_receive()
+                } else if port.closed_receive_pending() {
+                    port.receive_closed()
+                } else {
+                    Ok(crate::flow::pump_transport::ReceiveProgress::Pending)
+                };
+                received.map_err(|failure| RunFailure::Transport { source, failure })?;
+            }
+            if port.held().is_some_and(|frame| {
+                frame.exchange.opener == opener && matches!(frame.payload, Payload::Fault(_))
+            }) {
+                let received = port
+                    .take_received()
+                    .map_err(|failure| RunFailure::Transport { source, failure })?
+                    .expect("held original organ report");
+                self.report = Some(report::Report::new(owner.context, received, subsystem));
+                break;
+            }
         }
         Ok(())
     }
@@ -560,25 +568,6 @@ impl<'a> FoundationInput<'a> {
                         HaltPoint::Barrier,
                         "unexpected serving residency reply",
                     ));
-                }
-                if !owner
-                    .context
-                    .serving_organs
-                    .residency_matches(ports.lifecycle.residency.as_deref().unwrap())
-                    && let Some(received) = ports
-                        .lifecycle
-                        .residency
-                        .as_deref_mut()
-                        .unwrap()
-                        .take_received()
-                        .map_err(|failure| RunFailure::Transport {
-                            source: PumpSource::Residency,
-                            failure,
-                        })?
-                {
-                    self.report =
-                        Some(report::Report::new(owner.context, received, Subsystem::Spu));
-                    return Ok(());
                 }
                 if self.received.is_none() {
                     if owner

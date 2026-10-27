@@ -260,6 +260,37 @@ pub(in crate::flow::context) fn exercise(
             assert!(input.serving.owner.context.repair.is_some());
             assert!(input.serving.owner.context.place_close().is_none());
             assert!(!root.join("correction-appended-1.json").exists());
+            if mode.ends_with("cancel-before-close") {
+                stop(&mut guard, member, clock, mode, socket, root);
+                let input = guard.input.as_mut().unwrap();
+                let work = input.engine.as_mut().unwrap().emission.as_mut().unwrap();
+                assert!(work.cancelled_repair.is_some() && work.account.is_none());
+                assert!(work.closing_refusal.is_none());
+                assert_eq!(work.progress(), FoundationInputProgress::OperationRefused);
+                assert_eq!(
+                    work.close_correction_refusal(),
+                    Err(FoundationInputProgress::OperationRefused)
+                );
+                work.cancel(
+                    NonDispatchCause::Unload,
+                    input.serving.owner.context,
+                    Some(input.serving.owner.decode),
+                    Some(&mut input.serving.owner.gate),
+                    clock,
+                )
+                .unwrap();
+                assert!(work.stage == EmissionStage::Cancelled);
+                assert!(work.cancelled_repair.is_some() && work.account.is_none());
+                assert!(input.serving.owner.context.failure().is_none());
+                let rows = trace(reader);
+                assert_eq!(
+                    rows.iter()
+                        .filter(|row| row["kind"] == "turn.closed")
+                        .count(),
+                    1
+                );
+                return;
+            }
             input.close_correction_refusal().unwrap();
             if mode.contains("refusal-boundary-") {
                 return refusal_boundary(guard, member, reader, clock, socket, root, mode);

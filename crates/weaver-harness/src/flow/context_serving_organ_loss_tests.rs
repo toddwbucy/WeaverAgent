@@ -173,6 +173,7 @@ fn organ_loss_halt_preserves_exact_ticket_and_records_once_without_a_live_copy()
     let mut fx = InputFixture::new();
     fx.fill_trace();
     let first = install_and_latch(&mut fx);
+    fx.run.context.serving_organs.wake_ns = Some((true, fx.run.context.last_ns));
     let deadline = fx.run.context.halt().unwrap().deadline();
     let copies = fx.run.context.flow.ledger().facts().count();
     assert_eq!(
@@ -181,6 +182,10 @@ fn organ_loss_halt_preserves_exact_ticket_and_records_once_without_a_live_copy()
             .advance_halt_trace(&mut fx.run.clock)
             .unwrap(),
         HaltTraceProgress::Pending
+    );
+    assert!(
+        fx.run.context.serving_organs.wake().is_none(),
+        "halt must retire the serving observation's old wake"
     );
     let ticket = fx.run.context.pending_author().unwrap().ticket;
     let original = format!("{:?}", fx.run.context.pending_author().unwrap().event);
@@ -498,6 +503,10 @@ fn closed_gate_receive_debt_stays_runnable_before_its_terminal_deadline() {
         fx.run.context.pump_with_wait(&mut ports, true).unwrap(),
         PumpStep::Observation
     );
+    assert!(
+        !ports.gate.as_deref().unwrap().closed_receive_pending(),
+        "the common pump consumed the closed-tail wake even without an input owner"
+    );
     assert_eq!(
         fx.run.context.deadlines.get(PumpDeadline::Decision),
         Some(bound)
@@ -595,4 +604,48 @@ fn organ_observation_resumes_its_recorded_completion_after_save_expiry() {
     assert!(record_next_save(&mut fx.run.context, &mut ports).0 > sequence.0);
     assert_eq!(fx.records(Kind::Fault).len(), 1);
     assert_eq!(fx.records(Kind::SavePoint).len(), 1);
+}
+
+#[test]
+fn closed_gate_malformed_tail_returns_its_refusal_without_an_input_driver() {
+    use std::os::fd::AsRawFd;
+    let mut fx = InputFixture::new();
+    let now = fx.run.clock.now().unwrap();
+    let (channel, peer) = crate::channel::OrganChannel::pair().unwrap();
+    let mut gate = OrganPort::from_channel(channel).unwrap();
+    gate.stage(weaver_types::OrganEnvelope {
+        exchange: weaver_types::ExchangeId {
+            opener: weaver_types::Opener::Harness,
+            ordinal: 99,
+        },
+        position: weaver_types::Position::Open,
+        payload: weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Lower),
+    })
+    .unwrap();
+    gate.try_send().unwrap();
+    let raw = b"{ \"malformed_tail\" : [";
+    nix::sys::socket::send(
+        peer.as_fd().as_raw_fd(),
+        raw,
+        nix::sys::socket::MsgFlags::MSG_NOSIGNAL,
+    )
+    .unwrap();
+    drop(peer);
+    let first = gate.try_receive().unwrap_err();
+    assert_eq!(first.fault, crate::ChannelFault::Closed);
+    fx.run.context.serving_organs.gate = Some(ObservedGate {
+        port: gate.port_identity(),
+        observation: None,
+    });
+    let mut io = crate::flow::clock::testing::FakePumpIo::new(now);
+    let mut ports = ports(&mut io);
+    ports.gate = Some(&mut gate);
+    for _ in 0..2 {
+        assert!(matches!(fx.run.context.pump_with_wait(&mut ports, true),
+            Err(RunFailure::Transport { source: PumpSource::Gate, failure })
+                if failure.fault == crate::ChannelFault::Undecodable));
+        let gate = ports.gate.as_deref().unwrap();
+        assert_eq!(gate.failure(), Some(&first));
+        assert_eq!(gate.failed_wire(), Some(raw.as_slice()));
+    }
 }

@@ -1,9 +1,7 @@
 # Serving loss and retained reports
 
 Date filed: 2026-10-27. Author working record for issue #146.
-Branch: code/state-serving-organ-loss.
-Base: #350 at 3a0f9d9538db205a74fc475e157a365a9777a83c.
-Merge order: #360 into #350, then #350 into #332, then #332 into main.
+Branch: code/state-refusal-close-composition. Base: main. PR: #332.
 
 A gate exit during a tool call now retains the original report and any result
 already sent by that gate, contains the actual tools, files the resulting pair
@@ -61,17 +59,17 @@ session. No invocation or waiver is claimed.
 
 ## Planner review disposition at the revised head
 
-The merge order is #360 into #350, then #350 into #332, then #332 into main.
-The base is code/state-leave-save-composition at 3a0f9d95. Merge ancestry retains
-that correction and main at 2cdfa715. No parent union was squashed or replayed.
-The operator alone merges. #332 remains draft.
+The fold retains #360 and #350 through their original merge ancestry. The
+[current folded review record](state-management-folded-serving-review-2026-10-27.md)
+carries the additional #332 corrections and final gate scope. The validation
+figures below apply to the earlier #360 head 134fbe80. Only the operator merges.
 
 | Review row | Disposition and evidence |
 | --- | --- |
-| G1 / C8 | Corrected. Observation advance returns its wake to the common pump, which retains real interests and earlier terminal deadlines. The non-waiting path does not sleep. Separate tests pin both the observation and the common wait. |
+| G1 / C8 | Corrected. Observation advance returns its wake to the common pump, which retains real interests and earlier terminal deadlines. Pending observation work now waits through that pump even when its caller uses advance. Separate tests pin both the observation and the common wait. |
 | C1 / X1 / X4 | Corrected. Waiting also yields to the existing report, retaining a second Fault on its original port. An actual two-report process case records both in arrival order after the held original returns. Accepted, Turn, Refused, Aborted and Completed stages retain a pending report without entering the input-work panic arm. The real gate-process test exercises Accepted and Turn with an earlier held original, then records exactly one report after that original is returned. |
 | C2 / X6 | Corrected for the crossed held-packet boundary. A withheld rollback gate can use only the rollback owner's retained exact port identity. Missing identity, foreign identity and an explicitly supplied foreign port still refuse. The held packet remains untouched. This does not claim every failed-report handoff. |
-| C4 | Corrected. An observed closed gate with an empty receive slot and pending tail receive supplies an immediate wake through the common pump. Reset/interruption cannot leave that local receive waiting only for Decision expiry. Real sources and an already expired terminal deadline keep precedence. |
+| C4 | Corrected. An observed closed gate with an empty receive slot and pending tail receive supplies an immediate wake through the common pump, which performs that receive. Reset/interruption cannot leave that local receive waiting only for Decision expiry. Real sources and an already expired terminal deadline keep precedence. |
 | C5 | Guarded. Only an executing call can acquire a new terminal wait during gate settlement. A boundary test uses a recorded batch, a retained owner and no execution, with its wait removed to isolate that predicate. This is not a reproduction of every claimed between-call path. |
 | C6 | Corrected for unstarted queued-save records. Eligibility requires Entered. Releasing yields while keeping the original request. Already-admitted save authors and the complete release handoff remain under the existing integration limit. |
 | H7 | The release proof no longer depends on later-input handling. A separate actual-SPU-exit case completes its healthy SQLite save, performs the later forced Leave, reaps the child and records Unconfirmed. Removing the known-dead residency branch must fail this case. |
@@ -79,7 +77,7 @@ The operator alone merges. #332 remains draft.
 | X2 | Corrected. An owed rejected reply is checked before a terminal Decision wait is armed. The actual rejected packet retains its original wait and author across trace pressure and closure of the same gate; it then records exactly once. |
 | X3 | Corrected for ordinary accepted Leave/rollback. The consuming owner advances the same observation after mandatory Lower transport work and cannot pass the gate stage with observation debt. Its original last-word anchor and author claim remain unchanged. Unlatched Serving containment can use only the actual gate's private, completed Leave-sweep proof. Two actual gate EOF cases enter rollback during the last-word window, with containment already latched and still unlatched, and record one serving-death account before Unload. |
 | X9 | Corrected. The exact port-minted capture ticket can withdraw its wholly unsent bytes after Closed, retaining the first failure and returning the original packet. Other failures remain refusals. A disconnected-admin case revokes the original Commit before member Abort, records the capture refusal and leaves the run live. |
-| X7 | Retained batch in the SPU loss/received-report composition act. A held SPU Fault before observed EOF still needs intake and recording after residency is marked lost. The H7 release case does not establish that packet race. |
+| X7 | Corrected in the folded #332 act. Held and unread queued SPU Fault packets enter the same report owner after observed loss; separate actual process/SQLite/Leave cases pin both orderings. The earlier H7 release-only case did not establish either packet race. |
 | X11 | Retained batch in graceful conversion: an interrupted SaveQueued/CaptureWindow observation can delay setting forced until the existing drain bound. No new window or successful continuation is claimed. |
 | X12 | Retained batch in accepted Stop/pair cancellation: an unsent request still uses live-port withdrawal while gate settlement yields. The exact closed-port send witness and existing Decision bound must carry through that caller. |
 | X15 | Required self-check skill availability remains an explicit process carry; no invocation or waiver is claimed. |
@@ -90,9 +88,9 @@ The operator alone merges. #332 remains draft.
 
 | Changed boundary | Callers and new surface |
 | --- | --- |
-| Observation wake | FoundationInput and FoundationManagement advance the retained observation. RecordingContext lends its wake to CommonPump, used by ordinary input, turn and lifecycle waits. Non-waiting advance stays local. |
+| Observation wake | FoundationInput and FoundationManagement advance the retained observation. RecordingContext lends its wake to CommonPump, used by ordinary input, turn and lifecycle waits. Pending observation work uses the common blocking wait from advance as well as drive. |
 | Pending report | FoundationInput's progress remains Pending until Recorded. Its at-rest step does no input work. Report validates a supplied port first, or the private withheld rollback identity. No public identity or new port is introduced. |
-| Closed receive wake | All RecordingContext pump callers retain terminal precedence and real readiness probes. Only the exact observed gate with no held packet and an outstanding closed receive becomes immediately runnable. No send is re-enabled. |
+| Closed receive wake | All RecordingContext pump callers retain terminal precedence and real readiness probes. Only the exact observed gate with no held packet and an outstanding closed receive becomes immediately runnable, and the pump performs that receive. No send is re-enabled. |
 | Ordinary Leave / rollback | After actual Lower transport progress, refresh the original children and advance retained observation debt. A private exact-gate sweep proof can settle earlier containment. No move to Capture/Grants until every owed observation records. Failed-run teardown remains separately limited. |
 | Capture withdrawal | LifecyclePeer delegates the exact capture send ticket. Closed permits withdrawal of only the original wholly unsent datagram; no send is enabled and the failure stays latched. |
 | Gate settlement | A pending rejection owns its existing wait before terminal arming. Executing pairs retain the existing terminal wait. A batch with no executing call gets no new wait from this observation. Existing waits are not cleared or renewed. |
@@ -110,7 +108,7 @@ that separate gap and remains excluded. The new release-only case answers H7.
 The capture-refusal composition act implements #348/#349's S4-S7 teardown and
 publication outcomes. Neither act is completed by this review correction.
 
-## Validation
+## Validation at #360 head 134fbe80
 
 - 2,157 ordinary harness tests and doctests passed; 778 ignored by that invocation. Nested child summaries are excluded from this count.
 - Three runs of all 703 selected non-joint worker cases passed at default parallelism. All six joint admin/SQLite cases passed serially, for 709 distinct selected worker cases. The only excluded worker case is the disclosed later-input SPU-loss case awaiting merged #358's implementation.
@@ -164,7 +162,7 @@ The latest fixture setup corrections are retained with the evidence: the rejecti
 
 ## Remaining integration and limits
 
-- Carry X7, X11 and X12 through the SPU report, graceful-conversion and Stop/pair-cancellation acts, respectively.
+- Carry X11 and X12 through the graceful-conversion and Stop/pair-cancellation acts, respectively. The folded review record carries X7's correction and new evidence.
 - Complete C3/X5/X8 and C10/X14's still-owed observation/report handoff through graceful
   and failed teardown, including actual tools evidence, retired-port identity,
   first-observed order and the original halt cap.
@@ -189,4 +187,4 @@ the transport/security audit.
 
 The checkpoint is a reviewable implementation slice. These author checks are
 not a Planner grade, security disposition, production qualification or epic
-completion. #332 stays draft until the operator's final review stopping point.
+completion. The folded review record states the current review boundary.

@@ -195,6 +195,8 @@ impl RecordingContext {
 
     pub(in crate::flow::context) fn advance_halt_organ_observation(&mut self) -> HaltTraceProgress {
         assert_eq!(self.phase, RecordingPhase::Failed);
+        // Halt owns its settlement wake under the original halt cap.
+        self.serving_organs.wake_ns = None;
         for gate in self.serving_organs.order() {
             let Some(mut observation) = self.serving_organs.take(gate) else {
                 continue;

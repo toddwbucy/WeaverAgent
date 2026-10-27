@@ -8,6 +8,13 @@ mod member;
 pub(crate) mod window;
 use window::LoadWindow;
 
+#[cfg(test)]
+type ReadyMarkerHook = Box<dyn FnOnce(&LoadWindow)>;
+#[cfg(test)]
+thread_local! {
+    static BEFORE_READY_MARKER: std::cell::RefCell<Option<ReadyMarkerHook>> = const { std::cell::RefCell::new(None) };
+}
+
 use std::os::fd::{AsFd, AsRawFd};
 use std::process::Child;
 #[cfg(test)]
@@ -324,8 +331,13 @@ fn start_load(
     }
     match answer.payload {
         weaver_types::Payload::Answer(LifecycleAnswer::Ready) => {
+            // The timely validated Ready ends Enter. Marker durability is
+            // still required, but elapsed marker I/O cannot revoke that Ready.
+            #[cfg(test)]
+            if let Some(hook) = BEFORE_READY_MARKER.with_borrow_mut(Option::take) {
+                hook(window);
+            }
             crate::open_marker(&config.root, standing, &run.0)?;
-            window.check()?;
             Ok(Loaded {
                 state: prepared.loaded_state(),
             })

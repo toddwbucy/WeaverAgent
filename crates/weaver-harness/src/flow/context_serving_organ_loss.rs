@@ -40,7 +40,7 @@ pub(super) struct ObservedOrgans {
     gate: Option<ObservedGate>,
     spu: Option<ObservedSpu>,
     first_gate: Option<bool>,
-    wake_ns: Option<u64>,
+    wake_ns: Option<(bool, u64)>,
 }
 
 struct ObservedGate {
@@ -83,7 +83,12 @@ impl OwedOrganObservation {
 
 impl ObservedOrgans {
     pub(super) fn wake(&self) -> Option<u64> {
-        self.wake_ns
+        let (gate, wake) = self.wake_ns?;
+        self.observation(gate)
+            .filter(|observation| {
+                observation.sequence.is_none() && observation.unavailable.is_none()
+            })
+            .map(|_| wake)
     }
 
     fn order(&self) -> [bool; 2] {
@@ -538,7 +543,7 @@ impl RecordingContext {
             match result? {
                 ObservationProgress::Complete => (),
                 pending @ ObservationProgress::Pending { wake_ns } => {
-                    self.serving_organs.wake_ns = Some(wake_ns);
+                    self.serving_organs.wake_ns = Some((gate, wake_ns));
                     return Ok(pending);
                 }
                 pending => return Ok(pending),

@@ -429,6 +429,20 @@ fn root_case(case: &str) {
         .join(&identity.artifact_id)
         .join("state.sqlite");
     let inode = std::os::unix::fs::MetadataExt::ino(&fs::metadata(&image_path).unwrap());
+    if case.starts_with("ready-marker-") {
+        let marker_part = f.config.root.join(".run.marker.new");
+        let fail_write = case == "ready-marker-failure";
+        BEFORE_READY_MARKER.with_borrow_mut(|hook| {
+            *hook = Some(Box::new(move |window| {
+                let until = window.remaining().expect("Ready was accepted within Enter");
+                std::thread::sleep(until + Duration::from_millis(10));
+                assert_eq!(window.check(), Err(LifecycleRefusal::NoResidency));
+                if fail_write {
+                    fs::create_dir(marker_part).unwrap();
+                }
+            }))
+        });
+    }
     let started = Instant::now();
     let result = run_authorized(
         &f.config,
@@ -484,7 +498,7 @@ fn root_case(case: &str) {
             "the original answer bound was extended"
         );
     }
-    if case == "ready" {
+    if case == "ready" || case == "ready-marker-delay" {
         let loaded = result.unwrap();
         let LoadedStateFacts::Serving { start, .. } = loaded.state else {
             panic!("serving facts");
@@ -515,6 +529,8 @@ fn root_case(case: &str) {
     } else {
         let expected = if matches!(case, "timeout" | "refused" | "eof") {
             LifecycleRefusal::NoResidency
+        } else if case == "ready-marker-failure" {
+            LifecycleRefusal::BoundaryUnverified
         } else {
             LifecycleRefusal::Malformed
         };
@@ -612,6 +628,7 @@ fn root_case(case: &str) {
             .iter()
             .any(|v| v == "--classify-binary")
     );
+    assert!(BEFORE_READY_MARKER.with_borrow_mut(Option::take).is_none());
     crate::TEST_WORKER_UID.with(|uid| uid.set(None));
 }
 
@@ -619,6 +636,16 @@ fn root_case(case: &str) {
 #[ignore = "root-owned delegated cgroup scope; isolated protocol-double processes"]
 fn admin_startup_composition_ready_retains_exact_image_and_descriptor_custody() {
     root_case("ready");
+}
+#[test]
+#[ignore = "root-owned delegated cgroup scope; isolated protocol-double processes"]
+fn admin_startup_composition_timely_ready_survives_marker_work_after_enter_deadline() {
+    root_case("ready-marker-delay");
+}
+#[test]
+#[ignore = "root-owned delegated cgroup scope; isolated protocol-double processes"]
+fn admin_startup_composition_marker_failure_after_ready_still_rolls_back() {
+    root_case("ready-marker-failure");
 }
 #[test]
 #[ignore = "root-owned delegated cgroup scope; isolated protocol-double processes"]

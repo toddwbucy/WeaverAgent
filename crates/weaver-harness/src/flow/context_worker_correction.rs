@@ -338,7 +338,8 @@ impl EmissionWork {
                     correction.generation,
                     Some(GenerationCompletion::Refused(_))
                 )
-        }) || work.closing_refusal.is_some()
+        }) || work.cancelled.is_some()
+            || work.closing_refusal.is_some()
         {
             return Err(FoundationInputProgress::OperationRefused);
         }
