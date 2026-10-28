@@ -152,11 +152,11 @@ fn pending(owner: &mut Capture<'_>) {
     );
 }
 
-fn through_prepared<'a>(
+fn through_beginning<'a>(
     fixture: &Fixture,
     repo: &'a mut Repository,
     case: &str,
-) -> (Capture<'a>, OwnedFd, ExchangeId, CaptureArtifact) {
+) -> (Capture<'a>, OwnedFd, ExchangeId) {
     let loaded = seed(fixture, repo);
     let observed = observed(fixture, repo, &loaded, "valid").unwrap();
     let (channel, peer) = pair();
@@ -236,6 +236,15 @@ fn through_prepared<'a>(
         }),
     );
     pending(&mut owner);
+    (owner, peer, exchange)
+}
+
+fn through_prepared<'a>(
+    fixture: &Fixture,
+    repo: &'a mut Repository,
+    case: &str,
+) -> (Capture<'a>, OwnedFd, ExchangeId, CaptureArtifact) {
+    let (mut owner, peer, exchange) = through_beginning(fixture, repo, case);
     fixture.write_room("capture-9.sqlite.part", CAPTURE_BYTES);
     packet(
         &peer,
@@ -292,6 +301,361 @@ fn forced_leave_admin_pins_actual_observe_before_requesting_capture() {
         assert_eq!(fixture.index().len(), 1);
         assert_eq!(fixture.names().len(), 2);
     }
+}
+
+fn refused_packet(peer: &OwnedFd, exchange: &ExchangeId, missed: SavePointLeg) {
+    packet(
+        peer,
+        exchange,
+        CapturePayload::SavePointCaptureRefused(CaptureRefused {
+            capture_id: 9.into(),
+            missed,
+        }),
+    );
+}
+
+#[test]
+fn refused_leave_admin_awaits_final_outcome_and_removes_only_unconfirmed_publication() {
+    for mode in ["forced", "graceful", "graceful-converted"] {
+        let fixture = Fixture::new();
+        let mut repo = fixture.repository();
+        let (mut owner, peer, exchange, _) = through_prepared(&fixture, &mut repo, mode);
+        refused_packet(&peer, &exchange, SavePointLeg::Published);
+        pending(&mut owner);
+        assert!(
+            owner.finish_leave().is_err(),
+            "acknowledgement is no saved Leave"
+        );
+        assert_eq!(fixture.index().len(), 1);
+        assert_eq!(
+            fixture.names().len(),
+            2,
+            "unconfirmed part and owned guard removed"
+        );
+        packet(
+            &peer,
+            &exchange,
+            if mode == "graceful" {
+                CapturePayload::Refusal(CaptureRefusal::Save(SaveRefusal::SavePointNotTaken {
+                    missed: SavePointLeg::Published,
+                }))
+            } else {
+                CapturePayload::Answer(CaptureAnswer::Left {
+                    save_point: None,
+                    forced: true,
+                    no_state: false,
+                })
+            },
+        );
+        assert_eq!(
+            owner.advance(),
+            if mode == "graceful" {
+                LeaveProgress::Stopped
+            } else {
+                LeaveProgress::LeftReceived
+            },
+            "{mode}: {:?}",
+            owner.failure()
+        );
+        if mode == "graceful" {
+            assert!(matches!(owner.failure(), Some(FailureCause::WorkerOutcome)));
+        } else {
+            assert!(owner.failure().is_none());
+        }
+        assert!(
+            owner.finish_leave().is_err(),
+            "refused capture has no save to finalize"
+        );
+        assert_eq!(fixture.index().len(), 1);
+    }
+}
+
+#[test]
+fn refused_leave_admin_rejects_publication_restart_duplicate_ack_and_wrong_final_shape() {
+    for case in [
+        "duplicate",
+        "complete",
+        "commit",
+        "report",
+        "no-state",
+        "unforced",
+        "wrong-leg",
+        "forced-refusal",
+    ] {
+        let fixture = Fixture::new();
+        let mut repo = fixture.repository();
+        let (mut owner, peer, exchange, _) = through_prepared(
+            &fixture,
+            &mut repo,
+            if case == "forced-refusal" {
+                "forced"
+            } else {
+                "graceful"
+            },
+        );
+        refused_packet(&peer, &exchange, SavePointLeg::Published);
+        pending(&mut owner);
+        let payload = match case {
+            "duplicate" => CapturePayload::SavePointCaptureRefused(CaptureRefused {
+                capture_id: 9.into(),
+                missed: SavePointLeg::Published,
+            }),
+            "complete" => CapturePayload::SavePointCaptureComplete(CaptureIdentity {
+                capture_id: 9.into(),
+            }),
+            "commit" => CapturePayload::SavePointCommit(CaptureIdentity {
+                capture_id: 9.into(),
+            }),
+            "wrong-leg" | "forced-refusal" => {
+                CapturePayload::Refusal(CaptureRefusal::Save(SaveRefusal::SavePointNotTaken {
+                    missed: if case == "wrong-leg" {
+                        SavePointLeg::Finished
+                    } else {
+                        SavePointLeg::Published
+                    },
+                }))
+            }
+            _ => {
+                let saved = (case == "report").then(|| {
+                    let loaded = fixture
+                        .repository()
+                        .load(None, &fixture.scope())
+                        .unwrap()
+                        .identity();
+                    report(&loaded, 9)
+                });
+                CapturePayload::Answer(CaptureAnswer::Left {
+                    save_point: saved,
+                    forced: case != "unforced",
+                    no_state: case == "no-state",
+                })
+            }
+        };
+        packet(&peer, &exchange, payload);
+        assert_eq!(owner.advance(), LeaveProgress::Stopped, "{case}");
+        assert!(
+            matches!(owner.failure(), Some(FailureCause::Protocol(_))),
+            "{case}: {:?}",
+            owner.failure()
+        );
+        assert_eq!(fixture.index().len(), 1);
+    }
+}
+
+#[test]
+fn refused_leave_admin_accepts_the_acknowledgement_at_a_hashing_checkpoint() {
+    let fixture = Fixture::new();
+    let mut repo = fixture.repository();
+    let (mut owner, peer, exchange) = through_beginning(&fixture, &mut repo, "forced");
+    fixture.write_room("capture-9.sqlite.part", CAPTURE_BYTES);
+    packet(
+        &peer,
+        &exchange,
+        CapturePayload::SavePointImage(CaptureImage {
+            capture_id: 9.into(),
+            room_name: "capture-9.sqlite.part".into(),
+            size_bytes: (CAPTURE_BYTES.len() as u64).into(),
+            position: Some(position(9)),
+        }),
+    );
+    pending(&mut owner);
+    refused_packet(&peer, &exchange, SavePointLeg::Answer);
+    pending(&mut owner);
+    assert_eq!(fixture.names().len(), 2);
+    let mut wire = [0; 128];
+    assert_eq!(
+        recv(peer.as_raw_fd(), &mut wire, MsgFlags::MSG_DONTWAIT),
+        Err(nix::errno::Errno::EAGAIN),
+        "no ImageChecked after CaptureRefused"
+    );
+    packet(
+        &peer,
+        &exchange,
+        CapturePayload::Answer(CaptureAnswer::Left {
+            save_point: None,
+            forced: true,
+            no_state: false,
+        }),
+    );
+    assert_eq!(
+        owner.advance(),
+        LeaveProgress::LeftReceived,
+        "{:?}",
+        owner.failure()
+    );
+}
+
+#[test]
+fn refused_leave_admin_expired_capture_cannot_accept_queued_acknowledgement_or_left() {
+    for graceful in [false, true] {
+        let fixture = Fixture::new();
+        let mut repo = fixture.repository();
+        let loaded = seed(&fixture, &mut repo);
+        let observed = observed(&fixture, &repo, &loaded, "valid").unwrap();
+        let (channel, peer) = pair();
+        let begin = if graceful {
+            Capture::graceful
+        } else {
+            Capture::begin
+        };
+        let mut owner = begin(
+            observed,
+            &mut repo,
+            channel,
+            open_directory(&fixture.room).unwrap(),
+            fixture.owner.uid,
+            weaver_types::Cause { uid: 73 },
+            Duration::from_secs(30),
+        )
+        .unwrap();
+        pending(&mut owner);
+        let directive: weaver_types::OrganEnvelope = serde_json::from_slice(&read(&peer)).unwrap();
+        let now = crate::serving_load::window::raw_ns().unwrap();
+        let deadline = now + 250_000_000;
+        let began = deadline - SAVE_NS;
+        packet(
+            &peer,
+            &directive.exchange,
+            CapturePayload::SavePointBeginning(CaptureBeginning {
+                capture_id: 9.into(),
+                window: weaver_types::state_flow::SaveWindow {
+                    began_ns: began.into(),
+                    deadline_ns: deadline.into(),
+                },
+                tail_window: Some(weaver_types::state_flow::SaveWindow {
+                    began_ns: began.into(),
+                    deadline_ns: (began + weaver_types::LEAVE_BOUND_MS * 1_000_000).into(),
+                }),
+            }),
+        );
+        pending(&mut owner);
+        while let Some(remaining) =
+            deadline.checked_sub(crate::serving_load::window::raw_ns().unwrap())
+        {
+            std::thread::sleep(Duration::from_nanos(remaining + 1));
+        }
+        // Both whole frames are queued before the next receive. Readiness
+        // cannot replace the already expired, unchanged capture deadline.
+        refused_packet(&peer, &directive.exchange, SavePointLeg::Answer);
+        packet(
+            &peer,
+            &directive.exchange,
+            CapturePayload::Answer(CaptureAnswer::Left {
+                save_point: None,
+                forced: true,
+                no_state: false,
+            }),
+        );
+        for _ in 0..3 {
+            assert_eq!(owner.advance(), LeaveProgress::Stopped);
+            assert!(matches!(
+                owner.failure(),
+                Some(FailureCause::Channel(ChannelFault::Unanswered))
+            ));
+            assert!(owner.finish_leave().is_err());
+        }
+        assert_eq!(fixture.index().len(), 1);
+        assert_eq!(fixture.names().len(), 2);
+    }
+}
+
+#[test]
+fn refused_leave_admin_preparation_error_sends_one_abort_then_requires_cleanup_and_left() {
+    for outcome in ["clean", "worker-aborted", "crossed-commit"] {
+        let fixture = Fixture::new();
+        let mut repo = fixture.repository();
+        let (mut owner, peer, exchange) = through_beginning(&fixture, &mut repo, "forced");
+        packet(
+            &peer,
+            &exchange,
+            CapturePayload::SavePointImage(CaptureImage {
+                capture_id: 9.into(),
+                room_name: "capture-9.sqlite.part".into(),
+                size_bytes: (CAPTURE_BYTES.len() as u64).into(),
+                position: Some(position(9)),
+            }),
+        );
+        pending(&mut owner);
+        pending(&mut owner); // The named room file is missing: actual preparation error.
+        pending(&mut owner); // Carry the original Aborted, retaining the same wait.
+        let CapturePayload::SavePointAborted(aborted) = response(&peer) else {
+            panic!()
+        };
+        assert_eq!(aborted.capture_id, 9.into());
+        assert_eq!(aborted.code, "publication_failed");
+        assert!(owner.finish_leave().is_err());
+        packet(
+            &peer,
+            &exchange,
+            match outcome {
+                "worker-aborted" => CapturePayload::SavePointAborted(aborted),
+                "crossed-commit" => CapturePayload::SavePointCommit(CaptureIdentity {
+                    capture_id: 9.into(),
+                }),
+                _ => CapturePayload::SavePointCaptureRefused(CaptureRefused {
+                    capture_id: 9.into(),
+                    missed: SavePointLeg::Answer,
+                }),
+            },
+        );
+        if outcome == "clean" {
+            pending(&mut owner); // Worker's first attribution wins over admin's Published.
+            packet(
+                &peer,
+                &exchange,
+                CapturePayload::Answer(CaptureAnswer::Left {
+                    save_point: None,
+                    forced: true,
+                    no_state: false,
+                }),
+            );
+            assert_eq!(
+                owner.advance(),
+                LeaveProgress::LeftReceived,
+                "{:?}",
+                owner.failure()
+            );
+        } else {
+            assert_eq!(owner.advance(), LeaveProgress::Stopped);
+        }
+        assert_eq!(fixture.index().len(), 1);
+    }
+}
+
+#[test]
+fn refused_leave_admin_cleanup_failure_cannot_restart_the_cancelled_exchange() {
+    let fixture = Fixture::new();
+    let mut repo = fixture.repository();
+    let (mut owner, peer, exchange, prepared) = through_prepared(&fixture, &mut repo, "forced");
+    let guard = fixture
+        .root
+        .join(format!(".{}.pending", prepared.artifact_id));
+    fs::write(&guard, b"foreign publication guard").unwrap();
+    refused_packet(&peer, &exchange, SavePointLeg::Published);
+    assert_eq!(owner.advance(), LeaveProgress::Stopped);
+    assert!(matches!(
+        owner.failure(),
+        Some(FailureCause::Publication(_))
+    ));
+    assert_eq!(owner.advance(), LeaveProgress::Stopped);
+    assert_eq!(fs::read(&guard).unwrap(), b"foreign publication guard");
+    assert_eq!(fixture.index().len(), 1);
+    let mut bytes = [0; 1024];
+    assert_eq!(
+        recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
+        Err(nix::errno::Errno::EAGAIN),
+        "cleanup failure after CaptureRefused must not send another Aborted"
+    );
+}
+
+#[test]
+fn refused_capture_acknowledgement_cannot_replace_a_demand_outcome() {
+    let fixture = Fixture::new();
+    let mut repo = fixture.repository();
+    let (mut owner, peer, exchange) = through_beginning(&fixture, &mut repo, "demand");
+    refused_packet(&peer, &exchange, SavePointLeg::Answer);
+    assert_eq!(owner.advance(), LeaveProgress::Stopped);
+    assert!(matches!(owner.failure(), Some(FailureCause::Protocol(_))));
 }
 
 #[test]

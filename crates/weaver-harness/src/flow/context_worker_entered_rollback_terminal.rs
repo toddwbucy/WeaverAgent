@@ -59,6 +59,7 @@ pub(super) struct EnteredRollbackTerminal {
     refusal: Option<LifecycleRefusal>,
     answer: Option<AnswerCarry>,
     capture: Option<SavePointReport>,
+    serving: bool,
     forced: bool,
     send: Option<OrganSend>,
     _returned_answer: Option<AnswerCarry>,
@@ -104,6 +105,7 @@ impl EnteredRollbackTerminal {
             refusal,
             answer: None,
             capture: None,
+            serving: false,
             forced: true,
             send: None,
             _returned_answer: None,
@@ -114,7 +116,13 @@ impl EnteredRollbackTerminal {
 
     pub(super) fn captured(&mut self, report: SavePointReport) {
         assert!(self.stage == Stage::Unload && self.capture.is_none());
+        self.serving = true;
         self.capture = Some(report);
+    }
+
+    pub(super) fn refused_capture(&mut self) {
+        assert!(self.stage == Stage::Unload && self.capture.is_none() && self.forced);
+        self.serving = true;
     }
 
     pub(super) fn leave_outcome(&mut self, forced: bool, forced_by: Option<Cause>) {
@@ -271,14 +279,14 @@ impl EnteredRollbackTerminal {
                         }
                     }
                 }
-                self.answer = Some(if let Some(report) = &self.capture {
+                self.answer = Some(if self.serving {
                     AnswerCarry::Captured(CaptureEnvelope {
                         exchange: message.envelope.exchange.clone(),
                         position: Position::Close,
                         payload: self.refusal.clone().map_or_else(
                             || {
                                 CapturePayload::Answer(CaptureAnswer::Left {
-                                    save_point: Some(report.clone()),
+                                    save_point: self.capture.clone(),
                                     forced: self.forced,
                                     no_state: false,
                                 })

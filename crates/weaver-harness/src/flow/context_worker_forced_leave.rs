@@ -1,7 +1,7 @@
 //! Forced Leave consumes its own original directive and successful Ready.
 //! It shares Lower, account settlement and release with entered rollback, but
-//! must finish a real capture before release and carry that report in Left.
-//! The refused-capture policy is pending #348; that owner remains retained.
+//! must settle its capture before release. A refused capture carries its cleanup
+//! acknowledgement, then finishes forced Left without a saved-state report.
 use super::*;
 
 /// A distinct move-owned handoff; a rollback cannot be used to request a save.
@@ -18,8 +18,6 @@ pub struct FoundationForcedLeaveHandoff {
 pub enum FoundationForcedLeaveProgress {
     Progress,
     Pending,
-    /// Internal stop only. No final outcome is elected before #348 merges.
-    CaptureRefused,
     Closed,
 }
 
@@ -60,9 +58,6 @@ impl FoundationRun {
 
 impl FoundationForcedLeave {
     pub fn progress(&self) -> FoundationForcedLeaveProgress {
-        if self.inner.stage == CleanupStage::CaptureRefused && self.inner.failed.is_none() {
-            return FoundationForcedLeaveProgress::CaptureRefused;
-        }
         match self.inner.progress() {
             FoundationEnteredRollbackProgress::Progress => FoundationForcedLeaveProgress::Progress,
             FoundationEnteredRollbackProgress::Pending => FoundationForcedLeaveProgress::Pending,
@@ -70,9 +65,7 @@ impl FoundationForcedLeave {
         }
     }
     pub fn advance(&mut self) -> FoundationForcedLeaveProgress {
-        if self.progress() != FoundationForcedLeaveProgress::CaptureRefused {
-            self.inner.advance();
-        }
+        self.inner.advance();
         self.progress()
     }
     pub fn wait_for_progress(&mut self) -> FoundationForcedLeaveProgress {

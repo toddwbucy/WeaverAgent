@@ -172,6 +172,107 @@ pub(super) fn scenario(name: &str, mode: &str) {
         statuses.iter().all(|s| s.is_some_and(|s| s.success())),
         "joint admin/worker results: {statuses:?}"
     );
+    if mode.ends_with("-capture-refusal") {
+        let preparation = mode.contains("-preparation-capture-refusal");
+        let snapshot_timeout = mode.contains("-snapshot-timeout-capture-refusal");
+        let finished_timeout = mode.contains("-finished-timeout-capture-refusal");
+        let failed_cleanup = mode.contains("-failed-cleanup-capture-refusal");
+        assert!(
+            root.join(if preparation {
+                "capture-preparation-failure.json"
+            } else if snapshot_timeout || finished_timeout {
+                "demand-late-result.jsonl"
+            } else {
+                "capture-collision.json"
+            })
+            .exists()
+        );
+        let rows: Vec<serde_json::Value> = fs::read_to_string(root.join("worker-trace.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        if failed_cleanup {
+            assert!(root.join("demand-bad-aborted.jsonl").exists());
+            assert!(root.join("failed-cleanup.json").exists());
+            assert!(rows.iter().any(|r| r["kind"] == "fault"));
+            assert_eq!(rows.last().unwrap()["kind"], "unload");
+            assert_eq!(
+                rows.last().unwrap()["payload"]["end_reason"],
+                "component_failure"
+            );
+            assert!(!rows.iter().any(|r| r["kind"] == "save_point"
+                && matches!(
+                    r["payload"]["phase"].as_str(),
+                    Some("confirmed" | "published" | "refused")
+                )));
+            return;
+        }
+        assert_eq!(
+            rows.iter()
+                .filter(|r| r["kind"] == "save_point" && r["payload"]["phase"] == "refused")
+                .count(),
+            1
+        );
+        assert_eq!(rows.last().unwrap()["kind"], "unload");
+        assert!(!rows.iter().any(|r| r["kind"] == "state.flow_failed"));
+        let refusal = rows
+            .iter()
+            .find(|r| r["kind"] == "save_point" && r["payload"]["phase"] == "refused")
+            .unwrap();
+        assert_eq!(
+            refusal["payload"]["refusal_code"],
+            if preparation {
+                "publication_failed"
+            } else if snapshot_timeout {
+                "snapshot_timeout"
+            } else if finished_timeout {
+                "finished_timeout"
+            } else {
+                "snapshot_failed"
+            }
+        );
+        if snapshot_timeout || finished_timeout {
+            let operation = if finished_timeout {
+                "acknowledge"
+            } else {
+                "snapshot"
+            };
+            let late = rows
+                .iter()
+                .find(|r| r["payload"]["observation"]["operation"] == operation)
+                .unwrap();
+            let abort = rows
+                .iter()
+                .find(|r| r["payload"]["observation"]["operation"] == "abort")
+                .unwrap();
+            let sequence =
+                |r: &serde_json::Value| r["sequence"].as_str().unwrap().parse::<u64>().unwrap();
+            assert_eq!(
+                late["payload"]["observation"]["request_id"],
+                abort["payload"]["observation"]["request_id"]
+            );
+            assert!(sequence(late) < sequence(abort) && sequence(abort) < sequence(refusal));
+        }
+        if !mode.contains("-graceful-save") || mode.contains("-joined-capture-refusal") {
+            assert!(root.join("concluded-refused.json").exists());
+            assert!(!rows.iter().any(|r| r["kind"] == "save_point"
+                && matches!(
+                    r["payload"]["phase"].as_str(),
+                    Some("confirmed" | "published")
+                )));
+            assert_eq!(rows.last().unwrap()["payload"]["forced"], true);
+            if mode.contains("-joined-capture-refusal") {
+                assert!(root.join("joined-refused.json").exists());
+                assert!(root.join("capture-join-retained").exists());
+                assert_eq!(rows.last().unwrap()["payload"]["forced_by"]["uid"], 75);
+                assert_eq!(rows.last().unwrap()["payload"]["cause"]["uid"], 74);
+            }
+            return;
+        }
+        assert!(root.join("worker-s9.json").exists());
+        assert!(root.join("s9-admin-received-1.json").exists());
+    }
     if mode.ends_with("-bad-release") {
         let failed: serde_json::Value =
             serde_json::from_slice(&fs::read(root.join("failed.json")).unwrap()).unwrap();

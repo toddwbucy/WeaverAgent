@@ -163,11 +163,11 @@ fn join(
         }
         match &received.envelope.payload {
             CapturePayload::Answer(CaptureAnswer::Left {
-                save_point: Some(report),
+                save_point: report,
                 no_state: false,
                 forced,
             }) => {
-                if config.territory_unjudged && !forced {
+                if (config.territory_unjudged || report.is_none()) && !forced {
                     return Err(after_failed_answer(
                         config,
                         bounds,
@@ -178,7 +178,11 @@ fn join(
                     .noted_run
                     .as_ref()
                     .and_then(Option::as_ref)
-                    .is_some_and(|run| *run != report.event_run.0)
+                    .is_some_and(|run| {
+                        report
+                            .as_ref()
+                            .is_some_and(|report| *run != report.event_run.0)
+                    })
                 {
                     return Err(after_failed_answer(
                         config,
@@ -186,7 +190,7 @@ fn join(
                         FailureCause::Protocol("joined Left names another run").into(),
                     ));
                 }
-                return conclude(config, bounds, evidence, report, *forced).map(Some);
+                return conclude(config, bounds, evidence, report.as_ref(), *forced).map(Some);
             }
             CapturePayload::Refusal(CaptureRefusal::Lifecycle(LifecycleRefusal::OutOfOrder)) => {
                 std::thread::sleep(crate::JOIN_RETRY);
@@ -239,7 +243,7 @@ fn conclude(
     config: &ServiceConfig,
     bounds: UnloadBounds,
     evidence: &Evidence,
-    report: &weaver_types::state_flow::SavePointReport,
+    report: Option<&weaver_types::state_flow::SavePointReport>,
     forced: bool,
 ) -> Result<LifecycleAnswer, Failure> {
     let _behind = start::take_invocation_lock_waiting(
@@ -252,7 +256,10 @@ fn conclude(
     }
     // The marker may first become readable here. A report that was not compared
     // with an open run before this lock still cannot conclude a different run.
-    if run.as_deref().is_some_and(|run| run != report.event_run.0) {
+    if run
+        .as_deref()
+        .is_some_and(|run| report.is_some_and(|report| run != report.event_run.0))
+    {
         return Err(FailureCause::Protocol("joined Left differs from the resolved run").into());
     }
     crate::end_after_left(&config.run_directory(), bounds)?;
@@ -271,7 +278,7 @@ fn conclude(
     }
     if config.territory_unjudged {
         crate::write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Forced)?;
-    } else {
+    } else if let Some(report) = report {
         let verify = || -> Result<(), crate::save_points::serving::Fault> {
             let repository = Repository::from_judged_directory(
                 config
@@ -292,6 +299,10 @@ fn conclude(
                 detail: error.to_string(),
             })
         })?;
+        crate::write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Closed)?;
+    } else {
+        // The original publisher concluded a refused capture. This join has
+        // no artifact to verify or publish, but still owes the actual run end.
         crate::write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Closed)?;
     }
     crate::unloaded_by_ladder(config).map_err(Into::into)

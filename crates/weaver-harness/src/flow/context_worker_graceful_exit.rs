@@ -1,7 +1,7 @@
 //! The original graceful Leave consumes its phase accounts and actual Ready.
 //! Shared Lower, capture and release retain its original peer and fixed outcome.
 //! Converted drain, Quiesce and wind-down retain their accounts through cancellation.
-//! The refused-capture policy is pending #348; that owner remains retained.
+//! A refused capture answers the original Leave and retains the entered run at S9.
 use super::*;
 
 /// The original graceful holder, distinct from both rollback and sole force.
@@ -18,7 +18,7 @@ pub struct FoundationGracefulLeaveHandoff {
 pub enum FoundationGracefulLeaveProgress {
     Progress,
     Pending,
-    /// Internal stop only. No final outcome is elected before #348 merges.
+    /// The refused Leave has ended; the entered run remains at S9.
     CaptureRefused,
     Closed,
 }
@@ -61,7 +61,10 @@ impl FoundationRun {
 
 impl FoundationGracefulLeave {
     pub fn progress(&self) -> FoundationGracefulLeaveProgress {
-        if self.inner.stage == CleanupStage::CaptureRefused && self.inner.failed.is_none() {
+        if self.inner.stage == CleanupStage::CaptureRefused
+            && self.inner.failed.is_none()
+            && self.inner.resting.save.is_none()
+        {
             return FoundationGracefulLeaveProgress::CaptureRefused;
         }
         match self.inner.progress() {
@@ -73,13 +76,15 @@ impl FoundationGracefulLeave {
         }
     }
     pub fn advance(&mut self) -> FoundationGracefulLeaveProgress {
-        if self.progress() != FoundationGracefulLeaveProgress::CaptureRefused {
-            self.inner.advance();
-        }
+        self.inner.advance();
         self.progress()
     }
     pub fn wait_for_progress(&mut self) -> FoundationGracefulLeaveProgress {
-        if self.progress() == FoundationGracefulLeaveProgress::Pending {
+        if matches!(
+            self.progress(),
+            FoundationGracefulLeaveProgress::Pending
+                | FoundationGracefulLeaveProgress::CaptureRefused
+        ) {
             self.inner.wait_for_progress();
         }
         self.progress()

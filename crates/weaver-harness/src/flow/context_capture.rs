@@ -227,6 +227,14 @@ impl RecordingContext {
         })
     }
 
+    /// Attribution may be retained before cleanup completes. Reading it grants
+    /// no release or final disposition; those still require matching Aborted.
+    pub(super) fn retained_capture_refusal(&self) -> Option<&CaptureAnswer> {
+        self.member_capture
+            .as_ref()
+            .and_then(|owner| owner.refusal.as_ref())
+    }
+
     /// Move the exact refusal only after its cleanup result has been consumed.
     /// This adds no clock boundary between consuming that result and retaining
     /// the refused original in the lifecycle parent.
@@ -507,6 +515,46 @@ impl RecordingContext {
         // second recoverable boundary before carrying that accepted intent.
         self.start_capture_abort(io)?;
         Ok(Advance::Progress)
+    }
+
+    /// Settle the exact cancelled capture without releasing its admission hold.
+    /// Before Snapshot, drain only the already owed filing; never start a new
+    /// member request just to discover that cancellation has no holding.
+    pub(super) fn settle_cancelled_member_capture(
+        &mut self,
+        id: DecimalU64,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        if self
+            .member_capture
+            .as_ref()
+            .is_none_or(|owner| owner.id != id)
+        {
+            return Err(self.capture_fault(io, "cancelled accounting names another capture"));
+        }
+        if self.member_capture.as_ref().unwrap().phase == Phase::Barrier {
+            self.allow_capture_cleanup(io)?;
+            let ready = self
+                .flow
+                .capture_barrier_ready(&mut FlowRecording {
+                    barrier: &mut self.barrier,
+                    inbox: &mut self.inbox,
+                    budget: &mut self.budget,
+                    author: &self.author,
+                })
+                .map_err(|error| self.flow_failed(io, error))?;
+            if ready {
+                self.deadlines.disarm(PumpDeadline::Cut);
+                return Ok(true);
+            }
+            self.reduce_flow(io)?;
+            return Ok(false);
+        }
+        self.cancel_member_capture(id, io)?;
+        if self.member_capture.as_ref().unwrap().phase == Phase::Complete {
+            return Ok(true);
+        }
+        Ok(self.advance_member_capture(io)? == CaptureProgress::Complete)
     }
 
     /// Parent has recorded the final disposition and consumed the exact cleanup

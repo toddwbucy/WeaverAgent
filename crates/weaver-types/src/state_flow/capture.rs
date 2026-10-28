@@ -60,6 +60,7 @@ pub enum CapturePayload {
     SavePointCommit(CaptureIdentity),
     SavePointPublished(CaptureArtifact),
     SavePointCaptureComplete(CaptureIdentity),
+    SavePointCaptureRefused(CaptureRefused),
     SavePointAborted(CaptureAborted),
     Answer(CaptureAnswer),
     Refusal(CaptureRefusal),
@@ -122,6 +123,15 @@ super::codec::closed_object! {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CaptureIdentity {
     pub capture_id: DecimalU64,
+}
+}
+super::codec::closed_object! {
+/// Leave-only acknowledgement of completed cleanup and Recorded refusal.
+/// The receiving actor still owes the final lifecycle outcome.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CaptureRefused {
+    pub capture_id: DecimalU64,
+    pub missed: SavePointLeg,
 }
 }
 super::codec::closed_object! {
@@ -223,6 +233,7 @@ impl CaptureEnvelope {
             | CapturePayload::SavePointPublished(value) => Some(value.capture_id),
             CapturePayload::SavePointCommit(value)
             | CapturePayload::SavePointCaptureComplete(value) => Some(value.capture_id),
+            CapturePayload::SavePointCaptureRefused(value) => Some(value.capture_id),
             CapturePayload::SavePointAborted(value) => Some(value.capture_id),
             CapturePayload::Answer(CaptureAnswer::Left { save_point, .. }) => {
                 save_point.as_ref().map(|value| value.capture_id)
@@ -246,6 +257,7 @@ impl CaptureEnvelope {
             | SavePointImage(_)
             | SavePointImageFinished(_)
             | SavePointCommit(_)
+            | SavePointCaptureRefused(_)
             | SavePointCaptureComplete(_) => (Position::Continue, Some(CaptureSender::Harness)),
             SavePointImageChecked(_) | SavePointPrepared(_) | SavePointPublished(_) => {
                 (Position::Continue, Some(CaptureSender::Admin))
@@ -265,6 +277,14 @@ impl CaptureEnvelope {
             ));
         }
         match &self.payload {
+            SavePointCaptureRefused(CaptureRefused {
+                missed: SavePointLeg::CaptureNotReady,
+                ..
+            }) => {
+                return Err(CaptureCodecError::InvalidShape(
+                    "refused Leave capture requires Answer, Finished or Published",
+                ));
+            }
             Directive(CaptureDirective::SavePoint { window, .. }) => {
                 window
                     .validate()

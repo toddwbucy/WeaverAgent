@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use weaver_types::state_flow::capture::{
     CaptureAnswer, CaptureArtifact, CaptureDirective, CaptureEnvelope, CaptureImageChecked,
-    CapturePayload,
+    CapturePayload, SavePointLeg,
 };
 use weaver_types::state_flow::enter::{LoadFacts, LoadedStateFacts, ObservationAnswer};
 use weaver_types::state_flow::{PersistenceCause, PersistencePhase, SavePointReport};
@@ -24,6 +24,9 @@ pub(crate) mod invocation;
 
 #[path = "serving_save_invocation.rs"]
 pub(crate) mod save;
+
+#[path = "serving_leave_refusal.rs"]
+mod refusal;
 
 #[derive(Debug)]
 pub(crate) enum FailureCause {
@@ -152,6 +155,8 @@ enum Stage {
     TakenReceived,
     Aborting,
     AwaitAbortOutcome,
+    AwaitCaptureRefused,
+    AwaitRefusedLeave,
     Stopped,
 }
 
@@ -185,6 +190,9 @@ pub(crate) struct Capture<'repo> {
     publication_failure: Option<publication::Failure>,
     checkpoint_failure: Option<FailureCause>,
     abort: Option<CaptureEnvelope>,
+    aborted_at: Option<Stage>,
+    abort_crossed: bool,
+    refused: Option<SavePointLeg>,
     cleanup_failure: Option<FailureCause>,
 }
 
@@ -373,6 +381,9 @@ impl<'repo> Capture<'repo> {
             publication_failure: None,
             checkpoint_failure: None,
             abort: None,
+            aborted_at: None,
+            abort_crossed: false,
+            refused: None,
             cleanup_failure: None,
         }
     }
@@ -447,7 +458,9 @@ impl<'repo> Capture<'repo> {
             .envelope
             .payload
         else {
-            unreachable!("LeftReceived validated the whole reply")
+            return Err(FailureCause::Protocol(
+                "refused capture has no completed save",
+            ));
         };
         self.publication
             .as_mut()
@@ -499,9 +512,12 @@ impl<'repo> Capture<'repo> {
         }
     }
 
-    /// A graceful Leave refused before any capture by a standing-run refusal
-    /// grants no escalation. Do not apply this to a refused capture (#348).
+    /// A standing-run refusal grants no escalation. After capture, require its
+    /// cleanup acknowledgment and the matching final graceful refusal first.
     fn standing_refusal(&self) -> bool {
+        if self.refused.is_some() {
+            return self.refused_leave_standing();
+        }
         self.windows.matches_leave(false)
             && self.windows.capture().is_none()
             && self.publication.is_none()
@@ -521,15 +537,32 @@ impl<'repo> Capture<'repo> {
         if self.progress() != Progress::Pending {
             return self.progress();
         }
-        if let Err(cause) = self.step() {
-            let local_preparation_failed = self.windows.demand_window().is_some()
-                && !self.committed
+        if let Err(mut cause) = self.step() {
+            let local_preparation_failed = !self.committed
+                && self.refused.is_none()
                 && self.failure.is_none()
                 && self.checkpoint_failure.is_none()
                 && matches!(&cause, FailureCause::Publication(_))
                 && self.windows.capture().is_some();
             if let FailureCause::Publication(error) = &cause {
                 self.publication_failure = Some((**error).clone());
+            }
+            // A checkpoint can receive the acknowledgement while hashing or
+            // preparing. Publication retains its interrupted work; this owner
+            // validates the packet and continues the original Leave instead.
+            if self.unexpected.as_ref().is_some_and(|received| {
+                matches!(
+                    received.envelope.payload,
+                    CapturePayload::SavePointCaptureRefused(_)
+                )
+            }) {
+                match self.accept_checkpoint_refusal() {
+                    Ok(()) => return self.progress(),
+                    Err(error) => {
+                        self.checkpoint_failure = None;
+                        cause = error;
+                    }
+                }
             }
             let cause = self.checkpoint_failure.take().unwrap_or(cause);
             if let Some(publication) = &mut self.publication {
@@ -540,7 +573,8 @@ impl<'repo> Capture<'repo> {
             } else {
                 self.cleanup_failure = Some(cause);
             }
-            if local_preparation_failed {
+            if local_preparation_failed && self.refused.is_none() {
+                self.aborted_at = Some(self.stage);
                 self.abort = Some(CaptureEnvelope {
                     exchange: self.directive.exchange().clone(),
                     position: Position::Continue,
@@ -573,12 +607,18 @@ impl<'repo> Capture<'repo> {
             .map_err(FailureCause::Channel)
     }
 
-    fn receive(&mut self) -> Result<(), FailureCause> {
+    fn receive(&mut self) -> Result<bool, FailureCause> {
         self.receive_correlated()?;
+        if let CapturePayload::SavePointCaptureRefused(refused) =
+            &self.received.last().unwrap().envelope.payload
+        {
+            self.accept_capture_refused(refused.clone())?;
+            return Ok(false);
+        }
         if negative(&self.received.last().unwrap().envelope, self.committed) {
             return Err(FailureCause::WorkerOutcome);
         }
-        Ok(())
+        Ok(true)
     }
 
     fn receive_correlated(&mut self) -> Result<(), FailureCause> {
@@ -611,8 +651,14 @@ impl<'repo> Capture<'repo> {
                         &self.windows,
                     )
                     .map_err(FailureCause::Channel)?;
-                self.stage = Stage::AwaitAbortOutcome;
+                self.stage = if self.windows.demand_window().is_some() {
+                    Stage::AwaitAbortOutcome
+                } else {
+                    Stage::AwaitCaptureRefused
+                };
             }
+            Stage::AwaitCaptureRefused => self.await_capture_refused()?,
+            Stage::AwaitRefusedLeave => self.await_refused_leave()?,
             Stage::AwaitAbortOutcome => {
                 self.receive_correlated()?;
                 if !matches!(self.received.last().unwrap().envelope.payload,
@@ -639,7 +685,9 @@ impl<'repo> Capture<'repo> {
                 self.stage = Stage::Beginning;
             }
             Stage::Beginning => {
-                self.receive()?;
+                if !self.receive()? {
+                    return Ok(());
+                }
                 let CapturePayload::SavePointBeginning(value) =
                     &self.received.last().unwrap().envelope.payload
                 else {
@@ -649,7 +697,9 @@ impl<'repo> Capture<'repo> {
                 self.stage = Stage::Image;
             }
             Stage::Image => {
-                self.receive()?;
+                if !self.receive()? {
+                    return Ok(());
+                }
                 if !matches!(
                     self.received.last().unwrap().envelope.payload,
                     CapturePayload::SavePointImage(_)
@@ -707,7 +757,9 @@ impl<'repo> Capture<'repo> {
                 self.stage = Stage::Finished;
             }
             Stage::Finished => {
-                self.receive()?;
+                if !self.receive()? {
+                    return Ok(());
+                }
                 if !matches!(
                     self.received.last().unwrap().envelope.payload,
                     CapturePayload::SavePointImageFinished(_)
@@ -752,7 +804,9 @@ impl<'repo> Capture<'repo> {
                 self.stage = Stage::Commit;
             }
             Stage::Commit => {
-                self.receive()?;
+                if !self.receive()? {
+                    return Ok(());
+                }
                 let CapturePayload::SavePointCommit(value) =
                     &self.received.last().unwrap().envelope.payload
                 else {
@@ -810,7 +864,9 @@ impl<'repo> Capture<'repo> {
                 }
             }
             Stage::Complete => {
-                self.receive()?;
+                if !self.receive()? {
+                    return Ok(());
+                }
                 if self.windows.demand_window().is_some() {
                     let CapturePayload::Answer(CaptureAnswer::SavePointTaken { report }) =
                         &self.received.last().unwrap().envelope.payload
@@ -839,7 +895,9 @@ impl<'repo> Capture<'repo> {
                 self.stage = Stage::Left;
             }
             Stage::Left => {
-                self.receive()?;
+                if !self.receive()? {
+                    return Ok(());
+                }
                 let CapturePayload::Answer(CaptureAnswer::Left {
                     save_point: Some(report),
                     forced,

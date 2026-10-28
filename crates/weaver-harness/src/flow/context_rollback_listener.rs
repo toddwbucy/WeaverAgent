@@ -2,13 +2,19 @@
 use super::*;
 use crate::flow::pump::{LifecycleListener, PumpSource};
 use weaver_types::state_flow::capture::CaptureEnvelope;
+use weaver_types::state_flow::enter::ObservationEnvelope;
 use weaver_types::{LifecycleAnswer, LifecycleRefusal, Payload};
+
+#[path = "context_rollback_resting.rs"]
+mod resting;
+pub(in crate::flow::context) use resting::{RestingCommand, RestingRequest, RetiredRestingCommand};
 
 pub(in crate::flow::context) struct RollbackDials {
     pub(super) listener: LifecycleListener,
     pub(super) active: Option<PendingDial>,
     sealing: bool,
     graceful: Option<GracefulDials>,
+    refusing: bool,
 }
 
 struct GracefulOutcome {
@@ -62,6 +68,10 @@ pub(super) struct PendingDial {
     pub(super) read: Option<AbsoluteBound>,
     pub(super) message: Option<LifecycleMessage>,
     pub(super) answer: Option<OrganEnvelope>,
+    observation: Option<ObservationEnvelope>,
+    save: Option<crate::flow::pump::ReceivedCapture>,
+    save_answer: Option<CaptureEnvelope>,
+    serving_opener: bool,
     pub(super) send: Option<OrganSend>,
 }
 
@@ -72,6 +82,7 @@ impl RollbackDials {
             active: None,
             sealing: false,
             graceful: None,
+            refusing: false,
         }
     }
 
@@ -126,10 +137,10 @@ impl RollbackDials {
         }
     }
 
-    pub(in crate::flow::context) fn prepare(
+    fn prepare_dial(
         &mut self,
         context: &mut RecordingContext,
-        leave: AbsoluteBound,
+        leave: Option<AbsoluteBound>,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         context.live(io)?;
@@ -152,7 +163,7 @@ impl RollbackDials {
             }
             let end = accepted
                 .saturating_add(crate::state::ANSWER_BOUND_MS * 1_000_000)
-                .min(leave.deadline_ns());
+                .min(leave.map_or(u64::MAX, |bound| bound.deadline_ns()));
             let bound = AbsoluteBound::from_absolute(accepted, end).map_err(|error| {
                 context.fail(
                     io,
@@ -171,6 +182,10 @@ impl RollbackDials {
                 read: Some(bound),
                 message: None,
                 answer: None,
+                observation: None,
+                save: None,
+                save_answer: None,
+                serving_opener: false,
                 send: None,
             });
             context.arm(PumpDeadline::AdminRead, bound, io)?;
@@ -189,6 +204,19 @@ impl RollbackDials {
             self.active = None;
             return Ok(());
         }
+        Ok(())
+    }
+
+    pub(in crate::flow::context) fn prepare(
+        &mut self,
+        context: &mut RecordingContext,
+        leave: AbsoluteBound,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        self.prepare_dial(context, Some(leave), io)?;
+        let Some(dial) = &mut self.active else {
+            return Ok(());
+        };
         if dial.message.is_none() && dial.peer.held().is_some() {
             dial.message =
                 dial.peer
@@ -224,6 +252,7 @@ impl RollbackDials {
             }
             if let Payload::Directive(LifecycleDirective::JoinLeave { cause }) =
                 message.envelope.payload
+                && !self.refusing
                 && let Some(held) = &mut self.graceful
             {
                 held.outcome.join(cause);
@@ -514,6 +543,9 @@ pub(super) struct RetiredRollbackDial {
     pub(super) read: Option<AbsoluteBound>,
     pub(super) message: Option<crate::flow::pump::RetiredLifecycleMessage>,
     pub(super) answer: Option<OrganEnvelope>,
+    observation: Option<ObservationEnvelope>,
+    _save: Option<crate::flow::pump::RetiredReceivedCapture>,
+    _save_answer: Option<CaptureEnvelope>,
     pub(super) send: Option<OrganSend>,
 }
 impl RollbackDials {
@@ -544,6 +576,11 @@ impl RollbackDials {
                 read: dial.read,
                 message: dial.message.map(LifecycleMessage::retire_failed),
                 answer: dial.answer,
+                observation: dial.observation,
+                _save: dial
+                    .save
+                    .map(crate::flow::pump::ReceivedCapture::retire_failed),
+                _save_answer: dial.save_answer,
                 send: dial.send,
             }),
         }

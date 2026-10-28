@@ -23,7 +23,32 @@ pub(in crate::flow::context::worker_startup) struct FailedSaveRequest {
 }
 
 impl PendingSave {
-    pub(super) fn new(
+    pub(in crate::flow::context::worker_startup) fn prepare_expiry(
+        &mut self,
+        context: &mut RecordingContext,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        self.capture
+            .prepare_retained_window_expiry(context, &mut self.peer, io)
+    }
+
+    pub(in crate::flow::context::worker_startup) fn retain_interrupt(
+        &mut self,
+        context: &mut RecordingContext,
+        failure: &RunFailure,
+    ) -> bool {
+        self.capture.retain_queued_expiry(context, failure)
+            || self.capture.retain_window_expiry(context, failure)
+            || matches!(
+                failure,
+                RunFailure::Wait {
+                    key: PumpDeadline::CaptureResult,
+                    ..
+                }
+            )
+            || self.capture.retain_peer_end(failure)
+    }
+    pub(in crate::flow::context::worker_startup) fn new(
         peer: LifecyclePeer,
         request: ReceivedCapture,
         capture: ServingCapture,
@@ -37,7 +62,7 @@ impl PendingSave {
         }
     }
 
-    pub(super) fn port(&mut self) -> Option<&mut LifecyclePeer> {
+    pub(in crate::flow::context::worker_startup) fn port(&mut self) -> Option<&mut LifecyclePeer> {
         self.capture.peer_available().then_some(&mut self.peer)
     }
 
@@ -117,7 +142,7 @@ impl PendingSave {
         Ok(true)
     }
 
-    fn advance<I: PumpIo>(
+    pub(in crate::flow::context::worker_startup) fn advance<I: PumpIo>(
         &mut self,
         context: &mut RecordingContext,
         ports: PumpPorts<'_, I>,

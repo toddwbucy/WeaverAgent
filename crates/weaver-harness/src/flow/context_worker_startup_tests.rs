@@ -1177,6 +1177,22 @@ fn circuit(mode: &str) {
     if mode.ends_with("-bad-release") {
         normal.as_mut().unwrap().corrupt_release = true;
     }
+    if mode.ends_with("-capture-refusal") {
+        let normal = normal.as_mut().unwrap();
+        let snapshot_timeout = mode.contains("-snapshot-timeout-capture-refusal");
+        let finished_timeout = mode.contains("-finished-timeout-capture-refusal");
+        normal.refuse_first_snapshot = !mode.contains("-preparation-capture-refusal")
+            && !snapshot_timeout
+            && !finished_timeout;
+        normal.damage_first_image = mode.contains("-preparation-capture-refusal");
+        normal.wait_for_capture_join = mode.contains("-joined-capture-refusal");
+        normal.corrupt_abort = mode.contains("-failed-cleanup-capture-refusal");
+        if snapshot_timeout {
+            normal.delay_first_capture_result(normal_member::CaptureDelay::Snapshot);
+        } else if finished_timeout {
+            normal.delay_first_capture_result(normal_member::CaptureDelay::Finished);
+        }
+    }
     let now = if mode == "worker"
         || mode.starts_with("input-worker")
         || mode == "failed-startup-worker"
@@ -2116,6 +2132,50 @@ scenario!(
 scenario!(
     worker_session_forced_leave_joint_sqlite_idle,
     "input-worker-generation-emission-session-forced-save-sqlite-joint"
+);
+scenario!(
+    worker_session_forced_leave_joint_sqlite_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-capture-refusal"
+);
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-capture-refusal"
+);
+scenario!(
+    worker_session_joined_leave_joint_sqlite_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-joined-capture-refusal"
+);
+scenario!(
+    worker_session_forced_leave_joint_sqlite_preparation_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-preparation-capture-refusal"
+);
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_preparation_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-preparation-capture-refusal"
+);
+scenario!(
+    worker_session_forced_leave_joint_sqlite_snapshot_timeout_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-snapshot-timeout-capture-refusal"
+);
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_snapshot_timeout_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-snapshot-timeout-capture-refusal"
+);
+scenario!(
+    worker_session_forced_leave_joint_sqlite_finished_timeout_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-finished-timeout-capture-refusal"
+);
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_finished_timeout_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-finished-timeout-capture-refusal"
+);
+scenario!(
+    worker_session_forced_leave_joint_sqlite_failed_cleanup_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-failed-cleanup-capture-refusal"
+);
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_failed_cleanup_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-failed-cleanup-capture-refusal"
 );
 scenario!(
     worker_session_forced_leave_joint_sqlite_held_filing,
@@ -4689,6 +4749,26 @@ scenario!(
 scenario!(
     worker_session_composition_forced_save_refused,
     "input-worker-generation-emission-session-forced-save-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_refused,
+    "input-worker-generation-emission-session-graceful-save-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_retry_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-retry-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_force_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-force-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_spu_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-spu-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_orphan_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-orphan-refused"
 );
 scenario!(
     worker_session_composition_forced_save_snapshot_timeout,

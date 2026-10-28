@@ -36,6 +36,7 @@ enum Stage {
     CompleteCarry,
     Complete,
     Refused,
+    RefusalCarry,
     RefusalReady,
     CancelRecord,
     CancelMember,
@@ -133,6 +134,18 @@ impl Carry {
         // The transport records a whole send before its fallible clock. Its
         // witness remains in this owner if either this or the final check fails.
         peer.try_send_observed(io).map_err(|error| {
+            if self
+                .send
+                .as_ref()
+                .is_some_and(|send| send.sent() && send.sent_at().is_none())
+            {
+                return context.fail(
+                    io,
+                    FlowHaltReason::TraceFailed,
+                    HaltPoint::Author,
+                    format!("capture whole send has no clock observation: {error:?}"),
+                );
+            }
             if error.fault == crate::ChannelFault::Closed {
                 RunFailure::Transport {
                     source: PumpSource::LeavePeer,
@@ -271,11 +284,12 @@ pub(super) struct ServingCapture {
     incoming: [Option<ReceivedCapture>; 3],
     aborted: Option<ReceivedCapture>,
     unexpected: Option<ReceivedCapture>,
-    carries: [Option<Carry>; 5],
+    carries: [Option<Carry>; 7],
     requested: Record,
     confirmed: Record,
     published_record: Record,
     refused_record: Record,
+    refusal_cut: Option<AbsoluteBound>,
     artifact: Option<CaptureArtifact>,
     published: Option<StartIdentity>,
     refusal_code: Option<String>,
@@ -643,6 +657,7 @@ impl ServingCapture {
             confirmed: Record::default(),
             published_record: Record::default(),
             refused_record: Record::default(),
+            refusal_cut: None,
             artifact: None,
             published: None,
             refusal_code: None,
@@ -684,6 +699,61 @@ impl ServingCapture {
     pub(super) fn refusal_leg(&self) -> Option<SavePointLeg> {
         (self.stage == Stage::RefusalReady)
             .then(|| self.refusal_leg.expect("retained capture refusal leg"))
+    }
+
+    /// Only the containing Leave owner elects the still-graceful disposition.
+    /// A completed refusal keeps all capture evidence and grants no unload.
+    pub(super) fn finish_graceful_refusal<I: PumpIo>(
+        &mut self,
+        context: &mut RecordingContext,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<bool, RunFailure> {
+        let CaptureOrigin::Leave { bound, .. } = self.capture_origin else {
+            return Err(fault(
+                context,
+                ports.io,
+                "demand capture cannot refuse a Leave",
+            ));
+        };
+        if self.stage != Stage::RefusalReady {
+            return Err(fault(
+                context,
+                ports.io,
+                "Leave refusal still owes capture cleanup",
+            ));
+        }
+        self.probe(context, ports)?;
+        if self.carries[6].is_none() {
+            self.carries[6] = Some(Carry::new(
+                &self.exchange,
+                CapturePayload::Refusal(CaptureRefusal::Save(SaveRefusal::SavePointNotTaken {
+                    missed: self.refusal_leg.expect("recorded capture refusal"),
+                })),
+            ));
+        }
+        if self.disconnected {
+            return Ok(true);
+        }
+        let result = self.carries[6].as_mut().unwrap().advance(
+            ports
+                .lifecycle
+                .leave_peer
+                .as_deref_mut()
+                .expect("original peer"),
+            context,
+            bound,
+            ports.io,
+        );
+        match result {
+            Err(RunFailure::Transport {
+                source: PumpSource::LeavePeer,
+                failure,
+            }) if failure.fault == crate::ChannelFault::Closed => {
+                self.disconnected = true;
+                Ok(true)
+            }
+            result => result,
+        }
     }
 
     /// The enclosing current-turn owner may encounter this wait deep inside
@@ -734,8 +804,7 @@ impl ServingCapture {
         context: &RecordingContext,
         failure: &RunFailure,
     ) -> bool {
-        if !matches!(self.capture_origin, CaptureOrigin::Demand { .. })
-            || self.queued()
+        if self.queued()
             || self.commit_sent()
             || self.expired_at.is_some()
             || context.failure.is_some()
@@ -799,6 +868,7 @@ impl ServingCapture {
                 }
                 Stage::QueueRefused
                 | Stage::Refused
+                | Stage::RefusalCarry
                 | Stage::RefusalReady
                 | Stage::CancelRecord
                 | Stage::CancelMember => CaptureState::Aborting,
@@ -982,7 +1052,9 @@ impl ServingCapture {
         if let Err(error) = result {
             if error.fault == crate::ChannelFault::Closed && !self.commit_sent() {
                 self.disconnected = true;
-                self.cancelling = true;
+                if !matches!(self.stage, Stage::RefusalCarry | Stage::RefusalReady) {
+                    self.cancelling = true;
+                }
                 self.refusal_code
                     .get_or_insert_with(|| "admin_disconnected".into());
                 self.refusal_leg.get_or_insert(SavePointLeg::Published);
@@ -1002,14 +1074,6 @@ impl ServingCapture {
         let Some(message) = peer.capture_held() else {
             return Ok(());
         };
-        if self.cancelling && self.expired_at.is_none() {
-            self.unexpected = peer.take_capture().expect("held complete packet");
-            return Err(fault(
-                context,
-                ports.io,
-                "capture cancellation received another continuation",
-            ));
-        }
         let identity = message.envelope.exchange == self.exchange
             && message.envelope.capture_id() == Some(self.beginning.capture_id)
             && message.sink.is_none()
@@ -1030,8 +1094,21 @@ impl ServingCapture {
                 .get_or_insert_with(|| aborted.code.clone());
             self.refusal_leg.get_or_insert(SavePointLeg::Published);
             self.aborted = peer.take_capture().expect("held complete packet");
-            self.cancelling = true;
+            if !matches!(
+                self.stage,
+                Stage::Refused | Stage::RefusalCarry | Stage::RefusalReady
+            ) {
+                self.cancelling = true;
+            }
             return Ok(());
+        }
+        if self.cancelling && self.expired_at.is_none() {
+            self.unexpected = peer.take_capture().expect("held complete packet");
+            return Err(fault(
+                context,
+                ports.io,
+                "capture cancellation received another continuation",
+            ));
         }
         let expected = match self.expired_at.unwrap_or(self.stage) {
             Stage::AwaitChecked => Some(0),
@@ -1079,6 +1156,30 @@ impl ServingCapture {
         context: &mut RecordingContext,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<ServingCaptureProgress, RunFailure> {
+        // Cancellation revokes publication. Its cleanup and acknowledgement use
+        // their existing bounds and the original shared Leave tail, never a new
+        // capture window. Preserve the original window as evidence.
+        if matches!(self.capture_origin, CaptureOrigin::Leave { .. })
+            && context.deadlines.get(PumpDeadline::CaptureWindow) == Some(self.window)
+        {
+            context.deadlines.disarm(PumpDeadline::CaptureWindow);
+        }
+        if self.stage == Stage::Beginning
+            && let CaptureOrigin::Leave { bound, .. } = self.capture_origin
+            && !self.disconnected
+            && !self.carries[0].as_mut().unwrap().advance(
+                ports
+                    .lifecycle
+                    .leave_peer
+                    .as_deref_mut()
+                    .expect("original peer"),
+                context,
+                bound,
+                ports.io,
+            )?
+        {
+            return Ok(ServingCaptureProgress::Pending);
+        }
         if let Some(peer) = ports.lifecycle.leave_peer.as_deref_mut() {
             self.withdraw_pending_carries(context, peer, ports.io)?;
         }
@@ -1099,8 +1200,7 @@ impl ServingCapture {
         if self.expired_at.is_none() {
             return Ok(());
         }
-        if !matches!(self.capture_origin, CaptureOrigin::Demand { .. })
-            || !Arc::ptr_eq(&self.origin, &context.read_origin)
+        if !Arc::ptr_eq(&self.origin, &context.read_origin)
             || context.barrier.run() != self.run.0
             || !self.capture_origin.matches(context)
             || !peer.owns_capture_identity(&self.peer)
@@ -1184,6 +1284,53 @@ impl ServingCapture {
                 .advance(context, ports, self.payload(Stage::Confirmed))?;
         }
         if !matches!(self.stage, Stage::CancelRecord | Stage::CancelMember) {
+            self.stage = Stage::CancelMember;
+        }
+        let id = self.beginning.capture_id;
+        if self.stage == Stage::CancelMember {
+            if context.member_capture.is_some() {
+                if !context.settle_cancelled_member_capture(id, ports.io)? {
+                    return Ok(ServingCaptureProgress::Pending);
+                }
+                if let Some(answer) = context.take_capture_answer(ports.io)? {
+                    self.member_results.push(answer);
+                }
+                self.remember_member_refusal(context);
+                self.member_refusal = context.take_recorded_capture_refusal(id);
+            } else if matches!(self.capture_origin, CaptureOrigin::Leave { .. }) {
+                let ready = context
+                    .flow
+                    .cancelled_capture_boundary_ready(&mut FlowRecording {
+                        barrier: &mut context.barrier,
+                        inbox: &mut context.inbox,
+                        budget: &mut context.budget,
+                        author: &context.author,
+                    })
+                    .map_err(|error| context.flow_failed(ports.io, error))?;
+                if !ready {
+                    if self.refusal_cut.is_none() {
+                        let bound = AbsoluteBound::after(
+                            context.last_ns,
+                            context.declaration.cut_wait.elapsed_ns.0,
+                        )
+                        .map_err(|error| fault(context, ports.io, error.to_string()))?;
+                        context.arm(PumpDeadline::Cut, bound, ports.io)?;
+                        self.refusal_cut = Some(bound);
+                    }
+                    context.reduce_flow(ports.io)?;
+                    return Ok(ServingCaptureProgress::Pending);
+                }
+                if let Some(bound) = self.refusal_cut {
+                    if context.deadlines.get(PumpDeadline::Cut) != Some(bound) {
+                        return Err(fault(
+                            context,
+                            ports.io,
+                            "cancelled capture lost its filing bound",
+                        ));
+                    }
+                    context.deadlines.disarm(PumpDeadline::Cut);
+                }
+            }
             self.stage = Stage::CancelRecord;
         }
         if self.stage == Stage::CancelRecord {
@@ -1196,31 +1343,39 @@ impl ServingCapture {
                 self.refused_record
                     .advance(context, ports, self.payload(Stage::Refused))?;
             }
-            self.stage = Stage::CancelMember;
         }
         if context.member_capture.is_none() {
             context.deadlines.disarm(PumpDeadline::CaptureWindow);
             if matches!(self.capture_origin, CaptureOrigin::Demand { .. }) {
                 context.deadlines.disarm(PumpDeadline::SaveQueued);
             }
-            self.stage = Stage::RefusalReady;
-            return Ok(ServingCaptureProgress::Refused);
-        }
-        context.cancel_member_capture(self.beginning.capture_id, ports.io)?;
-        if context.member_capture.is_none() {
-            self.stage = Stage::RefusalReady;
-            return Ok(ServingCaptureProgress::Refused);
-        }
-        if context.advance_member_capture(ports.io)? == CaptureProgress::Complete
-            && let Some(answer) = context.take_capture_answer(ports.io)?
+        } else if context
+            .capture_snapshot()
+            .is_some_and(|capture| capture.phase == CapturePhase::Barrier)
         {
-            self.member_results.push(answer);
-            self.member_refusal = context.take_recorded_capture_refusal(self.beginning.capture_id);
-            context.finish_member_capture(self.beginning.capture_id, ports.io)?;
-            self.stage = Stage::RefusalReady;
-            return Ok(ServingCaptureProgress::Refused);
+            context.cancel_member_capture(id, ports.io)?;
+        } else {
+            context.finish_member_capture(id, ports.io)?;
         }
-        Ok(ServingCaptureProgress::Pending)
+        Ok(self.finish_refusal())
+    }
+
+    fn finish_refusal(&mut self) -> ServingCaptureProgress {
+        self.cancelling = false;
+        if matches!(self.capture_origin, CaptureOrigin::Leave { .. }) {
+            self.carries[5] = Some(Carry::new(
+                &self.exchange,
+                CapturePayload::SavePointCaptureRefused(CaptureRefused {
+                    capture_id: self.beginning.capture_id,
+                    missed: self.refusal_leg.expect("retained refusal attribution"),
+                }),
+            ));
+            self.stage = Stage::RefusalCarry;
+            ServingCaptureProgress::Progress
+        } else {
+            self.stage = Stage::RefusalReady;
+            ServingCaptureProgress::Refused
+        }
     }
 
     fn complete_sent<I: PumpIo>(
@@ -1300,6 +1455,7 @@ impl ServingCapture {
             return Ok(ServingCaptureProgress::Published);
         }
         if self.stage == Stage::RefusalReady {
+            self.probe(context, ports)?;
             return Ok(ServingCaptureProgress::Refused);
         }
         if self.complete_sent(context, ports)? {
@@ -1311,6 +1467,7 @@ impl ServingCapture {
         {
             return Err(failure);
         }
+        self.remember_member_refusal(context);
         self.probe(context, ports)?;
         // A queued save may share the running turn's context, but never its
         // author slot. Let that actual earlier owner continue instead of
@@ -1369,7 +1526,9 @@ impl ServingCapture {
                     ))
                 } else {
                     self.disconnected = true;
-                    self.cancelling = true;
+                    if !matches!(self.stage, Stage::RefusalCarry | Stage::RefusalReady) {
+                        self.cancelling = true;
+                    }
                     self.refusal_code
                         .get_or_insert_with(|| "admin_disconnected".into());
                     self.refusal_leg.get_or_insert(SavePointLeg::Published);
@@ -1644,6 +1803,26 @@ impl ServingCapture {
                 self.refused_record
                     .advance(context, ports, self.payload(Stage::Refused))?;
                 context.finish_member_capture(id, ports.io)?;
+                return Ok(self.finish_refusal());
+            }
+            Stage::RefusalCarry => {
+                let CaptureOrigin::Leave { bound, .. } = self.capture_origin else {
+                    unreachable!()
+                };
+                if !self.disconnected
+                    && !self.carries[5].as_mut().unwrap().advance(
+                        ports
+                            .lifecycle
+                            .leave_peer
+                            .as_deref_mut()
+                            .expect("original peer"),
+                        context,
+                        bound,
+                        ports.io,
+                    )?
+                {
+                    return Ok(ServingCaptureProgress::Pending);
+                }
                 self.stage = Stage::RefusalReady;
                 return Ok(ServingCaptureProgress::Refused);
             }
@@ -1652,6 +1831,46 @@ impl ServingCapture {
             }
         }
         Ok(ServingCaptureProgress::Progress)
+    }
+
+    fn remember_member_refusal(&mut self, context: &RecordingContext) {
+        if self.refusal_leg.is_some() {
+            return;
+        }
+        if let Some(refusal) = context.retained_capture_refusal()
+            && let shared::StateFrame::ControlAnswer {
+                frame: shared::StateControlAnswer::ControlRefused { code, .. },
+                ..
+            } = &refusal.answer
+        {
+            self.refusal_leg = Some(match refusal.request {
+                shared::StateControl::Snapshot { .. } => SavePointLeg::Answer,
+                shared::StateControl::Acknowledge { .. } => SavePointLeg::Finished,
+                _ => return,
+            });
+            self.refusal_code = Some(
+                serde_json::to_value(code)
+                    .expect("closed refusal code")
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+        } else if let Some(timeout) = context.capture_timeout() {
+            let snapshot = timeout.phase == CapturePhase::SnapshotPending;
+            self.refusal_leg = Some(if snapshot {
+                SavePointLeg::Answer
+            } else {
+                SavePointLeg::Finished
+            });
+            self.refusal_code = Some(
+                if snapshot {
+                    "snapshot_timeout"
+                } else {
+                    "finished_timeout"
+                }
+                .into(),
+            );
+        }
     }
 
     fn refused_member(
@@ -1670,35 +1889,15 @@ impl ServingCapture {
             return Ok(false);
         };
         self.member_results.push(answer);
+        self.remember_member_refusal(context);
         self.member_refusal = context.take_recorded_capture_refusal(self.beginning.capture_id);
-        self.refusal_leg = Some(if self.stage == Stage::Barrier {
-            SavePointLeg::Answer
-        } else {
-            SavePointLeg::Finished
-        });
-        self.refusal_code = Some(if let Some(refusal) = self.member_refusal.as_ref() {
-            match &refusal.answer {
-                shared::StateFrame::ControlAnswer {
-                    frame: shared::StateControlAnswer::ControlRefused { code, .. },
-                    ..
-                } => serde_json::to_value(code)
-                    .expect("closed refusal code")
-                    .as_str()
-                    .unwrap()
-                    .to_owned(),
-                _ => {
-                    return Err(fault(
-                        context,
-                        io,
-                        "capture refusal changed its typed result",
-                    ));
-                }
-            }
-        } else if context.capture_timeout().unwrap().phase == CapturePhase::SnapshotPending {
-            "snapshot_timeout".into()
-        } else {
-            "finished_timeout".into()
-        });
+        if self.refusal_leg.is_none() || self.refusal_code.is_none() {
+            return Err(fault(
+                context,
+                io,
+                "capture refusal lost its original attribution",
+            ));
+        }
         self.stage = Stage::Refused;
         Ok(true)
     }

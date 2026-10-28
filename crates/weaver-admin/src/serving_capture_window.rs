@@ -13,7 +13,7 @@ pub(crate) struct CaptureWindows {
     forced: bool,
     last: Cell<u64>,
     capture: Option<CaptureBeginning>,
-    complete: bool,
+    settled: bool,
     demand: Option<SaveWindow>,
 }
 
@@ -105,7 +105,7 @@ impl CaptureWindows {
             forced,
             last: Cell::new(now),
             capture: None,
-            complete: false,
+            settled: false,
             demand: None,
         })
     }
@@ -164,15 +164,21 @@ impl CaptureWindows {
         Ok(())
     }
 
-    /// Only the actor's matching CaptureComplete after Published calls this.
+    /// The actor's matching CaptureComplete after Published calls this.
     /// Retain the original windows as evidence; remove only the capture from waits.
     pub(crate) fn complete(&mut self, id: DecimalU64) -> Result<(), ChannelFault> {
+        self.complete_at(id, Self::now()?)
+    }
+
+    /// The actor has validated CaptureRefused before Commit on an actual Leave.
+    /// Its timely acknowledgement disarms only capture, never the shared tail.
+    pub(crate) fn refused(&mut self, id: DecimalU64) -> Result<(), ChannelFault> {
         self.complete_at(id, Self::now()?)
     }
     fn complete_at(&mut self, id: DecimalU64, now: u64) -> Result<(), ChannelFault> {
         self.remaining_at(now)?;
         if self.demand.is_some()
-            || self.complete
+            || self.settled
             || self
                 .capture
                 .as_ref()
@@ -180,7 +186,7 @@ impl CaptureWindows {
         {
             return Err(ChannelFault::Undecodable);
         }
-        self.complete = true;
+        self.settled = true;
         Ok(())
     }
     pub(crate) fn check(&self) -> Result<(), ChannelFault> {
@@ -202,7 +208,7 @@ impl CaptureWindows {
                     deadline.map_or(tail.deadline_ns.0, |outer| outer.min(tail.deadline_ns.0)),
                 );
             }
-            if !self.complete {
+            if !self.settled {
                 deadline = deadline.map(|end| end.min(value.window.deadline_ns.0));
             }
         }
