@@ -4,7 +4,7 @@
 
 **Landing PR:** #373
 
-**Version:** 0.23 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
+**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -383,12 +383,20 @@ neither alone is a final command result. A terminal Malformed, DescriptorsUnusab
 OrganRefused with organ Gate instead follows the existing failed-unwind conclusion:
 retain the refusal, end remaining run processes, preserve Open and report no successful
 save or Unloaded. OrganRefused keeps its nested reason attributed to the gate; it is
-not admin's own publication account. A matching FailedRun is retained worker evidence,
-not authority for root-owned artifacts or a published identity; its pre-Commit public
-result is Unanswered. Once Beginning has supplied a capture ID, FailedRun must name
+not admin's own publication account. FailedRun is admin's projection shape; the
+current harness does not emit it. If received from a worker, a matching FailedRun is
+retained only as defensive evidence, never authority for root-owned artifacts or a
+published identity; its pre-Commit public result is Unanswered. Once Beginning has supplied a capture ID, FailedRun must name
 that exact ID as well as the run, at receives and local-work checkpoints. Other
 terminal refusal codes are protocol failures, including a direct StatePersistenceInvalid
-or a code asking the caller to retry a standing run. Preserve the outer and shared
+or a code asking the caller to retry a standing run. This same terminal-code rule
+applies to every capture receive, local-work checkpoint and joined Leave exchange,
+including before CaptureRefused and after admin Aborted. A join compares any FailedRun
+with its observed run and rejects it when that run is unavailable or different; it
+has no Beginning and cannot assert a capture ID it never learned. Initial admission
+retains its named standing-refusal cases, and demand or graceful capture cleanup
+retains its specified SavePointNotTaken outcome. Public projection applies the same
+terminal set and never promotes a worker's publication claim. Preserve the outer and shared
 leave windows and all normal conclusion duties. Capture expiry still gives the
 existing unanswered-command outcome, never a new wait for a late success. A worker
 Aborted after a latched failure instead follows

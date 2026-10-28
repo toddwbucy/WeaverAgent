@@ -4,7 +4,7 @@
 
 **Landing PR:** #373
 
-**Version:** 0.26 **Date filed:** 2026-10-20 **Document ID:**
+**Version:** 0.27 **Date filed:** 2026-10-20 **Document ID:**
 `state-management-foundation-Spec` **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -483,7 +483,7 @@ rewrite follows from this distinction. [FLOW-3, PERSIST-3, PERSIST-4, STORE-5, C
 | After Beginning and before Commit, leave | Worker Aborted after a latched failure | Cancel unconfirmed publication and follow failed-run recovery, no successful Left |
 | AwaitRefusedLeave | Matching Left with forced true, no_state false and no save report | Complete normal forced-leave duties, Done, no save published |
 | AwaitRefusedLeave | SavePointNotTaken with the same missed leg | Report the graceful leave refusal, Done, merged retry remains available |
-| AwaitRefusedLeave | Correlated terminal Malformed, DescriptorsUnusable, OrganRefused with organ Gate, or FailedRun with the original run and capture ID | Retain the worker evidence and follow ADMIN-SAVE failed-unwind recovery; no successful save, Unloaded or retry of a standing run |
+| Any capture receive or local-work checkpoint, and joined Leave | Correlated terminal Malformed, DescriptorsUnusable, OrganRefused with organ Gate, or defensive FailedRun with the original run and any known capture ID | Retain the worker evidence and follow ADMIN-SAVE failed-unwind recovery; no successful save, Unloaded or retry of a standing run |
 | AwaitRefusedLeave | Other refusal, save report, CaptureComplete or renewed publication | Protocol failure, no publication or successful command result |
 | AwaitRefusedLeave | Shared-tail or outer leave deadline expires | Unanswered, preserve Open marker, Done, accept no late Left as success. The capture wait was already disarmed by CaptureRefused |
 | Any before Commit | Worker EOF, invalid message or deadline expiry | Do not publish, preserve Open marker, failed-run recovery, Done |

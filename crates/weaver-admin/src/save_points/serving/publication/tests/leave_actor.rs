@@ -440,56 +440,220 @@ fn refused_leave_admin_preserves_typed_terminal_refusals_and_rejects_foreign_ide
     }
 }
 
-#[test]
-fn refused_leave_admin_rejects_correlated_retry_codes_and_worker_publication_claims() {
+fn rejected_terminal_refusals() -> Vec<(&'static str, weaver_types::LifecycleRefusal)> {
     use weaver_types::state_flow::{PersistenceStage, StateManagementCode, StateManagementStage};
     use weaver_types::{LifecycleRefusal as L, RefusingOrgan};
-    for mode in ["forced", "graceful"] {
-        for case in 0..8 {
-            let fixture = Fixture::new();
-            let mut repo = fixture.repository();
-            let (mut owner, peer, exchange, prepared) = through_prepared(&fixture, &mut repo, mode);
+    vec![
+        ("carried-work", L::CarriedWork),
+        ("out-of-order", L::OutOfOrder),
+        (
+            "state-management",
+            L::StateManagementInvalid {
+                stage: StateManagementStage::Serving,
+                code: StateManagementCode::InvalidSpan,
+                rule_id: None,
+                path: None,
+                detail: "worker retry claim".into(),
+            },
+        ),
+        (
+            "publication-claim",
+            L::StatePersistenceInvalid {
+                stage: PersistenceStage::Publish,
+                case: PersistenceCase::PublicationFailed,
+                artifact_id: Some("a".repeat(64)),
+                detail: "worker publication claim".into(),
+            },
+        ),
+        ("not-at-rest", L::ActivityNotAtRest),
+        ("unauthorized", L::Unauthorized),
+        (
+            "spu-refusal",
+            L::OrganRefused {
+                organ: RefusingOrgan::Spu,
+                reason: Box::new(L::OutOfOrder),
+            },
+        ),
+        ("unanswered", L::Unanswered),
+        ("no-residency", L::NoResidency),
+    ]
+}
+
+fn at_refusal_site<'a>(
+    fixture: &Fixture,
+    repo: &'a mut Repository,
+    mode: &str,
+    site: &str,
+) -> (Capture<'a>, OwnedFd, ExchangeId) {
+    if matches!(site, "commit" | "refused") {
+        let (mut owner, peer, exchange, _) = through_prepared(fixture, repo, mode);
+        if site == "refused" {
             refused_packet(&peer, &exchange, SavePointLeg::Published);
             pending(&mut owner);
-            let refusal = match case {
-                0 => L::CarriedWork,
-                1 => L::OutOfOrder,
-                2 => L::StateManagementInvalid {
-                    stage: StateManagementStage::Serving,
-                    code: StateManagementCode::InvalidSpan,
-                    rule_id: None,
-                    path: None,
-                    detail: "worker retry claim".into(),
-                },
-                3 => L::StatePersistenceInvalid {
-                    stage: PersistenceStage::Publish,
+        }
+        return (owner, peer, exchange);
+    }
+    let (mut owner, peer, exchange) = through_beginning(fixture, repo, mode);
+    if site == "image" {
+        return (owner, peer, exchange);
+    }
+    if site != "cancelled" {
+        fixture.write_room("capture-9.sqlite.part", CAPTURE_BYTES);
+    }
+    packet(
+        &peer,
+        &exchange,
+        CapturePayload::SavePointImage(CaptureImage {
+            capture_id: 9.into(),
+            room_name: "capture-9.sqlite.part".into(),
+            size_bytes: (CAPTURE_BYTES.len() as u64).into(),
+            position: Some(position(9)),
+        }),
+    );
+    pending(&mut owner);
+    if site == "hashing" {
+        return (owner, peer, exchange);
+    }
+    pending(&mut owner);
+    if site == "cancelled" {
+        pending(&mut owner);
+        assert!(matches!(
+            response(&peer),
+            CapturePayload::SavePointAborted(_)
+        ));
+    } else {
+        assert!(matches!(
+            response(&peer),
+            CapturePayload::SavePointImageChecked(_)
+        ));
+        if site == "preparing" {
+            fs::rename(
+                fixture.room.join("capture-9.sqlite.part"),
+                fixture.room.join("capture-9.sqlite"),
+            )
+            .unwrap();
+            packet(
+                &peer,
+                &exchange,
+                CapturePayload::SavePointImageFinished(CaptureImageFinished {
+                    capture_id: 9.into(),
+                    room_name: "capture-9.sqlite".into(),
+                }),
+            );
+            pending(&mut owner);
+        }
+    }
+    (owner, peer, exchange)
+}
+
+#[test]
+fn capture_receives_reject_retry_codes_and_worker_publication_claims_at_every_site() {
+    for mode in ["forced", "graceful", "demand"] {
+        for site in [
+            "image",
+            "hashing",
+            "finished",
+            "preparing",
+            "commit",
+            "cancelled",
+            "refused",
+        ] {
+            if mode == "demand" && matches!(site, "cancelled" | "refused") {
+                continue; // Demand's separate Abort outcome is covered in its existing cases.
+            }
+            for (case, refusal) in rejected_terminal_refusals() {
+                let fixture = Fixture::new();
+                let mut repo = fixture.repository();
+                let (mut owner, peer, exchange) = at_refusal_site(&fixture, &mut repo, mode, site);
+                let names = fixture.names().len();
+                packet(
+                    &peer,
+                    &exchange,
+                    CapturePayload::Refusal(CaptureRefusal::Lifecycle(refusal)),
+                );
+                assert_eq!(
+                    owner.advance(),
+                    LeaveProgress::Stopped,
+                    "{mode}/{site}/{case}"
+                );
+                let failure = if site == "cancelled" {
+                    owner.cleanup_failure()
+                } else {
+                    owner.failure()
+                };
+                assert!(
+                    matches!(failure, Some(FailureCause::Protocol(_))),
+                    "{mode}/{site}/{case}: {failure:?}"
+                );
+                assert!(owner.finish_leave().is_err());
+                assert_eq!(fixture.index().len(), 1);
+                assert_eq!(
+                    fixture.names().len(),
+                    if matches!(site, "finished" | "preparing") {
+                        2
+                    } else {
+                        names
+                    },
+                    "{mode}/{site}/{case}: unconfirmed parts are removed, guards retained"
+                );
+                assert_eq!(
+                    recv(peer.as_raw_fd(), &mut [0; 1], MsgFlags::MSG_DONTWAIT),
+                    Err(nix::errno::Errno::EAGAIN),
+                    "{mode}/{site}/{case}: no continuation"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn capture_receives_keep_legitimate_terminal_codes_at_each_receive_and_checkpoint() {
+    use weaver_types::{LifecycleRefusal as L, RefusingOrgan};
+    for site in [
+        "image",
+        "hashing",
+        "finished",
+        "preparing",
+        "commit",
+        "cancelled",
+        "refused",
+    ] {
+        for refusal in [
+            L::Malformed,
+            L::DescriptorsUnusable,
+            L::OrganRefused {
+                organ: RefusingOrgan::Gate,
+                reason: Box::new(L::StatePersistenceInvalid {
+                    stage: weaver_types::state_flow::PersistenceStage::Publish,
                     case: PersistenceCase::PublicationFailed,
-                    artifact_id: Some(prepared.artifact_id),
-                    detail: "worker publication claim".into(),
-                },
-                4 => L::ActivityNotAtRest,
-                5 => L::Unauthorized,
-                6 => L::OrganRefused {
-                    organ: RefusingOrgan::Spu,
-                    reason: Box::new(L::OutOfOrder),
-                },
-                7 => L::Unanswered,
-                _ => unreachable!(),
-            };
+                    artifact_id: Some("b".repeat(64)),
+                    detail: "gate-attributed claim".into(),
+                }),
+            },
+        ] {
+            let fixture = Fixture::new();
+            let mut repo = fixture.repository();
+            let (mut owner, peer, exchange) = at_refusal_site(&fixture, &mut repo, "forced", site);
             packet(
                 &peer,
                 &exchange,
                 CapturePayload::Refusal(CaptureRefusal::Lifecycle(refusal)),
             );
             assert_eq!(owner.advance(), LeaveProgress::Stopped);
-            assert!(
-                matches!(owner.failure(), Some(FailureCause::Protocol(_))),
-                "{mode}/{case}: {:?}",
+            let failure = if site == "cancelled" {
+                owner.cleanup_failure()
+            } else {
                 owner.failure()
+            };
+            assert!(
+                matches!(failure, Some(FailureCause::WorkerOutcome)),
+                "{site}: {failure:?}"
             );
-            assert!(owner.finish_leave().is_err());
             assert_eq!(fixture.index().len(), 1);
-            assert_eq!(fixture.names().len(), 2);
+            assert_eq!(
+                recv(peer.as_raw_fd(), &mut [0; 1], MsgFlags::MSG_DONTWAIT),
+                Err(nix::errno::Errno::EAGAIN)
+            );
         }
     }
 }
@@ -523,6 +687,7 @@ fn begun_capture_requires_failed_run_identity_at_receive_and_preparation_checkpo
                 refused_packet(&peer, &exchange, SavePointLeg::Published);
                 pending(&mut owner);
             }
+            let names = fixture.names().len();
             packet(
                 &peer,
                 &exchange,
@@ -542,6 +707,11 @@ fn begun_capture_requires_failed_run_identity_at_receive_and_preparation_checkpo
                 owner.failure()
             );
             assert_eq!(fixture.index().len(), 1);
+            assert_eq!(fixture.names().len(), names);
+            assert_eq!(
+                recv(peer.as_raw_fd(), &mut [0; 1], MsgFlags::MSG_DONTWAIT),
+                Err(nix::errno::Errno::EAGAIN)
+            );
         }
     }
 }
@@ -1278,12 +1448,16 @@ fn forced_leave_admin_negative_packet_retains_a_stopped_owner_without_left() {
         let mut repo = fixture.repository();
         let (mut owner, peer, exchange, prepared) =
             through_prepared(&fixture, &mut repo, "negative");
+        let unacknowledged = matches!(
+            &payload,
+            CapturePayload::Refusal(CaptureRefusal::Save(SaveRefusal::SavePointNotTaken { .. }))
+        );
         let foreign = matches!(&payload, CapturePayload::Refusal(CaptureRefusal::Save(
             SaveRefusal::FailedRun { run, .. }
         )) if run.0 == "foreign");
         packet(&peer, &exchange, payload);
         assert_eq!(owner.advance(), LeaveProgress::Stopped);
-        if foreign {
+        if foreign || unacknowledged {
             assert!(matches!(owner.failure(), Some(FailureCause::Protocol(_))));
         } else {
             assert!(matches!(owner.failure(), Some(FailureCause::WorkerOutcome)));

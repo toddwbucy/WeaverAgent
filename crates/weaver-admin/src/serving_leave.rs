@@ -526,7 +526,7 @@ impl<'repo> Capture<'repo> {
                 envelope: CaptureEnvelope { payload: CapturePayload::Refusal(
                     weaver_types::state_flow::capture::CaptureRefusal::Lifecycle(refusal)
                 ), .. }, ..
-            }] if !crate::follows_the_unwind(refusal))
+            }] if crate::standing_leave_refusal(refusal))
     }
 
     fn verb(&self) -> &'static str {
@@ -615,7 +615,11 @@ impl<'repo> Capture<'repo> {
             self.accept_capture_refused(refused.clone())?;
             return Ok(false);
         }
-        if negative(&self.received.last().unwrap().envelope, self.committed) {
+        if negative(
+            &self.received.last().unwrap().envelope,
+            &self.windows,
+            self.committed,
+        ) {
             return Err(FailureCause::WorkerOutcome);
         }
         Ok(true)
@@ -947,7 +951,7 @@ fn checkpoint<'a>(
                 && windows
                     .capture()
                     .is_none_or(|beginning| same_capture(&received.envelope, beginning.capture_id));
-            let cause = if correlated && negative(&received.envelope, committed) {
+            let cause = if correlated && negative(&received.envelope, windows, committed) {
                 FailureCause::WorkerOutcome
             } else {
                 FailureCause::Protocol("packet during publication work")
@@ -964,9 +968,23 @@ fn checkpoint<'a>(
     }
 }
 
-fn negative(envelope: &CaptureEnvelope, committed: bool) -> bool {
-    matches!(envelope.payload, CapturePayload::Refusal(_))
-        || (!committed && matches!(envelope.payload, CapturePayload::SavePointAborted(_)))
+fn negative(envelope: &CaptureEnvelope, windows: &CaptureWindows, committed: bool) -> bool {
+    use weaver_types::state_flow::capture::{CaptureRefusal, SaveRefusal};
+    match &envelope.payload {
+        CapturePayload::Refusal(refusal) if crate::terminal_unwind_refusal(refusal) => true,
+        CapturePayload::Refusal(CaptureRefusal::Lifecycle(refusal)) => {
+            !committed && windows.capture().is_none() && crate::standing_leave_refusal(refusal)
+        }
+        CapturePayload::Refusal(CaptureRefusal::Save(SaveRefusal::SavePointNotTaken {
+            missed,
+        })) => {
+            !committed
+                && windows.demand_window().is_some()
+                && ((*missed == SavePointLeg::CaptureNotReady) == windows.capture().is_none())
+        }
+        CapturePayload::SavePointAborted(_) => !committed,
+        _ => false,
+    }
 }
 
 fn same_capture(
@@ -983,11 +1001,37 @@ fn same_capture(
     }
 }
 
-fn same_run(envelope: &CaptureEnvelope, run: &weaver_types::RunId) -> bool {
+pub(super) fn same_run(envelope: &CaptureEnvelope, run: &weaver_types::RunId) -> bool {
     match &envelope.payload {
         CapturePayload::Refusal(weaver_types::state_flow::capture::CaptureRefusal::Save(
             weaver_types::state_flow::capture::SaveRefusal::FailedRun { run: actual, .. },
         )) => actual == run,
         _ => true,
     }
+}
+
+pub(crate) fn project_worker_refusal(
+    refusal: &weaver_types::state_flow::capture::CaptureRefusal,
+) -> weaver_types::state_flow::capture::CaptureRefusal {
+    use weaver_types::LifecycleRefusal;
+    use weaver_types::state_flow::capture::{CaptureRefusal, SaveRefusal};
+    if crate::terminal_unwind_refusal(refusal) {
+        return match refusal {
+            CaptureRefusal::Save(SaveRefusal::FailedRun { .. }) => {
+                CaptureRefusal::Lifecycle(LifecycleRefusal::Unanswered)
+            }
+            _ => refusal.clone(),
+        };
+    }
+    // The owner admits these only at initial admission or after demand/graceful
+    // capture cleanup. They do not become failed-unwind codes by exclusion.
+    if matches!(refusal, CaptureRefusal::Lifecycle(value) if crate::standing_leave_refusal(value))
+        || matches!(
+            refusal,
+            CaptureRefusal::Save(SaveRefusal::SavePointNotTaken { .. })
+        )
+    {
+        return refusal.clone();
+    }
+    CaptureRefusal::Lifecycle(LifecycleRefusal::Malformed)
 }

@@ -1,7 +1,6 @@
 //! Pre-Commit Leave refusal stays separate from capture success and run end.
 use super::*;
 use weaver_types::state_flow::capture::{CaptureRefusal, CaptureRefused, SaveRefusal};
-use weaver_types::{LifecycleRefusal, RefusingOrgan};
 
 impl Capture<'_> {
     pub(super) fn accept_capture_refused(
@@ -77,7 +76,7 @@ impl Capture<'_> {
         if let CapturePayload::SavePointCaptureRefused(value) = &envelope.payload {
             return self.accept_capture_refused(value.clone());
         }
-        if negative(envelope, false) {
+        if negative(envelope, &self.windows, false) {
             return Err(FailureCause::WorkerOutcome);
         }
         let crossed = matches!(
@@ -113,17 +112,9 @@ impl Capture<'_> {
             })) if Some(*missed) == self.refused && self.windows.matches_leave(false) => {
                 Err(FailureCause::WorkerOutcome)
             }
-            CapturePayload::Refusal(
-                CaptureRefusal::Lifecycle(
-                    LifecycleRefusal::Malformed
-                    | LifecycleRefusal::DescriptorsUnusable
-                    | LifecycleRefusal::OrganRefused {
-                        organ: RefusingOrgan::Gate,
-                        ..
-                    },
-                )
-                | CaptureRefusal::Save(SaveRefusal::FailedRun { .. }),
-            ) => Err(FailureCause::WorkerOutcome),
+            CapturePayload::Refusal(refusal) if crate::terminal_unwind_refusal(refusal) => {
+                Err(FailureCause::WorkerOutcome)
+            }
             _ => Err(FailureCause::Protocol(
                 "refused capture lacks its final Leave disposition",
             )),

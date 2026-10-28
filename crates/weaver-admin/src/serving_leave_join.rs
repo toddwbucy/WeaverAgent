@@ -200,22 +200,17 @@ fn join(
                     return Ok(None);
                 }
             }
-            CapturePayload::Refusal(refusal) => {
-                let failure = FailureCause::WorkerOutcome.into();
+            CapturePayload::Refusal(_) => {
                 return Err(
-                    if match refusal {
-                        CaptureRefusal::Lifecycle(refusal) => crate::follows_the_unwind(refusal),
-                        CaptureRefusal::Save(SaveRefusal::FailedRun { .. }) => true,
-                        CaptureRefusal::Save(SaveRefusal::SavePointNotTaken { .. }) => false,
-                    } {
-                        after_failed_answer(config, bounds, failure)
-                    } else {
-                        failure
+                    match refusal_outcome(&received.envelope, &evidence.noted_run) {
+                        Ok(true) => {
+                            after_failed_answer(config, bounds, FailureCause::WorkerOutcome.into())
+                        }
+                        Ok(false) => FailureCause::WorkerOutcome.into(),
+                        Err(cause) => after_failed_answer(config, bounds, cause.into()),
                     },
                 );
             }
-            // Healthy capture-refusal continuation remains held for #348. This
-            // owner accepts no invented no-save or no-state foundation Left.
             _ => {
                 return Err(after_failed_answer(
                     config,
@@ -226,6 +221,38 @@ fn join(
             }
         }
     }
+}
+
+/// The join has no Beginning and no capture ID of its own. Compare every run
+/// identity it did observe, and never project a foreign/unverifiable FailedRun.
+fn refusal_outcome(
+    envelope: &weaver_types::state_flow::capture::CaptureEnvelope,
+    noted_run: &Option<Option<String>>,
+) -> Result<bool, FailureCause> {
+    let CapturePayload::Refusal(refusal) = &envelope.payload else {
+        return Err(FailureCause::Protocol("joined answer is not a refusal"));
+    };
+    if matches!(refusal, CaptureRefusal::Save(SaveRefusal::FailedRun { .. }))
+        && !noted_run
+            .as_ref()
+            .and_then(Option::as_ref)
+            .is_some_and(|run| {
+                crate::serving_leave::same_run(envelope, &weaver_types::RunId(run.clone()))
+            })
+    {
+        return Err(FailureCause::Protocol(
+            "joined refusal lacks the observed run",
+        ));
+    }
+    if crate::terminal_unwind_refusal(refusal) {
+        return Ok(true);
+    }
+    if matches!(refusal, CaptureRefusal::Lifecycle(value) if crate::standing_leave_refusal(value)) {
+        return Ok(false);
+    }
+    Err(FailureCause::Protocol(
+        "joined refusal is not an admitted Leave outcome",
+    ))
 }
 
 fn after_failed_answer(
