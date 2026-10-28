@@ -346,7 +346,7 @@ imperative, 25 words), and the agent emits both. The checker cannot tell the mod
 without a marker. This is an O02-1 grammar election, raised in the walk's section 1,
 with three options: one 20-word limit for everything with the imperative permitted but
 not required, mode inferred from the verb form, or a declared mode on the wire. Lean:
-the first, which needs no wire field and is the bound MODEL's one-governing-verb
+the first, which needs no wire field and is what Spec 02 MODEL's one-governing-verb
 assumption wants anyway. For the operator, and the ratification split carries it.
 
 **Light verbs.** Rule 1.12's preference, an approved verb with a noun, moves the act
