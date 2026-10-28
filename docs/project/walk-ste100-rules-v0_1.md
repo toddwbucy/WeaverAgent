@@ -28,6 +28,10 @@ unsupported-rule admission failure before code relies on this table.
   exclusion needs an approved scope and treatment of such input under D7.
 - **partly**: one half mechanical, one half not. The table says which half is which.
 
+D7 proposes checked for token/structure coverage and not_emitted for an approved
+n/a exclusion. Conditional rows need their election before they receive a final
+status. Every rule ID stays in the qualification record, including exclusions.
+
 Every proposed checked constraint, including the checked part of a partly row,
 needs positive and negative coverage before it can be claimed implemented.
 Rejection fixtures must identify the applicable rule and exact defect spans.
@@ -91,7 +95,7 @@ Options 2 and 3 also need rule coverage and parser/wire consequences settled.
 | 3.1 | Use only the verb forms given in the dictionary | token | Same table as 1.4. One fixture pair serves both. Consider citing 1.4 and 3.1 together |
 | 3.2 | Use only infinitive, imperative, simple present, simple past, simple future, and past participle as adjective | structure | Needs the parse to identify tense. Seed: THE FILE IS BEING WRITTEN fails, THE FILE IS WRITTEN admits |
 | 3.3 | Use the past participle only as an adjective | structure | Needs the parse. Seed: THE SERVER HAS STARTED fails, THE SERVER STARTED admits |
-| 3.4 | No auxiliary verbs in complex constructions | structure | Needs the parse. Seed: THE AGENT HAS BEEN WAITING fails. Overlaps 3.2 |
+| 3.4 | No auxiliary verbs in complex constructions, with the approved modal uses excepted | structure | Needs the parse and the dictionary's auxiliary/action distinction. Seeds: THE AGENT HAS BEEN WAITING fails. THE AGENT MUST KEEP THE LOG admits with KEEP governing. Overlaps 3.2 |
 | 3.5 | The -ing form only as a technical noun or its modifier | partly | The form is token. Whether an -ing word is a technical noun is D6. Seed: STOP WRITING THE FILE fails |
 | 3.6 | Active voice, passive only in description when the agent is unknown | partly | The parse can identify passive voice. Mode and whether the actor is unknown need separate treatment, so passive detection alone cannot enforce the exception. Seed: THE FILE WAS WRITTEN BY THE AGENT fails, THE AGENT WROTE THE FILE admits |
 | 3.7 | Describe an action with a verb, not a noun or other part of speech | taught | Nominalization is a meaning judgment. Seed only as a scored sample |
@@ -111,7 +115,7 @@ Options 2 and 3 also need rule coverage and parser/wire consequences settled.
 | Rule | In short | Grade | Why, and the fixture seed |
 | --- | --- | --- | --- |
 | 5.1 | Maximum 20 words per sentence | token | Count, with section 8's counting rules. Seed: a 21-word sentence fails |
-| 5.2 | One instruction per sentence unless the actions are simultaneous | partly | Grammar can count actions. Simultaneity is not established by action count or the word AND. MODEL permits multiple actions with separate Bindings. A seed must fix the exception before claiming that two instructions necessarily fail |
+| 5.2 | One instruction per sentence unless the actions are simultaneous | partly | Grammar can count actions. Simultaneity is not established by action count or the word AND. MODEL permits multiple actions with separate Bindings. Candidate admit seed: MAKE SURE THAT YOU REMOVE THE FILE, one instruction with an embedded binding under the dictionary's clause proposal. Pin that proposal and simultaneous/sequential coordination cases before claiming a rule-only refusal |
 | 5.3 | Instructions in the imperative | structure if kept | Depends on mode, section 1. Option 1 would permit non-imperative instructions and therefore would not enforce this requirement |
 | 5.4 | A condition the reader needs first goes before the command, divided by a comma | partly | Grammar can check position and punctuation. Whether the reader needs the condition first is a separate judgment. Candidate seed: START THE SERVER IF THE PORT IS FREE versus IF THE PORT IS FREE, START THE SERVER. Pin applicability before assigning a rule-only refusal |
 | 5.5 | Notes give information, not instructions | n/a | Proposed exclusion of document notes. The absence of a separate note channel does not exclude a note in Text |

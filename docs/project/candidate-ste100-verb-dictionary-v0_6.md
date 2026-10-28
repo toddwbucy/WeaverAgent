@@ -269,10 +269,14 @@ lists rules without saying which the checker enforces. The declaration is made r
 rule over every rule of Part 1 (53: Issue 9 moved rule 2.3 into section 4 as 4.5), not
 by naming a few. The drafting seat's `walk-ste100-rules-v0_1.md` is that table in
 draft, with grades token, structure, partly, taught and proposed n/a. It includes
-fixture seeds, not a complete set of qualified fixture pairs. Each rule is checked,
-taught,
-or checked for one class and taught for another, with the qualification record
-carrying the table, so that PARSER's "an unsupported rule is failed admission" applies
+fixture seeds, not a complete set of qualified fixture pairs. The proposed
+qualification record gives every rule ID one status: checked, taught, partly,
+or not_emitted. Partly names both its checked constraints and its taught remainder.
+Not_emitted names an explicitly excluded text form and the approved scope that
+excludes it. It does not mean an unimplemented rule or an arbitrary skipped input.
+The owning Spec must settle treatment of excluded input before using that status.
+The qualification record carries this complete table, so that PARSER's
+"an unsupported rule is failed admission" applies
 to the checked set and the taught set is the prompt's and the review's. The largest
 taught rule is 1.3, approved words only with their approved meanings: FOLLOW used to
 mean obey passes any lexical check. The walk's grades are the table, and this document
