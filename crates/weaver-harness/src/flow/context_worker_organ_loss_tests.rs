@@ -8,6 +8,8 @@ use crate::{FoundationGracefulLeaveHandoff, FoundationRun};
 use std::os::fd::OwnedFd;
 use weaver_trace::serving;
 
+#[path = "context_worker_save_progress_tests.rs"]
+mod save_progress;
 #[path = "context_worker_organ_loss_tail_tests.rs"]
 mod tail;
 #[path = "context_worker_world_request_tests.rs"]
@@ -67,6 +69,11 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
         let root = std::path::PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
         wait_file(&root, "organ-loss-image-held");
         eprintln!("{{\"fixture\":\"SPU last word before image verification\"}}");
+        if mode.contains("-held-reply-") {
+            nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
+            std::fs::write(root.join("organ-loss-decode-closed"), b"closed").unwrap();
+            wait_file(&root, "organ-loss-held-reply-reduced");
+        }
         if mode.ends_with("-spu-release") {
             if mode.contains("-report-queued-") {
                 // Decode EOF wakes a worker waiting on the paused capture.
@@ -227,8 +234,14 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                             }
                         }
                         std::fs::write(root.join("organ-loss-image-held"), &image_bytes).unwrap();
+                        if mode.contains("-held-reply-") {
+                            wait_file(root, "organ-loss-pin-ready");
+                        }
                         let observed_by = Instant::now() + Duration::from_secs(3);
-                        while !expiry && !fault_seen.load(Ordering::SeqCst) {
+                        while !expiry
+                            && !mode.contains("-held-reply-")
+                            && !fault_seen.load(Ordering::SeqCst)
+                        {
                             if done.load(Ordering::SeqCst) {
                                 return (packets, None);
                             }
@@ -363,10 +376,18 @@ pub(in crate::flow::context::worker_startup) fn handoff(
         let _stop = StopThreads(&done);
         let mut queued = false;
         let mut report_pinned = false;
+        let mut held_reply_pinned = false;
         let end = Instant::now() + Duration::from_secs(20);
         loop {
             assert!(Instant::now() < end, "organ loss driver stalled");
             if let Some(input) = &mut guard.input {
+                if mode.contains("-held-reply-")
+                    && !held_reply_pinned
+                    && root.join("organ-loss-image-held").exists()
+                {
+                    save_progress::reduce_while_last_word_is_pending(input, root);
+                    held_reply_pinned = true;
+                }
                 if mode.ends_with("-spu-release")
                     && !report_pinned
                     && root.join("organ-loss-image-held").exists()
@@ -599,6 +620,7 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                 "final SPU Fault must leave the dead port"
             );
         }
+        assert_eq!(held_reply_pinned, mode.contains("-held-reply-"));
         assert!(input.serving.save.is_none());
         assert!(input.serving.owner.context.capture_snapshot().is_none());
         let graceful = input.serving.graceful.as_ref().unwrap();

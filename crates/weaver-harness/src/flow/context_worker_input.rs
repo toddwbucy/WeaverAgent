@@ -261,12 +261,16 @@ impl<'a> FoundationInput<'a> {
             .prepare_save_window_expiry(io)
             .and_then(|()| self.advance_organ_faults(None, io))
             .and_then(|ready| {
+                let save_progress = self.advance_save(io)?;
                 if !ready {
-                    // Pending settlement must wait even when the driver calls advance.
-                    // The common pump still serves every socket and original bound.
+                    // Settlement does not own the save's held replies. Reduce
+                    // them before waiting, and do not wait twice if its pump
+                    // may have retained another reply for the next reduction.
+                    if save_progress == save::SaveProgress::Progress {
+                        return Ok(());
+                    }
                     return self.observe_with_wait(io, true);
                 }
-                self.advance_save(io)?;
                 if self.save_blocks_turn() {
                     return Ok(());
                 }

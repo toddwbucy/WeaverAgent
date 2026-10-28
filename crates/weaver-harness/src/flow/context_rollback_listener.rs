@@ -147,12 +147,20 @@ impl RollbackDials {
         // The listener may already hold the next connection while the prior
         // dial finishes. Retire that dial before adopting the held connection,
         // so the caller cannot sleep with neither an accept nor a read interest.
-        if self
+        if let Some(failure) = self
             .active
             .as_ref()
-            .is_some_and(|dial| dial.peer.failure().is_some())
+            .and_then(|dial| dial.peer.failure())
+            .cloned()
         {
-            self.drop_dial(context, "dialer transport closed or failed");
+            self.recover(
+                context,
+                RunFailure::Transport {
+                    source: PumpSource::AdminDial,
+                    failure,
+                },
+                io,
+            )?;
         } else if self
             .active
             .as_ref()

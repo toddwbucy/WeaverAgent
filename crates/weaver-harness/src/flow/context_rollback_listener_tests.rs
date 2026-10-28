@@ -139,8 +139,10 @@ fn take_answer(peer: &OwnedFd) -> Option<OrganEnvelope> {
 }
 
 #[test]
-#[ignore = "requires root for the actual coordination peer credentials"]
 fn answered_dial_hands_a_retained_connection_to_its_reader_before_waiting() {
+    if !root_test("answered_dial_hands_a_retained_connection_to_its_reader_before_waiting") {
+        return;
+    }
     use super::super::listener::RollbackDials;
     use crate::flow::context::tests::{Fixture, config};
     let mut fx = Fixture::new(config());
@@ -184,6 +186,93 @@ fn answered_dial_hands_a_retained_connection_to_its_reader_before_waiting() {
         dials.active.is_some(),
         "the next original dial needs its own read interest"
     );
+}
+
+#[test]
+fn retiring_a_failed_dial_preserves_its_sent_fact_and_missing_clock_failure() {
+    if !root_test("retiring_a_failed_dial_preserves_its_sent_fact_and_missing_clock_failure") {
+        return;
+    }
+    use super::super::listener::RollbackDials;
+    use crate::flow::context::tests::{Fixture, config};
+    for recover_first in [false, true] {
+        let mut fx = Fixture::new(config());
+        fx.activate();
+        let now = fx.clock.now().unwrap();
+        let leave_bound = AbsoluteBound::after(now, 150_000_000_000).unwrap();
+        let (door, listener) = Door::new();
+        let mut dials = RollbackDials::new(listener);
+        let peer = door.connect();
+        let mut ask = leave();
+        ask.payload = weaver_types::Payload::Directive(LifecycleDirective::Observe);
+        send_request(&peer, &ask);
+        assert!(dials.listener.accept_observed(now).unwrap());
+        dials
+            .prepare(&mut fx.context, leave_bound, &mut fx.clock)
+            .unwrap();
+        dials.active.as_mut().unwrap().peer.try_receive().unwrap();
+        dials
+            .prepare(&mut fx.context, leave_bound, &mut fx.clock)
+            .unwrap();
+        let mut failed = false;
+        let error = dials
+            .active
+            .as_mut()
+            .unwrap()
+            .peer
+            .try_send_observed(&mut DialSendClock {
+                io: &mut fx.clock,
+                peer: &peer,
+                failed: &mut failed,
+            })
+            .unwrap_err();
+        assert!(failed);
+        let send = dials.active.as_ref().unwrap().send.as_ref().unwrap();
+        assert!(send.sent() && send.sent_at().is_none());
+        let heard = take_answer(&peer).unwrap();
+        assert_eq!(heard.exchange, ask.exchange);
+        let next = door.connect();
+        send_request(&next, &ask);
+        assert!(dials.listener.accept_observed(now).unwrap());
+        let result = if recover_first {
+            dials.recover(
+                &mut fx.context,
+                RunFailure::Transport {
+                    source: crate::flow::pump::PumpSource::AdminDial,
+                    failure: error,
+                },
+                &mut fx.clock,
+            )
+        } else {
+            dials.prepare(&mut fx.context, leave_bound, &mut fx.clock)
+        };
+        assert!(
+            result.is_err(),
+            "missing send clock cannot be retired as a peer departure"
+        );
+        let first = fx.context.failure().unwrap().clone();
+        assert!(matches!(
+            first,
+            RunFailure::Flow {
+                reason: FlowHaltReason::TraceFailed,
+                ..
+            }
+        ));
+        let dial = dials.active.as_ref().unwrap();
+        let send = dial.send.as_ref().unwrap();
+        assert!(dial.peer.owns_send(send));
+        assert!(send.sent() && send.sent_at().is_none());
+        assert!(
+            dials.listener.held().is_some(),
+            "the next connection is retained during halt"
+        );
+        assert!(
+            dials
+                .prepare(&mut fx.context, leave_bound, &mut fx.clock)
+                .is_err()
+        );
+        assert_eq!(fx.context.failure().unwrap(), &first);
+    }
 }
 
 struct DialSendClock<'a> {
@@ -663,13 +752,28 @@ pub(super) fn drive(
     }
 }
 
-fn scenario(name: &str, mode: &'static str) {
-    if !nix::unistd::geteuid().is_root() {
-        let status=std::process::Command::new("unshare").arg("--map-root-user").arg(std::env::current_exe().unwrap()).arg("--exact").arg(format!("flow::context::startup_composition::refusal::response::tests::listener_tests::{name}")).arg("--nocapture").status().unwrap();
-        assert!(status.success(), "root-credential listener scenario failed");
-        return;
+fn root_test(name: &str) -> bool {
+    if nix::unistd::geteuid().is_root() {
+        return true;
     }
-    crate::flow::context::startup_composition::tests::refusal_join(mode);
+    let status = std::process::Command::new("unshare")
+        .arg("--map-root-user")
+        .arg(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg(format!(
+            "flow::context::startup_composition::refusal::response::tests::listener_tests::{name}"
+        ))
+        .arg("--nocapture")
+        .status()
+        .unwrap();
+    assert!(status.success(), "root-credential listener scenario failed");
+    false
+}
+
+fn scenario(name: &str, mode: &'static str) {
+    if root_test(name) {
+        crate::flow::context::startup_composition::tests::refusal_join(mode);
+    }
 }
 macro_rules! case {
     ($name:ident,$mode:literal) => {

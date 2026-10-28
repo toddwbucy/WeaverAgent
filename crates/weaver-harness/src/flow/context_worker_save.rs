@@ -278,13 +278,16 @@ impl FoundationInput<'_> {
             || save.capture.retain_peer_end(failure)
     }
 
-    pub(super) fn advance_save(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+    pub(super) fn advance_save(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<SaveProgress, RunFailure> {
         let at_boundary = matches!(
             self.stage,
             Stage::Waiting | Stage::Completed | Stage::Refused | Stage::Aborted
         );
         let Some(save) = &mut self.serving.save else {
-            return Ok(());
+            return Ok(SaveProgress::Complete);
         };
         let owner = &mut self.serving.owner;
         let progress = save.advance(
@@ -305,6 +308,6 @@ impl FoundationInput<'_> {
         if progress == SaveProgress::Complete {
             self.serving.save = None;
         }
-        Ok(())
+        Ok(progress)
     }
 }

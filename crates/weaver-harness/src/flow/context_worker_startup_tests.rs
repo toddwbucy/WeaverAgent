@@ -5355,3 +5355,8 @@ scenario!(
     worker_session_demand_save_sqlite_organ_loss_spu_queued_report,
     "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-report-queued-spu-release"
 );
+
+scenario!(
+    worker_session_demand_save_held_reply_progresses_during_spu_settlement,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-held-reply-spu"
+);
