@@ -371,6 +371,67 @@ fn refused_leave_admin_awaits_final_outcome_and_removes_only_unconfirmed_publica
 }
 
 #[test]
+fn refused_leave_admin_preserves_typed_terminal_refusals_and_rejects_foreign_identity() {
+    for mode in ["forced", "graceful"] {
+        for case in [
+            "lifecycle",
+            "failed-run",
+            "foreign-run",
+            "foreign-capture",
+            "foreign-exchange",
+        ] {
+            let fixture = Fixture::new();
+            let mut repo = fixture.repository();
+            let (mut owner, peer, exchange, _) = through_prepared(&fixture, &mut repo, mode);
+            refused_packet(&peer, &exchange, SavePointLeg::Published);
+            pending(&mut owner);
+            let refusal = if case == "lifecycle" {
+                CaptureRefusal::Lifecycle(weaver_types::LifecycleRefusal::DescriptorsUnusable)
+            } else {
+                CaptureRefusal::Save(SaveRefusal::FailedRun {
+                    run: if case == "foreign-run" {
+                        RunId("foreign".into())
+                    } else {
+                        run()
+                    },
+                    capture_id: Some(if case == "foreign-capture" { 10 } else { 9 }.into()),
+                    phase: PersistencePhase::Confirming,
+                    published: None,
+                    artifacts: Vec::new(),
+                    detail: "retained terminal failure".into(),
+                })
+            };
+            let mut response_exchange = exchange.clone();
+            if case == "foreign-exchange" {
+                response_exchange.ordinal += 1;
+            }
+            packet(&peer, &response_exchange, CapturePayload::Refusal(refusal));
+            assert_eq!(owner.advance(), LeaveProgress::Stopped);
+            if case.starts_with("foreign-") {
+                assert!(
+                    matches!(owner.failure(), Some(FailureCause::Protocol(_))),
+                    "{mode}/{case}: {:?}",
+                    owner.failure()
+                );
+            } else {
+                assert!(
+                    matches!(owner.failure(), Some(FailureCause::WorkerOutcome)),
+                    "{mode}/{case}: {:?}",
+                    owner.failure()
+                );
+            }
+            assert!(owner.finish_leave().is_err());
+            assert_eq!(fixture.index().len(), 1);
+            assert_eq!(fixture.names().len(), 2);
+            assert_eq!(
+                recv(peer.as_raw_fd(), &mut [0; 1], MsgFlags::MSG_DONTWAIT),
+                Err(nix::errno::Errno::EAGAIN)
+            );
+        }
+    }
+}
+
+#[test]
 fn refused_leave_admin_rejects_publication_restart_duplicate_ack_and_wrong_final_shape() {
     for case in [
         "duplicate",

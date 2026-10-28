@@ -1018,6 +1018,11 @@ impl<'repo> Publication<'repo> {
             if let Ok(bytes) = replacement {
                 let name = self.guard_name.as_ref().unwrap();
                 let result = match self.read_guard() {
+                    // A refused-capture cleanup may fail after the original
+                    // failure already installed this exact Broken guard.
+                    Ok(old) if old == bytes => {
+                        fs_ops::sync_directory(self.repository.directory.as_fd())
+                    }
                     Ok(old) => fs_ops::replace_file(
                         self.repository.directory.as_fd(),
                         name,

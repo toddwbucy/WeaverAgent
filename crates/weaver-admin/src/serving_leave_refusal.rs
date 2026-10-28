@@ -109,9 +109,16 @@ impl Capture<'_> {
             }
             CapturePayload::Refusal(CaptureRefusal::Save(SaveRefusal::SavePointNotTaken {
                 missed,
-            })) if Some(*missed) == self.refused && self.windows.matches_leave(false) => {
-                Err(FailureCause::WorkerOutcome)
+            })) => {
+                if Some(*missed) == self.refused && self.windows.matches_leave(false) {
+                    Err(FailureCause::WorkerOutcome)
+                } else {
+                    Err(FailureCause::Protocol(
+                        "refused capture lacks its final Leave disposition",
+                    ))
+                }
             }
+            CapturePayload::Refusal(_) => Err(FailureCause::WorkerOutcome),
             _ => Err(FailureCause::Protocol(
                 "refused capture lacks its final Leave disposition",
             )),
