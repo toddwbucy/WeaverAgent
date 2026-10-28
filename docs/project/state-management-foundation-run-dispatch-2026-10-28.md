@@ -1,6 +1,6 @@
 # Foundation run dispatch composition
 
-Version: 1.1. Date filed: 2026-10-28. Issue #146.
+Version: 1.2. Date filed: 2026-10-28. Issue #146.
 
 Branch code/state-foundation-run-dispatch builds on draft #376 at a97e80dd.
 
@@ -244,9 +244,13 @@ carries retained. This slice does not close those unrelated admin carries.
 
 Planner U1 identified three success guards whose removal left the prior tests
 green. The entered rollback and expired-activation fixtures now retain their
-real completed owner and successful terminal while checking each disqualifier.
-Abandonment, a retained context failure and a coordinator halt are independent
-checks. The preflight terminal separately checks incomplete accounting, a
+real completed owner and successful terminal while checking abandonment, a
+retained context failure and a coordinator halt independently. The entered
+owner also retains a separately constructed failed-cleanup owner while its
+successful run and terminal remain present, isolating the failed-owner guard.
+Its completed terminal varies a NoResidency refusal and checks both the
+terminal and outer process disposition before restoring the original absence
+of a refusal. The preflight terminal separately checks incomplete accounting, a
 terminal refusal and a stage that has not completed. Clean paths still require
 Success, and an unchanged Unload sequence excludes a new author from the check.
 
@@ -265,7 +269,11 @@ is preserved as an instrument correction, excluded from the six controls.
 The correction uses an isolated extract and private target
 /tmp/weaver-state-146-dispatch-review-target, pinned nightly, --locked,
 CARGO_INCREMENTAL=0 and disabled debug symbols. Independent rework review found
-no remaining issue within this test-only scope. Planner regrade remains owed.
+no remaining issue within its initial test-only scope. The Planner then found
+the failed-owner clause and entered terminal refusal still unpinned. Two
+additional separately compiled controls remove those clauses individually;
+each fails the ready-rollback process fixture. The restored fixture passes
+again. This residual correction still requires Planner regrade.
 
 The final correction passes 2,178 ordinary harness cases and 30 affected worker
 process cases, including all ten whole-driver cases, the management waits and
@@ -284,7 +292,8 @@ Concurrent fork inheritance or an interrupted probe can delay observation, but
 the log does not establish which caused this run. The earlier failure logs
 remain evidence. No production timer or halt-gate implementation changes.
 
-T1, T2, T4, T5, T6 and T8 remain review carries for the next composition head.
+T1, T2, T4, T5, T6, T8, T9, T10, T11 and T12 remain review carries for the next composition head.
+The residual corrects T13's description of which guard clauses are varied.
 T3's proposed raw stderr write does not give a time bound on a full blocking
 pipe, so the fatal custody fallback continues to exit without that write.
 T7 concerns two different time sources. A fresh pump sample must not move

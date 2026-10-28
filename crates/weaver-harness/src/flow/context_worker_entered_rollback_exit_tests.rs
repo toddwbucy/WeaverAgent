@@ -27,6 +27,49 @@ impl FoundationEnteredRollback {
         );
         self.progress = FoundationEnteredRollbackProgress::Closed;
 
+        // Keep the successful run and terminal intact while varying only the
+        // failed-owner slot. Moving the run would also trip the separate run
+        // guard and hide a missing failed-owner check.
+        let mut fixture =
+            crate::flow::context::tests::Fixture::new(crate::flow::context::tests::config());
+        let resources = fixture.context.failed_enter_resources().unwrap();
+        crate::flow::context::failed_enter_driver::tests::state_eof(&mut fixture);
+        let context = crate::flow::context::failed_enter_driver::tests::take_context(&mut fixture);
+        self.failed = Some(FailedRunCleanup::after_startup(context, resources));
+        assert_eq!(
+            self.terminal.as_ref().unwrap().process_exit(),
+            Some(Success)
+        );
+        assert_eq!(
+            self.process_exit(),
+            Some(Failure),
+            "a retained failed owner overrides a successful terminal"
+        );
+        drop(self.failed.take());
+        assert_eq!(self.process_exit(), Some(Success));
+
+        assert!(
+            self.terminal
+                .as_mut()
+                .unwrap()
+                .test_swap_refusal(Some(weaver_types::LifecycleRefusal::NoResidency),)
+                .is_none()
+        );
+        assert_eq!(
+            self.terminal.as_ref().unwrap().process_exit(),
+            Some(Failure)
+        );
+        assert_eq!(
+            self.process_exit(),
+            Some(Failure),
+            "a completed terminal refusal is not a successful process exit"
+        );
+        assert_eq!(
+            self.terminal.as_mut().unwrap().test_swap_refusal(None),
+            Some(weaver_types::LifecycleRefusal::NoResidency),
+        );
+        assert_eq!(self.process_exit(), Some(Success));
+
         self.abandoned = true;
         assert_eq!(
             self.process_exit(),
