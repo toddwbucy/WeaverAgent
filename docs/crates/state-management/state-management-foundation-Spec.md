@@ -862,8 +862,8 @@ arrives, also observes the announced capture and shared tail deadlines. The earl
 applicable deadline wins. This makes S6's already bounded tail visible even when the
 preceding graceful drain was unbounded. A join may shorten a wait under the existing
 force rule and never restarts a capture. Pre-Commit Leave cancellation uses
-PERSIST-LEAVE-REFUSAL's refusal-only timing. On success, the capture window ends when the image is
-released and the capture's trace outcomes are recorded. On demand that includes the
+PERSIST-LEAVE-REFUSAL's refusal-only timing. On success, the capture window ends when
+the image is released and the capture's trace outcomes are recorded. On demand that includes the
 command reply. On leave, the harness then carries SavePointCaptureComplete {capture_id}
 before disarming that window. Admin consumes that exact completion before disarming its
 capture window. It is permitted only on a leave exchange after Published and is not

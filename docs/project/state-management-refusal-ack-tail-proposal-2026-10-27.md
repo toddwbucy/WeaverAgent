@@ -16,6 +16,16 @@ permitted. It then waits only for refused-capture cleanup and the final lifecycl
 response, bounded by the original shared Leave tail and outer admin deadline.
 The earlier deadline wins. Nothing restarts either deadline.
 
+A graceful Leave may omit its outer deadline while its earlier drain and wind-down
+remain unbounded. This proposal starts only after validated Beginning: PERSIST-BEGIN
+requires a finite shared tail on Leave, even when the outer deadline is absent.
+That shared tail then bounds refusal-only processing by itself. A missing tail is
+not a valid Leave Beginning and grants no unbounded refusal wait.
+
+Admin's expiry-triggered Aborted may cross a refusal already held by the worker.
+The existing first-refusal and single-cancellation rules still apply: the crossing
+cannot replace that refusal, start cleanup twice or renew a deadline.
+
 A matching CaptureRefused after capture expiry may be timely for that refusal-only
 continuation. Forced Leave can conclude normally without a save; a still-graceful
 Leave reports SavePointNotTaken and remains at S9. No late image success,
