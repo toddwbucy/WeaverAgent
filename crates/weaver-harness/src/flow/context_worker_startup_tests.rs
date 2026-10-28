@@ -22,6 +22,9 @@ use weaver_types::state_flow as s;
 #[path = "../bin/worker/dev_loop/foundation.rs"]
 pub(super) mod worker;
 
+#[path = "context_worker_admission_process_tests.rs"]
+pub(super) mod admission_process;
+
 #[path = "context_worker_leave_joint_tests.rs"]
 mod leave_joint;
 #[path = "../../tests/state_flow/member.rs"]
@@ -1033,6 +1036,45 @@ fn foreign_run(original: &[u8], root: &std::path::Path) -> ForeignRun {
     }
 }
 
+fn before_load_probe(
+    admission: &mut FoundationAdmission,
+    path: &std::path::Path,
+    clock: &mut FakePumpIo,
+) {
+    let peer = dial(path);
+    let request = weaver_types::OrganEnvelope {
+        exchange: weaver_types::ExchangeId {
+            opener: weaver_types::Opener::Admin,
+            ordinal: 50,
+        },
+        position: weaver_types::Position::Open,
+        payload: weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Observe),
+    };
+    let bytes = serde_json::to_vec(&request).unwrap();
+    assert_eq!(
+        nix::sys::socket::send(peer.as_raw_fd(), &bytes, MsgFlags::MSG_NOSIGNAL),
+        Ok(bytes.len())
+    );
+    for _ in 0..8 {
+        assert_eq!(
+            admission.advance_with_io(clock),
+            FoundationAdmissionProgress::Pending
+        );
+        if let Some(answer) = packet(&peer) {
+            assert_eq!(answer.exchange, request.exchange);
+            assert_eq!(answer.position, weaver_types::Position::Close);
+            assert!(
+                matches!(answer.payload, weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::State {
+                state: weaver_types::AgentState::Unloaded, load: None, ref constituents
+            }) if constituents.is_empty())
+            );
+            assert!(admission.process_exit().is_none());
+            return;
+        }
+    }
+    panic!("before-load refusal did not preserve the listener");
+}
+
 fn circuit(mode: &str) {
     assert_eq!(
         nix::unistd::getuid().as_raw(),
@@ -1051,7 +1093,6 @@ fn circuit(mode: &str) {
     if mode == "unprivileged" {
         refuse_unprivileged(&mut admission, &path);
     }
-    let peer = dial(&path);
     let (sink, mut reader) = UnixStream::pair().unwrap();
     if mode == "expired-startup-activation-trace" {
         // A large actual Load blocks its writer on this small real socket.
@@ -1272,6 +1313,20 @@ fn circuit(mode: &str) {
         enter_window.deadline_ns = 100.into();
     }
     let bytes = envelope.encode().unwrap();
+    if admission_process::is_mode(mode) {
+        admission_process::run(
+            admission,
+            program,
+            sink,
+            reader,
+            state,
+            member,
+            &bytes,
+            &load.state_start.seed_id,
+            &files.0,
+        );
+    }
+    let peer = dial(&path);
     let wire = if mode == "malformed" {
         b"{bad".to_vec()
     } else {
@@ -1307,8 +1362,13 @@ fn circuit(mode: &str) {
         admission.advance_with_io(&mut clock)
     };
     if mode == "window-future" || mode == "window-expired" {
-        assert_eq!(received, FoundationAdmissionProgress::Stopped);
-        assert_eq!(admission.received.as_ref().unwrap().wire(), bytes);
+        assert_eq!(received, FoundationAdmissionProgress::Pending);
+        for _ in 0..4 {
+            assert_eq!(
+                admission.advance_with_io(&mut clock),
+                FoundationAdmissionProgress::Pending
+            );
+        }
         let response = packet(&peer);
         if mode == "window-future" {
             let response = response.expect("before-load Malformed on actual valid exchange");
@@ -1329,6 +1389,8 @@ fn circuit(mode: &str) {
             0,
             "actual unadmitted descriptors closed, no state Open"
         );
+        drop(peer);
+        before_load_probe(&mut admission, &path, &mut clock);
         assert!(admission.adopt_with_io(&mut clock).is_err());
         return;
     }
@@ -1350,15 +1412,23 @@ fn circuit(mode: &str) {
         admission.adopt_with_io(&mut clock)
     };
     if mode == "missing-state" {
-        let admission = adopted.err().expect("missing handle refused");
+        let mut admission = adopted.err().expect("missing handle refused");
         assert_eq!(admission.received.as_ref().unwrap().wire(), bytes);
-        assert!(
-            admission
-                .detail()
-                .unwrap()
-                .contains("requires trace and state")
+        for _ in 0..4 {
+            assert_eq!(
+                admission.advance_with_io(&mut clock),
+                FoundationAdmissionProgress::Pending
+            );
+        }
+        let answer = packet(&peer).expect("typed missing-descriptor refusal");
+        assert_eq!(answer.exchange, envelope.exchange);
+        assert_eq!(answer.position, weaver_types::Position::Close);
+        assert_eq!(
+            answer.payload,
+            weaver_types::Payload::Refusal(weaver_types::LifecycleRefusal::DescriptorsUnusable)
         );
-        assert!(packet(&peer).is_none());
+        drop(peer);
+        before_load_probe(&mut admission, &path, &mut clock);
         return;
     }
     let mut run = RunGuard(Some(adopted.map_err(|a| a.detail).ok().unwrap()));
@@ -2135,6 +2205,34 @@ macro_rules! scenario {
     };
 }
 scenario!(worker_startup_composition_ready, "ready");
+scenario!(
+    worker_admission_composition_diagnostic_retains_original,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-two"
+);
+scenario!(
+    worker_admission_composition_before_enter_two_turns,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-ordinary-two"
+);
+scenario!(
+    worker_admission_composition_future_refusal_then_serving,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-future-two"
+);
+scenario!(
+    worker_admission_composition_expired_then_serving,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-expired-two"
+);
+scenario!(
+    worker_admission_composition_missing_state_then_serving,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-missing-two"
+);
+scenario!(
+    worker_admission_composition_malformed_process_exit,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-malformed-two"
+);
+scenario!(
+    worker_admission_composition_truncated_process_exit,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-truncated-two"
+);
 scenario!(
     worker_management_dispatch_ordering,
     "input-dispatch-ordering"

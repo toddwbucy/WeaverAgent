@@ -193,10 +193,16 @@ pub(super) enum HeldInput {
     Both,
 }
 
-/// Creation errors happen before a usable recording context exists. They go to
-/// the existing enter diagnostic path, never to a fabricated trace head.
+/// Preserve constructor provenance before any load or usable context exists.
+/// Only the admission owner maps an actual trace-handle failure to a refusal;
+/// clock and invariant failures grant no replacement lifecycle answer.
 #[derive(Debug)]
-pub(super) struct ContextError(pub String);
+pub(super) enum ContextAdmissionError {
+    Clock(String),
+    Expired { observed_ns: u64 },
+    Trace(String),
+    Invalid(String),
+}
 
 #[derive(Debug)]
 pub(super) enum ActivationFailure {
@@ -449,8 +455,10 @@ pub(crate) struct RecordingContext {
 }
 
 impl RecordingContext {
+    /// The exact pre-load constructor, with typed failures for the admission
+    /// owner. Consumed descriptors close on error; no state Open is sent here.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn new(
+    pub(super) fn admit(
         sink: OwnedFd,
         state: StateChannel,
         session: String,
@@ -459,45 +467,49 @@ impl RecordingContext {
         declaration: FlowConfig,
         enter: AbsoluteBound,
         io: &mut impl PumpIo,
-    ) -> Result<Self, ContextError> {
+    ) -> Result<Self, ContextAdmissionError> {
         declaration
             .validate()
-            .map_err(|e| ContextError(e.to_string()))?;
+            .map_err(|e| ContextAdmissionError::Invalid(e.to_string()))?;
         if state.identity().0 != session || state.identity().1 != run {
-            return Err(ContextError("state and recording identities differ".into()));
-        }
-        // Capture before any state open or classifier bootstrap bytes can be sent.
-        let origin = ClockOrigin::capture(io).map_err(|e| ContextError(e.to_string()))?;
-        if enter.expired(origin.raw()) {
-            return Err(ContextError(
-                "original Enter window expired before context construction".into(),
+            return Err(ContextAdmissionError::Invalid(
+                "state and recording identities differ".into(),
             ));
         }
+        // Capture before any state open or classifier bootstrap bytes can be sent.
+        let origin =
+            ClockOrigin::capture(io).map_err(|e| ContextAdmissionError::Clock(e.to_string()))?;
+        if enter.expired(origin.raw()) {
+            return Err(ContextAdmissionError::Expired {
+                observed_ns: origin.raw(),
+            });
+        }
         let author = ServingAuthor::new(session.clone(), run.clone(), operator, origin.raw())
-            .map_err(|e| ContextError(format!("author identity: {e:?}")))?;
-        let recorder = PreflightRecorder::receive(sink, RunRef(run.clone()), SessionRef(session))
-            .map_err(|e| ContextError(format!("trace receive: {e:?}")))?;
+            .map_err(|e| ContextAdmissionError::Invalid(format!("author identity: {e:?}")))?;
+        let recorder =
+            PreflightRecorder::receive(sink, RunRef(run.clone()), SessionRef(session))
+                .map_err(|e| ContextAdmissionError::Trace(format!("trace receive: {e:?}")))?;
         let budget = RetentionBudget::new(declaration.backlog.clone())
-            .map_err(|e| ContextError(e.to_string()))?;
+            .map_err(|e| ContextAdmissionError::Invalid(e.to_string()))?;
         let flow = FlowCoordinator::preflight(
             state,
             declaration.scheme.clone(),
             declaration.observation_interval.clone(),
             declaration.backlog.lag_alarm_turns.0,
         )
-        .map_err(|e| ContextError(e.detail))?;
+        .map_err(|e| ContextAdmissionError::Invalid(e.detail))?;
         let mut deadlines = DeadlineRegistry::new();
         deadlines
             .arm(PumpDeadline::Enter, enter)
-            .map_err(|e| ContextError(e.to_string()))?;
+            .map_err(|e| ContextAdmissionError::Invalid(e.to_string()))?;
         let input = super::input::InputSlot::new(run.clone(), declaration.scheme.scheme_id.clone())
-            .map_err(|error| ContextError(error.to_string()))?;
+            .map_err(|error| ContextAdmissionError::Invalid(error.to_string()))?;
         let pairs = pairs::PairLedger::new(
             flow.state().identity().0.to_owned(),
             run.clone(),
             declaration.scheme.clone(),
         )
-        .map_err(|error| ContextError(format!("pair identity: {error:?}")))?;
+        .map_err(|error| ContextAdmissionError::Invalid(format!("pair identity: {error:?}")))?;
         Ok(Self {
             phase: RecordingPhase::Preflight,
             origin,
