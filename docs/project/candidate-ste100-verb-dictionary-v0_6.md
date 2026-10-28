@@ -110,9 +110,11 @@ rights list does not obviously include this program. See section 7.
 
 Five approved keys have a computing sense that comes only from rule 1.12: CLOSE, CUT,
 INSTALL, OPEN and TAP, whose dictionary meanings are physical or circuit meanings. They
-cite both their entry and rule 1.12 category 2, and they join D4's count of keys with
-an unresolved sense. ERASE is not among them: its approved meaning is to remove data
-from a medium, so its computing sense is the approved one.
+keep their approved entry as the single `authority`, with disposition `approved_word`,
+and name the rule 1.12 category 2 computing use in `sense` beside the entry citation.
+They join D4's count of keys with an unresolved sense. ERASE is not among them: its
+approved meaning is to remove data from a medium, so its computing sense is the
+approved one.
 
 ## 3. Auxiliary and modal verbs
 

@@ -28,9 +28,11 @@ unsupported-rule admission failure before code relies on this table.
   exclusion needs an approved scope and treatment of such input under D7.
 - **partly**: one half mechanical, one half not. The table says which half is which.
 
-D7 proposes checked for token/structure coverage and not_emitted for an approved
-n/a exclusion. Conditional rows need their election before they receive a final
-status. Every rule ID stays in the qualification record, including exclusions.
+D7 proposes checked for token/structure rows, taught for taught rows, and partly
+for partly rows, with each checked constraint and taught remainder named. It
+proposes not_emitted only for an approved n/a exclusion. Conditional rows need
+their election before they receive a final status. Every rule ID stays in the
+qualification record, including exclusions.
 
 Every proposed checked constraint, including the checked part of a partly row,
 needs positive and negative coverage before it can be claimed implemented.
