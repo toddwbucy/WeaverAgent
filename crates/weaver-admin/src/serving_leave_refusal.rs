@@ -3,6 +3,65 @@ use super::*;
 use weaver_types::state_flow::capture::{CaptureRefusal, CaptureRefused, SaveRefusal};
 
 impl Capture<'_> {
+    pub(super) fn prepare_abort(&mut self, code: &str, detail: &str) {
+        assert!(self.abort.is_none(), "one admin cancellation per capture");
+        self.aborted_at = Some(self.stage);
+        self.abort = Some(CaptureEnvelope {
+            exchange: self.directive.exchange().clone(),
+            position: Position::Continue,
+            payload: CapturePayload::SavePointAborted(
+                weaver_types::state_flow::capture::CaptureAborted {
+                    capture_id: self.windows.capture().unwrap().capture_id,
+                    code: code.into(),
+                    detail: detail.into(),
+                },
+            ),
+        });
+        self.stage = Stage::Aborting;
+    }
+
+    pub(super) fn begin_expired_refusal(&mut self) -> Result<bool, FailureCause> {
+        if self.windows.demand_window().is_some()
+            || self.committed
+            || self.refused.is_some()
+            || self.failure.is_some()
+            || self.abort.is_some()
+            || !matches!(
+                self.stage,
+                Stage::Image | Stage::Hashing | Stage::Finished | Stage::Preparing | Stage::Commit
+            )
+            || !self
+                .windows
+                .capture_expired()
+                .map_err(FailureCause::Channel)?
+        {
+            return Ok(false);
+        }
+        self.windows
+            .begin_refusal()
+            .map_err(FailureCause::Channel)?;
+        if let Some(publication) = &mut self.publication {
+            self.publication_failure = Some(publication.failed("capture expired before Commit"));
+        }
+        self.prepare_abort("capture_expired", "capture window expired before Commit");
+        if let Some(received) = self.unexpected.take() {
+            let correlated = &received.envelope.exchange == self.directive.exchange()
+                && same_run(&received.envelope, &self.observed.facts.run)
+                && same_capture(
+                    &received.envelope,
+                    self.windows.capture().unwrap().capture_id,
+                );
+            self.received.push(received);
+            if !correlated {
+                return Err(FailureCause::Protocol(
+                    "foreign packet crossed capture expiry",
+                ));
+            }
+            self.reduce_refusal_packet()?;
+        }
+        Ok(true)
+    }
+
     pub(super) fn accept_capture_refused(
         &mut self,
         value: CaptureRefused,
@@ -72,6 +131,10 @@ impl Capture<'_> {
 
     pub(super) fn await_capture_refused(&mut self) -> Result<(), FailureCause> {
         self.receive_correlated()?;
+        self.reduce_refusal_packet()
+    }
+
+    fn reduce_refusal_packet(&mut self) -> Result<(), FailureCause> {
         let envelope = &self.received.last().unwrap().envelope;
         if let CapturePayload::SavePointCaptureRefused(value) = &envelope.payload {
             return self.accept_capture_refused(value.clone());

@@ -832,7 +832,7 @@ fn refused_leave_admin_accepts_the_acknowledgement_at_a_hashing_checkpoint() {
 }
 
 #[test]
-fn refused_leave_admin_expired_capture_cannot_accept_queued_acknowledgement_or_left() {
+fn refused_leave_admin_expired_capture_accepts_only_cleanup_and_final_unsaved_outcome() {
     for graceful in [false, true] {
         let fixture = Fixture::new();
         let mut repo = fixture.repository();
@@ -880,26 +880,50 @@ fn refused_leave_admin_expired_capture_cannot_accept_queued_acknowledgement_or_l
         {
             std::thread::sleep(Duration::from_nanos(remaining + 1));
         }
-        // Both whole frames are queued before the next receive. Readiness
-        // cannot replace the already expired, unchanged capture deadline.
+        // Whole cleanup/final frames may be queued after capture expiry,
+        // but only the original Leave bounds can authorize their reduction.
         refused_packet(&peer, &directive.exchange, SavePointLeg::Answer);
         packet(
             &peer,
             &directive.exchange,
-            CapturePayload::Answer(CaptureAnswer::Left {
-                save_point: None,
-                forced: true,
-                no_state: false,
-            }),
+            if graceful {
+                CapturePayload::Refusal(CaptureRefusal::Save(SaveRefusal::SavePointNotTaken {
+                    missed: SavePointLeg::Answer,
+                }))
+            } else {
+                CapturePayload::Answer(CaptureAnswer::Left {
+                    save_point: None,
+                    forced: true,
+                    no_state: false,
+                })
+            },
         );
-        for _ in 0..3 {
-            assert_eq!(owner.advance(), LeaveProgress::Stopped);
-            assert!(matches!(
-                owner.failure(),
-                Some(FailureCause::Channel(ChannelFault::Unanswered))
-            ));
-            assert!(owner.finish_leave().is_err());
-        }
+        pending(&mut owner); // Withdraw success and retain one Aborted.
+        pending(&mut owner); // Carry that cancellation under the original tail.
+        let CapturePayload::SavePointAborted(aborted) = response(&peer) else {
+            panic!()
+        };
+        assert_eq!(aborted.capture_id, 9.into());
+        assert_eq!(aborted.code, "capture_expired");
+        pending(&mut owner); // Matching CaptureRefused.
+        assert_eq!(
+            owner.advance(),
+            if graceful {
+                LeaveProgress::Stopped
+            } else {
+                LeaveProgress::LeftReceived
+            }
+        );
+        assert!(
+            owner.finish_leave().is_err(),
+            "an unsaved Leave cannot finish a publication"
+        );
+        let mut byte = [0];
+        assert_eq!(
+            recv(peer.as_raw_fd(), &mut byte, MsgFlags::MSG_DONTWAIT),
+            Err(nix::errno::Errno::EAGAIN),
+            "no second cancellation or late publication continuation"
+        );
         assert_eq!(fixture.index().len(), 1);
         assert_eq!(fixture.names().len(), 2);
     }
@@ -1476,3 +1500,6 @@ fn forced_leave_admin_negative_packet_retains_a_stopped_owner_without_left() {
         assert_eq!(owner.advance(), LeaveProgress::Stopped);
     }
 }
+
+#[path = "leave_expiry.rs"]
+mod expiry;

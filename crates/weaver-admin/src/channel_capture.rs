@@ -14,12 +14,29 @@ pub(crate) struct ReceivedCapture {
     pub(crate) wire: Vec<u8>,
 }
 
+/// A whole packet remains evidence even if decoding crossed its deadline.
+/// The actor must judge timing before granting any successful continuation.
+pub(crate) struct CaptureRead {
+    pub(crate) received: ReceivedCapture,
+    pub(crate) timing: Result<(), ChannelFault>,
+}
+
 impl Coordination {
     pub(crate) fn send_capture(
         &self,
         envelope: &CaptureEnvelope,
         windows: &CaptureWindows,
     ) -> Result<(), ChannelFault> {
+        self.send_capture_tracked(envelope, windows, &mut false)
+    }
+
+    pub(crate) fn send_capture_tracked(
+        &self,
+        envelope: &CaptureEnvelope,
+        windows: &CaptureWindows,
+        sent: &mut bool,
+    ) -> Result<(), ChannelFault> {
+        *sent = false;
         if let CapturePayload::Directive(CaptureDirective::SavePoint { window, .. }) =
             &envelope.payload
             && (windows.demand_window() != Some(*window) || windows.capture().is_some())
@@ -30,7 +47,7 @@ impl Coordination {
         let bytes = envelope
             .encode(CaptureSender::Admin)
             .map_err(|_| ChannelFault::Undecodable)?;
-        self.send_capture_bytes(&bytes, windows)
+        self.send_capture_bytes_tracked(&bytes, windows, sent)
     }
 
     /// Use the original Leave's graceful or forced window before Beginning.
@@ -86,6 +103,15 @@ impl Coordination {
         bytes: &[u8],
         windows: &CaptureWindows,
     ) -> Result<(), ChannelFault> {
+        self.send_capture_bytes_tracked(bytes, windows, &mut false)
+    }
+
+    fn send_capture_bytes_tracked(
+        &self,
+        bytes: &[u8],
+        windows: &CaptureWindows,
+        sent: &mut bool,
+    ) -> Result<(), ChannelFault> {
         if bytes.len() > MAX_ENVELOPE_BYTES {
             return Err(ChannelFault::Truncated {
                 bound: MAX_ENVELOPE_BYTES,
@@ -98,7 +124,10 @@ impl Coordination {
                 bytes,
                 MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL,
             ) {
-                Ok(sent) if sent == bytes.len() => return windows.check(),
+                Ok(count) if count == bytes.len() => {
+                    *sent = true;
+                    return windows.check();
+                }
                 Ok(_) => return Err(ChannelFault::Closed),
                 Err(nix::errno::Errno::EINTR) => (),
                 Err(nix::errno::Errno::EAGAIN) => self.wait_capture(nix::libc::POLLOUT, windows)?,
@@ -117,12 +146,22 @@ impl Coordination {
         })
     }
 
-    /// The same sole reader is probed between publication filesystem steps.
-    /// A complete packet remains owned by the actor that judges its phase.
-    pub(crate) fn try_recv_capture(
+    pub(crate) fn recv_capture_retained(
         &self,
         windows: &CaptureWindows,
-    ) -> Result<Option<ReceivedCapture>, ChannelFault> {
+    ) -> Result<CaptureRead, ChannelFault> {
+        self.recv_capture_retained_with(windows, |bytes| {
+            CaptureEnvelope::decode(bytes, CaptureSender::Harness)
+                .map_err(|_| ChannelFault::Undecodable)
+        })
+    }
+
+    /// The same sole reader is probed between publication filesystem steps.
+    /// A complete packet remains owned by the actor that judges its phase.
+    pub(crate) fn try_recv_capture_retained(
+        &self,
+        windows: &CaptureWindows,
+    ) -> Result<Option<CaptureRead>, ChannelFault> {
         windows.check()?;
         let Some(wire) = self.capture_bytes()? else {
             windows.check()?;
@@ -130,8 +169,10 @@ impl Coordination {
         };
         let envelope = CaptureEnvelope::decode(&wire, CaptureSender::Harness)
             .map_err(|_| ChannelFault::Undecodable)?;
-        windows.check()?;
-        Ok(Some(ReceivedCapture { envelope, wire }))
+        Ok(Some(CaptureRead {
+            received: ReceivedCapture { envelope, wire },
+            timing: windows.check(),
+        }))
     }
 
     fn recv_capture_with(
@@ -139,16 +180,28 @@ impl Coordination {
         windows: &CaptureWindows,
         decode: impl FnOnce(&[u8]) -> Result<CaptureEnvelope, ChannelFault>,
     ) -> Result<ReceivedCapture, ChannelFault> {
+        let read = self.recv_capture_retained_with(windows, decode)?;
+        read.timing?;
+        Ok(read.received)
+    }
+
+    fn recv_capture_retained_with(
+        &self,
+        windows: &CaptureWindows,
+        decode: impl FnOnce(&[u8]) -> Result<CaptureEnvelope, ChannelFault>,
+    ) -> Result<CaptureRead, ChannelFault> {
         loop {
             self.wait_capture(nix::libc::POLLIN, windows)?;
             let Some(bytes) = self.capture_bytes()? else {
                 continue;
             };
             let envelope = decode(&bytes)?;
-            windows.check()?;
-            return Ok(ReceivedCapture {
-                envelope,
-                wire: bytes,
+            return Ok(CaptureRead {
+                received: ReceivedCapture {
+                    envelope,
+                    wire: bytes,
+                },
+                timing: windows.check(),
             });
         }
     }

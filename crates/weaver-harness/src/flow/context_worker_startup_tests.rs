@@ -1074,6 +1074,11 @@ fn circuit(mode: &str) {
         {
             load.state_flow.persistence.save_wait.elapsed_ns = 1_000_000_000.into();
         }
+        if mode.contains("-joint-expiry-") {
+            // The snapshot's per-leg allowance is capped by this same capture
+            // deadline. The real member result stays held until actual Abort.
+            load.state_flow.persistence.save_wait.elapsed_ns = 2_000_000_000.into();
+        }
         if mode.contains("-organ-loss-expiry-") {
             // The actual writer queue takes several seconds to fill in this
             // debug fixture. Leave time to retain the fault at trace admission
@@ -5368,4 +5373,24 @@ scenario!(
 scenario!(
     worker_session_graceful_save_resting_held_reply_progresses_during_spu_settlement,
     "input-worker-generation-emission-session-graceful-save-resting-held-reply-refused"
+);
+
+scenario!(
+    worker_session_forced_leave_joint_sqlite_expiry_snapshot_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-expiry-snapshot-timeout-capture-refusal"
+);
+
+scenario!(
+    worker_session_forced_leave_joint_sqlite_expiry_finished_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-expiry-finished-timeout-capture-refusal"
+);
+
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_expiry_snapshot_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-expiry-snapshot-timeout-capture-refusal"
+);
+
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_expiry_finished_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-expiry-finished-timeout-capture-refusal"
 );

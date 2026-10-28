@@ -450,6 +450,20 @@ fn forced_leave_joint_actual_admin() {
             received.envelope.payload,
             weaver_types::state_flow::capture::CapturePayload::SavePointCaptureRefused(_)
         )));
+        // The parent checks the first recorded cause against this exact leg
+        // after the worker drains its trace. At S9 that file is not yet saved.
+        let expiry_missed = mode.contains("-joint-expiry-").then(|| {
+            evidence
+                .received
+                .iter()
+                .find_map(|received| match &received.envelope.payload {
+                    weaver_types::state_flow::capture::CapturePayload::SavePointCaptureRefused(
+                        value,
+                    ) => Some(value.missed),
+                    _ => None,
+                })
+                .expect("cleanup acknowledgement before graceful refusal")
+        });
         assert!(matches!(
             evidence.received.last().unwrap().envelope.payload,
             weaver_types::state_flow::capture::CapturePayload::Refusal(
@@ -459,7 +473,9 @@ fn forced_leave_joint_actual_admin() {
                     }
                 )
             )
-        if missed == if mode.contains("-preparation-capture-refusal") {
+        if missed == if let Some(missed) = expiry_missed {
+            missed
+        } else if mode.contains("-preparation-capture-refusal") {
             weaver_types::state_flow::capture::SavePointLeg::Published
         } else if mode.contains("-finished-timeout-capture-refusal") {
             weaver_types::state_flow::capture::SavePointLeg::Finished
