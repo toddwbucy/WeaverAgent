@@ -499,6 +499,117 @@ fn lifecycle_deadlines_keep_their_owner_while_gate_expiry_latches_flow() {
     }
 }
 
+#[derive(Clone, Copy)]
+enum TimeoutClock {
+    Elapsed(u64),
+    Failed,
+    Reversed,
+}
+
+struct CrossDeadlineWait {
+    before: u64,
+    deadline: u64,
+    after: TimeoutClock,
+    waited: bool,
+    after_reads: usize,
+}
+
+impl PumpIo for CrossDeadlineWait {
+    fn now(&mut self) -> std::io::Result<u64> {
+        if !self.waited {
+            return Ok(self.before);
+        }
+        self.after_reads += 1;
+        match self.after {
+            TimeoutClock::Elapsed(observed) => {
+                assert_eq!(
+                    self.after_reads, 1,
+                    "retain the observation without resampling"
+                );
+                Ok(observed)
+            }
+            TimeoutClock::Failed => Err(std::io::Error::other("post-wait clock failed")),
+            TimeoutClock::Reversed => Ok(self.before - 1),
+        }
+    }
+
+    fn wait(
+        &mut self,
+        _: &[crate::flow::clock::WaitInterest<'_>],
+        deadline: Option<u64>,
+    ) -> std::io::Result<crate::flow::clock::WaitOutcome> {
+        assert!(!self.waited, "one wait crosses the retained bound");
+        assert_eq!(deadline, Some(self.deadline));
+        self.waited = true;
+        Ok(crate::flow::clock::WaitOutcome::Timeout)
+    }
+}
+
+#[test]
+fn pump_wait_expiry_retains_actual_time_and_original_lifecycle_bound() {
+    for key in [PumpDeadline::Enter, PumpDeadline::Leave] {
+        let mut fx = Fixture::with_enter(config(), 5);
+        let bound = fx.context.deadlines.get(PumpDeadline::Enter).unwrap();
+        if key == PumpDeadline::Leave {
+            fx.context.complete_wait(PumpDeadline::Enter).unwrap();
+            fx.context.arm(key, bound, &mut fx.clock).unwrap();
+        }
+        let observed = bound.deadline_ns() + 7;
+        let mut io = CrossDeadlineWait {
+            before: fx.context.last_ns,
+            deadline: bound.deadline_ns(),
+            after: TimeoutClock::Elapsed(observed),
+            waited: false,
+            after_reads: 0,
+        };
+        let result = fx.context.pump_once(&mut author_ports(&mut io));
+        assert!(
+            io.waited,
+            "expiry must first be observed after the actual wait"
+        );
+        assert_eq!(io.after_reads, 1);
+        assert_eq!(result, Err(RunFailure::Wait { key, bound }));
+        assert_eq!(
+            fx.context.last_ns, observed,
+            "retain actual time, not the bound"
+        );
+        assert_eq!(fx.context.deadlines.get(key), Some(bound));
+        assert_eq!(fx.context.phase(), RecordingPhase::Preflight);
+        assert!(fx.context.failure().is_none());
+        assert!(fx.context.flow.halt().is_none());
+    }
+}
+
+#[test]
+fn pump_wait_clock_failure_does_not_become_healthy_lifecycle_expiry() {
+    for after in [TimeoutClock::Failed, TimeoutClock::Reversed] {
+        let mut fx = Fixture::with_enter(config(), 5);
+        let bound = fx.context.deadlines.get(PumpDeadline::Enter).unwrap();
+        let before = fx.context.last_ns;
+        let mut io = CrossDeadlineWait {
+            before,
+            deadline: bound.deadline_ns(),
+            after,
+            waited: false,
+            after_reads: 0,
+        };
+        let result = fx.context.pump_once(&mut author_ports(&mut io));
+        assert!(io.waited);
+        assert!(matches!(
+            result,
+            Err(RunFailure::Flow {
+                reason: FlowHaltReason::TraceFailed,
+                point: HaltPoint::Author,
+                ..
+            })
+        ));
+        assert_eq!(fx.context.failure(), result.as_ref().err());
+        assert_eq!(fx.context.last_ns, before);
+        assert_eq!(fx.context.deadlines.get(PumpDeadline::Enter), Some(bound));
+        assert_eq!(fx.context.phase(), RecordingPhase::Failed);
+    }
+}
+
 pub(in crate::flow) fn with_frozen_source<T>(
     use_facts: impl FnOnce(
         &FlowCoordinator<SocketPort>,

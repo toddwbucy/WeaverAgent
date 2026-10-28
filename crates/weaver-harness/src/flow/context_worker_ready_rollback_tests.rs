@@ -501,6 +501,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
         (owner, recorder.join().unwrap())
     });
     assert_eq!(owner.progress(), FoundationEnteredRollbackProgress::Closed);
+    assert_eq!(
+        owner.process_exit(),
+        Some(crate::FoundationProcessExit::Success)
+    );
     assert!(!owner.abandoned(), "{:?}", owner.detail());
     assert!(owner.detail().is_none(), "{:?}", owner.detail());
     let (run, account) = owner.test_account();

@@ -961,6 +961,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
     }
     let mut guard = Guard(Some(run.expired_rollback(handoff).ok().expect("exact run")));
     let owner = guard.0.as_mut().unwrap();
+    assert_eq!(owner.process_exit(), None);
     assert_eq!(
         owner.progress(),
         FoundationExpiredRollbackProgress::AwaitRollback
@@ -1955,6 +1956,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         .expect("failed admission rollback"),
                 );
                 use super::super::rollback::failed::FoundationRollbackExitProgress as ExitProgress;
+                assert_eq!(exit.0.process_exit(), None);
                 loop {
                     assert!(Instant::now() < limit, "failed admission cleanup");
                     assert_eq!(exit.0.failure(), Some(&first));
@@ -1978,6 +1980,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 assert!(!exit.0.abandoned());
+                assert_eq!(
+                    exit.0.process_exit(),
+                    Some(crate::FoundationProcessExit::Failure)
+                );
                 assert!(exit.0.test_spu_child().is_none());
                 assert!(packet(&peer).is_none(), "failed admission grants no Left");
                 assert!(!path.parent().unwrap().join("classifier-bootstrap").exists());
@@ -2030,6 +2036,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         .expect("actual failed template rollback"),
                 );
                 use super::super::rollback::failed::FoundationRollbackExitProgress as ExitProgress;
+                assert_eq!(exit.0.process_exit(), None);
                 loop {
                     assert!(
                         Instant::now() < limit,
@@ -2046,6 +2053,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 assert!(!exit.0.abandoned());
+                assert_eq!(
+                    exit.0.process_exit(),
+                    Some(crate::FoundationProcessExit::Failure)
+                );
                 assert!(
                     packet(&peer).is_none(),
                     "failed template rollback grants no Left"
@@ -2135,6 +2146,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         .expect("actual stopped rollback"),
                 );
                 use super::super::rollback::failed::FoundationRollbackExitProgress as ExitProgress;
+                assert_eq!(exit.0.process_exit(), None);
                 loop {
                     assert!(
                         Instant::now() < limit,
@@ -2151,6 +2163,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 assert!(!exit.0.abandoned());
+                assert_eq!(
+                    exit.0.process_exit(),
+                    Some(crate::FoundationProcessExit::Failure)
+                );
                 if incomplete_open {
                     let account = exit
                         .0
@@ -2313,6 +2329,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         .expect("actual Recorded terminal"),
                 );
                 use super::super::rollback::failed::FoundationRollbackExitProgress as ExitProgress;
+                assert_eq!(exit.0.process_exit(), None);
                 loop {
                     assert!(Instant::now() < limit);
                     assert_eq!(exit.0.unload_sequence(), Some(sequence));
@@ -2323,6 +2340,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 assert!(!exit.0.abandoned());
+                assert_eq!(
+                    exit.0.process_exit(),
+                    Some(crate::FoundationProcessExit::Failure)
+                );
                 assert!(packet(&peer).is_none());
                 reader.set_nonblocking(true).unwrap();
                 let rows = super::super::tests::trace_through(
@@ -2356,6 +2377,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 );
                 assert_eq!(clock.now().unwrap(), leave.deadline_ns());
                 assert!(owner.abandoned());
+                assert_eq!(
+                    owner.process_exit(),
+                    Some(crate::FoundationProcessExit::Failure)
+                );
                 assert!(owner.run.context.failure.is_none());
                 assert!(owner.unload_sequence().is_none());
                 assert!(packet(&peer).is_none());
@@ -2733,6 +2758,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 packet(&peer).is_none(),
                 "unrecorded original refusal cannot grant Left"
             );
+            assert_eq!(
+                owner.process_exit(),
+                Some(crate::FoundationProcessExit::Failure)
+            );
             assert!(owner.retired_dial.as_ref().unwrap()._send.is_none());
             assert!(
                 !leave.expired(clock.now().unwrap()),
@@ -2740,12 +2769,20 @@ pub(in crate::flow::context::worker_startup) fn finish(
             );
         } else if filing_pending {
             assert!(!boot_pair_account(owner).unwrap().account_complete());
+            assert_eq!(
+                owner.process_exit(),
+                Some(crate::FoundationProcessExit::Failure)
+            );
             assert!(
                 packet(&peer).is_none(),
                 "unfinished filing cannot grant Left"
             );
             assert!(owner.retired_dial.as_ref().unwrap()._send.is_none());
         } else if incomplete_open {
+            assert_eq!(
+                owner.process_exit(),
+                Some(crate::FoundationProcessExit::Failure)
+            );
             let account = owner.active.as_ref().unwrap().open.as_ref().unwrap();
             assert!(
                 account.incomplete(),
@@ -2785,6 +2822,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 assert!(account.test_record().is_none());
             }
             let answer = packet(&peer).expect("actual Left after the terminal drain");
+            assert_eq!(
+                owner.process_exit(),
+                Some(crate::FoundationProcessExit::Success)
+            );
             assert_eq!(answer.exchange, directive.exchange);
             assert!(matches!(
                 answer.payload,
@@ -2955,6 +2996,11 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 .unwrap(),
             weaver_trace::serving::DrainStatus::Pending { .. }
         ));
+        assert_eq!(
+            owner.process_exit(),
+            None,
+            "Recorded Unload does not finish drain"
+        );
         struct ExpireOnWait<'a>(&'a mut FakePumpIo, u64);
         impl PumpIo for ExpireOnWait<'_> {
             fn now(&mut self) -> std::io::Result<u64> {
@@ -2977,6 +3023,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
             owner.detail()
         );
         assert!(owner.abandoned());
+        assert_eq!(
+            owner.process_exit(),
+            Some(crate::FoundationProcessExit::Failure)
+        );
         assert_eq!(
             owner.unload_sequence(),
             Some(1),
@@ -3016,6 +3066,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
         assert!(!owner.abandoned());
         assert_eq!(owner.run.context.phase, RecordingPhase::Closed);
+        assert_eq!(
+            owner.process_exit(),
+            Some(crate::FoundationProcessExit::Success)
+        );
         assert!(owner.run.context.failure().is_none());
         assert!(owner.run.context.flow.halt().is_none());
         assert!(owner.run.context.flow.unused_open().is_some());
@@ -3074,6 +3128,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
     }
     assert!(!owner.abandoned());
     assert!(owner.channel_fault().is_none());
+    assert_eq!(owner.process_exit(), None);
     if initial_admission {
         assert_eq!(
             owner.advance_with_io(&mut CircuitIo(clock)),
@@ -3121,6 +3176,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
     );
     assert!(owner.abandoned());
     assert_eq!(owner.channel_fault(), Some(crate::ChannelFault::Closed));
+    assert_eq!(
+        owner.process_exit(),
+        Some(crate::FoundationProcessExit::Failure)
+    );
     assert!(owner.run.context.failure().is_none());
     assert!(owner.run.context.flow.halt().is_none());
     assert_eq!(owner.run.context.phase, RecordingPhase::Closed);

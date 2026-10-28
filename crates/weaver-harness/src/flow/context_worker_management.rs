@@ -61,6 +61,7 @@ pub struct FoundationManagement<'a> {
     heard_ns: Option<u64>,
     read: Option<AbsoluteBound>,
     read_armed: bool,
+    wait_ready: bool,
 }
 
 /// A failed management exchange retains its exact request, answer and send;
@@ -128,6 +129,7 @@ impl<'a> FoundationInput<'a> {
             heard_ns: None,
             read,
             read_armed: false,
+            wait_ready: false,
         }))
     }
 }
@@ -147,6 +149,7 @@ impl<'a> FoundationManagement<'a> {
             heard_ns,
             read,
             read_armed,
+            wait_ready: _,
         } = self;
         (
             input,
@@ -179,7 +182,42 @@ impl<'a> FoundationManagement<'a> {
         if self.progress != FoundationManagementProgress::Pending {
             return self.progress;
         }
-        if let Err(mut failure) = self.step(io) {
+        self.wait_ready = false;
+        let result = self.step(io);
+        self.reduce_result(result, io)
+    }
+
+    /// Wait only after the reducer reaches transport or organ-settlement work.
+    /// Held requests and unfinished Stop work return to their original reducer.
+    /// The common pump retains this peer and every existing absolute deadline.
+    pub fn wait_for_progress(&mut self) -> FoundationManagementProgress {
+        self.wait_with_io(&mut MonotonicIo)
+    }
+
+    fn wait_with_io(&mut self, io: &mut impl PumpIo) -> FoundationManagementProgress {
+        if self.progress != FoundationManagementProgress::Pending || !self.wait_ready {
+            return self.progress;
+        }
+        // A wake must be reduced before another wait. In particular, a newly
+        // retained EOF still needs its observation's original settlement wake.
+        self.wait_ready = false;
+        // The flow owner reduces its own buffered replies and observation tick.
+        // Otherwise a due tick would remain immediately ready on every poll.
+        // Private input/Stop completions stay with their existing owners.
+        let result = match self.input.serving.owner.context.reduce_flow(io) {
+            Ok(crate::flow::coordinator::Advance::Progress) => Ok(()),
+            Ok(_) => self.pump(io, true),
+            Err(failure) => Err(failure),
+        };
+        self.reduce_result(result, io)
+    }
+
+    fn reduce_result(
+        &mut self,
+        result: Result<(), RunFailure>,
+        io: &mut impl PumpIo,
+    ) -> FoundationManagementProgress {
+        if let Err(mut failure) = result {
             if self.input.final_send_clock_failed()
                 || self
                     .send
@@ -288,7 +326,10 @@ impl<'a> FoundationManagement<'a> {
             .advance_organ_faults((!self.peer_unavailable).then_some(&mut self.peer), io)
         {
             Ok(true) => (),
-            Ok(false) => return Ok(()),
+            Ok(false) => {
+                self.wait_ready = true;
+                return Ok(());
+            }
             Err(failure) => {
                 // A root departure must not strand its already accepted Stop.
                 // The observation and the original directive keep their owners.
@@ -321,27 +362,7 @@ impl<'a> FoundationManagement<'a> {
                 return Ok(());
             }
         }
-        let retained_gate_end = self.input.retained_quiesce_gate_end();
-        let owner = &mut self.input.serving.owner;
-        let pumped = owner.context.observe_ready(&mut PumpPorts {
-            lifecycle: LifecyclePorts {
-                listener: Some(&mut owner.listener),
-                dial: (!self.peer_unavailable).then_some(&mut self.peer),
-                residency: Some(owner.resident.residency),
-                leave_peer: self
-                    .input
-                    .serving
-                    .save
-                    .as_mut()
-                    .and_then(|save| save.port()),
-                ..Default::default()
-            },
-            gate: (!retained_gate_end).then_some(&mut owner.gate),
-            decode: Some(owner.decode),
-            label: None,
-            io,
-        });
-        self.keep_dial_failure(pumped)?;
+        self.pump(io, false)?;
         if self.heard_ns.is_none()
             && (self.peer.capture_held().is_some() || self.peer.held().is_some())
         {
@@ -429,6 +450,8 @@ impl<'a> FoundationManagement<'a> {
             let Some(message) = self.peer.held() else {
                 if self.peer_unavailable {
                     self.progress = FoundationManagementProgress::Dropped;
+                } else {
+                    self.wait_ready = true;
                 }
                 return Ok(());
             };
@@ -454,11 +477,9 @@ impl<'a> FoundationManagement<'a> {
                         Payload::Directive(LifecycleDirective::JoinLeave { .. })
                     )
             } else {
-                !matches!(
+                matches!(
                     envelope.payload,
-                    Payload::Directive(
-                        LifecycleDirective::Observe | LifecycleDirective::Stop { .. }
-                    )
+                    Payload::Directive(LifecycleDirective::Leave { .. })
                 )
             };
             if delegate {
@@ -535,7 +556,9 @@ impl<'a> FoundationManagement<'a> {
                         }),
                     }));
                 }
-                Payload::Directive(_) if leaving => {
+                Payload::Directive(directive)
+                    if leaving || !matches!(directive, LifecycleDirective::Stop { .. }) =>
+                {
                     self.answer = Some(ManagementAnswer::Lifecycle(OrganEnvelope {
                         exchange: message.envelope.exchange.clone(),
                         position: Position::Close,
@@ -621,7 +644,38 @@ impl<'a> FoundationManagement<'a> {
                 }))?,
             }
         }
+        self.wait_ready = !self.peer_unavailable
+            && self.stop.as_ref().is_none_or(|stop| stop.gate_done)
+            && self.answer.is_none()
+            && self.send.as_ref().is_some_and(|send| !send.sent());
         Ok(())
+    }
+
+    fn pump(&mut self, io: &mut impl PumpIo, wait: bool) -> Result<(), RunFailure> {
+        let retained_gate_end = self.input.retained_quiesce_gate_end();
+        let owner = &mut self.input.serving.owner;
+        let pumped = owner.context.pump_with_wait(
+            &mut PumpPorts {
+                lifecycle: LifecyclePorts {
+                    listener: Some(&mut owner.listener),
+                    dial: (!self.peer_unavailable).then_some(&mut self.peer),
+                    residency: Some(owner.resident.residency),
+                    leave_peer: self
+                        .input
+                        .serving
+                        .save
+                        .as_mut()
+                        .and_then(|save| save.port()),
+                    ..Default::default()
+                },
+                gate: (!retained_gate_end).then_some(&mut owner.gate),
+                decode: Some(owner.decode),
+                label: None,
+                io,
+            },
+            wait,
+        );
+        self.keep_dial_failure(pumped)
     }
 
     fn keep_dial_failure<T>(&mut self, result: Result<T, RunFailure>) -> Result<(), RunFailure> {
@@ -672,3 +726,11 @@ impl<'a> FoundationManagement<'a> {
 #[cfg(test)]
 #[path = "context_worker_management_tests.rs"]
 pub(in super::super::super) mod tests;
+
+#[cfg(test)]
+#[path = "context_worker_management_wait_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod wait_tests;
+
+#[cfg(test)]
+#[path = "context_worker_dispatch_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod dispatch_tests;

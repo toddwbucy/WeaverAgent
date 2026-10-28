@@ -184,6 +184,9 @@ fn worker_fixture_clock_waits_for_complete_request_receipt() {
 struct Files(PathBuf, bool);
 impl Files {
     fn new() -> Self {
+        if let Some(root) = std::env::var_os("WEAVER_FOUNDATION_DISPATCH_ROOT") {
+            return Self(root.into(), false);
+        }
         if let Some(root) = std::env::var_os("WEAVER_LEAVE_JOINT_ROOT") {
             return Self(root.into(), false);
         }
@@ -255,6 +258,8 @@ impl Files {
                         || mode == "expired-startup-summary-account-retained-classifier-held"
                     {
                         "rollback-held-exit"
+                    } else if mode.ends_with("-dispatch-startup-refusal") {
+                        "refuse"
                     } else if mode.starts_with("input-") {
                         mode
                     } else if mode == "classifier-refusal"
@@ -481,6 +486,35 @@ pub(super) struct Member {
     pub(super) summary: Option<s::QueryResult>,
 }
 impl Member {
+    pub(super) fn dispatch_parts(self) -> (UnixStream, String) {
+        assert!(
+            self.normal.is_none(),
+            "dispatcher fixture uses an external declared member double"
+        );
+        assert!(self.requests.is_empty());
+        (self.peer, self.seed)
+    }
+
+    pub(super) fn dispatch_double(peer: UnixStream, seed: String, root: PathBuf) -> Self {
+        Self {
+            peer,
+            seed,
+            fixture_root: Some(root),
+            normal: None,
+            bytes: vec![],
+            ordinal: 0,
+            requests: vec![],
+            hold_mark: false,
+            hold_kind: None,
+            filings: vec![],
+            held_file: None,
+            hold_control: None,
+            held_control: None,
+            boot_pairs: vec![],
+            summary: None,
+        }
+    }
+
     pub(super) fn hold_next_normal_filing(&mut self) {
         self.normal
             .as_mut()
@@ -670,7 +704,9 @@ impl Member {
                         {
                             let root = self.fixture_root.as_ref().expect("snapshot fixture root");
                             assert!(
-                                root.join("ready-rollback-lower.json").exists(),
+                                root.join("ready-rollback-lower.json").exists()
+                                    || (mode.ends_with("-dispatch-demand-two")
+                                        && !root.join("dispatch-save-complete").exists()),
                                 "snapshot precedes actual Lower"
                             );
                             self.requests.push("snapshot".into());
@@ -1218,7 +1254,11 @@ fn circuit(mode: &str) {
     *enter_window = weaver_types::state_flow::EnterWindow {
         began_ns: now.into(),
         deadline_ns: (now
-            + if mode == "worker" || mode.starts_with("input-worker") {
+            + if mode.ends_with("-dispatch-enter-expired") {
+                // Boot reads have a fixed two-second allowance. This case
+                // expires the original Enter first, while retaining that read.
+                1_000_000_000
+            } else if mode == "worker" || mode.starts_with("input-worker") {
                 5_000_000_000
             } else {
                 1_000_000_000
@@ -1353,7 +1393,9 @@ fn circuit(mode: &str) {
         .unwrap();
     assert_eq!(
         bound.deadline_ns() - bound.began_ns(),
-        if mode == "worker" || mode.starts_with("input-worker") {
+        if mode.ends_with("-dispatch-enter-expired") {
+            1_000_000_000
+        } else if mode == "worker" || mode.starts_with("input-worker") {
             5_000_000_000
         } else {
             1_000_000_000
@@ -1377,6 +1419,19 @@ fn circuit(mode: &str) {
         boot_pairs: vec![],
         summary: None,
     };
+    if mode.contains("-dispatch-") && mode.starts_with("input-worker-") {
+        // The outer process owns the actual Enter caller, member double and
+        // trace reader. The child invokes the same non-returning worker driver
+        // whose process exit is under test; no fixture Drop finishes cleanup.
+        super::input::management::dispatch_tests::run(
+            run.take_boxed(),
+            program,
+            member,
+            peer,
+            reader,
+            &files.0,
+        );
+    }
     if mode == "worker" || mode.starts_with("input-worker") {
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = done.clone();
@@ -1410,6 +1465,10 @@ fn circuit(mode: &str) {
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-worker") {
             drop(peer);
+            if mode.starts_with("input-worker-management-wait-") {
+                super::input::management::wait_tests::exercise(serving, &mut member, &path, mode);
+                return;
+            }
             if mode.ends_with("-demand-receive-clock") {
                 super::input::generation::session_tests::demand_save::receive_clock::exercise(
                     serving,
@@ -1746,6 +1805,15 @@ fn circuit(mode: &str) {
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-") {
             drop(peer); // Normal admin departure does not revoke serving.
+            if mode == "input-dispatch-ordering" {
+                super::input::management::dispatch_tests::ordering(
+                    serving,
+                    &mut member,
+                    &mut clock,
+                    &path,
+                );
+                return;
+            }
             if mode.contains("-lower-organ-") {
                 let (handoff, rows, observed_at) = super::input::halt::exit::organ_tests::start(
                     serving,
@@ -1998,6 +2066,11 @@ fn assert_serving(
 
 fn scenario(name: &str, mode: &str) {
     if std::env::var("WEAVER_WORKER_STARTUP_CASE").ok().as_deref() == Some(mode) {
+        if mode.contains("-dispatch-") && mode.starts_with("input-worker-") {
+            // This is the fixture's first action, before adoption starts the
+            // recorder or any organ is forked; fd9 came from the parent exec.
+            assert!(crate::keep_start_step_descriptors().unwrap().0);
+        }
         let run = std::env::var("WEAVER_GATE_STARTUP_RUN").unwrap();
         std::fs::write(
             format!("/sys/fs/cgroup{run}/cgroup.procs"),
@@ -2009,6 +2082,10 @@ fn scenario(name: &str, mode: &str) {
     }
     if leave_joint::is_mode(mode) {
         leave_joint::scenario(name, mode);
+        return;
+    }
+    if mode.contains("-dispatch-") && mode.starts_with("input-worker-") {
+        super::input::management::dispatch_tests::scenario(name, mode);
         return;
     }
     let layout = crate::tools_cgroup::tests::ScratchLayout::new(&format!("worker-{mode}"));
@@ -2058,6 +2135,58 @@ macro_rules! scenario {
     };
 }
 scenario!(worker_startup_composition_ready, "ready");
+scenario!(
+    worker_management_dispatch_ordering,
+    "input-dispatch-ordering"
+);
+scenario!(
+    worker_management_waits_for_silent_retained_peer,
+    "input-worker-management-wait-silent"
+);
+scenario!(
+    worker_management_waits_for_retained_answer_capacity,
+    "input-worker-management-wait-pressure"
+);
+scenario!(
+    worker_dispatch_composition_two_turns_graceful,
+    "input-worker-generation-emission-session-graceful-save-dispatch-two"
+);
+scenario!(
+    worker_dispatch_composition_forced_leave,
+    "input-worker-generation-emission-session-forced-save-dispatch-idle"
+);
+scenario!(
+    worker_dispatch_composition_ready_rollback,
+    "input-worker-generation-emission-session-ready-rollback-dispatch-idle"
+);
+scenario!(
+    worker_dispatch_composition_startup_refusal,
+    "input-worker-generation-emission-session-ready-rollback-dispatch-startup-refusal"
+);
+scenario!(
+    worker_dispatch_composition_startup_failed,
+    "input-worker-generation-emission-session-ready-rollback-dispatch-startup-failed"
+);
+scenario!(
+    worker_dispatch_composition_enter_expired,
+    "input-worker-generation-emission-session-ready-rollback-dispatch-enter-expired"
+);
+scenario!(
+    worker_dispatch_composition_serving_failed,
+    "input-worker-generation-emission-session-forced-save-dispatch-serving-failed"
+);
+scenario!(
+    worker_dispatch_composition_pending_filing_forced,
+    "input-worker-generation-emission-session-forced-save-dispatch-pending"
+);
+scenario!(
+    worker_dispatch_composition_s9_retry,
+    "input-worker-generation-emission-session-graceful-save-dispatch-s9"
+);
+scenario!(
+    worker_dispatch_composition_requested_save_then_turns,
+    "input-worker-generation-emission-session-graceful-save-dispatch-demand-two"
+);
 scenario!(
     worker_session_demand_save_receive_clock,
     "input-worker-generation-emission-session-demand-receive-clock"
@@ -3618,6 +3747,10 @@ scenario!(
 scenario!(
     worker_session_composition_ready_rollback_edge_drained_clock,
     "input-worker-generation-emission-session-ready-rollback-edge-drained-clock"
+);
+scenario!(
+    worker_session_composition_ready_rollback_edge_answer_lost,
+    "input-worker-generation-emission-session-ready-rollback-edge-answer-lost"
 );
 
 scenario!(

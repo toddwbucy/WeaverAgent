@@ -151,6 +151,16 @@ impl EnteredRollbackTerminal {
         self.stage == Stage::Complete
     }
 
+    pub(super) fn process_exit(&self) -> Option<crate::FoundationProcessExit> {
+        self.complete().then_some(if self.refusal.is_none() {
+            // Completed release/drain/reap remains complete when the final
+            // caller departed. This does not claim the answer was sent.
+            crate::FoundationProcessExit::Success
+        } else {
+            crate::FoundationProcessExit::Failure
+        })
+    }
+
     #[allow(clippy::too_many_arguments)] // Borrow the actual owners without replacing their custody.
     pub(super) fn step(
         &mut self,

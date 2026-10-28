@@ -107,6 +107,16 @@ impl ExpiredPreflightRollback {
     pub(super) fn complete(&self) -> bool {
         self.stage == Stage::Complete
     }
+    pub(super) fn process_exit(&self) -> Option<crate::FoundationProcessExit> {
+        self.complete()
+            .then_some(if self.answer_left && self.refusal.is_none() {
+                crate::FoundationProcessExit::Success
+            } else {
+                // Incomplete Open accounting or a terminal protocol refusal can
+                // finish resource disposal without permitting successful exit.
+                crate::FoundationProcessExit::Failure
+            })
+    }
     pub(super) fn sequence(&self) -> Option<u64> {
         self.sequence.map(|sequence| sequence.0)
     }

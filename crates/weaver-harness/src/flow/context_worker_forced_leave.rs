@@ -83,6 +83,9 @@ impl FoundationForcedLeave {
     pub fn abandoned(&self) -> bool {
         self.inner.abandoned()
     }
+    pub fn process_exit(&self) -> Option<crate::FoundationProcessExit> {
+        self.inner.process_exit()
+    }
     #[cfg(test)]
     pub(in crate::flow::context::worker_startup) fn test_inner(
         &mut self,

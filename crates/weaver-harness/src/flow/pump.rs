@@ -113,6 +113,8 @@ pub(super) enum PumpStep {
     Deadline {
         key: PumpDeadline,
         bound: AbsoluteBound,
+        /// Actual validated clock sample which observed this expiry.
+        observed_ns: u64,
     },
     Idle,
 }
@@ -881,7 +883,11 @@ impl CommonPump {
         Ok(deadlines
             .expired(now)
             .min_by_key(|(_, bound)| bound.deadline_ns())
-            .map(|(key, bound)| PumpStep::Deadline { key, bound }))
+            .map(|(key, bound)| PumpStep::Deadline {
+                key,
+                bound,
+                observed_ns: now,
+            }))
     }
 
     /// No completion is consumed here, including a complete result that arrives

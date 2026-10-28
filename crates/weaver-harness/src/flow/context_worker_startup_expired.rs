@@ -12,6 +12,7 @@ use std::sync::Arc;
 mod active;
 #[path = "context_worker_startup_expired_failure.rs"]
 pub(super) mod failure;
+pub use failure::FoundationExpiredRollbackExit;
 #[path = "context_worker_startup_expired_gate.rs"]
 pub(in crate::flow) mod gate;
 #[path = "context_worker_startup_expired_preflight.rs"]
@@ -374,6 +375,23 @@ impl FoundationExpiredRollback {
 
     pub fn abandoned(&self) -> bool {
         self.abandoned
+    }
+
+    pub fn process_exit(&self) -> Option<crate::FoundationProcessExit> {
+        if self.progress() != FoundationExpiredRollbackProgress::Closed {
+            return None;
+        }
+        Some(
+            self.preflight
+                .as_ref()
+                .filter(|_| {
+                    !self.abandoned
+                        && self.run.context.failure.is_none()
+                        && self.run.context.flow.halt().is_none()
+                })
+                .and_then(preflight::ExpiredPreflightRollback::process_exit)
+                .unwrap_or(crate::FoundationProcessExit::Failure),
+        )
     }
 
     pub fn channel_fault(&self) -> Option<crate::ChannelFault> {

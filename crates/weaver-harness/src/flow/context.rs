@@ -1476,7 +1476,7 @@ impl RecordingContext {
             let advance = self.reduce_flow(ports.io)?;
             if self.budget.waiting_copy().is_some()
                 && advance != Advance::Progress
-                && let PumpStep::Deadline { key, bound } = self.pump_once(ports)?
+                && let PumpStep::Deadline { key, bound, .. } = self.pump_once(ports)?
             {
                 return Err((RunFailure::Wait { key, bound }).into());
             }
@@ -1852,7 +1852,7 @@ impl RecordingContext {
                     return Ok(sequence);
                 }
                 RecordProgress::Pending => {
-                    if let PumpStep::Deadline { key, bound } = self.pump_once(ports)? {
+                    if let PumpStep::Deadline { key, bound, .. } = self.pump_once(ports)? {
                         return Err((RunFailure::Wait { key, bound }).into());
                     }
                 }
@@ -2188,6 +2188,12 @@ impl RecordingContext {
         self.observe_plan_summary_lifecycle(&ports.lifecycle);
         self.observe_place_lifecycle(&ports.lifecycle);
         let sent = self.reconcile_pair_send(ports.io)?;
+        if let Ok(PumpStep::Deadline { observed_ns, .. }) = &step {
+            // A bounded wait can cross the deadline after live's sample. Keep
+            // that actual observation for the stopped owner's consuming join.
+            // Reconcile earlier send evidence before advancing this clock floor.
+            self.retain_pump_clock(*observed_ns, ports.io)?;
+        }
         match step {
             Ok(PumpStep::Deadline {
                 key: PumpDeadline::Decision,
@@ -2198,7 +2204,7 @@ impl RecordingContext {
                     sources: vec![PumpSource::Gate],
                 })
             }
-            Ok(PumpStep::Deadline { key, bound }) => Err(self.expired(ports.io, key, bound)),
+            Ok(PumpStep::Deadline { key, bound, .. }) => Err(self.expired(ports.io, key, bound)),
             Ok(step) => Ok(step),
             Err(PumpFailure::Transport { source, failure }) => {
                 if source == PumpSource::Decode && self.measure.is_some() {
@@ -2232,6 +2238,23 @@ impl RecordingContext {
                 ))
             }
         }
+    }
+
+    fn retain_pump_clock(
+        &mut self,
+        observed_ns: u64,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        if observed_ns < self.last_ns {
+            return Err(self.fail(
+                io,
+                FlowHaltReason::TraceFailed,
+                HaltPoint::Author,
+                "pump clock precedes the context's prior reading",
+            ));
+        }
+        self.last_ns = observed_ns;
+        Ok(())
     }
 
     /// Reduce only the state/classifier owner's exact recorded completions.

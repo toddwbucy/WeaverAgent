@@ -418,6 +418,12 @@ impl LeaveOwner {
             Self::Graceful(owner) => owner.detail(),
         }
     }
+    fn process_exit(&self) -> Option<crate::FoundationProcessExit> {
+        match self {
+            Self::Forced(owner) => owner.process_exit(),
+            Self::Graceful(owner) => owner.process_exit(),
+        }
+    }
     fn unload_sequence(&self) -> Option<u64> {
         match self {
             Self::Forced(owner) => owner.unload_sequence(),
@@ -556,6 +562,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
     };
     let mut owner = ForcedGuard(owner);
+    assert_eq!(owner.0.process_exit(), None);
     let mut capture_wait = capture_wait::Probe::new(mode, member);
     let Some(peer) = peer else {
         finish_joint(owner, member, reader, root, mode, before, leave);
@@ -1019,6 +1026,11 @@ pub(in crate::flow::context::worker_startup) fn finish(
     }
     if mode.ends_with("-refused") {
         assert_eq!(
+            owner.0.process_exit(),
+            expected_forced(mode).then_some(crate::FoundationProcessExit::Success),
+            "forced capture refusal completes shutdown; graceful refusal retains S9"
+        );
+        assert_eq!(
             owner.0.progress(),
             if expected_forced(mode) {
                 LeaveProgress::Closed
@@ -1067,6 +1079,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
             );
         }
     } else if mode.ends_with("-wrong-published") || mode.ends_with("peer-after-capture") {
+        assert_eq!(
+            owner.0.process_exit(),
+            Some(crate::FoundationProcessExit::Failure)
+        );
         assert_eq!(owner.0.progress(), LeaveProgress::Closed);
         assert!(report.is_none());
         assert!(owner.0.test_inner().test_context().failure().is_some());
@@ -1128,6 +1144,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
             departed
         );
     } else if quiesce_bad_ack {
+        assert_eq!(
+            owner.0.process_exit(),
+            Some(crate::FoundationProcessExit::Failure)
+        );
         assert!(final_refusal && report.is_none() && artifact.is_some());
         assert_eq!(owner.0.progress(), LeaveProgress::Closed);
         assert!(owner.0.detail().is_none(), "{:?}", owner.0.detail());
@@ -1142,6 +1162,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
         quiesce_conversion::assert_tail(&mut owner, &rows, &joins, &member.filings, root, mode);
     } else {
         assert_eq!(owner.0.progress(), LeaveProgress::Closed);
+        assert_eq!(
+            owner.0.process_exit(),
+            Some(crate::FoundationProcessExit::Success)
+        );
         assert!(owner.0.detail().is_none(), "{:?}", owner.0.detail());
         assert!(!owner.0.abandoned());
         let report = report.expect("actual final Left");
@@ -1339,6 +1363,7 @@ fn finish_joint(
             match progress {
                 LeaveProgress::Closed => break,
                 LeaveProgress::CaptureRefused => {
+                    assert_eq!(owner.0.process_exit(), None);
                     assert!(retry, "unexpected capture refusal: {:?}", owner.0.detail());
                     assert!(owner.0.unload_sequence().is_none());
                     assert!(
@@ -1366,6 +1391,10 @@ fn finish_joint(
         recorder.join().unwrap()
     });
     if mode.ends_with("-bad-release") || mode.contains("-failed-cleanup-capture-refusal") {
+        assert_eq!(
+            owner.0.process_exit(),
+            Some(crate::FoundationProcessExit::Failure)
+        );
         assert!(owner.0.test_inner().test_context().failure().is_some());
         assert!(owner.0.unload_sequence().is_some());
         member.finish_normal();
@@ -1381,6 +1410,10 @@ fn finish_joint(
         return;
     }
     assert!(owner.0.detail().is_none(), "{:?}", owner.0.detail());
+    assert_eq!(
+        owner.0.process_exit(),
+        Some(crate::FoundationProcessExit::Success)
+    );
     assert!(!owner.0.abandoned());
     assert!(owner.0.unload_sequence().is_some());
     let final_leave = owner

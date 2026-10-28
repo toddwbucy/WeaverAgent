@@ -18,6 +18,15 @@ use crate::{CoordinationListener, LoopIdentity, OrganBinaries, OrganParameters};
 use weaver_types::state_flow::TemplateSpec;
 use weaver_types::state_flow::enter::EnterBinding;
 
+/// The completed owner's process disposition, not a lifecycle reply receipt.
+/// Success requires completed ordinary shutdown; a failed cleanup never becomes
+/// successful because it recorded Unload or reached its terminal state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoundationProcessExit {
+    Success,
+    Failure,
+}
+
 /// Compiled worker inputs. Runtime instructions, start identities and scheme
 /// text come exclusively from the actual root-judged Enter, not this caller.
 pub struct FoundationProgram {

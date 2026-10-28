@@ -445,6 +445,27 @@ impl FoundationEnteredRollback {
     pub fn progress(&self) -> FoundationEnteredRollbackProgress {
         self.progress
     }
+    /// Report process disposition only after the original cleanup owner closes.
+    /// A terminal refusal, first failure or abandoned cleanup cannot claim the
+    /// ordinary exit even when an Unload sequence was retained.
+    pub fn process_exit(&self) -> Option<crate::FoundationProcessExit> {
+        if self.progress != FoundationEnteredRollbackProgress::Closed {
+            return None;
+        }
+        Some(
+            self.terminal
+                .as_ref()
+                .filter(|_| {
+                    self.failed.is_none()
+                        && !self.abandoned
+                        && self.run.as_ref().is_some_and(|run| {
+                            run.context.failure.is_none() && run.context.flow.halt().is_none()
+                        })
+                })
+                .and_then(EnteredRollbackTerminal::process_exit)
+                .unwrap_or(crate::FoundationProcessExit::Failure),
+        )
+    }
     pub fn detail(&self) -> Option<&str> {
         self.detail.as_deref()
     }
