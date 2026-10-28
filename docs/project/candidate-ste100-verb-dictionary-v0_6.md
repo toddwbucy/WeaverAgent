@@ -1,11 +1,8 @@
 # Candidate: the STE100 verb dictionary for state management
 
-Status: candidate v0.6, 2026-10-28, for operator ratification. v0.1 was the drafting
-seat's. v0.2 to v0.6 are the Planner seat's revisions after the drafting seat's reviews
-and the operator's words of 2026-10-28: the four strikes, no write key, and, agreed in
-session and proposed here for ratification, the pair as the recall shape, the flag as a
-mark on a write (D9), and the order of work in section 8. The operator holds v0.1 to
-v0.5. Serves O02-1 of State Management Spec 02
+Version: v0.6, 2026-10-28.
+
+This candidate serves O02-1 of State Management Spec 02
 (MERGED, file version 0.18), the computing dictionary part only. Source standard:
 ASD-STE100 Issue 9, 2025-01-15, the operator's copy, SHA-256
 d1f4ea9e7cd6e46b47aa9057209f99e78c0e9cfc4e27a5b07895b05c1a166431.
@@ -13,12 +10,20 @@ Repository read at WeaverAgent main 0c80e52 (merge of #371, 2026-10-27).
 
 ## 0. Boundary
 
-This document IS the election of which verbs enter the `verbs` array of the
+This document proposes the election of which verbs enter the `verbs` array of the
 `ste100-scheme/1` artifact, which of them are recall keys, and the policy for technical
 names. It IS NOT the artifact itself, the grammar or its compiler, the condition and
 StepId grammar, the negative corpus, the model selection (O02-2), or the system prompt
 (O02-5). It changes no merged Spec. Where a finding needs a Spec change, section 6 names
 it as a delta for its own pull request and drafts nothing.
+
+The operator's reported session decisions of 2026-10-28 include the four strikes,
+no write key, the pair as the recall shape, the flag as a mark on a write (D9), and
+the order of work in section 8. Approval of this candidate records those choices.
+Changing runtime behavior still requires the affected merged Specs and paired
+consumers under Working Process section 6. Its release-time ratification process
+is suspended. This document supplies neither implementation authority nor a
+qualified production artifact.
 
 The store schema is not owed. `state-content/1` is merged in the weaver-state Spec
 amendment v0.22, STATE-SCHEMA, with `statement_binding` holding the verb key and
@@ -53,12 +58,13 @@ examples" and do not give a full list of possible technical verbs.
 approved forms, with no subject filter. Reason: the operator's ruling of 2026-10-15
 keeps the verbs as close to the standard as possible so the decoder relies on its base
 training, and the correction of 2026-10-12 retired the split between aerospace and
-general vocabulary. A verb the agent never emits costs the classifier nothing, since the
-set is closed, the keys are generated without a model, and the binder's label set is
-seven labels regardless of the key count.
+general vocabulary. The binder's label set stays at seven labels regardless of the
+key count. Lexicon storage, grammar lookup, form ambiguity and verb/noun collisions
+still need validation and measurement under O02-1 and O02-2.
 
-**E2. The standard's category 2 example list enters wholesale.** Every example verb the
-standard gives under rule 1.12 category 2 (computer processes and applications) becomes
+**E2. The category 2 examples enter except for the operator's four strikes.** Each
+retained example under rule 1.12 category 2 (computer processes and applications)
+becomes
 a key with disposition `technical_use` and authority rule 1.12, category 2, with its
 subcategory letter. Where the example is already an approved headword (CLOSE, CUT,
 ERASE, INSTALL, OPEN, TAP) the approved key stands and no second key is made. Reason:
@@ -110,11 +116,12 @@ from a medium, so its computing sense is the approved one.
 
 ## 3. Auxiliary and modal verbs
 
-Seven approved headwords do not name an action the store can file as one: CAN, CANNOT,
-MUST and WILL are modal, DO in its second meaning is an auxiliary, and BE and HAVE state
-a condition or a property more often than an act. The first five enter the dictionary
-because the grammar must accept them, but they are proposed as never governing a
-binding. The governing verb of "THE AGENT MUST KEEP THE LOG" is KEEP. BE and HAVE stay
+Seven approved headwords need a role distinction: CAN, CANNOT, MUST and WILL are
+modal, DO in its second meaning is an auxiliary, and BE and HAVE state a condition
+or a property more often than an act. The four modals and auxiliary use of DO are
+proposed as never governing a binding. DO in its action sense can govern one, as
+in "DO A TEST". The governing verb of "THE AGENT MUST KEEP THE LOG" is KEEP. BE and HAVE
+stay
 as binding keys, because "THE FILE IS EMPTY" is a statement the store must hold. The
 scheme has no field for this role, so the grammar under O02-1 carries it.
 
@@ -122,8 +129,10 @@ This choice loses information. "DO NOT START THE SERVER AGAIN" files as verb STA
 noun SERVER, and nothing in `statement_binding` records the NOT. The span text keeps it,
 so placed history reads correctly. A comparison by verb key does not, and a history
 query that returns the opposite of what was said is worse than one that returns
-nothing. This document therefore proposes delta D2 for ruling before the schema has
-consumers, with polarity first and modality second. Section 6, delta D2.
+nothing. This document therefore proposes delta D2 for ruling before production
+qualification, with polarity first and modality second. The merged schema already
+has store, wire, harness and analysis consumers. Any change must carry their paired
+contracts, implementation and compatibility consequences. Section 6, delta D2.
 
 ## 4. Technical verbs proposed
 
@@ -135,6 +144,11 @@ consumers, with polarity first and modality second. Section 6, delta D2.
 | 2 b) user interface and application processes | clear, close, copy, cut, delete, deselect, disable, drag, drag and drop, enable, encrypt, erase, filter, highlight, invalidate, maximize, minimize, navigate, open, paste, save, scroll, sort, store, tweet, validate, zoom in, zoom out | CLOSE, CUT, ERASE, OPEN |
 | 2 c) system operations | abort, boot, communicate, debug, download, format, install, load, manage, process, reboot, update, upgrade, upload | INSTALL |
 
+The proposed count is 50 examples minus six approved overlaps minus four strikes:
+40 new keys. With E3's four additions, that is 44 technical keys beside E1's 208
+approved keys, or 252 proposed keys. The private appendices and a checked extraction
+must verify the exact membership, forms and uniqueness before artifact construction.
+
 Each of the 40 enters with authority {rule_id: "1.12", disposition: technical_use} and a
 sense naming its subcategory. Several have an unapproved entry in Part 2 that sends them
 to an approved verb (load to INSTALL, save and store to KEEP, delete to ERASE, enter,
@@ -145,10 +159,10 @@ on 2026-10-28 (tweet, swipe, zoom in, zoom out), and a strike changes nothing
 structurally.
 The remaining GUI verbs (click, press, drag, drag and drop, highlight, maximize,
 minimize, scroll, deselect, navigate) are kept, pending the operator's word at
-ratification. Both seats lean to keeping them: a closed set costs nothing, keys are
-generated without a model so an admitted key owes no fixture, they are the standard's
-own examples, and each strike is a judgment line the record must defend. The four
-strikes stay as the operator's exception, and E2 closes in one act at ratification.
+approval. Both seats lean to keeping them as the standard's own examples. Mechanical
+key generation does not discharge extraction, approved-form, ambiguity or collision
+checks. Corpus coverage must exercise those properties, including multi-word keys.
+The four strikes stay as the operator's exception, and E2 closes at approval.
 
 ### 4.2 Under E3: four verbs outside the list
 
@@ -218,8 +232,9 @@ that record nothing measures whether this dictionary is large enough.
 
 **D2. Polarity and modality on the binding.** `statement_binding` has no field for
 negation or for a modal. Proposed columns for review: polarity (affirmative or negative)
-and modality (none, must, can, cannot, will). Polarity is proposed for ruling now,
-before the schema has consumers, for the reason in section 3. Modality may follow
+and modality (none, must, can, cannot, will). Polarity is proposed for ruling before
+production qualification, with existing consumers included as in section 3. Modality may
+follow
 measurement. The delta names where polarity comes from (DO NOT, CANNOT, MUST NOT and
 the approved negators) and scopes it to the governing verb only, with the condition
 left as text.
@@ -230,8 +245,9 @@ digest only, and `statement_binding.verb` is unconstrained text. A `scheme_verb`
 filled at seed would give the store its own refusal of an unknown key, and that refusal
 can be tested by removing it.
 
-**D4. Meaning per statement.** E4 leaves 29 multi-meaning keys unresolved, and the five
-E2 overlaps in E6 add to them. The
+**D4. Meaning per statement.** E4 leaves 29 multi-meaning keys unresolved. D4 also
+covers E6's five dual-authority keys, some of which can already be in that set.
+The union must be counted by key rather than adding the two figures. The
 2026-10-17 lesson from Caterpillar Technical English was to resolve the sense at write
 time. That would need a sense column and a harder classifier job. The proposal is to
 measure first.
@@ -252,18 +268,22 @@ is written, because it changes what the grammar accepts.
 lists rules without saying which the checker enforces. The declaration is made rule by
 rule over every rule of Part 1 (53: Issue 9 moved rule 2.3 into section 4 as 4.5), not
 by naming a few. The drafting seat's `walk-ste100-rules-v0_1.md` is that table in
-draft, with grades token, structure, partly, taught and n/a and a fixture seed per
-checked rule. Each rule is checked, taught,
+draft, with grades token, structure, partly, taught and proposed n/a. It includes
+fixture seeds, not a complete set of qualified fixture pairs. Each rule is checked,
+taught,
 or checked for one class and taught for another, with the qualification record
 carrying the table, so that PARSER's "an unsupported rule is failed admission" applies
 to the checked set and the taught set is the prompt's and the review's. The largest
 taught rule is 1.3, approved words only with their approved meanings: FOLLOW used to
 mean obey passes any lexical check. The walk's grades are the table, and this document
-does not enumerate them a second time. The meaning-protocol text (CLASS-1) states the
+does not enumerate them a second time. Under D7, the meaning-protocol text (CLASS-1)
+would state the
 conformance claim as "under the declared checked rules".
 
-**D8. Dispatch by verb and program noun, read side only.** Spec 02 RECALL reserves a
-verb (`recall`, one noun, no condition) and TOOL-STATEMENT excludes "a recall key" from
+**D8. Dispatch by verb and program noun, read side only.** Spec 02 RECALL dispatches a
+Binding whose verb is in `scheme.recall_keys`, with one noun and no condition.
+This candidate proposes `recall` as that key. TOOL-STATEMENT excludes "a recall key"
+from
 tool statements. The operator's reading of 2026-10-28 is that the verb is one key and
 the noun says where the action goes. On the write side that is already how filing
 works and needs no dispatch (section 7, no write key), so D8 is a read-side delta only:
@@ -273,9 +293,10 @@ RECALL's one noun into a target noun and a subject, change the recall refusal sh
 with it, and make the program's nouns (STATE, HISTORY, PLAN, STEP) a closed
 technical-name list the grammar knows, which is the closed half of D6.
 
-The cost is where control flow rests. With a reserved verb, whether a sentence is a
-recall is a dictionary lookup with no model in the loop, which is the CLASS-2 property.
-With a pair the decision rests on the noun, and if the binder assigns that noun a binder
+The cost is where control flow rests. For an already produced Binding, the current
+recall dispatch tests its verb key without another model judgment. PARSER and MODEL
+still produce that Binding. With a pair the decision also rests on the noun, and if
+the binder assigns that noun a binder
 error turns a work read into a history query or the reverse. The program nouns also
 collide with the work's words: STATE is unapproved as a general noun (Part 2 sends it to
 CONDITION), so in conforming text it can only be a technical noun, and this program's
@@ -284,13 +305,14 @@ own work says "READ THE STATE FILE" constantly, and STEP is an approved general 
 nouns lexically and marks them apart from the work's identifiers, which is D6's marking
 convention. What it buys is further inward targets later (PLAN, STEP).
 
-Agreed with the operator in session on 2026-10-28 and proposed here for ratification:
-the pair is the shape, it lands with D6, and `recall` stays the one reserved verb until
-the compiler exists. No repository document records this yet, so it is a ruling only
-when this document is ratified.
+Reported as agreed with the operator in session on 2026-10-28 and proposed here for
+approval: the pair is the shape and it lands with D6. The merged reserved-key
+mechanism stays authoritative until D6/D8's owning Specs, paired consumers and
+tests land. A compiler's existence alone does not authorize that change. `recall`
+is this candidate's proposed key for the current mechanism, not a qualified artifact.
 
 **D9. The flag, a mark on a write.** Agreed with the operator in session on 2026-10-28
-and proposed here for ratification: "WRITE THIS TO STATE" is a mark on a write, not a
+and proposed here for approval: "WRITE THIS TO STATE" is a mark on a write, not a
 write. The statement files like any other, and a
 flag on the filed row is read by the serve-side sort as a ranking input inside the
 injection budget. It lands as a Spec 08 (sort and selection) delta and is the sibling
@@ -330,7 +352,8 @@ against it.
 
 **Clause and verb objects.** Some approved verbs take a clause or another verb as their
 object: MAKE SURE takes a THAT-clause ("MAKE SURE THAT THE FILE IS EMPTY") and is now
-the route for verify, check and test. LET is causative ("LET THE MATERIAL CURE"). TRY,
+the route for verify and check. Section 5 proposes DO A TEST for test.
+LET is causative ("LET THE MATERIAL CURE"). TRY,
 CONTINUE, START and STOP take another verb. Spec 02 MODEL gives each action one
 governing verb span and one or more object spans, so the grammar under O02-1 must say
 what the object is when it is a clause. Lean: the embedded clause yields its own
@@ -341,13 +364,15 @@ governs the noun and the outer binding takes the same nouns. MAKE SURE is the
 verification verb, so it is tested first, not last.
 
 **The mode of an emission.** Sections 5 and 6 of the standard split procedural writing
-(instructions, imperative, 20 words) from descriptive writing (information, no
-imperative, 25 words), and the agent emits both. The checker cannot tell the mode
-without a marker. This is an O02-1 grammar election, raised in the walk's section 1,
+(instructions, imperative, 20 words) from descriptive writing (information,
+25 words), and the agent emits both. The checker needs a defined mode rule.
+This is an O02-1 grammar election, raised in the walk's section 1,
 with three options: one 20-word limit for everything with the imperative permitted but
 not required, mode inferred from the verb form, or a declared mode on the wire. Lean:
-the first, which needs no wire field and is what Spec 02 MODEL's one-governing-verb
-assumption wants anyway. For the operator, and the ratification split carries it.
+the first, which needs no wire field. This is a proposed language policy, not a
+consequence of MODEL: MODEL permits distinct Bindings for distinct grammar actions
+and imposes no sentence word limit. The choice must reconcile rules 5.3 and 6.3
+in D7's coverage before it can authorize a compiler. Section 8 carries it.
 
 **Light verbs.** Rule 1.12's preference, an approved verb with a noun, moves the act
 into the noun: "DO A TEST", "MAKE A COPY", "PUT THE ITEMS IN AN ORDER". Keying by verb
@@ -363,22 +388,22 @@ table, aerospace split retired), 2026-10-15 (verbs close to the standard, additi
 when no approved verb carries the meaning) and 2026-10-17 (the lexicon-change marker,
 the Caterpillar lesson) are cited here from the sessions and appear in no repository
 document. Only the 2026-10-13 sort-twice node refers to "the store ruling of
-2026-10-15". A ratified election should carry them into the record, or quote them, so
+2026-10-15". An approved election should carry them into the record, or quote them, so
 its authority chain does not dangle. v0.1 also cited "A15" for the verb-key
 comparison. It is named in the decision sheet of 2026-10-16, which no repository holds,
 so no repository document names A15, and this document refers to the noun index
 instead.
 
-**Rights.** O02-1 names "lexical rights". The production artifact lives in admin's
-config root, not in the public repository, and only a one-verb fixture is committed
-today. Nothing in this document or the artifact should be committed to WeaverAgent until
-ASD's written authority or a clear exemption is in hand. Appendix A is itself an extract
-of Part 2 and the artifact's `verbs` array will be the same list, so this public copy
-carries sections 0 to 8 and not the appendices, which stay with the operator's full copy
-beside the standard. The contact named in the
-standard is info@asd-europe.org, and the request is a long-lead item worth sending now.
+**Rights and source verification.** O02-1's lexical-rights question remains open.
+This public candidate carries sections 0 to 8. The dictionary appendices and full
+source PDF remain with the operator and are not added by this PR. The exact source
+bytes, extraction, permitted artifact use and publication scope must be checked
+before qualification or publication of those extracts. A digest in this document
+does not prove that check, and paraphrasing or private storage alone does not settle
+rights. The drafting seat's repository review did not have the private PDF or
+appendices available and does not independently verify their counts or wording.
 
-## 8. Ratification, split
+## 8. Approval and implementation, split
 
 Firm now, independent of every delta, and enough to start the checked extraction of
 the forms that O02-1 owes either way:
@@ -398,13 +423,15 @@ The mode election (section 7) is ruled with D6 and D8. All three land before the
 compiler is written. The remaining GUI verbs are the operator's word either way and
 block nothing.
 
-The order of work the ratification feeds, agreed with the operator in session on
-2026-10-28 and proposed here for ratification:
+The order of work, reported as agreed with the operator in session on
+2026-10-28 and proposed here for approval:
 
 1. The walk table, every rule of Part 1 graded, is the D7 artifact.
-2. The fixture pairs, one conforming and one violating sentence per checked rule, with
-   the rule id in the `non_ste100` detail. They are the negative corpus O02-1 owes, and
-   they are STE100 sentences of ours, so they carry no rights problem.
+2. Positive and negative fixture coverage for each proposed checked constraint, with
+   the rule id in the `non_ste100` detail. Counting rules need cases on both sides
+   of the applicable length boundary. These form part of O02-1's corpus, alongside
+   lexical collisions, conditions, multi-word keys and held-out coverage. They are
+   not yet the complete qualified corpus.
 3. The compiler, written against those pairs.
 
 The checked extraction of the forms (appendix A) runs beside step 1 and blocks nothing.
