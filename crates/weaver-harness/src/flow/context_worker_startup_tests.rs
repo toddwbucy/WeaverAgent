@@ -4771,6 +4771,30 @@ scenario!(
     "input-worker-generation-emission-session-graceful-save-resting-orphan-refused"
 );
 scenario!(
+    worker_session_composition_graceful_save_resting_silent_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-silent-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_malformed_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-malformed-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_expired_save_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-expired-save-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_member_failure_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-member-failure-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_trace_failure_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-trace-failure-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_paced_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-paced-refused"
+);
+scenario!(
     worker_session_composition_forced_save_snapshot_timeout,
     "input-worker-generation-emission-session-forced-save-snapshot-timeout"
 );

@@ -144,6 +144,22 @@ impl RollbackDials {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         context.live(io)?;
+        // The listener may already hold the next connection while the prior
+        // dial finishes. Retire that dial before adopting the held connection,
+        // so the caller cannot sleep with neither an accept nor a read interest.
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|dial| dial.peer.failure().is_some())
+        {
+            self.drop_dial(context, "dialer transport closed or failed");
+        } else if self
+            .active
+            .as_ref()
+            .is_some_and(|dial| dial.send.as_ref().is_some_and(OrganSend::sent))
+        {
+            self.active = None;
+        }
         if self.active.is_none() && self.listener.held().is_some() {
             let Some(accepted) = self.listener.accepted_ns() else {
                 return Err(context.fail(
@@ -192,17 +208,6 @@ impl RollbackDials {
             // Acceptance may have preceded a delayed reduction. Do not grant a
             // late directive a fresh two seconds when the owner finally runs.
             context.live(io)?;
-        }
-        let Some(dial) = &mut self.active else {
-            return Ok(());
-        };
-        if dial.peer.failure().is_some() {
-            self.drop_dial(context, "dialer transport closed or failed");
-            return Ok(());
-        }
-        if dial.send.as_ref().is_some_and(OrganSend::sent) {
-            self.active = None;
-            return Ok(());
         }
         Ok(())
     }

@@ -138,6 +138,54 @@ fn take_answer(peer: &OwnedFd) -> Option<OrganEnvelope> {
     }
 }
 
+#[test]
+#[ignore = "requires root for the actual coordination peer credentials"]
+fn answered_dial_hands_a_retained_connection_to_its_reader_before_waiting() {
+    use super::super::listener::RollbackDials;
+    use crate::flow::context::tests::{Fixture, config};
+    let mut fx = Fixture::new(config());
+    fx.activate();
+    let now = fx.clock.now().unwrap();
+    let leave_bound = AbsoluteBound::after(now, 150_000_000_000).unwrap();
+    let (door, listener) = Door::new();
+    let mut dials = RollbackDials::new(listener);
+    let peer = door.connect();
+    let mut ask = leave();
+    ask.payload = weaver_types::Payload::Directive(LifecycleDirective::Observe);
+    send_request(&peer, &ask);
+    assert!(dials.listener.accept_observed(now).unwrap());
+    dials
+        .prepare(&mut fx.context, leave_bound, &mut fx.clock)
+        .unwrap();
+    dials.active.as_mut().unwrap().peer.try_receive().unwrap();
+    dials
+        .prepare(&mut fx.context, leave_bound, &mut fx.clock)
+        .unwrap();
+    dials
+        .active
+        .as_mut()
+        .unwrap()
+        .peer
+        .try_send_observed(&mut fx.clock)
+        .unwrap();
+    assert!(take_answer(&peer).is_some());
+    let next = door.connect();
+    send_request(&next, &ask);
+    assert!(dials.listener.accept_observed(now).unwrap());
+    assert!(dials.active.as_ref().unwrap().send.as_ref().unwrap().sent());
+    dials
+        .prepare(&mut fx.context, leave_bound, &mut fx.clock)
+        .unwrap();
+    assert!(
+        dials.listener.held().is_none(),
+        "accepted root dial must leave the listener slot before another wait"
+    );
+    assert!(
+        dials.active.is_some(),
+        "the next original dial needs its own read interest"
+    );
+}
+
 struct DialSendClock<'a> {
     io: &'a mut FakePumpIo,
     peer: &'a OwnedFd,

@@ -3,7 +3,9 @@ use super::*;
 use crate::flow::context::startup_composition::refusal::response::listener::{
     RestingCommand, RestingRequest,
 };
-use crate::flow::context::worker_startup::input::save::{FailedSaveRequest, PendingSave};
+use crate::flow::context::worker_startup::input::save::{
+    FailedSaveRequest, PendingSave, SaveProgress,
+};
 use weaver_types::state_flow::capture::{CaptureDirective, CapturePayload};
 
 #[derive(Default)]
@@ -18,6 +20,14 @@ pub(super) struct RestingWork {
 }
 
 impl FoundationEnteredRollback {
+    #[cfg(test)]
+    pub(in crate::flow::context::worker_startup) fn test_resting_reply_held(&mut self) -> bool {
+        self.resting
+            .save
+            .as_mut()
+            .and_then(|save| save.port())
+            .is_some_and(|peer| peer.capture_held().is_some())
+    }
     pub(super) fn retain_resting_interrupt(
         &mut self,
         failure: &RunFailure,
@@ -70,11 +80,12 @@ impl FoundationEnteredRollback {
                 return Ok(());
             }
         }
+        let mut save_progress = false;
         if let Some(save) = &mut self.resting.save {
             let (residency, decode) = run.resources.spu_ports_mut().unwrap();
             let mut lifecycle = dials.resting_ports();
             lifecycle.residency = Some(residency);
-            if save.advance(
+            match save.advance(
                 &mut run.context,
                 PumpPorts {
                     lifecycle,
@@ -85,7 +96,12 @@ impl FoundationEnteredRollback {
                 },
                 true,
             )? {
-                self.resting.save = None;
+                SaveProgress::Complete => {
+                    self.resting.save = None;
+                    save_progress = true;
+                }
+                SaveProgress::Progress => save_progress = true,
+                SaveProgress::Pending => (),
             }
         }
         let load = self
@@ -99,7 +115,9 @@ impl FoundationEnteredRollback {
                 dials.prepare_resting(&mut run.context, load, self.resting.save.is_none(), io)?;
         }
         let Some(command) = &mut self.resting.command else {
-            self.progress = FoundationEnteredRollbackProgress::Pending;
+            if !save_progress {
+                self.progress = FoundationEnteredRollbackProgress::Pending;
+            }
             return Ok(());
         };
         match &command.request {
