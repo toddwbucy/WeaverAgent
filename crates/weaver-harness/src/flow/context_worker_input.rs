@@ -261,7 +261,19 @@ impl<'a> FoundationInput<'a> {
             .prepare_save_window_expiry(io)
             .and_then(|()| self.advance_organ_faults(None, io))
             .and_then(|ready| {
-                let save_progress = self.advance_save(io)?;
+                // An owned reply can progress during settlement. A queued save
+                // still waits for settlement before beginning its capture.
+                let save_progress = if ready
+                    || self
+                        .serving
+                        .save
+                        .as_ref()
+                        .is_some_and(|save| save.reply_held())
+                {
+                    self.advance_save(io)?
+                } else {
+                    save::SaveProgress::Pending
+                };
                 if !ready {
                     // Settlement does not own the save's held replies. Reduce
                     // them before waiting, and do not wait twice if its pump

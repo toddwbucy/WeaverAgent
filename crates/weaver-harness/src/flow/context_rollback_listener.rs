@@ -153,14 +153,7 @@ impl RollbackDials {
             .and_then(|dial| dial.peer.failure())
             .cloned()
         {
-            self.recover(
-                context,
-                RunFailure::Transport {
-                    source: PumpSource::AdminDial,
-                    failure,
-                },
-                io,
-            )?;
+            self.retire_failed_dial(context, &failure, io)?;
         } else if self
             .active
             .as_ref()
@@ -495,6 +488,29 @@ impl RollbackDials {
         }
     }
 
+    fn retire_failed_dial(
+        &mut self,
+        context: &mut RecordingContext,
+        failure: &crate::flow::pump_transport::Failure,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        if self
+            .active
+            .as_ref()
+            .and_then(|dial| dial.send.as_ref())
+            .is_some_and(|send| send.sent() && send.sent_at().is_none())
+        {
+            return Err(context.fail(
+                io,
+                FlowHaltReason::TraceFailed,
+                HaltPoint::Author,
+                format!("rollback dial send clock observation failed: {failure:?}"),
+            ));
+        }
+        self.drop_dial(context, "dialer transport closed or failed");
+        Ok(())
+    }
+
     /// Only a secondary peer or its exact silent-read expiry is recoverable.
     /// Listener/state/trace/clock failure and the original Leave expiry survive.
     pub(in crate::flow::context) fn recover(
@@ -513,22 +529,9 @@ impl RollbackDials {
             }
             RunFailure::Transport {
                 source: PumpSource::AdminDial,
-                ..
+                failure,
             } if self.active.is_some() => {
-                if self
-                    .active
-                    .as_ref()
-                    .and_then(|dial| dial.send.as_ref())
-                    .is_some_and(|send| send.sent() && send.sent_at().is_none())
-                {
-                    return Err(context.fail(
-                        io,
-                        FlowHaltReason::TraceFailed,
-                        HaltPoint::Author,
-                        format!("rollback dial send clock observation failed: {error:?}"),
-                    ));
-                }
-                self.drop_dial(context, "dialer transport closed or failed");
+                self.retire_failed_dial(context, failure, io)?;
                 context.live(io)
             }
             _ => Err(error),

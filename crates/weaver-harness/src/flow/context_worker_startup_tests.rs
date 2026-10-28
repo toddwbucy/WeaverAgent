@@ -5360,3 +5360,12 @@ scenario!(
     worker_session_demand_save_held_reply_progresses_during_spu_settlement,
     "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-held-reply-spu"
 );
+
+scenario!(
+    worker_session_queued_save_waits_for_spu_settlement_before_capture,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-queued-boundary-spu"
+);
+scenario!(
+    worker_session_graceful_save_resting_held_reply_progresses_during_spu_settlement,
+    "input-worker-generation-emission-session-graceful-save-resting-held-reply-refused"
+);

@@ -163,3 +163,31 @@ fn demand_capture_not_ready_requires_a_correlated_worker_outcome() {
         original
     );
 }
+
+#[test]
+fn demand_public_worker_outcome_rejects_direct_publication_claims() {
+    let mut failure = fixture(FailureCause::WorkerOutcome);
+    let evidence = failure.evidence.as_mut().unwrap();
+    evidence.committed = false;
+    heard(
+        evidence,
+        CaptureRefusal::Lifecycle(LifecycleRefusal::StatePersistenceInvalid {
+            stage: weaver_types::state_flow::PersistenceStage::Publish,
+            case: PersistenceCase::PublicationFailed,
+            artifact_id: Some("a".repeat(64)),
+            detail: "worker-supplied publication".into(),
+        }),
+    );
+    let original = evidence.received[0].wire.clone();
+    assert_eq!(
+        failure.refusal(),
+        CaptureRefusal::Lifecycle(LifecycleRefusal::Malformed)
+    );
+    assert!(
+        !crate::surface::render_serving_refusal(&failure.refusal()).contains("worker-supplied")
+    );
+    assert_eq!(
+        failure.evidence.as_ref().unwrap().received[0].wire,
+        original
+    );
+}

@@ -64,24 +64,23 @@ impl FoundationEnteredRollback {
             .expect("S9 retains the admitted SPU");
         let mut lifecycle = dials.resting_ports();
         lifecycle.residency = Some(residency);
-        match run.context.advance_leaving_organ_faults(
-            &mut PumpPorts {
-                lifecycle,
-                gate: None,
-                decode: Some(decode),
-                label: None,
-                io,
-            },
-            self.gate.as_ref().and_then(RollbackGate::world_closed),
-        )? {
-            serving_organ_loss::ObservationProgress::Complete => (),
-            _ => {
-                self.progress = FoundationEnteredRollbackProgress::Pending;
-                return Ok(());
-            }
-        }
+        let settled = matches!(
+            run.context.advance_leaving_organ_faults(
+                &mut PumpPorts {
+                    lifecycle,
+                    gate: None,
+                    decode: Some(decode),
+                    label: None,
+                    io,
+                },
+                self.gate.as_ref().and_then(RollbackGate::world_closed),
+            )?,
+            serving_organ_loss::ObservationProgress::Complete
+        );
         let mut save_progress = false;
-        if let Some(save) = &mut self.resting.save {
+        if let Some(save) = &mut self.resting.save
+            && (settled || save.reply_held())
+        {
             let (residency, decode) = run.resources.spu_ports_mut().unwrap();
             let mut lifecycle = dials.resting_ports();
             lifecycle.residency = Some(residency);
@@ -103,6 +102,12 @@ impl FoundationEnteredRollback {
                 SaveProgress::Progress => save_progress = true,
                 SaveProgress::Pending => (),
             }
+        }
+        if !settled {
+            if !save_progress {
+                self.progress = FoundationEnteredRollbackProgress::Pending;
+            }
+            return Ok(());
         }
         let load = self
             .handoff
@@ -225,3 +230,7 @@ impl FoundationEnteredRollback {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "context_worker_resting_progress_tests.rs"]
+mod progress_tests;

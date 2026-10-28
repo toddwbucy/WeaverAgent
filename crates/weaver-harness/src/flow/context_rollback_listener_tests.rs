@@ -756,7 +756,7 @@ fn root_test(name: &str) -> bool {
     if nix::unistd::geteuid().is_root() {
         return true;
     }
-    let status = std::process::Command::new("unshare")
+    let output = std::process::Command::new("unshare")
         .arg("--map-root-user")
         .arg(std::env::current_exe().unwrap())
         .arg("--exact")
@@ -764,9 +764,22 @@ fn root_test(name: &str) -> bool {
             "flow::context::startup_composition::refusal::response::tests::listener_tests::{name}"
         ))
         .arg("--nocapture")
-        .status()
+        .output()
         .unwrap();
-    assert!(status.success(), "root-credential listener scenario failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "root-credential listener scenario requires unshare --map-root-user: {stdout}\n{stderr}"
+    );
+    let summary = stdout
+        .lines()
+        .rev()
+        .find(|line| line.starts_with("test result:"));
+    assert!(
+        summary.is_some_and(|line| line.starts_with("test result: ok. 1 passed;")),
+        "root listener child must execute exactly one test: {stdout}\n{stderr}"
+    );
     false
 }
 

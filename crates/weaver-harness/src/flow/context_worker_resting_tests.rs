@@ -77,7 +77,12 @@ fn response(peer: &OwnedFd, stage: &str) -> Vec<u8> {
     }
 }
 
-fn saved(peer: &OwnedFd, forced: Option<bool>, previous: AbsoluteBound) -> s::DecimalU64 {
+fn saved(
+    peer: &OwnedFd,
+    forced: Option<bool>,
+    previous: AbsoluteBound,
+    held_root: Option<&Path>,
+) -> s::DecimalU64 {
     let mut id = None;
     let mut artifact = None;
     let mut complete = false;
@@ -115,6 +120,11 @@ fn saved(peer: &OwnedFd, forced: Option<bool>, previous: AbsoluteBound) -> s::De
             }
             CapturePayload::SavePointImage(image) => {
                 assert_eq!(Some(image.capture_id), id);
+                if let Some(root) = held_root {
+                    std::fs::write(root.join("s9-image-held"), b"actual demand Image received")
+                        .unwrap();
+                    wait_file(root, "s9-pin-ready");
+                }
                 let value = CaptureArtifact {
                     capture_id: image.capture_id,
                     artifact_id: format!(
@@ -376,8 +386,9 @@ pub(super) fn exercise(
     }
     let lower = std::fs::read(root.join("ready-rollback-lower.json")).unwrap();
     let forced = mode.contains("-resting-force-");
-    let spu_dead = mode.contains("-resting-spu-");
-    if spu_dead {
+    let held_reply = mode.contains("-resting-held-reply-");
+    let spu_dead = mode.contains("-resting-spu-") || held_reply;
+    if spu_dead && !held_reply {
         owner.0.test_inner().test_end_resting_spu();
     }
     let save_wait = owner
@@ -463,7 +474,7 @@ pub(super) fn exercise(
                 send(peer.as_raw_fd(), &ask, MsgFlags::MSG_NOSIGNAL),
                 Ok(ask.len())
             );
-            let demand = saved(&peer, None, previous);
+            let demand = saved(&peer, None, previous, held_reply.then_some(root));
             let peer = management(
                 socket,
                 LifecycleDirective::Leave {
@@ -472,14 +483,22 @@ pub(super) fn exercise(
                     rollback: false,
                 },
             );
-            let retry = saved(&peer, Some(forced || spu_dead), previous);
+            let retry = saved(&peer, Some(forced || spu_dead), previous, None);
             assert_ne!(demand, retry, "a retry owns a fresh capture identity");
             admin_done.store(true, Ordering::SeqCst);
             expired_window
         });
         let _stop = StopThreads(&done);
         let end = Instant::now() + Duration::from_secs(20);
+        let mut pinned = false;
         loop {
+            if held_reply && !pinned && root.join("s9-image-held").exists() {
+                owner
+                    .0
+                    .test_inner()
+                    .test_reduce_resting_reply_during_settlement(root);
+                pinned = true;
+            }
             if paced {
                 // Let peer replies and writer notifications arrive between
                 // owner steps; readiness must survive a slower caller.
@@ -506,6 +525,7 @@ pub(super) fn exercise(
                 owner.0.wait_for_progress();
             }
         }
+        assert_eq!(pinned, held_reply);
         let expired_window = admin.join().unwrap();
         assert!(admin_done.load(Ordering::SeqCst));
         done.store(true, Ordering::SeqCst);
@@ -579,13 +599,13 @@ pub(super) fn exercise(
             .collect();
         assert_eq!(faults.len(), 1);
         assert!(
-            faults[0].0
-                < rows
-                    .iter()
-                    .position(
-                        |row| row["kind"] == "save_point" && row["payload"]["phase"] == "requested"
-                    )
-                    .unwrap(),
+            held_reply
+                || faults[0].0
+                    < rows
+                        .iter()
+                        .position(|row| row["kind"] == "save_point"
+                            && row["payload"]["phase"] == "requested")
+                        .unwrap(),
             "the retained SPU death is Recorded before a new S9 capture"
         );
         assert_eq!(

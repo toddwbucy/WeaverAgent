@@ -2862,12 +2862,34 @@ impl LeaveAnswer {
 /// pending), `SavePointNotTaken` (S9), `ActivityNotAtRest` and
 /// `Unauthorized`; any other follows the unwind.
 fn follows_the_unwind(refusal: &LifecycleRefusal) -> bool {
-    !matches!(
+    !standing_leave_refusal(refusal)
+}
+
+fn standing_leave_refusal(refusal: &LifecycleRefusal) -> bool {
+    matches!(
         refusal,
         LifecycleRefusal::OutOfOrder
             | LifecycleRefusal::SavePointNotTaken { .. }
             | LifecycleRefusal::ActivityNotAtRest
             | LifecycleRefusal::Unauthorized
+    )
+}
+
+/// Paired serving capture accepts only the failed-unwind outcomes in ADMIN-SAVE.
+/// FailedRun has no current worker producer; retain it as defensive evidence,
+/// never as authority for the publisher's artifact identities or locations.
+fn terminal_unwind_refusal(refusal: &weaver_types::state_flow::capture::CaptureRefusal) -> bool {
+    use weaver_types::state_flow::capture::{CaptureRefusal, SaveRefusal};
+    matches!(
+        refusal,
+        CaptureRefusal::Lifecycle(
+            LifecycleRefusal::Malformed
+                | LifecycleRefusal::DescriptorsUnusable
+                | LifecycleRefusal::OrganRefused {
+                    organ: weaver_types::RefusingOrgan::Gate,
+                    ..
+                }
+        ) | CaptureRefusal::Save(SaveRefusal::FailedRun { .. })
     )
 }
 

@@ -356,6 +356,22 @@ pub(super) mod testing {
     use super::*;
     use std::collections::VecDeque;
 
+    /// One or more controlled wakes with no readiness and no clock advance.
+    /// Unlike FakePumpIo's timeline this never supplies a missing result.
+    pub(in crate::flow) struct NoReadyIo {
+        pub now: u64,
+        pub waits: usize,
+    }
+    impl PumpIo for NoReadyIo {
+        fn now(&mut self) -> io::Result<u64> {
+            Ok(self.now)
+        }
+        fn wait(&mut self, _: &[WaitInterest<'_>], _: Option<u64>) -> io::Result<WaitOutcome> {
+            self.waits += 1;
+            Ok(WaitOutcome::Ready(Vec::new()))
+        }
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub(in crate::flow) struct FakeWait {
         pub began_ns: u64,

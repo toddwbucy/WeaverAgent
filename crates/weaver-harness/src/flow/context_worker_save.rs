@@ -77,6 +77,10 @@ impl PendingSave {
         self.capture.blocks_turn()
     }
 
+    pub(in crate::flow::context::worker_startup) fn reply_held(&self) -> bool {
+        self.peer.capture_held().is_some()
+    }
+
     /// Final refusal carry is deliberately nonblocking. The save has already
     /// been refused and the current turn may proceed. The same peer remains in
     /// the common pump; no new save or reply allowance replaces its old window.

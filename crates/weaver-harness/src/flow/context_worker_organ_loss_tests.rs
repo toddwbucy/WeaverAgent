@@ -67,7 +67,14 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
 pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
     if mode.ends_with("-spu") || mode.ends_with("-spu-release") {
         let root = std::path::PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
-        wait_file(&root, "organ-loss-image-held");
+        if mode.contains("-queued-boundary-") {
+            wait_file(&root, "organ-loss-save-queued");
+            nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
+            std::fs::write(root.join("organ-loss-decode-closed"), b"closed").unwrap();
+            wait_file(&root, "organ-loss-queued-boundary-checked");
+        } else {
+            wait_file(&root, "organ-loss-image-held");
+        }
         eprintln!("{{\"fixture\":\"SPU last word before image verification\"}}");
         if mode.contains("-held-reply-") {
             nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
@@ -588,6 +595,12 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                             guard.input =
                                 Some(management.queue_save().ok().expect("original demand save"));
                             queued = true;
+                            if mode.contains("-queued-boundary-") {
+                                save_progress::keep_queued_boundary_behind_settlement(
+                                    guard.input.as_mut().unwrap(),
+                                    root,
+                                );
+                            }
                         } else {
                             guard.input = Some(
                                 management
@@ -692,14 +705,22 @@ pub(in crate::flow::context::worker_startup) fn handoff(
         1,
         "one observed organ death, not one per dead socket"
     );
-    assert!(
-        faults[0]["sequence"]
-            .as_str()
-            .unwrap()
-            .parse::<u64>()
-            .unwrap()
-            > frozen.unwrap().1
-    );
+    let fault_sequence = faults[0]["sequence"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    if mode.contains("-queued-boundary-") {
+        assert!(
+            fault_sequence <= frozen.unwrap().1,
+            "the queued capture must include the prior organ observation in its frozen watermark"
+        );
+    } else {
+        assert!(
+            fault_sequence > frozen.unwrap().1,
+            "the capture already in progress retains its earlier frozen watermark"
+        );
+    }
     assert_eq!(
         faults[0]["payload"]["account"]["organ"],
         if mode.ends_with("-gate") {

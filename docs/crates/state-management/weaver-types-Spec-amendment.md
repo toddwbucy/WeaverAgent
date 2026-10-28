@@ -4,7 +4,7 @@
 
 **Landing PR:** #373
 
-**Version:** 0.35 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.36 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -938,7 +938,10 @@ It uses Continue and the original exchange and capture IDs. PERSIST-LEAVE-REFUSA
 the ordering and timing. The next normal outcome is either Left with forced true,
 no_state false and no save report, or SavePointNotTaken with the same missed leg for a
 still-graceful leave. Terminal unwind refusals follow ADMIN-SAVE's enumerated negative
-outcomes; after Beginning, FailedRun must carry the original run and capture ID.
+outcomes at every capture receive, local-work checkpoint and joined Leave. FailedRun
+is admin's projection shape, with no current harness producer. Defensive acceptance
+requires the original observed run and, after Beginning, the original capture ID.
+A join that cannot identify the run rejects that shape; it has no capture ID to compare.
 Neither a worker refusal nor its nested organ reason supplies admin's own publication
 facts. The receiver rejects other refusal codes, a save report, CaptureComplete or a
 return to publication after this acknowledgement. Aborted keeps its cancellation
