@@ -666,12 +666,27 @@ impl<'repo> Capture<'repo> {
         self.windows.check().map_err(FailureCause::Channel)?;
         match self.stage {
             Stage::Aborting => {
-                self.channel
-                    .send_capture(
-                        self.abort.as_ref().expect("original local abort"),
-                        &self.windows,
-                    )
-                    .map_err(FailureCause::Channel)?;
+                match self.channel.send_capture_attempt(
+                    self.abort.as_ref().expect("original local abort"),
+                    &self.windows,
+                    &mut false,
+                ) {
+                    Ok(()) => (),
+                    Err(crate::channel::CaptureSendFailure::PeerClosed)
+                        if self.windows.demand_window().is_none()
+                            && !self.windows.is_join()
+                            && self.windows.capture().is_some()
+                            && !self.committed =>
+                    {
+                        // The worker can complete refusal and close before
+                        // this send. Closure grants no delivery or cleanup:
+                        // drain only the existing correlated refusal path,
+                        // under its unchanged bounds, before judging the run.
+                    }
+                    Err(failure) => {
+                        return Err(FailureCause::Channel(failure.channel_fault()));
+                    }
+                }
                 self.stage = if self.windows.demand_window().is_some() {
                     Stage::AwaitAbortOutcome
                 } else {

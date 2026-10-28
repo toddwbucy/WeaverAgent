@@ -152,7 +152,7 @@ impl Capture<'_> {
         );
         if !crossed || self.abort_crossed {
             return Err(FailureCause::Protocol(
-                "unexpected continuation after admin Aborted",
+                "unexpected continuation during capture refusal",
             ));
         }
         self.abort_crossed = true;

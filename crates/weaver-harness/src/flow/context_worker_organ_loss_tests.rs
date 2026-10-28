@@ -67,7 +67,10 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
 pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
     if mode.ends_with("-spu") || mode.ends_with("-spu-release") {
         let root = std::path::PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
-        if mode.contains("-queued-boundary-") {
+        if mode.contains("-queued-author-") {
+            wait_file(&root, "organ-loss-requested-author-waiting");
+            nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
+        } else if mode.contains("-queued-boundary-") || mode.contains("-queued-requested-") {
             wait_file(&root, "organ-loss-save-queued");
             nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
             std::fs::write(root.join("organ-loss-decode-closed"), b"closed").unwrap();
@@ -151,12 +154,25 @@ pub(in crate::flow::context::worker_startup) fn handoff(
     let (bytes, packets, peer) = std::thread::scope(|scope| {
         let responder = scope.spawn(|| {
             while !done.load(Ordering::SeqCst) {
+                if mode.contains("-held-reply-")
+                    && root.join("organ-loss-image-held").exists()
+                    && !root.join("organ-loss-member-resume").exists()
+                {
+                    std::fs::write(
+                        root.join("organ-loss-member-paused"),
+                        b"acknowledge pending",
+                    )
+                    .unwrap();
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
                 member.step_live(mode);
                 std::thread::sleep(Duration::from_millis(1));
             }
         });
         let recorder = scope.spawn(|| {
             let mut bytes = Vec::new();
+            let mut scanned = 0;
             while !done.load(Ordering::SeqCst) {
                 if hold_trace.load(Ordering::SeqCst) {
                     trace_paused.store(true, Ordering::SeqCst);
@@ -164,7 +180,11 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                     continue;
                 }
                 let _ = reader.read_to_end(&mut bytes);
-                for line in bytes.split(|byte| *byte == b'\n') {
+                // Pressure fixtures retain a large trace. Parse each completed
+                // row once; leave a partial trailing row for the next read.
+                while let Some(length) = bytes[scanned..].iter().position(|byte| *byte == b'\n') {
+                    let line = &bytes[scanned..scanned + length];
+                    scanned += length + 1;
                     if let Ok(row) = serde_json::from_slice::<serde_json::Value>(line)
                         && row["kind"] == "fault"
                         && row["payload"]["case"] == "organ_death_observed"
@@ -278,6 +298,14 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                     }
                     CapturePayload::SavePointImageFinished(finished) => {
                         assert_eq!(finished.capture_id, artifact.as_ref().unwrap().capture_id);
+                        if mode.contains("-held-reply-") {
+                            std::fs::write(
+                                root.join("organ-loss-finished-carried"),
+                                b"actual ImageFinished received; Prepared withheld",
+                            )
+                            .unwrap();
+                            wait_file(root, "organ-loss-held-reply-reduced");
+                        }
                         Some(CapturePayload::SavePointPrepared(
                             artifact.as_ref().unwrap().clone(),
                         ))
@@ -595,10 +623,20 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                             guard.input =
                                 Some(management.queue_save().ok().expect("original demand save"));
                             queued = true;
-                            if mode.contains("-queued-boundary-") {
+                            if mode.contains("-queued-author-") {
+                                save_progress::keep_requested_author_behind_observation(
+                                    guard.input.as_mut().unwrap(),
+                                    root,
+                                    &hold_trace,
+                                    &trace_paused,
+                                );
+                            } else if mode.contains("-queued-boundary-")
+                                || mode.contains("-queued-requested-")
+                            {
                                 save_progress::keep_queued_boundary_behind_settlement(
                                     guard.input.as_mut().unwrap(),
                                     root,
+                                    mode.contains("-queued-requested-"),
                                 );
                             }
                         } else {
@@ -710,7 +748,10 @@ pub(in crate::flow::context::worker_startup) fn handoff(
         .unwrap()
         .parse::<u64>()
         .unwrap();
-    if mode.contains("-queued-boundary-") {
+    if mode.contains("-queued-boundary-")
+        || mode.contains("-queued-requested-")
+        || mode.contains("-queued-author-")
+    {
         assert!(
             fault_sequence <= frozen.unwrap().1,
             "the queued capture must include the prior organ observation in its frozen watermark"

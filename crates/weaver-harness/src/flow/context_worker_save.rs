@@ -77,8 +77,14 @@ impl PendingSave {
         self.capture.blocks_turn()
     }
 
+    #[cfg(test)]
     pub(in crate::flow::context::worker_startup) fn reply_held(&self) -> bool {
         self.peer.capture_held().is_some()
+    }
+
+    #[cfg(test)]
+    pub(in crate::flow::context::worker_startup) fn test_boundary_pending(&self) -> bool {
+        self.capture.boundary_pending()
     }
 
     /// Final refusal carry is deliberately nonblocking. The save has already
@@ -285,11 +291,15 @@ impl FoundationInput<'_> {
     pub(super) fn advance_save(
         &mut self,
         io: &mut impl PumpIo,
+        organs_settled: bool,
     ) -> Result<SaveProgress, RunFailure> {
-        let at_boundary = matches!(
-            self.stage,
-            Stage::Waiting | Stage::Completed | Stage::Refused | Stage::Aborted
-        );
+        // Requested can become QueueBoundary in this same advance call, so
+        // permission must reach the boundary election, not just entry here.
+        let at_boundary = organs_settled
+            && matches!(
+                self.stage,
+                Stage::Waiting | Stage::Completed | Stage::Refused | Stage::Aborted
+            );
         let Some(save) = &mut self.serving.save else {
             return Ok(SaveProgress::Complete);
         };

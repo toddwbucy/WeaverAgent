@@ -5,6 +5,7 @@ use super::super::{InputProgress, RunFailure, SeatedInput, StoppedAuthor};
 use super::FoundationServing;
 use crate::flow::author::{AuthoredEvent, AuthoredSource};
 use crate::flow::clock::{MonotonicIo, PumpIo};
+use crate::flow::context::serving_organ_loss::ObservationProgress;
 use crate::flow::input::AcceptedInput;
 use crate::flow::pump::{LifecyclePeer, LifecyclePorts, PumpPorts, PumpSource};
 use crate::flow::pump_transport::{OrganSend, ReceivedOrgan, TrackedStage};
@@ -257,27 +258,39 @@ impl<'a> FoundationInput<'a> {
             .context
             .management_listener
             .replace(listener.clone());
+        let author_was_blocked = !self
+            .serving
+            .owner
+            .context
+            .serving_observation_author_available();
         let result = self
             .prepare_save_window_expiry(io)
-            .and_then(|()| self.advance_organ_faults(None, io))
-            .and_then(|ready| {
-                // An owned reply can progress during settlement. A queued save
-                // still waits for settlement before beginning its capture.
-                let save_progress = if ready
-                    || self
+            .and_then(|()| self.advance_organ_observations(None, io))
+            .and_then(|observation| {
+                // Accounting and in-flight capture work keep their original
+                // windows during settlement. Only beginning a new capture
+                // requires the organ observation to be Recorded. EarlierAuthor
+                // still lets its original owner run, without granting a boundary
+                // when that owner finishes in this same call.
+                let settled = matches!(observation, ObservationProgress::Complete);
+                let save_progress = self.advance_save(io, settled)?;
+                if matches!(observation, ObservationProgress::EarlierAuthor)
+                    && author_was_blocked
+                    && self
                         .serving
-                        .save
-                        .as_ref()
-                        .is_some_and(|save| save.reply_held())
+                        .owner
+                        .context
+                        .serving_observation_author_available()
                 {
-                    self.advance_save(io)?
-                } else {
-                    save::SaveProgress::Pending
-                };
-                if !ready {
-                    // Settlement does not own the save's held replies. Reduce
-                    // them before waiting, and do not wait twice if its pump
-                    // may have retained another reply for the next reduction.
+                    // The earlier owner finished. Re-enter the owed organ
+                    // observation before an unrelated input wait can block it.
+                    // An already-free author may instead be waiting on a held
+                    // tool reply, whose owner must still run below.
+                    return Ok(());
+                }
+                if matches!(observation, ObservationProgress::Pending { .. }) {
+                    // Do not add another wait after the save's pump: it may
+                    // have retained work for the next reduction.
                     if save_progress == save::SaveProgress::Progress {
                         return Ok(());
                     }
@@ -407,6 +420,18 @@ impl<'a> FoundationInput<'a> {
         peer: Option<&mut LifecyclePeer>,
         io: &mut impl PumpIo,
     ) -> Result<bool, RunFailure> {
+        // Management must still advance the earlier original which the organ
+        // observation is waiting on. This is progress permission, not a save
+        // boundary grant.
+        self.advance_organ_observations(peer, io)
+            .map(|progress| !matches!(progress, ObservationProgress::Pending { .. }))
+    }
+
+    fn advance_organ_observations(
+        &mut self,
+        peer: Option<&mut LifecyclePeer>,
+        io: &mut impl PumpIo,
+    ) -> Result<ObservationProgress, RunFailure> {
         // Intake only retains evidence. The existing operation owners reduce
         // due save/Leave waits; observation and report authoring check live
         // before their own work. Do not preempt a save owner's timeout here.
@@ -435,18 +460,15 @@ impl<'a> FoundationInput<'a> {
         let result = owner
             .context
             .advance_serving_organ_faults(&mut ports, &owner.tools)?;
-        if matches!(
-            result,
-            crate::flow::context::serving_organ_loss::ObservationProgress::Pending { .. }
-        ) {
-            return Ok(false);
+        if matches!(result, ObservationProgress::Pending { .. }) {
+            return Ok(result);
         }
         if let Some(report) = &mut self.report
             && report.advance(owner.context, &mut ports)?
         {
             self.report = None;
         }
-        Ok(true)
+        Ok(result)
     }
 
     /// Workflow policy supplies the turn identity only after accepted input is

@@ -3156,6 +3156,10 @@ scenario!(
     "input-generation-emission-pairs-external-gate-death-crossed"
 );
 scenario!(
+    worker_external_composition_gate_death_held_crossed,
+    "input-generation-emission-pairs-external-gate-death-held-crossed"
+);
+scenario!(
     worker_external_composition_gate_death_unsent,
     "input-generation-emission-pairs-external-gate-death-unsent"
 );
@@ -5371,8 +5375,28 @@ scenario!(
     "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-queued-boundary-spu"
 );
 scenario!(
+    worker_session_queued_requested_records_without_beginning_during_spu_settlement,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-queued-requested-spu"
+);
+scenario!(
+    worker_session_queued_requested_keeps_boundary_behind_earlier_author,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-queued-author-spu"
+);
+scenario!(
     worker_session_graceful_save_resting_held_reply_progresses_during_spu_settlement,
     "input-worker-generation-emission-session-graceful-save-resting-held-reply-refused"
+);
+scenario!(
+    worker_session_graceful_save_resting_queued_requested_waits_for_spu_settlement,
+    "input-worker-generation-emission-session-graceful-save-resting-queued-requested-refused"
+);
+scenario!(
+    worker_session_graceful_save_resting_queued_requested_keeps_boundary_behind_earlier_author,
+    "input-worker-generation-emission-session-graceful-save-resting-queued-author-refused"
+);
+scenario!(
+    worker_session_graceful_save_resting_queued_boundary_waits_for_spu_settlement,
+    "input-worker-generation-emission-session-graceful-save-resting-queued-boundary-refused"
 );
 
 scenario!(
