@@ -3124,6 +3124,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
             owner.original.as_ref().unwrap().retained_wire().as_ptr(),
             address
         );
+        completed_exit_guards(owner);
         return;
     }
     assert!(!owner.abandoned());
@@ -3306,5 +3307,81 @@ pub(in crate::flow::context::worker_startup) fn finish(
     assert_eq!(
         member.requests, requests,
         "disposal does not resume expired boot work"
+    );
+}
+
+/// Vary each disqualifier on the real completed preflight owner while retaining
+/// its successful inner terminal. These are disposition checks, not claims that
+/// an already closed cleanup admits new runtime work.
+fn completed_exit_guards(owner: &mut FoundationExpiredRollback) {
+    use crate::FoundationProcessExit::{Failure, Success};
+    assert_eq!(owner.progress(), FoundationExpiredRollbackProgress::Closed);
+    assert_eq!(owner.process_exit(), Some(Success));
+    owner
+        .preflight
+        .as_mut()
+        .unwrap()
+        .test_completed_exit_guards();
+    let sequence = owner.unload_sequence();
+
+    owner.abandoned = true;
+    assert_eq!(
+        owner.process_exit(),
+        Some(Failure),
+        "abandonment overrides a successful preflight terminal"
+    );
+    owner.abandoned = false;
+    assert_eq!(owner.process_exit(), Some(Success));
+
+    owner.run.context.failure = Some(RunFailure::Flow {
+        reason: FlowHaltReason::TraceFailed,
+        point: HaltPoint::Teardown,
+        detail: "retained completion failure".into(),
+    });
+    assert_eq!(
+        owner.process_exit(),
+        Some(Failure),
+        "retained failure overrides a successful preflight terminal"
+    );
+    owner.run.context.failure = None;
+    assert_eq!(owner.process_exit(), Some(Success));
+
+    let context = &mut owner.run.context;
+    context.flow.latch(
+        crate::flow::report::SecondaryFailure {
+            reason: FlowHaltReason::ProtocolFailed,
+            point: HaltPoint::Teardown,
+            detail: "retained completion halt".into(),
+            observed_ns: Some(context.last_ns.into()),
+        },
+        context
+            .deadlines
+            .get(PumpDeadline::Leave)
+            .map(AbsoluteBound::deadline_ns),
+        &mut FlowRecording {
+            barrier: &mut context.barrier,
+            inbox: &mut context.inbox,
+            budget: &mut context.budget,
+            author: &context.author,
+        },
+    );
+    assert!(
+        context.failure.is_none(),
+        "the halt guard is exercised independently"
+    );
+    assert!(context.flow.halt().is_some());
+    assert_eq!(
+        owner.preflight.as_ref().unwrap().process_exit(),
+        Some(Success)
+    );
+    assert_eq!(
+        owner.process_exit(),
+        Some(Failure),
+        "retained halt overrides a successful preflight terminal"
+    );
+    assert_eq!(
+        owner.unload_sequence(),
+        sequence,
+        "disposition grants no new author"
     );
 }

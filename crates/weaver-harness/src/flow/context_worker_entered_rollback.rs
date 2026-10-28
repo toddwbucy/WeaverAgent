@@ -1539,3 +1539,7 @@ impl FoundationEnteredRollback {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "context_worker_entered_rollback_exit_tests.rs"]
+mod exit_tests;

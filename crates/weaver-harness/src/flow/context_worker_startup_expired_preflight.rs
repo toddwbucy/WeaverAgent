@@ -417,3 +417,37 @@ impl ExpiredPreflightRollback {
         self.stage = Stage::Complete;
     }
 }
+
+#[cfg(test)]
+impl ExpiredPreflightRollback {
+    pub(super) fn test_completed_exit_guards(&mut self) {
+        use crate::FoundationProcessExit::{Failure, Success};
+        assert!(self.complete() && self.answer_left && self.refusal.is_none());
+        assert_eq!(self.process_exit(), Some(Success));
+        let sequence = self.sequence;
+        self.stage = Stage::Answer;
+        assert_eq!(
+            self.process_exit(),
+            None,
+            "an owed answer is not terminal completion"
+        );
+        self.stage = Stage::Complete;
+        self.answer_left = false;
+        assert_eq!(
+            self.process_exit(),
+            Some(Failure),
+            "incomplete accounting permits no successful exit"
+        );
+        self.answer_left = true;
+        assert_eq!(self.process_exit(), Some(Success));
+        self.refusal = Some(LifecycleRefusal::Malformed);
+        assert_eq!(
+            self.process_exit(),
+            Some(Failure),
+            "a terminal refusal permits no successful exit"
+        );
+        self.refusal = None;
+        assert_eq!(self.process_exit(), Some(Success));
+        assert_eq!(self.sequence, sequence);
+    }
+}

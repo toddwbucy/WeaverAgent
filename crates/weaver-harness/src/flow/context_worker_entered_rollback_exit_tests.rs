@@ -1,0 +1,91 @@
+//! Test the public disposition on an actual completed rollback owner. Its
+//! successful terminal stays present while each independent disqualifier is
+//! varied, so an absent terminal cannot mask a deleted outer guard.
+use super::*;
+use crate::flow::coordinator::FlowRecording;
+use crate::flow::report::{FlowHaltReason, HaltPoint, SecondaryFailure};
+
+impl FoundationEnteredRollback {
+    pub(in crate::flow::context::worker_startup) fn test_completed_exit_guards(&mut self) {
+        use crate::FoundationProcessExit::{Failure, Success};
+        assert_eq!(self.progress, FoundationEnteredRollbackProgress::Closed);
+        assert_eq!(
+            self.terminal.as_ref().unwrap().process_exit(),
+            Some(Success)
+        );
+        assert_eq!(self.process_exit(), Some(Success));
+        assert!(self.failed.is_none());
+        assert!(self.run.as_ref().unwrap().context.failure.is_none());
+        assert!(self.run.as_ref().unwrap().context.flow.halt().is_none());
+        let sequence = self.unload_sequence();
+
+        self.progress = FoundationEnteredRollbackProgress::Pending;
+        assert_eq!(
+            self.process_exit(),
+            None,
+            "terminal evidence does not close its outer owner"
+        );
+        self.progress = FoundationEnteredRollbackProgress::Closed;
+
+        self.abandoned = true;
+        assert_eq!(
+            self.process_exit(),
+            Some(Failure),
+            "abandonment overrides a successful terminal"
+        );
+        self.abandoned = false;
+        assert_eq!(self.process_exit(), Some(Success));
+
+        self.run.as_mut().unwrap().context.failure = Some(RunFailure::Flow {
+            reason: FlowHaltReason::TraceFailed,
+            point: HaltPoint::Teardown,
+            detail: "retained completion failure".into(),
+        });
+        assert_eq!(
+            self.process_exit(),
+            Some(Failure),
+            "retained failure overrides a successful terminal"
+        );
+        self.run.as_mut().unwrap().context.failure = None;
+        assert_eq!(self.process_exit(), Some(Success));
+
+        let context = &mut self.run.as_mut().unwrap().context;
+        context.flow.latch(
+            SecondaryFailure {
+                reason: FlowHaltReason::ProtocolFailed,
+                point: HaltPoint::Teardown,
+                detail: "retained completion halt".into(),
+                observed_ns: Some(context.last_ns.into()),
+            },
+            context
+                .deadlines
+                .get(PumpDeadline::Leave)
+                .map(AbsoluteBound::deadline_ns),
+            &mut FlowRecording {
+                barrier: &mut context.barrier,
+                inbox: &mut context.inbox,
+                budget: &mut context.budget,
+                author: &context.author,
+            },
+        );
+        assert!(
+            context.failure.is_none(),
+            "the halt guard is exercised independently"
+        );
+        assert!(context.flow.halt().is_some());
+        assert_eq!(
+            self.terminal.as_ref().unwrap().process_exit(),
+            Some(Success)
+        );
+        assert_eq!(
+            self.process_exit(),
+            Some(Failure),
+            "retained halt overrides a successful terminal"
+        );
+        assert_eq!(
+            self.unload_sequence(),
+            sequence,
+            "disposition grants no new author"
+        );
+    }
+}

@@ -1,6 +1,6 @@
 # Foundation run dispatch composition
 
-Version: 1.0. Date filed: 2026-10-28. Issue #146.
+Version: 1.1. Date filed: 2026-10-28. Issue #146.
 
 Branch code/state-foundation-run-dispatch builds on draft #376 at a97e80dd.
 
@@ -239,6 +239,58 @@ Raw logs, source manifests and failed attempts live under
 verified bulk-store evidence deposit are named in the PR body and comment.
 #376 has a zero-fix Planner grade at a97e80dd, with S1-S7 and earlier batch
 carries retained. This slice does not close those unrelated admin carries.
+
+## Cleanup disposition guards
+
+Planner U1 identified three success guards whose removal left the prior tests
+green. The entered rollback and expired-activation fixtures now retain their
+real completed owner and successful terminal while checking each disqualifier.
+Abandonment, a retained context failure and a coordinator halt are independent
+checks. The preflight terminal separately checks incomplete accounting, a
+terminal refusal and a stage that has not completed. Clean paths still require
+Success, and an unchanged Unload sequence excludes a new author from the check.
+
+The negative states are injected after the fixture has proved its real cleanup.
+They test the public disposition against retained evidence, not an assertion
+that those failures arose organically after a closed run. Runtime behavior is
+unchanged. The additions are test-only helpers and two existing fixture hooks.
+
+Six separately compiled controls are caught. Removing the entered filter, the
+expired filter or the preflight accounting/refusal check each fails the required
+Failure assertion. Returning Failure on each clean path fails the corresponding
+Success assertion. All 771 Rust/configuration hashes restore, and both original
+process fixtures pass again. An initial malformed control did not compile and
+is preserved as an instrument correction, excluded from the six controls.
+
+The correction uses an isolated extract and private target
+/tmp/weaver-state-146-dispatch-review-target, pinned nightly, --locked,
+CARGO_INCREMENTAL=0 and disabled debug symbols. Independent rework review found
+no remaining issue within this test-only scope. Planner regrade remains owed.
+
+The final correction passes 2,178 ordinary harness cases and 30 affected worker
+process cases, including all ten whole-driver cases, the management waits and
+both cleanup-owner families. Strict all-target harness lint, formatting, lock,
+diff and three DocsMirror cases pass. The 857 ignored cases and known #331
+filter remain explicit. These results supersede neither the broader original
+789-case record nor its disclosed fixture-setup failure.
+
+The first package invocation passed the library but lacked the normal SQLite
+member in this fresh target, so six integration fixtures failed setup. After
+building that binary, a repeat exposed an existing EOF observation assumption:
+the halt-gate test required closure after exactly two nonblocking probes. It
+now waits for the same port's actual EOF under a three-second fixture watchdog,
+requires the precise closure cause and retains the complete result text.
+Concurrent fork inheritance or an interrupted probe can delay observation, but
+the log does not establish which caused this run. The earlier failure logs
+remain evidence. No production timer or halt-gate implementation changes.
+
+T1, T2, T4, T5, T6 and T8 remain review carries for the next composition head.
+T3's proposed raw stderr write does not give a time bound on a full blocking
+pipe, so the fatal custody fallback continues to exit without that write.
+T7 concerns two different time sources. A fresh pump sample must not move
+backward, while a previously Recorded receipt may be older than a later valid
+observation. Keeping the newer floor for the latter preserves its exact receipt
+without allowing a reversed fresh clock.
 
 ## Remaining work
 
