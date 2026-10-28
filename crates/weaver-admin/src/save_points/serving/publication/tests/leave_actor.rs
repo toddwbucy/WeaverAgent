@@ -1503,3 +1503,6 @@ fn forced_leave_admin_negative_packet_retains_a_stopped_owner_without_left() {
 
 #[path = "leave_expiry.rs"]
 mod expiry;
+
+#[path = "leave_send.rs"]
+mod send_boundary;

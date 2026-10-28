@@ -1,6 +1,6 @@
 # Save progress during organ settlement
 
-Version: 1.0. Date filed: 2026-10-28. Issue #146 section E.
+Version: 1.1. Date filed: 2026-10-28. Issue #146 section E.
 
 Branch code/state-save-settlement-composition builds on #375 at 8e902515.
 It answers #374 C1(a) and C2, the pending-author ordering found while
@@ -87,14 +87,43 @@ socket at S9 before admin sends its prepared Aborted. Admin formerly stopped at
 the failed send without reading those queued packets, then escalated a standing
 worker. Instrumented failure evidence identifies Channel(Closed) at that send.
 
-Capture send now distinguishes actual EPIPE, ECONNRESET and ENOTCONN from other
-Closed failures, including a failed clock witness. Only this socket evidence on
-an uncommitted Leave capture lets Aborting proceed to its existing correlated
-refusal reader. It proves no packet delivery, member cleanup or lifecycle result.
-Admin still requires the matching CaptureRefused and final disposition under
-the original shared-tail and outer bounds. Demand, join and committed work keep
-their existing behavior. Clock failure remains fatal even when valid packets
-are buffered and the clock later recovers.
+Capture send distinguishes EPIPE, ECONNRESET and ENOTCONN from other Closed
+failures, including a failed clock witness. Only this socket evidence on an
+uncommitted Leave with an accepted Beginning admits the existing correlated
+refusal reader. It proves no send, member cleanup or lifecycle result. Admin
+still requires the matching CaptureRefused and final disposition under the
+original shared-tail and outer bounds.
+
+The Planner's R1 class correction covers all four capture-send sites:
+
+| Send | Peer closure disposition |
+| --- | --- |
+| ImageChecked, while Hashing | Before Commit, retain the original Leave and drain its correlated refusal. |
+| Prepared, while Preparing | The same pre-Commit continuation, including closure after the final publication probe. |
+| Published, while Publishing | Commit already stands. Preserve the fatal send result and broken publication guard. |
+| Aborted, while Aborting | Preserve the existing typed continuation through the shared pre-Commit Leave predicate. |
+
+Initial Leave, demand and join gain no continuation. A later capture expiry in
+AwaitCaptureRefused reduces under the same refusal-only tail and outer deadline.
+A direct or publication-checkpoint receive-clock failure stays fatal even if a
+valid refusal packet is retained and the clock later recovers.
+
+Seven new actor cases close the R1 coverage gap. A test-only one-shot hook runs
+after publication checkpoints and encoding, immediately before the real send.
+The worker peer then sends its actual refusal packets and closes. ImageChecked
+and Prepared exercise forced and graceful results, with and without subsequent
+capture expiry. Negative cases retain missing, foreign, mismatched and crossed
+Commit outcomes. Separate cases exclude demand and Published, preserve the
+indexed post-Commit artifact's guard, and keep pre-read and post-decode clock
+failures fatal. Filesystem cleanup and the original index are checked.
+
+R2's probe-only alternative is declined: a worker can close between the final
+probe and the send syscall, which the new hook reproduces. R3 does not justify
+widening every Closed into a refusal continuation, since Closed also carries
+clock failure. No new full-buffer peer-close composition is claimed. Existing
+channel pressure cases remain the transport evidence. R6's redundant Aborted
+predicate is replaced by the shared actual-Leave admission. R4/R5's observation
+precision and R7's zero-timeout fixture polling remain carried.
 
 The deterministic positive case fails on the unchanged #375 admin runtime at
 Channel(Closed). It passes on both snapshot and finished refusal with the fix.
@@ -109,9 +138,13 @@ establish the cause separately.
 
 The private target is /tmp/weaver-state-146-serving-organ-loss-target with
 CARGO_INCREMENTAL=0, pinned nightly and --locked. Lock and formatting pass.
-Both affected crates pass strict all-target clippy. The final admin package run
-passes 585 cases serially: 553 main-binary, three relay and 29 integration cases,
-with 71 ignored. The ten expiry actor tests include the three added here.
+Both affected crates pass strict all-target clippy. The R1 admin package run
+passes 592 cases serially: 560 main-binary, three relay and 29 integration cases,
+with 71 inherited ignored. This includes the seven new send-boundary cases and
+the earlier ten expiry actor cases. No namespace skip was reported. An initial
+sandbox run of the seven cases failed at its forbidden setresuid fixture call.
+The compiled tests passed in a delegated root scope, then the ordinary full
+package passed outside the sandbox.
 
 The ordinary harness gate passes 2,174 tests/doctests: 2,093 library, seven worker,
 43 integration and 31 doctests, excluding nested child summaries. There are
@@ -120,19 +153,29 @@ and clippy results are retained from the first broad gate. Source hashes prove
 that only admin files changed afterward, with no harness dependency or Cargo
 configuration changes. They are reused results, not a second invocation.
 
-All 136 selected process identities pass under a root-owned delegated scope with
-the rebuilt admin test binary and the SQLite member. They include all nine focused
-save-settlement cases, all 16 gate-death cases, and the inherited joint refusal
-families. These sets overlap and are not added together. Real joint-operation
-packets and member evidence are retained separately. The final source/configuration
-hashes are identical before and after the gates. The document-mirror gate follows
-the addition of this record.
+At 703f9fb1, all 136 selected process identities passed under a root-owned
+delegated scope with the rebuilt admin binary and SQLite member. For R1, all 21
+joint identities are rerun against a fresh build of that exact published harness
+and the corrected admin. They cover forced and graceful capture refusal, both
+expiry legs, cleanup failures, demand save and joined Leave. All 21 pass. The
+unpublished dispatcher work was copied aside, the parent harness installed for
+this gate, and the original work restored by hash afterward. The gate snapshots
+prove that its harness source is the published parent's and that its sources did
+not change while the joint cases ran. The other 115 process cases are retained
+baseline evidence, not rerun claims for this admin correction.
 
 Ten separately compiled protective controls fail as intended. Eight remove the
 harness's no-packet progress, boundary permission or earlier-owner handoff in input
 and S9. Two remove admin's peer-close continuation or admit a clock failure as peer
 closure. Each source is restored by hash. The earlier crossed-result control
 survivor is retained separately and is not counted as a caught control.
+
+Five further independently compiled R1 controls remove the send continuation,
+its expiry reduction, its actual-Leave restriction, its pre-Commit restriction,
+and its receive-clock failure guard. Each fails its intended actor case. The
+clock control fails both direct and checkpoint cases. Source hashes are restored
+and all seven send-boundary cases pass again. These controls are separate from
+the ten controls on the initial head.
 
 The early failed builds and fixture runs remain separate evidence. They exposed
 test-only visibility, missing member readiness, an invalid fixed-clock/member

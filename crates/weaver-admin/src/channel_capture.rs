@@ -80,6 +80,8 @@ impl Coordination {
         let bytes = envelope
             .encode(CaptureSender::Admin)
             .map_err(|_| ChannelFault::Undecodable)?;
+        #[cfg(test)]
+        before_capture_send(envelope);
         self.send_capture_bytes_tracked(&bytes, windows, sent)
     }
 
@@ -305,3 +307,61 @@ impl Coordination {
 #[cfg(test)]
 #[path = "channel_capture_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TestCaptureSend {
+    ImageChecked,
+    Prepared,
+    Published,
+    Aborted,
+}
+
+#[cfg(test)]
+type SendHook = (TestCaptureSend, Box<dyn FnOnce()>);
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_CAPTURE_SEND: std::cell::RefCell<Option<SendHook>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Controls the peer at the exact send boundary, after publication checkpoints.
+/// It changes no socket result, clock result, actor state or production branch.
+#[cfg(test)]
+pub(crate) fn with_before_capture_send<T>(
+    kind: TestCaptureSend,
+    before: impl FnOnce() + 'static,
+    action: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<SendHook>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BEFORE_CAPTURE_SEND.with(|hook| hook.replace(self.0.take()));
+        }
+    }
+    let _restore =
+        Restore(BEFORE_CAPTURE_SEND.with(|hook| hook.replace(Some((kind, Box::new(before))))));
+    action()
+}
+
+#[cfg(test)]
+fn before_capture_send(envelope: &CaptureEnvelope) {
+    let kind = match envelope.payload {
+        CapturePayload::SavePointImageChecked(_) => TestCaptureSend::ImageChecked,
+        CapturePayload::SavePointPrepared(_) => TestCaptureSend::Prepared,
+        CapturePayload::SavePointPublished(_) => TestCaptureSend::Published,
+        CapturePayload::SavePointAborted(_) => TestCaptureSend::Aborted,
+        _ => return,
+    };
+    let before = BEFORE_CAPTURE_SEND.with(|hook| {
+        let mut hook = hook.borrow_mut();
+        if hook.as_ref().is_some_and(|(expected, _)| *expected == kind) {
+            hook.take().map(|(_, before)| before)
+        } else {
+            None
+        }
+    });
+    if let Some(before) = before {
+        before();
+    }
+}
