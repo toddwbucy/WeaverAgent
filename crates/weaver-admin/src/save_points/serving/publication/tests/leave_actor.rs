@@ -375,6 +375,8 @@ fn refused_leave_admin_preserves_typed_terminal_refusals_and_rejects_foreign_ide
     for mode in ["forced", "graceful"] {
         for case in [
             "lifecycle",
+            "malformed",
+            "gate-refusal",
             "failed-run",
             "foreign-run",
             "foreign-capture",
@@ -387,6 +389,13 @@ fn refused_leave_admin_preserves_typed_terminal_refusals_and_rejects_foreign_ide
             pending(&mut owner);
             let refusal = if case == "lifecycle" {
                 CaptureRefusal::Lifecycle(weaver_types::LifecycleRefusal::DescriptorsUnusable)
+            } else if case == "malformed" {
+                CaptureRefusal::Lifecycle(weaver_types::LifecycleRefusal::Malformed)
+            } else if case == "gate-refusal" {
+                CaptureRefusal::Lifecycle(weaver_types::LifecycleRefusal::OrganRefused {
+                    organ: weaver_types::RefusingOrgan::Gate,
+                    reason: Box::new(weaver_types::LifecycleRefusal::OutOfOrder),
+                })
             } else {
                 CaptureRefusal::Save(SaveRefusal::FailedRun {
                     run: if case == "foreign-run" {
@@ -427,6 +436,112 @@ fn refused_leave_admin_preserves_typed_terminal_refusals_and_rejects_foreign_ide
                 recv(peer.as_raw_fd(), &mut [0; 1], MsgFlags::MSG_DONTWAIT),
                 Err(nix::errno::Errno::EAGAIN)
             );
+        }
+    }
+}
+
+#[test]
+fn refused_leave_admin_rejects_correlated_retry_codes_and_worker_publication_claims() {
+    use weaver_types::state_flow::{PersistenceStage, StateManagementCode, StateManagementStage};
+    use weaver_types::{LifecycleRefusal as L, RefusingOrgan};
+    for mode in ["forced", "graceful"] {
+        for case in 0..8 {
+            let fixture = Fixture::new();
+            let mut repo = fixture.repository();
+            let (mut owner, peer, exchange, prepared) = through_prepared(&fixture, &mut repo, mode);
+            refused_packet(&peer, &exchange, SavePointLeg::Published);
+            pending(&mut owner);
+            let refusal = match case {
+                0 => L::CarriedWork,
+                1 => L::OutOfOrder,
+                2 => L::StateManagementInvalid {
+                    stage: StateManagementStage::Serving,
+                    code: StateManagementCode::InvalidSpan,
+                    rule_id: None,
+                    path: None,
+                    detail: "worker retry claim".into(),
+                },
+                3 => L::StatePersistenceInvalid {
+                    stage: PersistenceStage::Publish,
+                    case: PersistenceCase::PublicationFailed,
+                    artifact_id: Some(prepared.artifact_id),
+                    detail: "worker publication claim".into(),
+                },
+                4 => L::ActivityNotAtRest,
+                5 => L::Unauthorized,
+                6 => L::OrganRefused {
+                    organ: RefusingOrgan::Spu,
+                    reason: Box::new(L::OutOfOrder),
+                },
+                7 => L::Unanswered,
+                _ => unreachable!(),
+            };
+            packet(
+                &peer,
+                &exchange,
+                CapturePayload::Refusal(CaptureRefusal::Lifecycle(refusal)),
+            );
+            assert_eq!(owner.advance(), LeaveProgress::Stopped);
+            assert!(
+                matches!(owner.failure(), Some(FailureCause::Protocol(_))),
+                "{mode}/{case}: {:?}",
+                owner.failure()
+            );
+            assert!(owner.finish_leave().is_err());
+            assert_eq!(fixture.index().len(), 1);
+            assert_eq!(fixture.names().len(), 2);
+        }
+    }
+}
+
+#[test]
+fn begun_capture_requires_failed_run_identity_at_receive_and_preparation_checkpoints() {
+    for mode in ["forced", "graceful"] {
+        for phase in ["image", "hashing", "commit", "refused"] {
+            let fixture = Fixture::new();
+            let mut repo = fixture.repository();
+            let (mut owner, peer, exchange) = if matches!(phase, "commit" | "refused") {
+                let (owner, peer, exchange, _) = through_prepared(&fixture, &mut repo, mode);
+                (owner, peer, exchange)
+            } else {
+                through_beginning(&fixture, &mut repo, mode)
+            };
+            if phase == "hashing" {
+                fixture.write_room("capture-9.sqlite.part", CAPTURE_BYTES);
+                packet(
+                    &peer,
+                    &exchange,
+                    CapturePayload::SavePointImage(CaptureImage {
+                        capture_id: 9.into(),
+                        room_name: "capture-9.sqlite.part".into(),
+                        size_bytes: (CAPTURE_BYTES.len() as u64).into(),
+                        position: Some(position(9)),
+                    }),
+                );
+                pending(&mut owner);
+            } else if phase == "refused" {
+                refused_packet(&peer, &exchange, SavePointLeg::Published);
+                pending(&mut owner);
+            }
+            packet(
+                &peer,
+                &exchange,
+                CapturePayload::Refusal(CaptureRefusal::Save(SaveRefusal::FailedRun {
+                    run: run(),
+                    capture_id: None,
+                    phase: PersistencePhase::Preparing,
+                    published: None,
+                    artifacts: Vec::new(),
+                    detail: "missing capture identity".into(),
+                })),
+            );
+            assert_eq!(owner.advance(), LeaveProgress::Stopped);
+            assert!(
+                matches!(owner.failure(), Some(FailureCause::Protocol(_))),
+                "{mode}/{phase}: {:?}",
+                owner.failure()
+            );
+            assert_eq!(fixture.index().len(), 1);
         }
     }
 }

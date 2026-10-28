@@ -630,11 +630,10 @@ impl<'repo> Capture<'repo> {
         let envelope = &self.received.last().unwrap().envelope;
         if &envelope.exchange != self.directive.exchange()
             || !same_run(envelope, &self.observed.facts.run)
-            || self.windows.capture().is_some_and(|beginning| {
-                envelope
-                    .capture_id()
-                    .is_some_and(|id| id != beginning.capture_id)
-            })
+            || self
+                .windows
+                .capture()
+                .is_some_and(|beginning| !same_capture(envelope, beginning.capture_id))
         {
             return Err(FailureCause::Protocol("foreign capture continuation"));
         }
@@ -945,12 +944,9 @@ fn checkpoint<'a>(
         Ok(Some(received)) => {
             let correlated = &received.envelope.exchange == exchange
                 && same_run(&received.envelope, run)
-                && windows.capture().is_none_or(|beginning| {
-                    received
-                        .envelope
-                        .capture_id()
-                        .is_none_or(|id| id == beginning.capture_id)
-                });
+                && windows
+                    .capture()
+                    .is_none_or(|beginning| same_capture(&received.envelope, beginning.capture_id));
             let cause = if correlated && negative(&received.envelope, committed) {
                 FailureCause::WorkerOutcome
             } else {
@@ -971,6 +967,20 @@ fn checkpoint<'a>(
 fn negative(envelope: &CaptureEnvelope, committed: bool) -> bool {
     matches!(envelope.payload, CapturePayload::Refusal(_))
         || (!committed && matches!(envelope.payload, CapturePayload::SavePointAborted(_)))
+}
+
+fn same_capture(
+    envelope: &CaptureEnvelope,
+    capture_id: weaver_types::state_flow::DecimalU64,
+) -> bool {
+    use weaver_types::state_flow::capture::{CaptureRefusal, SaveRefusal};
+    match &envelope.payload {
+        CapturePayload::Refusal(CaptureRefusal::Save(SaveRefusal::FailedRun {
+            capture_id: actual,
+            ..
+        })) => *actual == Some(capture_id),
+        _ => envelope.capture_id().is_none_or(|id| id == capture_id),
+    }
 }
 
 fn same_run(envelope: &CaptureEnvelope, run: &weaver_types::RunId) -> bool {
