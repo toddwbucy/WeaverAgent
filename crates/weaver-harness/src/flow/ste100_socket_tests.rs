@@ -2,7 +2,7 @@ use crate::flow::classifier::{PortFailure, PortFailureKind, ResultPoll, Ste100Po
 use crate::flow::ste100_channel::{Channel, DATAGRAM_BYTES, Fault, HEADER_BYTES, Receive, Tag};
 use crate::flow::ste100_socket::*;
 use nix::sys::socket::{
-    AddressFamily, MsgFlags, SockFlag, SockType, recv, send, setsockopt, socketpair, sockopt,
+    AddressFamily, MsgFlags, SockFlag, SockType, send, setsockopt, socketpair, sockopt,
 };
 use std::os::fd::{AsRawFd, OwnedFd};
 use weaver_types::state_flow::{
@@ -244,10 +244,10 @@ fn invalid_local_bootstrap_and_declaration_never_send_bytes() {
             SocketPort::starting(end, bootstrap, scheme).is_err(),
             "case {case}"
         );
-        let mut bytes = [0; DATAGRAM_BYTES];
-        assert_eq!(
-            recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
-            Ok(0)
+        crate::flow::fixture_eof::await_eof_until(
+            peer.as_raw_fd(),
+            std::time::Instant::now() + std::time::Duration::from_secs(3),
+            || {},
         );
     }
     let (end, _) = std::os::unix::net::UnixStream::pair().unwrap();
