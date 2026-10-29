@@ -99,20 +99,23 @@ impl<'a> FoundationInput<'a> {
         if self.progress() != FoundationInputProgress::ManagementPending {
             return Err(self);
         }
-        let read =
-            if self.has_graceful_leave() || self.serving.save.is_some() || self.plan_pending() {
-                let Some(accepted) = self.serving.owner.listener.accepted_ns() else {
-                    return Err(self);
-                };
-                let Ok(bound) =
-                    AbsoluteBound::after(accepted, crate::state::ANSWER_BOUND_MS * 1_000_000)
-                else {
-                    return Err(self);
-                };
-                Some(bound)
-            } else {
-                None
+        let read = if self.has_graceful_leave()
+            || self.serving.save.is_some()
+            || self.plan_pending()
+            || self.flags_pending()
+        {
+            let Some(accepted) = self.serving.owner.listener.accepted_ns() else {
+                return Err(self);
             };
+            let Ok(bound) =
+                AbsoluteBound::after(accepted, crate::state::ANSWER_BOUND_MS * 1_000_000)
+            else {
+                return Err(self);
+            };
+            Some(bound)
+        } else {
+            None
+        };
         let mut peer = self
             .serving
             .owner
@@ -498,6 +501,26 @@ impl<'a> FoundationManagement<'a> {
                     .complete_wait(PumpDeadline::AdminRead);
                 self.read_armed = false;
             }
+            if self.input.flags_pending()
+                && matches!(
+                    envelope.payload,
+                    Payload::Directive(
+                        LifecycleDirective::Stop { .. } | LifecycleDirective::Leave { .. }
+                    )
+                )
+            {
+                self.input.serving.owner.context.cancel_read(io)?;
+                self.input
+                    .advance_flags((!self.peer_unavailable).then_some(&mut self.peer), io)?;
+                if self.input.flags_pending() {
+                    return Ok(());
+                }
+            }
+            let envelope = &self
+                .peer
+                .held()
+                .expect("held directive survives flag settlement")
+                .envelope;
             if self.input.plan_pending()
                 && matches!(
                     envelope.payload,

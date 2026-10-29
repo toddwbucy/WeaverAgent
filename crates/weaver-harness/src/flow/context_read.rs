@@ -17,6 +17,9 @@ pub(in crate::flow) use boot::{
     BootHead, BootReadBeginError, BootReadBeginRefusal, BootReadCompletion,
 };
 
+#[path = "context_read_flags.rs"]
+pub(in crate::flow) mod flags;
+
 const READ_NS: u64 = 2_000_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,6 +192,7 @@ enum ReadPurpose {
     Ordinary,
     Marks,
     RootPlan,
+    PlanFlags(flags::FlagRead),
     BootPairs,
     PlanSummary,
     Inward(weaver_types::state_flow::CallId),
@@ -249,7 +253,10 @@ impl ReadTransaction {
         self.bound
     }
     pub(super) fn plan_ticket(&self) -> Option<u64> {
-        self.author_ticket
+        match &self.purpose {
+            ReadPurpose::PlanFlags(flags) if flags.event.is_some() => flags.ticket,
+            _ => self.author_ticket,
+        }
     }
     pub(super) fn plan_recorded(&self) -> Option<Sequence> {
         self.recorded
@@ -270,6 +277,7 @@ impl ReadTransaction {
             ReadPurpose::Ordinary
             | ReadPurpose::Marks
             | ReadPurpose::RootPlan
+            | ReadPurpose::PlanFlags(_)
             | ReadPurpose::Inward(_) => false,
         }
     }
@@ -329,6 +337,8 @@ impl RecordingContext {
                 if read.is_some_and(|read| {
                     read.plan_ticket().is_some() && read.plan_ticket() == ticket
                 }) => {}
+            Some(Kind::StatePlanMeasurement)
+                if read.is_some_and(|read| matches!(&read.purpose, ReadPurpose::PlanFlags(flags) if flags.ticket.is_some() && flags.ticket == ticket)) => {}
             Some(Kind::StateStoreMeasurement)
                 if ticket.is_some()
                     && read.and_then(|read| read.plan_expected()).is_some_and(
@@ -684,11 +694,11 @@ impl RecordingContext {
         }
         self.read_wait_matches(ports.io)?;
         if self.read_blocks_reduction() {
-            return self.advance_read_recall(ports);
+            return self.advance_read_observation(ports);
         }
         let advance = self.reduce_flow(ports.io)?;
         if self.read_blocks_reduction() {
-            return self.advance_read_recall(ports);
+            return self.advance_read_observation(ports);
         }
         if self.read.as_ref().is_some_and(|read| read.complete) {
             return Ok(ReadProgress::Complete);
@@ -715,6 +725,14 @@ impl RecordingContext {
         &mut self,
         io: &mut impl PumpIo,
     ) -> Result<Option<RetainedReadCompletion>, RunFailure> {
+        self.take_read_retained_owned(io, false)
+    }
+
+    fn take_read_retained_owned(
+        &mut self,
+        io: &mut impl PumpIo,
+        flags_owner: bool,
+    ) -> Result<Option<RetainedReadCompletion>, RunFailure> {
         self.live(io)?;
         if self.plan_summary_blocks_external() {
             return Err(RunFailure::PlanSummaryOwned);
@@ -727,6 +745,13 @@ impl RecordingContext {
         }
         if self.inward_blocks_external() {
             return Err(RunFailure::PairOwned);
+        }
+        if self
+            .read
+            .as_ref()
+            .is_some_and(|read| matches!(read.purpose, ReadPurpose::PlanFlags(_)) != flags_owner)
+        {
+            return Err(RunFailure::ReadOwned);
         }
         if self.read.as_ref().is_some_and(|read| {
             matches!(
@@ -900,6 +925,9 @@ impl RecordingContext {
             if matches!(read.purpose, ReadPurpose::Boot { .. }) {
                 self.boot_read_started = true;
             }
+            if let ReadPurpose::PlanFlags(flags) = &mut read.purpose {
+                flags.request_id = Some(request_id);
+            }
         }
         if let Err(error) = read.pages.bind_request(request_id, &request) {
             return Err(self.read_fault(io, error.to_string()));
@@ -1046,14 +1074,17 @@ impl RecordingContext {
                     .expect("complete read keeps its disposition"),
             );
             if matches!(read.released, Some(Err(_))) {
-                read.complete = true;
-                self.deadlines.disarm(PumpDeadline::StateControl);
+                if !matches!(read.purpose, ReadPurpose::PlanFlags(_)) {
+                    read.complete = true;
+                    self.deadlines.disarm(PumpDeadline::StateControl);
+                }
             } else {
                 let completed = read.released.as_ref().unwrap().as_ref().unwrap();
                 let record = match &mut read.purpose {
                     ReadPurpose::Ordinary
                     | ReadPurpose::Marks
                     | ReadPurpose::RootPlan
+                    | ReadPurpose::PlanFlags(_)
                     | ReadPurpose::BootPairs
                     | ReadPurpose::PlanSummary
                     | ReadPurpose::Inward(_) => {
@@ -1209,12 +1240,24 @@ impl RecordingContext {
     }
 
     fn finish_recorded_recall(&mut self, io: &mut impl PumpIo) -> Result<ReadProgress, RunFailure> {
+        let complete = !self
+            .read
+            .as_ref()
+            .is_some_and(|read| matches!(read.purpose, ReadPurpose::PlanFlags(_)));
+        self.finish_recorded_read_observation(io, complete)
+    }
+
+    fn finish_recorded_read_observation(
+        &mut self,
+        io: &mut impl PumpIo,
+        complete: bool,
+    ) -> Result<ReadProgress, RunFailure> {
         let now = io.now().map_err(|error| {
             self.fail(
                 io,
                 FlowHaltReason::TraceFailed,
                 HaltPoint::Author,
-                format!("recall Recorded clock failed: {error}"),
+                format!("read observation Recorded clock failed: {error}"),
             )
         })?;
         if now < self.last_ns {
@@ -1222,7 +1265,7 @@ impl RecordingContext {
                 io,
                 FlowHaltReason::TraceFailed,
                 HaltPoint::Author,
-                "recall Recorded clock reversed",
+                "read observation Recorded clock reversed",
             ));
         }
         self.last_ns = now;
@@ -1233,10 +1276,16 @@ impl RecordingContext {
             self.live(io)?;
             return Err(self.expired(io, PumpDeadline::StateControl, bound));
         }
-        self.read.as_mut().unwrap().complete = true;
-        self.deadlines.disarm(PumpDeadline::StateControl);
+        if complete {
+            self.read.as_mut().unwrap().complete = true;
+            self.deadlines.disarm(PumpDeadline::StateControl);
+        }
         self.live(io)?;
-        Ok(ReadProgress::Complete)
+        Ok(if complete {
+            ReadProgress::Complete
+        } else {
+            ReadProgress::Progress
+        })
     }
 
     fn read_fault(&mut self, io: &mut impl PumpIo, detail: impl Into<String>) -> RunFailure {

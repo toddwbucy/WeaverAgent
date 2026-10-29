@@ -1174,6 +1174,11 @@ fn circuit(mode: &str) {
             load.state_flow.persistence.snapshot_wait.elapsed_ns = 50_000_000.into();
         }
     }
+    if mode.ends_with("-flags-queued-save") {
+        // This real process case retains a save while the flag member delays;
+        // its declared budget is not the fake-clock fixture's millisecond window.
+        load.state_flow.persistence.save_wait.elapsed_ns = 5_000_000_000.into();
+    }
     if mode.starts_with("input-worker") {
         load.state_flow.ste100.decision_wait.elapsed_ns = 5_000_000_000.into();
         bootstrap.instruction.decision_wait.elapsed_ns = 5_000_000_000.into();
@@ -1557,6 +1562,27 @@ fn circuit(mode: &str) {
                     &mut member,
                     &mut reader,
                 );
+                return;
+            }
+            if mode.starts_with("input-worker-plan-save-sqlite-flags-") {
+                assert!(
+                    member.normal.is_some(),
+                    "flag observations use normal SQLite"
+                );
+                if let Some(cleanup) = super::input::plan::tests::flags::exercise(
+                    serving,
+                    &mut member,
+                    &mut reader,
+                    &path,
+                    mode,
+                ) {
+                    super::input::plan::tests::flags::finish(
+                        run.take_boxed(),
+                        cleanup,
+                        &mut member,
+                        &mut reader,
+                    );
+                }
                 return;
             }
             if mode.starts_with("input-worker-plan-") {
@@ -2238,6 +2264,38 @@ macro_rules! scenario {
 }
 scenario!(worker_startup_composition_ready, "ready");
 scenario!(worker_plan_composition_stop, "input-worker-plan-stop");
+scenario!(
+    worker_plan_composition_open_turn,
+    "input-worker-plan-open-turn"
+);
+scenario!(
+    worker_plan_flags_queued_save,
+    "input-worker-plan-save-sqlite-flags-queued-save"
+);
+scenario!(
+    worker_plan_flags_failed,
+    "input-worker-plan-save-sqlite-flags-failed"
+);
+scenario!(
+    worker_plan_flags_recorded_failed,
+    "input-worker-plan-save-sqlite-flags-recorded-failed"
+);
+scenario!(
+    worker_plan_flags_success,
+    "input-worker-plan-save-sqlite-flags-success"
+);
+scenario!(
+    worker_plan_flags_unavailable,
+    "input-worker-plan-save-sqlite-flags-unavailable"
+);
+scenario!(
+    worker_plan_flags_stop,
+    "input-worker-plan-save-sqlite-flags-stop"
+);
+scenario!(
+    worker_plan_flags_leave,
+    "input-worker-plan-save-sqlite-flags-leave"
+);
 scenario!(
     worker_plan_composition_cancel_input_filing,
     "input-worker-plan-save-sqlite-cancel-input"

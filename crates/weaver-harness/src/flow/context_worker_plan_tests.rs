@@ -18,6 +18,12 @@ use weaver_types::{Cause, LifecycleDirective, LifecycleRefusal};
 #[path = "context_worker_plan_cleanup_tests.rs"]
 pub(in crate::flow::context::worker_startup) mod cleanup;
 
+#[path = "context_worker_flags_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod flags;
+
+#[path = "context_worker_plan_admission_tests.rs"]
+mod admission;
+
 #[path = "context_worker_plan_pressure_tests.rs"]
 mod pressure;
 
@@ -121,13 +127,13 @@ fn observe(guard: &mut Guard<'_>, socket: &Path) -> s::enter::ObservationContent
     answer.payload
 }
 
-fn sqlite_update(
-    serving: FoundationServing<'_>,
+fn sqlite_update<'a>(
+    serving: FoundationServing<'a>,
     member: &mut Member,
     reader: &mut UnixStream,
     socket: &Path,
     lost: bool,
-) {
+) -> Guard<'a> {
     let mut guard = Guard {
         input: Some(serving.input()),
         management: None,
@@ -270,6 +276,7 @@ fn sqlite_update(
     assert_eq!(plan_rows[0]["origin"], "operator");
     assert_eq!(plan_rows[1]["origin"], "loop");
     assert!(rows.iter().all(|row| row["kind"] != "turn.started"));
+    guard
 }
 
 fn admin_update(
@@ -629,6 +636,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     socket: &Path,
     mode: &str,
 ) {
+    if mode.ends_with("-open-turn") {
+        return admission::open_turn(serving, member, reader, socket);
+    }
     if mode.ends_with("-answer-pressure") || mode.ends_with("-answer-expiry") {
         return pressure::exercise(serving, reader, socket, mode.ends_with("-answer-expiry"));
     }
@@ -645,13 +655,14 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         );
     }
     if mode.contains("-save-sqlite-") {
-        return sqlite_update(
+        let _guard = sqlite_update(
             serving,
             member,
             reader,
             socket,
             mode.ends_with("lost-answer"),
         );
+        return;
     }
     if mode.ends_with("stop") {
         return stopped(serving, member, reader, socket);

@@ -7,6 +7,8 @@ use weaver_types::OrganEnvelope;
 
 impl Coordination {
     pub(crate) fn send_plan_until(&self, bytes: &[u8], end: Instant) -> Result<(), ChannelFault> {
+        #[cfg(test)]
+        observe_plan_deadline(true, end);
         if bytes.len() > MAX_ENVELOPE_BYTES {
             return Err(ChannelFault::Truncated {
                 bound: MAX_ENVELOPE_BYTES,
@@ -29,6 +31,8 @@ impl Coordination {
     }
 
     pub(crate) fn recv_plan_until(&self, end: Instant) -> Result<OrganEnvelope, ChannelFault> {
+        #[cfg(test)]
+        observe_plan_deadline(false, end);
         loop {
             self.wait_plan_until(nix::libc::POLLIN, end)?;
             let Some(bytes) = self.packet_bytes()? else {
@@ -71,4 +75,42 @@ fn remaining(end: Instant) -> Result<std::time::Duration, ChannelFault> {
     end.checked_duration_since(Instant::now())
         .filter(|wait| !wait.is_zero())
         .ok_or(ChannelFault::Unanswered)
+}
+
+// Test-only observation of the bounds supplied by the actual exchange owner.
+// Neither this probe nor its consumer changes a socket or clock result.
+#[cfg(test)]
+type PlanDeadlines = Vec<(bool, Instant, Instant)>;
+#[cfg(test)]
+type PlanDeadlineProbe = (PlanDeadlines, std::sync::mpsc::Sender<()>);
+#[cfg(test)]
+thread_local! {
+    static PLAN_DEADLINES: std::cell::RefCell<Option<PlanDeadlineProbe>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+fn observe_plan_deadline(send: bool, end: Instant) {
+    PLAN_DEADLINES.with(|slot| {
+        if let Some((values, started)) = &mut *slot.borrow_mut() {
+            values.push((send, end, Instant::now()));
+            if send {
+                started.send(()).unwrap();
+            }
+        }
+    });
+}
+#[cfg(test)]
+pub(crate) fn with_plan_deadlines<T>(
+    started: std::sync::mpsc::Sender<()>,
+    action: impl FnOnce() -> T,
+) -> (T, PlanDeadlines) {
+    struct Restore(Option<PlanDeadlineProbe>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            PLAN_DEADLINES.with(|slot| slot.replace(self.0.take()));
+        }
+    }
+    let _restore = Restore(PLAN_DEADLINES.with(|slot| slot.replace(Some((Vec::new(), started)))));
+    let result = action();
+    let deadlines = PLAN_DEADLINES.with(|slot| slot.take().unwrap().0);
+    (result, deadlines)
 }

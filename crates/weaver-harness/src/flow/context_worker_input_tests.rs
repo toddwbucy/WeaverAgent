@@ -90,13 +90,19 @@ fn worker_input_gate_child() {
             payload: Payload::Answer(LifecycleAnswer::GateReady),
         },
     );
-    if mode.starts_with("input-worker-plan-") {
+    if mode.starts_with("input-worker-plan-") && !mode.ends_with("-open-turn") {
         // Keep the actual gate idle while root management owns the circuit.
         // The guard reaps this real fixture child after the assertions.
         loop {
             match recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()) {
                 Ok(0) => return,
-                Ok(n) if mode.ends_with("-leave-read") || mode.ends_with("-failed-read") => {
+                Ok(n)
+                    if mode.ends_with("-leave-read")
+                        || mode.ends_with("-failed-read")
+                        || mode.ends_with("-flags-leave")
+                        || mode.ends_with("-flags-failed")
+                        || mode.ends_with("-flags-recorded-failed") =>
+                {
                     let lower: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
                     assert_eq!(lower.payload, Payload::Directive(LifecycleDirective::Lower));
                     packet(

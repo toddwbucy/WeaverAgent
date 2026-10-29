@@ -293,6 +293,7 @@ impl<'a> FoundationEnter<'a> {
             graceful: None,
             save: None,
             plan: None,
+            flags: None,
         })
     }
 }
@@ -321,6 +322,7 @@ pub struct FoundationServing<'a> {
     graceful: Option<Box<input::graceful::PendingGraceful>>,
     save: Option<Box<input::save::PendingSave>>,
     plan: Option<Box<input::plan::PendingPlan>>,
+    flags: Option<Box<input::flags::FoundationFlags>>,
 }
 
 #[path = "context_worker_input.rs"]
