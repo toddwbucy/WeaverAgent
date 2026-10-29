@@ -629,7 +629,7 @@ impl Harness {
         mut self,
         identity: &str,
         composer: weaver_trace::LoopIdentity,
-        mut entry: F,
+        entry: F,
     ) -> Result<Outcome, ChannelFault>
     where
         F: FnMut(
@@ -644,7 +644,21 @@ impl Harness {
         // on: the listener leaves the read set while a verb's connection is
         // being served, which is what holds the contract's
         // one-exchange-in-flight rule now that no fleet map does.
-        let mut pending: Option<OrganChannel> = None;
+        self.serve_loop(identity, entry, None)
+    }
+
+    fn serve_loop<F>(
+        mut self,
+        identity: &str,
+        mut entry: F,
+        mut pending: Option<OrganChannel>,
+    ) -> Result<Outcome, ChannelFault>
+    where
+        F: FnMut(
+            &mut crate::engine::Ports<'_>,
+            &str,
+        ) -> Result<crate::engine::TurnOutcome, crate::engine::TurnError>,
+    {
         loop {
             // **No wait over a record that failed** (#116): a wake that
             // authored and announced nothing is still not served past.
@@ -668,7 +682,19 @@ impl Harness {
                 },
                 Ok(Wake::Connection) => {
                     let connection = pending.take().expect("the wake proved a connection");
-                    let (envelope, sink, state_end) = match connection.recv_with_descriptor() {
+                    let received = if connection.is_diagnostic_wire() {
+                        match receive_entered(&connection) {
+                            Ok(Some(envelope)) => Ok((envelope, None, None)),
+                            Ok(None) => {
+                                pending = Some(connection);
+                                continue;
+                            }
+                            Err(fault) => Err(fault),
+                        }
+                    } else {
+                        connection.recv_with_descriptor()
+                    };
+                    let (envelope, sink, state_end) = match received {
                         Ok(received) => received,
                         // The verb answered and admin closed. Ordinary, and
                         // not an ending: the run is held across connections,
@@ -3928,6 +3954,11 @@ fn hear_dial(
     fixed: bool,
     latched: bool,
 ) {
+    // The canonical Diagnostic decoder can itself refuse a repeated Enter.
+    // The record latch therefore precedes both decoding and ordinary dispatch.
+    if latched {
+        return;
+    }
     let Some(deadline) = std::time::Instant::now().checked_add(std::time::Duration::from_millis(
         crate::state::ANSWER_BOUND_MS,
     )) else {
@@ -3936,13 +3967,9 @@ fn hear_dial(
     if !readable_by(&connection, deadline) {
         return;
     }
-    let Ok(envelope) = connection.recv() else {
+    let Ok(Some(envelope)) = receive_entered(&connection) else {
         return;
     };
-    // Read before a join too, which `join` may refuse on its own.
-    if latched {
-        return;
-    }
     let answer = match envelope.payload {
         weaver_types::Payload::Directive(LifecycleDirective::JoinLeave { cause }) => {
             leave.join(connection, envelope.exchange, cause, fixed);
@@ -4375,3 +4402,8 @@ fn record_enter_ask(
 
 #[cfg(test)]
 mod tests;
+
+#[path = "lifecycle/diagnostic_admission.rs"]
+pub(crate) mod diagnostic_admission;
+
+pub(crate) use diagnostic_admission::receive_entered;

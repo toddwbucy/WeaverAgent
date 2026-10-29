@@ -484,6 +484,77 @@ fn diagnostic_keeps_original_descriptors_and_cannot_be_adopted_by_serving() {
     assert_eq!(fx.owner.process_exit(), None);
 }
 
+fn diagnostic_program() -> super::super::FoundationProgram {
+    super::super::FoundationProgram {
+        organs: crate::OrganBinaries {
+            spu: "/not-used-before-load".into(),
+            gate: "/not-used-before-load".into(),
+            classify: None,
+        },
+        parameters: crate::OrganParameters {
+            headroom_bytes: None,
+        },
+        composer: weaver_trace::LoopIdentity::compiled("worker"),
+        templates: &[],
+    }
+}
+
+#[test]
+fn diagnostic_lost_preload_refusal_returns_listener_after_peer_departure() {
+    let mut fx = Fixture::new();
+    let mut value: serde_json::Value = serde_json::from_slice(&enter()).unwrap();
+    value["payload"]["body"]["payload"]["binding"] = serde_json::json!({
+        "kind":"diagnostic", "state_election":weaver_types::StateElection::default()
+    });
+    fx.request(&serde_json::to_vec(&value).unwrap(), &[]);
+    let mut clock = FakePumpIo::new(10);
+    assert_eq!(
+        fx.owner.advance_with_io(&mut clock),
+        FoundationAdmissionProgress::Received
+    );
+    // The packet is fully received before its authenticated peer disappears.
+    // Missing handles refuse before any child or record is created.
+    drop(fx.peer);
+    let FoundationDiagnosticResult::Admission(mut owner) =
+        fx.owner.serve_diagnostic(&diagnostic_program())
+    else {
+        panic!("a lost pre-load refusal does not end admission")
+    };
+    assert_eq!(owner.progress(), FoundationAdmissionProgress::Pending);
+    assert_eq!(owner.last_ns, Some(10));
+    // The existing Diagnostic lifecycle reports the failed send directly.
+    assert!(owner.take_delivery_loss().is_none());
+    assert_eq!(
+        owner.advance_with_io(&mut clock),
+        FoundationAdmissionProgress::Pending
+    );
+    assert!(
+        owner.receiver.is_none(),
+        "retire the original peer only on its EOF"
+    );
+    assert_eq!(owner.process_exit(), None);
+}
+
+#[test]
+fn diagnostic_adapter_returns_serving_source_without_projection_or_reply() {
+    let mut fx = Fixture::new();
+    let bytes = enter();
+    fx.request(&bytes, &[]);
+    assert_eq!(
+        fx.owner.advance_with_io(&mut FakePumpIo::new(10)),
+        FoundationAdmissionProgress::Received
+    );
+    let FoundationDiagnosticResult::Admission(owner) =
+        fx.owner.serve_diagnostic(&diagnostic_program())
+    else {
+        panic!("Serving never transfers to Diagnostic")
+    };
+    assert_eq!(owner.binding_kind(), Some(BindingKind::Serving));
+    assert_eq!(owner.received.as_ref().unwrap().wire(), bytes);
+    assert!(packet(&fx.peer).is_none());
+    assert_eq!(owner.process_exit(), None);
+}
+
 #[test]
 fn an_empty_run_identity_is_malformed_before_any_descriptor_is_consumed() {
     let mut fx = Fixture::new();

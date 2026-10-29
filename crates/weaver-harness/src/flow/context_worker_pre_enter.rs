@@ -22,6 +22,14 @@ pub enum FoundationAdmissionProgress {
     Stopped,
 }
 
+pub enum FoundationDiagnosticResult {
+    /// A source which cannot transfer, or the original listener and peer after
+    /// a pre-load refusal. Resume admission and inspect its progress, including
+    /// any stopped handoff and queued input on the retained peer.
+    Admission(Box<FoundationAdmission>),
+    Finished(Result<crate::Outcome, ChannelFault>),
+}
+
 struct Response {
     answer: Option<OrganEnvelope>,
     send: Option<OrganSend>,
@@ -29,7 +37,7 @@ struct Response {
     bound: Option<AbsoluteBound>,
 }
 
-/// No child or recording context exists until successful Serving adoption.
+/// No child or recording context exists before a binding's lifecycle takes over.
 /// Every accepted peer has one receiver; later connections stay in the backlog.
 pub struct FoundationAdmission {
     listener: LifecycleListener,
@@ -46,6 +54,80 @@ pub struct FoundationAdmission {
 }
 
 impl FoundationAdmission {
+    /// Route only the original canonical Diagnostic source to the existing
+    /// Diagnostic recorder/replay lifecycle. Serving never enters this adapter.
+    pub fn serve_diagnostic(
+        mut self,
+        program: &super::FoundationProgram,
+    ) -> FoundationDiagnosticResult {
+        if self.binding_kind() != Some(BindingKind::Diagnostic) {
+            return FoundationDiagnosticResult::Admission(Box::new(self));
+        }
+        let prepared = self
+            .listener
+            .prepare_diagnostic()
+            .and_then(|()| self.received.as_mut().unwrap().prepare_diagnostic());
+        if let Err(failure) = prepared {
+            self.stop(format!("Diagnostic handoff: {failure:?}"));
+            return FoundationDiagnosticResult::Admission(Box::new(self));
+        }
+        let original = self.received.take().unwrap();
+        let (peer, mut message, _wire) = original.into_parts();
+        let channel = peer.into_diagnostic();
+        let listener = self.listener.into_diagnostic();
+        let harness = match crate::Harness::listen(
+            listener,
+            program.organs.clone(),
+            program.parameters.clone(),
+        ) {
+            Ok(harness) => harness,
+            Err(_) => return FoundationDiagnosticResult::Finished(Err(ChannelFault::Closed)),
+        };
+        let result = harness.serve_diagnostic(
+            channel,
+            &message.envelope,
+            message.sink.take(),
+            message.state.take(),
+            program.composer.clone(),
+        );
+        match result {
+            crate::lifecycle::diagnostic_admission::DiagnosticService::Finished(outcome) => {
+                FoundationDiagnosticResult::Finished(outcome)
+            }
+            crate::lifecycle::diagnostic_admission::DiagnosticService::BeforeEnter {
+                mut listener,
+                peer,
+            } => {
+                listener.diagnostic_wire(false);
+                let listener = match LifecycleListener::new(listener) {
+                    Ok(listener) => listener,
+                    Err(_) => {
+                        return FoundationDiagnosticResult::Finished(Err(ChannelFault::Closed));
+                    }
+                };
+                let peer = match LifecyclePeer::from_channel(peer) {
+                    Ok(peer) => peer,
+                    Err(_) => {
+                        return FoundationDiagnosticResult::Finished(Err(ChannelFault::Closed));
+                    }
+                };
+                FoundationDiagnosticResult::Admission(Box::new(Self {
+                    listener,
+                    receiver: Some(EnterReceiver::from_peer(peer).ok().expect("fresh peer")),
+                    received: None,
+                    ordinary: None,
+                    response: None,
+                    ready: false,
+                    stopped: false,
+                    detail: None,
+                    last_ns: self.last_ns,
+                    wait_ready: false,
+                    delivery_loss: None,
+                }))
+            }
+        }
+    }
+
     pub fn listen(listener: CoordinationListener) -> Result<Self, String> {
         crate::lifecycle::clear_dumpable()
             .map_err(|error| format!("admission hygiene: {error:?}"))?;

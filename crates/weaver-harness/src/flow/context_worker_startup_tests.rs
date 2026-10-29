@@ -1334,6 +1334,7 @@ fn circuit(mode: &str) {
             &bytes,
             &load.state_start.seed_id,
             &files.0,
+            mode,
         );
     }
     let peer = dial(&path);
@@ -2361,6 +2362,18 @@ scenario!(
 scenario!(
     worker_admission_composition_diagnostic_retains_original,
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-two"
+);
+scenario!(
+    worker_admission_composition_diagnostic_replay_same_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-same-peer"
+);
+scenario!(
+    worker_admission_composition_diagnostic_replay_new_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-new-peer"
+);
+scenario!(
+    worker_admission_composition_unified_serving,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-unified-two"
 );
 scenario!(
     worker_admission_composition_before_enter_two_turns,

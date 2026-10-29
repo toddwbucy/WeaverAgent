@@ -478,6 +478,23 @@ impl ReceivedOrgan {
 }
 
 impl OrganPort {
+    pub(super) fn idle_for_diagnostic(&self) -> bool {
+        self.outgoing.is_none()
+            && self.series.is_none()
+            && self.received_wire.is_none()
+            && self.received_reservation.is_none()
+            && self.held.is_none()
+            && self.decode_reservation.is_none()
+            && self.failure.is_none()
+            && !self.zero_received
+            && matches!(self.closed_receive, ClosedReceive::Finished)
+    }
+
+    pub(super) fn into_diagnostic_fd(self) -> OwnedFd {
+        assert!(self.idle_for_diagnostic(), "prepared Diagnostic transport");
+        self.end
+    }
+
     pub(super) fn admit_not_started(&self) -> bool {
         self.outgoing
             .as_ref()

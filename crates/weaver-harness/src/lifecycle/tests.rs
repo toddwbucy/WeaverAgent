@@ -8368,6 +8368,40 @@ fn a_dial_heard_in_a_leave_is_not_answered_over_a_latched_record() {
     assert!(!arrives(&far), "nothing is answered");
 }
 
+#[test]
+fn diagnostic_reenter_during_leave_checks_record_latch_before_refusing() {
+    use crate::lifecycle_table::Leave;
+    use std::os::fd::{AsFd, AsRawFd};
+    for latched in [false, true] {
+        let (mut leave, _admin) = pending_leave(Leave::Graceful, Leave::Graceful, false);
+        let (near, far) = OrganChannel::pair().unwrap();
+        let near = OrganChannel::diagnostic_from_owned(near.into_fd());
+        let far = far.into_channel();
+        let bytes = include_bytes!("../../../weaver-types/tests/fixtures/state-enter.json");
+        assert_eq!(
+            nix::sys::socket::send(
+                far.as_fd().as_raw_fd(),
+                bytes,
+                nix::sys::socket::MsgFlags::MSG_NOSIGNAL
+            )
+            .unwrap(),
+            bytes.len()
+        );
+        hear_dial(near, &mut leave, false, latched);
+        if latched {
+            assert!(
+                !arrives(&far),
+                "no canonical Enter refusal over a failed record"
+            );
+        } else {
+            assert_eq!(
+                far.recv().unwrap().payload,
+                weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder)
+            );
+        }
+    }
+}
+
 /// **The leave's held callers are refused `DescriptorsUnusable` over a
 /// latched record** (#116, `answer_all`), whatever the leave would have
 /// answered: the seal's `Left` and S9's `SavePointNotTaken` alike.

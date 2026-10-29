@@ -284,6 +284,20 @@ pub(in crate::flow) enum EnterTimeError {
     Clock(String),
 }
 impl ReceivedEnter {
+    pub(in crate::flow) fn prepare_diagnostic(&mut self) -> Result<(), Failure> {
+        if !matches!(
+            self.envelope().enter().binding,
+            weaver_types::state_flow::enter::EnterBinding::Diagnostic { .. }
+        ) || self.adopted_origin.is_some()
+            || self.closed_unadmitted.is_some()
+        {
+            return Err(invalid_failure(
+                "only an unadopted Diagnostic Enter can transfer",
+            ));
+        }
+        self.peer.prepare_diagnostic()
+    }
+
     pub(in crate::flow) fn observed_ns(&self) -> u64 {
         self.observed_ns.get()
     }

@@ -165,8 +165,9 @@ pub use flow::context::worker_startup::input::{
 };
 pub use flow::context::worker_startup::rollback::{FoundationRollback, FoundationRollbackProgress};
 pub use flow::context::worker_startup::{
-    FoundationAdmission, FoundationAdmissionProgress, FoundationEnter, FoundationEnterProgress,
-    FoundationProcessExit, FoundationProgram, FoundationRun, FoundationServing,
+    FoundationAdmission, FoundationAdmissionProgress, FoundationDiagnosticResult, FoundationEnter,
+    FoundationEnterProgress, FoundationProcessExit, FoundationProgram, FoundationRun,
+    FoundationServing,
 };
 pub use lifecycle::{Harness, OrganBinaries, OrganParameters};
 pub use record::{Record, RecordFailure};

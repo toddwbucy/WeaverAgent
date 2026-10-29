@@ -184,6 +184,30 @@ enum ListenProgress {
 }
 
 impl LifecycleListener {
+    pub(super) fn prepare_diagnostic(&mut self) -> Result<(), Failure> {
+        if self.held.is_some() || self.failure.is_some() {
+            return Err(invalid_failure(
+                "Diagnostic handoff requires an idle listener",
+            ));
+        }
+        let flags = fcntl(self.listener.as_fd(), FcntlArg::F_GETFL).map_err(io_failure)?;
+        fcntl(
+            self.listener.as_fd(),
+            FcntlArg::F_SETFL(OFlag::from_bits_retain(flags) & !OFlag::O_NONBLOCK),
+        )
+        .map_err(io_failure)?;
+        Ok(())
+    }
+
+    pub(super) fn into_diagnostic(mut self) -> CoordinationListener {
+        assert!(
+            self.held.is_none() && self.failure.is_none(),
+            "prepared Diagnostic listener"
+        );
+        self.listener.diagnostic_wire(true);
+        self.listener
+    }
+
     pub(super) fn new(listener: CoordinationListener) -> Result<Self, Failure> {
         let flags = fcntl(listener.as_fd(), FcntlArg::F_GETFL).map_err(io_failure)?;
         fcntl(
@@ -357,6 +381,32 @@ pub(super) struct LifecyclePeer {
 }
 
 impl LifecyclePeer {
+    pub(super) fn prepare_diagnostic(&mut self) -> Result<(), Failure> {
+        if self.held.is_some()
+            || self.capture_held.is_some()
+            || self.wire.is_some()
+            || self.failure.is_some()
+            || self.zero_received
+            || self.projection != LifecycleProjection::Legacy
+            || !self.sender.idle_for_diagnostic()
+        {
+            return Err(invalid_failure(
+                "Diagnostic handoff requires the idle original peer",
+            ));
+        }
+        let flags = fcntl(self.fd(), FcntlArg::F_GETFL).map_err(io_failure)?;
+        fcntl(
+            self.fd(),
+            FcntlArg::F_SETFL(OFlag::from_bits_retain(flags) & !OFlag::O_NONBLOCK),
+        )
+        .map_err(io_failure)?;
+        Ok(())
+    }
+
+    pub(super) fn into_diagnostic(self) -> OrganChannel {
+        OrganChannel::diagnostic_from_owned(self.sender.into_diagnostic_fd())
+    }
+
     pub(super) fn from_channel(channel: OrganChannel) -> Result<Self, Failure> {
         Self::from_owned(channel.into_fd())
     }
