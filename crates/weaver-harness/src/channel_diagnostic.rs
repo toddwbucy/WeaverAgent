@@ -9,7 +9,16 @@ use weaver_types::{LifecycleAnswer, LifecycleDirective, Payload};
 
 pub(crate) enum DiagnosticRequest {
     Ordinary(OrganEnvelope),
-    Enter(Box<EnterEnvelope>),
+    Refused {
+        exchange: weaver_types::ExchangeId,
+        reason: weaver_types::LifecycleRefusal,
+    },
+}
+
+impl DiagnosticRequest {
+    fn refused(exchange: weaver_types::ExchangeId, reason: weaver_types::LifecycleRefusal) -> Self {
+        Self::Refused { exchange, reason }
+    }
 }
 
 impl CoordinationListener {
@@ -33,7 +42,10 @@ impl OrganChannel {
     pub(crate) fn recv_diagnostic(&self) -> Result<DiagnosticRequest, ChannelFault> {
         let (request, sink, state) = self.recv_with_decoder(|bytes| {
             if let Ok(enter) = EnterEnvelope::decode(bytes) {
-                return Ok(DiagnosticRequest::Enter(Box::new(enter)));
+                return Ok(DiagnosticRequest::refused(
+                    enter.exchange,
+                    weaver_types::LifecycleRefusal::OutOfOrder,
+                ));
             }
             let envelope: OrganEnvelope = weaver_types::state_flow::decode_strict(
                 std::str::from_utf8(bytes).map_err(|_| ChannelFault::Undecodable)?,
@@ -42,20 +54,34 @@ impl OrganChannel {
             if envelope.exchange.opener != weaver_types::Opener::Admin
                 || envelope.position != weaver_types::Position::Open
                 || !matches!(envelope.payload, Payload::Directive(_))
-                || matches!(
-                    envelope.payload,
-                    Payload::Directive(LifecycleDirective::Enter { .. })
-                )
             {
-                return Err(ChannelFault::Undecodable);
+                return Ok(DiagnosticRequest::refused(
+                    envelope.exchange,
+                    weaver_types::LifecycleRefusal::Malformed,
+                ));
+            }
+            if matches!(
+                envelope.payload,
+                Payload::Directive(LifecycleDirective::Enter { .. })
+            ) {
+                // A decoded legacy Enter cannot re-enter an admitted run or
+                // select a legacy wire. Its original exchange can be refused.
+                return Ok(DiagnosticRequest::refused(
+                    envelope.exchange,
+                    weaver_types::LifecycleRefusal::OutOfOrder,
+                ));
             }
             Ok(DiagnosticRequest::Ordinary(envelope))
         })?;
         // Enter may carry its usual descriptors even when out of order. They
         // have exactly one owner here and close with this rejected opener.
-        if matches!(request, DiagnosticRequest::Ordinary(_)) && (sink.is_some() || state.is_some())
+        if (sink.is_some() || state.is_some())
+            && let DiagnosticRequest::Ordinary(envelope) = request
         {
-            return Err(ChannelFault::Undecodable);
+            return Ok(DiagnosticRequest::refused(
+                envelope.exchange,
+                weaver_types::LifecycleRefusal::Malformed,
+            ));
         }
         Ok(request)
     }

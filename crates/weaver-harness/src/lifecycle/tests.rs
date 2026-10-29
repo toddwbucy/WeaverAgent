@@ -453,6 +453,7 @@ fn position_walks_three_point_zero_for_every_kind_of_leave() {
     run.diagnostic = Some(DiagnosticSeat {
         reader_elected: false,
         artifact: String::new(),
+        admitted: true,
         replayed: false,
     });
     assert_eq!(
@@ -3242,6 +3243,7 @@ fn a_graceful_leave_with_a_dead_spu_or_gate_starts_forced() {
             run.diagnostic = Some(DiagnosticSeat {
                 reader_elected: false,
                 artifact: String::new(),
+                admitted: true,
                 replayed: true,
             });
         }
@@ -5422,6 +5424,7 @@ fn a_diagnostic_leave_never_steps_into_the_wind_down() {
             run.diagnostic = Some(DiagnosticSeat {
                 reader_elected: false,
                 artifact: String::new(),
+                admitted: true,
                 replayed: true,
             });
         }
@@ -8366,6 +8369,98 @@ fn a_dial_heard_in_a_leave_is_not_answered_over_a_latched_record() {
     let (observe, far) = dialed(LifecycleDirective::Observe);
     hear_dial(observe, &mut leave, false, true);
     assert!(!arrives(&far), "nothing is answered");
+}
+
+#[test]
+fn diagnostic_refusals_check_the_current_record_before_decoding() {
+    use nix::sys::socket::{MsgFlags, recv, send};
+    use std::os::fd::{AsFd, AsRawFd};
+    for canonical in [false, true] {
+        for latched in [false, true] {
+            let (mut run, _spare, _path) = entered_run(None);
+            let (sink, _reader) = std::os::unix::net::UnixStream::pair().unwrap();
+            run.recorder = crate::record::Record::from(
+                weaver_diagnostic::Recorder::receive(
+                    sink.into(),
+                    weaver_diagnostic::RunRef("r-1".into()),
+                    weaver_diagnostic::SessionRef("s-1".into()),
+                )
+                .unwrap(),
+            );
+            if latched {
+                // A serving load has no Diagnostic counterpart. Its refused
+                // authoring latches the record without breaking the sink.
+                assert!(
+                    run.author
+                        .author(
+                            &mut run.recorder,
+                            Kind::Load,
+                            Subsystem::Harness,
+                            None,
+                            None,
+                        )
+                        .is_err()
+                );
+                assert!(run.recorder.failed());
+            }
+            let (harness, _dir) = harness_entered(run);
+            let (near, far) = OrganChannel::pair().unwrap();
+            let near = OrganChannel::diagnostic_from_owned(near.into_fd());
+            let far = far.into_channel();
+            let ordinary = OrganEnvelope {
+                exchange: test_exchange(),
+                position: Position::Open,
+                payload: weaver_types::Payload::Answer(LifecycleAnswer::AtRest),
+            };
+            let bytes = if canonical {
+                include_bytes!("../../../weaver-types/tests/fixtures/state-enter.json").to_vec()
+            } else {
+                serde_json::to_vec(&ordinary).unwrap()
+            };
+            let expected: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                send(far.as_fd().as_raw_fd(), &bytes, MsgFlags::MSG_NOSIGNAL).unwrap(),
+                bytes.len()
+            );
+            let received = receive_entered(&near, harness.record_holds().is_err());
+            if latched {
+                assert!(matches!(received, Err(ChannelFault::Closed)));
+                assert_eq!(
+                    recv(
+                        far.as_fd().as_raw_fd(),
+                        &mut [0; 1024],
+                        MsgFlags::MSG_DONTWAIT
+                    ),
+                    Err(nix::errno::Errno::EAGAIN)
+                );
+                // Refusal is blocked before even consuming the request.
+                let mut retained = vec![0; bytes.len() + 1];
+                let n = recv(
+                    near.as_fd().as_raw_fd(),
+                    &mut retained,
+                    MsgFlags::MSG_DONTWAIT,
+                )
+                .unwrap();
+                assert_eq!(&retained[..n], bytes);
+            } else {
+                assert!(matches!(received, Ok(None)));
+                let answer = far.recv().unwrap();
+                assert_eq!(
+                    serde_json::to_value(&answer.exchange).unwrap(),
+                    expected["exchange"]
+                );
+                assert_eq!(answer.position, Position::Close);
+                assert_eq!(
+                    answer.payload,
+                    weaver_types::Payload::Refusal(if canonical {
+                        LifecycleRefusal::OutOfOrder
+                    } else {
+                        LifecycleRefusal::Malformed
+                    })
+                );
+            }
+        }
+    }
 }
 
 #[test]

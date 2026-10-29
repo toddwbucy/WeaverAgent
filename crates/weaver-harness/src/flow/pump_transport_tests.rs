@@ -196,6 +196,54 @@ fn organ_closed_receive_yields_each_interruption_and_reset() {
 }
 
 #[test]
+fn live_withdrawal_requires_the_current_ticket_and_retains_failed_transport() {
+    let (end, peer) = pair();
+    let mut port = OrganPort::from_owned(end).unwrap();
+    let original = envelope();
+    let TrackedStage::Queued(earlier) = port.stage_tracked(original.clone()).unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        port.try_send_observed(&mut MonotonicIo),
+        Ok(SendProgress::Complete)
+    );
+    assert!(receive_bytes(&peer).is_some());
+    let TrackedStage::Queued(current) = port.stage_tracked(original.clone()).unwrap() else {
+        panic!()
+    };
+    let (other, _peer) = pair();
+    let mut other = OrganPort::from_owned(other).unwrap();
+    let TrackedStage::Queued(foreign) = other.stage_tracked(original.clone()).unwrap() else {
+        panic!()
+    };
+    for wrong in [&earlier, &foreign] {
+        assert!(
+            port.withdraw_tracked_pending(wrong).is_err(),
+            "only the current send ticket can withdraw"
+        );
+        assert!(port.send_pending() && !current.withdrawn());
+        assert!(port.failure().is_none());
+    }
+    assert_eq!(
+        port.withdraw_tracked_pending(&current).unwrap(),
+        Some(original.clone())
+    );
+    assert!(current.withdrawn() && !current.sent());
+    assert!(earlier.sent() && !earlier.withdrawn());
+    assert!(!foreign.sent() && !foreign.withdrawn());
+    assert!(receive_bytes(&peer).is_none());
+    assert!(!port.send_pending());
+    let TrackedStage::Queued(next) = port.stage_tracked(original).unwrap() else {
+        panic!()
+    };
+    send_bytes(&peer, b"malformed");
+    let failure = port.try_receive().unwrap_err();
+    assert_eq!(port.withdraw_tracked_pending(&next), Err(failure.clone()));
+    assert!(port.send_pending() && !next.withdrawn());
+    assert_frozen(&mut port, &failure);
+}
+
+#[test]
 fn closed_withdrawal_requires_the_original_ticket_and_preserves_received_bytes() {
     let (end, peer) = pair();
     let mut port = OrganPort::from_owned(end).unwrap();
