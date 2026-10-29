@@ -1,6 +1,6 @@
 # Proposal: Diagnostic replay interruption
 
-**Version:** 0.1, 2026-10-29.
+**Version:** 0.2, 2026-10-29.
 **Parent:** WeaverTools Working Process
 
 This proposal answers the protocol and lifecycle election in #390 and advances #146
@@ -42,14 +42,22 @@ bound, then returns the seat without new certification or replay work. Forced Le
 rollback, joining force or drain expiry can interrupt that turn. A new replay attempt
 requires a fresh diagnostic load. This remains a gateless, no-save Diagnostic run.
 
+An absent drain_bound means unbounded, under the operator's existing 2026-10-09
+lifecycle ruling in admin Spec 3 and the admin-harness contract 3. A blocked ReFeed
+can therefore keep a graceful Leave pending until the operator forces it. The owner
+must remain responsive to Observe and JoinLeave during that wait. R2 starts only
+when cancellation is accepted, and does not supply a default graceful-drain watchdog.
+The proposal bounds cancellation and its cleanup, not every graceful Leave.
+
 The sixty-second worker duration is a proposed operational limit, chosen to bound the
 accepted cancellation duty without adding a Diagnostic declaration field. It is not a
 measured model limit or a promise to meet admin's remaining receive time. Admin's
 existing wait begins at its directive, whereas this worker interval begins at its
 accepted interruption. A caller can time out first. Its departure does not erase the
 worker's retained duties. No SPU-side wall clock or asynchronous kernel cancellation
-is introduced. If a kernel cannot settle, the worker takes the existing bounded
-organ-failure cleanup path. Left still requires its own cleanup and record conditions.
+is introduced. After cancellation is accepted, if a kernel cannot settle, the worker
+takes the existing bounded organ-failure cleanup path. Left still requires its own
+cleanup and record conditions.
 
 ## Alternatives
 
@@ -58,6 +66,12 @@ declaration's other elapsed-nanosecond allowances. It would also add a paired
 configuration and Enter field. R2 explicitly elects the fixed floor constant
 instead. Both choices can carry one non-renewing deadline, and the constant is
 proposed for the operator rather than implied by an existing declared wait.
+
+A default finite graceful-drain cap would change the existing unbounded-by-default
+lifecycle election. It would need a separate operator ruling and paired changes to
+admin's unload wait, the Enter/declaration semantics and the lifecycle contract. This
+proposal preserves that election and makes its force-unload escape explicit. It does
+not introduce a new cap through the cancellation constant.
 
 Keeping the attributed fault rule avoids a new decode answer but makes an ordinary
 Stop terminate the SPU. The harness would still need explicit fault, turn-close,
@@ -120,6 +134,14 @@ invented Cancel or AtRest. Earlier accepted replay.closed must remain its same a
 under later Leave. Controls remove each custody, ordering, interval or certification
 guard and must fail the relevant case. Child fixture passes are not counted as proof
 of an unobserved parent verdict.
+
+Separate the valid OutOfOrder answer to a foreign-turn Cancel at the SPU seam from
+a foreign-turn terminal or OutOfOrder response to the harness's matching Cancel.
+The former leaves the active ReFeed running, and the latter follows protocol failure.
+With no drain bound, prove that a blocked graceful Leave stays pending past the
+cancellation constant while Observe still answers. Then join a force and require
+bounded cancellation and cleanup from their specified origins. A declared drain
+expiry remains a separate forced-transition case.
 
 The implementation does not close all of #390 merely by handling ReFeed. The pre-Ready
 Diagnostic identity wait still needs its separate admission audit and any ruling that

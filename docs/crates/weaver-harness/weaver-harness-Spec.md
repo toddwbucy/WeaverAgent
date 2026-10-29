@@ -2823,7 +2823,13 @@ turns answers AtRest and does not cancel the pass or invent a turn.
 
 During a ReFeed, Stop and a forced or rollback Leave request that turn's Cancel once.
 A graceful Leave is held under its original drain bound while the current recorded
-turn finishes. It starts no later turn or resident edit. A joining force or drain
+turn finishes. An absent drain_bound retains section 3's unbounded graceful drain,
+as specified by admin Spec 3's bounds and the admin-harness contract 3. No cancellation
+timer starts merely because a graceful Leave was accepted. The management owner
+continues to hear Observe and a joining force while the SPU is blocked. A declared
+drain deadline or the operator's force-unload ends that wait through the forced
+transition. Without either, a blocked turn can keep the graceful drain pending.
+It starts no later turn or resident edit. A joining force or drain
 expiry turns it forced and requests cancellation without renewing any interval. Once
 Stop has been accepted against an open replay turn, or Leave against the entered pass,
 that pass cannot admit a new replay.closed. An earlier accepted closing event keeps its
@@ -2851,7 +2857,14 @@ does not retire the worker's accepted duty. A pending Leave retains its original
 cleanup deadlines. Expiry fails the unsettled operation through existing fault and
 organ-cleanup paths, never a successful Stop. Left remains subject to section 3's
 record, release and process-cleanup requirements, including its forced-failure rules.
-A stuck prefill or kernel cannot make this owner wait without a deadline.
+Once cancellation is accepted, a stuck prefill or kernel cannot make the cancellation
+owner wait without a deadline. That guarantee does not cap an undeclared graceful
+drain before a forced transition.
+
+The owner sends Cancel only for its retained active turn. At the SPU seam a Cancel
+naming a foreign turn is refused OutOfOrder and leaves the active ReFeed running,
+as the decode contract specifies. That valid refusal is distinct from a response
+to the owner's matching Cancel or a malformed terminal naming a foreign turn.
 
 | Replay state | Event | Required transition |
 | --- | --- | --- |
@@ -2859,11 +2872,11 @@ A stuck prefill or kernel cannot make this owner wait without a deadline.
 | Entered, no turn open | Leave or rollback | Stop admitting replay work and hand the original request to lifecycle cleanup, without a new turn or certification |
 | Turn open, ReFeed active | Stop | Retain opener/cause, start the cancellation interval, send one matching Cancel, settle both decode exchanges |
 | Turn open, no decode ask outstanding | Stop or forced interruption | Start the same interval, admit no further decode ask, close the turn without inventing Cancel or AtRest |
-| Turn open | Graceful Leave | Retain Leave and original drain origin, finish only the current turn, then give back the seat without certification |
+| Turn open | Graceful Leave | Retain Leave and original drain origin, finish only the current turn, then give back the seat without certification. With no declared drain bound, keep the drain unbounded and management responsive until that turn finishes or a joining force arrives |
 | Turn open | Forced Leave, rollback, joining force or drain expiry | Preserve earlier obligations, start cancellation only if none is already owed, settle the same turn and return the seat |
 | Cancel outstanding | RefeedInterrupted | Validate original turn, consumed less than path length and checked consumed + 1 no greater than resident no greater than capacity, retain the terminal and await AtRest |
 | Cancel outstanding | ReFed wins the race | Retain and record its truthful complete-generation facts, await AtRest, permit no next replay work or certification |
-| Cancel outstanding | AtRest before a ReFeed terminal, foreign turn, impossible counts or duplicate terminal | Existing protocol-failure path, no completed Stop or certification |
+| Cancel outstanding for the retained active turn | OutOfOrder for that matching Cancel, AtRest before a ReFeed terminal, a terminal carrying a foreign turn, impossible counts or duplicate terminal | Existing protocol-failure path, no completed Stop or certification |
 | Interrupted turn, every owed decode exchange settled | Pending close can be Recorded | Close the original turn once, stopped for the accepted Stop or unload cause under section 3's precedence, then answer Stop or continue Leave |
 | Graceful drain | Current turn finishes normally | Preserve its clean turn close and hand the original Leave to cleanup, with no next replay work or new certification |
 | Any retained operation | Requester EOF | Keep accepted duties, original causes and deadlines, retire only answer delivery |
@@ -2893,6 +2906,12 @@ Cancel duplicates, AtRest is skipped, the interval renews, a next turn starts, a
 certificate appears after interruption, or Stop/Left precedes its required accounting.
 The SPU seam cases in its section 4.6 are required beside the harness's scripted-peer
 cases. Neither family alone qualifies a real-model diagnostic deployment.
+
+A no-drain-bound case retains the graceful Leave beyond DIAGNOSTIC_CANCEL_BOUND_MS
+without fabricating a cancellation or expiry, answers Observe, then accepts a joining
+force and applies the original cancellation and cleanup intervals. Keep the foreign
+Cancel refusal at the SPU seam separate from a foreign terminal for a matching Cancel
+at the harness, and require the respective unchanged-drive and protocol-failure paths.
 
 **The entered-state wait spans three descriptors, by `poll`, serial as ever.**
 Between enter and leave, loop 0 waits against the coordination listener, the

@@ -1385,8 +1385,9 @@ If the whole recorded path completed before the cancel was polled, the normal Re
 stands and the cancel is handled at rest. There is no second terminal for the re-feed.
 A prefill, token or terminator failure, a malformed seam or a failed intermediate send
 remains a fault and cannot become RefeedInterrupted. Token-boundary polling makes no
-wall-time promise about a stuck prefill or kernel. The harness's section 6.2 interval
-bounds its wait and uses ordinary failed-organ cleanup when the SPU cannot settle.
+wall-time promise about a stuck prefill or kernel. Once cancellation is accepted, the
+harness's section 6.2 interval bounds its cancellation wait and uses ordinary
+failed-organ cleanup when the SPU cannot settle. It is not a graceful-drain deadline.
 
 The seam instruments cancel before the first path token and after an interior prefix,
 require the exact resident prefix and terminator, retain earlier field/column frames,

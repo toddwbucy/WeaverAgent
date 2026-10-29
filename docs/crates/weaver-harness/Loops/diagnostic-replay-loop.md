@@ -1,6 +1,6 @@
 # Diagnostic Replay Loop
 
-**Status:** DRAFT v0.7, proposed 2026-10-29. The workflow for diagnostic replay,
+**Status:** DRAFT v0.8, proposed 2026-10-29. The workflow for diagnostic replay,
 filed under the harness's `Loops/` container per the Document Format's container
 entry. It argues no edges of its own: the seams it walks are declared in the crate
 charters, and a graph block here would duplicate a record that already has a home.
@@ -152,7 +152,11 @@ Management during the walk follows DIAGNOSTIC-INTERRUPT in weaver-harness-Spec
 section 6.2. Stop against an open recorded turn ends this pass after the same turn's
 accounting, without retrying or proceeding to another generation. A graceful Leave
 allows only that turn to finish, and a force, rollback, join or drain expiry can
-interrupt it. That accepted management request admits no new replay.closed.
+interrupt it. With no declared drain bound, the graceful drain is unbounded under
+the existing lifecycle rule. Management remains responsive and force-unload is the
+recourse for a blocked turn. The cancellation interval starts at the accepted
+interruption, not at the graceful Leave. That accepted management request admits no
+new replay.closed.
 An earlier accepted closing event retains its original author and outcome. Stop with
 no turn open answers AtRest and
 does not cancel the pass. Leave with no turn open ends admission of further work.
