@@ -91,6 +91,17 @@ fn worker_input_gate_child() {
         },
     );
     if mode.starts_with("input-worker-plan-") && !mode.ends_with("-open-turn") {
+        if mode.ends_with("-flags-turn-boundary") {
+            let end = Instant::now() + Duration::from_secs(15);
+            while !root.join("flags-turn-request").exists() {
+                assert!(
+                    Instant::now() < end,
+                    "flag fixture never requested gate input"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            packet(port.as_raw_fd(), &frame("input-plan-flags", 101));
+        }
         // Keep the actual gate idle while root management owns the circuit.
         // The guard reaps this real fixture child after the assertions.
         loop {

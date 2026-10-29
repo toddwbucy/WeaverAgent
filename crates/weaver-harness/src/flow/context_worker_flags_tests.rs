@@ -20,6 +20,10 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     mode: &str,
 ) -> Option<Cleanup> {
     let mut guard = sqlite_update(serving, member, reader, socket, false);
+    let turn_boundary = mode.ends_with("-turn-boundary");
+    if turn_boundary {
+        prepare_checked_turn(&mut guard, member, socket);
+    }
     let summary = guard
         .input
         .as_mut()
@@ -40,6 +44,14 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     assert!(input.take_observed_flags().is_none());
     input.observe_flags(plan.clone(), after.clone()).unwrap();
     assert!(input.flags_pending());
+    let original_input = turn_boundary.then(|| {
+        assert_eq!(input.progress(), FoundationInputProgress::Pending);
+        assert_eq!(
+            input.serving.owner.context.open_turn,
+            Some(weaver_trace::TurnRef("flags-boundary-turn".into()))
+        );
+        input.received.as_ref().unwrap().raw_bytes().to_vec()
+    });
     assert!(input.take_observed_flags().is_none());
     let refused = input
         .observe_flags(plan.clone(), after.clone())
@@ -54,6 +66,12 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         .deadlines
         .get(PumpDeadline::StateControl)
         .unwrap();
+    if turn_boundary {
+        guard.input = Some(match guard.input.take().unwrap().finish() {
+            Err(input) => input,
+            Ok(_) => panic!("a pending flag sample must retain the checked turn"),
+        });
+    }
     // A read does not mutate the plan or invalidate the last committed summary.
     assert!(
         matches!(observe(&mut guard, socket), s::enter::ObservationContent::Answer(
@@ -143,6 +161,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 }
             } else {
                 let input = guard.input.as_mut().unwrap();
+                if turn_boundary && input.flags_pending() {
+                    assert_eq!(input.progress(), FoundationInputProgress::Pending);
+                }
                 let progress = input.advance();
                 assert_ne!(
                     progress,
@@ -294,6 +315,40 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         let taken = input.take_observed_flags().unwrap();
         assert_eq!(taken.sequence(), sequence);
         assert!(input.take_observed_flags().is_none());
+        if let Some(original) = original_input {
+            assert_eq!(input.received.as_ref().unwrap().raw_bytes(), original);
+            assert_eq!(input.progress(), FoundationInputProgress::Turn);
+            // The same checked turn becomes available only after the sample's
+            // exact measurement above has crossed the recorder.
+            let started: Vec<_> = rows
+                .iter()
+                .filter(|row| row["kind"] == "turn.started")
+                .collect();
+            assert_eq!(started.len(), 1);
+            assert!(
+                started[0]["sequence"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+                    < sequence.0
+            );
+            assert_eq!(
+                input.serving.owner.context.open_turn,
+                Some(weaver_trace::TurnRef("flags-boundary-turn".into()))
+            );
+            let returned = guard
+                .input
+                .take()
+                .unwrap()
+                .finish()
+                .ok()
+                .expect("Recorded flags release the exact turn");
+            let super::super::FoundationInputResult::Turn(turn) = returned else {
+                panic!("the original checked turn must return")
+            };
+            guard.input = Some(turn.into_service());
+        }
     }
     None
 }
@@ -372,7 +427,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
     );
     assert_eq!(
         owner.process_exit(),
-        Some(crate::FoundationProcessExit::Success)
+        Some(crate::FoundationProcessExit::Success),
+        "{}",
+        owner.test_exit_detail()
     );
     let (run, retained) = owner.test_account();
     assert!(run.context.failure().is_none());
@@ -399,6 +456,58 @@ pub(in crate::flow::context::worker_startup) fn finish(
         rows.iter().all(|r| r["kind"] != "state.plan.measurement"),
         "cleanup must not sample again"
     );
+}
+
+fn prepare_checked_turn(guard: &mut Guard<'_>, member: &mut Member, socket: &Path) {
+    std::fs::write(
+        socket.parent().unwrap().join("flags-turn-request"),
+        b"offer\n",
+    )
+    .unwrap();
+    let input = guard.input.as_mut().unwrap();
+    advance_input_with_member(input, member, FoundationInputProgress::Accepted);
+    assert!(input.token.is_some());
+    assert!(input.serving.owner.context.open_turn.is_none());
+    input
+        .start_turn(TurnKey("flags-boundary-turn".into()))
+        .unwrap();
+    advance_input_with_member(input, member, FoundationInputProgress::Turn);
+}
+
+fn advance_input_with_member(
+    input: &mut FoundationInput<'_>,
+    member: &mut Member,
+    wanted: FoundationInputProgress,
+) {
+    let done = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let responder = scope.spawn(|| {
+            let end = Instant::now() + Duration::from_secs(10);
+            while !done.load(Ordering::SeqCst) && Instant::now() < end {
+                member.step_live("ready");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        struct Done<'a>(&'a AtomicBool);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let _done = Done(&done);
+        let end = Instant::now() + Duration::from_secs(5);
+        while input.progress() != wanted {
+            assert_ne!(
+                input.advance(),
+                FoundationInputProgress::Stopped,
+                "{:?}",
+                input.detail()
+            );
+            assert!(Instant::now() < end, "input did not reach {wanted:?}");
+        }
+        done.store(true, Ordering::SeqCst);
+        responder.join().unwrap();
+    });
 }
 
 fn queue_save(guard: &mut Guard<'_>, socket: &Path) -> (OwnedFd, s::SaveWindow) {
