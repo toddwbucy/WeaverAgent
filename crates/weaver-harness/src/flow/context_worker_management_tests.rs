@@ -93,6 +93,30 @@ pub(in crate::flow::context::worker_startup) fn disconnect_accepted_stop_during_
         }
     }
     assert!(owner.input.flags_pending() || owner.input.plan_pending());
+    // Compress only this fixture's secondary receive interval. The real state
+    // operation keeps its original bound, so the already fulfilled receive can
+    // expire while the genuine drain still has time to finish.
+    let receive = owner.read.expect("secondary receive bound");
+    let shortened =
+        AbsoluteBound::from_absolute(receive.began_ns(), receive.began_ns() + 1_000_000_000)
+            .unwrap();
+    assert!(shortened.deadline_ns() < receive.deadline_ns());
+    owner.read = Some(shortened);
+    let state_bound = owner
+        .input
+        .serving
+        .owner
+        .context
+        .deadlines
+        .get(PumpDeadline::StateControl);
+    let decision = owner
+        .input
+        .serving
+        .owner
+        .context
+        .deadlines
+        .get(PumpDeadline::Decision);
+    assert!(state_bound.unwrap().deadline_ns() > shortened.deadline_ns() + 250_000_000);
     owner.peer.try_receive().unwrap();
     let original = owner.peer.held().unwrap().envelope.clone();
     assert!(matches!(
@@ -117,6 +141,66 @@ pub(in crate::flow::context::worker_startup) fn disconnect_accepted_stop_during_
     );
     assert_eq!(owner.peer.held().unwrap().envelope, original);
     assert!(owner.input.serving.owner.context.failure().is_none());
+    assert!(owner.heard_ns.is_some());
+    assert!(!owner.read_armed);
+    let now = MonotonicIo.now().unwrap();
+    if now <= shortened.deadline_ns() {
+        std::thread::sleep(Duration::from_nanos(
+            shortened.deadline_ns() - now + 1_000_000,
+        ));
+    }
+    struct NonReady;
+    impl PumpIo for NonReady {
+        fn now(&mut self) -> std::io::Result<u64> {
+            MonotonicIo.now()
+        }
+        fn wait(&mut self, _: &[WaitInterest<'_>], _: Option<u64>) -> std::io::Result<WaitOutcome> {
+            Ok(WaitOutcome::Ready(vec![]))
+        }
+    }
+    assert_eq!(
+        owner.advance_with_io(&mut NonReady),
+        FoundationManagementProgress::Pending,
+        "a fulfilled receive deadline must not discard accepted Stop: {:?}",
+        owner.detail()
+    );
+    assert_eq!(owner.peer.held().unwrap().envelope, original);
+    assert_eq!(
+        owner.read,
+        Some(shortened),
+        "retain the original receive evidence"
+    );
+    assert!(!owner.read_armed);
+    assert_eq!(
+        owner
+            .input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(PumpDeadline::AdminRead),
+        None
+    );
+    assert_eq!(
+        owner
+            .input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(PumpDeadline::StateControl),
+        state_bound
+    );
+    assert_eq!(
+        owner
+            .input
+            .serving
+            .owner
+            .context
+            .deadlines
+            .get(PumpDeadline::Decision),
+        decision
+    );
 }
 
 pub(in crate::flow::context::worker_startup) fn assert_undelivered_stop_answer(

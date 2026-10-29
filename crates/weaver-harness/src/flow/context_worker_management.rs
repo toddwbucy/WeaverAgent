@@ -323,6 +323,8 @@ impl<'a> FoundationManagement<'a> {
         self.input.prepare_save_window_expiry(io)?;
         if let Some(bound) = self.read
             && !self.read_armed
+            // A whole request's receive witness survives every later drain.
+            && self.heard_ns.is_none()
             && self.message.is_none()
             && self.save_message.is_none()
             && self.progress == FoundationManagementProgress::Pending

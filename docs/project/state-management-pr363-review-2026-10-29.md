@@ -1,6 +1,6 @@
 # Consolidated foundation review corrections
 
-Version: 0.1, 2026-10-29.
+Version: 0.2, 2026-10-29.
 
 This act answers #363's Planner CX1, originally Codex on #383, and CodeRabbit's
 forced-marker finding and author-test request. The starting head is
@@ -86,6 +86,50 @@ process cases are claimed, not the complete ignored inventory. Both changed
 crates pass strict all-target lint; lock, formatting, diff and three DocsMirror
 checks pass. The private target, pinned toolchain, --locked commands, source
 hashes and all earlier failed attempts are retained in the deposited evidence.
+
+## Receive-duty follow-up
+
+CodeRabbit review 5699899892 found that the retained AdminRead interval could
+re-arm after a whole Stop had fulfilled its receive duty but before its flags
+or root-plan drain finished. The owner now requires no received-request clock
+witness before arming AdminRead. The original read bound remains retained as
+evidence; the received timestamp, held request and pending operation retain
+their existing owners. No operation bound is shortened, extended or replaced.
+An empty secondary peer still owes its original read deadline.
+
+The owner has one AdminRead arming site. Its consumers retain these duties:
+
+| Consumer | Receive and operation ownership after this change |
+| --- | --- |
+| Empty secondary connection | No witness; the original AdminRead still arms and expires. |
+| Stop/Leave awaiting flags or root-plan settlement | The received witness prevents re-arm; original state/Decision bounds still govern the drain. |
+| Observe, PlanUpdate, capture, Leave and JoinLeave handoff | Existing validation, receive completion and handoff remain; the receive witness is not reset. |
+| Failed or finished management owner | Existing failure/finish paths retire any armed read and retain or return their exact owners. |
+
+No new limit, refusal variant or ownership slot is introduced. Manual rework
+review traced the witness's sole assignment and all read-completion sites.
+
+The two disconnect regressions now shorten only the fixture receive interval
+from two seconds to one, leaving the actual state and Decision bounds intact.
+They retain and disconnect the actual Stop, let that fulfilled interval expire,
+then require Pending with the exact original request, no AdminRead and unchanged
+state/Decision bounds. The original code answers Dropped with "secondary Leave
+dial supplied no timely directive" in both cases. This instruments read-duty
+ownership; it does not claim that the whole production two-second ordering was
+reproduced. Both original drain completions must still finish with their exact
+undelivered Stop answers. Removing the receive-witness guard is the protective
+control for this follow-up. Its separate evidence retains the reproductions,
+restored source hashes, final gates and named management/secondary-Leave cases.
+
+The follow-up passes 2,231 ordinary harness tests/doctests (2,148 lib, eight
+worker, 43 integration and 32 doctests), with 928 ignored and known #331 skipped.
+Forty-five process identities pass: 26 plan/flags, three management and sixteen
+secondary-Leave cases, including silent receive expiry. The two focused fixed
+cases also pass before the full gates; removing the witness guard makes both
+fail at the intended Pending assertion. Lock, formatting, strict all-target
+harness lint, diff and three DocsMirror checks pass. All 815 Rust/configuration
+hashes match before and after the compiled control and final gates. Admin source
+is unchanged; its earlier evidence remains scoped to the first review batch.
 
 ## Dispositions and limits
 
