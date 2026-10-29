@@ -3,7 +3,7 @@
 **Status:** MERGED.
 
 **Version:** 0.30 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
-**Landing branch:** docs/state-plan-port-outcomes
+**Landing PR:** #384
 
 ## 0. What this document is
 

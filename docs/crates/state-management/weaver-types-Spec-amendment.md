@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #348
+**Landing PR:** #384
 
 **Version:** 0.35 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 

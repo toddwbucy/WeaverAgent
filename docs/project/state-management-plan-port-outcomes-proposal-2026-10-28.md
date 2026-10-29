@@ -5,7 +5,7 @@
 
 This proposes the missing refusal outcomes for the non-root plan ports. It is a
 proposal for the operator and Planner, with no implementation or qualification claim.
-The branch is `docs/state-plan-port-outcomes`, based on main
+Draft PR #384 uses `docs/state-plan-port-outcomes`, based on main
 `f6f707799e2b0349180582032bc909a1e021a383`. The runtime audit also read draft #383
 at `dee6c94a13053c34455fa70e0ca7cf5b5669e07c`. The original serving implementation
 remains selected. Implementation waits for the operator's election, review and merge.
