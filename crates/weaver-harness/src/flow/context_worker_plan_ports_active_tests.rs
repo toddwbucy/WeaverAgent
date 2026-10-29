@@ -188,6 +188,23 @@ pub(super) fn exercise(
             .committed_plan_summary()
             .unwrap()
             .cloned();
+        let s::QueryResult::PlanCurrent {
+            current: Some(before_snapshot),
+            ..
+        } = input
+            .serving
+            .owner
+            .context
+            .plan_cache
+            .committed
+            .as_ref()
+            .unwrap()
+            .read()
+            .result()
+        else {
+            panic!("actual committed plan snapshot")
+        };
+        let before_steps = before_snapshot.steps.clone();
         let expected_digest = if mode.ends_with("-work") {
             let preview = read(
                 input,
@@ -207,7 +224,17 @@ pub(super) fn exercise(
         } else {
             None
         };
-        if mode.ends_with("-work") {
+        if mode.ends_with("-break") {
+            input
+                .record_break(
+                    successor.plan.clone(),
+                    Some(successor.step_id.clone()),
+                    s::PlanBreakCase::WrongCategory,
+                    Some(successor.instruction.block_id.clone()),
+                    Some(TurnKey(TURN.into())),
+                )
+                .unwrap();
+        } else if mode.ends_with("-work") {
             input
                 .work_reference(
                     successor.plan.clone(),
@@ -258,6 +285,31 @@ pub(super) fn exercise(
             .expect("one completed operation");
         assert!(result.completion.belongs_to(input.serving.owner.context));
         match result.outcome() {
+            FoundationPlanOutcome::BreakRecorded { current } => {
+                assert!(mode.ends_with("-break"));
+                let current = current.unwrap();
+                assert_eq!(current.plan, successor.plan);
+                assert_eq!(current.status, s::PlanStatus::Broken);
+                let broken = current.broken.as_ref().unwrap();
+                assert_eq!(broken.step_id.as_ref(), Some(&successor.step_id));
+                assert_eq!(broken.case, s::PlanBreakCase::WrongCategory);
+                assert_eq!(
+                    broken.proposed_source.as_ref(),
+                    Some(&successor.instruction.block_id)
+                );
+                assert_eq!(broken.source, current.last_source.block_id);
+                assert_eq!(current.steps, before_steps);
+                assert!(input.serving.owner.context.native_place_cache_ready());
+                let marks = read(input, s::ReadSelector::Marks {});
+                let s::QueryResult::Marks { open_scopes, .. } = marks.result() else {
+                    panic!()
+                };
+                assert!(
+                    open_scopes
+                        .iter()
+                        .any(|scope| scope.span == span && scope.status == s::SpanStatus::Open)
+                );
+            }
             FoundationPlanOutcome::Cancelled => {
                 assert!(mode.ends_with("-completed-leave") || mode.ends_with("-completed-stop"))
             }
@@ -288,15 +340,17 @@ pub(super) fn exercise(
             other => panic!("unexpected operation outcome: {other:?}"),
         }
         assert!(input.take_plan_operation().is_none());
-        assert_eq!(
-            input
-                .serving
-                .owner
-                .context
-                .committed_plan_summary()
-                .unwrap(),
-            before.as_ref()
-        );
+        if !mode.ends_with("-break") {
+            assert_eq!(
+                input
+                    .serving
+                    .owner
+                    .context
+                    .committed_plan_summary()
+                    .unwrap(),
+                before.as_ref()
+            );
+        }
         assert!(
             input
                 .serving
@@ -312,9 +366,24 @@ pub(super) fn exercise(
         rows.iter()
             .filter(|row| row["kind"] == "plan.event")
             .count(),
-        1,
-        "only the public activation changes the plan"
+        if mode.ends_with("-break") { 2 } else { 1 },
+        "only admitted activation and break effects change the plan"
     );
+    let breaks: Vec<_> = rows
+        .iter()
+        .filter(|row| row["kind"] == "plan.break")
+        .collect();
+    assert_eq!(breaks.len(), usize::from(mode.ends_with("-break")));
+    if mode.ends_with("-break") {
+        let effect = rows
+            .iter()
+            .rev()
+            .find(|row| row["kind"] == "plan.event")
+            .unwrap();
+        assert_eq!(breaks[0]["causal_parent"], effect["sequence"]);
+        assert_eq!(breaks[0]["turn"], TURN);
+        assert_eq!(breaks[0]["payload"]["case"], "wrong_category");
+    }
     assert!(
         rows.iter()
             .all(|row| row["kind"] != "tool.call.started" && row["kind"] != "model.request"),

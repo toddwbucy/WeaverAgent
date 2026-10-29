@@ -331,7 +331,7 @@ fn plan_activation_allocates_ungrouped_new_group_and_existing_group_from_marks()
             step_span,
             group_span,
             ..
-        } = fx.run().context.test_activation_effect().unwrap()
+        } = fx.run().context.test_plan_effect().unwrap()
         else {
             panic!()
         };
@@ -554,7 +554,7 @@ fn plan_activation_cancelled_preparation_releases_allocator_without_effect() {
             break;
         }
     }
-    assert!(fx.run().context.test_activation_effect().is_some());
+    assert!(fx.run().context.test_plan_effect().is_some());
     fx.run().context.cancel_plan_operation();
     assert!(matches!(finish(&mut fx), PlanPortCompletion::Cancelled(_)));
     assert!(fx.run().context.plan_port_work().is_none());
@@ -581,7 +581,7 @@ fn plan_activation_template_fault_records_before_refusal_even_after_cancellation
         // accounted without substituting another certified family.
 
         run.context
-            .begin_activation_effect(&certificate, &mut run.clock)
+            .begin_plan_effect(&certificate, &mut run.clock)
             .unwrap();
         if cancelled {
             run.context.cancel_plan_operation();

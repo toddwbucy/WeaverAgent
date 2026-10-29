@@ -24,7 +24,7 @@ fn ready_effect(group: u8) -> (SummaryFixture, TemplateCertificate) {
 fn start_effect(fx: &mut SummaryFixture, certificate: &TemplateCertificate) {
     let run = fx.run();
     run.context
-        .begin_activation_effect(certificate, &mut run.clock)
+        .begin_plan_effect(certificate, &mut run.clock)
         .unwrap();
 }
 
@@ -76,7 +76,7 @@ fn updated_snapshot(fx: &mut SummaryFixture, source: s::SourcePosition) -> s::Pl
         step_span,
         group_span,
         ..
-    } = context.test_activation_effect().unwrap()
+    } = context.test_plan_effect().unwrap()
     else {
         panic!()
     };

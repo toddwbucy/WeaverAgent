@@ -78,7 +78,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     socket: &Path,
     mode: &str,
 ) -> Option<Cleanup> {
-    if mode.contains("-port-activation-") {
+    if mode.contains("-port-activation-") || mode.contains("-port-break-") {
         return activation::exercise(serving, member, reader, socket, mode);
     }
     if mode.contains("-port-active-") {

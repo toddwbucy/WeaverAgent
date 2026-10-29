@@ -8,6 +8,10 @@ use weaver_types::state_flow as s;
 #[path = "plan_activation.rs"]
 pub(in crate::flow) mod activation;
 pub use activation::CheckedStepSuccessor;
+#[path = "plan_break.rs"]
+pub(in crate::flow) mod break_plan;
+#[path = "plan_port_effect.rs"]
+pub(in crate::flow) mod effect;
 
 #[derive(Debug)]
 pub enum PlanRequest {
@@ -20,6 +24,12 @@ pub enum PlanRequest {
         expected: s::PlanRef,
         step_id: s::StepId,
         successor: CheckedStepSuccessor,
+    },
+    RecordBreak {
+        expected: s::PlanRef,
+        step_id: Option<s::StepId>,
+        case: s::PlanBreakCase,
+        proposed_source: Option<s::SourceBlockId>,
     },
     AssessAct {
         expected: s::PlanRef,
@@ -40,6 +50,7 @@ impl PlanRequest {
         match self {
             Self::StepSuccessor { expected, .. }
             | Self::Activate { expected, .. }
+            | Self::RecordBreak { expected, .. }
             | Self::AssessAct { expected, .. }
             | Self::WorkReference { expected, .. } => expected,
         }
@@ -47,6 +58,7 @@ impl PlanRequest {
     pub(in crate::flow) fn step_id(&self) -> Option<&s::StepId> {
         match self {
             Self::StepSuccessor { .. } => None,
+            Self::RecordBreak { step_id, .. } => step_id.as_ref(),
             Self::Activate { step_id, .. }
             | Self::AssessAct { step_id, .. }
             | Self::WorkReference { step_id, .. } => Some(step_id),
@@ -56,6 +68,7 @@ impl PlanRequest {
         Some(match self {
             Self::StepSuccessor { .. } => return None,
             Self::Activate { .. } => s::PlanPortOperation::Activate,
+            Self::RecordBreak { .. } => s::PlanPortOperation::RecordBreak,
             Self::AssessAct { .. } => s::PlanPortOperation::AssessAct,
             Self::WorkReference { .. } => s::PlanPortOperation::WorkReference,
         })
@@ -81,6 +94,7 @@ impl PlanRequest {
                 previous_step: previous_step.clone(),
             },
             Self::Activate { .. } => s::ReadSelector::Marks {},
+            Self::RecordBreak { .. } => unreachable!("break consumes the committed cache"),
             Self::AssessAct { statement, .. } => s::ReadSelector::Statement {
                 statement: statement.clone(),
             },

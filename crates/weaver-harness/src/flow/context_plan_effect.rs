@@ -1,29 +1,29 @@
-//! The allocator retains activation through its admitted effect, mandatory
+//! The allocator retains a plan effect through its admitted filing, mandatory
 //! summary refresh, native-scope adoption and any template-refusal records.
 use super::*;
 use crate::flow::author::AuthoredSource;
 use crate::flow::context::receipt_driver::FilingOwner;
 use crate::flow::place::PlaceError;
-use crate::flow::plan::ports::activation::PreparedActivation;
+use crate::flow::plan::ports::effect::PreparedPortEffect;
 use crate::flow::templates::{
-    ExpansionIdentity, TemplateCertificate, TemplateExpansion, expand_activate,
+    ExpansionIdentity, TemplateCertificate, TemplateExpansion, expand_activate, expand_break,
 };
 
-pub(super) struct ActivationWork {
-    prepared: PreparedActivation,
+pub(super) struct PlanEffectWork {
+    pub(super) prepared: PreparedPortEffect,
     expansion: Option<TemplateExpansion>,
     event: Option<AuthoredEvent>,
-    filing: Option<FilingCompletion>,
+    pub(super) filing: Option<FilingCompletion>,
     receipt: Option<Arc<()>>,
-    summary: Option<PlanSummaryCompletion>,
+    pub(super) summary: Option<PlanSummaryCompletion>,
     native: Option<NativeMarkCompletion>,
     cancelled_native: Option<PlaceAccount>,
     fault: Option<Box<serde_json::value::RawValue>>,
     fault_record: Option<PlanPortRecord>,
     pub(super) active: Option<s::PlanStep>,
 }
-impl ActivationWork {
-    pub(super) fn new(prepared: PreparedActivation) -> Self {
+impl PlanEffectWork {
+    pub(super) fn new(prepared: PreparedPortEffect) -> Self {
         Self {
             prepared,
             expansion: None,
@@ -42,27 +42,23 @@ impl ActivationWork {
 
 impl RecordingContext {
     #[cfg(test)]
-    pub(in crate::flow::context) fn test_activation_effect(&self) -> Option<&s::PlanEffect> {
+    pub(in crate::flow::context) fn test_plan_effect(&self) -> Option<&s::PlanEffect> {
         self.plan_port_work()?
-            .activation
+            .effect
             .as_ref()
             .map(|work| work.prepared.effect())
     }
-    fn activation(&self) -> &ActivationWork {
-        self.plan_port_work().unwrap().activation.as_ref().unwrap()
+    pub(super) fn plan_effect(&self) -> &PlanEffectWork {
+        self.plan_port_work().unwrap().effect.as_ref().unwrap()
     }
-    fn activation_mut(&mut self) -> &mut ActivationWork {
-        self.plan_port_work_mut()
-            .unwrap()
-            .activation
-            .as_mut()
-            .unwrap()
+    pub(super) fn plan_effect_mut(&mut self) -> &mut PlanEffectWork {
+        self.plan_port_work_mut().unwrap().effect.as_mut().unwrap()
     }
     pub(in crate::flow::context) fn plan_port_filing_allowed(&self, key: PumpDeadline) -> bool {
         self.plan_port_work().is_some_and(|work| {
             work.driving
                 && work.stage == Stage::EffectFiling
-                && work.activation.is_some()
+                && work.effect.is_some()
                 && key == PumpDeadline::Decision
                 && self.deadlines.get(key) == Some(work.bound)
         })
@@ -71,7 +67,7 @@ impl RecordingContext {
         self.plan_port_work().is_some_and(|work| {
             work.driving
                 && matches!(work.stage, Stage::EffectFiled | Stage::Summary)
-                && work.activation.is_some()
+                && work.effect.is_some()
                 && key == PumpDeadline::Decision
                 && self.deadlines.get(key) == Some(work.bound)
         })
@@ -87,7 +83,7 @@ impl RecordingContext {
                 && proof.filing().wait_key() == PumpDeadline::Decision
                 && self.deadlines.get(PumpDeadline::Decision) == Some(work.bound)
                 && proof.filing().wait_bound() == work.bound
-                && work.activation.as_ref().is_some_and(|activation| {
+                && work.effect.as_ref().is_some_and(|activation| {
                     activation.receipt.as_ref().is_some_and(|receipt| {
                         Arc::ptr_eq(receipt, proof.filing().receipt_identity())
                     })
@@ -95,7 +91,7 @@ impl RecordingContext {
         })
     }
 
-    pub(in crate::flow) fn begin_activation_effect(
+    pub(in crate::flow) fn begin_plan_effect(
         &mut self,
         certificate: &TemplateCertificate,
         io: &mut impl PumpIo,
@@ -106,7 +102,7 @@ impl RecordingContext {
             || self.deadlines.get(PumpDeadline::Decision) != Some(work.bound)
         {
             return Err(
-                self.plan_port_fault(io, "activation lost preparation or its original wait")
+                self.plan_port_fault(io, "plan effect lost preparation or its original wait")
             );
         }
         if work.cancelled {
@@ -114,9 +110,15 @@ impl RecordingContext {
             return Ok(());
         }
         if !self.repair_certificate_matches(certificate) {
-            return Err(self.plan_port_fault(io, "activation has a foreign template certificate"));
+            return Err(self.plan_port_fault(io, "plan effect has a foreign template certificate"));
         }
-        match expand_activate(
+        let template_id = self.plan_effect().prepared.template_id();
+        let expand = match self.plan_effect().prepared.effect() {
+            s::PlanEffect::Activate { .. } => expand_activate,
+            s::PlanEffect::Break { .. } => expand_break,
+            _ => unreachable!("private plan effect"),
+        };
+        match expand(
             certificate,
             ExpansionIdentity {
                 run_id: self.flow.run(),
@@ -127,18 +129,18 @@ impl RecordingContext {
         ) {
             Ok(expansion) => {
                 let event = self
-                    .activation()
+                    .plan_effect()
                     .prepared
                     .event(self, &expansion)
                     .map_err(|detail| self.plan_port_fault(io, detail))?;
-                let work = self.activation_mut();
+                let work = self.plan_effect_mut();
                 work.expansion = Some(expansion);
                 work.event = Some(event);
                 self.plan_port_work_mut().unwrap().stage = Stage::EffectFiling;
             }
             Err(reason) => {
-                self.activation_mut().fault = Some(serde_json::value::to_raw_value(
-                    &serde_json::json!({"template_id":"plan.activate", "reason":format!("{reason:?}")}))
+                self.plan_effect_mut().fault = Some(serde_json::value::to_raw_value(
+                    &serde_json::json!({"template_id":template_id, "reason":format!("{reason:?}")}))
                     .expect("template fault serializes"));
                 self.plan_port_work_mut().unwrap().stage = Stage::TemplateFault;
             }
@@ -146,14 +148,14 @@ impl RecordingContext {
         Ok(())
     }
 
-    pub(super) fn advance_activation_filing<I: PumpIo>(
+    pub(super) fn advance_plan_effect_filing<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<PlanPortProgress, RunFailure> {
         if self.plan_port_work().unwrap().cancelled
             && let Some(event) = self.withdraw_unstarted_owned(FilingOwner::PlanPort)
         {
-            self.activation_mut().event = Some(event);
+            self.plan_effect_mut().event = Some(event);
             self.plan_port_work_mut().unwrap().stage = Stage::Complete;
             return Ok(PlanPortProgress::Complete);
         }
@@ -163,24 +165,24 @@ impl RecordingContext {
                 return Ok(PlanPortProgress::Complete);
             }
             let event = self
-                .activation_mut()
+                .plan_effect_mut()
                 .event
                 .take()
-                .expect("unadmitted activation source");
+                .expect("unadmitted plan effect source");
             if let Err(error) = self.begin_owned_filing(
                 event,
                 PumpDeadline::Decision,
                 FilingOwner::PlanPort,
                 ports.io,
             ) {
-                self.activation_mut().event = Some(error.event);
+                self.plan_effect_mut().event = Some(error.event);
                 if let Some(failure) = error.failure {
                     return Err(failure);
                 }
                 if error.refusal == FilingBeginRefusal::Busy {
                     return Ok(PlanPortProgress::Pending);
                 }
-                return Err(self.plan_port_fault(ports.io, "activation lost filing admission"));
+                return Err(self.plan_port_fault(ports.io, "plan effect lost filing admission"));
             }
         }
         let progress = self.advance_owned_filing(FilingOwner::PlanPort, ports)?;
@@ -191,9 +193,9 @@ impl RecordingContext {
                 PlanPortProgress::Progress
             });
         };
-        self.activation_mut().receipt = Some(Arc::clone(filing.receipt_identity()));
-        self.activation_mut().filing = Some(filing);
-        let work = self.activation();
+        self.plan_effect_mut().receipt = Some(Arc::clone(filing.receipt_identity()));
+        self.plan_effect_mut().filing = Some(filing);
+        let work = self.plan_effect();
         let rejected = work
             .prepared
             .check_filing(
@@ -203,7 +205,7 @@ impl RecordingContext {
             )
             .map_err(|detail| self.plan_port_fault(ports.io, detail))?;
         if rejected {
-            let work = self.activation_mut();
+            let work = self.plan_effect_mut();
             let crate::flow::ledger::SourceDisposition::CorrectlyRejected(source) = work
                 .filing
                 .as_ref()
@@ -216,7 +218,7 @@ impl RecordingContext {
                 unreachable!()
             };
             work.fault = Some(serde_json::value::to_raw_value(&serde_json::json!({
-                "template_id":"plan.activate", "source_id":source.source(), "result":source.reply(),
+                "template_id":work.prepared.template_id(), "source_id":source.source(), "result":source.reply(),
             })).expect("template fault serializes"));
             self.plan_port_work_mut().unwrap().stage = Stage::TemplateFault;
         } else {
@@ -225,14 +227,14 @@ impl RecordingContext {
         Ok(PlanPortProgress::Progress)
     }
 
-    pub(super) fn advance_activation_summary<I: PumpIo>(
+    pub(super) fn advance_plan_effect_summary<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<PlanPortProgress, RunFailure> {
         if self.plan_port_work().unwrap().stage == Stage::EffectFiled {
-            let filing = self.activation_mut().filing.take().unwrap();
+            let filing = self.plan_effect_mut().filing.take().unwrap();
             if let Err(error) = self.begin_effect_plan_summary(filing, ports.io) {
-                self.activation_mut().filing = Some(error.prerequisite);
+                self.plan_effect_mut().filing = Some(error.prerequisite);
                 if let Some(failure) = error.failure {
                     return Err(failure);
                 }
@@ -240,7 +242,7 @@ impl RecordingContext {
                     return Ok(PlanPortProgress::Pending);
                 }
                 return Err(
-                    self.plan_port_fault(ports.io, "activation lost its effect refresh duty")
+                    self.plan_port_fault(ports.io, "plan effect lost its effect refresh duty")
                 );
             }
             self.plan_port_work_mut().unwrap().stage = Stage::Summary;
@@ -253,9 +255,9 @@ impl RecordingContext {
                 PlanPortProgress::Progress
             });
         };
-        self.activation_mut().summary = Some(summary);
+        self.plan_effect_mut().summary = Some(summary);
         if matches!(
-            self.activation().summary,
+            self.plan_effect().summary,
             Some(PlanSummaryCompletion::Cancelled(_))
         ) {
             let work = self.plan_port_work_mut().unwrap();
@@ -263,16 +265,22 @@ impl RecordingContext {
             work.stage = Stage::Complete;
             return Ok(PlanPortProgress::Complete);
         }
-        let Some(PlanSummaryCompletion::Effect(proof)) = &self.activation().summary else {
-            return Err(self.plan_port_fault(ports.io, "activation has no committed summary"));
+        let Some(PlanSummaryCompletion::Effect(proof)) = &self.plan_effect().summary else {
+            return Err(self.plan_port_fault(ports.io, "plan effect has no committed summary"));
         };
+        if matches!(
+            self.plan_effect().prepared.effect(),
+            s::PlanEffect::Break { .. }
+        ) {
+            return self.finish_break_summary(ports.io);
+        }
         let s::PlanEffect::Activate {
             expected,
             step_id,
             step_span,
             group_span,
             ..
-        } = self.activation().prepared.effect()
+        } = self.plan_effect().prepared.effect()
         else {
             unreachable!()
         };
@@ -302,7 +310,7 @@ impl RecordingContext {
                 self.plan_port_fault(ports.io, "activation refresh changed its committed step")
             );
         };
-        self.activation_mut().active = Some(active);
+        self.plan_effect_mut().active = Some(active);
         let current = Arc::clone(self.plan_cache.committed.as_ref().unwrap());
         let work = self.plan_port_work_mut().unwrap();
         work.current = Some(current);
@@ -313,17 +321,17 @@ impl RecordingContext {
         Ok(PlanPortProgress::Progress)
     }
 
-    pub(super) fn advance_activation_native<I: PumpIo>(
+    pub(super) fn advance_plan_effect_native<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<PlanPortProgress, RunFailure> {
         if self.native_marks.is_none() {
-            let Some(PlanSummaryCompletion::Effect(proof)) = self.activation_mut().summary.take()
+            let Some(PlanSummaryCompletion::Effect(proof)) = self.plan_effect_mut().summary.take()
             else {
-                unreachable!("checked activation summary")
+                unreachable!("checked plan effect summary")
             };
             if let Err(error) = self.begin_place_effect_marks(proof, ports.io) {
-                self.activation_mut().summary =
+                self.plan_effect_mut().summary =
                     Some(PlanSummaryCompletion::Effect(error.prerequisite));
                 if let Some(failure) = error.failure {
                     return Err(failure);
@@ -331,7 +339,9 @@ impl RecordingContext {
                 if matches!(error.refusal, PlaceError::Busy(_)) {
                     return Ok(PlanPortProgress::Pending);
                 }
-                return Err(self.plan_port_fault(ports.io, "activation lost native scope adoption"));
+                return Err(
+                    self.plan_port_fault(ports.io, "plan effect lost native scope adoption")
+                );
             }
         }
         if self.plan_port_work().unwrap().cancelled {
@@ -339,9 +349,9 @@ impl RecordingContext {
         }
         let progress = self.advance_place_marks(ports)?;
         if let Some(done) = self.take_place_marks(ports.io)? {
-            self.activation_mut().native = Some(done);
+            self.plan_effect_mut().native = Some(done);
         } else if let Some(done) = self.take_cancelled_place_marks(ports.io)? {
-            self.activation_mut().cancelled_native = Some(done);
+            self.plan_effect_mut().cancelled_native = Some(done);
             self.plan_port_work_mut().unwrap().cancelled = true;
         } else {
             return Ok(if progress == PlaceProgress::Pending {
@@ -350,11 +360,19 @@ impl RecordingContext {
                 PlanPortProgress::Progress
             });
         }
-        self.plan_port_work_mut().unwrap().stage = Stage::Complete;
-        Ok(PlanPortProgress::Complete)
+        if matches!(
+            self.plan_effect().prepared.effect(),
+            s::PlanEffect::Break { .. }
+        ) {
+            self.plan_port_work_mut().unwrap().stage = Stage::BreakReport;
+            Ok(PlanPortProgress::Progress)
+        } else {
+            self.plan_port_work_mut().unwrap().stage = Stage::Complete;
+            Ok(PlanPortProgress::Complete)
+        }
     }
 
-    pub(super) fn advance_activation_fault<I: PumpIo>(
+    pub(super) fn advance_plan_effect_fault<I: PumpIo>(
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<PlanPortProgress, RunFailure> {
@@ -362,7 +380,7 @@ impl RecordingContext {
             let work = self.plan_port_work().unwrap();
             let fault = weaver_types::FaultReport {
                 case: weaver_types::FaultCase::StateTemplateRejected,
-                account: self.activation().fault.as_ref().unwrap().clone(),
+                account: self.plan_effect().fault.as_ref().unwrap().clone(),
             };
             let event = AuthoredEvent {
                 kind: Kind::Fault,
@@ -370,7 +388,7 @@ impl RecordingContext {
                 turn: work.turn.clone(),
                 source: AuthoredSource::Runtime,
                 causal_parent: self
-                    .activation()
+                    .plan_effect()
                     .filing
                     .as_ref()
                     .map(FilingCompletion::sequence)
@@ -387,10 +405,10 @@ impl RecordingContext {
         let work = self.plan_port_work_mut().unwrap();
         let record = work.record.take().unwrap();
         work.parent = record.sequence;
-        work.activation.as_mut().unwrap().fault_record = Some(record);
+        work.effect.as_mut().unwrap().fault_record = Some(record);
         work.refusal = Some(s::PlanOperationRefused {
             case: s::PlanOperationCase::TemplateRejected,
-            detail: "certified activation template was rejected".into(),
+            detail: "certified plan effect template was rejected".into(),
             read_code: None,
         });
         work.stage = Stage::Refusal;

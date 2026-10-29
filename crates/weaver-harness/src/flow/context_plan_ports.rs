@@ -11,9 +11,11 @@ use weaver_types::state_flow as s;
 #[path = "context_plan_ports_record.rs"]
 mod record;
 use record::PlanPortRecord;
-#[path = "context_plan_activation.rs"]
-mod activation;
-use activation::ActivationWork;
+#[path = "context_plan_effect.rs"]
+mod effect;
+use effect::PlanEffectWork;
+#[path = "context_plan_break.rs"]
+mod break_plan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::flow) enum PlanPortAdmission {
@@ -49,6 +51,7 @@ enum Stage {
     Summary,
     Native,
     TemplateFault,
+    BreakReport,
     Refusal,
     Complete,
 }
@@ -66,7 +69,8 @@ pub(super) struct PlanPortTransaction {
     parent: Option<Sequence>,
     record: Option<PlanPortRecord>,
     work_ref: Option<s::WorkRef>,
-    activation: Option<ActivationWork>,
+    effect: Option<PlanEffectWork>,
+    break_report: Option<s::PlanBreakReport>,
     successor: Option<checked::CheckedStepSuccessor>,
     cancelled: bool,
 }
@@ -109,7 +113,7 @@ impl ActivatedStep {
     pub(in crate::flow) fn step(&self) -> &s::PlanStep {
         self.account
             .work
-            .activation
+            .effect
             .as_ref()
             .unwrap()
             .active
@@ -122,6 +126,7 @@ pub(in crate::flow) enum PlanPortCompletion {
     Successor(PlanPortAccount),
     QueryRefused(PlanPortAccount),
     Activated(ActivatedStep),
+    BreakRecorded(PlanPortAccount),
     Allowed(AllowedAct),
     Work(CheckedWork),
     Refused {
@@ -132,6 +137,18 @@ pub(in crate::flow) enum PlanPortCompletion {
 }
 
 impl PlanPortCompletion {
+    pub(in crate::flow) fn break_snapshot(&self) -> Option<&s::PlanSnapshot> {
+        let Self::BreakRecorded(account) = self else {
+            return None;
+        };
+        let s::QueryResult::PlanCurrent { current, .. } =
+            account.work.current.as_ref().unwrap().read().result()
+        else {
+            unreachable!()
+        };
+        current.as_ref()
+    }
+
     pub(in crate::flow) fn successor(&self) -> Option<&checked::CheckedStepSuccessor> {
         match self {
             Self::Successor(account) => account.work.successor.as_ref(),
@@ -161,7 +178,8 @@ impl PlanPortCompletion {
             Self::Activated(grant) => &grant.account,
             Self::Allowed(grant) => &grant.account,
             Self::Work(work) => &work.account,
-            Self::Successor(account)
+            Self::BreakRecorded(account)
+            | Self::Successor(account)
             | Self::QueryRefused(account)
             | Self::Refused { account, .. }
             | Self::Cancelled(account) => account,
@@ -178,7 +196,8 @@ impl PlanPortCompletion {
             Self::Activated(grant) => grant.account,
             Self::Allowed(grant) => grant.account,
             Self::Work(work) => work.account,
-            Self::Successor(account)
+            Self::BreakRecorded(account)
+            | Self::Successor(account)
             | Self::QueryRefused(account)
             | Self::Refused { account, .. }
             | Self::Cancelled(account) => account,
@@ -294,7 +313,11 @@ impl RecordingContext {
                 Some(failure),
             ));
         }
-        if matches!(request, PlanRequest::Activate { .. }) && turn.is_none() {
+        let break_needs_turn = matches!(request, PlanRequest::RecordBreak { .. })
+            && self.plan_cache.committed.as_ref().is_some_and(|proof|
+                matches!(proof.read().result(), s::QueryResult::PlanCurrent { current: Some(plan), .. }
+                    if plan.status == s::PlanStatus::Locked));
+        if (matches!(request, PlanRequest::Activate { .. }) || break_needs_turn) && turn.is_none() {
             return Err(error(
                 request,
                 turn,
@@ -321,7 +344,8 @@ impl RecordingContext {
             parent: None,
             record: None,
             work_ref: None,
-            activation: None,
+            effect: None,
+            break_report: None,
             successor: None,
             cancelled: false,
         })));
@@ -381,6 +405,12 @@ impl RecordingContext {
                 let work = self.plan_port_work_mut().unwrap();
                 work.parent = Some(current.read().recall_sequence());
                 work.current = Some(current);
+                if matches!(
+                    self.plan_port_work().unwrap().request,
+                    PlanRequest::RecordBreak { .. }
+                ) {
+                    return self.prepare_plan_break(ports.io);
+                }
                 let work = self.plan_port_work().unwrap();
                 let check = if let PlanRequest::Activate { successor, .. } = &work.request {
                     match checked::locked(&work.request, self, work.current.as_ref().unwrap()) {
@@ -408,10 +438,11 @@ impl RecordingContext {
             }
             Stage::Read => self.advance_plan_port_read(ports),
             Stage::Effect => Ok(PlanPortProgress::EffectReady),
-            Stage::EffectFiling => self.advance_activation_filing(ports),
-            Stage::EffectFiled | Stage::Summary => self.advance_activation_summary(ports),
-            Stage::Native => self.advance_activation_native(ports),
-            Stage::TemplateFault => self.advance_activation_fault(ports),
+            Stage::EffectFiling => self.advance_plan_effect_filing(ports),
+            Stage::EffectFiled | Stage::Summary => self.advance_plan_effect_summary(ports),
+            Stage::Native => self.advance_plan_effect_native(ports),
+            Stage::TemplateFault => self.advance_plan_effect_fault(ports),
+            Stage::BreakReport => self.advance_plan_break_report(ports),
             Stage::Refusal => {
                 if !self.record_plan_port_refusal(ports)? {
                     return Ok(PlanPortProgress::Pending);
@@ -502,7 +533,7 @@ impl RecordingContext {
             match prepared {
                 Ok(prepared) => {
                     let work = self.plan_port_work_mut().unwrap();
-                    work.activation = Some(ActivationWork::new(prepared));
+                    work.effect = Some(PlanEffectWork::new(prepared));
                     work.stage = Stage::Effect;
                 }
                 Err(failure) => self.retain_plan_check_failure(failure, ports.io)?,
@@ -510,7 +541,9 @@ impl RecordingContext {
             return Ok(PlanPortProgress::Progress);
         }
         let result = match &work.request {
-            PlanRequest::Activate { .. } | PlanRequest::StepSuccessor { .. } => unreachable!(),
+            PlanRequest::RecordBreak { .. }
+            | PlanRequest::Activate { .. }
+            | PlanRequest::StepSuccessor { .. } => unreachable!(),
             PlanRequest::AssessAct { .. } => checked::assess(
                 &work.request,
                 self,
@@ -638,6 +671,8 @@ impl RecordingContext {
             }
         } else if let Some(refusal) = account.work.refusal.clone() {
             PlanPortCompletion::Refused { refusal, account }
+        } else if matches!(account.work.request, PlanRequest::RecordBreak { .. }) {
+            PlanPortCompletion::BreakRecorded(account)
         } else if matches!(account.work.request, PlanRequest::Activate { .. }) {
             PlanPortCompletion::Activated(ActivatedStep { account })
         } else if matches!(account.work.request, PlanRequest::AssessAct { .. }) {

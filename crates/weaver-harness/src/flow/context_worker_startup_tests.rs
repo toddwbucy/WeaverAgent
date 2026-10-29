@@ -2299,6 +2299,30 @@ macro_rules! scenario {
 scenario!(worker_startup_composition_ready, "ready");
 scenario!(worker_plan_composition_stop, "input-worker-plan-stop");
 scenario!(
+    worker_plan_port_break_stop,
+    "input-worker-plan-save-sqlite-port-break-stop"
+);
+scenario!(
+    worker_plan_port_break_leave,
+    "input-worker-plan-save-sqlite-port-break-leave"
+);
+scenario!(
+    worker_plan_port_break_failed,
+    "input-worker-plan-save-sqlite-port-break-failed"
+);
+scenario!(
+    worker_plan_port_break_active_stop,
+    "input-worker-plan-save-sqlite-port-break-active-stop"
+);
+scenario!(
+    worker_plan_port_break_active_leave,
+    "input-worker-plan-save-sqlite-port-break-active-leave"
+);
+scenario!(
+    worker_plan_port_break_active_complete,
+    "input-worker-plan-save-sqlite-port-active-break"
+);
+scenario!(
     worker_plan_port_activation_stop,
     "input-worker-plan-save-sqlite-port-activation-stop"
 );

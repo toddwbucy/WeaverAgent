@@ -1,12 +1,8 @@
 //! Activation consumes the actual successor proof and allocates only from the
 //! recorded marks catalog. Neither public metadata nor a model supplies a grant.
+use super::effect::PreparedPortEffect;
 use super::*;
-use crate::flow::author::{AuthoredEvent, AuthoredSource};
 use crate::flow::clock::AbsoluteBound;
-use crate::flow::context::FilingCompletion;
-use crate::flow::ledger::{LedgerFile, SourceDisposition};
-use crate::flow::pump::PumpDeadline;
-use crate::flow::templates::TemplateExpansion;
 use std::sync::Arc;
 use weaver_trace::{Sequence, TurnRef};
 
@@ -110,14 +106,6 @@ pub(in crate::flow) fn waiting<'a>(
     Ok((plan, step))
 }
 
-pub(in crate::flow) struct PreparedActivation {
-    origin: Arc<()>,
-    effect: s::PlanEffect,
-    parent: Sequence,
-    turn: TurnRef,
-    bound: AbsoluteBound,
-}
-
 pub(in crate::flow) fn prepare(
     request: &PlanRequest,
     context: &RecordingContext,
@@ -125,7 +113,7 @@ pub(in crate::flow) fn prepare(
     marks: &RecordedRead,
     turn: TurnRef,
     bound: AbsoluteBound,
-) -> Result<PreparedActivation, PlanCheckFailure> {
+) -> Result<PreparedPortEffect, PlanCheckFailure> {
     let (plan, step) = waiting(request, context, current)?;
     let PlanRequest::Activate { successor, .. } = request else {
         unreachable!()
@@ -213,7 +201,7 @@ pub(in crate::flow) fn prepare(
             "activation marks differ from its task/group scopes",
         ));
     }
-    Ok(PreparedActivation {
+    Ok(PreparedPortEffect {
         origin: Arc::clone(marks.origin()),
         effect: s::PlanEffect::Activate {
             expected: plan.plan.clone(),
@@ -223,98 +211,7 @@ pub(in crate::flow) fn prepare(
             successor: successor.reference().clone(),
         },
         parent: marks.recall_sequence(),
-        turn,
+        turn: Some(turn),
         bound,
     })
-}
-
-impl PreparedActivation {
-    pub(in crate::flow) fn effect(&self) -> &s::PlanEffect {
-        &self.effect
-    }
-
-    pub(in crate::flow) fn event(
-        &self,
-        context: &RecordingContext,
-        expansion: &TemplateExpansion,
-    ) -> Result<AuthoredEvent, &'static str> {
-        if !Arc::ptr_eq(&self.origin, context.enter_origin())
-            || expansion.template_id() != "plan.activate"
-        {
-            return Err("activation lost its context or compiled template family");
-        }
-        Ok(AuthoredEvent {
-            kind: weaver_trace::serving::Kind::PlanEvent,
-            subsystem: weaver_trace::Subsystem::Harness,
-            turn: Some(self.turn.clone()),
-            source: AuthoredSource::Loop,
-            causal_parent: Some(self.parent),
-            payload: Some(weaver_trace::serving::Payload::PlanEffect(Box::new(
-                weaver_trace::serving::payloads::PlanEffectRecord {
-                    message: serde_json::value::to_raw_value(expansion.message())
-                        .expect("Message serializes"),
-                    context: crate::flow::mirror::activation_effect(&self.effect)?,
-                    template_id: expansion.template_id().into(),
-                },
-            ))),
-        })
-    }
-
-    pub(in crate::flow) fn check_filing(
-        &self,
-        context: &RecordingContext,
-        expansion: &TemplateExpansion,
-        filing: &FilingCompletion,
-    ) -> Result<bool, &'static str> {
-        if !Arc::ptr_eq(&self.origin, context.enter_origin())
-            || !filing.belongs_to(context)
-            || filing.wait_key() != PumpDeadline::Decision
-            || filing.wait_bound() != self.bound
-            || self.bound.expired(filing.recorded_ns())
-            || filing.sequence().0 <= self.parent.0
-            || !filing.receipts().is_complete()
-            || filing.receipts().sources().count() != 1
-            || filing.receipts().dispositions().count() != 1
-            || expansion.template_id() != "plan.activate"
-        {
-            return Err("activation lost its original complete filing and bound");
-        }
-        let (file, rejected) = match filing.receipts().dispositions().next().unwrap() {
-            SourceDisposition::Committed(value) => {
-                let LedgerFile::Statement(file) = value.file() else {
-                    return Err("activation has a pair receipt");
-                };
-                (file.as_ref(), false)
-            }
-            SourceDisposition::CorrectlyRejected(value) => (value.file(), true),
-        };
-        let metadata = file
-            .context
-            .as_ref()
-            .ok_or("activation lost its typed context")?;
-        let effect: s::PlanEffect =
-            s::decode_strict(metadata.raw.get()).map_err(|_| "activation has malformed context")?;
-        if file.block_id.run != expansion.run_id()
-            || file.block_id.sequence.0 != filing.sequence().0
-            || file.block_id.block.0 != 0
-            || file.source.kind != "plan.event"
-            || file.source.channel != "internal"
-            || file.source.origin != "loop"
-            || file.source.turn.as_deref() != Some(self.turn.0.as_str())
-            || file.source.causal_parent.map(|v| v.0) != Some(self.parent.0)
-            || file.scheme_id != expansion.scheme().scheme_id
-            || file.text != expansion.text()
-            || metadata.source_path != [s::SourcePathPart::Key("context".into())]
-            || effect != self.effect
-            || if rejected {
-                file.effect.is_some()
-            } else {
-                file.effect.as_ref()
-                    != Some(&s::StatementEffect::Plan(Box::new(self.effect.clone())))
-            }
-        {
-            return Err("activation filing differs from its certified source or private grant");
-        }
-        Ok(rejected)
-    }
 }

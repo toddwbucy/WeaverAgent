@@ -150,7 +150,7 @@ fn check_context(
             format!("{:?}", context.plan_port_work().unwrap().test_request()),
             request
         );
-        assert_eq!(context.test_activation_effect(), Some(effect.as_ref()));
+        assert_eq!(context.test_plan_effect(), Some(effect.as_ref()));
         assert!(Arc::ptr_eq(
             context.filing.as_ref().unwrap().receipt_identity(),
             receipt
