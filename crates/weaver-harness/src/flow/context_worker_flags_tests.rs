@@ -593,7 +593,11 @@ pub(in crate::flow::context::worker_startup) fn finish(
     );
 }
 
-fn prepare_checked_turn(guard: &mut Guard<'_>, member: &mut Member, socket: &Path) {
+pub(in crate::flow::context::worker_startup) fn prepare_checked_turn(
+    guard: &mut Guard<'_>,
+    member: &mut Member,
+    socket: &Path,
+) {
     std::fs::write(
         socket.parent().unwrap().join("flags-turn-request"),
         b"offer\n",

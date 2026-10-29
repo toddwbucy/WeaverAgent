@@ -3,12 +3,17 @@ use super::*;
 use crate::flow::clock::AbsoluteBound;
 use crate::flow::context::worker_startup::input::management::plan_refusal::composition_tests::pressure;
 use crate::flow::context::worker_startup::input::management::tests::Guard;
-use crate::flow::context::worker_startup::input::plan_ports::tests::check_pending;
+use crate::flow::context::worker_startup::input::plan_ports::tests::{
+    check_pending, pending_decision,
+};
 use crate::flow::context::worker_startup::tests::{Member, reap, worker};
+use crate::flow::pump::PumpDeadline;
 use std::io::Read;
 use std::os::unix::net::UnixStream;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use weaver_types::state_flow as s;
 
 pub(in crate::flow::context::worker_startup) struct Failure {
     handoff: Box<FoundationFailedHandoff>,
@@ -16,20 +21,67 @@ pub(in crate::flow::context::worker_startup) struct Failure {
     deadline: u64,
     request: String,
     decision: AbsoluteBound,
-    ticket: u64,
+    ticket: Option<u64>,
+    activation: Option<(Box<s::PlanEffect>, Arc<()>)>,
+    owned_decision: Option<AbsoluteBound>,
     initial: Vec<u8>,
 }
 
 pub(in crate::flow::context::worker_startup) fn begin(
-    mut guard: Guard<'_>,
+    guard: Guard<'_>,
     member: &mut Member,
     reader: &mut UnixStream,
     request: String,
     decision: AbsoluteBound,
     ticket: u64,
 ) -> Failure {
+    begin_inner(guard, member, reader, request, decision, Some(ticket), None)
+}
+
+pub(in crate::flow::context::worker_startup) fn begin_activation(
+    guard: Guard<'_>,
+    member: &mut Member,
+    reader: &mut UnixStream,
+    request: String,
+    decision: AbsoluteBound,
+    effect: s::PlanEffect,
+) -> Failure {
+    let receipt = Arc::clone(
+        guard
+            .input
+            .as_ref()
+            .unwrap()
+            .serving
+            .owner
+            .context
+            .filing
+            .as_ref()
+            .unwrap()
+            .receipt_identity(),
+    );
+    begin_inner(
+        guard,
+        member,
+        reader,
+        request,
+        decision,
+        None,
+        Some((Box::new(effect), receipt)),
+    )
+}
+
+fn begin_inner(
+    mut guard: Guard<'_>,
+    member: &mut Member,
+    reader: &mut UnixStream,
+    request: String,
+    decision: AbsoluteBound,
+    ticket: Option<u64>,
+    activation: Option<(Box<s::PlanEffect>, Arc<()>)>,
+) -> Failure {
     member.stop_responses();
     let input = guard.input.as_mut().unwrap();
+    let owned_decision = pending_decision(input.serving.plan_operation.as_ref().unwrap());
     let watch = Instant::now() + Duration::from_secs(5);
     while input.advance() != FoundationInputProgress::Stopped {
         assert!(
@@ -48,7 +100,13 @@ pub(in crate::flow::context::worker_startup) fn begin(
             ..
         }
     ));
-    assert_eq!(context.pending_author().unwrap().ticket, ticket);
+    if let Some(ticket) = ticket {
+        assert_eq!(context.pending_author().unwrap().ticket, ticket);
+    }
+    assert_eq!(
+        context.deadlines.get(PumpDeadline::Decision),
+        Some(decision)
+    );
     let deadline = context.halt().unwrap().deadline().unwrap();
     let mut initial = pressure::drain(context, reader);
     let mut halt = match worker::halt(Ok(guard.input.take().unwrap())) {
@@ -61,10 +119,11 @@ pub(in crate::flow::context::worker_startup) fn begin(
     };
     let context = &halt.test_input().serving.owner.context;
     assert_eq!(context.failure(), Some(&first));
-    check_context(context, &request, ticket, false);
+    check_context(context, &request, ticket, activation.as_ref(), false);
     let _ = reader.read_to_end(&mut initial);
     let handoff = halt.handoff().ok().expect("terminal failed plan handoff");
-    check_pending(handoff._plan_operation.as_ref().unwrap(), decision);
+    let work = handoff._plan_operation.as_ref().unwrap();
+    check_pending(work, owned_decision);
     Failure {
         handoff,
         first,
@@ -72,6 +131,8 @@ pub(in crate::flow::context::worker_startup) fn begin(
         request,
         decision,
         ticket,
+        activation,
+        owned_decision,
         initial,
     }
 }
@@ -79,13 +140,28 @@ pub(in crate::flow::context::worker_startup) fn begin(
 fn check_context(
     context: &crate::flow::context::RecordingContext,
     request: &str,
-    ticket: u64,
+    ticket: Option<u64>,
+    activation: Option<&(Box<s::PlanEffect>, Arc<()>)>,
     settled: bool,
 ) {
+    if let Some((effect, receipt)) = activation {
+        assert!(ticket.is_none());
+        assert_eq!(
+            format!("{:?}", context.plan_port_work().unwrap().test_request()),
+            request
+        );
+        assert_eq!(context.test_activation_effect(), Some(effect.as_ref()));
+        assert!(Arc::ptr_eq(
+            context.filing.as_ref().unwrap().receipt_identity(),
+            receipt
+        ));
+        assert!(context.plan_cache.required.is_none());
+        return;
+    }
     let (original, held_ticket, recorded, consumed) =
         context.plan_port_work().unwrap().test_refusal_account();
     assert_eq!(format!("{original:?}"), request);
-    assert_eq!(held_ticket, Some(ticket));
+    assert_eq!(held_ticket, ticket);
     if settled {
         assert!(
             recorded.is_some(),
@@ -118,6 +194,8 @@ pub(in crate::flow::context::worker_startup) fn finish(
         request,
         decision,
         ticket,
+        activation,
+        owned_decision,
         mut initial,
     } = failure;
     let done = AtomicBool::new(false);
@@ -157,8 +235,19 @@ pub(in crate::flow::context::worker_startup) fn finish(
     );
     assert_eq!(owner.tail.context.failure(), Some(&first));
     assert_eq!(owner.handoff.deadline, Some(deadline));
-    check_pending(owner.handoff._plan_operation.as_ref().unwrap(), decision);
-    check_context(&owner.tail.context, &request, ticket, true);
+    let work = owner.handoff._plan_operation.as_ref().unwrap();
+    check_pending(work, owned_decision);
+    assert_eq!(
+        owner.tail.context.deadlines.get(PumpDeadline::Decision),
+        Some(decision)
+    );
+    check_context(
+        &owner.tail.context,
+        &request,
+        ticket,
+        activation.as_ref(),
+        true,
+    );
     assert!(owner.lower_confirmed);
     assert!(!owner.abandoned());
     let rows: Vec<serde_json::Value> = bytes
@@ -172,6 +261,6 @@ pub(in crate::flow::context::worker_startup) fn finish(
         rows.iter()
             .filter(|row| row["kind"] == "refusal" && row["payload"]["seam"] == "plan_operation")
             .count(),
-        1
+        usize::from(ticket.is_some())
     );
 }

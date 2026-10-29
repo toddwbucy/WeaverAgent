@@ -2299,6 +2299,18 @@ macro_rules! scenario {
 scenario!(worker_startup_composition_ready, "ready");
 scenario!(worker_plan_composition_stop, "input-worker-plan-stop");
 scenario!(
+    worker_plan_port_activation_stop,
+    "input-worker-plan-save-sqlite-port-activation-stop"
+);
+scenario!(
+    worker_plan_port_activation_leave,
+    "input-worker-plan-save-sqlite-port-activation-leave"
+);
+scenario!(
+    worker_plan_port_activation_failed,
+    "input-worker-plan-save-sqlite-port-activation-failed"
+);
+scenario!(
     worker_plan_port_active_assess,
     "input-worker-plan-save-sqlite-port-active-assess"
 );

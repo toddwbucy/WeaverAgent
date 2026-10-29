@@ -1,6 +1,33 @@
 //! Exhaustive conversion of root input metadata into the serialize-only mirror.
 use super::*;
 
+pub(in crate::flow) fn activation_effect(
+    value: &shared::PlanEffect,
+) -> Result<trace::PlanEffect, &'static str> {
+    let shared::PlanEffect::Activate {
+        expected,
+        step_id: step,
+        step_span,
+        group_span,
+        successor,
+    } = value
+    else {
+        return Err("activation grant has another effect");
+    };
+    Ok(trace::PlanEffect::Activate {
+        expected: plan_ref(expected),
+        step_id: step_id(step),
+        step_span: span_ref(step_span),
+        group_span: group_span.as_ref().map(span_ref),
+        successor: trace::StepQueryRef {
+            plan: plan_ref(&successor.plan),
+            previous_step: successor.previous_step.as_ref().map(step_id),
+            step_id: step_id(&successor.step_id),
+            instruction: statement(&successor.instruction),
+        },
+    })
+}
+
 pub(in crate::flow) fn root_plan_effect(
     value: &shared::PlanEffect,
 ) -> Result<trace::PlanEffect, &'static str> {

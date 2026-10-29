@@ -104,24 +104,21 @@ impl<'a> FoundationInput<'a> {
         if self.progress() != FoundationInputProgress::ManagementPending {
             return Err(self);
         }
-        let read = if self.has_graceful_leave()
-            || self.serving.save.is_some()
-            || self.plan_pending()
-            || self.flags_pending()
-            || self.plan_operation_pending()
-        {
-            let Some(accepted) = self.serving.owner.listener.accepted_ns() else {
-                return Err(self);
+        let read =
+            if self.has_graceful_leave() || self.serving.save.is_some() || self.plan_work_pending()
+            {
+                let Some(accepted) = self.serving.owner.listener.accepted_ns() else {
+                    return Err(self);
+                };
+                let Ok(bound) =
+                    AbsoluteBound::after(accepted, crate::state::ANSWER_BOUND_MS * 1_000_000)
+                else {
+                    return Err(self);
+                };
+                Some(bound)
+            } else {
+                None
             };
-            let Ok(bound) =
-                AbsoluteBound::after(accepted, crate::state::ANSWER_BOUND_MS * 1_000_000)
-            else {
-                return Err(self);
-            };
-            Some(bound)
-        } else {
-            None
-        };
         let mut peer = self
             .serving
             .owner
@@ -476,6 +473,9 @@ impl<'a> FoundationManagement<'a> {
                 && self.input.serving.save.is_none()
                 && !self.input.plan_pending()
             {
+                // Save may queue behind a flag/plan-port owner. Its actual
+                // capture boundary uses plan_work_pending after that owner
+                // settles. A root exchange already owns the shared peer lane.
                 self.progress = FoundationManagementProgress::DirectivePending;
                 return Ok(());
             }

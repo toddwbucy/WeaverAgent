@@ -6,6 +6,8 @@ use crate::flow::context::plan_port_driver::{
 use crate::flow::plan::ports::PlanRequest;
 use sha2::{Digest as _, Sha256};
 
+#[path = "context_plan_activation_tests.rs"]
+mod activation_tests;
 #[path = "context_plan_ports_review_tests.rs"]
 mod review;
 
@@ -205,7 +207,7 @@ fn plan_port_foreign_identity_records_original_without_consuming_cache_or_query(
     let mut fx = ready(true);
     let original = request("foreign-seed");
     let expected = original.expected().clone();
-    let step = original.step_id().clone();
+    let step = original.step_id().unwrap().clone();
     let recalls = fx.records(Kind::Recall).len();
     begin(&mut fx, original);
     assert!(take(&mut fx).is_none());

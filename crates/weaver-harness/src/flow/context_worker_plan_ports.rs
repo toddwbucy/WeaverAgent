@@ -9,7 +9,7 @@ use weaver_types::state_flow::{
     PlanAct, PlanOperationRefused, PlanRef, SourcePosition, SpanRef, StatementRef, StepId, WorkRef,
 };
 
-pub use crate::flow::plan::ports::PlanRequest as FoundationPlanRequest;
+pub use crate::flow::plan::ports::{CheckedStepSuccessor, PlanRequest as FoundationPlanRequest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoundationPlanAdmissionRefusal {
@@ -31,6 +31,12 @@ pub struct FoundationPlanOperationError {
 /// A view of a settled operation. Metadata cannot reconstruct its private grant.
 #[derive(Debug)]
 pub enum FoundationPlanOutcome<'a> {
+    Successor(&'a weaver_types::state_flow::StepQueryRef),
+    QueryRefused {
+        code: weaver_types::state_flow::ReadRefusalCode,
+        detail: &'a str,
+    },
+    Activated(&'a weaver_types::state_flow::PlanStep),
     Allowed,
     Work(&'a WorkRef),
     Refused(&'a PlanOperationRefused),
@@ -50,11 +56,27 @@ pub struct FoundationPlanOperation {
 }
 
 impl FoundationPlanOperation {
+    /// Consume the settled query proof. Refusal/cancellation returns the entire
+    /// original result, never a constructed successor from public metadata.
+    pub fn into_successor(self) -> Result<CheckedStepSuccessor, Self> {
+        self.completion
+            .into_successor()
+            .map_err(|completion| Self { completion })
+    }
+
     pub fn request(&self) -> &FoundationPlanRequest {
         self.completion.request()
     }
     pub fn outcome(&self) -> FoundationPlanOutcome<'_> {
         match &self.completion {
+            PlanPortCompletion::Successor(_) => {
+                FoundationPlanOutcome::Successor(self.completion.successor().unwrap().reference())
+            }
+            PlanPortCompletion::QueryRefused(_) => {
+                let (code, detail) = self.completion.query_refusal().unwrap();
+                FoundationPlanOutcome::QueryRefused { code, detail }
+            }
+            PlanPortCompletion::Activated(step) => FoundationPlanOutcome::Activated(step.step()),
             PlanPortCompletion::Allowed(_) => FoundationPlanOutcome::Allowed,
             PlanPortCompletion::Work(work) => FoundationPlanOutcome::Work(work.reference()),
             PlanPortCompletion::Refused { refusal, .. } => FoundationPlanOutcome::Refused(refusal),
@@ -79,6 +101,46 @@ pub(in crate::flow::context::worker_startup) struct PendingPlanOperation {
 }
 
 impl FoundationInput<'_> {
+    /// Read only the exact successor selector elected by the caller. A refused
+    /// STEP-QUERY keeps its ordinary read outcome and cannot activate a step.
+    #[allow(clippy::result_large_err)]
+    pub fn step_successor(
+        &mut self,
+        expected: PlanRef,
+        previous_step: Option<StepId>,
+        turn: Option<TurnKey>,
+    ) -> Result<(), FoundationPlanOperationError> {
+        self.begin_plan_operation(
+            FoundationPlanRequest::StepSuccessor {
+                expected,
+                previous_step,
+            },
+            turn,
+            &mut MonotonicIo,
+        )
+    }
+
+    /// Activate only this checked successor. The original Decision bounds the
+    /// allocation, effect, summary refresh and native-scope adoption.
+    #[allow(clippy::result_large_err)]
+    pub fn activate(
+        &mut self,
+        expected: PlanRef,
+        step_id: StepId,
+        successor: CheckedStepSuccessor,
+        turn: TurnKey,
+    ) -> Result<(), FoundationPlanOperationError> {
+        self.begin_plan_operation(
+            FoundationPlanRequest::Activate {
+                expected,
+                step_id,
+                successor,
+            },
+            Some(turn),
+            &mut MonotonicIo,
+        )
+    }
+
     /// Elect only the checked predicate, without dispatch or plan mutation.
     #[allow(clippy::result_large_err)]
     pub fn assess_act(
@@ -149,8 +211,7 @@ impl FoundationInput<'_> {
         }
         if self.serving.plan_operation.is_some()
             || self.serving.owner.listener.held().is_some()
-            || self.plan_pending()
-            || self.flags_pending()
+            || self.plan_work_pending()
             || self.serving.save.is_some()
             || self.has_graceful_leave()
             || self.report.is_some()
@@ -272,6 +333,19 @@ impl FoundationInput<'_> {
         };
         loop {
             match owner.context.advance_plan_operation(&mut ports)? {
+                PlanPortProgress::EffectReady => {
+                    let Some(certificate) = owner.certificate.as_ref() else {
+                        return Err(owner.context.fail(
+                            ports.io,
+                            FlowHaltReason::ProtocolFailed,
+                            HaltPoint::Barrier,
+                            "activation lost its loaded template certificate",
+                        ));
+                    };
+                    owner
+                        .context
+                        .begin_activation_effect(certificate, ports.io)?;
+                }
                 PlanPortProgress::Progress => (),
                 PlanPortProgress::Pending => {
                     owner.context.pump_once(&mut ports)?;

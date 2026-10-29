@@ -1,13 +1,11 @@
-//! Positive public ports against a plan filed and activated in the real member.
-//! Activation here is fixture setup through existing filing/summary owners,
-//! not evidence that the future public activation port is implemented.
+//! Public successor, activation and predicate ports against the actual member.
+//! Every activation below consumes the public query proof and exact effect owner.
 use super::*;
 use crate::flow::context::worker_startup::input::plan::tests as root_plan;
-use crate::flow::context::{PlanSummaryCompletion, ReadCompletion, RecordedRead, RecordingContext};
+use crate::flow::context::{ReadCompletion, RecordedRead, RecordingContext};
 use sha2::{Digest as _, Sha256};
 use std::sync::atomic::{AtomicBool, Ordering};
-use weaver_trace::serving::{Kind, Payload as TracePayload, payloads as t};
-use weaver_traits::{ContentBlock, Message, Role};
+use weaver_trace::serving::{Kind, Payload as TracePayload};
 
 const TURN: &str = "active-plan-port";
 
@@ -57,49 +55,31 @@ fn read(input: &mut FoundationInput<'_>, selector: s::ReadSelector) -> RecordedR
     }
 }
 
-fn activation(successor: &s::StepQueryRef, span: &s::SpanRef) -> AuthoredEvent {
-    let step = t::StepId {
-        seed_id: successor.step_id.seed_id.clone(),
-        local_id: successor.step_id.local_id.0.into(),
-    };
-    let plan = crate::flow::mirror::plan_ref(&successor.plan);
-    let source = &successor.instruction.block_id;
-    AuthoredEvent {
-        kind: Kind::PlanEvent,
-        subsystem: Subsystem::Harness,
-        source: AuthoredSource::Loop,
-        turn: Some(TurnRef(TURN.into())),
-        causal_parent: None,
-        payload: Some(TracePayload::PlanEffect(Box::new(t::PlanEffectRecord {
-            message: serde_json::value::to_raw_value(&Message {
-                role: Role::User,
-                content: vec![ContentBlock::Text {
-                    text: "Read plan.".into(),
-                }],
-            })
-            .unwrap(),
-            template_id: "plan.activate".into(),
-            context: t::PlanEffect::Activate {
-                expected: plan.clone(),
-                step_id: step.clone(),
-                step_span: crate::flow::mirror::span_ref(span),
-                group_span: None,
-                successor: t::StepQueryRef {
-                    plan,
-                    previous_step: None,
-                    step_id: step,
-                    instruction: t::StatementRef {
-                        block_id: t::SourceBlockId {
-                            run: source.run.clone(),
-                            sequence: source.sequence.0.into(),
-                            block: source.block.0.into(),
-                        },
-                        binding: successor.instruction.binding.0.into(),
-                    },
-                },
-            },
-        }))),
+fn complete_operation(input: &mut FoundationInput<'_>) -> FoundationPlanOperation {
+    let end = Instant::now() + Duration::from_secs(5);
+    assert_eq!(
+        input.progress(),
+        FoundationInputProgress::Pending,
+        "an admitted plan owner excludes input before its first reduction"
+    );
+    while input.plan_operation_pending() {
+        let stage = input
+            .serving
+            .owner
+            .context
+            .plan_port_work()
+            .map(|work| work.test_stage());
+        assert_ne!(
+            input.advance(),
+            FoundationInputProgress::Stopped,
+            "{stage:?}: {:?}",
+            input.detail()
+        );
+        assert!(Instant::now() < end, "public plan operation did not settle");
     }
+    input
+        .take_plan_operation()
+        .expect("one completed operation")
 }
 
 fn activate(input: &mut FoundationInput<'_>) -> (s::StepQueryRef, s::SpanRef, s::SourcePosition) {
@@ -130,121 +110,40 @@ fn activate(input: &mut FoundationInput<'_>) -> (s::StepQueryRef, s::SpanRef, s:
         .unwrap()
         .plan
         .clone();
-    let successor_read = read(
-        input,
-        s::ReadSelector::StepSuccessor {
-            plan,
-            previous_step: None,
-        },
-    );
-    let s::QueryResult::StepSuccessor {
-        reference,
-        instruction,
-    } = successor_read.result()
-    else {
-        panic!("actual member must supply the successor");
-    };
-    assert_eq!(instruction.bindings.len(), 1);
-    let successor = reference.clone();
-    let marks = read(input, s::ReadSelector::Marks {});
-    let s::QueryResult::Marks { next_span_id, .. } = marks.result() else {
-        panic!("actual marks allocation required");
-    };
-    let span = s::SpanRef {
-        seed_id: successor.plan.plan_id.seed_id.clone(),
-        local_id: *next_span_id,
-        revision: 1.into(),
-    };
     input
-        .serving
-        .owner
-        .context
-        .begin_filing(
-            activation(&successor, &span),
-            PumpDeadline::Decision,
-            &mut MonotonicIo,
+        .step_successor(plan, None, Some(TurnKey(TURN.into())))
+        .unwrap();
+    let checked = complete_operation(input).into_successor().unwrap();
+    let successor = checked.reference().clone();
+    input
+        .activate(
+            successor.plan.clone(),
+            successor.step_id.clone(),
+            checked,
+            TurnKey(TURN.into()),
         )
         .unwrap();
-    let end = Instant::now() + Duration::from_secs(5);
-    let filing = loop {
-        if let Some(done) = pump(input, |context, ports| {
-            context.advance_filing(ports).unwrap();
-            let done = context.take_filing(ports.io).unwrap();
-            if done.is_none() {
-                context.pump_once(ports).unwrap();
-            }
-            done
-        }) {
-            break done;
-        }
-        assert!(Instant::now() < end, "activation filing did not settle");
-    };
-    input
-        .serving
-        .owner
-        .context
-        .begin_effect_plan_summary(filing, &mut MonotonicIo)
-        .unwrap();
-    let summary = loop {
-        if let Some(done) = pump(input, |context, ports| {
-            context.advance_plan_summary(ports).unwrap();
-            let done = context.take_plan_summary(ports.io).unwrap();
-            if done.is_none() {
-                context.pump_once(ports).unwrap();
-            }
-            done
-        }) {
-            let PlanSummaryCompletion::Effect(proof) = done else {
-                panic!("activation must retain its refreshed summary");
-            };
-            break proof;
-        }
-        assert!(Instant::now() < end, "activation summary did not settle");
-    };
-    let s::QueryResult::PlanCurrent {
-        current: Some(plan),
-        ..
-    } = summary.read().result()
-    else {
-        panic!("activation must retain the actual current plan");
-    };
-    let active = plan
-        .steps
-        .iter()
-        .find(|step| step.step_id == successor.step_id)
-        .unwrap();
-    assert_eq!(active.status, s::StepStatus::Active);
-    assert_eq!(active.span.as_ref(), Some(&span));
-    let through = plan.last_source.clone();
-    input
-        .serving
-        .owner
-        .context
-        .begin_place_effect_marks(summary, &mut MonotonicIo)
-        .unwrap();
-    let native = loop {
-        if let Some(done) = pump(input, |context, ports| {
-            context.advance_place_marks(ports).unwrap();
-            let done = context.take_place_marks(ports.io).unwrap();
-            if done.is_none() {
-                context.pump_once(ports).unwrap();
-            }
-            done
-        }) {
-            break done;
-        }
-        assert!(Instant::now() < end, "native activation did not settle");
+    let result = complete_operation(input);
+    let FoundationPlanOutcome::Activated(active) = result.outcome() else {
+        panic!("activation must return its committed active step: {result:?}");
     };
     assert!(
-        native.positions().is_empty(),
-        "activation grants no observed endpoint"
+        input.serving.owner.context.native_place_cache_ready(),
+        "activation must adopt native scopes before granting the active step"
     );
-    assert_eq!(
-        native.prerequisite().summary().unwrap().last_source,
-        through
-    );
-    assert!(successor_read.belongs_to(input.serving.owner.context));
-    assert!(marks.belongs_to(input.serving.owner.context));
+    assert_eq!(active.step_id, successor.step_id);
+    assert_eq!(active.status, s::StepStatus::Active);
+    assert_eq!(active.instruction, successor.instruction);
+    let span = active.span.clone().expect("committed activation span");
+    let through = input
+        .serving
+        .owner
+        .context
+        .committed_plan_summary()
+        .unwrap()
+        .unwrap()
+        .last_source
+        .clone();
     assert_eq!(
         input
             .serving
@@ -386,6 +285,7 @@ pub(super) fn exercise(
                 );
                 assert_eq!(refusal.read_code, None);
             }
+            other => panic!("unexpected operation outcome: {other:?}"),
         }
         assert!(input.take_plan_operation().is_none());
         assert_eq!(
@@ -413,7 +313,7 @@ pub(super) fn exercise(
             .filter(|row| row["kind"] == "plan.event")
             .count(),
         1,
-        "only fixture activation changes the plan"
+        "only the public activation changes the plan"
     );
     assert!(
         rows.iter()

@@ -25,6 +25,9 @@ pub(in crate::flow::context::worker_startup) mod cleanup;
 #[path = "context_worker_plan_ports_active_tests.rs"]
 mod active;
 
+#[path = "context_worker_plan_activation_tests.rs"]
+mod activation;
+
 pub(in crate::flow::context::worker_startup) enum Cleanup {
     Leave(cleanup::Leave),
     Failed(failed::Failure),
@@ -75,6 +78,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     socket: &Path,
     mode: &str,
 ) -> Option<Cleanup> {
+    if mode.contains("-port-activation-") {
+        return activation::exercise(serving, member, reader, socket, mode);
+    }
     if mode.contains("-port-active-") {
         active::exercise(serving, member, reader, socket, mode);
         return None;
@@ -464,13 +470,19 @@ fn interrupt_held_refusal(
 
 pub(in crate::flow::context::worker_startup) fn check_pending(
     work: &PendingPlanOperation,
-    bound: AbsoluteBound,
+    bound: Option<AbsoluteBound>,
 ) {
-    assert_eq!(work.owned_decision, Some(bound));
+    assert_eq!(work.owned_decision, bound);
     assert!(
         work.result.is_none(),
         "failed operation grants no completion"
     );
+}
+
+pub(in crate::flow::context::worker_startup) fn pending_decision(
+    work: &PendingPlanOperation,
+) -> Option<AbsoluteBound> {
+    work.owned_decision
 }
 
 struct ReleaseTrace<'a> {

@@ -536,7 +536,8 @@ impl RecordingContext {
                     ReadPurpose::Marks | ReadPurpose::RootPlan | ReadPurpose::PlanPort
                 )
                 && !(matches!(purpose, ReadPurpose::PlanSummary)
-                    && self.root_plan_summary_allowed(PumpDeadline::Decision)))
+                    && (self.root_plan_summary_allowed(PumpDeadline::Decision)
+                        || self.plan_port_summary_allowed(PumpDeadline::Decision))))
             || (matches!(purpose, ReadPurpose::Marks) && !owned_continuation)
             || (matches!(purpose, ReadPurpose::RootPlan | ReadPurpose::PlanPort)
                 && !owned_continuation)

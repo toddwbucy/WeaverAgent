@@ -45,9 +45,7 @@ impl FoundationManagement<'_> {
             || self.stop.is_some()
             || self.input.has_graceful_leave()
             || self.input.serving.save.is_some()
-            || self.input.plan_pending()
-            || self.input.flags_pending()
-            || self.input.plan_operation_pending()
+            || self.input.plan_work_pending()
             || !self.input.rollback_admissible()
             || !self.peer.held().is_some_and(|message| {
                 message.envelope.exchange.opener == Opener::Admin

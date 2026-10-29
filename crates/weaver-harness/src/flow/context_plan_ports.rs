@@ -1,4 +1,4 @@
-//! Read-only plan operations retain their exact request and checked proofs in
+//! Plan operations retain their exact request and checked proofs in
 //! the one allocator slot. No result escapes before its owed account settles.
 use super::*;
 use crate::flow::plan::CommittedPlanSummary;
@@ -11,6 +11,9 @@ use weaver_types::state_flow as s;
 #[path = "context_plan_ports_record.rs"]
 mod record;
 use record::PlanPortRecord;
+#[path = "context_plan_activation.rs"]
+mod activation;
+use activation::ActivationWork;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::flow) enum PlanPortAdmission {
@@ -30,6 +33,7 @@ pub(in crate::flow) struct PlanPortBeginError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::flow) enum PlanPortProgress {
+    EffectReady,
     Progress,
     Pending,
     Complete,
@@ -39,6 +43,12 @@ pub(in crate::flow) enum PlanPortProgress {
 enum Stage {
     Validate,
     Read,
+    Effect,
+    EffectFiling,
+    EffectFiled,
+    Summary,
+    Native,
+    TemplateFault,
     Refusal,
     Complete,
 }
@@ -56,6 +66,8 @@ pub(super) struct PlanPortTransaction {
     parent: Option<Sequence>,
     record: Option<PlanPortRecord>,
     work_ref: Option<s::WorkRef>,
+    activation: Option<ActivationWork>,
+    successor: Option<checked::CheckedStepSuccessor>,
     cancelled: bool,
 }
 
@@ -90,7 +102,26 @@ impl CheckedWork {
     }
 }
 
+pub(in crate::flow) struct ActivatedStep {
+    account: PlanPortAccount,
+}
+impl ActivatedStep {
+    pub(in crate::flow) fn step(&self) -> &s::PlanStep {
+        self.account
+            .work
+            .activation
+            .as_ref()
+            .unwrap()
+            .active
+            .as_ref()
+            .unwrap()
+    }
+}
+
 pub(in crate::flow) enum PlanPortCompletion {
+    Successor(PlanPortAccount),
+    QueryRefused(PlanPortAccount),
+    Activated(ActivatedStep),
     Allowed(AllowedAct),
     Work(CheckedWork),
     Refused {
@@ -101,11 +132,39 @@ pub(in crate::flow) enum PlanPortCompletion {
 }
 
 impl PlanPortCompletion {
+    pub(in crate::flow) fn successor(&self) -> Option<&checked::CheckedStepSuccessor> {
+        match self {
+            Self::Successor(account) => account.work.successor.as_ref(),
+            _ => None,
+        }
+    }
+    pub(in crate::flow) fn query_refusal(&self) -> Option<(s::ReadRefusalCode, &str)> {
+        let Self::QueryRefused(account) = self else {
+            return None;
+        };
+        let ReadCompletion::Refused(crate::flow::read::ReadFailure::Refused { code, detail }) =
+            &account.work.read.as_ref().unwrap().completion
+        else {
+            unreachable!()
+        };
+        Some((*code, detail))
+    }
+    pub(in crate::flow) fn into_successor(self) -> Result<checked::CheckedStepSuccessor, Self> {
+        let Self::Successor(mut account) = self else {
+            return Err(self);
+        };
+        Ok(account.work.successor.take().unwrap())
+    }
+
     fn account(&self) -> &PlanPortAccount {
         match self {
+            Self::Activated(grant) => &grant.account,
             Self::Allowed(grant) => &grant.account,
             Self::Work(work) => &work.account,
-            Self::Refused { account, .. } | Self::Cancelled(account) => account,
+            Self::Successor(account)
+            | Self::QueryRefused(account)
+            | Self::Refused { account, .. }
+            | Self::Cancelled(account) => account,
         }
     }
     pub(in crate::flow) fn request(&self) -> &PlanRequest {
@@ -116,9 +175,13 @@ impl PlanPortCompletion {
     }
     pub(in crate::flow) fn cancel(self) -> Self {
         let mut account = match self {
+            Self::Activated(grant) => grant.account,
             Self::Allowed(grant) => grant.account,
             Self::Work(work) => work.account,
-            Self::Refused { account, .. } | Self::Cancelled(account) => account,
+            Self::Successor(account)
+            | Self::QueryRefused(account)
+            | Self::Refused { account, .. }
+            | Self::Cancelled(account) => account,
         };
         account.work.cancelled = true;
         Self::Cancelled(account)
@@ -150,7 +213,8 @@ impl RecordingContext {
             work.driving
                 && !work.cancelled
                 && work.stage == Stage::Read
-                && work.current.is_some()
+                && (work.current.is_some()
+                    || matches!(work.request, PlanRequest::StepSuccessor { .. }))
                 && &work.request.selector() == selector
                 && work.turn.as_ref() == turn
                 && self.deadlines.get(PumpDeadline::Decision) == Some(work.bound)
@@ -230,6 +294,14 @@ impl RecordingContext {
                 Some(failure),
             ));
         }
+        if matches!(request, PlanRequest::Activate { .. }) && turn.is_none() {
+            return Err(error(
+                request,
+                turn,
+                PlanPortAdmission::InvalidAttribution,
+                None,
+            ));
+        }
         if let Err(refusal) = self.plan_port_admission(turn.as_ref()) {
             return Err(error(request, turn, refusal, None));
         }
@@ -249,6 +321,8 @@ impl RecordingContext {
             parent: None,
             record: None,
             work_ref: None,
+            activation: None,
+            successor: None,
             cancelled: false,
         })));
         Ok(())
@@ -277,12 +351,19 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<PlanPortProgress, RunFailure> {
         let work = self.plan_port_work().unwrap();
-        if work.cancelled && self.read.is_none() && work.stage != Stage::Refusal {
+        if work.cancelled
+            && self.read.is_none()
+            && matches!(work.stage, Stage::Validate | Stage::Read | Stage::Effect)
+        {
             self.plan_port_work_mut().unwrap().stage = Stage::Complete;
             return Ok(PlanPortProgress::Complete);
         }
         match work.stage {
             Stage::Validate => {
+                if matches!(work.request, PlanRequest::StepSuccessor { .. }) {
+                    self.plan_port_work_mut().unwrap().stage = Stage::Read;
+                    return Ok(PlanPortProgress::Progress);
+                }
                 let seed = &self.open_start.as_ref().unwrap().seed_id;
                 if let Some(refusal) = work.request.local_refusal(seed) {
                     let work = self.plan_port_work_mut().unwrap();
@@ -301,13 +382,36 @@ impl RecordingContext {
                 work.parent = Some(current.read().recall_sequence());
                 work.current = Some(current);
                 let work = self.plan_port_work().unwrap();
-                match checked::active(&work.request, self, work.current.as_ref().unwrap()) {
+                let check = if let PlanRequest::Activate { successor, .. } = &work.request {
+                    match checked::locked(&work.request, self, work.current.as_ref().unwrap()) {
+                        Ok(_) => {
+                            let parent =
+                                Sequence(work.parent.unwrap().0.max(successor.sequence().0));
+                            self.plan_port_work_mut().unwrap().parent = Some(parent);
+                            let work = self.plan_port_work().unwrap();
+                            checked::activation::waiting(
+                                &work.request,
+                                self,
+                                work.current.as_ref().unwrap(),
+                            )
+                        }
+                        Err(failure) => Err(failure),
+                    }
+                } else {
+                    checked::active(&work.request, self, work.current.as_ref().unwrap())
+                };
+                match check {
                     Ok(_) => self.plan_port_work_mut().unwrap().stage = Stage::Read,
                     Err(failure) => self.retain_plan_check_failure(failure, ports.io)?,
                 }
                 Ok(PlanPortProgress::Progress)
             }
             Stage::Read => self.advance_plan_port_read(ports),
+            Stage::Effect => Ok(PlanPortProgress::EffectReady),
+            Stage::EffectFiling => self.advance_activation_filing(ports),
+            Stage::EffectFiled | Stage::Summary => self.advance_activation_summary(ports),
+            Stage::Native => self.advance_activation_native(ports),
+            Stage::TemplateFault => self.advance_activation_fault(ports),
             Stage::Refusal => {
                 if !self.record_plan_port_refusal(ports)? {
                     return Ok(PlanPortProgress::Pending);
@@ -357,6 +461,9 @@ impl RecordingContext {
             self.plan_port_work_mut().unwrap().stage = Stage::Complete;
             return Ok(PlanPortProgress::Complete);
         }
+        if matches!(work.request, PlanRequest::StepSuccessor { .. }) {
+            return self.finish_step_successor_read(ports.io);
+        }
         let retained = work.read.as_ref().unwrap();
         if let Some(proof) = &retained.refusal {
             let refusal = checked::read_refusal(self, &selector, proof)
@@ -382,7 +489,28 @@ impl RecordingContext {
         };
         let parent = proof.recall_sequence();
         let current = work.current.as_ref().unwrap();
+        if matches!(work.request, PlanRequest::Activate { .. }) {
+            let prepared = checked::activation::prepare(
+                &work.request,
+                self,
+                current,
+                proof,
+                work.turn.clone().unwrap(),
+                work.bound,
+            );
+            self.plan_port_work_mut().unwrap().parent = Some(parent);
+            match prepared {
+                Ok(prepared) => {
+                    let work = self.plan_port_work_mut().unwrap();
+                    work.activation = Some(ActivationWork::new(prepared));
+                    work.stage = Stage::Effect;
+                }
+                Err(failure) => self.retain_plan_check_failure(failure, ports.io)?,
+            }
+            return Ok(PlanPortProgress::Progress);
+        }
         let result = match &work.request {
+            PlanRequest::Activate { .. } | PlanRequest::StepSuccessor { .. } => unreachable!(),
             PlanRequest::AssessAct { .. } => checked::assess(
                 &work.request,
                 self,
@@ -409,6 +537,39 @@ impl RecordingContext {
                 Ok(PlanPortProgress::Progress)
             }
         }
+    }
+
+    fn finish_step_successor_read(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<PlanPortProgress, RunFailure> {
+        let retained = self.plan_port_work_mut().unwrap().read.take().unwrap();
+        match retained.completion {
+            ReadCompletion::Recorded(read) => {
+                match checked::CheckedStepSuccessor::from_read(self, read) {
+                    Ok(successor) => self.plan_port_work_mut().unwrap().successor = Some(successor),
+                    Err((read, detail)) => {
+                        self.plan_port_work_mut().unwrap().read =
+                            Some(read_driver::RetainedReadCompletion {
+                                completion: ReadCompletion::Recorded(read),
+                                refusal: retained.refusal,
+                            });
+                        return Err(self.plan_port_fault(io, detail));
+                    }
+                }
+            }
+            ReadCompletion::Refused(crate::flow::read::ReadFailure::Refused { .. })
+                if retained.refusal.is_some() =>
+            {
+                self.plan_port_work_mut().unwrap().read = Some(retained);
+            }
+            _ => {
+                self.plan_port_work_mut().unwrap().read = Some(retained);
+                return Err(self.plan_port_fault(io, "step query lacks its complete read outcome"));
+            }
+        }
+        self.plan_port_work_mut().unwrap().stage = Stage::Complete;
+        Ok(PlanPortProgress::Complete)
     }
 
     fn retain_plan_check_failure(
@@ -451,6 +612,7 @@ impl RecordingContext {
         }
         if !work.cancelled
             && work.refusal.is_none()
+            && !matches!(work.request, PlanRequest::StepSuccessor { .. })
             && !self.plan_cache.committed.as_ref().is_some_and(|current| {
                 work.current
                     .as_ref()
@@ -468,8 +630,16 @@ impl RecordingContext {
         // This port borrows the caller's Decision. It never disarms that wait.
         Ok(Some(if account.work.cancelled {
             PlanPortCompletion::Cancelled(account)
+        } else if matches!(account.work.request, PlanRequest::StepSuccessor { .. }) {
+            if account.work.successor.is_some() {
+                PlanPortCompletion::Successor(account)
+            } else {
+                PlanPortCompletion::QueryRefused(account)
+            }
         } else if let Some(refusal) = account.work.refusal.clone() {
             PlanPortCompletion::Refused { refusal, account }
+        } else if matches!(account.work.request, PlanRequest::Activate { .. }) {
+            PlanPortCompletion::Activated(ActivatedStep { account })
         } else if matches!(account.work.request, PlanRequest::AssessAct { .. }) {
             PlanPortCompletion::Allowed(AllowedAct { account })
         } else {

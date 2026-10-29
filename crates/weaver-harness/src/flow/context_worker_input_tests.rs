@@ -95,7 +95,8 @@ fn worker_input_gate_child() {
         && !mode.ends_with("-source-author")
         && !mode.ends_with("-task-author")
     {
-        let flags_turn = mode.contains("-flags-turn-boundary");
+        let flags_turn =
+            mode.contains("-flags-turn-boundary") || mode.contains("-port-activation-");
         if flags_turn {
             let end = Instant::now() + Duration::from_secs(15);
             while !root.join("flags-turn-request").exists() {
@@ -130,7 +131,12 @@ fn worker_input_gate_child() {
                         assert!(matches!(request.payload, Payload::Frame(_)));
                     }
                 }
-                Ok(n) if flags_turn && (mode.ends_with("-stop") || mode.ends_with("-leave")) => {
+                Ok(n)
+                    if flags_turn
+                        && (mode.ends_with("-stop")
+                            || mode.ends_with("-leave")
+                            || mode.ends_with("-failed")) =>
+                {
                     let answer: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
                     if mode.ends_with("-stop")
                         && answer.exchange.ordinal == u64::MAX
@@ -150,6 +156,9 @@ fn worker_input_gate_child() {
                         // disposition. Record even an erroneous Stop Lower so
                         // the parent, rather than this child alone, rejects it.
                         std::fs::write(root.join("flags-turn-lowered"), b"lower\n").unwrap();
+                        if mode.contains("-port-activation-") {
+                            std::fs::write(root.join("plan-port-lowered"), b"lower\n").unwrap();
+                        }
                         packet(
                             port.as_raw_fd(),
                             &OrganEnvelope {
