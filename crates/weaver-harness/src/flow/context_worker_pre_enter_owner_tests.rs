@@ -532,6 +532,13 @@ fn diagnostic_busy_handoff_stops_with_original_custody_and_no_ready() {
     assert_eq!(owner.progress(), FoundationAdmissionProgress::Stopped);
     assert_eq!(owner.process_exit(), Some(FoundationProcessExit::Failure));
     assert!(
+        nix::fcntl::OFlag::from_bits_retain(
+            nix::fcntl::fcntl(owner.listener.interest().0, nix::fcntl::FcntlArg::F_GETFL).unwrap()
+        )
+        .contains(nix::fcntl::OFlag::O_NONBLOCK),
+        "a rejected peer handoff cannot change the retained listener's mode"
+    );
+    assert!(
         owner
             .detail()
             .unwrap()

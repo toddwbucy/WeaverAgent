@@ -34,6 +34,31 @@ const _: fn() = || {
 };
 
 #[test]
+fn lifecycle_owned_peer_acquires_nonblocking_mode_with_queued_input() {
+    let (end, peer) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+    let original = OFlag::from_bits_retain(fcntl(&end, FcntlArg::F_GETFL).unwrap());
+    assert!(!original.contains(OFlag::O_NONBLOCK));
+    send_envelope(&peer, 44);
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    assert_eq!(
+        OFlag::from_bits_retain(fcntl(owner.fd(), FcntlArg::F_GETFL).unwrap()),
+        original | OFlag::O_NONBLOCK
+    );
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    assert_eq!(
+        owner.take_completion().unwrap().unwrap().envelope,
+        envelope(44)
+    );
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Pending);
+}
+
+#[test]
 fn diagnostic_handoff_preserves_held_request_and_pending_answer() {
     let (end, peer) = pair();
     let mut owner = LifecyclePeer::from_owned(end).unwrap();

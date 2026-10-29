@@ -158,11 +158,17 @@ fn observed(peer: &OwnedFd, ordinal: u64, expected: AgentState, end: Instant) {
     );
 }
 
-fn malformed_management(peer: &OwnedFd, source: &EnterEnvelope, state: AgentState, end: Instant) {
+fn malformed_management(
+    peer: &OwnedFd,
+    source: &EnterEnvelope,
+    state: AgentState,
+    first_ordinal: u64,
+    end: Instant,
+) {
     let ordinary = OrganEnvelope {
         exchange: ExchangeId {
             opener: Opener::Admin,
-            ordinal: 930,
+            ordinal: first_ordinal,
         },
         position: Position::Open,
         payload: Payload::Directive(LifecycleDirective::Observe),
@@ -178,32 +184,40 @@ fn malformed_management(peer: &OwnedFd, source: &EnterEnvelope, state: AgentStat
         payload: Box::new(crate::channel::diagnostic::diagnostic_payload(source).unwrap()),
     });
     for (index, (mut request, reason, handles)) in [
-        (foreign, LifecycleRefusal::Malformed, false),
-        (continuation, LifecycleRefusal::Malformed, false),
-        (answer, LifecycleRefusal::Malformed, false),
-        (ordinary, LifecycleRefusal::Malformed, true),
-        (legacy, LifecycleRefusal::OutOfOrder, true),
+        (foreign, LifecycleRefusal::Malformed, 0),
+        (continuation, LifecycleRefusal::Malformed, 0),
+        (answer, LifecycleRefusal::Malformed, 0),
+        (ordinary.clone(), LifecycleRefusal::Malformed, 1),
+        (ordinary, LifecycleRefusal::Malformed, 2),
+        (legacy.clone(), LifecycleRefusal::OutOfOrder, 1),
+        (legacy, LifecycleRefusal::OutOfOrder, 2),
     ]
     .into_iter()
     .enumerate()
     {
-        request.exchange.ordinal += index as u64;
+        request.exchange.ordinal += 2 * index as u64;
         let (sink, mut reader) = UnixStream::pair().unwrap();
         let (member, mut watcher) = UnixStream::pair().unwrap();
-        let descriptors = if handles {
-            vec![sink.as_raw_fd(), member.as_raw_fd()]
-        } else {
-            Vec::new()
-        };
-        send_enter(peer, &serde_json::to_vec(&request).unwrap(), &descriptors);
+        let descriptors = [sink.as_raw_fd(), member.as_raw_fd()];
+        send_enter(
+            peer,
+            &serde_json::to_vec(&request).unwrap(),
+            &descriptors[..handles],
+        );
         drop((sink, member));
-        let refusal: OrganEnvelope = serde_json::from_slice(&receive(peer, end)).unwrap();
-        assert_eq!(refusal.exchange, request.exchange);
-        assert_eq!(refusal.position, Position::Close);
-        assert_eq!(refusal.payload, Payload::Refusal(reason));
+        let refusal: serde_json::Value = serde_json::from_slice(&receive(peer, end)).unwrap();
+        assert_eq!(
+            refusal,
+            serde_json::to_value(OrganEnvelope {
+                exchange: request.exchange.clone(),
+                position: Position::Close,
+                payload: Payload::Refusal(reason),
+            })
+            .unwrap()
+        );
         closed_empty(&mut reader, end);
         closed_empty(&mut watcher, end);
-        observed(peer, 940 + index as u64, state.clone(), end);
+        observed(peer, request.exchange.ordinal + 1, state.clone(), end);
     }
 }
 
@@ -320,7 +334,7 @@ pub(super) fn control(
         closed_empty(&mut rejected_reader, end);
         closed_empty(&mut rejected_member, end);
         observed(&peer, 926, AgentState::Active, end);
-        malformed_management(&peer, &envelope, AgentState::Active, end);
+        malformed_management(&peer, &envelope, AgentState::Active, 1000, end);
         std::fs::write(root.join("diagnostic-continue"), b"finish\n").unwrap();
         loop {
             send(&peer, 922, LifecycleDirective::Observe);
@@ -349,7 +363,7 @@ pub(super) fn control(
             Payload::Refusal(LifecycleRefusal::OutOfOrder)
         );
         observed(&peer, 927, AgentState::Idle, end);
-        malformed_management(&peer, &envelope, AgentState::Idle, end);
+        malformed_management(&peer, &envelope, AgentState::Idle, 1100, end);
         send(
             &peer,
             924,
@@ -379,11 +393,9 @@ pub(super) fn control(
                 ..
             })
         ));
-        while child.try_wait().unwrap().is_none() {
-            assert!(Instant::now() < end);
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(child.wait().unwrap().success());
+        let (status, expired) = crate::test_child::wait_until(child, end).unwrap();
+        assert!(!expired, "Diagnostic replay did not finish Leave");
+        assert!(status.success());
         responder.join().unwrap();
     });
     assert!(root.join("diagnostic-released").exists());
@@ -488,14 +500,9 @@ fn opener_pressure(
             ..
         })
     ));
-    while child.try_wait().unwrap().is_none() {
-        assert!(
-            Instant::now() < end,
-            "failed Diagnostic entry did not finish rollback"
-        );
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    assert!(child.wait().unwrap().success());
+    let (status, expired) = crate::test_child::wait_until(child, end).unwrap();
+    assert!(!expired, "failed Diagnostic entry did not finish rollback");
+    assert!(status.success());
     assert!(!root.join("diagnostic-spawned").exists());
     assert!(!root.join("diagnostic-forbidden-organ").exists());
     for endpoint in [&*reader, &*member] {

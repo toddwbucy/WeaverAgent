@@ -408,18 +408,17 @@ impl LifecyclePeer {
     }
 
     pub(super) fn from_channel(channel: OrganChannel) -> Result<Self, Failure> {
-        // Diagnostic uses the same original connection in blocking mode. The
-        // admission pump regains its nonblocking transport after a pre-load
-        // refusal, including any request already queued on this connection.
-        let flags = fcntl(channel.as_fd(), FcntlArg::F_GETFL).map_err(io_failure)?;
-        fcntl(
-            channel.as_fd(),
-            FcntlArg::F_SETFL(OFlag::from_bits_retain(flags) | OFlag::O_NONBLOCK),
-        )
-        .map_err(io_failure)?;
         Self::from_owned(channel.into_fd())
     }
     pub(super) fn from_owned(end: OwnedFd) -> Result<Self, Failure> {
+        // Every admission path acquires nonblocking mode here, including the
+        // original peer returned by Diagnostic after a pre-load refusal.
+        let flags = fcntl(end.as_fd(), FcntlArg::F_GETFL).map_err(io_failure)?;
+        fcntl(
+            end.as_fd(),
+            FcntlArg::F_SETFL(OFlag::from_bits_retain(flags) | OFlag::O_NONBLOCK),
+        )
+        .map_err(io_failure)?;
         Ok(Self {
             sender: OrganPort::from_owned(end)?,
             held: None,

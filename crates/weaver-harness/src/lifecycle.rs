@@ -181,9 +181,9 @@ pub(crate) fn render_close_with_finish(
 /// declaration here would be one fact in two places, per
 /// `weaver-types-Spec` section 4's rule for the record.
 ///
-/// A refusal that could not be recorded is latched on the record (#116), and
-/// the answer to admin that follows reads the latch and ends service rather
-/// than announcing over the missing refusal.
+/// A serving refusal that could not be recorded latches the record (#116),
+/// preventing its announcement. Diagnostic setup has no replay bracket and
+/// owes no refusal event. Its answer to admin retains the usual record check.
 fn author_lifecycle_refusal(run: &mut Run, refusal: &LifecycleRefusal) {
     // Diagnostic setup has no replay bracket yet. Its Enter refusal reaches
     // admin, but cannot precede replay.opened on the diagnostic record (Spec 3).
@@ -688,7 +688,7 @@ impl Harness {
                 Ok(Wake::Connection) => {
                     let connection = pending.take().expect("the wake proved a connection");
                     let received = if connection.is_diagnostic_wire() {
-                        match receive_entered(&connection) {
+                        match receive_entered(&connection, self.record_holds().is_err()) {
                             Ok(Some(envelope)) => Ok((envelope, None, None)),
                             Ok(None) => {
                                 pending = Some(connection);
@@ -3969,7 +3969,7 @@ fn hear_dial(
     if !readable_by(&connection, deadline) {
         return;
     }
-    let Ok(Some(envelope)) = receive_entered(&connection) else {
+    let Ok(Some(envelope)) = receive_entered(&connection, latched) else {
         return;
     };
     let answer = match envelope.payload {

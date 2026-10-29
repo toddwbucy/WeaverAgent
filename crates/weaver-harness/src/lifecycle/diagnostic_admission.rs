@@ -14,20 +14,18 @@ pub(crate) enum DiagnosticService {
 /// reinterpreting its binding or dropping into the old Serving implementation.
 pub(crate) fn receive_entered(
     connection: &OrganChannel,
+    record_failed: bool,
 ) -> Result<Option<OrganEnvelope>, ChannelFault> {
+    // Decoding can itself answer a refusal. The caller's current record latch
+    // therefore gates that answer as it gates ordinary lifecycle dispatch.
+    if record_failed {
+        return Err(ChannelFault::Closed);
+    }
     if !connection.is_diagnostic_wire() {
         return connection.recv().map(Some);
     }
     match connection.recv_diagnostic()? {
         DiagnosticRequest::Ordinary(envelope) => Ok(Some(envelope)),
-        DiagnosticRequest::Enter(source) => {
-            connection.send(&OrganEnvelope {
-                exchange: source.exchange.clone(),
-                position: Position::Close,
-                payload: weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder),
-            })?;
-            Ok(None)
-        }
         DiagnosticRequest::Refused { exchange, reason } => {
             connection.send(&OrganEnvelope {
                 exchange,
