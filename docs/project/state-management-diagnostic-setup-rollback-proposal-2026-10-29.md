@@ -1,6 +1,6 @@
 # Diagnostic setup rollback proposal
 
-Date: 2026-10-29. Proposed authority for #146 E, #390 and #395 AI1.
+Date: 2026-10-29. Proposed authority for #146 E, #390, #395 AI1 and the Diagnostic part of #397 AK1.
 Base: main f6f707799e2b0349180582032bc909a1e021a383.
 Draft proposal: #398. Branch: docs/state-diagnostic-setup-rollback.
 
@@ -38,7 +38,11 @@ that the current implementation conforms.
    admission was withdrawn, not a measurement that the device is empty. Left
    remains the cleanup outcome. Ready selected after all confirmations remains
    committed even if its delivery is delayed; a later rollback uses the entered
-   rule. Peer loss alone changes no lifecycle outcome.
+   rule. Pending setup and refused partial Diagnostic custody report InTransition
+   to Observe, not Idle; SavePoint and Stop refuse OutOfOrder. Before-load refusal
+   without a retained run keeps its existing Unloaded observation. This addresses
+   the Diagnostic part of Planner review 5696280646 AK1; its serving case remains
+   separate. Peer loss alone changes no lifecycle outcome.
 2. Setup settlement shares the existing worker Leave interval from rollback
    acceptance. The worker drains a sent Admit to its exact terminal before any
    Release. It sends no Open after rollback. A withheld Admit ends through owned
@@ -53,7 +57,11 @@ that the current implementation conforms.
 The alternative to election 1 is to retire Enter without an answer once rollback
 is accepted, requiring an explicit exception to the aggregate contract, or to add
 a dedicated setup-cancelled refusal and update both endpoints' vocabularies.
-NoResidency preserves the wire but overloads the code; that tradeoff is the
+Keeping Idle for refused partial custody would preserve the current answer but
+continue to report readiness the failed setup never established. A new public
+refused-load state would require paired enum and reader changes. InTransition
+uses the existing answer for an unfinished lifecycle. NoResidency preserves the
+wire but overloads the code; that tradeoff is the
 operator's to elect. The alternative to draining Admit is to end the child at
 rollback acceptance. The proposal keeps the existing exchange ordering and gives
 normal settlement the remainder of the already-running Leave bound.

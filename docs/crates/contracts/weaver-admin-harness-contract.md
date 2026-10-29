@@ -336,7 +336,11 @@ already established, the original Enter closes NoResidency, meaning the aggregat
 was withdrawn; that refusal is not a claim that device cleanup has finished.
 Only the rollback's later Left confirms its completed cleanup. The two peers may
 be the same or different; a lost or blocked Enter answer does not delay cleanup.
-This adds no S1 operator verb, wire variant or timing field.
+Pending setup and a refused partial Diagnostic run answer Observe as InTransition
+until cleanup, with SavePoint and Stop OutOfOrder. A before-load refusal retaining
+no run keeps its existing BeforeEnter/Unloaded observation. This adds no S1
+operator verb, AgentState, wire variant or timing field. The serving refused-run
+observation is outside this Diagnostic election.
 
 **`Left` carries `forced` and `no_state`**, each required on the wire with no default, `no_state` true where the run has no state to keep (every diagnostic binding, graceful or forced, and a serving run with no member seam), so a `Left` with no save point says on the wire whether there was nothing to keep or the save point was not taken; `forced` the leave's state at its
 end per `weaver-admin-Spec` section 3's definition (directed forced, joined, a declared bound passing, or a dead gate or SPU), so every

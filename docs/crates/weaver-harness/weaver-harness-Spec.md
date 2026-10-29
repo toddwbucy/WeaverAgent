@@ -2805,8 +2805,12 @@ listener: the state identity answer, SPU Admit, decode Open and elected classifi
 readiness. Partial messages, pending answers and the exact Enter exchange remain
 owned. Peer loss retires delivery alone. A silent new peer or a blocked answer
 cannot prevent the setup owner from hearing rollback or its current deadline.
-An Observe that reaches the worker during setup answers InTransition. Other
-directives refuse OutOfOrder, except a forced Leave with rollback true.
+An Observe that reaches the worker during setup answers InTransition. This also
+holds after an Enter refusal while partial Diagnostic resources remain held for
+rollback: refusal custody is not a ready Idle run. SavePoint, Stop and other
+directives refuse OutOfOrder, except a forced Leave with rollback true. The
+before-load refusal that retained no run still returns to BeforeEnter and its
+existing Unloaded observation. Recorder failure still bars a successful answer.
 
 Accepting that rollback before Ready commits ends setup continuation. No further
 child is forked, no new identity/Open/classifier work starts and no replay grant
@@ -2825,6 +2829,7 @@ nor escalation and run-end duties (admin Spec section 3, S1 rollback).
 | State | Event | Required continuation |
 | --- | --- | --- |
 | Setup, no rollback accepted | An arm confirms or refuses | Continue setup or retain the exact Enter refusal under the existing aggregate rule; Ready requires every elected arm. |
+| Refused setup, partial run held | Observe, SavePoint or Stop | Answer InTransition to Observe and OutOfOrder to SavePoint/Stop; retain the exact established Enter refusal and await rollback, never replay. |
 | Setup, before Ready commits | Forced rollback Leave accepted | Retain both exchanges, retire setup continuation and admit the original Enter refusal above. Enter reply backpressure cannot delay cleanup. |
 | Rollback, identity ask pending | Any partial or late identity answer | Close the state ask end and retain no new identity work; no SPU fork follows. |
 | Rollback, Admit not completely sent | Its child exists | Close the child's ends and reap under the retained deadline; send neither a partial retry nor Release before a completed Admit. |
