@@ -1786,7 +1786,9 @@ component faults. The table extends the serialized lifecycle reducer, not admin 
 **HARNESS-PLAN-PORTS.** Implement Spec 07 PLAN-PORT in flow/plan.rs. Its public
 operations request activation, predicate checking, work-reference construction, review
 assessment binding, category-authorized attest_closure, closure and break recording.
-Each returns its typed result after the source/receipt conditions in Spec 07. No method
+work_reference(expected,step_id,span,through) is Spec 07 WORK-REFERENCE's constructor
+and returns its checked WorkRef or the recorded PlanOperationRefused. Each operation
+returns its typed result after the source/receipt conditions in Spec 07. No method
 selects a next step, launches a review, interprets a review script or starts a decode
 pass. The caller supplies ReviewAssessment and the primitive checks its association with
 a held completed review pair and unchanged WorkRef. attest_closure requires
