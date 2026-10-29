@@ -30,6 +30,7 @@
 //! use weaver_types::{LifecycleAnswer, LifecycleDirective, LifecycleRefusal};
 //! fn directive_name(d: &LifecycleDirective) -> &'static str {
 //!     match d {
+//!         LifecycleDirective::PlanUpdate { .. } => "plan_update",
 //!         LifecycleDirective::Enter { .. } => "enter",
 //!         LifecycleDirective::Leave { .. } => "leave",
 //!         LifecycleDirective::Stop { .. } => "stop",
@@ -52,6 +53,7 @@
 //! }
 //! fn answer_name(a: &LifecycleAnswer) -> &'static str {
 //!     match a {
+//!         LifecycleAnswer::PlanUpdated { .. } => "plan_updated",
 //!         LifecycleAnswer::Ready => "ready",
 //!         LifecycleAnswer::Left { .. } => "left",
 //!         LifecycleAnswer::SavePointTaken { .. } => "save_point_taken",
@@ -72,6 +74,7 @@
 //!     match r {
 //!         LifecycleRefusal::StateManagementInvalid { .. } => "state_management_invalid",
 //!         LifecycleRefusal::StatePersistenceInvalid { .. } => "state_persistence_invalid",
+//!         LifecycleRefusal::PlanUpdateRefused { .. } => "plan_update_refused",
 //!         LifecycleRefusal::Unauthorized => "unauthorized",
 //!         LifecycleRefusal::Malformed => "malformed",
 //!         LifecycleRefusal::NoSuchAgent => "no_such_agent",

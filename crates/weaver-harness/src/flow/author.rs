@@ -2,12 +2,12 @@
 //! This prepares one event and performs no submission or nested authoring.
 
 use weaver_trace::serving::{Channel, Envelope, Event, Kind, Origin, Payload};
-use weaver_trace::{Cause, MonotonicNs, RunRef, Sequence, SessionRef, Subsystem, TurnRef};
+use weaver_trace::{MonotonicNs, RunRef, Sequence, SessionRef, Subsystem, TurnRef};
 
 #[derive(Debug, Clone)]
 pub(super) enum AuthoredSource {
     BoundaryInput(u32),
-    ManagementInput(Cause),
+    ManagementInput(super::plan::ManagementInput),
     Model,
     Tool,
     Loop,
@@ -118,7 +118,7 @@ fn attribution(
             _ => None,
         },
         K::PlanEvent => match source {
-            S::ManagementInput(_) => Some((C::Input, O::Operator)),
+            S::ManagementInput(input) if input.cause().uid == 0 => Some((C::Input, O::Operator)),
             S::Loop => Some((C::Internal, O::Loop)),
             _ => None,
         },

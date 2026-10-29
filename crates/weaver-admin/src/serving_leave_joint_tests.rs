@@ -69,6 +69,14 @@ fn existing_config(root: &Path, agent: String) -> ServiceConfig {
     }
 }
 
+struct JoiningAdmin(std::process::Child);
+impl Drop for JoiningAdmin {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[test]
 #[ignore = "separate invocation launched by the demand-save joint participant"]
 fn demand_save_joint_competing_admin() {
@@ -105,6 +113,41 @@ fn demand_save_joint_competing_admin() {
         ),
         "forced unload during save: {failure:?}"
     );
+}
+
+#[test]
+#[ignore = "separate force invocation in the capture-refusal joint circuit"]
+fn capture_refusal_joint_force_admin() {
+    let root = PathBuf::from(std::env::var_os("WEAVER_LEAVE_JOINT_ROOT").unwrap());
+    let host: serde_json::Value = serde_json::from_slice(&wait(&root, "host.json")).unwrap();
+    wait(&root, "capture-collision.json");
+    let config = existing_config(&root, host["agent"].as_str().unwrap().into());
+    crate::TEST_WORKER_UID.with(|uid| uid.set(Some(0)));
+    let result = run_authorized(
+        &config,
+        &AgentName(config.agent.clone()),
+        Cause { uid: 75 },
+        crate::UNLOAD_BOUNDS,
+        |_| Ok(0),
+    )
+    .unwrap();
+    crate::TEST_WORKER_UID.with(|uid| uid.set(None));
+    let evidence = result
+        .joined
+        .as_ref()
+        .expect("force joined the held original unload");
+    let received = evidence.received.as_ref().unwrap();
+    assert!(matches!(
+        received.envelope.payload,
+        weaver_types::state_flow::capture::CapturePayload::Answer(
+            weaver_types::state_flow::capture::CaptureAnswer::Left {
+                save_point: None,
+                forced: true,
+                no_state: false,
+            }
+        )
+    ));
+    fs::write(root.join("joined-refused.json"), &received.wire).unwrap();
 }
 
 fn publish_seed(root: &Path, config: &ServiceConfig, payload: &EnterPayload) -> StartIdentity {
@@ -354,7 +397,22 @@ fn forced_leave_joint_actual_admin() {
         );
         return;
     }
-    let result = run_mode(
+    let mode = host["mode"].as_str().unwrap();
+    let joining = mode.contains("-joined-capture-refusal");
+    let mut joiner =
+        joining.then(|| {
+            JoiningAdmin(std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "serving_leave::invocation::tests::joint::capture_refusal_joint_force_admin",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("WEAVER_LEAVE_JOINT_ROOT", &root)
+            .spawn()
+            .unwrap())
+        });
+    let mut result = run_mode(
         &config,
         &AgentName(config.agent.clone()),
         Cause { uid: 74 },
@@ -364,9 +422,111 @@ fn forced_leave_joint_actual_admin() {
             term: Duration::from_secs(1),
             kill: Duration::from_secs(1),
         },
-        !host["mode"].as_str().unwrap().contains("-graceful-save"),
+        !mode.contains("-graceful-save"),
         |_| Ok(0),
     );
+    if let Some(joiner) = &mut joiner {
+        assert!(
+            joiner.0.wait().unwrap().success(),
+            "actual joining force failed"
+        );
+    }
+    let failed_cleanup = mode.contains("-failed-cleanup-capture-refusal");
+    if mode.ends_with("-capture-refusal")
+        && mode.contains("-graceful-save")
+        && !joining
+        && !failed_cleanup
+    {
+        let failure = result
+            .as_ref()
+            .expect_err("first graceful capture must refuse");
+        assert!(
+            failure.cleanup.is_none(),
+            "S9 performs no failed-run escalation: {failure:?}"
+        );
+        let evidence = failure.evidence.as_ref().unwrap();
+        assert!(evidence.report.is_none() && evidence.completed.is_none() && !evidence.committed);
+        assert!(evidence.received.iter().any(|received| matches!(
+            received.envelope.payload,
+            weaver_types::state_flow::capture::CapturePayload::SavePointCaptureRefused(_)
+        )));
+        // The parent checks the first recorded cause against this exact leg
+        // after the worker drains its trace. At S9 that file is not yet saved.
+        let expiry_missed = mode.contains("-joint-expiry-").then(|| {
+            evidence
+                .received
+                .iter()
+                .find_map(|received| match &received.envelope.payload {
+                    weaver_types::state_flow::capture::CapturePayload::SavePointCaptureRefused(
+                        value,
+                    ) => Some(value.missed),
+                    _ => None,
+                })
+                .expect("cleanup acknowledgement before graceful refusal")
+        });
+        assert!(matches!(
+            evidence.received.last().unwrap().envelope.payload,
+            weaver_types::state_flow::capture::CapturePayload::Refusal(
+                weaver_types::state_flow::capture::CaptureRefusal::Save(
+                    weaver_types::state_flow::capture::SaveRefusal::SavePointNotTaken {
+                        missed,
+                    }
+                )
+            )
+        if missed == if let Some(missed) = expiry_missed {
+            missed
+        } else if mode.contains("-preparation-capture-refusal") {
+            weaver_types::state_flow::capture::SavePointLeg::Published
+        } else if mode.contains("-finished-timeout-capture-refusal") {
+            weaver_types::state_flow::capture::SavePointLeg::Finished
+        } else {
+            weaver_types::state_flow::capture::SavePointLeg::Answer
+        }));
+        for (index, received) in evidence.received.iter().enumerate() {
+            fs::write(
+                root.join(format!("s9-admin-received-{index}.json")),
+                &received.wire,
+            )
+            .unwrap();
+        }
+        wait(&root, "worker-s9.json");
+        assert!(start::run_lock_held(&directory).unwrap());
+        assert!(path.exists());
+        assert_eq!(
+            save_points::read_marker(&config.root).unwrap(),
+            save_points::Marker::Open {
+                run: payload.run.0.clone()
+            }
+        );
+        assert_eq!(
+            fs::read_to_string(
+                config
+                    .territory
+                    .join("save-points")
+                    .join(save_points::MANIFEST)
+            )
+            .unwrap()
+            .lines()
+            .count(),
+            1,
+            "refusal publishes no index entry"
+        );
+        // The same actual admin path retries after releasing its invocation
+        // lock. Observe supplies the retained run facts; no new Ready is made.
+        result = run_mode(
+            &config,
+            &AgentName(config.agent.clone()),
+            Cause { uid: 74 },
+            UnloadBounds {
+                leave: Duration::from_secs(20),
+                after_left: Duration::from_secs(5),
+                term: Duration::from_secs(1),
+                kill: Duration::from_secs(1),
+            },
+            false,
+            |_| Ok(0),
+        );
+    }
     crate::TEST_WORKER_UID.with(|uid| uid.set(None));
     let evidence = match &result {
         Ok(result) => result.evidence.as_deref().expect("actual capture evidence"),
@@ -392,6 +552,86 @@ fn forced_leave_joint_actual_admin() {
     // conclusion. It cannot race a fresh loader in this private fixture.
     let _inspection =
         start::take_invocation_lock(&directory, crate::verb_table::HolderVerb::Load).unwrap();
+    if failed_cleanup {
+        let failure =
+            result.expect_err("failed cleanup cannot acknowledge refusal or complete Left");
+        assert!(failure.cleanup.is_none(), "{failure:?}");
+        let public: serde_json::Value =
+            serde_json::from_str(&crate::surface::render_serving_refusal(&failure.refusal()))
+                .unwrap();
+        // The worker retained its failure on trace and closed this peer without
+        // a typed terminal answer. ADMIN-SAVE forbids inferring a phase or a
+        // FailedRun message from that absence: admin reports Unanswered.
+        assert_eq!(public["kind"], "unanswered");
+        let evidence = failure.evidence.as_ref().unwrap();
+        assert!(evidence.report.is_none() && evidence.completed.is_none() && !evidence.committed);
+        assert!(!evidence.received.iter().any(|received| matches!(
+            received.envelope.payload,
+            weaver_types::state_flow::capture::CapturePayload::SavePointCaptureRefused(_)
+                | weaver_types::state_flow::capture::CapturePayload::Answer(_)
+        )));
+        assert_eq!(
+            save_points::read_marker(&config.root).unwrap(),
+            save_points::Marker::Open { run: payload.run.0 }
+        );
+        let saves = config.territory.join("save-points");
+        assert_eq!(
+            fs::read_to_string(saves.join(save_points::MANIFEST))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        assert_eq!(fs::read_dir(saves).unwrap().count(), 2);
+        write(
+            &root,
+            "failed-cleanup.json",
+            &json!({"admin":"unanswered","open":true}),
+        );
+        return;
+    }
+    if mode.ends_with("-capture-refusal") && (!mode.contains("-graceful-save") || joining) {
+        let result = result.expect("refused forced capture must still complete real Leave");
+        let evidence = result.evidence.as_ref().unwrap();
+        assert!(evidence.report.is_none() && evidence.completed.is_none() && !evidence.committed);
+        assert!(evidence.received.iter().any(|received| matches!(
+            received.envelope.payload,
+            weaver_types::state_flow::capture::CapturePayload::SavePointCaptureRefused(_)
+        )));
+        assert!(matches!(
+            evidence.received.last().unwrap().envelope.payload,
+            weaver_types::state_flow::capture::CapturePayload::Answer(
+                weaver_types::state_flow::capture::CaptureAnswer::Left {
+                    save_point: None,
+                    forced: true,
+                    no_state: false,
+                }
+            )
+        ));
+        assert_eq!(
+            save_points::read_marker(&config.root).unwrap(),
+            save_points::Marker::Closed { run: payload.run.0 }
+        );
+        let saves = config.territory.join("save-points");
+        assert_eq!(
+            fs::read_to_string(saves.join(save_points::MANIFEST))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        assert_eq!(
+            fs::read_dir(saves).unwrap().count(),
+            2,
+            "only the seed and index remain"
+        );
+        write(
+            &root,
+            "concluded-refused.json",
+            &json!({"save_report":null,"closed":true}),
+        );
+        return;
+    }
     if host["mode"].as_str().unwrap().ends_with("-bad-release") {
         let failure = result.expect_err("a wrong member receipt cannot complete Left");
         assert!(failure.cleanup.is_none(), "{failure:?}");

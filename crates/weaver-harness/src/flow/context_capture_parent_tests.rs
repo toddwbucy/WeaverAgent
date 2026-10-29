@@ -12,6 +12,9 @@ use weaver_types::{ExchangeId, Opener, Position};
 #[path = "context_capture_demand_tests.rs"]
 mod demand_tests;
 
+#[path = "context_capture_refusal_tests.rs"]
+mod refusal_tests;
+
 struct Parent<'a> {
     member: Member<'a>,
     capture: ServingCapture,
@@ -1169,6 +1172,20 @@ fn leave_capture_parent_records_exact_member_refusal_only_after_matching_abort()
             }
         }
         assert_eq!(parent.step().unwrap(), ServingCaptureProgress::Refused);
+        let acknowledgement = parent.next();
+        assert_eq!(acknowledgement.exchange, parent.exchange);
+        assert_eq!(acknowledgement.position, Position::Continue);
+        assert_eq!(
+            acknowledgement.payload,
+            CapturePayload::SavePointCaptureRefused(CaptureRefused {
+                capture_id: id,
+                missed: if finished {
+                    SavePointLeg::Finished
+                } else {
+                    SavePointLeg::Answer
+                },
+            })
+        );
         assert_eq!(
             parent.member.records(Kind::SavePoint)[1]["payload"]["refusal_code"],
             "snapshot_failed"

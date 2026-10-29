@@ -8,6 +8,8 @@ use crate::{FoundationGracefulLeaveHandoff, FoundationRun};
 use std::os::fd::OwnedFd;
 use weaver_trace::serving;
 
+#[path = "context_worker_save_progress_tests.rs"]
+mod save_progress;
 #[path = "context_worker_organ_loss_tail_tests.rs"]
 mod tail;
 #[path = "context_worker_world_request_tests.rs"]
@@ -65,8 +67,23 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
 pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
     if mode.ends_with("-spu") || mode.ends_with("-spu-release") {
         let root = std::path::PathBuf::from(std::env::var("WEAVER_WORKER_INPUT_ROOT").unwrap());
-        wait_file(&root, "organ-loss-image-held");
+        if mode.contains("-queued-author-") {
+            wait_file(&root, "organ-loss-requested-author-waiting");
+            nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
+        } else if mode.contains("-queued-boundary-") || mode.contains("-queued-requested-") {
+            wait_file(&root, "organ-loss-save-queued");
+            nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
+            std::fs::write(root.join("organ-loss-decode-closed"), b"closed").unwrap();
+            wait_file(&root, "organ-loss-queued-boundary-checked");
+        } else {
+            wait_file(&root, "organ-loss-image-held");
+        }
         eprintln!("{{\"fixture\":\"SPU last word before image verification\"}}");
+        if mode.contains("-held-reply-") {
+            nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
+            std::fs::write(root.join("organ-loss-decode-closed"), b"closed").unwrap();
+            wait_file(&root, "organ-loss-held-reply-reduced");
+        }
         if mode.ends_with("-spu-release") {
             if mode.contains("-report-queued-") {
                 // Decode EOF wakes a worker waiting on the paused capture.
@@ -137,12 +154,25 @@ pub(in crate::flow::context::worker_startup) fn handoff(
     let (bytes, packets, peer) = std::thread::scope(|scope| {
         let responder = scope.spawn(|| {
             while !done.load(Ordering::SeqCst) {
+                if mode.contains("-held-reply-")
+                    && root.join("organ-loss-image-held").exists()
+                    && !root.join("organ-loss-member-resume").exists()
+                {
+                    std::fs::write(
+                        root.join("organ-loss-member-paused"),
+                        b"acknowledge pending",
+                    )
+                    .unwrap();
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
                 member.step_live(mode);
                 std::thread::sleep(Duration::from_millis(1));
             }
         });
         let recorder = scope.spawn(|| {
             let mut bytes = Vec::new();
+            let mut scanned = 0;
             while !done.load(Ordering::SeqCst) {
                 if hold_trace.load(Ordering::SeqCst) {
                     trace_paused.store(true, Ordering::SeqCst);
@@ -150,7 +180,11 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                     continue;
                 }
                 let _ = reader.read_to_end(&mut bytes);
-                for line in bytes.split(|byte| *byte == b'\n') {
+                // Pressure fixtures retain a large trace. Parse each completed
+                // row once; leave a partial trailing row for the next read.
+                while let Some(length) = bytes[scanned..].iter().position(|byte| *byte == b'\n') {
+                    let line = &bytes[scanned..scanned + length];
+                    scanned += length + 1;
                     if let Ok(row) = serde_json::from_slice::<serde_json::Value>(line)
                         && row["kind"] == "fault"
                         && row["payload"]["case"] == "organ_death_observed"
@@ -227,8 +261,14 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                             }
                         }
                         std::fs::write(root.join("organ-loss-image-held"), &image_bytes).unwrap();
+                        if mode.contains("-held-reply-") {
+                            wait_file(root, "organ-loss-pin-ready");
+                        }
                         let observed_by = Instant::now() + Duration::from_secs(3);
-                        while !expiry && !fault_seen.load(Ordering::SeqCst) {
+                        while !expiry
+                            && !mode.contains("-held-reply-")
+                            && !fault_seen.load(Ordering::SeqCst)
+                        {
                             if done.load(Ordering::SeqCst) {
                                 return (packets, None);
                             }
@@ -258,6 +298,14 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                     }
                     CapturePayload::SavePointImageFinished(finished) => {
                         assert_eq!(finished.capture_id, artifact.as_ref().unwrap().capture_id);
+                        if mode.contains("-held-reply-") {
+                            std::fs::write(
+                                root.join("organ-loss-finished-carried"),
+                                b"actual ImageFinished received; Prepared withheld",
+                            )
+                            .unwrap();
+                            wait_file(root, "organ-loss-held-reply-reduced");
+                        }
                         Some(CapturePayload::SavePointPrepared(
                             artifact.as_ref().unwrap().clone(),
                         ))
@@ -363,10 +411,18 @@ pub(in crate::flow::context::worker_startup) fn handoff(
         let _stop = StopThreads(&done);
         let mut queued = false;
         let mut report_pinned = false;
+        let mut held_reply_pinned = false;
         let end = Instant::now() + Duration::from_secs(20);
         loop {
             assert!(Instant::now() < end, "organ loss driver stalled");
             if let Some(input) = &mut guard.input {
+                if mode.contains("-held-reply-")
+                    && !held_reply_pinned
+                    && root.join("organ-loss-image-held").exists()
+                {
+                    save_progress::reduce_while_last_word_is_pending(input, root);
+                    held_reply_pinned = true;
+                }
                 if mode.ends_with("-spu-release")
                     && !report_pinned
                     && root.join("organ-loss-image-held").exists()
@@ -567,6 +623,22 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                             guard.input =
                                 Some(management.queue_save().ok().expect("original demand save"));
                             queued = true;
+                            if mode.contains("-queued-author-") {
+                                save_progress::keep_requested_author_behind_observation(
+                                    guard.input.as_mut().unwrap(),
+                                    root,
+                                    &hold_trace,
+                                    &trace_paused,
+                                );
+                            } else if mode.contains("-queued-boundary-")
+                                || mode.contains("-queued-requested-")
+                            {
+                                save_progress::keep_queued_boundary_behind_settlement(
+                                    guard.input.as_mut().unwrap(),
+                                    root,
+                                    mode.contains("-queued-requested-"),
+                                );
+                            }
                         } else {
                             guard.input = Some(
                                 management
@@ -599,6 +671,7 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                 "final SPU Fault must leave the dead port"
             );
         }
+        assert_eq!(held_reply_pinned, mode.contains("-held-reply-"));
         assert!(input.serving.save.is_none());
         assert!(input.serving.owner.context.capture_snapshot().is_none());
         let graceful = input.serving.graceful.as_ref().unwrap();
@@ -670,14 +743,25 @@ pub(in crate::flow::context::worker_startup) fn handoff(
         1,
         "one observed organ death, not one per dead socket"
     );
-    assert!(
-        faults[0]["sequence"]
-            .as_str()
-            .unwrap()
-            .parse::<u64>()
-            .unwrap()
-            > frozen.unwrap().1
-    );
+    let fault_sequence = faults[0]["sequence"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    if mode.contains("-queued-boundary-")
+        || mode.contains("-queued-requested-")
+        || mode.contains("-queued-author-")
+    {
+        assert!(
+            fault_sequence <= frozen.unwrap().1,
+            "the queued capture must include the prior organ observation in its frozen watermark"
+        );
+    } else {
+        assert!(
+            fault_sequence > frozen.unwrap().1,
+            "the capture already in progress retains its earlier frozen watermark"
+        );
+    }
     assert_eq!(
         faults[0]["payload"]["account"]["organ"],
         if mode.ends_with("-gate") {

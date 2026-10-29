@@ -763,7 +763,8 @@ fn ordinary_ready_sources_rotate_and_partial_readiness_does_not_renew_deadlines(
             .unwrap(),
         PumpStep::Deadline {
             key: PumpDeadline::Cut,
-            bound: cut
+            bound: cut,
+            observed_ns: 105,
         }
     );
     assert_eq!(deadlines.get(PumpDeadline::Cut), Some(cut));
@@ -775,7 +776,7 @@ fn expired_bound_prevents_transport_even_when_lifecycle_is_ready() {
     let (admin, peer) = pair();
     let mut admin = LifecyclePeer::from_owned(admin).unwrap();
     send_envelope(&peer, 41);
-    let mut io = FakePumpIo::new(105);
+    let mut io = FakePumpIo::new(107);
     let mut deadlines = DeadlineRegistry::new();
     let bound = AbsoluteBound::after(100, 5).unwrap();
     deadlines.arm(PumpDeadline::Enter, bound).unwrap();
@@ -787,7 +788,8 @@ fn expired_bound_prevents_transport_even_when_lifecycle_is_ready() {
             .unwrap(),
         PumpStep::Deadline {
             key: PumpDeadline::Enter,
-            bound
+            bound,
+            observed_ns: 107,
         }
     );
     assert!(admin.held().is_none());
@@ -830,7 +832,8 @@ fn bound_is_checked_immediately_after_a_lifecycle_unit() {
             .unwrap(),
         PumpStep::Deadline {
             key: PumpDeadline::Leave,
-            bound
+            bound,
+            observed_ns: 103,
         }
     );
     assert_eq!(
@@ -1200,9 +1203,11 @@ fn an_already_held_gate_completion_is_not_progress_while_other_sources_are_ready
             PumpStep::Deadline {
                 key,
                 bound: observed,
+                observed_ns,
             } => {
                 assert_eq!(key, PumpDeadline::Leave);
                 assert_eq!(observed, bound);
+                assert_eq!(observed_ns, bound.deadline_ns());
                 expired = true;
                 break;
             }
@@ -1245,7 +1250,8 @@ fn an_already_held_residency_completion_does_not_spin_as_new_progress() {
             .unwrap(),
         PumpStep::Deadline {
             key: PumpDeadline::Leave,
-            bound
+            bound,
+            observed_ns: 105,
         }
     );
     assert_eq!(io.waits().len(), 1);
@@ -1372,10 +1378,12 @@ fn real_silent_socket_wait_expires_at_the_original_bound_with_a_watchdog() {
                 PumpStep::Deadline {
                     key,
                     bound: observed,
+                    observed_ns,
                 } => {
                     assert_eq!(key, PumpDeadline::Gate);
                     assert_eq!(observed, bound);
-                    assert!(io.now().unwrap() >= bound.deadline_ns());
+                    assert!(observed_ns >= bound.deadline_ns());
+                    assert!(io.now().unwrap() >= observed_ns);
                     assert!(gate.held().is_none());
                     finished.send(()).unwrap();
                     break;
@@ -1469,6 +1477,7 @@ fn final_trace_unit_cannot_return_progress_after_the_absolute_bound() {
         PumpStep::Deadline {
             key: PumpDeadline::Leave,
             bound,
+            observed_ns: 103,
         },
         "there is no next unit whose precheck can hide a missing post-unit check"
     );

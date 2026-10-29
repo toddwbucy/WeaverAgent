@@ -121,6 +121,29 @@ impl<'a> Session<'a> {
         self.route_graceful_leave(false)
     }
 
+    pub fn queue_plan_update(&mut self) -> bool {
+        if let Some(State::Turn(flow)) = self.state.as_mut() {
+            return flow.queue_plan_update();
+        }
+        if !matches!(self.state.as_ref(), Some(State::Management(owner)) if owner.progress() == FoundationManagementProgress::DirectivePending)
+        {
+            return false;
+        }
+        let State::Management(owner) = self.state.take().unwrap() else {
+            unreachable!()
+        };
+        match owner.queue_plan_update() {
+            Ok(input) => {
+                self.state = Some(State::Input(input));
+                true
+            }
+            Err(owner) => {
+                self.state = Some(State::Management(owner));
+                false
+            }
+        }
+    }
+
     pub fn queue_save(&mut self) -> bool {
         if let Some(State::Turn(flow)) = self.state.as_mut() {
             return flow.queue_save();
@@ -233,12 +256,19 @@ impl<'a> Session<'a> {
                 }
             }
             State::Management(owner) => {
-                owner.advance();
+                if owner.advance() == FoundationManagementProgress::Pending {
+                    owner.wait_for_progress();
+                }
             }
             State::Turn(flow) => {
                 flow.advance();
             }
         }
+        self.route_management();
+        self.progress()
+    }
+
+    fn route_management(&mut self) {
         if matches!(self.state.as_ref(), Some(State::Input(input))
             if input.progress() == FoundationInputProgress::ManagementPending)
         {
@@ -260,7 +290,46 @@ impl<'a> Session<'a> {
                 Err(owner) => State::Management(owner),
             });
         }
-        self.progress()
+    }
+
+    /// A declined policy election retains the same session and waits for the
+    /// existing lifecycle/transport work instead of polling an accepted input.
+    pub(super) fn wait_for_election(&mut self) {
+        match self.state.as_mut().unwrap() {
+            State::Input(input) => {
+                input.wait_for_wake();
+            }
+            State::Management(owner) => {
+                if owner.advance() == FoundationManagementProgress::Pending {
+                    owner.wait_for_progress();
+                }
+            }
+            State::Turn(flow) => {
+                flow.wait_for_election();
+            }
+        }
+        self.route_management();
+    }
+
+    /// A refused consume retains the original workflow, including its round
+    /// count and wind-down election. No fresh session is reconstructed.
+    // Return the retained session directly; refusal needs no new allocation.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn into_exit(mut self) -> Result<super::dispatch::ServingHandoff, Self> {
+        let result = match self.state.take().unwrap() {
+            State::Input(input) => super::dispatch::input_handoff(input).map_err(State::Input),
+            State::Management(owner) => {
+                super::dispatch::management_handoff(owner).map_err(State::Management)
+            }
+            State::Turn(flow) => flow.into_exit().map_err(State::Turn),
+        };
+        match result {
+            Ok(handoff) => Ok(handoff),
+            Err(state) => {
+                self.state = Some(state);
+                Err(self)
+            }
+        }
     }
 
     /// Each accepted input needs its own caller-supplied turn. begin_task reads
