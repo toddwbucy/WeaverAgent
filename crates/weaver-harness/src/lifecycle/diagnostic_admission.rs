@@ -28,6 +28,14 @@ pub(crate) fn receive_entered(
             })?;
             Ok(None)
         }
+        DiagnosticRequest::Refused { exchange, reason } => {
+            connection.send(&OrganEnvelope {
+                exchange,
+                position: Position::Close,
+                payload: weaver_types::Payload::Refusal(reason),
+            })?;
+            Ok(None)
+        }
     }
 }
 

@@ -500,6 +500,68 @@ fn diagnostic_program() -> super::super::FoundationProgram {
 }
 
 #[test]
+fn diagnostic_busy_handoff_stops_with_original_custody_and_no_ready() {
+    let mut fx = Fixture::new();
+    let mut value: serde_json::Value = serde_json::from_slice(&enter()).unwrap();
+    value["payload"]["body"]["payload"]["binding"] = serde_json::json!({
+        "kind":"diagnostic", "state_election":weaver_types::StateElection::default()
+    });
+    let bytes = serde_json::to_vec(&value).unwrap();
+    let (sink, mut reader) = UnixStream::pair().unwrap();
+    fx.request(&bytes, &[sink.as_raw_fd()]);
+    drop(sink);
+    assert_eq!(
+        fx.owner.advance_with_io(&mut FakePumpIo::new(10)),
+        FoundationAdmissionProgress::Received
+    );
+    assert!(matches!(
+        fx.owner
+            .received
+            .as_mut()
+            .unwrap()
+            .peer_mut()
+            .stage(ordinary(91, LifecycleDirective::Observe))
+            .unwrap(),
+        crate::flow::pump_transport::Stage::Queued
+    ));
+    let FoundationDiagnosticResult::Admission(mut owner) =
+        fx.owner.serve_diagnostic(&diagnostic_program())
+    else {
+        panic!("a busy peer cannot transfer custody")
+    };
+    assert_eq!(owner.progress(), FoundationAdmissionProgress::Stopped);
+    assert_eq!(owner.process_exit(), Some(FoundationProcessExit::Failure));
+    assert!(
+        owner
+            .detail()
+            .unwrap()
+            .contains("Diagnostic handoff requires the idle original peer")
+    );
+    assert_eq!(owner.received.as_ref().unwrap().wire(), bytes);
+    assert_eq!(
+        owner.advance_with_io(&mut FakePumpIo::new(11)),
+        FoundationAdmissionProgress::Stopped
+    );
+    assert_eq!(
+        recv(fx.peer.as_raw_fd(), &mut [0], MsgFlags::MSG_DONTWAIT),
+        Err(nix::errno::Errno::EAGAIN)
+    );
+    reader.set_nonblocking(true).unwrap();
+    assert_eq!(
+        reader.read(&mut [0]).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    // The real entry retains this stopped owner until failure exit. Closing it
+    // here models exit's FD cleanup: admin gets EOF, never an invented Ready.
+    drop(owner);
+    assert_eq!(
+        recv(fx.peer.as_raw_fd(), &mut [0], MsgFlags::MSG_DONTWAIT).unwrap(),
+        0
+    );
+    assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+}
+
+#[test]
 fn diagnostic_lost_preload_refusal_returns_listener_after_peer_departure() {
     let mut fx = Fixture::new();
     let mut value: serde_json::Value = serde_json::from_slice(&enter()).unwrap();

@@ -33,6 +33,68 @@ const _: fn() = || {
     let _ = <LifecycleMessage as NoClone<_>>::check;
 };
 
+#[test]
+fn diagnostic_handoff_preserves_held_request_and_pending_answer() {
+    let (end, peer) = pair();
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    send_envelope(&peer, 41);
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    assert!(owner.prepare_diagnostic().is_err());
+    let original = owner.take_completion().unwrap().unwrap();
+    assert_eq!(original.envelope, envelope(41));
+    assert!(matches!(
+        owner.sender.stage(envelope(42)).unwrap(),
+        Stage::Queued
+    ));
+    assert!(owner.prepare_diagnostic().is_err());
+    assert!(owner.sender.send_pending());
+    assert_eq!(owner.sender.try_send().unwrap(), SendProgress::Complete);
+    owner.prepare_diagnostic().unwrap();
+    let channel = owner.into_diagnostic();
+    assert!(channel.is_diagnostic_wire());
+    assert!(
+        !OFlag::from_bits_retain(fcntl(channel.as_fd(), FcntlArg::F_GETFL).unwrap())
+            .contains(OFlag::O_NONBLOCK)
+    );
+    let mut bytes = vec![0; 4096];
+    let n = nix::sys::socket::recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<OrganEnvelope>(&bytes[..n]).unwrap(),
+        envelope(42)
+    );
+}
+
+#[test]
+#[should_panic(expected = "prepared Diagnostic transport")]
+fn diagnostic_transfer_rejects_a_reserved_sender_without_preparation() {
+    let (end, _peer) = pair();
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    assert!(matches!(
+        owner.sender.stage(envelope(42)).unwrap(),
+        Stage::Queued
+    ));
+    owner.into_diagnostic();
+}
+
+#[test]
+fn diagnostic_refusal_restores_nonblocking_original_peer_with_queued_request() {
+    let (end, peer) = pair();
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    owner.prepare_diagnostic().unwrap();
+    let channel = owner.into_diagnostic();
+    send_envelope(&peer, 43);
+    let mut owner = LifecyclePeer::from_channel(channel).unwrap();
+    assert!(
+        OFlag::from_bits_retain(fcntl(owner.fd(), FcntlArg::F_GETFL).unwrap())
+            .contains(OFlag::O_NONBLOCK)
+    );
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    assert_eq!(
+        owner.take_completion().unwrap().unwrap().envelope,
+        envelope(43)
+    );
+}
+
 fn capture_message(id: u64) -> weaver_types::state_flow::capture::CaptureEnvelope {
     use weaver_types::state_flow::capture::*;
     CaptureEnvelope {

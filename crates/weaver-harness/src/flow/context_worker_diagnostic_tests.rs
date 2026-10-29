@@ -157,6 +157,55 @@ fn observed(peer: &OwnedFd, ordinal: u64, expected: AgentState, end: Instant) {
     );
 }
 
+fn malformed_management(peer: &OwnedFd, source: &EnterEnvelope, state: AgentState, end: Instant) {
+    let ordinary = OrganEnvelope {
+        exchange: ExchangeId {
+            opener: Opener::Admin,
+            ordinal: 930,
+        },
+        position: Position::Open,
+        payload: Payload::Directive(LifecycleDirective::Observe),
+    };
+    let mut foreign = ordinary.clone();
+    foreign.exchange.opener = Opener::Harness;
+    let mut continuation = ordinary.clone();
+    continuation.position = Position::Continue;
+    let mut answer = ordinary.clone();
+    answer.payload = Payload::Answer(LifecycleAnswer::AtRest);
+    let mut legacy = ordinary.clone();
+    legacy.payload = Payload::Directive(LifecycleDirective::Enter {
+        payload: Box::new(crate::channel::diagnostic::diagnostic_payload(source).unwrap()),
+    });
+    for (index, (mut request, reason, handles)) in [
+        (foreign, LifecycleRefusal::Malformed, false),
+        (continuation, LifecycleRefusal::Malformed, false),
+        (answer, LifecycleRefusal::Malformed, false),
+        (ordinary, LifecycleRefusal::Malformed, true),
+        (legacy, LifecycleRefusal::OutOfOrder, true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        request.exchange.ordinal += index as u64;
+        let (sink, mut reader) = UnixStream::pair().unwrap();
+        let (member, mut watcher) = UnixStream::pair().unwrap();
+        let descriptors = if handles {
+            vec![sink.as_raw_fd(), member.as_raw_fd()]
+        } else {
+            Vec::new()
+        };
+        send_enter(peer, &serde_json::to_vec(&request).unwrap(), &descriptors);
+        drop((sink, member));
+        let refusal: OrganEnvelope = serde_json::from_slice(&receive(peer, end)).unwrap();
+        assert_eq!(refusal.exchange, request.exchange);
+        assert_eq!(refusal.position, Position::Close);
+        assert_eq!(refusal.payload, Payload::Refusal(reason));
+        closed_empty(&mut reader, end);
+        closed_empty(&mut watcher, end);
+        observed(peer, 940 + index as u64, state.clone(), end);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn control(
     root: &std::path::Path,
@@ -265,6 +314,8 @@ pub(super) fn control(
         );
         closed_empty(&mut rejected_reader, end);
         closed_empty(&mut rejected_member, end);
+        observed(&peer, 926, AgentState::Active, end);
+        malformed_management(&peer, &envelope, AgentState::Active, end);
         std::fs::write(root.join("diagnostic-continue"), b"finish\n").unwrap();
         loop {
             send(&peer, 922, LifecycleDirective::Observe);
@@ -282,6 +333,18 @@ pub(super) fn control(
             std::thread::sleep(Duration::from_millis(1));
         }
         observed(&peer, 923, AgentState::Idle, end);
+        // Repeat reentry at rest: this is the entered service loop, whereas
+        // the first refusal is handled inside the pending ReFeed exchange.
+        send_enter(&peer, &wire, &[]);
+        let refused: OrganEnvelope = serde_json::from_slice(&receive(&peer, end)).unwrap();
+        assert_eq!(refused.exchange, envelope.exchange);
+        assert_eq!(refused.position, Position::Close);
+        assert_eq!(
+            refused.payload,
+            Payload::Refusal(LifecycleRefusal::OutOfOrder)
+        );
+        observed(&peer, 927, AgentState::Idle, end);
+        malformed_management(&peer, &envelope, AgentState::Idle, end);
         send(
             &peer,
             924,
