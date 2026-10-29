@@ -1,6 +1,6 @@
 # Root PlanUpdate admission-refusal account
 
-**Version:** 0.2, 2026-10-29.
+**Version:** 0.3, 2026-10-29.
 **Parent:** Issue 146, state management implementation.
 
 Implements: state-management-spec-07-plan-forward-flags section 2,
@@ -171,7 +171,53 @@ The PR body supplies the archived commit and verified manifest. The deposit
 retains the source, review patch, source hashes, all gate/process logs, all
 seven mutation diffs and failures, restored checks, failed development
 attempts and their runners. #405 retains the nonblocking review carries.
-This repair awaits Planner regrade, with no production qualification claim.
+The Planner accepted the runtime repair in regrade 5703568602. The fixture
+correction below answers its remaining AQ1 finding, with no production
+qualification claim.
+
+## Parallel prior-author fixtures
+
+Planner regrade 5703568602 at e62e8215 closes AP1 and withdraws the
+Stage::Turn allegation. Its continuation controls are caught. AQ1 remains a
+required fixture correction: the flags case exceeded its two-second read
+interval under the Planner's parallel family load, and the root case once
+finished without its answer. Both passed five isolated runs on that seat.
+
+The shared pressure fixture used 32 KiB of padding per record, so each case
+drained and parsed roughly 32 MiB while real operation deadlines were live.
+It now uses 1 KiB per record and permits enough attempts for the socket's
+buffered records. The same real recorder queue must reach ORDINARY_CAPACITY
+before the fixture returns. The original author's actual pending ticket and
+the original Decision and StateControl intervals remain asserted. No runtime
+deadline is enlarged or replaced, and no case is serialized.
+
+The corrected worker-plan family passes three consecutive parallel runs,
+47 cases each with 48 test threads. Independently compiled removals of the
+flags and root-plan continuations still fail the intended ownership
+assertion. The old fixture also passed one 47-case parallel run on this host,
+so the Planner's repeated failures remain the reproduction evidence. These
+runs do not establish reliability at every host load or qualify production
+limits. Earlier controls remain scoped to their recorded source revisions.
+
+Final author gates pass 2,239 ordinary harness tests/doctests, with 949
+ignored cases and the explicit #331 skip, strict all-target harness lint,
+lock, format, diff and three DocsMirror checks. All eight prior-author cases
+pass after restoring the two controls. The existing wind-down and Quiesce
+process regressions also pass. All 820 Rust/configuration hashes match the
+final controls, restored tests, gates and three parallel family runs.
+
+The first format check caught one wrapping change after the filler was
+shortened. Its failed log and the passing pre-format tests remain separate.
+The formatted source was rebuilt and the two controls, restored tests, full
+affected gates and parallel runs were repeated. Unchanged types results
+remain scoped to e62e8215, and no new types run is claimed.
+
+The supplemental evidence deposit is:
+
+`/bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/root-plan-aq1-20261029`
+
+The PR body supplies the final archived commit, gate results and verified
+manifest. AQ1 still requires Planner regrade. The PR remains draft.
 
 ## Initial published evidence and limits
 
@@ -266,3 +312,8 @@ receive, Recorded, caller-completion and actual-send boundaries separate in
 future process fixtures, and observe transport loss before the accounting
 step when that is the property being tested. This record carries that lesson
 forward for the next plan-operation act.
+
+AQ1 also separates recorder occupancy from artificial byte volume. A custody
+fixture must prove the actual occupied slot and missing-continuation failure.
+Its filler need not consume a large share of an unrelated real read interval.
+Keep byte-limit qualification in its own measured instruments.

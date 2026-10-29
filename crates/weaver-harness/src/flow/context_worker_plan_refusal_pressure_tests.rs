@@ -23,10 +23,12 @@ impl PumpIo for RecordedExpiry {
 }
 
 pub(super) fn fill(context: &mut RecordingContext) {
+    // Saturate the real event queue without making each ownership test drain
+    // and parse 32 MiB inside an unrelated read's two-second interval. Allow
+    // for compact records already flushed into the socket before it blocks.
     let payload =
-        serde_json::value::to_raw_value(&serde_json::json!({"fixture":"x".repeat(32_768)}))
-            .unwrap();
-    for _ in 0..serving::ORDINARY_CAPACITY + 64 {
+        serde_json::value::to_raw_value(&serde_json::json!({"fixture":"x".repeat(1024)})).unwrap();
+    for _ in 0..serving::ORDINARY_CAPACITY * 2 {
         if context.barrier.recorder().boundary().queued == serving::ORDINARY_CAPACITY {
             return;
         }
