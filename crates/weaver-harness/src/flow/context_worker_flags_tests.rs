@@ -101,6 +101,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         .then(|| queue_save(&mut guard, socket));
     let stop = mode.ends_with("stop");
     let leave = mode.ends_with("leave");
+    let disconnect = mode.ends_with("disconnect-stop");
     let peer = if stop || leave {
         let peer = dial(socket);
         let request = OrganEnvelope {
@@ -132,6 +133,12 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             assert!(Instant::now() < end);
         }
         guard.management = Some(guard.input.take().unwrap().management().ok().unwrap());
+        if disconnect {
+            crate::flow::context::worker_startup::input::management::tests::disconnect_accepted_stop_during_drain(
+                guard.management.as_mut().unwrap(),
+                &peer,
+            );
+        }
         Some(peer)
     } else {
         None
@@ -168,6 +175,8 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 if progress
                     == if leave {
                         FoundationManagementProgress::DirectivePending
+                    } else if disconnect {
+                        FoundationManagementProgress::Dropped
                     } else {
                         FoundationManagementProgress::Answered
                     }
@@ -350,18 +359,22 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         });
     } else {
         if stop {
-            let answer: OrganEnvelope =
-                serde_json::from_slice(&read_packet(peer.as_ref().unwrap()).unwrap()).unwrap();
-            assert_eq!(
-                answer.payload,
-                Payload::Answer(if turn_boundary {
-                    weaver_types::LifecycleAnswer::TurnAborted {
-                        turn: original_input.as_ref().unwrap().turn.clone(),
-                    }
-                } else {
-                    weaver_types::LifecycleAnswer::AtRest
-                })
-            );
+            let expected = if turn_boundary {
+                weaver_types::LifecycleAnswer::TurnAborted {
+                    turn: original_input.as_ref().unwrap().turn.clone(),
+                }
+            } else {
+                weaver_types::LifecycleAnswer::AtRest
+            };
+            if disconnect {
+                crate::flow::context::worker_startup::input::management::tests::assert_undelivered_stop_answer(
+                    guard.management.as_ref().unwrap(), expected,
+                );
+            } else {
+                let answer: OrganEnvelope =
+                    serde_json::from_slice(&read_packet(peer.as_ref().unwrap()).unwrap()).unwrap();
+                assert_eq!(answer.payload, Payload::Answer(expected));
+            }
             guard.input = Some(guard.management.take().unwrap().finish().ok().unwrap());
         }
         if mode.ends_with("recorded-failed") {

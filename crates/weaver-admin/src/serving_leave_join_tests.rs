@@ -51,6 +51,7 @@ for attempt in range(2 if mode in ('retry','retry-holder') else 1):
     if mode=='wrong-capture': report['capture_id']='10'
     if mode=='wrong-hash': report['start']['dump_sha256']='b'*64
     payload={'kind':'answer','body':{'kind':'left','save_point':report,'forced':mode!='late','no_state':False}}
+    if mode=='no-report': payload['body']['save_point']=None
     position='close'
     if mode=='refused': payload={'kind':'refusal','body':{'kind':'descriptors_unusable'}}
     if mode=='malformed': payload={'kind':'refusal','body':{'kind':'malformed'}}
@@ -73,7 +74,7 @@ for attempt in range(2 if mode in ('retry','retry-holder') else 1):
     if mode=='foreign-marker':
         while True: time.sleep(1)
     # A timely Left must wait behind the invocation lock before killing holders.
-    if mode in ('closed','open','late','guard','unjudged','retry'):
+    if mode in ('closed','open','late','guard','unjudged','retry','no-report'):
         wait('holder_done')
         time.sleep(.02)
     sys.exit(0)
@@ -364,7 +365,7 @@ fn scenario(mode: &str, verb: &str) {
         );
     } else if matches!(
         mode,
-        "closed" | "open" | "late" | "unjudged" | "retry" | "sealed" | "silent"
+        "closed" | "open" | "late" | "unjudged" | "retry" | "sealed" | "silent" | "no-report"
     ) {
         let concluded = result
             .as_ref()
@@ -383,7 +384,7 @@ fn scenario(mode: &str, verb: &str) {
             );
         }
         if mode != "sealed" {
-            expected_marker = if matches!(mode, "unjudged" | "silent") {
+            expected_marker = if matches!(mode, "unjudged" | "silent" | "no-report") {
                 save_points::Marker::Forced { run: RUN.into() }
             } else {
                 save_points::Marker::Closed { run: RUN.into() }
@@ -508,6 +509,12 @@ fn forced_leave_join_concludes_behind_the_holder_without_a_second_publisher() {
     for mode in ["closed", "open", "late", "unjudged", "retry", "sealed"] {
         scenario(mode, "unload");
     }
+}
+
+#[test]
+#[ignore = "root-owned delegated scope; actual join invocation and private children"]
+fn forced_leave_join_without_a_save_report_preserves_forced_marker() {
+    scenario("no-report", "unload");
 }
 
 #[test]

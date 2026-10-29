@@ -510,8 +510,10 @@ impl<'a> FoundationManagement<'a> {
                 )
             {
                 self.input.serving.owner.context.cancel_read(io)?;
-                self.input
-                    .advance_flags((!self.peer_unavailable).then_some(&mut self.peer), io)?;
+                let progress = self
+                    .input
+                    .advance_flags((!self.peer_unavailable).then_some(&mut self.peer), io);
+                self.keep_dial_failure(progress)?;
                 if self.input.flags_pending() {
                     return Ok(());
                 }
@@ -530,8 +532,10 @@ impl<'a> FoundationManagement<'a> {
                 )
             {
                 self.input.serving.owner.context.cancel_root_plan_update();
-                self.input
-                    .advance_plan((!self.peer_unavailable).then_some(&mut self.peer), io)?;
+                let progress = self
+                    .input
+                    .advance_plan((!self.peer_unavailable).then_some(&mut self.peer), io);
+                self.keep_dial_failure(progress)?;
                 if self.input.plan_pending() {
                     return Ok(());
                 }

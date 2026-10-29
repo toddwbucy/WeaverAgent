@@ -5,6 +5,7 @@ use super::{Capture, FailureCause, Observed, Progress};
 use crate::save_points::serving::repository::Repository;
 use crate::{ServiceConfig, UnloadBounds, agent_cgroup, conclusion, inventory, save_points, start};
 use std::os::fd::AsFd;
+use weaver_types::state_flow::capture::{CaptureAnswer, CapturePayload};
 use weaver_types::state_flow::{DecimalU64, SavePointReport, StartIdentity};
 use weaver_types::{AgentName, Cause, LifecycleAnswer, LifecycleRefusal, RunId};
 
@@ -417,8 +418,24 @@ fn conclude(
         return crate::unloaded_by_ladder(config).map_err(Fault::Admission);
     }
     // Marker closure and Unloaded still require successful run cleanup.
-    crate::write_by_rule(config, Some(&run.0), conclusion::MarkerWrite::Closed)
-        .map_err(Fault::Admission)?;
+    // Judge the validated final reply: an initially graceful Leave can turn
+    // forced, and a forced Leave with a completed save still closes cleanly.
+    let marker = if matches!(
+        leave
+            .received
+            .last()
+            .map(|received| &received.envelope.payload),
+        Some(CapturePayload::Answer(CaptureAnswer::Left {
+            save_point: None,
+            forced: true,
+            no_state: false,
+        }))
+    ) {
+        conclusion::MarkerWrite::Forced
+    } else {
+        conclusion::MarkerWrite::Closed
+    };
+    crate::write_by_rule(config, Some(&run.0), marker).map_err(Fault::Admission)?;
     crate::unloaded_by_ladder(config).map_err(Fault::Admission)
 }
 

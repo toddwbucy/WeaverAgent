@@ -26,8 +26,12 @@ impl ManagementInput {
     }
     #[cfg(test)]
     pub(in crate::flow) fn for_test_root() -> Self {
+        Self::for_test_uid(0)
+    }
+    #[cfg(test)]
+    pub(in crate::flow) fn for_test_uid(uid: u32) -> Self {
         Self {
-            cause: weaver_trace::Cause { uid: 0 },
+            cause: weaver_trace::Cause { uid },
         }
     }
 }

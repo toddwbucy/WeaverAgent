@@ -327,9 +327,11 @@ fn conclude(
             })
         })?;
         crate::write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Closed)?;
+    } else if forced {
+        // A validated report-less Left is forced after a refused capture.
+        // Preserve that reset cause after the actual run end.
+        crate::write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Forced)?;
     } else {
-        // The original publisher concluded a refused capture. This join has
-        // no artifact to verify or publish, but still owes the actual run end.
         crate::write_by_rule(config, run.as_deref(), conclusion::MarkerWrite::Closed)?;
     }
     crate::unloaded_by_ladder(config).map_err(Into::into)

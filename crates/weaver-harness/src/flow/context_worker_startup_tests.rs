@@ -2266,6 +2266,10 @@ macro_rules! scenario {
 scenario!(worker_startup_composition_ready, "ready");
 scenario!(worker_plan_composition_stop, "input-worker-plan-stop");
 scenario!(
+    worker_plan_composition_disconnect_stop,
+    "input-worker-plan-disconnect-stop"
+);
+scenario!(
     worker_plan_composition_open_turn,
     "input-worker-plan-open-turn"
 );
@@ -2293,6 +2297,10 @@ scenario!(
 scenario!(
     worker_plan_flags_turn_boundary_stop,
     "input-worker-plan-save-sqlite-flags-turn-boundary-stop"
+);
+scenario!(
+    worker_plan_flags_turn_boundary_disconnect_stop,
+    "input-worker-plan-save-sqlite-flags-turn-boundary-disconnect-stop"
 );
 scenario!(
     worker_plan_flags_turn_boundary_leave,
@@ -3279,6 +3287,10 @@ scenario!(
 scenario!(
     worker_correction_composition_refusal_ready_stop,
     "input-generation-emission-correction-fit-refusal-boundary-refusal-close-ready-stop"
+);
+scenario!(
+    worker_correction_composition_refusal_ready_stop_admin_eof,
+    "input-generation-emission-correction-fit-refusal-boundary-refusal-close-ready-stop-admin-eof"
 );
 
 scenario!(

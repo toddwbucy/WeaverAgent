@@ -1132,6 +1132,34 @@ pub(in crate::flow::context::worker_startup) fn stop(
         }
     }
     guard.management = Some(guard.input.take().unwrap().management().ok().unwrap());
+    if mode.contains("refusal-close-ready-stop-admin-eof") {
+        crate::flow::context::worker_startup::input::management::tests::retain_stop_before_disconnect(
+            guard.management.as_mut().unwrap(),
+            &request,
+            &peer,
+        );
+        let management = guard.management.as_mut().unwrap();
+        for _ in 0..100 {
+            assert_eq!(
+                management.advance_with_io(&mut CircuitIo(clock)),
+                FoundationManagementProgress::Pending,
+                "admin departure during refusal close must retain Stop: {:?}",
+                management.detail()
+            );
+            if management
+                .detail()
+                .is_some_and(|detail| detail.contains("AdminDial"))
+            {
+                break;
+            }
+        }
+        assert!(
+            management
+                .detail()
+                .is_some_and(|detail| detail.contains("AdminDial"))
+        );
+        std::fs::write(root.join("drain"), b"yes").unwrap();
+    }
     if mode.contains("external-stop-unsent") {
         for _ in 0..8 {
             guard
@@ -1216,6 +1244,12 @@ pub(in crate::flow::context::worker_startup) fn stop(
         guard.management.as_ref().unwrap().progress(),
         FoundationManagementProgress::Pending
     );
+    if mode.contains("refusal-close-ready-stop-admin-eof") {
+        crate::flow::context::worker_startup::input::management::tests::assert_undelivered_stop_answer(
+            guard.management.as_ref().unwrap(),
+            LifecycleAnswer::AtRest,
+        );
+    }
     guard.input = Some(guard.management.take().unwrap().finish().ok().unwrap());
     assert_eq!(
         guard.input.as_ref().unwrap().progress(),

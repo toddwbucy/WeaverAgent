@@ -857,6 +857,9 @@ pub(in crate::flow::context::worker_startup) fn refusal_boundary(
         }
     );
     if mode.contains("ready-stop") {
+        if mode.contains("refusal-close-ready-stop-admin-eof") {
+            fill(input.serving.owner.gate.fd().as_raw_fd());
+        }
         stop(&mut guard, member, clock, mode, socket, root);
     } else {
         // Move time before the close is elected: a fresh Decision would extend

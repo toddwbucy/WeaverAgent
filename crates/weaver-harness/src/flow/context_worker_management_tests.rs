@@ -54,6 +54,88 @@ impl Drop for Guard<'_> {
     }
 }
 
+pub(in crate::flow::context::worker_startup) fn retain_stop_before_disconnect(
+    owner: &mut FoundationManagement<'_>,
+    request: &OrganEnvelope,
+    peer: &std::os::fd::OwnedFd,
+) {
+    owner.peer.try_receive().unwrap();
+    assert_eq!(&owner.peer.held().unwrap().envelope, request);
+    nix::sys::socket::shutdown(peer.as_raw_fd(), nix::sys::socket::Shutdown::Both).unwrap();
+}
+
+pub(in crate::flow::context::worker_startup) fn disconnect_accepted_stop_during_drain(
+    owner: &mut FoundationManagement<'_>,
+    peer: &OwnedFd,
+) {
+    use crate::flow::clock::{WaitInterest, WaitOutcome};
+    struct DisconnectIo {
+        caller: i32,
+        dial: i32,
+        closed: bool,
+    }
+    impl PumpIo for DisconnectIo {
+        fn now(&mut self) -> std::io::Result<u64> {
+            MonotonicIo.now()
+        }
+        fn wait(
+            &mut self,
+            interests: &[WaitInterest<'_>],
+            deadline: Option<u64>,
+        ) -> std::io::Result<WaitOutcome> {
+            if !self.closed {
+                assert!(interests.iter().any(|p| p.fd.as_raw_fd() == self.dial));
+                assert!(deadline.is_some(), "the drain retains its original bound");
+                nix::sys::socket::shutdown(self.caller, nix::sys::socket::Shutdown::Both).unwrap();
+                self.closed = true;
+            }
+            MonotonicIo.wait(interests, deadline)
+        }
+    }
+    assert!(owner.input.flags_pending() || owner.input.plan_pending());
+    owner.peer.try_receive().unwrap();
+    let original = owner.peer.held().unwrap().envelope.clone();
+    assert!(matches!(
+        original.payload,
+        Payload::Directive(LifecycleDirective::Stop { .. })
+    ));
+    let mut io = DisconnectIo {
+        caller: peer.as_raw_fd(),
+        dial: owner.peer.fd().as_raw_fd(),
+        closed: false,
+    };
+    let progress = owner.advance_with_io(&mut io);
+    assert!(
+        io.closed,
+        "the accepted Stop must reach its actual drain wait"
+    );
+    assert_eq!(
+        progress,
+        FoundationManagementProgress::Pending,
+        "admin departure during drain must retain the accepted Stop: {:?}",
+        owner.detail()
+    );
+    assert_eq!(owner.peer.held().unwrap().envelope, original);
+    assert!(owner.input.serving.owner.context.failure().is_none());
+}
+
+pub(in crate::flow::context::worker_startup) fn assert_undelivered_stop_answer(
+    owner: &FoundationManagement<'_>,
+    expected: LifecycleAnswer,
+) {
+    assert_eq!(owner.progress(), FoundationManagementProgress::Dropped);
+    assert!(owner.peer_unavailable);
+    assert!(owner.send.is_none(), "a departed peer received no answer");
+    let Some(ManagementAnswer::Lifecycle(answer)) = &owner.answer else {
+        panic!("the completed Stop must retain its undelivered answer")
+    };
+    assert_eq!(answer.payload, Payload::Answer(expected));
+    assert_eq!(
+        answer.exchange,
+        owner.message.as_ref().unwrap().envelope.exchange
+    );
+}
+
 pub(in crate::flow::context::worker_startup) fn closed_save_projection(
     owner: Box<FoundationManagement<'_>>,
 ) -> Box<FoundationInput<'_>> {

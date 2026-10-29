@@ -610,7 +610,7 @@ fn forced_leave_joint_actual_admin() {
         ));
         assert_eq!(
             save_points::read_marker(&config.root).unwrap(),
-            save_points::Marker::Closed { run: payload.run.0 }
+            save_points::Marker::Forced { run: payload.run.0 }
         );
         let saves = config.territory.join("save-points");
         assert_eq!(
@@ -628,7 +628,7 @@ fn forced_leave_joint_actual_admin() {
         write(
             &root,
             "concluded-refused.json",
-            &json!({"save_report":null,"closed":true}),
+            &json!({"save_report":null,"forced":true}),
         );
         return;
     }

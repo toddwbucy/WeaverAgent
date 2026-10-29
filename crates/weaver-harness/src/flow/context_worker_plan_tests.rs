@@ -506,6 +506,7 @@ fn stopped(
     member: &mut Member,
     reader: &mut UnixStream,
     socket: &Path,
+    disconnect: bool,
 ) {
     let mut guard = Guard {
         input: Some(serving.input()),
@@ -551,6 +552,11 @@ fn stopped(
         assert!(Instant::now() < end);
     }
     guard.management = Some(guard.input.take().unwrap().management().ok().unwrap());
+    if disconnect {
+        crate::flow::context::worker_startup::input::management::tests::disconnect_accepted_stop_during_drain(
+            guard.management.as_mut().unwrap(), &stop,
+        );
+    }
     let done = AtomicBool::new(false);
     std::thread::scope(|scope| {
         let responder = scope.spawn(|| {
@@ -569,7 +575,13 @@ fn stopped(
                 "{:?}",
                 owner.detail()
             );
-            if progress == FoundationManagementProgress::Answered {
+            if progress
+                == if disconnect {
+                    FoundationManagementProgress::Dropped
+                } else {
+                    FoundationManagementProgress::Answered
+                }
+            {
                 break;
             }
             assert!(Instant::now() < end, "Stop did not settle root work");
@@ -577,12 +589,18 @@ fn stopped(
         done.store(true, Ordering::SeqCst);
         responder.join().unwrap();
     });
-    let answer: OrganEnvelope = serde_json::from_slice(&read_packet(&stop).unwrap()).unwrap();
-    assert_eq!(answer.exchange, request.exchange);
-    assert_eq!(
-        answer.payload,
-        Payload::Answer(weaver_types::LifecycleAnswer::AtRest)
-    );
+    if disconnect {
+        crate::flow::context::worker_startup::input::management::tests::assert_undelivered_stop_answer(
+            guard.management.as_ref().unwrap(), weaver_types::LifecycleAnswer::AtRest,
+        );
+    } else {
+        let answer: OrganEnvelope = serde_json::from_slice(&read_packet(&stop).unwrap()).unwrap();
+        assert_eq!(answer.exchange, request.exchange);
+        assert_eq!(
+            answer.payload,
+            Payload::Answer(weaver_types::LifecycleAnswer::AtRest)
+        );
+    }
     guard.input = Some(guard.management.take().unwrap().finish().ok().unwrap());
     let input = guard.input.as_ref().unwrap();
     let plan = input.serving.plan.as_ref().unwrap();
@@ -665,7 +683,13 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         return;
     }
     if mode.ends_with("stop") {
-        return stopped(serving, member, reader, socket);
+        return stopped(
+            serving,
+            member,
+            reader,
+            socket,
+            mode.ends_with("disconnect-stop"),
+        );
     }
     let mut guard = Guard {
         input: Some(serving.input()),
