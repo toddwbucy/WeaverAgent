@@ -15,6 +15,12 @@ mod wind_down;
 #[path = "foundation_session.rs"]
 pub mod session;
 
+#[path = "foundation_dispatch.rs"]
+pub mod dispatch;
+
+#[path = "foundation_admission.rs"]
+pub mod admission;
+
 pub type FailedOwner<'a> =
     Result<Box<FoundationInput<'a>>, Box<weaver_harness::FoundationManagement<'a>>>;
 
@@ -43,8 +49,8 @@ pub fn entered_rollback(
     }
 }
 
-/// Drive the actual forced Leave, keeping refusal custody pending its paired
-/// Spec ruling. No active dispatcher selects this incomplete replacement.
+/// Drive the actual forced Leave through capture success or cleaned refusal
+/// and its final lifecycle outcome. Foundation selection remains held.
 #[allow(clippy::result_large_err)]
 pub fn forced_leave(
     run: Box<FoundationRun>,
@@ -63,15 +69,13 @@ pub fn forced_leave(
             weaver_harness::FoundationForcedLeaveProgress::Pending => {
                 owner.wait_for_progress();
             }
-            weaver_harness::FoundationForcedLeaveProgress::CaptureRefused
-            | weaver_harness::FoundationForcedLeaveProgress::Closed => return Ok(owner),
+            weaver_harness::FoundationForcedLeaveProgress::Closed => return Ok(owner),
         }
     }
 }
 
 /// Drive the original graceful Leave after its settled wind-down, keeping
-/// refusal custody pending its paired Spec ruling. No active dispatcher
-/// selects this incomplete replacement.
+/// the entered run at S9 after a refused capture. Foundation selection stays held.
 #[allow(clippy::result_large_err)]
 pub fn graceful_leave(
     run: Box<FoundationRun>,
@@ -87,11 +91,11 @@ pub fn graceful_leave(
     loop {
         match owner.advance() {
             weaver_harness::FoundationGracefulLeaveProgress::Progress => (),
-            weaver_harness::FoundationGracefulLeaveProgress::Pending => {
+            weaver_harness::FoundationGracefulLeaveProgress::Pending
+            | weaver_harness::FoundationGracefulLeaveProgress::CaptureRefused => {
                 owner.wait_for_progress();
             }
-            weaver_harness::FoundationGracefulLeaveProgress::CaptureRefused
-            | weaver_harness::FoundationGracefulLeaveProgress::Closed => return Ok(owner),
+            weaver_harness::FoundationGracefulLeaveProgress::Closed => return Ok(owner),
         }
     }
 }

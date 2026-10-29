@@ -64,6 +64,7 @@ impl RecordedSte100 {
 pub(super) struct RecordedStateMeasurement {
     run: String,
     measurement: StateStoreMeasurement,
+    sequence: Sequence,
 }
 
 impl RecordedStateMeasurement {
@@ -72,6 +73,9 @@ impl RecordedStateMeasurement {
     }
     pub(super) fn measurement(&self) -> &StateStoreMeasurement {
         &self.measurement
+    }
+    pub(super) fn sequence(&self) -> Sequence {
+        self.sequence
     }
     #[cfg(test)]
     pub(super) fn for_test(measurement: &StateStoreMeasurement) -> Self {
@@ -82,6 +86,7 @@ impl RecordedStateMeasurement {
         Self {
             run: run.into(),
             measurement: measurement.clone(),
+            sequence: Sequence(1),
         }
     }
 }
@@ -760,6 +765,7 @@ impl RecordBarrier {
                         Some(RecordProof::State(RecordedStateMeasurement {
                             run: self.run.clone(),
                             measurement,
+                            sequence: submission.sequence,
                         }))
                     }
                     RecordPurpose::Terminal(source) => {

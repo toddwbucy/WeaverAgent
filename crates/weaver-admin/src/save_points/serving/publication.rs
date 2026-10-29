@@ -166,6 +166,7 @@ pub(crate) struct Publication<'repo> {
     guard_durable: bool,
     known_files: BTreeMap<&'static str, KnownFile>,
     indexed: bool,
+    commit_received: bool,
     stage: Stage,
     phase: PersistencePhase,
     failure: Option<Failure>,
@@ -373,6 +374,9 @@ impl<'repo> Publication<'repo> {
         if self.stage != Stage::Prepared || !self.matches_capture(run, capture_id) {
             return Err(self.fail("uncorrelated or out-of-phase Commit"));
         }
+        // Retain observed Commit even if its checkpoint fails before authority
+        // can be used. Failed loses the stage, not this irreversible boundary.
+        self.commit_received = true;
         self.check(PersistencePhase::Confirming, checkpoint)?;
         self.stage = Stage::Authorized;
         Ok(())
@@ -576,6 +580,95 @@ impl<'repo> Publication<'repo> {
         self.fail(detail)
     }
 
+    /// CaptureRefused proves that this original Leave cannot Commit. Remove
+    /// only its unlisted part and exact owned guard, retaining any cleanup
+    /// failure instead of claiming a normal refused-capture conclusion.
+    pub(crate) fn cancel_unconfirmed_leave(
+        &mut self,
+        run: &RunId,
+        capture_id: DecimalU64,
+    ) -> Result<(), Failure> {
+        let before_commit = matches!(self.stage, Stage::Copied | Stage::Prepared)
+            || (self.stage == Stage::Failed
+                && matches!(
+                    self.phase,
+                    PersistencePhase::Hashing
+                        | PersistencePhase::Preparing
+                        | PersistencePhase::Confirming
+                ));
+        if !before_commit
+            || self.commit_received
+            || self.indexed
+            || !self.matches_capture(run, capture_id)
+            || !matches!(
+                self.origin,
+                Origin::Serving {
+                    cause: PersistenceCause::GracefulUnload | PersistenceCause::ForcedUnload,
+                    ..
+                }
+            )
+        {
+            return Err(self.fail("capture refusal cannot cancel this publication"));
+        }
+        let prior = self.failure.take();
+        let result = (|| -> Result<(), String> {
+            let guard = if self.owns_guard {
+                let actual = self.read_guard()?;
+                let broken = self
+                    .guard(PublicationState::Broken)
+                    .and_then(|guard| guard.to_json().map_err(before_io))
+                    .map_err(|error| error.to_string())?;
+                if self.guard_bytes.as_ref() != Some(&actual) && actual != broken {
+                    return Err("cancelled capture's guard changed".into());
+                }
+                Some(actual)
+            } else {
+                None
+            };
+            if let Some(part) = &self.part {
+                if !part.name().ends_with(".part") {
+                    return Err("cancelled capture is no longer an unlisted part".into());
+                }
+                match nix::sys::stat::fstatat(
+                    self.repository.directory.as_fd(),
+                    part.name(),
+                    AtFlags::AT_SYMLINK_NOFOLLOW,
+                ) {
+                    Err(nix::errno::Errno::ENOENT) => (),
+                    Err(error) => return Err(error.to_string()),
+                    Ok(_) => part.remove().map_err(|error| error.to_string())?,
+                }
+            }
+            if let Some(bytes) = guard {
+                fs_ops::remove_file(
+                    self.repository.directory.as_fd(),
+                    self.guard_name.as_ref().unwrap(),
+                    &bytes,
+                    self.repository.root_owner,
+                    0o600,
+                )
+                .map_err(|error| error.to_string())?;
+            }
+            Ok(())
+        })();
+        if let Err(detail) = result {
+            let detail = prior.map_or_else(
+                || detail.clone(),
+                |prior| format!("{}; capture refusal cleanup: {detail}", prior.detail),
+            );
+            return Err(self.fail(detail));
+        }
+        self.part = None;
+        self.owns_guard = false;
+        self.guard_durable = false;
+        self.stage = Stage::Failed;
+        let mut retained = prior.unwrap_or_else(|| before_io("worker completed capture refusal"));
+        retained.phase = self.phase;
+        retained.artifacts.clear();
+        self.failure = Some(retained);
+        Ok(())
+    }
+
     /// An observed peer failure or expiry permanently withdraws future authority.
     pub(crate) fn failed(&mut self, detail: impl Into<String>) -> Failure {
         self.fail(detail)
@@ -608,6 +701,7 @@ impl<'repo> Publication<'repo> {
             guard_durable: false,
             known_files: BTreeMap::new(),
             indexed: false,
+            commit_received: false,
             stage: Stage::Copied,
             phase: PersistencePhase::Hashing,
             failure: None,
@@ -932,6 +1026,11 @@ impl<'repo> Publication<'repo> {
             if let Ok(bytes) = replacement {
                 let name = self.guard_name.as_ref().unwrap();
                 let result = match self.read_guard() {
+                    // A refused-capture cleanup may fail after the original
+                    // failure already installed this exact Broken guard.
+                    Ok(old) if old == bytes => {
+                        fs_ops::sync_directory(self.repository.directory.as_fd())
+                    }
                     Ok(old) => fs_ops::replace_file(
                         self.repository.directory.as_fd(),
                         name,

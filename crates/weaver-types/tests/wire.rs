@@ -73,6 +73,7 @@ fn the_boxed_payloads_cross_as_the_payloads_do() {
     assert_eq!(enter, back);
 
     let state = LifecycleAnswer::State {
+        plan: None,
         state: AgentState::Idle,
         load: Some(Box::new(weaver_types::LoadFacts {
             session: weaver_types::SessionId("s-1".into()),
@@ -500,6 +501,7 @@ fn the_cause_and_the_constituents_render_as_stated() {
         r#"{"kind":"stop","cause":{"uid":0}}"#
     );
     let bare = LifecycleAnswer::State {
+        plan: None,
         state: AgentState::Unloaded,
         load: None,
         constituents: Vec::new(),
@@ -509,6 +511,7 @@ fn the_cause_and_the_constituents_render_as_stated() {
         r#"{"kind":"state","state":"unloaded"}"#
     );
     let held = LifecycleAnswer::State {
+        plan: None,
         state: AgentState::Unloaded,
         load: None,
         constituents: vec![4100, 4101, 4102],

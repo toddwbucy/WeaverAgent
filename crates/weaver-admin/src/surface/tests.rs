@@ -1,5 +1,67 @@
 use super::*;
 
+#[test]
+fn foundation_plan_command_has_one_agent_and_keeps_the_legacy_parser_selected() {
+    let args = ["plan-update".to_owned(), "alpha".to_owned()];
+    assert_eq!(
+        parse_arguments(args.clone()),
+        Err(LifecycleRefusal::Malformed)
+    );
+    let request = parse_foundation_arguments(args).unwrap();
+    assert_eq!(request, Request::PlanUpdate(AgentName("alpha".into())));
+    assert_eq!(request.agent(), &AgentName("alpha".into()));
+    for args in [
+        vec!["plan-update"],
+        vec!["plan-update", "alpha", "file.json"],
+        vec!["plan-update", "alpha", "-"],
+        vec!["plan-update", "alpha", "--stdin"],
+    ] {
+        assert_eq!(
+            parse_foundation_arguments(args.into_iter().map(str::to_owned)),
+            Err(LifecycleRefusal::Malformed)
+        );
+    }
+    assert!(FOUNDATION_HELP.contains("plan-update <agent>"));
+    assert!(FOUNDATION_HELP.contains("plan-update.json"));
+    assert!(FOUNDATION_HELP.contains("stdin"));
+}
+
+#[test]
+fn plan_outcomes_use_the_existing_single_answer_rendering() {
+    use weaver_types::state_flow as s;
+    let answer = LifecycleAnswer::PlanUpdated {
+        plan: s::PlanRef {
+            plan_id: s::PlanId {
+                seed_id: "seed".into(),
+                local_id: 1.into(),
+            },
+            revision: 2.into(),
+        },
+        source: s::SourcePosition {
+            block_id: s::SourceBlockId {
+                run: "run".into(),
+                sequence: 17.into(),
+                block: 0.into(),
+            },
+            turn: None,
+        },
+    };
+    assert_eq!(
+        serde_json::from_str::<LifecycleAnswer>(&render_answer(&answer)).unwrap(),
+        answer
+    );
+    let refusal = LifecycleRefusal::PlanUpdateRefused {
+        case: s::PlanUpdateCase::ReadRefused,
+        detail: "exact member detail".into(),
+        rejected_blocks: vec![],
+        read_code: Some(s::ReadRefusalCode::ResultUnavailable),
+    };
+    assert_eq!(
+        serde_json::from_str::<LifecycleRefusal>(&render_refusal(&refusal)).unwrap(),
+        refusal
+    );
+}
+
 /// **The answer and the exit status agree.** Zero exits an answer and a
 /// non-zero status exits a refusal, so a shell reads the status and a tool
 /// reads the object and the two never disagree.

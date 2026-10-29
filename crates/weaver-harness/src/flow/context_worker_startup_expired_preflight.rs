@@ -107,6 +107,16 @@ impl ExpiredPreflightRollback {
     pub(super) fn complete(&self) -> bool {
         self.stage == Stage::Complete
     }
+    pub(super) fn process_exit(&self) -> Option<crate::FoundationProcessExit> {
+        self.complete()
+            .then_some(if self.answer_left && self.refusal.is_none() {
+                crate::FoundationProcessExit::Success
+            } else {
+                // Incomplete Open accounting or a terminal protocol refusal can
+                // finish resource disposal without permitting successful exit.
+                crate::FoundationProcessExit::Failure
+            })
+    }
     pub(super) fn sequence(&self) -> Option<u64> {
         self.sequence.map(|sequence| sequence.0)
     }
@@ -405,5 +415,39 @@ impl ExpiredPreflightRollback {
             _send: dial.send,
         });
         self.stage = Stage::Complete;
+    }
+}
+
+#[cfg(test)]
+impl ExpiredPreflightRollback {
+    pub(super) fn test_completed_exit_guards(&mut self) {
+        use crate::FoundationProcessExit::{Failure, Success};
+        assert!(self.complete() && self.answer_left && self.refusal.is_none());
+        assert_eq!(self.process_exit(), Some(Success));
+        let sequence = self.sequence;
+        self.stage = Stage::Answer;
+        assert_eq!(
+            self.process_exit(),
+            None,
+            "an owed answer is not terminal completion"
+        );
+        self.stage = Stage::Complete;
+        self.answer_left = false;
+        assert_eq!(
+            self.process_exit(),
+            Some(Failure),
+            "incomplete accounting permits no successful exit"
+        );
+        self.answer_left = true;
+        assert_eq!(self.process_exit(), Some(Success));
+        self.refusal = Some(LifecycleRefusal::Malformed);
+        assert_eq!(
+            self.process_exit(),
+            Some(Failure),
+            "a terminal refusal permits no successful exit"
+        );
+        self.refusal = None;
+        assert_eq!(self.process_exit(), Some(Success));
+        assert_eq!(self.sequence, sequence);
     }
 }

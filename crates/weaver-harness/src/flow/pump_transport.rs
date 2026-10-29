@@ -6,9 +6,9 @@
 //! deadlines, rotation, trace authoring and completion reduction. In particular,
 //! organ channels have two initiators: incoming traffic is legal while sending.
 //!
-//! Ordinary organ traffic admits no ancillary handles. Preflight Enter's sink
-//! and state descriptors still belong to channel.rs::recv_with_descriptor until
-//! the paired P1d migration. That owner must finish custody before conversion.
+//! Ordinary organ traffic admits no ancillary handles. The active lifecycle's
+//! Enter reader and the dormant foundation Enter receiver each retain their
+//! original sink and state descriptors before any organ-port conversion.
 //! Decode retains the existing SegmentPreamble wire, not the STE100 framing.
 
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};

@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #348
+**Landing PR:** #373
 
-**Version:** 0.34 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.36 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -935,11 +935,17 @@ Published includes admin's preparation refusal before ImageChecked or Prepared, 
 only failure after publication begins. The first retained refusal supplies the leg,
 so a crossed admin Aborted cannot replace an earlier Answer or Finished.
 It uses Continue and the original exchange and capture IDs. PERSIST-LEAVE-REFUSAL owns
-the ordering and timing. The next final outcome is either Left with forced true,
+the ordering and timing. The next normal outcome is either Left with forced true,
 no_state false and no save report, or SavePointNotTaken with the same missed leg for a
-still-graceful leave. The receiver rejects a save report, CaptureComplete or a return
-to publication after this acknowledgement. Aborted keeps its cancellation and failure
-meaning and never substitutes for CaptureRefused. This adds one internal continuation,
+still-graceful leave. Terminal unwind refusals follow ADMIN-SAVE's enumerated negative
+outcomes at every capture receive, local-work checkpoint and joined Leave. FailedRun
+is admin's projection shape, with no current harness producer. Defensive acceptance
+requires the original observed run and, after Beginning, the original capture ID.
+A join that cannot identify the run rejects that shape; it has no capture ID to compare.
+Neither a worker refusal nor its nested organ reason supplies admin's own publication
+facts. The receiver rejects other refusal codes, a save report, CaptureComplete or a
+return to publication after this acknowledgement. Aborted keeps its cancellation
+and failure meaning and never substitutes for CaptureRefused. This adds one internal continuation,
 no trace field, event kind or external command. [PERSIST-4, SEAM-2, FLOW-5]
 
 On a leave exchange, admin sends at most one Aborted for a capture. Its first matching

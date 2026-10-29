@@ -133,6 +133,67 @@ impl<'a> Workflow<'a> {
         self.rounds
     }
 
+    pub(super) fn wait_for_election(&mut self) {
+        if let Some(owner) = self.management.as_mut() {
+            if owner.advance() == FoundationManagementProgress::Pending {
+                owner.wait_for_progress();
+            }
+        } else if let Some(input) = self.input.as_mut() {
+            input.wait_for_wake();
+        }
+        if self
+            .input
+            .as_ref()
+            .is_some_and(|input| input.progress() == FoundationInputProgress::ManagementPending)
+        {
+            match self.input.take().unwrap().management() {
+                Ok(owner) => self.management = Some(owner),
+                Err(input) => self.input = Some(input),
+            }
+        }
+    }
+
+    pub(super) fn into_exit(mut self) -> Result<super::dispatch::ServingHandoff, Self> {
+        if let Some(owner) = self.management.take() {
+            match super::dispatch::management_handoff(owner) {
+                Ok(handoff) => Ok(handoff),
+                Err(owner) => {
+                    self.management = Some(owner);
+                    Err(self)
+                }
+            }
+        } else {
+            match super::dispatch::input_handoff(self.input.take().unwrap()) {
+                Ok(handoff) => Ok(handoff),
+                Err(input) => {
+                    self.input = Some(input);
+                    Err(self)
+                }
+            }
+        }
+    }
+
+    pub fn queue_plan_update(&mut self) -> bool {
+        if !self
+            .management
+            .as_ref()
+            .is_some_and(|owner| owner.progress() == FoundationManagementProgress::DirectivePending)
+        {
+            return false;
+        }
+        let owner = self.management.take().unwrap();
+        match owner.queue_plan_update() {
+            Ok(input) => {
+                self.input = Some(input);
+                true
+            }
+            Err(owner) => {
+                self.management = Some(owner);
+                false
+            }
+        }
+    }
+
     pub fn queue_save(&mut self) -> bool {
         if !self
             .management
@@ -228,7 +289,9 @@ impl<'a> Workflow<'a> {
             return self.progress();
         }
         if let Some(management) = self.management.as_mut() {
-            management.advance();
+            if management.advance() == FoundationManagementProgress::Pending {
+                management.wait_for_progress();
+            }
             let management = self.management.take().unwrap();
             match management.finish() {
                 Ok(input) => self.input = Some(input),
