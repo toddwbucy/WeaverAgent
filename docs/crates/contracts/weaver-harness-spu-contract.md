@@ -206,6 +206,17 @@ counterexample to the invariant as written, and it is the same counterexample th
 coordination seam already is. `weaver-admin-PRD` section 11 files the scoping edit, and
 this contract is the second case that edit has to cover rather than a second edit.
 
+**Diagnostic setup rollback does not cancel Admit by sending Release early.**
+Under harness Spec 6.1.1, a completely sent Admit is drained for its exact terminal
+inside the already-running rollback interval. An Admitted answer is a residency
+to release, never permission to send Open or Ready after rollback. A refusal or
+channel loss supplies no residency confirmation. A pending Admit that cannot settle
+by that interval ends through channel closure and owned-child failure cleanup,
+not a concurrent Release, a fabricated Released answer or a second Admit.
+The already-selected rollback Enter refusal is retained; a later arm failure
+affects cleanup rather than replacing that outcome. The SPU's ordinary ordering
+and refusal vocabulary stay unchanged.
+
 ## 3. Ordering
 
 - Admit is first and happens exactly once on a channel.

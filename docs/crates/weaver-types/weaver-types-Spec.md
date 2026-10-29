@@ -1429,7 +1429,7 @@ no store, or the leave is a load's rollback, which takes none (`weaver-admin-Spe
 section 3, S1 x Leave), a forced leave otherwise taking its save point as any leave does
 (the forced unload).
 
-**The lifecycle act (2026-10-09) adds six cases and three members**, `Left.forced`, `Left.no_state` and `Leave.rollback`,, on the lifecycle
+**The lifecycle act (2026-10-09) adds six cases and three members**, `Left.forced`, `Left.no_state` and `Leave.rollback`, on the lifecycle
 state table approved by the operator on 2026-10-09, recorded on #1, which
 `weaver-admin-Spec` section 3 holds; each cites the row it carries and none restates
 it. **`Left`'s `forced`** is the leave's state at its end, per `weaver-admin-Spec` section
@@ -1456,6 +1456,14 @@ agent is unloading": the harness answers each frame the gate flushes to it with 
 through the gate, the connection standing, and records it as a refusal of the leave
 (`weaver-admin-Spec` section 3, S4 and S5 x dialer request, and I5). One fact, the
 agent leaving, and no claim about the request.
+
+**Diagnostic setup rollback also uses NoResidency for the original Enter**
+(harness Spec 6.1.1 DIAGNOSTIC-SETUP-ROLLBACK). In that one aggregate outcome it
+means rollback withdrew admission before Ready. It does not assert that a device
+was already emptied; the rollback's successful Left remains the cleanup outcome.
+An already established Enter refusal retains its exact code. This adds no enum
+case or wire member and does not change NoResidency on an SPU request.
+
 **`Quiesce`** is the harness's to the gate, the graceful unload's first act at the gate
 but for a `ToolInterrupt` that precedes it where a tool call is out,
 and **`GateQuiesced`** the gate's answer once it has closed its listener, stopped

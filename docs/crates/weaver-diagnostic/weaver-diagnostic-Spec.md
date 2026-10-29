@@ -243,6 +243,14 @@ flush and elision since 2026-09-26, and a source's own `recall` since the same d
 post-flush request with no recall of the `recall` verb before it refuses at identity on
 a record carrying the kind, per `diagnostic-replay-loop` section 2.
 
+**Setup failure and pre-Ready rollback record nothing**, under harness Spec
+6.1.1 DIAGNOSTIC-SETUP-ROLLBACK. A partial load is cleanup custody rather than an
+admitted replay. Its refused Enter, failed arm, channel loss or rollback cannot
+author a Fault, Refusal or replay bracket before ReplayOpened. Lifecycle replies
+and operator diagnostics report those failures. Once ReplayOpened is admitted,
+the existing pass and recorder rules hold; this clause elects no new event or
+interrupted-replay outcome.
+
 **`elision` is carried because the loop now performs one**, as of 2026-09-26, which
 closes the open election section 8 held. `diagnostic-replay-loop` section 2 reproduces
 a source's elision where it fell, as it reproduces a flush, so the loop's grant names

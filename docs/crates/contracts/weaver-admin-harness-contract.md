@@ -322,10 +322,21 @@ could not be, the miss then recorded as a refusal of the leave naming the leg.
 `Leave` with `rollback` true, which admin sends only to undo its own load, takes no save
 point and runs no wind-down in any position, `Entered` included, since a `Ready` can
 land just after admin's enter deadline and leave the harness `Entered` while admin rolls
-back; it authors `unload` with `forced` true and the load's cause, and answers `Left`
+back; on a serving binding it authors `unload` with `forced` true and the load's cause,
+while Diagnostic keeps its own bracket rule (harness Spec 6.1.1). It answers `Left`
 with none. Admin leaves the marker as section 4's marker-write rule gives (K1), and the
 rollback is the exemption I2 names. The directive marks it, never the harness's
 position.
+
+**A Diagnostic rollback can reach a still-pending Enter.** The exception to the
+ordinary single-exchange ordering is the load's own forced rollback before Ready,
+as specified by harness Spec 6.1.1 DIAGNOSTIC-SETUP-ROLLBACK. The harness retains
+the original Enter and rollback identities. Unless an earlier Enter outcome was
+already established, the original Enter closes NoResidency, meaning the aggregate
+was withdrawn; that refusal is not a claim that device cleanup has finished.
+Only the rollback's later Left confirms its completed cleanup. The two peers may
+be the same or different; a lost or blocked Enter answer does not delay cleanup.
+This adds no S1 operator verb, wire variant or timing field.
 
 **`Left` carries `forced` and `no_state`**, each required on the wire with no default, `no_state` true where the run has no state to keep (every diagnostic binding, graceful or forced, and a serving run with no member seam), so a `Left` with no save point says on the wire whether there was nothing to keep or the save point was not taken; `forced` the leave's state at its
 end per `weaver-admin-Spec` section 3's definition (directed forced, joined, a declared bound passing, or a dead gate or SPU), so every
