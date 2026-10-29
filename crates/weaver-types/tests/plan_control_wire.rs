@@ -9,6 +9,29 @@ fn refusal(case: &str, code: Value) -> Value {
     json!({"case":case,"detail":"exact read detail","rejected_blocks":[],"read_code":code})
 }
 
+#[test]
+fn plan_admission_refusals_round_trip_through_floor_consumers() {
+    for refusal in [LifecycleRefusal::OutOfOrder, LifecycleRefusal::Unauthorized] {
+        let record = RefusalRecord::Lifecycle {
+            asked: LifecycleAsk::PlanUpdate,
+            refusal: refusal.clone(),
+        };
+        let wire = serde_json::to_value(&record).unwrap();
+        assert_eq!(wire["asked"], json!({"ask":"plan_update"}));
+        assert_eq!(wire["refusal"], serde_json::to_value(&refusal).unwrap());
+        assert_eq!(
+            decode_strict::<RefusalRecord>(&wire.to_string()).unwrap(),
+            record
+        );
+        let answer = json!({"exchange":{"opener":"admin","ordinal":611},"position":"close","payload":{"kind":"refusal","body":wire["refusal"]}});
+        let decoded = decode_strict::<OrganEnvelope>(&answer.to_string()).unwrap();
+        assert_eq!(decoded.payload, weaver_types::Payload::Refusal(refusal));
+        let mut malformed = wire;
+        malformed["asked"]["body"] = json!({});
+        assert!(decode_strict::<RefusalRecord>(&malformed.to_string()).is_err());
+    }
+}
+
 fn accepts_refusal(fields: Value, accepted: bool) {
     let source = fields.to_string();
     assert_eq!(

@@ -3,6 +3,28 @@ use crate::flow::plan::AcceptedPlanUpdate;
 use nix::sys::socket::{AddressFamily, MsgFlags, SockType, send, socketpair};
 use sha2::{Digest as _, Sha256};
 
+#[test]
+fn refused_plan_packet_preserves_exact_wire_after_peer_eof_without_granting_admission() {
+    let (mut owner, other, wire) = received(" { \"unparsed\": true }\n", 42, false);
+    let envelope = owner.held().unwrap().envelope.clone();
+    drop(other);
+    let refused = owner.take_refused_plan_update().unwrap().unwrap();
+    assert_eq!(refused.wire(), wire);
+    assert_eq!(refused.envelope(), &envelope);
+    assert!(owner.held().is_none());
+    assert!(owner.wire.is_none());
+    assert!(owner.take_root_plan_update().ok().flatten().is_none());
+}
+
+#[test]
+fn refused_plan_packet_cannot_take_an_opener_with_descriptors() {
+    let (mut owner, _other, wire) = received(&document(), 0, false);
+    owner.held.as_mut().unwrap().sink = Some(std::fs::File::open("/dev/null").unwrap().into());
+    assert!(owner.take_refused_plan_update().is_err());
+    assert_eq!(owner.wire.as_deref(), Some(wire.as_slice()));
+    assert!(owner.held().unwrap().sink.is_some());
+}
+
 pub(in crate::flow) fn document() -> String {
     serde_json::json!({"format":"state-plan-update/1","expected":null,"operation":{
         "create":{"task":"Read records.","steps":[{"id":null,"instruction":"Read input."},{"id":null,"instruction":"Send output."}],

@@ -25,6 +25,9 @@ mod save_handoff;
 #[path = "context_worker_plan_handoff.rs"]
 mod plan_handoff;
 
+#[path = "context_worker_plan_refusal.rs"]
+pub(in crate::flow::context::worker_startup) mod plan_refusal;
+
 enum ManagementAnswer {
     Observation(ObservationEnvelope),
     Lifecycle(OrganEnvelope),
@@ -54,7 +57,8 @@ pub struct FoundationManagement<'a> {
     pub(super) input: Box<FoundationInput<'a>>,
     peer: LifecyclePeer,
     message: Option<LifecycleMessage>,
-    declined_plan: Option<crate::flow::pump::plan::RootPlanPacket>,
+    declined_plan: Option<crate::flow::pump::plan::RefusedPlanPacket>,
+    plan_refusal: Option<plan_refusal::PlanRefusal>,
     save_message: Option<ReceivedCapture>,
     answer: Option<ManagementAnswer>,
     stop: Option<StopWork>,
@@ -73,7 +77,8 @@ pub struct FoundationManagement<'a> {
 pub(super) struct FailedManagement {
     _peer: crate::flow::pump::RetiredLifecyclePeer,
     _message: Option<crate::flow::pump::RetiredLifecycleMessage>,
-    _declined_plan: Option<crate::flow::pump::plan::RootPlanPacket>,
+    _declined_plan: Option<crate::flow::pump::plan::RefusedPlanPacket>,
+    _plan_refusal: Option<plan_refusal::PlanRefusal>,
     _save_message: Option<RetiredReceivedCapture>,
     _answer: Option<ManagementAnswer>,
     _stop: Option<StopWork>,
@@ -129,6 +134,7 @@ impl<'a> FoundationInput<'a> {
             peer,
             message: None,
             declined_plan: None,
+            plan_refusal: None,
             save_message: None,
             answer: None,
             stop: None,
@@ -150,6 +156,7 @@ impl<'a> FoundationManagement<'a> {
             peer,
             message,
             declined_plan,
+            plan_refusal,
             save_message,
             answer,
             stop,
@@ -168,6 +175,7 @@ impl<'a> FoundationManagement<'a> {
                 _peer: peer.retire_failed(),
                 _message: message.map(LifecycleMessage::retire_failed),
                 _declined_plan: declined_plan,
+                _plan_refusal: plan_refusal,
                 _save_message: save_message.map(ReceivedCapture::retire_failed),
                 _answer: answer,
                 _stop: stop,
@@ -261,6 +269,11 @@ impl<'a> FoundationManagement<'a> {
                 self.detail = Some("secondary Leave dial supplied no timely directive".into());
                 return self.progress;
             }
+            match self.expire_plan_refusal(&failure, io) {
+                Ok(true) => return self.progress,
+                Ok(false) => (),
+                Err(error) => failure = error,
+            }
             match self.input.retain_organ_end(&failure, io) {
                 Ok(true) => return self.progress,
                 Ok(false) => (),
@@ -285,6 +298,20 @@ impl<'a> FoundationManagement<'a> {
                     }
                 )
             {
+                if self.plan_refusal.is_some() {
+                    // The refusal cannot be discarded to resume the save.
+                    // Its original owner reduces the due cleanup in place.
+                    match self.input.advance_save(io, false) {
+                        Ok(_) => return self.progress,
+                        Err(error) => {
+                            self.input.failure = Some(error.clone());
+                            self.input.stage = Stage::Stopped;
+                            self.progress = FoundationManagementProgress::Stopped;
+                            self.detail = Some(format!("{error:?}"));
+                            return self.progress;
+                        }
+                    }
+                }
                 // The retained save owns timeout reduction and any correlated
                 // cleanup. An unrelated secondary dial cannot strand it here.
                 self.progress = FoundationManagementProgress::Dropped;
@@ -300,6 +327,10 @@ impl<'a> FoundationManagement<'a> {
                     ..
                 }
             ) {
+                if self.plan_refusal.is_some() {
+                    self.peer_unavailable = true;
+                    return self.progress;
+                }
                 // Management departure is not a run failure. Already transferred
                 // content and input deadlines stay with the exact original owner.
                 self.progress = FoundationManagementProgress::Dropped;
@@ -326,6 +357,7 @@ impl<'a> FoundationManagement<'a> {
             // A whole request's receive witness survives every later drain.
             && self.heard_ns.is_none()
             && self.message.is_none()
+            && self.declined_plan.is_none()
             && self.save_message.is_none()
             && self.progress == FoundationManagementProgress::Pending
         {
@@ -353,7 +385,11 @@ impl<'a> FoundationManagement<'a> {
             }
         }
         self.input.serving.owner.context.live(io)?;
-        let done = self.stop.as_ref().is_none_or(|stop| stop.gate_done);
+        let done = self.stop.as_ref().is_none_or(|stop| stop.gate_done)
+            && self
+                .plan_refusal
+                .as_ref()
+                .is_none_or(|record| record.complete());
         let exchange = self
             .message
             .as_ref()
@@ -603,6 +639,26 @@ impl<'a> FoundationManagement<'a> {
             {
                 return Ok(());
             }
+            if matches!(
+                self.peer.held().unwrap().envelope.payload,
+                Payload::Directive(LifecycleDirective::PlanUpdate { .. })
+            ) {
+                self.declined_plan = self.peer.take_refused_plan_update().map_err(|failure| {
+                    RunFailure::Transport {
+                        source: PumpSource::AdminDial,
+                        failure,
+                    }
+                })?;
+                let exchange = self
+                    .declined_plan
+                    .as_ref()
+                    .unwrap()
+                    .envelope()
+                    .exchange
+                    .clone();
+                self.refuse_plan(exchange, weaver_types::LifecycleRefusal::OutOfOrder, io)?;
+                return Ok(());
+            }
             self.message =
                 self.peer
                     .take_completion()
@@ -676,6 +732,9 @@ impl<'a> FoundationManagement<'a> {
                 }
                 _ => unreachable!("judged management directive"),
             }
+        }
+        if !self.advance_plan_refusal(io)? {
+            return Ok(());
         }
         if let Some(stop) = &mut self.stop {
             let progress = stop.advance(
@@ -804,6 +863,13 @@ impl<'a> FoundationManagement<'a> {
             self.progress,
             FoundationManagementProgress::Answered | FoundationManagementProgress::Dropped
         ) {
+            if self.plan_refusal.is_some() {
+                self.input
+                    .serving
+                    .owner
+                    .context
+                    .complete_wait(PumpDeadline::PlanRefusal);
+            }
             if self.read_armed {
                 self.input
                     .serving

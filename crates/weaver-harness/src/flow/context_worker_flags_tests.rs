@@ -97,8 +97,50 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         return Some(Cleanup::Failed(failed::begin(guard, member, false)));
     }
     let queued_save = mode
-        .ends_with("queued-save")
+        .contains("queued-save")
         .then(|| queue_save(&mut guard, socket));
+    if mode.ends_with("plan-refused") {
+        let rejected = request(socket, "{ this refused plan must never be parsed }");
+        let answer: OrganEnvelope =
+            serde_json::from_slice(&management_answer(&mut guard, &rejected)).unwrap();
+        assert_eq!(
+            answer.payload,
+            Payload::Refusal(LifecycleRefusal::OutOfOrder)
+        );
+        assert!(read_packet(&rejected).is_none());
+        let input = guard.input.as_ref().unwrap();
+        assert!(
+            input.flags_pending(),
+            "refusal cannot consume the original flag observation"
+        );
+        assert!(input.serving.flags.is_none());
+        assert!(!input.plan_pending());
+        assert!(input.serving.owner.context.root_plan_work().is_none());
+        assert_eq!(
+            input
+                .serving
+                .owner
+                .context
+                .deadlines
+                .get(PumpDeadline::StateControl),
+            Some(bound)
+        );
+        if let Some((_, window)) = &queued_save {
+            assert!(
+                input.serving.save.is_some(),
+                "refusal must preserve queued save custody"
+            );
+            let held = input
+                .serving
+                .owner
+                .context
+                .deadlines
+                .get(PumpDeadline::SaveQueued)
+                .unwrap();
+            assert_eq!(held.began_ns(), window.began_ns.0);
+            assert_eq!(held.deadline_ns(), window.deadline_ns.0);
+        }
+    }
     let stop = mode.ends_with("stop");
     let leave = mode.ends_with("leave");
     let disconnect = mode.ends_with("disconnect-stop");

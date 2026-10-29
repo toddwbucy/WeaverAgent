@@ -37,19 +37,23 @@ impl<'a> FoundationManagement<'a> {
             Err(PlanReceiveError::Refused(refusal)) => {
                 // A failed authentication/cause judgment leaves the packet on
                 // its port until this same owner takes it for its refusal.
-                self.message = match self.peer.take_completion() {
+                self.declined_plan = match self.peer.take_refused_plan_update() {
                     Ok(value) => value,
                     Err(error) => {
                         self.detail = Some(format!("root refusal take: {error:?}"));
                         return Err(self);
                     }
                 };
-                self.answer = Some(ManagementAnswer::Lifecycle(OrganEnvelope {
-                    exchange: self.message.as_ref().unwrap().envelope.exchange.clone(),
-                    position: Position::Close,
-                    payload: Payload::Refusal(refusal),
-                }));
                 self.progress = FoundationManagementProgress::Pending;
+                let exchange = self
+                    .declined_plan
+                    .as_ref()
+                    .unwrap()
+                    .envelope()
+                    .exchange
+                    .clone();
+                let result = self.refuse_plan(exchange, refusal, io);
+                self.reduce_result(result, io);
                 return Err(self);
             }
             Err(PlanReceiveError::Transport(failure)) => {
@@ -66,19 +70,18 @@ impl<'a> FoundationManagement<'a> {
             .context
             .begin_root_plan_update(packet, io)
         {
-            self.declined_plan = error.original;
+            self.declined_plan = error
+                .original
+                .map(crate::flow::pump::plan::RootPlanPacket::into_refused);
             if let Some(failure) = error.failure {
                 self.detail = Some(format!("root plan admission: {failure:?}"));
                 self.input.failure = Some(failure);
                 self.input.stage = Stage::Stopped;
                 self.progress = FoundationManagementProgress::Stopped;
             } else {
-                self.answer = Some(ManagementAnswer::Lifecycle(OrganEnvelope {
-                    exchange,
-                    position: Position::Close,
-                    payload: Payload::Refusal(error.refusal),
-                }));
                 self.progress = FoundationManagementProgress::Pending;
+                let result = self.refuse_plan(exchange, error.refusal, io);
+                self.reduce_result(result, io);
             }
             return Err(self);
         }

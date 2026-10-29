@@ -2445,6 +2445,7 @@ impl RecordingContext {
             | PumpDeadline::Label
             | PumpDeadline::AdminRead
             | PumpDeadline::PlanAnswer
+            | PumpDeadline::PlanRefusal
             | PumpDeadline::CaptureResult
             | PumpDeadline::SaveQueued
             | PumpDeadline::CaptureWindow => {

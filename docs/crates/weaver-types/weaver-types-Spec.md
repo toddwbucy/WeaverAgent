@@ -8,7 +8,6 @@ one's Spec pass. Code is written against it under the gates of Working Process s
 **Document ID:** `weaver-types-Spec`
 **Parent:** `weaver-types-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #398
 
 ---
 
@@ -2135,12 +2134,14 @@ pub enum TokenAsk {
 /// Which lifecycle ask a refusal answered.
 #[serde(tag = "ask", rename_all = "snake_case")]
 pub enum LifecycleAsk {
+    PlanUpdate,
     Enter,
     Leave,
     Stop,
     Observe,
     Admit,
     Release,
+    WorldRequest,
 }
 
 pub enum TokenRefusal {

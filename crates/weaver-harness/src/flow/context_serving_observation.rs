@@ -18,6 +18,9 @@ pub(super) struct ServingObservationAuthor {
 
 #[derive(Debug)]
 enum Observation {
+    PlanRefusal {
+        payload: String,
+    },
     Save {
         capture_id: trace::DecimalU64,
         window: trace::SaveWindow,
@@ -33,6 +36,24 @@ enum Observation {
 }
 
 impl ServingObservationAuthor {
+    pub(super) fn plan_refusal(
+        context: &RecordingContext,
+        refusal: &weaver_types::LifecycleRefusal,
+    ) -> Self {
+        Self {
+            origin: Arc::clone(&context.read_origin),
+            observation: Observation::PlanRefusal {
+                payload: serde_json::to_string(&weaver_types::RefusalRecord::Lifecycle {
+                    asked: weaver_types::LifecycleAsk::PlanUpdate,
+                    refusal: refusal.clone(),
+                })
+                .expect("typed plan refusal serializes"),
+            },
+            ticket: OnceLock::new(),
+            sequence: OnceLock::new(),
+        }
+    }
+
     pub(super) fn new(context: &RecordingContext, payload: &trace::SavePointRecord) -> Self {
         let (capture_id, window, refusal) = match payload {
             trace::SavePointRecord::Requested {
@@ -102,7 +123,9 @@ impl ServingObservationAuthor {
             && (context.phase == RecordingPhase::Entered
                 || (matches!(
                     self.observation,
-                    Observation::OrganLoss { .. } | Observation::OrganReport { .. }
+                    Observation::OrganLoss { .. }
+                        | Observation::OrganReport { .. }
+                        | Observation::PlanRefusal { .. }
                 ) && context.phase == RecordingPhase::Releasing))
             && context.failure.is_none()
             && context.flow.halt().is_none()
@@ -121,6 +144,10 @@ impl ServingObservationAuthor {
             return false;
         }
         let (expected_id, expected_window, expected_refusal) = match &self.observation {
+            Observation::PlanRefusal { payload } => {
+                return event.kind == Kind::Refusal
+                    && matches!(&event.payload, Some(Payload::Refusal(raw)) if raw.get() == payload);
+            }
             Observation::OrganLoss { payload } | Observation::OrganReport { payload, .. } => {
                 return event.kind == Kind::Fault
                     && matches!(&event.payload, Some(Payload::Fault(raw)) if raw.get() == payload);

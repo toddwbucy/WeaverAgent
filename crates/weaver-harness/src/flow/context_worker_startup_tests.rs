@@ -1174,7 +1174,7 @@ fn circuit(mode: &str) {
             load.state_flow.persistence.snapshot_wait.elapsed_ns = 50_000_000.into();
         }
     }
-    if mode.ends_with("-flags-queued-save") {
+    if mode.contains("-flags-queued-save") {
         // This real process case retains a save while the flag member delays;
         // its declared budget is not the fake-clock fixture's millisecond window.
         load.state_flow.persistence.save_wait.elapsed_ns = 5_000_000_000.into();
@@ -1584,6 +1584,16 @@ fn circuit(mode: &str) {
                         &mut reader,
                     );
                 }
+                return;
+            }
+            if mode.starts_with("input-worker-plan-refusal-") {
+                super::input::management::plan_refusal::composition_tests::exercise(
+                    serving,
+                    &mut member,
+                    &mut reader,
+                    &path,
+                    mode,
+                );
                 return;
             }
             if mode.starts_with("input-worker-plan-") {
@@ -2274,8 +2284,60 @@ scenario!(
     "input-worker-plan-open-turn"
 );
 scenario!(
+    worker_plan_refusal_invalid_cause,
+    "input-worker-plan-refusal-cause"
+);
+scenario!(
+    worker_plan_refusal_inner_admission,
+    "input-worker-plan-refusal-inner"
+);
+scenario!(
+    worker_plan_refusal_complete_opener_eof,
+    "input-worker-plan-refusal-eof"
+);
+scenario!(
+    worker_plan_refusal_delivery_expiry,
+    "input-worker-plan-refusal-delivery-expiry"
+);
+scenario!(
+    worker_plan_refusal_accounting_expiry,
+    "input-worker-plan-refusal-accounting-expiry"
+);
+scenario!(
+    worker_plan_refusal_preserves_earlier_expiry,
+    "input-worker-plan-refusal-earlier-expiry"
+);
+scenario!(
+    worker_plan_refusal_sent_before_expiry,
+    "input-worker-plan-refusal-sent-expiry"
+);
+scenario!(
+    worker_plan_refusal_sent_clock_failure,
+    "input-worker-plan-refusal-sent-clock"
+);
+scenario!(
+    worker_plan_refusal_trace_pressure_eof,
+    "input-worker-plan-refusal-trace-eof"
+);
+scenario!(
+    worker_plan_refusal_pending_ticket_expiry,
+    "input-worker-plan-refusal-pending-expiry"
+);
+scenario!(
+    worker_plan_refusal_recorded_completion_expiry,
+    "input-worker-plan-refusal-recorded-expiry"
+);
+scenario!(
     worker_plan_flags_queued_save,
     "input-worker-plan-save-sqlite-flags-queued-save"
+);
+scenario!(
+    worker_plan_refusal_preserves_flags,
+    "input-worker-plan-save-sqlite-flags-plan-refused"
+);
+scenario!(
+    worker_plan_refusal_preserves_flags_and_save,
+    "input-worker-plan-save-sqlite-flags-queued-save-plan-refused"
 );
 scenario!(
     worker_plan_flags_failed,

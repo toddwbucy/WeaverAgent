@@ -575,6 +575,14 @@ impl<'a> FoundationInput<'a> {
     }
 
     fn step(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        self.step_with_peer(None, io)
+    }
+
+    fn step_with_peer(
+        &mut self,
+        peer: Option<&mut LifecyclePeer>,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
         if self.progress() == FoundationInputProgress::WindDown {
             return self.advance_wind_down(io);
         }
@@ -582,13 +590,14 @@ impl<'a> FoundationInput<'a> {
             return self.advance_quiesce(io);
         }
         if self.stage == Stage::Engine {
-            return self.advance_engine(None, io);
+            return self.advance_engine(peer, io);
         }
         let owner = &mut self.serving.owner;
         owner.context.live(io)?;
         let mut ports = PumpPorts {
             lifecycle: LifecyclePorts {
                 listener: Some(&mut owner.listener),
+                dial: peer,
                 residency: Some(owner.resident.residency),
                 leave_peer: plan::retained_port(&mut self.serving.plan, &mut self.serving.save),
                 ..Default::default()
