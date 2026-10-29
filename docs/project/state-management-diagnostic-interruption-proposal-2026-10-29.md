@@ -53,6 +53,12 @@ organ-failure cleanup path. Left still requires its own cleanup and record condi
 
 ## Alternatives
 
+A declared cancellation interval would align this wait with the diagnostic
+declaration's other elapsed-nanosecond allowances. It would also add a paired
+configuration and Enter field. R2 explicitly elects the fixed floor constant
+instead. Both choices can carry one non-renewing deadline, and the constant is
+proposed for the operator rather than implied by an existing declared wait.
+
 Keeping the attributed fault rule avoids a new decode answer but makes an ordinary
 Stop terminate the SPU. The harness would still need explicit fault, turn-close,
 requester and teardown composition, with no retained model after that stop. It would
@@ -70,6 +76,11 @@ reader changes. This proposal instead retains the current reader rule: every unc
 bracket produces no downstream artifact, regardless of why it is unclosed. The Agent
 copies of WeaverAnalysis PRD section 4 and Spec section 3 already state that rule.
 No Analysis schema or compatibility obligation is introduced here.
+
+R3 asks the operator to accept partial field/column evidence and the existing
+turn-close cause as sufficient. The outer unended bracket alone does not distinguish
+an operator's Stop from process death. This limitation is part of the election,
+not a claim that the reader can reconstruct a missing management outcome.
 
 ## Paired ownership and implementation plan
 

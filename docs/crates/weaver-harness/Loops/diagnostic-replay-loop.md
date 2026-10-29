@@ -1,7 +1,7 @@
 # Diagnostic Replay Loop
 
-**Status:** MERGED v0.7, 2026-10-29. The workflow document for the diagnostic replay
-loop, filed under the harness's `Loops/` container per the Document Format's container
+**Status:** DRAFT v0.7, proposed 2026-10-29. The workflow for diagnostic replay,
+filed under the harness's `Loops/` container per the Document Format's container
 entry. It argues no edges of its own: the seams it walks are declared in the crate
 charters, and a graph block here would duplicate a record that already has a home.
 
