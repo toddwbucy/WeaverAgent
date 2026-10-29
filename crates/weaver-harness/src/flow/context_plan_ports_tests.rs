@@ -6,6 +6,9 @@ use crate::flow::context::plan_port_driver::{
 use crate::flow::plan::ports::PlanRequest;
 use sha2::{Digest as _, Sha256};
 
+#[path = "context_plan_ports_review_tests.rs"]
+mod review;
+
 const _: fn() = || {
     trait NotClone<M> {
         fn pin() {}
@@ -55,7 +58,27 @@ fn ready_with_seed(locked: bool, foreign: bool) -> SummaryFixture {
 }
 
 fn ready_with_status(locked: bool, foreign: bool, status: s::StepStatus) -> SummaryFixture {
-    let mut fx = SummaryFixture::new(vec![]);
+    ready_configured(
+        SummaryFixture::new(vec![]),
+        locked,
+        foreign,
+        status,
+        s::Category {
+            id: "work".into(),
+            verbs: vec!["read".into()],
+            acts: vec![s::PlanAct::Statement],
+            review_required: false,
+        },
+    )
+}
+
+fn ready_configured(
+    mut fx: SummaryFixture,
+    locked: bool,
+    foreign: bool,
+    status: s::StepStatus,
+    category: s::Category,
+) -> SummaryFixture {
     let current = locked.then(|| {
         let mut plan = fx.snapshot();
         let PlanRequest::WorkReference {
@@ -70,12 +93,7 @@ fn ready_with_status(locked: bool, foreign: bool, status: s::StepStatus) -> Summ
         plan.plan = expected;
         plan.status = s::PlanStatus::Locked;
         plan.lock_source = Some(through.block_id.clone());
-        plan.categories = vec![s::Category {
-            id: "work".into(),
-            verbs: vec!["read".into()],
-            acts: vec![s::PlanAct::Statement],
-            review_required: false,
-        }];
+        plan.categories = vec![category];
         plan.steps = vec![s::PlanStep {
             step_id,
             ordinal: 0.into(),

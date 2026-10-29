@@ -2303,6 +2303,14 @@ scenario!(
     "input-worker-plan-save-sqlite-port-active-assess"
 );
 scenario!(
+    worker_plan_port_completed_grant_leave,
+    "input-worker-plan-save-sqlite-port-active-completed-leave"
+);
+scenario!(
+    worker_plan_port_completed_grant_stop,
+    "input-worker-plan-save-sqlite-port-active-completed-stop"
+);
+scenario!(
     worker_plan_port_active_work,
     "input-worker-plan-save-sqlite-port-active-work"
 );

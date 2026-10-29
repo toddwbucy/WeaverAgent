@@ -350,11 +350,18 @@ pub(super) fn exercise(
             );
             assert!(Instant::now() < end, "public plan operation did not settle");
         }
+        if mode.ends_with("-completed-leave") || mode.ends_with("-completed-stop") {
+            interrupt_completed(&mut guard, socket, mode.ends_with("-completed-leave"));
+        }
+        let input = guard.input.as_mut().unwrap();
         let result = input
             .take_plan_operation()
             .expect("one completed operation");
         assert!(result.completion.belongs_to(input.serving.owner.context));
         match result.outcome() {
+            FoundationPlanOutcome::Cancelled => {
+                assert!(mode.ends_with("-completed-leave") || mode.ends_with("-completed-stop"))
+            }
             FoundationPlanOutcome::Allowed => assert!(mode.ends_with("-assess")),
             FoundationPlanOutcome::Work(work) => {
                 assert!(mode.ends_with("-work"));
@@ -379,7 +386,6 @@ pub(super) fn exercise(
                 );
                 assert_eq!(refusal.read_code, None);
             }
-            other => panic!("unexpected operation outcome: {other:?}"),
         }
         assert!(input.take_plan_operation().is_none());
         assert_eq!(
@@ -427,4 +433,140 @@ pub(super) fn exercise(
     } else {
         assert!(refusals.is_empty());
     }
+}
+
+fn interrupt_completed(guard: &mut Guard<'_>, socket: &Path, leave: bool) {
+    if !leave {
+        // This fixture opens a trace turn to file activation, without a world
+        // request. Close it through the real author before testing idle Stop.
+        // A live-turn Stop requires a gate request and a turn owner instead.
+        pump(guard.input.as_mut().unwrap(), |context, ports| {
+            context
+                .author_and_wait(
+                    ports,
+                    AuthoredEvent {
+                        kind: Kind::TurnClosed,
+                        subsystem: Subsystem::Harness,
+                        source: AuthoredSource::Runtime,
+                        turn: Some(TurnRef(TURN.into())),
+                        causal_parent: None,
+                        payload: Some(TracePayload::TurnClosed(weaver_trace::TurnClose::Clean)),
+                    },
+                )
+                .unwrap();
+        });
+    }
+    let input = guard.input.as_ref().unwrap();
+    let result = input
+        .serving
+        .plan_operation
+        .as_ref()
+        .unwrap()
+        .result
+        .as_ref()
+        .expect("assessment completed before the management packet");
+    assert!(matches!(result.outcome(), FoundationPlanOutcome::Allowed));
+    let request = format!("{:?}", result.request());
+    assert!(!input.plan_operation_pending());
+    assert!(input.serving.owner.context.plan_port_work().is_none());
+    let input_address = std::ptr::from_ref(&**input);
+    let peer = dial(socket);
+    let envelope = OrganEnvelope {
+        exchange: ExchangeId {
+            opener: Opener::Admin,
+            ordinal: 412,
+        },
+        position: Position::Open,
+        payload: Payload::Directive(if leave {
+            LifecycleDirective::Leave {
+                cause: Cause { uid: 0 },
+                forced: false,
+                rollback: false,
+            }
+        } else {
+            LifecycleDirective::Stop {
+                cause: Cause { uid: 0 },
+            }
+        }),
+    };
+    let bytes = serde_json::to_vec(&envelope).unwrap();
+    assert_eq!(
+        send(peer.as_raw_fd(), &bytes, MsgFlags::MSG_NOSIGNAL).unwrap(),
+        bytes.len()
+    );
+    let limit = Instant::now() + Duration::from_secs(5);
+    while guard.input.as_mut().unwrap().advance() != FoundationInputProgress::ManagementPending {
+        assert!(
+            Instant::now() < limit,
+            "completed grant must allow management"
+        );
+    }
+    guard.management = Some(guard.input.take().unwrap().management().ok().unwrap());
+    let owner = guard.management.as_mut().unwrap();
+    let wanted = if leave {
+        FoundationManagementProgress::DirectivePending
+    } else {
+        FoundationManagementProgress::Answered
+    };
+    while owner.progress() != wanted {
+        assert_ne!(
+            owner.advance(),
+            FoundationManagementProgress::Stopped,
+            "{:?}",
+            owner.detail()
+        );
+        assert!(
+            Instant::now() < limit,
+            "completed grant management must settle"
+        );
+    }
+    if leave {
+        assert!(
+            read_packet(&peer).is_none(),
+            "Leave still owns its later cleanup"
+        );
+        // A graceful Leave returns the same input via its real deferred handoff.
+        // finish() instead returns the input for an answered Stop below.
+        guard.input = Some(
+            guard
+                .management
+                .take()
+                .unwrap()
+                .defer_graceful_leave()
+                .ok()
+                .unwrap(),
+        );
+        assert!(guard.input.as_ref().unwrap().has_graceful_leave());
+        assert_eq!(
+            guard
+                .input
+                .as_ref()
+                .unwrap()
+                .serving
+                .graceful
+                .as_ref()
+                .unwrap()
+                .message
+                .envelope,
+            envelope
+        );
+    } else {
+        let answer: OrganEnvelope = serde_json::from_slice(&read_packet(&peer).unwrap()).unwrap();
+        assert_eq!(answer.payload, Payload::Answer(LifecycleAnswer::AtRest));
+        guard.input = Some(guard.management.take().unwrap().finish().ok().unwrap());
+    }
+    let input = guard.input.as_mut().unwrap();
+    assert_eq!(std::ptr::from_ref(&**input), input_address);
+    assert!(input.serving.owner.context.failure().is_none());
+    let result = input
+        .serving
+        .plan_operation
+        .as_ref()
+        .unwrap()
+        .result
+        .as_ref()
+        .unwrap();
+    assert_eq!(format!("{:?}", result.request()), request);
+    // The caller must observe revocation through the public take below, after
+    // management has returned the input. Do not cancel from this fixture.
 }
