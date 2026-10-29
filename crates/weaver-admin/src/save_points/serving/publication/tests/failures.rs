@@ -887,3 +887,121 @@ fn every_seed_checkpoint_stops_later_work_without_fabricating_a_guard() {
         }
     }
 }
+
+#[test]
+fn cancelled_failed_leave_keeps_original_failure_without_rebreaking_its_guard() {
+    for case in ["foreign-part", "guard-unlink", "guard-sync"] {
+        let fixture = Fixture::new();
+        let mut repo = fixture.repository();
+        let loaded = fixture.seed_complete(&mut repo);
+        let mut publication =
+            fixture.capture(&mut repo, &loaded, 3, PersistenceCause::GracefulUnload);
+        let first = publication
+            .image_finished(&run(), 3.into(), "capture-3.sqlite", &mut |_| {
+                if fixture
+                    .names()
+                    .iter()
+                    .any(|name| name.ends_with(".pending"))
+                {
+                    Err("original preparation failure".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+        let prepared = publication.identity();
+        assert_eq!(first.phase, PersistencePhase::Preparing);
+        assert_eq!(first.detail, "original preparation failure");
+        let guard = fixture.root.join(publication.guard_name.as_ref().unwrap());
+        let original_guard = fs::read(&guard).unwrap();
+        fixture.assert_guarded(&prepared, PublicationState::Broken);
+        let part = fixture.root.join(&publication.work_name);
+        let foreign = part.join("foreign");
+        let failure = if case == "foreign-part" {
+            fs::write(&foreign, b"not owned by publication").unwrap();
+            publication.cancel_unconfirmed_leave(&run(), 3.into())
+        } else {
+            let fault = if case == "guard-unlink" {
+                fs_ops::GuardFault::BeforeRemove
+            } else {
+                fs_ops::GuardFault::AfterRemoveDirectorySync
+            };
+            fs_ops::with_guard_fault(fault, 0, || {
+                publication.cancel_unconfirmed_leave(&run(), 3.into())
+            })
+        }
+        .unwrap_err();
+        assert!(
+            failure
+                .detail
+                .starts_with("original preparation failure; capture refusal cleanup:"),
+            "{case}: {}",
+            failure.detail
+        );
+        assert!(
+            !failure.detail.contains("broken guard update failed"),
+            "{case}: {}",
+            failure.detail
+        );
+        assert_eq!(fs::read(&guard).unwrap(), original_guard, "{case}");
+        fixture.assert_guarded(&prepared, PublicationState::Broken);
+        if case == "foreign-part" {
+            assert_eq!(fs::read(&foreign).unwrap(), b"not owned by publication");
+        } else {
+            assert!(!part.exists(), "part removal precedes guard removal");
+            assert!(
+                failure
+                    .artifacts
+                    .iter()
+                    .all(|artifact| artifact.kind == RetainedArtifactKind::Guard),
+                "{case}: {:?}",
+                failure.artifacts
+            );
+        }
+        assert!(!failure.artifacts.is_empty());
+        for artifact in &failure.artifacts {
+            assert!(
+                fixture.base.join(&artifact.location).exists(),
+                "{case}: {}",
+                artifact.location
+            );
+        }
+        assert!(failure.published.is_none());
+        assert_eq!(publication.failed("later failure").detail, failure.detail);
+        assert_eq!(fixture.index().len(), 1);
+    }
+}
+
+#[test]
+fn refused_leave_cancels_failed_prepared_work_but_keeps_an_observed_commit_guarded() {
+    for committed in [false, true] {
+        let fixture = Fixture::new();
+        let mut repo = fixture.repository();
+        let loaded = fixture.seed_complete(&mut repo);
+        let mut publication =
+            fixture.capture(&mut repo, &loaded, 3, PersistenceCause::GracefulUnload);
+        let prepared = publication
+            .image_finished(&run(), 3.into(), "capture-3.sqlite", &mut alive)
+            .unwrap();
+        let failure = if committed {
+            publication
+                .commit(&run(), 3.into(), &mut |_| {
+                    Err("Commit checkpoint failed".into())
+                })
+                .unwrap_err()
+        } else {
+            publication.failed("capture expired before Commit")
+        };
+        assert_eq!(failure.phase, PersistencePhase::Confirming);
+        fixture.assert_guarded(&prepared, PublicationState::Broken);
+        let result = publication.cancel_unconfirmed_leave(&run(), 3.into());
+        if committed {
+            assert!(result.is_err());
+            fixture.assert_guarded(&prepared, PublicationState::Broken);
+        } else {
+            result.unwrap();
+            assert_eq!(fixture.names().len(), 2);
+        }
+        assert_eq!(fixture.index().len(), 1);
+    }
+}

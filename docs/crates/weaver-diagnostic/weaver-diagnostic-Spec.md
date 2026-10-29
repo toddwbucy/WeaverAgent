@@ -7,7 +7,7 @@ written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-diagnostic-Spec`
 **Parent:** `weaver-diagnostic-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #136
+**Landing PR:** #398
 
 ---
 
@@ -242,6 +242,14 @@ serving payload as the other fourteen shared kinds do. The walk reads the source
 flush and elision since 2026-09-26, and a source's own `recall` since the same day: a
 post-flush request with no recall of the `recall` verb before it refuses at identity on
 a record carrying the kind, per `diagnostic-replay-loop` section 2.
+
+**Setup failure and pre-Ready rollback record nothing**, under harness Spec
+6.1.1 DIAGNOSTIC-SETUP-ROLLBACK. A partial load is cleanup custody rather than an
+admitted replay. Its refused Enter, failed arm, channel loss or rollback cannot
+author a Fault, Refusal or replay bracket before ReplayOpened. Lifecycle replies
+and operator diagnostics report those failures. Once ReplayOpened is admitted,
+the existing pass and recorder rules hold; this clause elects no new event or
+interrupted-replay outcome.
 
 **`elision` is carried because the loop now performs one**, as of 2026-09-26, which
 closes the open election section 8 held. `diagnostic-replay-loop` section 2 reproduces
@@ -483,12 +491,24 @@ from: weaver-harness
 to: diagnostic-divergence-position-is-the-resident-length
 ```
 
-**No outcome is authored for a pass that died.** The contract's section 5 forbids
+**No outcome is authored for a pass stopped before completion.** The contract's
+section 5 includes failure and accepted management interruption and forbids
 manufacturing one, and the reason is the fourth outcome: a closing event written at
 a death would collapse unended into abandoned and tell a reader a pass ended when it
 stopped. **`Abandoned` is for a pass that reached its own end without certifying**,
 whatever stopped it, the loop's likeliest being a refusal at input identity before
 any forward pass ran. What `AbandonReason` enumerates is section 8's.
+
+DIAGNOSTIC-INTERRUPT in the harness Spec governs replay management. An interrupted
+turn's existing turn.closed carries its Stop or unload reason and cause. A turn that
+finishes normally during graceful drain keeps its clean close. Earlier
+field and column observations stand. RefeedInterrupted is an internal decode answer,
+not a new diagnostic event or a model generation. It produces no partial certification,
+model.request/output/measurement triplet or new replay.closed. An earlier accepted
+replay.closed retains its original author and outcome until its disposition. Otherwise
+the interrupted pass stays unended even when its SPU or run remains alive.
+The reader's existing rule for every unclosed bracket still applies, whichever way it
+became unclosed. No output artifact is authorized by the partial record.
 
 ```graph
 node: diagnostic-outcome-absent-not-manufactured

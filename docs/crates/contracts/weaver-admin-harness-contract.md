@@ -8,7 +8,7 @@ human's ruling of 2026-07-31.
 **Document ID:** `weaver-admin-harness-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #72
+**Landing PR:** #398
 
 ---
 
@@ -322,10 +322,25 @@ could not be, the miss then recorded as a refusal of the leave naming the leg.
 `Leave` with `rollback` true, which admin sends only to undo its own load, takes no save
 point and runs no wind-down in any position, `Entered` included, since a `Ready` can
 land just after admin's enter deadline and leave the harness `Entered` while admin rolls
-back; it authors `unload` with `forced` true and the load's cause, and answers `Left`
+back; on a serving binding it authors `unload` with `forced` true and the load's cause,
+while Diagnostic keeps its own bracket rule (harness Spec 6.1.1). It answers `Left`
 with none. Admin leaves the marker as section 4's marker-write rule gives (K1), and the
 rollback is the exemption I2 names. The directive marks it, never the harness's
 position.
+
+**A Diagnostic rollback can reach a still-pending Enter.** The exception to the
+ordinary single-exchange ordering is the load's own forced rollback before Ready,
+as specified by harness Spec 6.1.1 DIAGNOSTIC-SETUP-ROLLBACK. The harness retains
+the original Enter and rollback identities. Unless an earlier Enter outcome was
+already established, the original Enter closes NoResidency, meaning the aggregate
+was withdrawn; that refusal is not a claim that device cleanup has finished.
+Only the rollback's later Left confirms its completed cleanup. The two peers may
+be the same or different; a lost or blocked Enter answer does not delay cleanup.
+Pending setup and a refused partial Diagnostic run answer Observe as InTransition
+until cleanup, with SavePoint and Stop OutOfOrder. A before-load refusal retaining
+no run keeps its existing BeforeEnter/Unloaded observation. This adds no S1
+operator verb, AgentState, wire variant or timing field. The serving refused-run
+observation is outside this Diagnostic election.
 
 **`Left` carries `forced` and `no_state`**, each required on the wire with no default, `no_state` true where the run has no state to keep (every diagnostic binding, graceful or forced, and a serving run with no member seam), so a `Left` with no save point says on the wire whether there was nothing to keep or the save point was not taken; `forced` the leave's state at its
 end per `weaver-admin-Spec` section 3's definition (directed forced, joined, a declared bound passing, or a dead gate or SPU), so every
@@ -394,7 +409,10 @@ placed, the promise above carrying no invocation exception.
 
 **Observe the run.** Opened by admin, added 2026-09-04 per issue #435 as the observation
 exchange this contract's parties named as owed on 2026-08-06. Admin asks what stands and
-carries nothing. The harness answers `State` from whichever position it holds: before
+carries nothing. During pending Diagnostic setup or while a refused partial Diagnostic
+run is retained for rollback, the harness answers `InTransition` under the setup rule
+above and harness Spec 6.1.1. A before-load refusal retaining no run keeps `Unloaded`.
+Outside those setup positions, the harness answers `State` from its position: before
 any enter, `Unloaded` and no load. Entered, `Idle` where no turn is in flight and
 `Active` where one is, with the load's facts beside the state, the session, the run, the
 declaration's digest as admin read it at the enter, the artifact, the elections the load

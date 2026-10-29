@@ -34,6 +34,8 @@ pub enum Request {
     Restore(AgentName),
     /// The unload that completes without its leave save point.
     ForceUnload(AgentName),
+    /// Root-only replacement command, admitted by the foundation parser.
+    PlanUpdate(AgentName),
 }
 
 impl Request {
@@ -47,7 +49,8 @@ impl Request {
             | Request::Show(agent)
             | Request::SavePoint(agent)
             | Request::Restore(agent)
-            | Request::ForceUnload(agent) => agent,
+            | Request::ForceUnload(agent)
+            | Request::PlanUpdate(agent) => agent,
         }
     }
 }
@@ -60,6 +63,28 @@ impl Request {
 /// A verb this crate does not carry, a missing agent, or a trailing argument
 /// is `Malformed`. Nothing is guessed at and no default verb exists.
 pub fn parse_arguments<I>(arguments: I) -> Result<Request, LifecycleRefusal>
+where
+    I: IntoIterator<Item = String>,
+{
+    parse(arguments, false)
+}
+
+/// Replacement command admission; the executable keeps parse_arguments until
+/// the coupled serving cutover. No flag or environment variable enables it.
+#[allow(dead_code)]
+pub(crate) fn parse_foundation_arguments<I>(arguments: I) -> Result<Request, LifecycleRefusal>
+where
+    I: IntoIterator<Item = String>,
+{
+    parse(arguments, true)
+}
+
+/// Diagnostics for the replacement parser, with the same one-answer stdout
+/// contract. This text grants no caller-selected file or stdin interface.
+#[allow(dead_code)]
+pub(crate) const FOUNDATION_HELP: &str = "weaver-admin plan-update <agent>: root shell only; reads config-root/plan-update.json; no additional argument or stdin";
+
+fn parse<I>(arguments: I, foundation: bool) -> Result<Request, LifecycleRefusal>
 where
     I: IntoIterator<Item = String>,
 {
@@ -82,6 +107,7 @@ where
         "save-point" => Ok(Request::SavePoint(named(rest)?)),
         "restore" => Ok(Request::Restore(named(rest)?)),
         "force-unload" => Ok(Request::ForceUnload(named(rest)?)),
+        "plan-update" if foundation => Ok(Request::PlanUpdate(named(rest)?)),
         _ => Err(LifecycleRefusal::Malformed),
     }
 }

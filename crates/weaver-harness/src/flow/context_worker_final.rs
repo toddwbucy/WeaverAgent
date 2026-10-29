@@ -25,7 +25,10 @@ impl FoundationInput<'_> {
         })
     }
     pub(in crate::flow::context::worker_startup::input) fn final_send_clock_failed(&self) -> bool {
-        self.quiesce_send_clock_failed()
+        self.send
+            .as_ref()
+            .is_some_and(|send| send.sent() && send.sent_at().is_none())
+            || self.quiesce_send_clock_failed()
             || self
                 .engine
                 .as_ref()

@@ -357,14 +357,10 @@ fn repair_custody_refused_extraction_advances_owed_recall_and_protocol_records()
         for _ in 0..64 {
             let progress = fx.step(true);
             if progress == RepairProgress::Refused {
-                assert!(
-                    fx.input
-                        .run
-                        .context
-                        .deadlines
-                        .get(PumpDeadline::Decision)
-                        .is_none(),
-                    "refusal readiness retires its original wait before extraction"
+                assert_eq!(
+                    fx.input.run.context.deadlines.get(PumpDeadline::Decision),
+                    bound,
+                    "refusal readiness retains the original wait for its caller"
                 );
             }
             retained = fx
@@ -379,6 +375,10 @@ fn repair_custody_refused_extraction_advances_owed_recall_and_protocol_records()
         }
         let retained =
             retained.expect("advance must settle owed refusal and return original Refused custody");
+        assert_eq!(
+            fx.input.run.context.deadlines.get(PumpDeadline::Decision),
+            bound
+        );
         assert!(matches!(
             retained.evidence(),
             RepairRefusalEvidence::Instruction { .. }

@@ -14,7 +14,7 @@ pub(in crate::flow::context::worker_startup) struct RollbackInputWork {
     received: Option<ReceivedOrgan>,
     _token: Option<AcceptedInput>,
     _turn: Option<TurnKey>,
-    _seated: Option<SeatedInput>,
+    seated: Option<SeatedInput>,
     close: Option<OrganEnvelope>,
     send: Option<OrganSend>,
     report: Option<report::Report>,
@@ -55,7 +55,7 @@ impl<'a> FoundationInput<'a> {
                 received,
                 _token: token,
                 _turn: turn,
-                _seated: seated,
+                seated,
                 close,
                 send,
                 report,
@@ -86,6 +86,13 @@ impl RollbackInputWork {
             engine.retire_failed_placement_grants(context)?;
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(in crate::flow::context::worker_startup) fn test_checked_source(
+        &self,
+    ) -> Option<(&TurnKey, &weaver_types::state_flow::SourceBlockId)> {
+        Some((self._turn.as_ref()?, &self.seated.as_ref()?.source))
     }
 
     #[cfg(test)]
@@ -286,13 +293,13 @@ impl RollbackInputWork {
         // operation. An elected but unconsumed token never enters this branch.
         if context.input_turn.is_some() {
             if let Some(seated) = context.resume_input_turn(ports)? {
-                self._seated = Some(seated);
+                self.seated = Some(seated);
             } else {
                 context.pump_once(ports)?;
             }
             return Ok(false);
         }
-        if let Some(seated) = &self._seated {
+        if let Some(seated) = &self.seated {
             // Direct source authoring has no task receipt consumer. Keep its
             // actual seated source while the coordinator files the selected
             // copy using the already accepted input's single-use check. A

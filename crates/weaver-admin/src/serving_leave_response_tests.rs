@@ -157,3 +157,96 @@ fn leave_public_local_publication_failure_after_commit_keeps_the_guard_account()
         })
     ));
 }
+
+#[test]
+fn leave_public_worker_outcomes_never_promote_publication_claims_from_owner_or_joiner() {
+    use weaver_types::state_flow::capture::{CaptureEnvelope, CaptureSender};
+    use weaver_types::{ExchangeId, Opener, Position, RefusingOrgan};
+    for joined in [false, true] {
+        let claim = LifecycleRefusal::StatePersistenceInvalid {
+            stage: PersistenceStage::Publish,
+            case: PersistenceCase::PublicationFailed,
+            artifact_id: Some("a".repeat(64)),
+            detail: "worker-supplied publication".into(),
+        };
+        for (refusal, accepted) in [
+            (claim.clone(), false),
+            (
+                LifecycleRefusal::OrganRefused {
+                    organ: RefusingOrgan::Spu,
+                    reason: Box::new(claim.clone()),
+                },
+                false,
+            ),
+            (LifecycleRefusal::NoResidency, false),
+            (
+                LifecycleRefusal::OrganRefused {
+                    organ: RefusingOrgan::Gate,
+                    reason: Box::new(claim),
+                },
+                true,
+            ),
+            (LifecycleRefusal::DescriptorsUnusable, true),
+        ] {
+            let mut failure = fixture(FailureCause::WorkerOutcome);
+            failure.evidence.as_mut().unwrap().committed = false;
+            let envelope = CaptureEnvelope {
+                exchange: ExchangeId {
+                    opener: Opener::Admin,
+                    ordinal: 1,
+                },
+                position: Position::Close,
+                payload: CapturePayload::Refusal(CaptureRefusal::Lifecycle(refusal.clone())),
+            };
+            let wire = envelope.encode(CaptureSender::Harness).unwrap();
+            let received = crate::channel::ReceivedCapture {
+                envelope,
+                wire: wire.clone(),
+            };
+            if joined {
+                failure.evidence = None;
+                failure.joined = Some(Box::new(super::super::join::Evidence {
+                    noted_run: Some(Some("original-run".into())),
+                    directive: None,
+                    received: Some(received),
+                }));
+            } else {
+                failure.evidence.as_mut().unwrap().unexpected = Some(received);
+            }
+            assert_eq!(
+                failure.refusal(),
+                CaptureRefusal::Lifecycle(if accepted {
+                    refusal
+                } else {
+                    LifecycleRefusal::Malformed
+                })
+            );
+            if !accepted {
+                assert!(
+                    !crate::surface::render_serving_refusal(&failure.refusal())
+                        .contains("worker-supplied")
+                );
+            }
+            let retained = if joined {
+                &failure
+                    .joined
+                    .as_ref()
+                    .unwrap()
+                    .received
+                    .as_ref()
+                    .unwrap()
+                    .wire
+            } else {
+                &failure
+                    .evidence
+                    .as_ref()
+                    .unwrap()
+                    .unexpected
+                    .as_ref()
+                    .unwrap()
+                    .wire
+            };
+            assert_eq!(retained, &wire);
+        }
+    }
+}

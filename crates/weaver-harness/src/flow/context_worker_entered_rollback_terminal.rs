@@ -59,6 +59,7 @@ pub(super) struct EnteredRollbackTerminal {
     refusal: Option<LifecycleRefusal>,
     answer: Option<AnswerCarry>,
     capture: Option<SavePointReport>,
+    serving: bool,
     forced: bool,
     send: Option<OrganSend>,
     _returned_answer: Option<AnswerCarry>,
@@ -67,6 +68,14 @@ pub(super) struct EnteredRollbackTerminal {
 }
 
 impl EnteredRollbackTerminal {
+    #[cfg(test)]
+    pub(super) fn test_detail(&self) -> String {
+        format!(
+            "refusal={:?}, stopped={:?}, sequence={:?}",
+            self.refusal, self.stopped, self.sequence
+        )
+    }
+
     pub(super) fn new(
         cause: Cause,
         surface: GrantSurface,
@@ -104,6 +113,7 @@ impl EnteredRollbackTerminal {
             refusal,
             answer: None,
             capture: None,
+            serving: false,
             forced: true,
             send: None,
             _returned_answer: None,
@@ -114,7 +124,13 @@ impl EnteredRollbackTerminal {
 
     pub(super) fn captured(&mut self, report: SavePointReport) {
         assert!(self.stage == Stage::Unload && self.capture.is_none());
+        self.serving = true;
         self.capture = Some(report);
+    }
+
+    pub(super) fn refused_capture(&mut self) {
+        assert!(self.stage == Stage::Unload && self.capture.is_none() && self.forced);
+        self.serving = true;
     }
 
     pub(super) fn leave_outcome(&mut self, forced: bool, forced_by: Option<Cause>) {
@@ -141,6 +157,25 @@ impl EnteredRollbackTerminal {
 
     pub(super) fn complete(&self) -> bool {
         self.stage == Stage::Complete
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_swap_refusal(
+        &mut self,
+        refusal: Option<LifecycleRefusal>,
+    ) -> Option<LifecycleRefusal> {
+        assert!(self.complete());
+        std::mem::replace(&mut self.refusal, refusal)
+    }
+
+    pub(super) fn process_exit(&self) -> Option<crate::FoundationProcessExit> {
+        self.complete().then_some(if self.refusal.is_none() {
+            // Completed release/drain/reap remains complete when the final
+            // caller departed. This does not claim the answer was sent.
+            crate::FoundationProcessExit::Success
+        } else {
+            crate::FoundationProcessExit::Failure
+        })
     }
 
     #[allow(clippy::too_many_arguments)] // Borrow the actual owners without replacing their custody.
@@ -271,14 +306,14 @@ impl EnteredRollbackTerminal {
                         }
                     }
                 }
-                self.answer = Some(if let Some(report) = &self.capture {
+                self.answer = Some(if self.serving {
                     AnswerCarry::Captured(CaptureEnvelope {
                         exchange: message.envelope.exchange.clone(),
                         position: Position::Close,
                         payload: self.refusal.clone().map_or_else(
                             || {
                                 CapturePayload::Answer(CaptureAnswer::Left {
-                                    save_point: Some(report.clone()),
+                                    save_point: self.capture.clone(),
                                     forced: self.forced,
                                     no_state: false,
                                 })

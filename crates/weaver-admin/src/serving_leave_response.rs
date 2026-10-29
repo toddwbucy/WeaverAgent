@@ -76,11 +76,7 @@ impl Failure {
                             }
                         })
                 {
-                    // A matching ordinary refusal keeps its original typed code.
-                    // A worker's FailedRun cannot supply root-owned locations.
-                    if !matches!(refusal, CaptureRefusal::Save(SaveRefusal::FailedRun { .. })) {
-                        return refusal.clone();
-                    }
+                    return crate::serving_leave::project_worker_refusal(refusal);
                 }
                 LifecycleRefusal::Unanswered
             }

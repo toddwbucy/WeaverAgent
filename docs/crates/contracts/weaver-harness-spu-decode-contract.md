@@ -11,7 +11,7 @@ and neither document restates the other.
 **Document ID:** `weaver-harness-spu-decode-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #141
+**Landing PR:** #393
 
 ---
 
@@ -240,8 +240,8 @@ the parse's reason, and the family grammar that judged it, per `weaver-spu-Spec`
 section 5, and the harness authors it as the record's `model.unrecovered_call`. **It is
 data on the answer and never a fault or an emission**: an unrecovered call is a fact
 about what the model wrote, the generation answered whole, and before this ruling the
-report reached the SPU's standard error and no record. A re-feed's answer carries the
-parse and its report the same way, its parse inferring no missing closer because it
+report reached the SPU's standard error and no record. A completed re-feed's answer
+carries the parse and its report the same way, inferring no missing closer because it
 holds no terminator of the source's, per `weaver-spu-Spec` section 5, until the
 directive carries one (#144). **What anyone does about an unrecovered call is not
 this seam's**: the SPU reports it and decides nothing, and a loop's response is designed
@@ -263,7 +263,7 @@ whatever the draw said**, so a divergent position stays comparable instead
 of cascading. **It draws no token of its own**: no token intermediate
 crosses, there being no piece drawn to stream, while the field and the
 column intermediates cross where their elections stand, which is what makes
-this exchange the reader pass's substrate. The answer carries the
+this exchange the reader pass's substrate. The completed answer carries the
 measurement with the recomputed draw identifiers in the slots the sampled
 identifiers would fill, **and it is its own answer and never a
 generation's**: a re-feed answering in the generation's shape would put a
@@ -276,14 +276,27 @@ rule - where the session is not open, where the ask is out of order, or
 where the recorded path is empty, an empty path being a replay of nothing
 wearing an exchange.
 
-**Cancel.** Opened by the harness while a generation is in flight,
+**An interrupted re-feed has a distinct terminal answer.** A matching cancel ends the
+drive at a token boundary and leaves the recorded prefix and the family's terminator
+resident. The interrupted answer names the original turn, the number of recorded path
+tokens appended and the session's fullness. It carries no completed-path emission or
+measurement. Earlier field and column observations stand. The interrupted answer
+closes the re-feed first, then the cancel answers at rest. No later recorded-path
+position is read or appended. A completed re-feed that wins the race retains its
+ordinary answer, and the subsequent cancel answers at rest. The harness drains both
+exchanges before starting another decode ask or claiming a completed stop. A fault in
+the engine or stream cannot be replaced by the interrupted answer.
+
+**Cancel.** Opened by the harness while a generation or re-feed is in flight,
 carrying the turn's context and nothing else. The generation stops at the
 next token boundary, the session is left well-framed with the family's
 turn terminator resident, and the outstanding append-and-generate answers
 with the partial output marked stopped, the tokens already streamed
 standing and the close accounting every one of them. A cancel with nothing in flight
 answers at rest, a clean close rather than a refusal, the same shape the
-stop exchange takes on the coordination seam.
+stop exchange takes on the coordination seam. For a re-feed, its interrupted answer
+above replaces the append-and-generate's stopped partial. A cancel naming a different
+turn is out of order and cannot stop the active re-feed.
 
 **Flush.** Opened by the harness between turns, never while a generation
 is in flight. The directive names its cut, `keep`, added 2026-08-19 on
@@ -395,6 +408,9 @@ token intermediates never among them.
 - An answer to append-and-generate arrives only after the session is
   well-framed for the next turn, stopped or complete alike, so the
   harness may rely on the session's coherence without inspecting it.
+- A re-feed's interrupted answer arrives only after its retained prefix and terminator
+  are resident. Its cancel's at-rest answer follows it. Neither answer certifies a
+  completed path, and no new decode ask precedes their complete reception.
 - An answer to flush arrives only after the kept-prefix state holds.
 - An answer to elision arrives only after the shortened state holds, on the
   flush's rule and for its reason.
@@ -429,8 +445,9 @@ reported reaching it as its own event, per `weaver-trace-PRD` section 3.1.
 drawn, the field stream where its election stands, the column stream where
 the ask stood at open, one message per sampled position, each generation
 with its measurement and elected reductions and its parse with the report of
-every call the parse could not recover, each re-feed's typed answer
-with the recomputed draws in its measurement, the stopped partials, the
+every call the parse could not recover, each completed re-feed's typed answer
+with the recomputed draws in its measurement, each interrupted re-feed's distinct
+terminal account, the stopped generation partials, the
 flush confirmation, the elision confirmation with its resident counts
 either side, the typed refusals, and the fault reports.
 
@@ -644,10 +661,14 @@ How each check is implemented is Spec work. What must be checkable:
   delta cleanly, watched to fail when the terminator step is removed.
 - The stop lands within a token boundary of the cancel's arrival.
 - The measurement is positionally paired and absent-not-zeroed.
-- A re-feed's resident outcome is the recorded path exactly, whatever the
+- A completed re-feed's resident outcome is the recorded path exactly, whatever the
   draws said: a position whose recomputed draw diverges appends the
   recorded token like every other, watched to fail when the append is made
   to follow the draw.
+- An interrupted re-feed appends only the reported recorded prefix and its terminator,
+  sends its own terminal before the cancel's at-rest answer, and emits no completed-path
+  answer. Zero appended path tokens is a valid interrupted outcome. A foreign-turn
+  cancel leaves the active re-feed running. Engine and stream failures remain faults.
 - A re-feed streams nothing of its own: no token intermediate crosses it,
   while the field and the column cross where their elections stand, on the
   sites a generation crosses them.

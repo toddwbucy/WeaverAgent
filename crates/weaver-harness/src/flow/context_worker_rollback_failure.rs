@@ -458,6 +458,10 @@ impl FoundationRollbackExit {
     pub fn progress(&self) -> FoundationRollbackExitProgress {
         self.progress
     }
+    pub fn process_exit(&self) -> Option<crate::FoundationProcessExit> {
+        (self.progress == FoundationRollbackExitProgress::Closed)
+            .then_some(crate::FoundationProcessExit::Failure)
+    }
     pub fn channel_fault(&self) -> Option<crate::ChannelFault> {
         (self.progress == FoundationRollbackExitProgress::Closed)
             .then_some(crate::ChannelFault::Closed)

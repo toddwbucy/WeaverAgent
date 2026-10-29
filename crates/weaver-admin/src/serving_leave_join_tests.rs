@@ -51,10 +51,18 @@ for attempt in range(2 if mode in ('retry','retry-holder') else 1):
     if mode=='wrong-capture': report['capture_id']='10'
     if mode=='wrong-hash': report['start']['dump_sha256']='b'*64
     payload={'kind':'answer','body':{'kind':'left','save_point':report,'forced':mode!='late','no_state':False}}
+    if mode=='no-report': payload['body']['save_point']=None
     position='close'
     if mode=='refused': payload={'kind':'refusal','body':{'kind':'descriptors_unusable'}}
-    if mode=='failed-run':
-        payload={'kind':'refusal','body':{'kind':'failed_run','run':f['run'],'capture_id':'9','phase':'publishing',
+    if mode=='malformed': payload={'kind':'refusal','body':{'kind':'malformed'}}
+    if mode in ('gate-refusal','spu-refusal'):
+        payload={'kind':'refusal','body':{'kind':'organ_refused','organ':'gate' if mode=='gate-refusal' else 'spu','reason':{'kind':'out_of_order'}}}
+    if mode in ('unanswered','no-residency'):
+        payload={'kind':'refusal','body':{'kind':mode.replace('-','_')}}
+    if mode=='worker-publication':
+        payload={'kind':'refusal','body':{'kind':'state_persistence_invalid','stage':'publish','case':'publication_failed','artifact_id':'a'*64,'detail':'worker-supplied publication'}}
+    if mode in ('failed-run','foreign-failed-run','unknown-failed-run'):
+        payload={'kind':'refusal','body':{'kind':'failed_run','run':('another-run' if mode=='foreign-failed-run' else f['run']),'capture_id':'9','phase':'publishing',
             'published':report['start'],'artifacts':[{'location':'/worker-supplied/claim','kind':'dump','sha256':None}],
             'detail':'worker claims root publication'}}
     if mode=='beginning':
@@ -66,7 +74,7 @@ for attempt in range(2 if mode in ('retry','retry-holder') else 1):
     if mode=='foreign-marker':
         while True: time.sleep(1)
     # A timely Left must wait behind the invocation lock before killing holders.
-    if mode in ('closed','open','late','guard','unjudged','retry'):
+    if mode in ('closed','open','late','guard','unjudged','retry','no-report'):
         wait('holder_done')
         time.sleep(.02)
     sys.exit(0)
@@ -92,7 +100,7 @@ with open(f['lock'],'r+') as lock:
         lock.seek(0); lock.truncate(); lock.write('save-point '+str(os.getpid())); lock.flush()
         while not os.path.exists(f['returned']): time.sleep(.001)
     time.sleep(.15)
-    if f['mode']=='late-marker-foreign':
+    if f['mode'] in ('late-marker-foreign','unknown-failed-run'):
         with open(f['marker'],'w') as out: json.dump({'run':f['run'],'state':'open'},out)
     assert json.load(open(f['marker']))=={'run':f['run'],'state':'open'},'join concluded before it owned the lock'
     if f['mode']=='closed':
@@ -244,7 +252,7 @@ fn scenario(mode: &str, verb: &str) {
         Some(&save_points::Marker::Open { run: RUN.into() }),
     )
     .unwrap();
-    if mode == "late-marker-foreign" {
+    if matches!(mode, "late-marker-foreign" | "unknown-failed-run") {
         fs::write(
             f.config.root.join(save_points::MARKER),
             b"unreadable marker",
@@ -357,7 +365,7 @@ fn scenario(mode: &str, verb: &str) {
         );
     } else if matches!(
         mode,
-        "closed" | "open" | "late" | "unjudged" | "retry" | "sealed" | "silent"
+        "closed" | "open" | "late" | "unjudged" | "retry" | "sealed" | "silent" | "no-report"
     ) {
         let concluded = result
             .as_ref()
@@ -376,7 +384,7 @@ fn scenario(mode: &str, verb: &str) {
             );
         }
         if mode != "sealed" {
-            expected_marker = if matches!(mode, "unjudged" | "silent") {
+            expected_marker = if matches!(mode, "unjudged" | "silent" | "no-report") {
                 save_points::Marker::Forced { run: RUN.into() }
             } else {
                 save_points::Marker::Closed { run: RUN.into() }
@@ -418,6 +426,14 @@ fn scenario(mode: &str, verb: &str) {
                 !crate::surface::render_serving_refusal(&failure.refusal())
                     .contains("worker-supplied")
             );
+        } else if mode == "gate-refusal" {
+            assert_eq!(
+                failure.refusal(),
+                CaptureRefusal::Lifecycle(LifecycleRefusal::OrganRefused {
+                    organ: weaver_types::RefusingOrgan::Gate,
+                    reason: Box::new(LifecycleRefusal::OutOfOrder),
+                })
+            );
         } else if mode == "refused" {
             assert_eq!(
                 failure.refusal(),
@@ -427,6 +443,24 @@ fn scenario(mode: &str, verb: &str) {
             assert_eq!(
                 failure.refusal(),
                 CaptureRefusal::Lifecycle(LifecycleRefusal::Malformed)
+            );
+        }
+        if matches!(
+            mode,
+            "worker-publication"
+                | "spu-refusal"
+                | "unanswered"
+                | "no-residency"
+                | "foreign-failed-run"
+                | "unknown-failed-run"
+        ) {
+            assert!(
+                matches!(failure.cause, Fault::Sequence(FailureCause::Protocol(_))),
+                "{mode}: {failure:?}"
+            );
+            assert!(
+                !crate::surface::render_serving_refusal(&failure.refusal())
+                    .contains("worker-supplied")
             );
         }
         if mode != "eof" {
@@ -479,6 +513,12 @@ fn forced_leave_join_concludes_behind_the_holder_without_a_second_publisher() {
 
 #[test]
 #[ignore = "root-owned delegated scope; actual join invocation and private children"]
+fn forced_leave_join_without_a_save_report_preserves_forced_marker() {
+    scenario("no-report", "unload");
+}
+
+#[test]
+#[ignore = "root-owned delegated scope; actual join invocation and private children"]
 fn forced_leave_join_retains_guards_and_rejects_foreign_terminal_evidence() {
     for mode in [
         "guard",
@@ -506,7 +546,21 @@ fn forced_leave_join_refuses_every_other_invocation_holder() {
 #[test]
 #[ignore = "root-owned delegated scope; actual join invocation and private children"]
 fn forced_leave_join_distinguishes_silence_worker_loss_and_another_run() {
-    for mode in ["silent", "eof", "foreign-marker", "refused", "failed-run"] {
+    for mode in [
+        "silent",
+        "eof",
+        "foreign-marker",
+        "refused",
+        "failed-run",
+        "foreign-failed-run",
+        "unknown-failed-run",
+        "worker-publication",
+        "gate-refusal",
+        "spu-refusal",
+        "unanswered",
+        "no-residency",
+        "malformed",
+    ] {
         scenario(mode, "unload");
     }
 }

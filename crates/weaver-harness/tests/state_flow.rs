@@ -513,12 +513,6 @@ fn circuit(root: &Path, case: Case) {
         loop {
             tick();
             let progress = owner.advance();
-            assert_ne!(
-                progress,
-                FoundationForcedLeaveProgress::CaptureRefused,
-                "{:?}",
-                owner.detail()
-            );
             if progress == FoundationForcedLeaveProgress::Closed {
                 break;
             }

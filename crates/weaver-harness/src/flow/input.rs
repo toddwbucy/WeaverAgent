@@ -11,7 +11,9 @@ use weaver_traits::{ContentBlock, Message, Role};
 use weaver_types::state_flow::{
     DecimalU64, InputRefusalCase, Ste100Reply, Ste100Result, Ste100Target,
 };
-use weaver_types::{InputRefusal, TurnFrame, TurnRequest};
+use weaver_types::{
+    InputRefusal, LifecycleAsk, LifecycleRefusal, RefusalRecord, TurnFrame, TurnRequest,
+};
 
 use super::author::{AuthoredEvent, AuthoredSource};
 use super::classifier::AcceptedReuse;
@@ -120,13 +122,31 @@ pub(super) struct ConsumedInput {
     pub reuse: Option<AcceptedReuse>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Refusal {
+    Input(InputRefusal),
+    NoResidency,
+}
+
+impl Refusal {
+    pub(super) fn record(&self) -> RefusalRecord {
+        match self {
+            Self::Input(refusal) => RefusalRecord::Input(refusal.clone()),
+            Self::NoResidency => RefusalRecord::Lifecycle {
+                asked: LifecycleAsk::WorldRequest,
+                refusal: LifecycleRefusal::NoResidency,
+            },
+        }
+    }
+}
+
 struct Current {
     snapshot: InputSnapshot,
     frame: TurnFrame,
     dialer: u32,
     text: Option<String>,
     reply: Option<Ste100Reply>,
-    refusal: Option<InputRefusal>,
+    refusal: Option<Refusal>,
     refusal_sequence: Option<Sequence>,
     cancellation_disposed: bool,
     closed_without_response: bool,
@@ -239,7 +259,11 @@ impl InputSlot {
 
     /// Called only after the exact offered event is Recorded. No octet decoding
     /// or request parsing occurs at begin or while offered authoring is pending.
-    pub(super) fn offered_recorded(&mut self, sequence: Sequence) -> Result<(), InputError> {
+    pub(super) fn offered_recorded(
+        &mut self,
+        sequence: Sequence,
+        no_residency: bool,
+    ) -> Result<(), InputError> {
         let current = self.live_current()?;
         if sequence.0 == 0
             || current.snapshot.offered_sequence.is_some()
@@ -252,6 +276,11 @@ impl InputSlot {
         }
         current.snapshot.offered_sequence = Some(sequence.0.into());
         if current.snapshot.cancelled {
+            return Ok(());
+        }
+        if no_residency {
+            current.refusal = Some(Refusal::NoResidency);
+            current.snapshot.state = InputState::NeedRefusal;
             return Ok(());
         }
         let parsed = current
@@ -272,15 +301,35 @@ impl InputSlot {
                 current.snapshot.state = InputState::ReadyToCheck;
             }
             Err(detail) => {
-                current.refusal = Some(InputRefusal {
+                current.refusal = Some(Refusal::Input(InputRefusal {
                     input_id: current.snapshot.input_id,
                     case: InputRefusalCase::InvalidInputShape,
                     detail,
-                });
+                }));
                 current.snapshot.state = InputState::NeedRefusal;
             }
         }
         Ok(())
+    }
+
+    /// The SPU can disappear after Offered records but before submission.
+    /// Only an unsubmitted, uncancelled input may take this boundary refusal.
+    /// An already-owned refusal author is settled by the context first.
+    pub(super) fn refuse_no_residency(&mut self) {
+        let Some(current) = &mut self.current else {
+            return;
+        };
+        if !self.halted
+            && !current.snapshot.cancelled
+            && current.snapshot.request_id.is_none()
+            && matches!(
+                current.snapshot.state,
+                InputState::ReadyToCheck | InputState::NeedRefusal
+            )
+        {
+            current.refusal = Some(Refusal::NoResidency);
+            current.snapshot.state = InputState::NeedRefusal;
+        }
     }
 
     pub(super) fn check_operation(&self) -> Option<CheckOperation> {
@@ -343,11 +392,11 @@ impl InputSlot {
                     current.snapshot.state = InputState::Accepted;
                 }
                 Ste100Result::NotSte100 { detail, .. } => {
-                    current.refusal = Some(InputRefusal {
+                    current.refusal = Some(Refusal::Input(InputRefusal {
                         input_id: current.snapshot.input_id,
                         case: InputRefusalCase::NonSte100,
                         detail: detail.clone(),
-                    });
+                    }));
                     current.snapshot.state = InputState::NeedRefusal;
                 }
                 Ste100Result::ComponentFailed { .. } => unreachable!("component result refused"),
@@ -413,7 +462,7 @@ impl InputSlot {
         }
     }
 
-    pub(super) fn refusal(&self) -> Option<InputRefusal> {
+    pub(super) fn refusal(&self) -> Option<Refusal> {
         let current = self.current.as_ref()?;
         if self.halted || current.snapshot.state != InputState::NeedRefusal {
             return None;
@@ -600,7 +649,11 @@ impl InputSlot {
         } else if current.snapshot.cancelled {
             br#"{"kind":"stopped","reason":"The agent is leaving."}"#
         } else if current.snapshot.state == InputState::Refused {
-            br#"{"kind":"refused","reason":"Restate the input in STE100."}"#
+            if matches!(current.refusal, Some(Refusal::NoResidency)) {
+                br#"{"kind":"refused","reason":"no model is resident"}"#
+            } else {
+                br#"{"kind":"refused","reason":"Restate the input in STE100."}"#
+            }
         } else {
             return None;
         };

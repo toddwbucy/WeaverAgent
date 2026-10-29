@@ -5,6 +5,7 @@ use super::super::{InputProgress, RunFailure, SeatedInput, StoppedAuthor};
 use super::FoundationServing;
 use crate::flow::author::{AuthoredEvent, AuthoredSource};
 use crate::flow::clock::{MonotonicIo, PumpIo};
+use crate::flow::context::serving_organ_loss::ObservationProgress;
 use crate::flow::input::AcceptedInput;
 use crate::flow::pump::{LifecyclePeer, LifecyclePorts, PumpPorts, PumpSource};
 use crate::flow::pump_transport::{OrganSend, ReceivedOrgan, TrackedStage};
@@ -22,6 +23,12 @@ pub(crate) mod wind_down;
 
 #[path = "context_worker_graceful_leave.rs"]
 pub(in crate::flow::context::worker_startup) mod graceful;
+
+#[path = "context_worker_flags.rs"]
+pub(crate) mod flags;
+
+#[path = "context_worker_plan.rs"]
+pub(in crate::flow::context::worker_startup) mod plan;
 
 #[path = "context_worker_save.rs"]
 pub(in crate::flow::context::worker_startup) mod save;
@@ -181,7 +188,7 @@ impl<'a> FoundationInput<'a> {
         if self.serving.owner.listener.held().is_some() {
             return FoundationInputProgress::ManagementPending;
         }
-        if self.save_blocks_turn() {
+        if self.save_blocks_turn() || self.plan_pending() || self.flags_pending() {
             return FoundationInputProgress::Pending;
         }
         if let Some(progress) = self.wind_down_input_progress() {
@@ -257,16 +264,56 @@ impl<'a> FoundationInput<'a> {
             .context
             .management_listener
             .replace(listener.clone());
+        let author_was_blocked = !self
+            .serving
+            .owner
+            .context
+            .serving_observation_author_available();
         let result = self
             .prepare_save_window_expiry(io)
-            .and_then(|()| self.advance_organ_faults(None, io))
-            .and_then(|ready| {
-                if !ready {
-                    // Pending settlement must wait even when the driver calls advance.
-                    // The common pump still serves every socket and original bound.
+            .and_then(|()| self.advance_organ_observations(None, io))
+            .and_then(|observation| {
+                // Accounting and in-flight capture work keep their original
+                // windows during settlement. Only beginning a new capture
+                // requires the organ observation to be Recorded. EarlierAuthor
+                // still lets its original owner run, without granting a boundary
+                // when that owner finishes in this same call.
+                let settled = matches!(observation, ObservationProgress::Complete);
+                if self.flags_pending() {
+                    self.advance_flags(None, io)?;
+                    // Yield the completed sample before any unrelated idle wait.
+                    return Ok(());
+                }
+                let plan_was_pending = self.plan_pending();
+                self.advance_plan(None, io)?;
+                if plan_was_pending {
+                    // This reduction may just have carried the answer. Yield
+                    // before an unrelated idle wait can hide that completion.
+                    return Ok(());
+                }
+                let save_progress = self.advance_save(io, settled)?;
+                if matches!(observation, ObservationProgress::EarlierAuthor)
+                    && author_was_blocked
+                    && self
+                        .serving
+                        .owner
+                        .context
+                        .serving_observation_author_available()
+                {
+                    // The earlier owner finished. Re-enter the owed organ
+                    // observation before an unrelated input wait can block it.
+                    // An already-free author may instead be waiting on a held
+                    // tool reply, whose owner must still run below.
+                    return Ok(());
+                }
+                if matches!(observation, ObservationProgress::Pending { .. }) {
+                    // Do not add another wait after the save's pump: it may
+                    // have retained work for the next reduction.
+                    if save_progress == save::SaveProgress::Progress {
+                        return Ok(());
+                    }
                     return self.observe_with_wait(io, true);
                 }
-                self.advance_save(io)?;
                 if self.save_blocks_turn() {
                     return Ok(());
                 }
@@ -305,7 +352,8 @@ impl<'a> FoundationInput<'a> {
                 Ok(false) => (),
                 Err(error) => failure = error,
             }
-            if self.retain_save_interrupt(&failure)
+            if self.retain_plan_interrupt(&failure)
+                || self.retain_save_interrupt(&failure)
                 || self.retain_graceful_expiry(&failure)
                 || self.retain_quiesce_gate_end(&failure)
             {
@@ -391,6 +439,18 @@ impl<'a> FoundationInput<'a> {
         peer: Option<&mut LifecyclePeer>,
         io: &mut impl PumpIo,
     ) -> Result<bool, RunFailure> {
+        // Management must still advance the earlier original which the organ
+        // observation is waiting on. This is progress permission, not a save
+        // boundary grant.
+        self.advance_organ_observations(peer, io)
+            .map(|progress| !matches!(progress, ObservationProgress::Pending { .. }))
+    }
+
+    fn advance_organ_observations(
+        &mut self,
+        peer: Option<&mut LifecyclePeer>,
+        io: &mut impl PumpIo,
+    ) -> Result<ObservationProgress, RunFailure> {
         // Intake only retains evidence. The existing operation owners reduce
         // due save/Leave waits; observation and report authoring check live
         // before their own work. Do not preempt a save owner's timeout here.
@@ -405,7 +465,7 @@ impl<'a> FoundationInput<'a> {
                 listener: Some(&mut owner.listener),
                 dial: peer,
                 residency: Some(owner.resident.residency),
-                leave_peer: self.serving.save.as_mut().and_then(|save| save.port()),
+                leave_peer: plan::retained_port(&mut self.serving.plan, &mut self.serving.save),
                 ..Default::default()
             },
             gate: Some(&mut owner.gate),
@@ -419,18 +479,15 @@ impl<'a> FoundationInput<'a> {
         let result = owner
             .context
             .advance_serving_organ_faults(&mut ports, &owner.tools)?;
-        if matches!(
-            result,
-            crate::flow::context::serving_organ_loss::ObservationProgress::Pending { .. }
-        ) {
-            return Ok(false);
+        if matches!(result, ObservationProgress::Pending { .. }) {
+            return Ok(result);
         }
         if let Some(report) = &mut self.report
             && report.advance(owner.context, &mut ports)?
         {
             self.report = None;
         }
-        Ok(true)
+        Ok(result)
     }
 
     /// Workflow policy supplies the turn identity only after accepted input is
@@ -458,7 +515,7 @@ impl<'a> FoundationInput<'a> {
                 lifecycle: LifecyclePorts {
                     listener: Some(&mut owner.listener),
                     residency: Some(owner.resident.residency),
-                    leave_peer: self.serving.save.as_mut().and_then(|save| save.port()),
+                    leave_peer: plan::retained_port(&mut self.serving.plan, &mut self.serving.save),
                     ..Default::default()
                 },
                 gate: (!retained_gate_end).then_some(&mut owner.gate),
@@ -533,7 +590,7 @@ impl<'a> FoundationInput<'a> {
             lifecycle: LifecyclePorts {
                 listener: Some(&mut owner.listener),
                 residency: Some(owner.resident.residency),
-                leave_peer: self.serving.save.as_mut().and_then(|save| save.port()),
+                leave_peer: plan::retained_port(&mut self.serving.plan, &mut self.serving.save),
                 ..Default::default()
             },
             gate: Some(&mut owner.gate),
@@ -727,7 +784,13 @@ impl<'a> FoundationInput<'a> {
                         }
                     }
                 }
-                if self.send.as_ref().is_some_and(|send| send.sent()) {
+                if self.send.as_ref().is_some_and(|send| {
+                    send.sent()
+                        && send.sent_at().is_some()
+                        && send.belongs_to(ports.gate.as_deref().unwrap())
+                        && send
+                            .matches_exchange(&self.received.as_ref().unwrap().envelope().exchange)
+                }) {
                     owner.context.input_response_sent(ports.io)?;
                     owner.context.finish_input(ports.io)?;
                     self.stage = Stage::Refused;

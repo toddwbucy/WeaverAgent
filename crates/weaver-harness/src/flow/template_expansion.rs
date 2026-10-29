@@ -70,6 +70,31 @@ pub(in crate::flow) fn expand_begin_task(
     expand(certificate, identity, "mark.begin_task", "state.mark", None)
 }
 
+/// Root effect families have literal text. Plan identities and operator bytes
+/// are carried in typed context, never substituted into the certified sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::flow) enum RootPlanTemplate {
+    Authorize,
+    Lock,
+    Replace,
+}
+impl RootPlanTemplate {
+    pub(in crate::flow) fn id(self) -> &'static str {
+        match self {
+            Self::Authorize => "plan.authorize",
+            Self::Lock => "plan.lock",
+            Self::Replace => "plan.replace",
+        }
+    }
+    pub(in crate::flow) fn expand(
+        self,
+        certificate: &TemplateCertificate,
+        identity: ExpansionIdentity<'_>,
+    ) -> Result<TemplateExpansion, ExpansionRefusal> {
+        expand(certificate, identity, self.id(), "plan.event", None)
+    }
+}
+
 /// The lifecycle consumer chooses this fixed family, with no source-text slot.
 pub(in crate::flow) fn expand_wind_down(
     certificate: &TemplateCertificate,

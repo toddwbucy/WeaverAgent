@@ -405,7 +405,7 @@ pub(in crate::flow::context) fn release_peer(mode: &str, residency: i32, decode:
                     }
                 );
                 assert_eq!(request.position, Position::Open);
-                assert_eq!(recv(decode, &mut bytes, MsgFlags::MSG_DONTWAIT), Ok(0));
+                crate::flow::fixture_eof::await_eof_until(decode, end, || {});
                 assert!(!root.join("halt-release.json").exists());
                 std::fs::write(
                     root.join("halt-release.json"),
@@ -524,6 +524,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
         run.failed_exit(handoff).ok().expect("same original run")
     }));
     let owner = guard.0.as_mut().unwrap();
+    if !mode.contains("-worker") {
+        assert_eq!(owner.process_exit(), None);
+    }
     if mode.contains("placement-pending-trace-loss") || mode.contains("rejection-unavailable") {
         for _ in 0..32 {
             owner.advance_with_io(clock);
@@ -767,6 +770,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
         owner.stage as u8,
         owner.tail.release_outcome(),
         owner.tail.context.halt().unwrap().secondary()
+    );
+    assert_eq!(
+        owner.process_exit(),
+        Some(crate::FoundationProcessExit::Failure)
     );
     if mode.contains("placement-pending-trace-loss") || mode.contains("rejection-unavailable") {
         assert!(

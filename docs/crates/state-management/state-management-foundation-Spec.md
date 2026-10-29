@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #349
+**Landing PR:** #373
 
-**Version:** 0.26 **Date filed:** 2026-10-20 **Document ID:**
+**Version:** 0.27 **Date filed:** 2026-10-20 **Document ID:**
 `state-management-foundation-Spec` **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -483,7 +483,8 @@ rewrite follows from this distinction. [FLOW-3, PERSIST-3, PERSIST-4, STORE-5, C
 | After Beginning and before Commit, leave | Worker Aborted after a latched failure | Cancel unconfirmed publication and follow failed-run recovery, no successful Left |
 | AwaitRefusedLeave | Matching Left with forced true, no_state false and no save report | Complete normal forced-leave duties, Done, no save published |
 | AwaitRefusedLeave | SavePointNotTaken with the same missed leg | Report the graceful leave refusal, Done, merged retry remains available |
-| AwaitRefusedLeave | Save report, CaptureComplete or renewed publication | Protocol failure, no publication or successful command result |
+| Any capture receive or local-work checkpoint, and joined Leave | Correlated terminal Malformed, DescriptorsUnusable, OrganRefused with organ Gate, or defensive FailedRun with the original run and any known capture ID | Retain the worker evidence and follow ADMIN-SAVE failed-unwind recovery; no successful save, Unloaded or retry of a standing run |
+| AwaitRefusedLeave | Other refusal, save report, CaptureComplete or renewed publication | Protocol failure, no publication or successful command result |
 | AwaitRefusedLeave | Shared-tail or outer leave deadline expires | Unanswered, preserve Open marker, Done, accept no late Left as success. The capture wait was already disarmed by CaptureRefused |
 | Any before Commit | Worker EOF, invalid message or expiry of the deadline applicable to that state | Do not publish, preserve Open marker, failed-run recovery, Done |
 | After Commit | Worker fails or no final outcome | Mark the pending capture broken, publish nothing further, retain artifacts, never invent Left |
@@ -609,8 +610,10 @@ drain and reap and answers Left with forced true, no_state false and no save rep
 A leave still graceful remains at S9 and answers SavePointNotTaken. Joined and
 bound-forced leaves use the same existing force election. Capture refusal does not
 reverse that election. A caller still completes the normal leave duties before
-reporting Unloaded. No saved state is claimed. [PERSIST-4, admin Spec 3.0,
-harness Spec 6]
+reporting Unloaded. Terminal unwind refusals use ADMIN-SAVE's enumerated negative
+outcomes instead, preserving the original worker evidence and Open marker without
+claiming publication or a retryable standing run. No saved state is claimed.
+[PERSIST-4, admin Spec 3.0, harness Spec 6]
 
 On-demand save keeps its existing final SavePointNotTaken response after cleanup.
 An absent admin permits no invented acknowledgement or final response. The worker

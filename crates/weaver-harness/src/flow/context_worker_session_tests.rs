@@ -35,6 +35,9 @@ pub(in crate::flow::context) mod wind_down;
 #[path = "context_worker_demand_save_tests.rs"]
 pub(in crate::flow::context::worker_startup) mod demand_save;
 
+#[path = "context_worker_dispatch_organs_tests.rs"]
+mod dispatch_organs;
+
 fn wait_file(root: &Path, name: &str) {
     let end = Instant::now() + Duration::from_secs(25);
     while !root.join(name).exists() {
@@ -72,6 +75,9 @@ fn frame(index: usize, malformed: bool) -> OrganEnvelope {
     }
 }
 pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
+    if dispatch_organs::two_turns(mode) || dispatch_organs::pending_force(mode) {
+        return dispatch_organs::gate(mode, root, fd);
+    }
     if mode.ends_with("-demand-receive-clock") {
         let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
         assert_eq!(recv(fd, &mut bytes, MsgFlags::empty()).unwrap_or(0), 0);
@@ -158,6 +164,9 @@ pub(in crate::flow::context) fn gate(mode: &str, root: &Path, fd: i32) {
 }
 
 pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
+    if dispatch_organs::two_turns(mode) || dispatch_organs::resting(mode) {
+        return dispatch_organs::spu(mode, fd);
+    }
     if demand_save::organ_loss::is_mode(mode) {
         return demand_save::organ_loss::spu(mode, fd);
     }

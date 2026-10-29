@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn world_request_is_a_distinct_lifecycle_refusal_ask_and_never_a_directive() {
+    let expected =
+        r#"{"seam":"lifecycle","asked":{"ask":"world_request"},"refusal":{"kind":"no_residency"}}"#;
+    let record = RefusalRecord::Lifecycle {
+        asked: LifecycleAsk::WorldRequest,
+        refusal: LifecycleRefusal::NoResidency,
+    };
+    assert_eq!(serde_json::to_string(&record).unwrap(), expected);
+    assert_eq!(
+        crate::state_flow::decode_strict::<RefusalRecord>(expected).unwrap(),
+        record
+    );
+    for ask in [
+        LifecycleAsk::Enter,
+        LifecycleAsk::Admit,
+        LifecycleAsk::Release,
+    ] {
+        assert_ne!(
+            record,
+            RefusalRecord::Lifecycle {
+                asked: ask,
+                refusal: LifecycleRefusal::NoResidency
+            }
+        );
+    }
+    assert!(serde_json::from_str::<LifecycleDirective>(r#"{"kind":"world_request"}"#).is_err());
+}
+
+#[test]
 fn kind_first_decode_answers_do_not_buffer_or_reparse_the_outer_values() {
     let bodies = [
         ("token", r#"{"token":17,"piece":"\u00e9\n"}"#),
